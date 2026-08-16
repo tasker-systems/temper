@@ -38,6 +38,45 @@
 -- Artifact Tests job runs it). A symmetric edit — both bodies wrong identically — passes the
 -- differential; the companion test `the_shared_predicate_admits_and_denies_the_cases_it_is_supposed_to`
 -- pins the expected verdicts and catches that.
+--
+-- `[boyscout — this PR]` The `predicates` CTE — the wire-parse that turns the caller's jsonb into
+-- (property_key, op, vals, direction, bound) columns — is extracted here as ONE `IMMUTABLE`
+-- function, after the PR that added `Compare` made it a fourth identical copy. The measured
+-- blocker on extracting the operator DISPATCH (`20260808000020:308`: a `LANGUAGE sql STABLE`
+-- body with a sublink does not inline and loses its Index Only Scan) DOES NOT apply to the
+-- wire-parse: it is a pure expression over the input parameter with NO sublink and NO
+-- correlation, so it inlines as `IMMUTABLE`. Measured plan-identical to the inline CTE:
+-- same cost, same Index Only Scan on `uq_kb_properties_active`, same Filter, same SubPlan
+-- structure. The extraction is the same bar `20260815000050` set for view extraction.
+--
+-- What this BUYS: a future `PropertyOp` arm is a one-place edit for the parse (this function),
+-- not two — which is the drift surface the parity test exists to catch. The operator dispatch
+-- (`CASE q.op` with its `EXISTS` sublink) stays as two copies, held to the differential witness,
+-- because THAT is the part that does not inline. The wire-parse and the operator dispatch are
+-- different extraction problems with different measured answers, and splitting them here is
+-- the boyscout: one extracted, one not, each for a measured reason.
+
+-- The wire-parse: one `jsonb` argument → (property_key, op, vals, direction, bound) rows.
+-- `IMMUTABLE` because it is a pure function of its argument (no table reads, no correlation).
+-- The raise-guards (`CASE jsonb_typeof`) are the same ones the inline CTE carried: they stop
+-- `jsonb_array_elements` raising on a non-array argument, which a `WHERE` beside the lateral
+-- SRF would run AFTER the expansion that already raised.
+CREATE OR REPLACE FUNCTION _temper_property_predicates_parse(p_props jsonb)
+RETURNS TABLE (property_key text, op text, vals jsonb, direction text, bound jsonb)
+LANGUAGE sql IMMUTABLE AS $$
+    SELECT q->>'key'             AS property_key,
+           q->'op'->>'op'        AS op,
+           CASE jsonb_typeof(q->'op'->'values')
+             WHEN 'array' THEN q->'op'->'values' ELSE '[]'::jsonb END AS vals,
+           q->'op'->>'direction' AS direction,
+           q->'op'->'value'       AS bound
+      FROM jsonb_array_elements(
+             CASE jsonb_typeof(p_props)
+               WHEN 'array' THEN p_props ELSE '[]'::jsonb END) AS q
+$$;
+
+COMMENT ON FUNCTION _temper_property_predicates_parse(jsonb) IS
+    'The wire-parse behind both predicate bodies: one jsonb argument → (property_key, op, vals, direction, bound) rows. IMMUTABLE — a pure function of its argument, no table reads, no correlation — so it inlines and the Index Only Scan on uq_kb_properties_active survives (measured plan-identical to the inline CTE). The raise-guards are the same the inline CTE carried. Extracted from four identical copies (20260815000010, 20260815000040, this migration) so a future PropertyOp arm is a one-place parse edit, not two — the operator dispatch (CASE q.op with its EXISTS sublink) stays as two copies because THAT does not inline (20260808000020:308).';
 
 -- ── `__temper_ungated_find_resources_with`: add the `compare` arm ──────────────────────────────
 CREATE OR REPLACE FUNCTION __temper_ungated_find_resources_with(
@@ -56,20 +95,13 @@ CREATE OR REPLACE FUNCTION __temper_ungated_find_resources_with(
     p_properties     jsonb)
 RETURNS TABLE (resource_id uuid)
 LANGUAGE sql STABLE AS $$
-  -- The wire shape parsed once into columns, exactly as the edge sibling parses it. `PropertyOp`
-  -- is internally tagged inside a field named `op`, hence `q->'op'->>'op'`. `Compare` adds two
-  -- columns: `direction` (the `OrdOp` discriminant) and `bound` (the single value). `Contains`
-  -- still carries its list in `vals`; `HasKey` carries neither.
+  -- The wire shape parsed once into columns by the shared `IMMUTABLE` parse function. The
+  -- `predicates` alias is kept so the `CASE q.op` below reads identically to the edge body —
+  -- the operator dispatch is the two-copy part the differential witness holds, and keeping
+  -- the alias name makes the two read the same to a reviewer. `Compare` adds `direction` and
+  -- `bound`; `Contains` still carries its list in `vals`; `HasKey` carries neither.
   WITH predicates AS (
-    SELECT q->>'key'      AS property_key,
-           q->'op'->>'op' AS op,
-           CASE jsonb_typeof(q->'op'->'values')
-             WHEN 'array' THEN q->'op'->'values' ELSE '[]'::jsonb END AS vals,
-           q->'op'->>'direction' AS direction,
-           q->'op'->'value'       AS bound
-      FROM jsonb_array_elements(
-             CASE jsonb_typeof(p_properties)
-               WHEN 'array' THEN p_properties ELSE '[]'::jsonb END) AS q
+    SELECT * FROM _temper_property_predicates_parse(p_properties)
   )
     SELECT r.id
       FROM kb_resources r
@@ -182,21 +214,13 @@ CREATE OR REPLACE FUNCTION __temper_ungated_follow_from(
     p_edge_properties  jsonb)
 RETURNS TABLE (resource_id uuid, graph_score real, via jsonb)
 LANGUAGE sql STABLE AS $$
+  -- The wire shape parsed by the shared `IMMUTABLE` parse function (same one the resource body
+  -- uses — see the function's COMMENT for why it inlines where the operator dispatch cannot).
+  -- The `WITH RECURSIVE` is preserved because the walk below is recursive; the `predicates`
+  -- alias is kept so the `CASE q.op` reads identically to the resource body.
   WITH RECURSIVE
-  -- `PropertyOp` is internally tagged inside a field named `op`, hence `q->'op'->>'op'`. The
-  -- `CASE`s are raise-guards: `jsonb_array_elements` errors on a non-array, and a `WHERE` beside a
-  -- lateral SRF runs after the expansion that already raised. `Compare` adds `direction` and
-  -- `bound` columns; `Contains` still carries its list in `vals`; `HasKey` carries neither.
   predicates AS (
-    SELECT q->>'key'      AS property_key,
-           q->'op'->>'op' AS op,
-           CASE jsonb_typeof(q->'op'->'values')
-             WHEN 'array' THEN q->'op'->'values' ELSE '[]'::jsonb END AS vals,
-           q->'op'->>'direction' AS direction,
-           q->'op'->'value'       AS bound
-      FROM jsonb_array_elements(
-             CASE jsonb_typeof(p_edge_properties)
-               WHEN 'array' THEN p_edge_properties ELSE '[]'::jsonb END) AS q
+    SELECT * FROM _temper_property_predicates_parse(p_edge_properties)
   ),
   admitted AS (
     SELECT v.id
