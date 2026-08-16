@@ -94,7 +94,12 @@ fn test_skill_install_writes_directory() {
 
     temp_env::with_vars(env, || {
         let skill_dir = dir.path().join("skill-output");
-        let report = temper_cli::commands::skill::install(&config, &skill_dir).unwrap();
+        let report = temper_cli::commands::skill::install(
+            &config,
+            &skill_dir,
+            temper_cli::cli::SkillTarget::Claude,
+        )
+        .unwrap();
         assert!(
             !report.is_no_op(),
             "first install into empty dir should report changed files"
@@ -125,8 +130,18 @@ fn test_skill_install_is_idempotent() {
 
     temp_env::with_vars(env, || {
         let skill_dir = dir.path().join("skill-output");
-        temper_cli::commands::skill::install(&config, &skill_dir).unwrap();
-        let second = temper_cli::commands::skill::install(&config, &skill_dir).unwrap();
+        temper_cli::commands::skill::install(
+            &config,
+            &skill_dir,
+            temper_cli::cli::SkillTarget::Claude,
+        )
+        .unwrap();
+        let second = temper_cli::commands::skill::install(
+            &config,
+            &skill_dir,
+            temper_cli::cli::SkillTarget::Claude,
+        )
+        .unwrap();
         assert!(
             second.is_no_op(),
             "second install with no changes should be a no-op, got: {:?}",
@@ -136,7 +151,12 @@ fn test_skill_install_is_idempotent() {
         // Mutating one file should make the next install report exactly that file.
         let mutated = skill_dir.join("subagent-guidance.md");
         std::fs::write(&mutated, "stale\n").unwrap();
-        let third = temper_cli::commands::skill::install(&config, &skill_dir).unwrap();
+        let third = temper_cli::commands::skill::install(
+            &config,
+            &skill_dir,
+            temper_cli::cli::SkillTarget::Claude,
+        )
+        .unwrap();
         assert_eq!(third.changed, vec!["subagent-guidance.md".to_string()]);
     });
 }
@@ -284,7 +304,12 @@ fn test_skill_md_routes_to_block_grain_and_guards_stdin() {
 
     temp_env::with_vars(env, || {
         let skill_dir = dir.path().join("skill-output");
-        temper_cli::commands::skill::install(&config, &skill_dir).unwrap();
+        temper_cli::commands::skill::install(
+            &config,
+            &skill_dir,
+            temper_cli::cli::SkillTarget::Claude,
+        )
+        .unwrap();
         let skill_md = std::fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
         // Router must point at the block-grain reference section...
         assert!(
@@ -317,7 +342,12 @@ fn skill_md_carries_the_outcome_discipline_stanza_not_just_the_pointer() {
 
     temp_env::with_vars(env, || {
         let skill_dir = dir.path().join("skill-output");
-        temper_cli::commands::skill::install(&config, &skill_dir).unwrap();
+        temper_cli::commands::skill::install(
+            &config,
+            &skill_dir,
+            temper_cli::cli::SkillTarget::Claude,
+        )
+        .unwrap();
         let skill_md = std::fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
 
         assert!(
@@ -464,7 +494,12 @@ fn test_skill_md_contexts_section_addresses_by_ref() {
 
     temp_env::with_vars(env, || {
         let skill_dir = dir.path().join("skill-output");
-        temper_cli::commands::skill::install(&config, &skill_dir).unwrap();
+        temper_cli::commands::skill::install(
+            &config,
+            &skill_dir,
+            temper_cli::cli::SkillTarget::Claude,
+        )
+        .unwrap();
         let skill_md = std::fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
         // SKILL.md should explain that contexts are addressed by @me/<slug>
         assert!(
