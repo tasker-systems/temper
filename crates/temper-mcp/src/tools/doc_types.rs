@@ -172,6 +172,50 @@ pub async fn describe_open_meta(svc: &TemperMcpService) -> Result<CallToolResult
     )]))
 }
 
+// ── Consolidated read tool (3→1) ───────────────────────────────────────────────
+
+/// The schema-describe view to perform.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DescribeSchemaView {
+    /// List all available document types with schema summaries.
+    DocTypes,
+    /// Describe a specific document type in detail (full JSON schema, required fields, enum values).
+    DocType,
+    /// Describe the recognized open_meta conventions.
+    OpenMeta,
+}
+
+/// Consolidated describe-schema tool — one read tool with a `view` discriminator.
+///
+/// Collapses `list_doc_types`, `describe_doc_type`, and `describe_open_meta`
+/// into a single MCP tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DescribeSchemaInput {
+    /// Which schema description to perform.
+    pub view: DescribeSchemaView,
+    /// The document type name (e.g. "task", "goal", "session"). Required for `doc_type`; ignored otherwise.
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// Dispatch the consolidated describe-schema tool.
+pub async fn describe_schema(
+    svc: &TemperMcpService,
+    input: DescribeSchemaInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    match input.view {
+        DescribeSchemaView::DocTypes => list_doc_types(svc).await,
+        DescribeSchemaView::DocType => {
+            let name = input.name.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("doc_type requires `name`".to_string(), None)
+            })?;
+            describe_doc_type(svc, DescribeDocTypeInput { name }).await
+        }
+        DescribeSchemaView::OpenMeta => describe_open_meta(svc).await,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

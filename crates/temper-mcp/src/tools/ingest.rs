@@ -259,3 +259,148 @@ pub async fn ingest_blocks(
         to_text(&out.value),
     )]))
 }
+
+// ── Consolidated tool (4→1) ─────────────────────────────────────────────────────
+
+/// The segmented-ingest action to perform.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum IngestAction {
+    /// Begin a segmented ingest — land segment 0 and create the resource.
+    Begin,
+    /// Append one segment to an in-progress ingest.
+    Append,
+    /// Declare the ingest complete.
+    Finalize,
+    /// Read back the segments that have landed (for resume after interruption).
+    Blocks,
+}
+
+/// Consolidated segmented-ingest tool — one write tool with an `action` discriminator.
+///
+/// Collapses `ingest_begin`, `ingest_append`, `ingest_finalize`, and `ingest_blocks`
+/// into a single MCP tool. The `action` field selects which lifecycle step to perform.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SegmentedIngestInput {
+    /// Which ingest action to perform.
+    pub action: IngestAction,
+    /// Every `create_resource` field, plus segmented-session hints. Required for `begin`; ignored otherwise.
+    #[serde(flatten)]
+    #[serde(default)]
+    pub create: Option<CreateResourceInput>,
+    /// Bare-hex sha256 of segment 0's content. Required for `begin`; ignored otherwise.
+    #[serde(default)]
+    pub content_hash: Option<String>,
+    /// Best-effort total segment count. Used with `begin`.
+    #[serde(default)]
+    pub total_blocks_hint: Option<u32>,
+    /// Bytes of text this session's segment boundaries were cut at. Used with `begin`.
+    #[serde(default)]
+    pub block_budget: Option<u32>,
+    /// sha256 of the whole source. Used with `begin`.
+    #[serde(default)]
+    pub source_hash: Option<String>,
+    /// Resource ref returned by `ingest_begin`. Required for `append`, `finalize`, `blocks`; ignored for `begin`.
+    #[serde(default)]
+    pub resource: Option<String>,
+    /// Zero-based segment index. Required for `append` (starts at 1).
+    #[serde(default)]
+    pub seq: Option<u32>,
+    /// This segment's markdown text. Required for `append`.
+    #[serde(default)]
+    pub content: Option<String>,
+    /// Optional per-segment provenance sources. Used with `append`.
+    #[serde(default)]
+    pub sources: Option<Vec<String>>,
+    /// Total landed segments counting segment 0. Required for `finalize`.
+    #[serde(default)]
+    pub expected_blocks: Option<u32>,
+    /// The opaque `body_hash` from your most recent append/blocks response. Required for `finalize`.
+    #[serde(default)]
+    pub expected_body_hash: Option<String>,
+}
+
+/// Dispatch the consolidated segmented-ingest tool.
+pub async fn segmented_ingest(
+    svc: &TemperMcpService,
+    input: SegmentedIngestInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    match input.action {
+        IngestAction::Begin => {
+            let create = input.create.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("begin requires create fields".to_string(), None)
+            })?;
+            let content_hash = input.content_hash.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("begin requires `content_hash`".to_string(), None)
+            })?;
+            ingest_begin(
+                svc,
+                IngestBeginInput {
+                    create,
+                    content_hash,
+                    block_budget: input.block_budget,
+                    total_blocks_hint: input.total_blocks_hint,
+                    source_hash: input.source_hash,
+                },
+            )
+            .await
+        }
+        IngestAction::Append => {
+            let resource = input.resource.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("append requires `resource`".to_string(), None)
+            })?;
+            let seq = input.seq.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("append requires `seq`".to_string(), None)
+            })?;
+            let content = input.content.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("append requires `content`".to_string(), None)
+            })?;
+            let content_hash = input.content_hash.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("append requires `content_hash`".to_string(), None)
+            })?;
+            ingest_append(
+                svc,
+                IngestAppendInput {
+                    resource,
+                    seq,
+                    content,
+                    content_hash,
+                    sources: input.sources,
+                },
+            )
+            .await
+        }
+        IngestAction::Finalize => {
+            let resource = input.resource.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("finalize requires `resource`".to_string(), None)
+            })?;
+            let expected_blocks = input.expected_blocks.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params(
+                    "finalize requires `expected_blocks`".to_string(),
+                    None,
+                )
+            })?;
+            let expected_body_hash = input.expected_body_hash.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params(
+                    "finalize requires `expected_body_hash`".to_string(),
+                    None,
+                )
+            })?;
+            ingest_finalize(
+                svc,
+                IngestFinalizeInput {
+                    resource,
+                    expected_blocks,
+                    expected_body_hash,
+                },
+            )
+            .await
+        }
+        IngestAction::Blocks => {
+            let resource = input.resource.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("blocks requires `resource`".to_string(), None)
+            })?;
+            ingest_blocks(svc, IngestBlocksInput { resource }).await
+        }
+    }
+}

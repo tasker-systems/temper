@@ -5,11 +5,13 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use uuid::Uuid;
 
+use temper_core::types::cognitive_maps::ContextShapeInput;
 use temper_core::types::context::{ContextCreateRequest, ShareContextRequest};
 use temper_core::types::ids::{ContextId, ProfileId};
 use temper_services::error::ApiError;
 
 use crate::service::TemperMcpService;
+use crate::tools::cognitive_maps::{context_region_metrics, context_shape};
 
 /// Which admission rule a context tool's `403` describes.
 ///
@@ -275,6 +277,181 @@ pub async fn rename_context(
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         text,
     )]))
+}
+
+// ── Consolidated read tool (4→1) ───────────────────────────────────────────────
+
+/// The context-read view to perform.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextReadView {
+    /// List all contexts available to the caller.
+    List,
+    /// Get details of a specific context by UUID.
+    Get,
+    /// Read the context's materialized regions (most salient first).
+    Shape,
+    /// Read per-region analytics metrics for the context.
+    Metrics,
+}
+
+/// Consolidated context-read tool — one read tool with a `view` discriminator.
+///
+/// Collapses `list_contexts`, `get_context`, `context_shape`, and `context_region_metrics`
+/// into a single MCP tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ContextReadInput {
+    /// Which context read to perform.
+    pub view: ContextReadView,
+    /// Context UUID. Required for `get`; ignored for `list`.
+    #[serde(default)]
+    pub id: Option<Uuid>,
+    /// Context ref (`@me/<slug>`, `+<team>/<slug>`, or UUID). Required for `shape` and `metrics`; ignored for `list` and `get`.
+    #[serde(default)]
+    pub context: Option<String>,
+    /// Optional lens ref to filter regions. Used with `shape` and `metrics`.
+    #[serde(default)]
+    pub lens: Option<String>,
+}
+
+/// Dispatch the consolidated context-read tool.
+pub async fn context_read(
+    svc: &TemperMcpService,
+    input: ContextReadInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    match input.view {
+        ContextReadView::List => list_contexts(svc).await,
+        ContextReadView::Get => {
+            let id = input.id.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("get requires `id`".to_string(), None)
+            })?;
+            get_context(svc, GetContextInput { id }).await
+        }
+        ContextReadView::Shape => {
+            let context = input.context.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("shape requires `context`".to_string(), None)
+            })?;
+            context_shape(
+                svc,
+                ContextShapeInput {
+                    context,
+                    lens: input.lens,
+                },
+            )
+            .await
+        }
+        ContextReadView::Metrics => {
+            let context = input.context.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("metrics requires `context`".to_string(), None)
+            })?;
+            context_region_metrics(
+                svc,
+                ContextShapeInput {
+                    context,
+                    lens: input.lens,
+                },
+            )
+            .await
+        }
+    }
+}
+
+// ── Consolidated write tool (5→1) ─────────────────────────────────────────────
+
+/// The context-manage action to perform.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextManageAction {
+    /// Create a new context.
+    Create,
+    /// Rename a context (re-addresses it — the old slug stops resolving).
+    Rename,
+    /// Share a context into a team's read-reach.
+    Share,
+    /// Unshare a context from a team.
+    Unshare,
+    /// Transfer a context's ownership to a team.
+    Transfer,
+}
+
+/// Consolidated context-manage tool — one write tool with an `action` discriminator.
+///
+/// Collapses `create_context`, `rename_context`, `share_context`, `unshare_context`,
+/// and `transfer_context` into a single MCP tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ContextManageInput {
+    /// Which context action to perform.
+    pub action: ContextManageAction,
+    /// The display name for the new context. Required for `create`.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Who owns the new context. Used with `create`.
+    #[serde(default)]
+    pub owner: Option<temper_core::context_ref::ContextOwnerRef>,
+    /// Context UUID. Required for `rename`, `share`, `unshare`, `transfer`; ignored for `create`.
+    #[serde(default)]
+    pub context: Option<Uuid>,
+    /// Team UUID. Required for `share`, `unshare`, `transfer`.
+    #[serde(default)]
+    pub team: Option<Uuid>,
+}
+
+/// Dispatch the consolidated context-manage tool.
+pub async fn context_manage(
+    svc: &TemperMcpService,
+    input: ContextManageInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    match input.action {
+        ContextManageAction::Create => {
+            let name = input.name.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("create requires `name`".to_string(), None)
+            })?;
+            create_context(
+                svc,
+                ContextCreateRequest {
+                    name,
+                    owner: input.owner,
+                },
+            )
+            .await
+        }
+        ContextManageAction::Rename => {
+            let context = input.context.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("rename requires `context`".to_string(), None)
+            })?;
+            let name = input.name.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("rename requires `name`".to_string(), None)
+            })?;
+            rename_context(svc, RenameContextInput { context, name }).await
+        }
+        ContextManageAction::Share => {
+            let context = input.context.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("share requires `context`".to_string(), None)
+            })?;
+            let team = input.team.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("share requires `team`".to_string(), None)
+            })?;
+            share_context(svc, ShareContextInput { context, team }).await
+        }
+        ContextManageAction::Unshare => {
+            let context = input.context.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("unshare requires `context`".to_string(), None)
+            })?;
+            let team = input.team.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("unshare requires `team`".to_string(), None)
+            })?;
+            unshare_context(svc, ShareContextInput { context, team }).await
+        }
+        ContextManageAction::Transfer => {
+            let context = input.context.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("transfer requires `context`".to_string(), None)
+            })?;
+            let to_team = input.team.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("transfer requires `team`".to_string(), None)
+            })?;
+            transfer_context(svc, TransferContextInput { context, to_team }).await
+        }
+    }
 }
 
 #[cfg(test)]

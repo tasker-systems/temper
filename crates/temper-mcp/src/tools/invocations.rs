@@ -7,11 +7,14 @@
 //! cannot read the originating cogmap gets an empty result, never an error).
 
 use rmcp::model::CallToolResult;
+use schemars::JsonSchema;
+use serde::Deserialize;
 
 use temper_core::error::TemperError;
 use temper_core::types::ids::{CogmapId, ProfileId};
 use temper_core::types::invocation::{
-    InvocationCloseInput, InvocationListInput, InvocationOpenInput, InvocationShowInput,
+    Disposition, InvocationCloseInput, InvocationListInput, InvocationOpenInput,
+    InvocationShowInput,
 };
 use temper_core::types::invocation_requests::{InvocationAck, InvocationCloseAck};
 use temper_services::backend::DbBackend;
@@ -185,6 +188,146 @@ pub async fn invocation_list(
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         text,
     )]))
+}
+
+// ── Consolidated write tool (2→1) ─────────────────────────────────────────────
+
+/// The invocation action to perform.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum InvocationManageAction {
+    /// Open an agent-invocation envelope.
+    Open,
+    /// Close an open envelope with a terminal disposition.
+    Close,
+}
+
+/// Consolidated invocation-manage tool — one write tool with an `action` discriminator.
+///
+/// Collapses `invocation_open` and `invocation_close` into a single MCP tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct InvocationManageInput {
+    /// Which invocation action to perform.
+    pub action: InvocationManageAction,
+    /// Free-form trigger label (e.g. `manual`, `delegated`, `scheduled`). Required for `open`; ignored for `close`.
+    #[serde(default)]
+    pub trigger_kind: Option<String>,
+    /// The cognitive map this invocation runs against, by ref. Required for `open`; ignored for `close`.
+    #[serde(default)]
+    pub originating_cogmap: Option<String>,
+    /// Optional delegating-parent cogmap ref. Used with `open`.
+    #[serde(default)]
+    pub parent_cogmap: Option<String>,
+    /// The invocation to close, by ref (the UUID returned by `open`). Required for `close`; ignored for `open`.
+    #[serde(default)]
+    pub invocation: Option<String>,
+    /// Terminal disposition: `completed`, `failed`, `abandoned`. Required for `close`.
+    #[serde(default)]
+    pub disposition: Option<Disposition>,
+    /// Opaque, agent-defined terminal outcome payload. Used with `close`.
+    #[serde(default)]
+    pub outcome: Option<serde_json::Value>,
+}
+
+/// Dispatch the consolidated invocation-manage tool.
+pub async fn invocation_manage(
+    svc: &TemperMcpService,
+    input: InvocationManageInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    match input.action {
+        InvocationManageAction::Open => {
+            let trigger_kind = input.trigger_kind.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("open requires `trigger_kind`".to_string(), None)
+            })?;
+            let originating_cogmap = input.originating_cogmap.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params(
+                    "open requires `originating_cogmap`".to_string(),
+                    None,
+                )
+            })?;
+            invocation_open(
+                svc,
+                InvocationOpenInput {
+                    trigger_kind,
+                    originating_cogmap,
+                    parent_cogmap: input.parent_cogmap,
+                },
+            )
+            .await
+        }
+        InvocationManageAction::Close => {
+            let invocation = input.invocation.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("close requires `invocation`".to_string(), None)
+            })?;
+            let disposition = input.disposition.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("close requires `disposition`".to_string(), None)
+            })?;
+            invocation_close(
+                svc,
+                InvocationCloseInput {
+                    invocation,
+                    disposition,
+                    outcome: input.outcome,
+                },
+            )
+            .await
+        }
+    }
+}
+
+// ── Consolidated read tool (2→1) ───────────────────────────────────────────────
+
+/// The invocation-read view to perform.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum InvocationReadView {
+    /// Show one envelope plus its acts by UUID.
+    Show,
+    /// List envelopes, optionally narrowed.
+    List,
+}
+
+/// Consolidated invocation-read tool — one read tool with a `view` discriminator.
+///
+/// Collapses `invocation_show` and `invocation_list` into a single MCP tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct InvocationReadInput {
+    /// Which invocation read to perform.
+    pub view: InvocationReadView,
+    /// The invocation to read, by ref (UUID). Required for `show`; ignored for `list`.
+    #[serde(default)]
+    pub invocation: Option<String>,
+    /// Optional originating cogmap ref to filter by. Used with `list`.
+    #[serde(default)]
+    pub cogmap: Option<String>,
+    /// Optional lifecycle status filter: `open`, `completed`, `failed`, `abandoned`. Used with `list`.
+    #[serde(default)]
+    pub status: Option<String>,
+}
+
+/// Dispatch the consolidated invocation-read tool.
+pub async fn invocation_read(
+    svc: &TemperMcpService,
+    input: InvocationReadInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    match input.view {
+        InvocationReadView::Show => {
+            let invocation = input.invocation.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("show requires `invocation`".to_string(), None)
+            })?;
+            invocation_show(svc, InvocationShowInput { invocation }).await
+        }
+        InvocationReadView::List => {
+            invocation_list(
+                svc,
+                InvocationListInput {
+                    cogmap: input.cogmap,
+                    status: input.status,
+                },
+            )
+            .await
+        }
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────

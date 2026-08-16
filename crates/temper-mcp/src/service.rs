@@ -110,10 +110,12 @@ impl TemperMcpService {
             .ok_or_else(|| rmcp::ErrorData::internal_error("Not authenticated".to_string(), None))
     }
 
-    // ── Tools ──────────────────────────────────────────────────────────
+    // ── Tools (consolidated: 64 → 26) ─────────────────────────────────
+
+    // ── Resources (unchanged) ──────────────────────────────────────────
 
     #[tool(
-        description = "Create a new resource in the knowledge base. Optionally include markdown content for indexing and search. Context must already exist — use create_context first if needed. Use list_doc_types to see available types."
+        description = "Create a new resource in the knowledge base. Optionally include markdown content for indexing and search. Context must already exist — use context_manage (action: create) first if needed. Use describe_schema (view: doc_types) to see available types."
     )]
     async fn create_resource(
         &self,
@@ -220,133 +222,7 @@ impl TemperMcpService {
         tools::resources::delete_resource(self, input).await
     }
 
-    #[tool(
-        description = "Assert a directed relationship from a source resource to a target slug. Specify the source by owner/context/doctype/slug. Returns a edge_handle that identifies this relationship for future retype, reweight, or fold calls."
-    )]
-    async fn assert_relationship(
-        &self,
-        Parameters(input): Parameters<tools::relationships::AssertRelationshipInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::relationships::assert_relationship(self, input).await
-    }
-
-    #[tool(
-        description = "Change the edge_kind and polarity of an existing relationship. Use the edge_handle returned by assert_relationship to identify the relationship."
-    )]
-    async fn retype_relationship(
-        &self,
-        Parameters(input): Parameters<tools::relationships::RetypeRelationshipInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::relationships::retype_relationship(self, input).await
-    }
-
-    #[tool(
-        description = "Update the weight of an existing relationship. Use the edge_handle returned by assert_relationship to identify the relationship."
-    )]
-    async fn reweight_relationship(
-        &self,
-        Parameters(input): Parameters<tools::relationships::ReweightRelationshipInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::relationships::reweight_relationship(self, input).await
-    }
-
-    #[tool(
-        description = "Retract (fold) an existing relationship, marking it inactive. Optionally provide a human-readable reason. Use the edge_handle returned by assert_relationship to identify the relationship."
-    )]
-    async fn fold_relationship(
-        &self,
-        Parameters(input): Parameters<tools::relationships::FoldRelationshipInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::relationships::fold_relationship(self, input).await
-    }
-
-    #[tool(
-        description = "Record an auditor's signed defensibility verdict on one (block, source) citation of a finding. The value spans [-1.0, 1.0]: assess how much this source supports the specific connection the citation claims — never whether the underlying claim is true, and never what the source itself says. A strongly negative value expresses that the source does not carry the connection made here, without asserting what the source does say; a positive value reinforces the citation. Only Resource-kind sources are auditable. Append-only: a later verdict never erases an earlier one."
-    )]
-    async fn record_citation_audit(
-        &self,
-        Parameters(input): Parameters<tools::citation_audits::RecordCitationAuditInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::citation_audits::record_citation_audit(self, input).await
-    }
-
-    #[tool(description = "Set a facet (typed property) on a resource — the steward's facet act")]
-    async fn facet_set(
-        &self,
-        Parameters(input): Parameters<tools::facets::FacetSetInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::facets::facet_set(self, input).await
-    }
-
-    #[tool(
-        description = "Set a facet (typed property) on a RELATIONSHIP (edge), addressed by its edge handle — a qualifier on a link rather than on a thing"
-    )]
-    async fn edge_facet_set(
-        &self,
-        Parameters(input): Parameters<tools::facets::EdgeFacetSetInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::facets::edge_facet_set(self, input).await
-    }
-
-    #[tool(description = "Read the live facets of one relationship (edge)")]
-    async fn edge_facets(
-        &self,
-        Parameters(input): Parameters<tools::facets::EdgeFacetsInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::facets::edge_facets(self, input).await
-    }
-
-    #[tool(
-        description = "Read the live facets of one resource — one entry per assert, each with its weight and author. Use this to confirm a facet_set landed: get_resource collapses facets into a single newest-wins value in open_meta and drops the weight."
-    )]
-    async fn resource_facets(
-        &self,
-        Parameters(input): Parameters<tools::facets::ResourceFacetsInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::facets::resource_facets(self, input).await
-    }
-
-    #[tool(
-        description = "Read a team-self-cognition cogmap's ingest delta: how many new resources + events have landed in the team's contexts since the steward's watermark, and whether that clears the threshold (i.e. the steward should run)."
-    )]
-    async fn steward_ingest_delta(
-        &self,
-        Parameters(input): Parameters<temper_core::types::steward::StewardDeltaInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::steward::steward_ingest_delta(self, input).await
-    }
-
-    #[tool(
-        description = "Advance a team-self-cognition cogmap's ingest watermark to a given event id — the cursor a completed steward run records so the next delta counts only newer material. Requires cogmap-write."
-    )]
-    async fn steward_advance_watermark(
-        &self,
-        Parameters(input): Parameters<temper_core::types::steward::StewardAdvanceWatermarkInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::steward::steward_advance_watermark(self, input).await
-    }
+    // ── Search & Query (unchanged) ─────────────────────────────────────
 
     #[tool(
         description = "Search resources using text queries, embedding vectors, or both. Send a plain text 'query' for full-text search — no embedding required."
@@ -361,18 +237,6 @@ impl TemperMcpService {
     }
 
     #[tool(
-        description = "Read the event trail (append-only history) of a graph element — a resource (node) or a relationship (edge). A time-ordered list of the events that produced and mutated it: created, updated, relationship asserted/folded, facets set, etc. Each event carries its actor, time, and replay-sufficient payload. An unreadable or nonexistent element returns an empty trail, never an error. Pass `kind` (node | edge) and `element` (a resource ref for a node, an edge UUID for an edge; the decorated `slug-<uuid>` form is accepted and the slug half ignored)."
-    )]
-    async fn element_trail(
-        &self,
-        Parameters(input): Parameters<tools::trail::ElementTrailInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::trail::element_trail(self, input).await
-    }
-
-    #[tool(
         description = "Run a composed query — a DAG of act invocations (find-exact, find-about-anywhere, find-about-within, follow-from, find-resources-with) and set combinations (union, intersect, difference), with per-stage filters and property predicates. The `plan` object IS the composition contract; its schema describes every stage, act, filter, and combinator. A refused plan returns every refusal at once — each names its stage and reason — so the plan can be repaired in one round trip. Set `trace: false` to omit the per-stage trace and receive only the returned arms."
     )]
     async fn run_query(
@@ -384,196 +248,86 @@ impl TemperMcpService {
         tools::query::run_query(self, input).await
     }
 
+    // ── Trail (unchanged) ──────────────────────────────────────────────
+
     #[tool(
-        description = "Create (genesis) a new cognitive map: a cogmap plus its telos charter resource. System-admin only. The map is born with an EMPTY charter — author the charter and deliver it afterwards with `temper cogmap reconcile` (which embeds client-side). Idempotent at a supplied cogmap_id (re-creating is a no-op)."
+        description = "Read the event trail (append-only history) of a graph element — a resource (node) or a relationship (edge). A time-ordered list of the events that produced and mutated it: created, updated, relationship asserted/folded, facets set, etc. Each event carries its actor, time, and replay-sufficient payload. An unreadable or nonexistent element returns an empty trail, never an error. Pass `kind` (node | edge) and `element` (a resource ref for a node, an edge UUID for an edge; the decorated `slug-<uuid>` form is accepted and the slug half ignored)."
     )]
-    async fn cogmap_create(
+    async fn element_trail(
         &self,
-        Parameters(input): Parameters<tools::cognitive_maps::CogmapCreateInput>,
+        Parameters(input): Parameters<tools::trail::ElementTrailInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        tools::cognitive_maps::cogmap_create(self, input).await
+        tools::trail::element_trail(self, input).await
+    }
+
+    // ── Relationship (consolidated 4→1 write) ──────────────────────────
+
+    #[tool(
+        description = "Manage relationships (graph edges) with an `action` discriminator. Actions: `assert` (create a directed relationship from source to target — requires source, target, edge_kind, polarity, label, weight), `retype` (change edge_kind and polarity — requires edge_handle, edge_kind, polarity), `reweight` (change weight — requires edge_handle, weight), `fold` (retract/mark inactive — requires edge_handle, optional reason). The edge_handle comes from the assert response. Per-act authorship fields (confidence, reasoning, invocation_id, etc.) are accepted on all actions."
+    )]
+    async fn relationship(
+        &self,
+        Parameters(input): Parameters<tools::relationships::RelationshipInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::relationships::relationship(self, input).await
+    }
+
+    // ── Citation audit (unchanged write) ───────────────────────────────
+
+    #[tool(
+        description = "Record an auditor's signed defensibility verdict on one (block, source) citation of a finding. The value spans [-1.0, 1.0]: assess how much this source supports the specific connection the citation claims — never whether the underlying claim is true, and never what the source itself says. A strongly negative value expresses that the source does not carry the connection made here, without asserting what the source does say; a positive value reinforces the citation. Only Resource-kind sources are auditable. Append-only: a later verdict never erases an earlier one."
+    )]
+    async fn record_citation_audit(
+        &self,
+        Parameters(input): Parameters<tools::citation_audits::RecordCitationAuditInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::citation_audits::record_citation_audit(self, input).await
+    }
+
+    // ── Facets (consolidated: 2→1 read, 2→1 write) ─────────────────────
+
+    #[tool(
+        description = "Read the live facets of a resource or a relationship (edge) — one entry per assert, each with its weight and author. Set `target` to `resource` (requires `resource` ref) or `edge` (requires `edge_handle`). Use this to confirm a facet_set landed: get_resource collapses facets into a single newest-wins value in open_meta and drops the weight."
+    )]
+    async fn facets_read(
+        &self,
+        Parameters(input): Parameters<tools::facets::FacetsReadInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::facets::facets_read(self, input).await
     }
 
     #[tool(
-        description = "Read a cognitive map's materialize delta: how many formation events (created resources, asserted/folded edges, facets, block edits) have landed on the map since it was last materialized, and whether that clears the threshold (i.e. the map should re-materialize)."
+        description = "Set a facet (typed property) on a resource or a relationship (edge). Set `target` to `resource` (requires `resource` ref) or `edge` (requires `edge_handle`). The facet's typed value payload goes in `values`; optional `weight` (0.0-1.0, defaults to 1.0). Per-act authorship fields accepted."
     )]
-    async fn cogmap_materialize_delta(
+    async fn facet_set(
         &self,
-        Parameters(input): Parameters<temper_core::types::materialize::MaterializeDeltaInput>,
+        Parameters(input): Parameters<tools::facets::FacetSetUnifiedInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        tools::cognitive_maps::cogmap_materialize_delta(self, input).await
+        tools::facets::facet_set_unified(self, input).await
     }
 
-    #[tool(
-        description = "Re-materialize a cognitive map's regions when its formation delta since the last materialize clears the threshold; a safe no-op below threshold (materialized: false). This is the substrate's deterministic region-formation cadence — not an authored act. Requires cogmap-write."
-    )]
-    async fn cogmap_materialize(
-        &self,
-        Parameters(input): Parameters<temper_core::types::materialize::MaterializeTriggerInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::cognitive_maps::cogmap_materialize(self, input).await
-    }
+    // ── Cogmap reads (consolidated 6→1) + list + create + materialize ─
 
     #[tool(
-        description = "Bind a cognitive map to a team (system-admin only). Widens the map's producer-intersection reach to include the team's shared resources. Idempotent — re-binding is a no-op (bound: false). Pass the map by ref and the team by UUID."
+        description = "Read a cognitive map with a `view` discriminator. Views: `show` (orient on one map — identity, charter, foundational resources), `shape` (materialized regions, most salient first), `metrics` (per-region analytics: centrality, cohesion, tension, reference standing, telos alignment), `analytics` (map-level: telos charter, staleness, regulation concepts), `charter` (telos/charter blocks — statement, questions, framing), `materialize_delta` (how many formation events since last materialize, whether threshold is cleared). Pass the map by ref (`cogmap`); `lens` narrows `shape`/`metrics`; `threshold` gates `materialize_delta`."
     )]
-    async fn cogmap_bind(
+    async fn cogmap_read(
         &self,
-        Parameters(input): Parameters<tools::cognitive_maps::CogmapBindInput>,
+        Parameters(input): Parameters<tools::cognitive_maps::CogmapReadInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        tools::cognitive_maps::cogmap_bind(self, input).await
-    }
-
-    #[tool(
-        description = "Unbind a cognitive map from a team (system-admin only). No-op safe — unbinding a non-existent binding returns unbound: false. Pass the map by ref and the team by UUID."
-    )]
-    async fn cogmap_unbind(
-        &self,
-        Parameters(input): Parameters<tools::cognitive_maps::CogmapBindInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::cognitive_maps::cogmap_unbind(self, input).await
-    }
-
-    #[tool(
-        description = "Grant a capability on a cognitive map (system-admin OR a holder of can_grant on the map). Post-Q-A, authoring a map requires an explicit write grant, not team membership. Pass the map by ref, exactly one principal (to_profile or to_team by UUID), and capability flags (read/write/grant; read is implied by write/grant)."
-    )]
-    async fn cogmap_grant(
-        &self,
-        Parameters(input): Parameters<tools::cognitive_maps::CogmapGrantInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::cognitive_maps::cogmap_grant(self, input).await
-    }
-
-    #[tool(
-        description = "Revoke a capability grant on a cognitive map (system-admin OR a holder of can_grant on the map). No-op safe. Pass the map by ref and exactly one principal (from_profile or from_team by UUID)."
-    )]
-    async fn cogmap_revoke(
-        &self,
-        Parameters(input): Parameters<tools::cognitive_maps::CogmapRevokeInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::cognitive_maps::cogmap_revoke(self, input).await
-    }
-
-    #[tool(
-        description = "Grant a capability on a resource to a profile or team (system-admin, a can_grant holder, OR the resource owner). Pass the resource by ref, exactly one principal (to_profile or to_team by UUID), and capability flags (read/write/grant; read is implied by write/grant)."
-    )]
-    async fn resource_grant(
-        &self,
-        Parameters(input): Parameters<tools::resources::ResourceGrantInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::resources::resource_grant(self, input).await
-    }
-
-    #[tool(
-        description = "Revoke a capability grant on a resource (system-admin, a can_grant holder, or the resource owner). No-op safe. Pass the resource by ref and exactly one principal (from_profile or from_team by UUID)."
-    )]
-    async fn resource_revoke(
-        &self,
-        Parameters(input): Parameters<tools::resources::ResourceRevokeInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::resources::resource_revoke(self, input).await
-    }
-
-    #[tool(
-        description = "Read a cognitive map's surface tier: its materialized regions (salience, cohesion, label, member count) under an optional lens. Pass the map by ref."
-    )]
-    async fn cogmap_shape(
-        &self,
-        Parameters(input): Parameters<temper_core::types::cognitive_maps::CogmapShapeInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::cognitive_maps::cogmap_shape(self, input).await
-    }
-
-    #[tool(
-        description = "Read a cognitive map's per-region analytics metrics (centrality, content cohesion, internal tension, reference standing, telos alignment) under an optional lens. Pass the map by ref."
-    )]
-    async fn cogmap_region_metrics(
-        &self,
-        Parameters(input): Parameters<temper_core::types::cognitive_maps::CogmapRegionMetricsInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::cognitive_maps::cogmap_region_metrics(self, input).await
-    }
-
-    #[tool(
-        description = "Read a cognitive map's map-level analytics: its telos charter resource id, staleness, and the regulation concept set. Pass the map by ref."
-    )]
-    async fn cogmap_analytics(
-        &self,
-        Parameters(input): Parameters<temper_core::types::cognitive_maps::CogmapAnalyticsInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::cognitive_maps::cogmap_analytics(self, input).await
-    }
-
-    #[tool(
-        description = "Orient in a CONTEXT by its regions: read the context's materialized regions (salience, cohesion, label, member count), most salient first. This is the region-level view of everything in a context — the fastest way to see what a context is ABOUT before reading any resource in it. Pass the context by ref (@me/<slug>, +<team>/<slug>, or a UUID)."
-    )]
-    async fn context_shape(
-        &self,
-        Parameters(input): Parameters<temper_core::types::cognitive_maps::ContextShapeInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::cognitive_maps::context_shape(self, input).await
-    }
-
-    #[tool(
-        description = "Read a context's per-region analytics metrics (centrality, content cohesion, internal tension, reference standing, telos alignment) under an optional lens. Pass the context by ref (@me/<slug>, +<team>/<slug>, or a UUID)."
-    )]
-    async fn context_region_metrics(
-        &self,
-        Parameters(input): Parameters<temper_core::types::cognitive_maps::ContextShapeInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::cognitive_maps::context_region_metrics(self, input).await
-    }
-
-    #[tool(
-        description = "Re-form a context's regions when enough has changed since its last materialize (below threshold this is a safe no-op). Requires write access to the context. Pass the context by ref (@me/<slug>, +<team>/<slug>, or a UUID)."
-    )]
-    async fn context_materialize(
-        &self,
-        Parameters(input): Parameters<temper_core::types::materialize::ContextMaterializeInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::cognitive_maps::context_materialize(self, input).await
-    }
-
-    #[tool(
-        description = "Read a cognitive map's telos/charter blocks (statement / questions / framing) — the steward orients on this before acting. Pass the map by ref."
-    )]
-    async fn cogmap_read_charter(
-        &self,
-        Parameters(input): Parameters<tools::cognitive_maps::CogmapReadCharterInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::cognitive_maps::cogmap_read_charter(self, input).await
+        tools::cognitive_maps::cogmap_read(self, input).await
     }
 
     #[tool(
@@ -589,274 +343,133 @@ impl TemperMcpService {
     }
 
     #[tool(
-        description = "Orient on ONE cognitive map in a single call: its identity, its charter (statement / questions / framing — what the map is for), and the foundational resources it is built on (its homed set, with the telos flagged). Pass the map by ref. Errors 'not found or not readable' when you cannot read it."
+        description = "Create (genesis) a new cognitive map: a cogmap plus its telos charter resource. System-admin only. The map is born with an EMPTY charter — author the charter and deliver it afterwards with `temper cogmap reconcile` (which embeds client-side). Idempotent at a supplied cogmap_id (re-creating is a no-op)."
     )]
-    async fn cogmap_show(
+    async fn cogmap_create(
         &self,
-        Parameters(input): Parameters<tools::cognitive_maps::CogmapShowInput>,
+        Parameters(input): Parameters<tools::cognitive_maps::CogmapCreateInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        tools::cognitive_maps::cogmap_show(self, input).await
+        tools::cognitive_maps::cogmap_create(self, input).await
     }
 
     #[tool(
-        description = "Begin a segmented (multi-block) ingest for a body too large to send in one call, landing its first segment. Prefer create_resource for anything that fits a single call — segmented ingest costs extra round-trips. content is segment 0's text and content_hash is its bare-hex sha256. Returns resource_id, the landed block set, and an opaque body_hash. Follow with ingest_append for each further segment, then ingest_finalize."
+        description = "Re-materialize a cognitive map's regions when its formation delta since the last materialize clears the threshold; a safe no-op below threshold (materialized: false). This is the substrate's deterministic region-formation cadence — not an authored act. Requires cogmap-write."
     )]
-    async fn ingest_begin(
+    async fn cogmap_materialize(
         &self,
-        Parameters(input): Parameters<tools::ingest::IngestBeginInput>,
+        Parameters(input): Parameters<temper_core::types::materialize::MaterializeTriggerInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        tools::ingest::ingest_begin(self, input).await
+        tools::cognitive_maps::cogmap_materialize(self, input).await
+    }
+
+    // ── Context (consolidated 4→1 read, 5→1 write) ────────────────────
+
+    #[tool(
+        description = "Read a context with a `view` discriminator. Views: `list` (all contexts available to you), `get` (one context by UUID — requires `id`), `shape` (materialized regions, most salient first — the fastest orientation move; requires `context` ref), `metrics` (per-region analytics: centrality, cohesion, tension, reference standing, telos alignment; requires `context` ref). The `context` field takes a context ref (`@me/<slug>`, `+<team>/<slug>`, or UUID); `lens` narrows `shape`/`metrics`."
+    )]
+    async fn context_read(
+        &self,
+        Parameters(input): Parameters<tools::contexts::ContextReadInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::contexts::context_read(self, input).await
     }
 
     #[tool(
-        description = "Append one segment to an in-progress segmented ingest. Segments are zero-indexed and segment 0 landed at ingest_begin, so start at seq=1 and send them in order. content_hash is the bare-hex sha256 of content; a mismatch is rejected. Re-appending an already-landed segment is a safe no-op, which is what makes retry and resume safe. Returns the landed block set and the body_hash to echo at finalize. You do not chunk or embed anything — send raw markdown text."
+        description = "Manage contexts with an `action` discriminator. Actions: `create` (new context — requires `name`, optional `owner`), `rename` (change display name, re-addresses the context — requires `context` UUID, `name`), `share` (share into a team's read-reach — requires `context` UUID, `team` UUID), `unshare` (remove a team's read-reach — requires `context` UUID, `team` UUID), `transfer` (transfer ownership to a team — requires `context` UUID, `team` UUID). Share/unshare/transfer are system-admin only. Rename re-addresses: the old slug stops resolving."
     )]
-    async fn ingest_append(
+    async fn context_manage(
         &self,
-        Parameters(input): Parameters<tools::ingest::IngestAppendInput>,
+        Parameters(input): Parameters<tools::contexts::ContextManageInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        tools::ingest::ingest_append(self, input).await
+        tools::contexts::context_manage(self, input).await
+    }
+
+    // ── Schema (consolidated 3→1 read) ─────────────────────────────────
+
+    #[tool(
+        description = "Describe schema with a `view` discriminator. Views: `doc_types` (list all available document types with schema summaries), `doc_type` (describe one type in detail — full JSON schema, required fields, enum values, example managed_meta; requires `name`), `open_meta` (the recognized open_meta conventions — recognized keys, their shapes, which are FTS-indexed)."
+    )]
+    async fn describe_schema(
+        &self,
+        Parameters(input): Parameters<tools::doc_types::DescribeSchemaInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::doc_types::describe_schema(self, input).await
+    }
+
+    // ── Invocation (consolidated 2→1 read, 2→1 write) ─────────────────
+
+    #[tool(
+        description = "Read agent-invocation envelopes with a `view` discriminator. Views: `show` (one envelope plus its acts by UUID — requires `invocation` ref), `list` (list envelopes, optionally narrowed by `cogmap` ref and/or `status`: open/completed/failed/abandoned)."
+    )]
+    async fn invocation_read(
+        &self,
+        Parameters(input): Parameters<tools::invocations::InvocationReadInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::invocations::invocation_read(self, input).await
     }
 
     #[tool(
-        description = "Declare a segmented ingest complete. expected_blocks is the total segment count including segment 0; expected_body_hash is the opaque body_hash from your most recent ingest_append or ingest_blocks response, echoed back verbatim. Fails if the landed set does not match, which means a segment is missing — call ingest_blocks to see which."
+        description = "Manage agent-invocation envelopes with an `action` discriminator. Actions: `open` (start an accountability envelope for one agent run against a cognitive map — requires `trigger_kind`, `originating_cogmap` ref; optional `parent_cogmap`; returns the server-minted invocation_id), `close` (terminate an open envelope — requires `invocation` ref, `disposition`: completed/failed/abandoned; optional `outcome`)."
     )]
-    async fn ingest_finalize(
+    async fn invocation_manage(
         &self,
-        Parameters(input): Parameters<tools::ingest::IngestFinalizeInput>,
+        Parameters(input): Parameters<tools::invocations::InvocationManageInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        tools::ingest::ingest_finalize(self, input).await
+        tools::invocations::invocation_manage(self, input).await
+    }
+
+    // ── Segmented ingest (consolidated 4→1 write) ──────────────────────
+
+    #[tool(
+        description = "Segmented (multi-block) ingest for bodies too large to send in one call, with an `action` discriminator. Actions: `begin` (land segment 0 and create the resource — requires flattened `create` fields, `content_hash`; optional `block_budget`, `total_blocks_hint`, `source_hash`; returns resource_id, landed block set, opaque body_hash), `append` (land segment N — requires `resource`, `seq` (starts at 1), `content`, `content_hash`; optional `sources`; idempotent re-append is a safe no-op), `finalize` (declare complete — requires `resource`, `expected_blocks`, `expected_body_hash` echoed verbatim), `blocks` (read landed segments for resume — requires `resource`). Prefer create_resource for anything that fits a single call."
+    )]
+    async fn segmented_ingest(
+        &self,
+        Parameters(input): Parameters<tools::ingest::SegmentedIngestInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::ingest::segmented_ingest(self, input).await
+    }
+
+    // ── Steward (unchanged, scoped descriptions) ───────────────────────
+
+    #[tool(
+        description = "This tool is for the team-self-cognition steward agent. If you are not running a steward cycle, you do not need this tool. Read a team-self-cognition cogmap's ingest delta: how many new resources + events have landed in the team's contexts since the steward's watermark, and whether that clears the threshold (i.e. the steward should run)."
+    )]
+    async fn steward_ingest_delta(
+        &self,
+        Parameters(input): Parameters<temper_core::types::steward::StewardDeltaInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::steward::steward_ingest_delta(self, input).await
     }
 
     #[tool(
-        description = "Read back the segments that have landed for an in-progress segmented ingest. This is how you resume after an interruption: compare the returned seq set against your segments, re-send only the missing ones with ingest_append, then ingest_finalize. Also returns the current body_hash."
+        description = "This tool is for the team-self-cognition steward agent. If you are not running a steward cycle, you do not need this tool. Advance a team-self-cognition cogmap's ingest watermark to a given event id — the cursor a completed steward run records so the next delta counts only newer material. Requires cogmap-write."
     )]
-    async fn ingest_blocks(
+    async fn steward_advance_watermark(
         &self,
-        Parameters(input): Parameters<tools::ingest::IngestBlocksInput>,
+        Parameters(input): Parameters<temper_core::types::steward::StewardAdvanceWatermarkInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        tools::ingest::ingest_blocks(self, input).await
-    }
-
-    #[tool(
-        description = "Open an agent-invocation envelope — an append-only accountability record for one agent run against a cognitive map. Returns the server-minted invocation_id; feed it into invocation_close when the run terminates. Pass the originating map by ref."
-    )]
-    async fn invocation_open(
-        &self,
-        Parameters(input): Parameters<temper_core::types::invocation::InvocationOpenInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::invocations::invocation_open(self, input).await
-    }
-
-    #[tool(
-        description = "Close an open agent-invocation envelope with a terminal disposition (completed/failed/abandoned) and an optional opaque outcome. Identify the envelope by the invocation_id returned by invocation_open."
-    )]
-    async fn invocation_close(
-        &self,
-        Parameters(input): Parameters<temper_core::types::invocation::InvocationCloseInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::invocations::invocation_close(self, input).await
-    }
-
-    #[tool(
-        description = "Show one agent-invocation envelope plus its acts (the stamped events that occurred under it), by raw UUID. Returns null if the invocation is absent or not readable."
-    )]
-    async fn invocation_show(
-        &self,
-        Parameters(input): Parameters<temper_core::types::invocation::InvocationShowInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::invocations::invocation_show(self, input).await
-    }
-
-    #[tool(
-        description = "List agent-invocation envelopes, optionally narrowed by originating cognitive map (by ref) and/or lifecycle status (open/completed/failed/abandoned)."
-    )]
-    async fn invocation_list(
-        &self,
-        Parameters(input): Parameters<temper_core::types::invocation::InvocationListInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::invocations::invocation_list(self, input).await
-    }
-
-    #[tool(
-        description = "Read the admin ledger: who granted what, to whom, and when. Exactly one axis — `subject` ('<kind>:<uuid>', e.g. kb_resources:0199...) asks what was done TO a thing; `actor` (a profile uuid) asks what a principal DID. Your own acts are always readable; reading another actor's is an audit and requires admin. The response carries `epoch`, the point admin history begins — an empty `entries` with an epoch means 'nothing since then', never 'nothing ever'."
-    )]
-    async fn admin_ledger(
-        &self,
-        Parameters(input): Parameters<temper_core::types::admin::AdminLedgerInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::admin_ledger::admin_ledger(self, input).await
-    }
-
-    #[tool(description = "List all contexts (workspaces) available to the authenticated user.")]
-    async fn list_contexts(
-        &self,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::contexts::list_contexts(self).await
-    }
-
-    #[tool(description = "Get details of a specific context by ID.")]
-    async fn get_context(
-        &self,
-        Parameters(input): Parameters<tools::contexts::GetContextInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::contexts::get_context(self, input).await
-    }
-
-    #[tool(description = "Create a new context (workspace) in the knowledge base.")]
-    async fn create_context(
-        &self,
-        Parameters(input): Parameters<temper_core::types::context::ContextCreateRequest>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::contexts::create_context(self, input).await
-    }
-
-    #[tool(
-        description = "Share a context into a team's read-reach (system-admin only). Every member of the team gains read access to the context's resources. Idempotent — safe to call when the share already exists. Pass the context and team by UUID (from list_contexts and your team listing)."
-    )]
-    async fn share_context(
-        &self,
-        Parameters(input): Parameters<tools::contexts::ShareContextInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::contexts::share_context(self, input).await
-    }
-
-    #[tool(
-        description = "Unshare a context from a team (system-admin only), removing the team's read-reach into it. No-op safe when there is no share to remove. Pass the context and team by UUID."
-    )]
-    async fn unshare_context(
-        &self,
-        Parameters(input): Parameters<tools::contexts::ShareContextInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::contexts::unshare_context(self, input).await
-    }
-
-    #[tool(
-        description = "Transfer a context's ownership to a team — the single path to shared authorship. Read-sharing (share_context) lets a team read a context; owning it lets the team's members write into it. Authorized for the context's administrator who also manages the target team (owner/maintainer), or an instance admin. Idempotent — safe when the context is already owned by the target team. Pass the context and target team by UUID."
-    )]
-    async fn transfer_context(
-        &self,
-        Parameters(input): Parameters<tools::contexts::TransferContextInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::contexts::transfer_context(self, input).await
-    }
-
-    #[tool(
-        description = "Rename a context — change its display name. The addressable slug is derived from the name server-side, so a rename RE-ADDRESSES the context: @me/notes becomes @me/field-notes, the old ref stops resolving, and every stored ref goes stale — use the context_ref in the result from now on. Authorized for the context's administrator (its profile owner, or an owner/maintainer of the owning team), or an instance admin. Idempotent — renamed: false when that is already the name. Refuses when the derived slug is taken under the same owner (it does NOT auto-suffix), or when the name has no addressable content. Pass the context by UUID (from list_contexts)."
-    )]
-    async fn rename_context(
-        &self,
-        Parameters(input): Parameters<tools::contexts::RenameContextInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::contexts::rename_context(self, input).await
-    }
-
-    #[tool(
-        description = "List all available document types with schema summaries. Returns id, name, has_schema, and required_fields for each type. Use describe_doc_type for full schema details."
-    )]
-    async fn list_doc_types(
-        &self,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::doc_types::list_doc_types(self).await
-    }
-
-    #[tool(
-        description = "Describe a specific document type in detail. Returns the full JSON schema, required fields, enum field values, and an example managed_meta object showing the tier-3 fields agents should supply."
-    )]
-    async fn describe_doc_type(
-        &self,
-        Parameters(input): Parameters<tools::doc_types::DescribeDocTypeInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::doc_types::describe_doc_type(self, input).await
-    }
-
-    #[tool(
-        description = "Describe the recognized open_meta conventions. Returns the self-describing JSON schema for the open (caller-defined) frontmatter tier — recognized keys, their shapes, and which are FTS-indexed (and at what weight) vs shape-only — plus discouraged bare keys. The tier stays free-form (additionalProperties: true); this is guidance for attaching keywords/tags/descriptor/date so they rank and validate correctly."
-    )]
-    async fn describe_open_meta(
-        &self,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::doc_types::describe_open_meta(self).await
-    }
-
-    #[tool(
-        description = "Get the authenticated user's profile, including display name, email, and preferences."
-    )]
-    async fn get_profile(
-        &self,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::profiles::get_profile(self).await
-    }
-
-    #[tool(description = "List the pending team invitations addressed to you (across all teams).")]
-    async fn list_my_invitations(
-        &self,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::invitations::list_my_invitations(self).await
-    }
-
-    #[tool(description = "Accept a team invitation by its token.")]
-    async fn accept_invitation(
-        &self,
-        Parameters(input): Parameters<tools::invitations::AcceptInvitationInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::invitations::accept_invitation(self, input).await
-    }
-
-    #[tool(description = "Decline a team invitation by its token.")]
-    async fn decline_invitation(
-        &self,
-        Parameters(input): Parameters<tools::invitations::DeclineInvitationInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::invitations::decline_invitation(self, input).await
+        tools::steward::steward_advance_watermark(self, input).await
     }
 }
 
@@ -1060,10 +673,11 @@ mod tests {
     use super::TemperMcpService;
 
     /// A `#[tool]` written into the wrong impl block compiles fine and is simply never advertised.
-    /// Assert the router actually carries the segmented-ingest four, rather than inferring it from
-    /// "it compiled". Needs no database — `tool_router()` is a pure associated function.
+    /// Assert the router actually carries the consolidated segmented-ingest tool, rather than
+    /// inferring it from "it compiled". Needs no database — `tool_router()` is a pure
+    /// associated function.
     #[test]
-    fn the_four_ingest_tools_are_advertised_by_the_router() {
+    fn the_segmented_ingest_tool_is_advertised_by_the_router() {
         let router = TemperMcpService::tool_router();
         let names: Vec<String> = router
             .list_all()
@@ -1071,24 +685,17 @@ mod tests {
             .map(|t| t.name.to_string())
             .collect();
 
-        for expected in [
-            "ingest_begin",
-            "ingest_append",
-            "ingest_finalize",
-            "ingest_blocks",
-        ] {
-            assert!(
-                names.iter().any(|n| n == expected),
-                "{expected} is not advertised; router has {names:?}"
-            );
-        }
+        assert!(
+            names.iter().any(|n| n == "segmented_ingest"),
+            "segmented_ingest is not advertised; router has {names:?}"
+        );
     }
 
-    /// Same failure mode as above, for the context act set: a `rename_context` tool body that
-    /// exists in `tools/contexts.rs` but is never delegated from this impl block leaves rename the
-    /// one context act an agent cannot perform — which is the parity the spec adds it for.
+    /// Same failure mode as above, for the context manage tool: `rename_context` is now one
+    /// action under the consolidated `context_manage` tool. If the consolidation drops the
+    /// `rename` action, the one context act an agent cannot perform is silently missing.
     #[test]
-    fn rename_context_is_advertised_by_the_router() {
+    fn context_manage_is_advertised_by_the_router() {
         let names: Vec<String> = TemperMcpService::tool_router()
             .list_all()
             .into_iter()
@@ -1096,8 +703,8 @@ mod tests {
             .collect();
 
         assert!(
-            names.iter().any(|n| n == "rename_context"),
-            "rename_context is not advertised; router has {names:?}"
+            names.iter().any(|n| n == "context_manage"),
+            "context_manage is not advertised; router has {names:?}"
         );
     }
 
