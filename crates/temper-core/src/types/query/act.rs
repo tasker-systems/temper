@@ -317,6 +317,14 @@ pub enum Disclosure {
     /// variant exists because the fields it names exist; a closed vocabulary may carry a member
     /// with no current declarer, where an open one may not.
     FilterCounts,
+    /// Which region each returned resource came from, and that region's score —
+    /// `ResourceHit.region_id` / `ResourceHit.region_score`.
+    ///
+    /// Declared by `survey`, which produces resources (the primary output) and discloses the
+    /// region each one came from (trace). The region is not the output — it is how the output was
+    /// reached, and a reader who wants the regions themselves pipes to a different act or reads
+    /// the trace.
+    Region,
 }
 
 /// One act, declared.

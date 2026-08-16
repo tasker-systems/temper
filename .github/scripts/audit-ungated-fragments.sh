@@ -160,11 +160,34 @@ PREFIX='__temper_ungated_'
 #   `jsonb_build_object`. Note the direction — the pre-fix behaviour returned MORE rows than asked
 #   for, never more than the caller could SEE. `p_visible_ids` was doing its job throughout; the
 #   defect was in a narrowing predicate, not in the gate.
+#
+# REVIEWED 2026-08-16 (`__temper_ungated_survey`, migration 20260816000020, the survey act, task
+# 01a00c0b-9a02). The function-NAME set grows by one; the SQL-file set grows by one; both Rust
+# counts grow by one.
+#
+#   VERDICT: `query_survey` computes `resources_visible_to(p_principal)` once and hands the array
+#     down — same shape as the other gated wrappers. BUT survey has TWO visibility gates, which is
+#     new to this file: the RESOURCE gate (the member join, filtered by `p_visible_ids`) and the
+#     REGION gate (inside `wayfind_region_scores`, by `p_principal`). The ungated core takes BOTH
+#     `p_visible_ids` and `p_principal` — a different shape from the other ungated cores, which
+#     take only `p_visible_ids`. The `p_principal` is the compiler's `$1` (always bound first),
+#     not a second id set. The audit invariant — "every ungated fragment is handed the RBAC verdict
+#     as `p_visible_ids`" — holds for the resource gate. The region gate is inside
+#     `wayfind_region_scores`, which is NOT an ungated function and is not in this baseline.
+#   EMITTER: the call goes through `emit_ungated_core_call`'s `CoreCall::Survey` arm, which writes
+#     `VISIBLE_IDS` and `PRINCIPAL_BIND` itself. Same one-emitter rule as the other arms.
+#   RESIDUE: unchanged and accepted.
+#
+#   NOTE THE SECOND ARGUMENT, which is the thing to get backwards: `p_principal` is in the second
+#     position (after `p_visible_ids`), not the first. The other ungated cores take only
+#     `p_visible_ids`; survey takes `p_visible_ids` THEN `p_principal`. A future widening that
+#     moves `p_principal` or adds a second id set would be the thing to review here.
 read -r -d '' SQL_BASELINE <<'EOF' || true
 __temper_ungated_find_exact
 __temper_ungated_find_resources_with
 __temper_ungated_find_wide
 __temper_ungated_follow_from
+__temper_ungated_survey
 EOF
 
 # The reviewed Rust baseline: <count> <path>, sorted by path. Every production file that NAMES an
@@ -201,9 +224,20 @@ EOF
 #     people stop believing. That function became an enum to take
 #     a second call shape; a second EMITTER was rejected precisely because the security property is
 #     that there is one place, and the second one is the one nobody audits.
+#
+# REVIEWED 2026-08-16 (survey becomes an act, task 01a00c0b-9a02) — both counts move by one.
+#   validate/mod.rs 4 -> 5: `CALLABLE_FRAGMENTS` gains
+#     `query_survey -> __temper_ungated_survey`. Naming a core here still does NOT call one.
+#   query_plan.rs 4 -> 5: a fifth `EMIT_*` constant (`EMIT_SURVEY`), and nothing else. Same
+#     reasoning as the selection entry — the count is constants, not call sites.
+#   VERDICT/EMITTER: the survey call goes through `emit_ungated_core_call`'s `CoreCall::Survey`
+#     arm, which writes `VISIBLE_IDS` and `PRINCIPAL_BIND` itself. Survey is the only core that
+#     takes BOTH — the others take only `VISIBLE_IDS` — because `wayfind_region_scores` applies
+#     its own region visibility by principal. The `PRINCIPAL_BIND` is the compiler's `$1`, not a
+#     second id set, so the one-emitter security property holds.
 read -r -d '' RUST_BASELINE <<'EOF' || true
-4 crates/temper-core/src/types/query/validate/mod.rs
-4 crates/temper-substrate/src/readback/query_plan.rs
+5 crates/temper-core/src/types/query/validate/mod.rs
+5 crates/temper-substrate/src/readback/query_plan.rs
 EOF
 
 # The SQL half: ungated functions DEFINED in migrations. A definition is what creates the hazard; a
@@ -352,6 +386,7 @@ read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260815000030_property_elements_and_tag_normalization.sql
 20260815000040_resource_property_predicates.sql
 20260816000010_range_operator.sql
+20260816000020_survey_act.sql
 EOF
 
 # The Rust half: production files naming an ungated fragment, per file. Comment lines are excluded

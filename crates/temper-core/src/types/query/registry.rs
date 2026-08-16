@@ -46,6 +46,10 @@ use super::scalars::BoundTerm;
 /// `build_state` stays provisional here.
 ///
 /// `[provisional — 2026-08-05; resolve in phase 4]`
+/// `[unused — 2026-08-16]` No declaration carries this state today — `follow-from` and `survey`
+/// both moved to `BuildState::Served` when their wrappers shipped. Kept rather than deleted because
+/// a future act whose mechanic is live but door-stranded would need it again.
+#[allow(dead_code)]
 fn provisionally_unexpressed() -> BuildState {
     BuildState::Fused {
         host: "unified_search".to_string(),
@@ -64,10 +68,9 @@ fn provisionally_unexpressed() -> BuildState {
 ///
 /// `follow-from` and `survey` used to carry this shape too, while [`provisionally_unexpressed`]
 /// recorded in prose that no door in fact reaches their mechanic. That tension is **over**
-/// `[ruled — 2026-08-10, Pete]`: both now declare [`DoorReach::Absent`] at every door, written out
-/// rather than routed through here, because a declaration describes the DEPLOYED system and holding
-/// a known-false `Serves` until `/api/query` arrives is the defect this whole field exists against.
-/// They restore to `Serves` when that door lands, which is additive.
+/// `[ruled — 2026-08-10, Pete]`: both now declare their door reach directly — `follow-from`
+/// restored to `Serves` on 2026-08-14 when its mechanic shipped, and `survey` restored on
+/// 2026-08-16 when `query_survey` landed. Neither routes through here anymore.
 ///
 /// `bounds_unreachable` is passed once for the same reason `cli_unreachable` is a parameter at all:
 /// it is the seam a shortfall on this axis would land in without a signature change, kept even
@@ -334,7 +337,13 @@ pub fn search_family() -> Vec<ActDeclaration> {
             // is keyed GATED entry point -> ungated core, and the incumbent is now a third,
             // shape-preserving wrapper that delegates to this one (`20260814000030`).
             served_by: Some("query_follow_from".to_string()),
-            build_state: provisionally_unexpressed(),
+            // `[amended — 2026-08-16]` was `provisionally_unexpressed()` (`Fused { host:
+            // "unified_search" }`), which was stale on two counts: `unified_search` was retired
+            // (`20260806000020`) and `query_follow_from` is a standalone function. The
+            // `door_coverage` was updated to `Serves` at CLI and API on 2026-08-14, but
+            // `build_state` was left behind — the same known-false declaration this field exists
+            // to stop. Now `Served`, matching the door coverage and `CALLABLE_FRAGMENTS`.
+            build_state: BuildState::Served,
             // **The one genuine foreclosure, now closed** `[2026-08-14]`. This read: "Bounded
             // follow-from is UNBUILT: search_graph_expand has no scope parameter, so 'walk from
             // these seeds but stay inside this set' is unstatable."
@@ -436,35 +445,39 @@ pub fn search_family() -> Vec<ActDeclaration> {
         ActDeclaration {
             name: ActName::Survey,
             asker_holds: "a question about what a scope knows".to_string(),
-            served_by: Some("wayfind_region_scores".to_string()),
-            build_state: provisionally_unexpressed(),
+            // `[amended — 2026-08-16]` was `wayfind_region_scores`; the act now has its own
+            // wrapper (`query_survey`, migration 20260816000020) that calls wayfind with
+            // `p_lens = NULL` and joins matched regions to member resources. The `served_by`
+            // points at the wrapper, not the underlying scorer, because the fingerprint and
+            // reachability rules key on this name.
+            served_by: Some("query_survey".to_string()),
+            build_state: BuildState::Served,
             // Takes (p_anchor_table, p_anchor_id) — an anchor, which a typed IdSet can name.
             accepts_bounds: vec![IdKind::Cogmap, IdKind::Context],
             accepts_seeds: vec![],
             accepts_bound_terms: vec![BoundTerm::Regions],
             accepts_filters: vec![],
             bound_ceilings: BTreeMap::from([(BoundTerm::Regions, 20)]),
-            produces: Some(IdKind::Region),
-            // No location: it produces regions, and a region is not somewhere inside a resource.
-            discloses: vec![],
-            // ABSENT AT EVERY DOOR `[ruled — 2026-08-10, Pete, ADJ-9a]`, for the same reason and by
-            // the same principle as `follow-from` above: this said `unified_doors(vec![])` — full
-            // reach — while no door reaches `wayfind_region_scores` at all. `/api/search` no longer
-            // runs the region funnel, and nothing outside temper-substrate's tests calls the
-            // function. The comment this replaces cited `--wayfind` and `--regions` as CLI flags;
-            // `temper search` has neither, and had neither when that was written. Restores to
-            // `Serves` when `/api/query` gives the act a door — additive.
-            door_coverage: BTreeMap::from([
-                (Door::Cli, DoorReach::Absent),
-                (Door::Api, DoorReach::Absent),
-                (Door::Mcp, DoorReach::Absent),
-            ]),
+            // `[amended — 2026-08-16]` was `Region`; the ratified ⟨3⟩ redesign produces the
+            // member RESOURCES of matched regions, not the regions. Regions move to `discloses`.
+            produces: Some(IdKind::Resource),
+            // The region each resource came from is trace disclosure, not the primary output.
+            discloses: vec![Disclosure::Region],
+            // `[amended — 2026-08-16]` was ABSENT AT EVERY DOOR. The act now has a door: the
+            // `query_survey` wrapper is wired into `CALLABLE_FRAGMENTS` and the compiler emits
+            // it. Survey is a knowledge subject (resources), so it reaches all three doors per
+            // `subject-decides-the-door`. No term-axis shortfall at any door — `Regions` is the
+            // only bound term and all three doors admit it.
+            door_coverage: unified_doors(vec![], vec![]),
             orders_by: Some(ActQuantity {
                 field: "region_score".to_string(),
                 means: "alpha * sal_norm + beta * query_cos + kappa * prior, with alpha 0.4, beta \
                         0.6 and kappa 0.05 — the region's per-kind salience rank, blended with its \
                         centroid's similarity to the query, plus an anchor-kind prior of 1.0 for a \
-                        region homed on a cogmap and 0.6 for one homed on a context"
+                        region homed on a cogmap and 0.6 for one homed on a context. Resources \
+                        within a matched region are ranked by the resource's own embedding \
+                        similarity to the query (query_cos at a finer grain), not the region's \
+                        centroid similarity."
                     .to_string(),
                 // The surprise, and the reason this variant exists. `sal_norm` is a `percent_rank`
                 // in [0,1], but `query_cos` is `1 - (centroid <=> p_emb)` and a cosine DISTANCE
@@ -482,6 +495,12 @@ pub fn search_family() -> Vec<ActDeclaration> {
                 // Note what this is next to: `vec_norm` rescales the SAME `<=>` operator as
                 // `1 - d/2` into [0,1]. Two rescales of one distance, in one search family, with
                 // neither column name disclosing which it is.
+                //
+                // `[amended — 2026-08-16]` The within-region ranking reuses `query_cos` at a
+                // finer grain (the resource's own embedding, not the region's centroid). This
+                // does NOT change the `region_score` formula or its range — the blend is the
+                // sal_norm open ruling, which stands. The within-resource `query_cos` spans
+                // [-1,1] by the same reasoning, and is a disclosed quantity on each resource row.
                 scale: QuantityScale::OtherRange {
                     bounds: "[-0.57, 1.05]".to_string(),
                 },
@@ -694,7 +713,7 @@ mod tests {
     }
 
     #[test]
-    fn the_served_set_is_the_four_query_acts_plus_substantiate() {
+    fn the_served_set_is_the_five_query_acts_plus_substantiate() {
         // WAS `substantiate_is_the_only_act_with_a_door_of_its_own`, and before that
         // `nothing_in_the_search_family_is_served`, whose comment read "every mechanic is reachable
         // only through unified_search". That sentence was FALSE about the deployed system while its
@@ -717,6 +736,12 @@ mod tests {
         // once the fragment shipped would have been the same known-false declaration this field was
         // added to stop.
         //
+        // `[moved — 2026-08-16]` `survey` joins, served by `query_survey` (migration
+        // `20260816000020`). It went `Fused` to `Served` when the `p_lens` blocker was settled
+        // (`NULL` is correct) and the wrapper shipped. Same day, `follow-from`'s `build_state` was
+        // corrected from `Fused` to `Served` — its `door_coverage` was already `Serves` at CLI and
+        // API since 2026-08-14, but `build_state` was left stale. Both are now `Served`.
+        //
         // Kept as an EXACT set: an act acquiring or losing a door must be a deliberate edit here,
         // and `build_state` moving is BREAKING under the semver table (design §6.2). Order follows
         // `search_family()`.
@@ -732,6 +757,8 @@ mod tests {
                 ActName::FindAboutAnywhere,
                 ActName::FindAboutWithin,
                 ActName::FindResourcesWith,
+                ActName::FollowFrom,
+                ActName::Survey,
                 ActName::Substantiate,
             ]
         );
@@ -866,7 +893,7 @@ mod tests {
         }
     }
 
-    /// The act nothing can invoke says so at every door.
+    /// The act that was stranded now reaches every door.
     ///
     /// `[ruled — 2026-08-10, Pete, ADJ-9a]` `follow-from` and `survey` both declared
     /// `unified_doors(vec![])` — full reach at CLI, API and MCP — while `/api/search` calls only the
@@ -876,24 +903,25 @@ mod tests {
     /// none the whole time.
     ///
     /// `[narrowed to one — 2026-08-14]` **`follow-from` is no longer stranded** — it reaches
-    /// `/api/query` at CLI and API, which is the restoration its own comment promised and this test
-    /// exists to force through a deliberate edit. `survey` still waits on a `p_lens` slot.
+    /// `/api/query` at CLI and API.
     ///
-    /// Kept as an EXACT set of doors rather than a `contains`, for the same reason
-    /// `the_served_set_…` is: an act acquiring a door must be a deliberate edit here, beside the
-    /// door actually existing.
+    /// `[closed — 2026-08-16]` **`survey` is no longer stranded either.** The `query_survey`
+    /// wrapper (migration 20260816000020) gives it a door, and the `p_lens` blocker was settled
+    /// (`NULL` is correct — the lens is a clustering-time parameter). Survey is a knowledge subject
+    /// (resources), so `subject-decides-the-door` requires all three doors. This test was the
+    /// stranded-mechanic assertion; it is now the served-at-every-door assertion, kept as an exact
+    /// set so an act losing a door must be a deliberate edit here.
     #[test]
-    fn the_stranded_mechanic_declares_no_door_at_all() {
+    fn the_survey_act_reaches_every_door() {
         let a = declaration(&ActName::Survey).unwrap();
         assert!(
             a.served_by.is_some(),
-            "survey still names a live mechanic — that is what makes the absence worth declaring"
+            "survey names a live mechanic — query_survey"
         );
         for door in Door::ALL {
-            assert_eq!(
-                a.door_coverage.get(&door),
-                Some(&DoorReach::Absent),
-                "survey claims {door:?} reaches it; no door does"
+            assert!(
+                matches!(a.door_coverage.get(&door), Some(DoorReach::Serves { .. })),
+                "survey must serve {door:?}"
             );
         }
     }
@@ -1181,10 +1209,14 @@ mod tests {
     fn survey_accepts_anchor_kinds_as_bounds() {
         // Dissolved by the typed currency: wayfind_region_scores takes (p_anchor_table,
         // p_anchor_id), so cogmap_list -> survey needs no SQL change.
+        //
+        // `[amended — 2026-08-16]` was `produces: Region`; the ratified ⟨3⟩ redesign produces
+        // the member RESOURCES of matched regions. Regions move to `discloses`.
         let a = declaration(&ActName::Survey).unwrap();
         assert!(a.accepts_bounds.contains(&IdKind::Cogmap));
         assert!(a.accepts_bounds.contains(&IdKind::Context));
-        assert_eq!(a.produces, Some(IdKind::Region));
+        assert_eq!(a.produces, Some(IdKind::Resource));
+        assert!(a.discloses.contains(&Disclosure::Region));
     }
 
     #[test]

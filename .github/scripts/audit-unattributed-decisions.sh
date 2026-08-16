@@ -122,7 +122,7 @@ read -r -d '' BASELINE <<'EOF' || true
 1 crates/temper-core/src/types/query/scalars.rs
 1 crates/temper-core/src/types/query/stage.rs
 1 crates/temper-core/src/types/query/validate/capability.rs
-4 crates/temper-core/src/types/query/validate/mod.rs
+3 crates/temper-core/src/types/query/validate/mod.rs
 1 crates/temper-core/src/types/query/validate/shape.rs
 EOF
 

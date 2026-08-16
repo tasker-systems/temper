@@ -144,6 +144,12 @@ const WALK_GAMMA: &str = "0.5::double precision";
 /// select's shared column list, which every act stage and every tally arm must match.
 pub const EMIT_FOLLOW_FROM: &str = "__temper_ungated_follow_from";
 
+/// The survey act (`20260816000020`). Unlike the other cores, this one takes BOTH `p_visible_ids`
+/// (the hoisted resource gate) and `p_principal` (for `wayfind_region_scores`'s internal region
+/// gate). It produces resources with `region_score` as the quantity and `region_id`/`affinity` as
+/// disclosed columns. See `CoreCall::Survey` and the migration for the two-gate design.
+pub const EMIT_SURVEY: &str = "__temper_ungated_survey";
+
 /// **Every emitted identifier is double-quoted**, here and at each CTE definition and reference.
 /// `[fixed — 2026-08-09]` `StageName::parse` admits `[a-z][a-z0-9_]{0,62}`, which includes `both`,
 /// `all`, `order` and every other reserved word in lower case; unquoted, each is a syntax error a
@@ -598,15 +604,58 @@ fn emit_act_body(
                  FROM {call}"
             )))
         }
+        Some(EMIT_SURVEY) => {
+            // Survey requires an intention (enforced by the shape pass). A `None` embedding here
+            // means the server's embed attempt failed — `EmbeddingUnavailable`, same as find-about.
+            let Some(emb) = embedding else {
+                refusals.push(PlanRefusal {
+                    stage: Some(inv.name.clone()),
+                    reason: RefusalReason::EmbeddingUnavailable,
+                    detail: "a survey stage needs a query embedding; none was supplied and \
+                             the server could not compute one"
+                        .to_string(),
+                });
+                return Ok(emitted(refused_body(&act)));
+            };
+            let ei = binds.len() + 1;
+            binds.push(QueryBind::Embedding(emb.to_vec()));
+            // `regions_n` is bound from the `Regions` bound term, clamped to the ceiling of 20 by
+            // `applied_terms`. It is a funnel width (how many regions to match), not a row limit.
+            let applied = temper_core::types::query::declaration(&inv.act)
+                .map(|d| temper_core::types::query::applied_terms(&inv.terms, &d))
+                .unwrap_or_default();
+            let regions_n = match applied.get(&BoundTerm::Regions) {
+                Some(v) => {
+                    let idx = binds.len() + 1;
+                    binds.push(QueryBind::Int(*v));
+                    format!("${idx}::int")
+                }
+                None => "NULL::int".to_string(),
+            };
+            let call = emit_ungated_core_call(&CoreCall::Survey {
+                core: EMIT_SURVEY,
+                embedding: format!("${ei}::vector"),
+                regions_n: &regions_n,
+                anchor_table: &anchor_table,
+                anchor_id: &anchor_id,
+            });
+            Ok(emitted(format!(
+                "  -- act: {act} -> {EMIT_SURVEY}\n  \
+                 SELECT resource_id AS id, 'resource'::text AS kind, \
+                 region_score::double precision AS quantity, NULL::jsonb AS via\n    \
+                 FROM {call}"
+            )))
+        }
         // **Unreachable through `validate`, and emitted anyway.** `survey` used to reach here; it
         // left `CALLABLE_FRAGMENTS` because its fragment takes an argument no slot supplies
         // (`p_lens`), and `validate` now refuses it with `NotSeparablyReachable` before a
         // `ValidatedComposition` can exist. (`follow-from` was the other, and rejoined the map on
-        // 2026-08-14 — its `p_depth`/`p_gamma` turned out to want constants rather than slots.) Every act this arm
-        // could still catch is one that declared itself into `search_family()` with a `served_by`
-        // this builder has no case for — an internal inconsistency, not a caller error. It emits a
-        // function that deliberately does not exist so Postgres errors loudly, rather than guessing
-        // a value and returning plausible rows.
+        // 2026-08-14 — its `p_depth`/`p_gamma` turned out to want constants rather than slots.)
+        // `[2026-08-16]` survey rejoined too — `p_lens = NULL` is correct, not a slot. Every act
+        // this arm could still catch is one that declared itself into `search_family()` with a
+        // `served_by` this builder has no case for — an internal inconsistency, not a caller error.
+        // It emits a function that deliberately does not exist so Postgres errors loudly, rather
+        // than guessing a value and returning plausible rows.
         //
         // **NOTHING TESTS THIS ARM, and that is a second fact rather than the same one restated.**
         // `[declared — 2026-08-12]` "Unreachable through `validate`" and "no test exercises it" are
@@ -715,6 +764,25 @@ enum CoreCall<'a> {
         /// against a name that also has a twelve-parameter form.
         properties: String,
     },
+    /// The survey core: a query embedding, a funnel width, and an anchor pair. The only core that
+    /// takes BOTH `VISIBLE_IDS` (the resource gate) and `PRINCIPAL_BIND` (the region gate inside
+    /// `wayfind_region_scores`).
+    ///
+    /// **`p_emb` is bound from the stage's intention**, same as the find-about acts. Survey
+    /// requires an intention (enforced by the shape pass); a `None` here means the server's embed
+    /// attempt failed, which is `EmbeddingUnavailable` — same refusal, same reason.
+    ///
+    /// **`regions_n` is bound from the `Regions` bound term**, clamped to the ceiling of 20 by
+    /// `applied_terms`. It is a funnel width (how many regions to match), not a row limit — survey
+    /// still declines `Limit` because `Limit` means rows and survey's rows are resources, not
+    /// regions.
+    Survey {
+        core: &'a str,
+        embedding: String,
+        regions_n: &'a str,
+        anchor_table: &'a str,
+        anchor_id: &'a str,
+    },
 }
 
 /// **The one place an ungated core is called, and the only place its authorization inputs are
@@ -798,6 +866,21 @@ fn emit_ungated_core_call(c: &CoreCall) -> String {
         } => format!(
             "{core}({VISIBLE_IDS}, {seeds}, {depth}, {gamma}, {edge_kinds}, {labels}, {bound}, \
              {limit}, {edge_properties})"
+        ),
+        // The ONLY core that takes BOTH `VISIBLE_IDS` and `PRINCIPAL_BIND`: `wayfind_region_scores`
+        // applies its own region visibility by principal, so the ungated core needs `$1` for the
+        // region gate beside the hoisted set for the resource gate. The `PRINCIPAL_BIND` is the
+        // compiler's `$1` (always bound first), not a second id set — the one-emitter security
+        // property holds because no caller can influence either argument here.
+        CoreCall::Survey {
+            core,
+            embedding,
+            regions_n,
+            anchor_table,
+            anchor_id,
+        } => format!(
+            "{core}({VISIBLE_IDS}, {PRINCIPAL_BIND}, {embedding}, {regions_n}, {anchor_table}, \
+             {anchor_id})"
         ),
     }
 }

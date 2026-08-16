@@ -16,6 +16,11 @@
       "const": "filter_counts",
       "description": "How many rows each filter admitted and excluded — `NarrowedBy.admitted` / `.excluded`.\n\nDeclared by NO act today, and that is a measured absence rather than an oversight: no\ndeployed fragment computes these counts, and counting on demand costs a second query. The\nvariant exists because the fields it names exist; a closed vocabulary may carry a member\nwith no current declarer, where an open one may not.",
       "type": "string"
+    },
+    {
+      "const": "region",
+      "description": "Which region each returned resource came from, and that region's score —\n`ResourceHit.region_id` / `ResourceHit.region_score`.\n\nDeclared by `survey`, which produces resources (the primary output) and discloses the\nregion each one came from (trace). The region is not the output — it is how the output was\nreached, and a reader who wants the regions themselves pipes to a different act or reads\nthe trace.",
+      "type": "string"
     }
   ],
   "title": "Disclosure"
