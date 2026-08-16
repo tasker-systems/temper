@@ -696,6 +696,110 @@ pub async fn context_materialize(
     )]))
 }
 
+// ── Consolidated read tool (6→1) ───────────────────────────────────────────────
+
+/// The cogmap-read view to perform.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CogmapReadView {
+    /// Orient on one map: identity, charter, and foundational resources.
+    Show,
+    /// Read the map's materialized regions (most salient first).
+    Shape,
+    /// Read per-region analytics metrics.
+    Metrics,
+    /// Read map-level analytics (telos charter, staleness, regulation concepts).
+    Analytics,
+    /// Read the map's telos/charter blocks (statement / questions / framing).
+    Charter,
+    /// Read the map's materialize delta (how many formation events since last materialize).
+    MaterializeDelta,
+}
+
+/// Consolidated cogmap-read tool — one read tool with a `view` discriminator.
+///
+/// Collapses `cogmap_show`, `cogmap_shape`, `cogmap_region_metrics`, `cogmap_analytics`,
+/// `cogmap_read_charter`, and `cogmap_materialize_delta` into a single MCP tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CogmapReadInput {
+    /// Which cogmap read to perform.
+    pub view: CogmapReadView,
+    /// The cognitive map to read, by ref (UUID or `slug-<uuid>`). Required for all views.
+    pub cogmap: String,
+    /// Optional lens ref to filter regions. Used with `shape` and `metrics`.
+    #[serde(default)]
+    pub lens: Option<String>,
+    /// Materialize threshold to gate on. Used with `materialize_delta`.
+    #[serde(default)]
+    pub threshold: Option<i64>,
+}
+
+/// Dispatch the consolidated cogmap-read tool.
+pub async fn cogmap_read(
+    svc: &TemperMcpService,
+    input: CogmapReadInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    match input.view {
+        CogmapReadView::Show => {
+            cogmap_show(
+                svc,
+                CogmapShowInput {
+                    cogmap: input.cogmap,
+                },
+            )
+            .await
+        }
+        CogmapReadView::Shape => {
+            cogmap_shape(
+                svc,
+                CogmapShapeInput {
+                    cogmap: input.cogmap,
+                    lens: input.lens,
+                },
+            )
+            .await
+        }
+        CogmapReadView::Metrics => {
+            cogmap_region_metrics(
+                svc,
+                CogmapRegionMetricsInput {
+                    cogmap: input.cogmap,
+                    lens: input.lens,
+                },
+            )
+            .await
+        }
+        CogmapReadView::Analytics => {
+            cogmap_analytics(
+                svc,
+                CogmapAnalyticsInput {
+                    cogmap: input.cogmap,
+                },
+            )
+            .await
+        }
+        CogmapReadView::Charter => {
+            cogmap_read_charter(
+                svc,
+                CogmapReadCharterInput {
+                    cogmap: input.cogmap,
+                },
+            )
+            .await
+        }
+        CogmapReadView::MaterializeDelta => {
+            cogmap_materialize_delta(
+                svc,
+                MaterializeDeltaInput {
+                    cogmap: input.cogmap,
+                    threshold: input.threshold,
+                },
+            )
+            .await
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

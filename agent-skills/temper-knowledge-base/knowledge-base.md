@@ -10,42 +10,62 @@ tools for writes and search.
 Trigger when: the user mentions their knowledge base, vault, notes, contexts,
 sessions, research, or wants to look up / store information across conversations.
 
+## The Tool Surface (28 tools, read/write separable)
+
+The MCP surface is consolidated: each tool serves an agent use case, not an
+administrative one. Tools that shared a lifecycle are collapsed into one tool
+with a discriminator (`action`, `view`, or `target`). Read and write are
+separable — a consumer gating on "read-only" can grant the read tools without
+drilling into action parameters.
+
+**Reads (14):** `search`, `run_query`, `get_resource`, `list_resources`,
+`resource_lineage`, `element_trail`, `get_block_provenance`, `cogmap_read`,
+`cogmap_list`, `context_read`, `describe_schema`, `invocation_read`,
+`facets_read`, `steward_ingest_delta`
+
+**Writes (12):** `create_resource`, `update_resource`, `update_resource_meta`,
+`delete_resource`, `annotate_resource`, `relationship`, `facet_set`,
+`record_citation_audit`, `invocation_manage`, `segmented_ingest`,
+`cogmap_create`, `cogmap_materialize`, `context_manage`, `steward_advance_watermark`
+
+**Declared off-MCP (CLI door):** grants (`resource_grant`/`revoke`,
+`cogmap_grant`/`revoke`), `admin_ledger`, cogmap bind/unbind, team invitations,
+`get_profile`, `reassign`. Each capability stays at the CLI; its absence from
+MCP is a declaration, not a gap.
+
 ## Resources vs Tools — Decision Table
 
 | Intent | Use | Why |
 |--------|-----|-----|
-| See what a context is *about* before reading it | Tool: `context_shape` | Region-level map, most salient first — the fastest orientation move |
-| Per-region analytics for a context | Tool: `context_region_metrics` | Centrality, cohesion, tension, telos alignment under an optional lens |
-| Refresh a context's regions after big changes | Tool: `context_materialize` | Re-forms stale region shape; safe no-op below threshold; needs write access |
+| See what a context is *about* before reading it | Tool: `context_read` (view: shape) | Region-level map, most salient first — the fastest orientation move |
+| Per-region analytics for a context | Tool: `context_read` (view: metrics) | Centrality, cohesion, tension, telos alignment under an optional lens |
 | Browse what's in a context | Resource: `temper://contexts/{ref}/resources` | No tool call overhead, client can cache |
 | Read a specific document | Resource: `temper://resources/{id}` | Returns metadata + full markdown |
 | Get raw markdown only | Resource: `temper://resources/{id}/content` | Lighter than full resource read |
 | Find something by topic | Tool: `search` | Semantic vector search, can't do with resources |
 | Create a new resource (with or without content) | Tool: `create_resource` | Mutation — tools only |
 | Update title/metadata/content | Tool: `update_resource` | Mutation — tools only |
-| Build a large / resumable body as ordered blocks | Tools: `ingest_begin` → `ingest_append` → `ingest_finalize` | Segmented lifecycle; `ingest_blocks` reads landed segments to resume |
+| Build a large / resumable body as ordered blocks | Tool: `segmented_ingest` (action: begin → append → finalize) | Segmented lifecycle; action: blocks reads landed segments to resume |
 | Attach provenance sources without rewriting the body | Tool: `annotate_resource` | Provenance-only backfill — body_hash + embeddings unchanged |
 | Read a resource's per-block provenance | Tool: `get_block_provenance` | Which sources each content block was distilled from |
 | Read a resource or relationship's event history | Tool: `element_trail` | Append-only ledger — who created/updated/touched it and when |
 | Read a resource with content via tool | Tool: `get_resource` with `include_content: true` | When resource browsing isn't available |
 | Delete a resource | Tool: `delete_resource` | Soft-delete, tools only |
-| Create a new context | Tool: `create_context` | Mutation — tools only |
-| Check who you are | Tool: `get_profile` | Identity/settings |
-| Audit recent activity | Tool: `admin_ledger` | Debugging, event history |
-| Discover valid document types | Tool: `list_doc_types` | Returns id and name for each type |
-| Get schema for a specific type | Tool: `describe_doc_type` | Returns JSON Schema and example_managed_meta |
+| Create a new context | Tool: `context_manage` (action: create) | Mutation — tools only |
+| Discover valid document types | Tool: `describe_schema` (view: doc_types) | Returns id and name for each type |
+| Get schema for a specific type | Tool: `describe_schema` (view: doc_type) | Returns JSON Schema and example_managed_meta |
 
 ## Session Start Pattern
 
 When beginning work that involves the knowledge base:
 
 1. **Discover contexts** — read `temper://contexts/{ref}/resources` for the
-   relevant workspace, or use the `list_contexts` tool if you don't know the
-   context name
-2. **Orient before you read** — call `context_shape` on the context to see its
-   materialized regions (what it is *about*) before pulling individual resources.
-   This is the fastest way to understand a large context without reading every
-   document in it. See **Context Orientation** below.
+   relevant workspace, or use the `context_read` tool (view: list) if you don't
+   know the context name
+2. **Orient before you read** — call `context_read` (view: shape) on the context
+   to see its materialized regions (what it is *about*) before pulling
+   individual resources. This is the fastest way to understand a large context
+   without reading every document in it. See **Context Orientation** below.
 3. **Load relevant content** — read resources directly via
    `temper://resources/{id}` to build working context
 4. **Search if needed** — use the `search` tool for semantic lookup when you
@@ -58,12 +78,12 @@ consuming tool-call tokens.
 
 A context is not just a flat bag of documents. Temper continuously clusters a
 context's resources into **regions** — groups of semantically related material —
-and scores each region for salience. The orientation trio lets you read that
+and scores each region for salience. The orientation read lets you read that
 region-level shape directly, so you can understand what a large context is
-*about* without reading (or listing) every resource inside it. Reach for these
+*about* without reading (or listing) every resource inside it. Reach for this
 first when a context is unfamiliar or large.
 
-All three are addressed by **context ref**, not resource ref:
+All context reads are addressed by **context ref**, not resource ref:
 
 - `@me/<slug>` — a context you own (e.g. `@me/temper`)
 - `+<team>/<slug>` — a team context
@@ -72,7 +92,7 @@ All three are addressed by **context ref**, not resource ref:
 Bare names are deliberately **not** accepted — a context is not a resource, so
 the resource-ref parser is not used here.
 
-### `context_shape` — what the context is about
+### `context_read` (view: shape) — what the context is about
 
 The primary orientation read. Returns the context's materialized regions, most
 salient first, each with its salience, content cohesion, agent-authored label
@@ -80,46 +100,34 @@ salient first, each with its salience, content cohesion, agent-authored label
 context before you commit tokens to reading its documents.
 
 ```
-Tool: context_shape
-Input: { "context": "@me/temper", "lens": "<optional lens ref>" }
+Tool: context_read
+Input: { "view": "shape", "context": "@me/temper", "lens": "<optional lens ref>" }
 ```
 
-### `context_region_metrics` — the analytics tier
+### `context_read` (view: metrics) — the analytics tier
 
 Deeper per-region metrics for the same regions: centrality, content cohesion,
-internal tension, reference standing, and telos alignment. Use when `context_shape`
-has shown you the regions and you want to judge which are load-bearing versus
-peripheral.
+internal tension, reference standing, and telos alignment. Use when
+`context_read` (view: shape) has shown you the regions and you want to judge
+which are load-bearing versus peripheral.
 
 ```
-Tool: context_region_metrics
-Input: { "context": "@me/temper", "lens": "<optional lens ref>" }
-```
-
-### `context_materialize` — refresh the shape
-
-Re-forms a context's regions when enough has changed since the last materialize.
-Below that change threshold it is a safe idempotent no-op, so it is cheap to call
-defensively before orienting a context you have just written to heavily. **Requires
-write access** to the context (direct membership with an authoring role).
-
-```
-Tool: context_materialize
-Input: { "context": "@me/temper" }
+Tool: context_read
+Input: { "view": "metrics", "context": "@me/temper", "lens": "<optional lens ref>" }
 ```
 
 ### The `lens` parameter
 
-`context_shape` and `context_region_metrics` take an optional `lens` ref. A lens
+`context_read` (views: shape, metrics) takes an optional `lens` ref. A lens
 is a perspective that produces its own regioning of the same context; omit `lens`
 to read across all lenses. Leave it off unless you have a specific lens ref in
 hand.
 
-> **Cognitive-map peers**: these three tools are the context-addressed peers of
-> the cognitive-map orientation tools (`cogmap_shape`, `cogmap_region_metrics`,
-> `cogmap_materialize`). The region reads beneath them are the same — only the
-> anchor differs (a context ref instead of a cogmap ref). If you are orienting on
-> a cognitive map rather than a context, use the `cogmap_*` trio instead.
+> **Cognitive-map peers**: these reads are the context-addressed peers of
+> the cognitive-map orientation reads (`cogmap_read` with views: shape,
+> metrics). The region reads beneath them are the same — only the anchor
+> differs (a context ref instead of a cogmap ref). If you are orienting on
+> a cognitive map rather than a context, use `cogmap_read` instead.
 
 ## Reading Content
 
@@ -187,19 +195,19 @@ an input. See `references/frontmatter.md` for the doc types and both metadata ti
 
 ### Discovering Document Types
 
-Before creating content, use `list_doc_types` to see available types and which have schemas.
-Common types include: `session`, `research`, `concept`, `task`, `goal`.
+Before creating content, use `describe_schema` (view: doc_types) to see available types and
+which have schemas. Common types include: `session`, `research`, `concept`, `task`, `goal`.
 
 ```
-Tool: list_doc_types
-Input: {}
+Tool: describe_schema
+Input: { "view": "doc_types" }
 ```
 
 For a specific type's JSON Schema and a usable `example_managed_meta` template:
 
 ```
-Tool: describe_doc_type
-Input: { "name": "task" }
+Tool: describe_schema
+Input: { "view": "doc_type", "name": "task" }
 ```
 
 Pass the `name` field as `doc_type_name` in `create_resource`.
@@ -209,8 +217,8 @@ Pass the `name` field as `doc_type_name` in `create_resource`.
 If the `context_ref` does not match an existing context, **do not silently create a new one**.
 The context must already exist — `create_resource` will fail if the context is not found.
 Instead, ask the user: "I don't see a context named `{name}`. Would you like me to create
-it, or did you mean one of these: {list existing contexts}?" Use `list_contexts` to fetch
-the current list before asking.
+it, or did you mean one of these: {list existing contexts}?" Use `context_read` (view: list)
+to fetch the current list before asking.
 
 ### Updating Resources
 
@@ -317,21 +325,53 @@ An MCP caller has no chunker or embedder, so it omits `chunks_packed` and the se
 segment text itself (carrying the heading breadcrumb across block boundaries). Use the lifecycle
 when a body is too large for one `create_resource` call, or when a build must be resumable:
 
-| Tool | Role |
+| Action | Role |
 |------|------|
-| `ingest_begin` | Lands segment 0 and creates the resource. Takes every `create_resource` field plus a bare-hex `content_hash` of segment 0, and optional `block_budget` / `total_blocks_hint` / `source_hash`. Returns `resource_id`, the landed block set, and an opaque `body_hash`. |
-| `ingest_append` | Lands segment N. `seq` starts at **1** (segment 0 landed at begin) and must go in order. **Idempotent** — re-appending an already-landed `seq` is a safe no-op, so retry/resume is safe. Pass `content` + its `content_hash`; optional per-segment `sources`. |
-| `ingest_blocks` | Reads the landed segment set back for a resource — how a stateless caller resumes after an interruption before continuing to append. |
-| `ingest_finalize` | Declares the session complete. Pass `expected_blocks` (counting segment 0) and **echo the `body_hash` back verbatim** from your most recent `ingest_append`/`ingest_blocks` response — it is opaque; never parse or recompute it. Fails loudly on a gap. |
+| `segmented_ingest` (action: begin) | Lands segment 0 and creates the resource. Takes every `create_resource` field plus a bare-hex `content_hash` of segment 0, and optional `block_budget` / `total_blocks_hint` / `source_hash`. Returns `resource_id`, the landed block set, and an opaque `body_hash`. |
+| `segmented_ingest` (action: append) | Lands segment N. `seq` starts at **1** (segment 0 landed at begin) and must go in order. **Idempotent** — re-appending an already-landed `seq` is a safe no-op, so retry/resume is safe. Pass `content` + its `content_hash`; optional per-segment `sources`. |
+| `segmented_ingest` (action: blocks) | Reads the landed segment set back for a resource — how a stateless caller resumes after an interruption before continuing to append. |
+| `segmented_ingest` (action: finalize) | Declares the session complete. Pass `expected_blocks` (counting segment 0) and **echo the `body_hash` back verbatim** from your most recent `append`/`blocks` response — it is opaque; never parse or recompute it. Fails loudly on a gap. |
 
 Each segment's `content_hash` is a per-segment transit-integrity check (bare-hex sha256 of that
 segment's text), verified server-side; a mismatch is rejected before anything lands.
+
+## Relationships, Facets & Invocations
+
+### `relationship` — manage graph edges (consolidated)
+
+One tool with an `action` discriminator, collapsing assert/retype/reweight/fold:
+
+| Action | What it does | Required fields |
+|--------|-------------|-----------------|
+| `assert` | Create a directed relationship from source to target | `source`, `target`, `edge_kind`, `polarity`, `label`, `weight` |
+| `retype` | Change edge_kind and polarity of an existing edge | `edge_handle`, `edge_kind`, `polarity` |
+| `reweight` | Change the weight of an existing edge | `edge_handle`, `weight` |
+| `fold` | Retract (fold) an edge, marking it inactive | `edge_handle` (`reason` optional) |
+
+The `edge_handle` comes from the `assert` response. Per-act authorship fields (`confidence`,
+`reasoning`, `invocation_id`, etc.) are accepted on all actions.
+
+### `facet_set` / `facets_read` — typed properties on resources and edges
+
+`facet_set` sets a facet on a resource or a relationship (edge) via a `target` discriminator:
+`resource` (requires `resource` ref) or `edge` (requires `edge_handle`). `facets_read` reads
+the live facets with the same `target` discriminator — use it to confirm a `facet_set` landed,
+since `get_resource` collapses facets into a single newest-wins value in `open_meta` and drops
+the weight.
+
+### `invocation_manage` / `invocation_read` — agent-run envelopes
+
+`invocation_manage` (action: open) opens an accountability envelope for one agent run against a
+cognitive map — returns the server-minted `invocation_id`. `invocation_manage` (action: close)
+terminates it with a disposition (`completed`/`failed`/`abandoned`) and optional outcome.
+`invocation_read` (view: show) reads one envelope plus its acts; `invocation_read` (view: list)
+lists envelopes, optionally narrowed by cogmap and/or status.
 
 ## Context Navigation
 
 Contexts are workspaces that group resources. The typical flow:
 
-1. `list_contexts` tool → see all available workspaces
+1. `context_read` (view: list) → see all available workspaces
 2. `temper://contexts/{ref}/resources` resource → browse a workspace
 3. `temper://resources/{id}` resource → read a specific document
 
@@ -342,10 +382,9 @@ Contexts are workspaces that group resources. The typical flow:
 - **Search supports text queries** — the `search` tool accepts a plain text
   `query` parameter. No embedding vector needed; the server embeds it for the
   `wide` arm, and the `exact` arm needs no embedding at all.
-- **Pagination** — `list_resources` and `admin_ledger` support `limit` and
-  `offset`. Resources listing is capped at 200 items, and its response carries a
-  `truncated` flag — read it before asserting a set is complete or a resource is
-  absent; `true` means there is more to fetch. `admin_ledger` carries no such
-  flag, so page it until a short page comes back.
+- **Pagination** — `list_resources` supports `limit` and `offset`. Resources
+  listing is capped at 200 items, and its response carries a `truncated` flag —
+  read it before asserting a set is complete or a resource is absent; `true`
+  means there is more to fetch.
 - **Access control is automatic** — you only see resources and contexts your
   authenticated profile has access to. No need to handle permissions.

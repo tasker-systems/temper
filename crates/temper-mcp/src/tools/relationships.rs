@@ -261,6 +261,161 @@ pub async fn fold_relationship(
     )]))
 }
 
+// ── Consolidated tool (4→1) ─────────────────────────────────────────────────────
+
+/// The relationship action to perform.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RelationshipAction {
+    /// Assert a new directed relationship from source to target.
+    Assert,
+    /// Change the edge_kind and polarity of an existing relationship.
+    Retype,
+    /// Update the weight of an existing relationship.
+    Reweight,
+    /// Retract (fold) an existing relationship, marking it inactive.
+    Fold,
+}
+
+/// Consolidated relationship tool — one write tool with an `action` discriminator.
+///
+/// Collapses `assert_relationship`, `retype_relationship`, `reweight_relationship`,
+/// and `fold_relationship` into a single MCP tool. The `action` field selects which
+/// operation to perform; only the fields relevant to that action are required.
+///
+/// **Action → required fields:**
+/// - `assert`: `source`, `target`, `edge_kind`, `polarity`, `label`, `weight`
+/// - `retype`: `edge_handle`, `edge_kind`, `polarity`
+/// - `reweight`: `edge_handle`, `weight`
+/// - `fold`: `edge_handle` (`reason` optional)
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RelationshipInput {
+    /// Which relationship action to perform.
+    pub action: RelationshipAction,
+    /// Source resource ref (UUID or `slug-<uuid>`). Required for `assert`; ignored otherwise.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Target resource ref (UUID or `slug-<uuid>`). Required for `assert`; ignored otherwise.
+    #[serde(default)]
+    pub target: Option<String>,
+    /// The edge handle (from `assert`'s response). Required for `retype`, `reweight`, `fold`; ignored for `assert`.
+    #[serde(default)]
+    pub edge_handle: Option<Uuid>,
+    /// Structural edge kind — `express`, `contains`, `leads_to`, `near`. Required for `assert` and `retype`.
+    #[serde(default)]
+    pub edge_kind: Option<EdgeKind>,
+    /// Edge direction sign — `forward` or `inverse`. Required for `assert` and `retype`.
+    #[serde(default)]
+    pub polarity: Option<Polarity>,
+    /// Human-readable relation label (e.g. `depends_on`). Required for `assert`.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Numeric edge weight (0.0–1.0). Required for `assert` and `reweight`.
+    #[serde(default)]
+    pub weight: Option<f64>,
+    /// Optional human-readable reason for folding. Used only with `fold`.
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// Per-act correlation (`invocation_id`) + discrete agent authorship. Flattened top-level
+    /// keys; all optional. `confidence` required when any other authorship field is supplied.
+    #[serde(flatten)]
+    pub act: ActInput,
+}
+
+/// Dispatch the consolidated relationship tool.
+pub async fn relationship(
+    svc: &TemperMcpService,
+    input: RelationshipInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    match input.action {
+        RelationshipAction::Assert => {
+            let source = input.source.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("assert requires `source`".to_string(), None)
+            })?;
+            let target = input.target.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("assert requires `target`".to_string(), None)
+            })?;
+            let edge_kind = input.edge_kind.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("assert requires `edge_kind`".to_string(), None)
+            })?;
+            let polarity = input.polarity.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("assert requires `polarity`".to_string(), None)
+            })?;
+            let label = input.label.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("assert requires `label`".to_string(), None)
+            })?;
+            let weight = input.weight.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("assert requires `weight`".to_string(), None)
+            })?;
+            assert_relationship(
+                svc,
+                AssertRelationshipInput {
+                    source,
+                    target,
+                    edge_kind,
+                    polarity,
+                    label,
+                    weight,
+                    act: input.act,
+                },
+            )
+            .await
+        }
+        RelationshipAction::Retype => {
+            let edge_handle = input.edge_handle.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("retype requires `edge_handle`".to_string(), None)
+            })?;
+            let edge_kind = input.edge_kind.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("retype requires `edge_kind`".to_string(), None)
+            })?;
+            let polarity = input.polarity.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("retype requires `polarity`".to_string(), None)
+            })?;
+            retype_relationship(
+                svc,
+                RetypeRelationshipInput {
+                    edge_handle,
+                    edge_kind,
+                    polarity,
+                    act: input.act,
+                },
+            )
+            .await
+        }
+        RelationshipAction::Reweight => {
+            let edge_handle = input.edge_handle.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("reweight requires `edge_handle`".to_string(), None)
+            })?;
+            let weight = input.weight.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("reweight requires `weight`".to_string(), None)
+            })?;
+            reweight_relationship(
+                svc,
+                ReweightRelationshipInput {
+                    edge_handle,
+                    weight,
+                    act: input.act,
+                },
+            )
+            .await
+        }
+        RelationshipAction::Fold => {
+            let edge_handle = input.edge_handle.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("fold requires `edge_handle`".to_string(), None)
+            })?;
+            fold_relationship(
+                svc,
+                FoldRelationshipInput {
+                    edge_handle,
+                    reason: input.reason,
+                    act: input.act,
+                },
+            )
+            .await
+        }
+    }
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

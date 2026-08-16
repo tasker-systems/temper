@@ -234,6 +234,142 @@ pub async fn resource_facets(
     )]))
 }
 
+// ── Consolidated write tool (2→1) ─────────────────────────────────────────────
+
+/// The facet target — a resource or a relationship (edge).
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FacetTarget {
+    /// Set a facet on a resource (node).
+    Resource,
+    /// Set a facet on a relationship (edge).
+    Edge,
+}
+
+/// Consolidated facet-set tool — one write tool with a `target` discriminator.
+///
+/// Collapses `facet_set` (resource) and `edge_facet_set` (edge) into a single MCP tool.
+/// The `target` field selects whether to set the facet on a resource or a relationship.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FacetSetUnifiedInput {
+    /// Whether to set the facet on a resource or a relationship.
+    pub target: FacetTarget,
+    /// Resource ref (UUID or `slug-<uuid>`). Required when `target` is `resource`; ignored otherwise.
+    #[serde(default)]
+    pub resource: Option<String>,
+    /// The relationship's edge handle (UUID from `assert_relationship`). Required when `target` is `edge`; ignored otherwise.
+    #[serde(default)]
+    pub edge_handle: Option<Uuid>,
+    /// The facet's typed value payload.
+    pub values: serde_json::Value,
+    /// Facet salience/confidence weight (0.0-1.0 by convention). Defaults to 1.0.
+    #[serde(default)]
+    pub weight: Option<f64>,
+    /// Per-act correlation (`invocation_id`) + discrete agent authorship. Flattened top-level
+    /// keys; all optional. `confidence` required when any other authorship field is supplied.
+    #[serde(flatten)]
+    pub act: ActInput,
+}
+
+/// Dispatch the consolidated facet-set tool.
+pub async fn facet_set_unified(
+    svc: &TemperMcpService,
+    input: FacetSetUnifiedInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    match input.target {
+        FacetTarget::Resource => {
+            let resource = input.resource.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params(
+                    "target=resource requires `resource`".to_string(),
+                    None,
+                )
+            })?;
+            facet_set(
+                svc,
+                FacetSetInput {
+                    resource,
+                    values: input.values,
+                    weight: input.weight,
+                    act: input.act,
+                },
+            )
+            .await
+        }
+        FacetTarget::Edge => {
+            let edge_handle = input.edge_handle.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params(
+                    "target=edge requires `edge_handle`".to_string(),
+                    None,
+                )
+            })?;
+            edge_facet_set(
+                svc,
+                EdgeFacetSetInput {
+                    edge_handle,
+                    values: input.values,
+                    weight: input.weight,
+                    act: input.act,
+                },
+            )
+            .await
+        }
+    }
+}
+
+// ── Consolidated read tool (2→1) ───────────────────────────────────────────────
+
+/// The facet-read target — a resource or a relationship (edge).
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FacetsReadTarget {
+    /// Read facets of a resource (node).
+    Resource,
+    /// Read facets of a relationship (edge).
+    Edge,
+}
+
+/// Consolidated facets-read tool — one read tool with a `target` discriminator.
+///
+/// Collapses `resource_facets` and `edge_facets` into a single MCP tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FacetsReadInput {
+    /// Whether to read facets from a resource or a relationship.
+    pub target: FacetsReadTarget,
+    /// Resource ref (UUID or `slug-<uuid>`). Required when `target` is `resource`; ignored otherwise.
+    #[serde(default)]
+    pub resource: Option<String>,
+    /// The relationship's edge handle. Required when `target` is `edge`; ignored otherwise.
+    #[serde(default)]
+    pub edge_handle: Option<Uuid>,
+}
+
+/// Dispatch the consolidated facets-read tool.
+pub async fn facets_read(
+    svc: &TemperMcpService,
+    input: FacetsReadInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    match input.target {
+        FacetsReadTarget::Resource => {
+            let resource = input.resource.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params(
+                    "target=resource requires `resource`".to_string(),
+                    None,
+                )
+            })?;
+            resource_facets(svc, ResourceFacetsInput { resource }).await
+        }
+        FacetsReadTarget::Edge => {
+            let edge_handle = input.edge_handle.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params(
+                    "target=edge requires `edge_handle`".to_string(),
+                    None,
+                )
+            })?;
+            edge_facets(svc, EdgeFacetsInput { edge_handle }).await
+        }
+    }
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
