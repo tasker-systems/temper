@@ -28,10 +28,14 @@
 #
 #   THE TARGETS   The shapes that are DESIGNED AND NOT YET BUILT, listed under
 #                 IMPLEMENTATION PENDING below. Only these are still declared here
-#                 as schemas — `IdSet`, `StageOutput`, `StageTrace`, `BoundTerm`,
-#                 `Disclosure`, `ResourcesOutput` — because there is nothing
+#                 as schemas — `BoundTerm`, `Disclosure` — because there is nothing
 #                 generated to point at yet. Each is a deliberate delta, never
 #                 drift, and each retires into a `$ref` when its work lands.
+#                 `[retired — 2026-08-16]` `IdSet`, `StageOutput`, `StageTrace`,
+#                 and `ResourcesOutput` were TARGETS for the survey redesign (⟨3⟩);
+#                 the survey act shipped (PR #696, #697) and these four retired
+#                 into `$ref`s (or were subsumed by one — `ResourcesOutput` is
+#                 inline in the generated `StageOutput`).
 #
 # ── WHY IT IS NOT `openapi.json`, AND WHERE IT DEFERS TO IT ──────────────────
 #
@@ -186,29 +190,33 @@
 # recording block where the old shape stood.
 #
 # `[re-scoped — 2026-08-13, PR D]` This block used to end "THIS DOCUMENT IS THE
-# TARGET", and that is now true of SIX schemas rather than all thirty-seven.
+# TARGET", and that is now true of TWO schemas rather than all thirty-seven.
 # Everything whose shape has shipped is a `$ref`; only the list below is still
 # declared here, and each entry names the schema that stays hand-written for it.
 # The rule for reading this file is therefore mechanical: **a hand-written
 # schema is a target, a `$ref` is the contract.**
+# `[retired — 2026-08-16]` Four of the six targets (the survey redesign's
+# `StageOutput`, `StageTrace`, `IdSet`, `ResourcesOutput`) retired when the
+# survey act shipped (PR #696, #697). Two remain: `BoundTerm` and `Disclosure`.
 #
-# IMPLEMENTATION PENDING — updated `[2026-08-10]` after the P4 audit's fix
-# pass implemented the cheap half (input_contributed and
-# Disclosure::InputContribution removed; located_at now an explicit null;
-# bounds/meta_detail/meta_truncated removed; the `refusal` field added and
-# filled). Deliberate deltas remaining — pending-implementation, never drift:
+# IMPLEMENTATION PENDING — updated `[2026-08-16]` after the survey act shipped
+# (PR #696, #697) and the four contract schemas it carried retired into `$ref`s.
+# The survey redesign (⟨3⟩) is LIVE: `query_survey` produces resources, regions
+# are trace disclosure (`Disclosure::Region`), and it answered against prod
+# (731 resources from 5 matched regions on the self-cognition cogmap).
+# `StageOutput`, `StageTrace`, `IdSet` are now `$ref`s into `openapi.json`;
+# `ResourcesOutput` was subsumed by the `StageOutput` `$ref` (its resources arm
+# is inline in the generated `oneOf`). Deliberate deltas remaining —
+# pending-implementation, never drift:
 #
-#   * THE SURVEY REDESIGN (⟨3⟩), one coherent work item with the fragment:
-#     registry.rs still says `produces: Region`, terms `[regions]` only;
-#     stage.rs/hits.rs still carry `StageOutput::Regions` / `RegionHit` /
-#     `ProducedVariant::Regions`; id_set.rs still carries region provenance and
-#     the validator still raises `missing_provenance`; `extent_of` still
-#     answers `indeterminate` for survey; `StageTrace.regions_matched` does
-#     not exist yet. All of it lands together when the survey fragment is
-#     built to the ratified semantics.
-#     HAND-WRITTEN FOR THIS: `StageOutput`, `ResourcesOutput`, `StageTrace`,
-#     `IdSet` — each differs from the published shape deliberately, and each
-#     becomes a `$ref` when the redesign lands `[verified — 2026-08-13]`.
+#   * THE SURVEY REDESIGN (⟨3⟩) — RETIRED `[2026-08-16]`. The act is live; the
+#     four hand-written schemas retired. The generated `openapi.json` still
+#     carries the pre-redesign Rust types (`StageOutput::Regions`,
+#     `IdSet::provenance`, `StageTrace` without `regions_matched`), and the
+#     contract now defers to those generated shapes — which is the point: the
+#     contract was a target, the target landed, and a `$ref` cannot drift.
+#     The `sal_norm` open ruling (region_score blend) is still OPEN and the
+#     schema retirement does not settle it.
 #   * THE FOLLOW-FROM MECHANIC (P3 door work): `follow-from` compiles to the
 #     deliberately-nonexistent placeholder, and validate.rs refuses EVERY
 #     `edge_filter` unconditionally — correctly, since nothing exists to apply
@@ -850,85 +858,70 @@ components:
       $ref: '../../openapi.json#/components/schemas/StageResult'
 
     StageOutput:
-      description: |
-        What a RETURNED stage produced, tagged by CURRENCY.
+      # `[retired — 2026-08-16]` The survey act is live (PR #696, #697), so the
+      # hand-written target retires into a `$ref` against the generated document.
+      # The shape is `openapi.json`'s now — a restatement can drift; a `$ref` cannot.
+      #
+      # ── ONE VARIANT TODAY, AND THE TAG ANSWERS EXACTLY ONE QUESTION ──────────
+      #
+      # `[amended — 2026-08-09, ratification ⟨3⟩]` The `regions` variant is
+      # RETIRED: survey produces the member RESOURCES of its matched regions
+      # (see the RATIFICATION block), so resources are the only currency a
+      # returned stage carries. The discriminator stays on a single member
+      # deliberately — the tag answers "what was produced", a future currency
+      # arrives as a new member additively, and collapsing the envelope now
+      # would make that return a breaking change.
+      #
+      # HOW rows were scored is a different question, answered per row
+      # by `Scoring.score_kind`.
+      #
+      # An earlier draft split this four ways — `fts_hits`, `vec_hits`,
+      # `graph_hits` — so that two acts' rows could not share a list type. That
+      # guard was real, but the name was a misnomer and it cost something worse:
+      # **a row could not be read without knowing which envelope carried it.**
+      # The quantity WAS the field name, so the envelope was load-bearing for
+      # interpreting the row, and a client needed one type per act rather than
+      # one per currency.
+      #
+      # ── WHAT STILL PREVENTS `unified_search`'s CONFLATION ────────────────────
+      #
+      # `unified_search` renamed `fts_norm`/`vec_norm` to
+      # `fts_score`/`vector_score` and SUMMED them into `combined_score`. The
+      # lesson is that incommensurable quantities must not be silently addable.
+      #
+      # The protection is structural and unchanged: arms are keyed separately in
+      # `returned`, and there is no merged ordered list anywhere for two acts'
+      # rows to fall into. Combining two arms takes a deliberate act.
+      #
+      # What changed is that the difference is now DATA rather than schema —
+      # every hit carries `score_kind` beside its number. That is strictly more
+      # legible than a bare field name: `fts_norm` requires the reader to already
+      # know what it means, while `score_kind: "fts_norm"` is a machine-readable
+      # assertion that kinds exist, differ, and must be compared before anything
+      # is combined. A client can check it; nothing about `hit.fts_norm` invites
+      # checking anything.
+      #
+      # ── THERE IS NO `ids` VARIANT ────────────────────────────────────────────
+      #
+      # A returned stage is always hydrated. Ids remain the pipe's INTERNAL
+      # currency — the only value that crosses a stage boundary is membership,
+      # and an intermediate stage that merely feeds a downstream one is never
+      # hydrated at all. What is removed is `ids` as a thing you can ASK to be
+      # given back: subselecting a result set is a client concern with a good
+      # answer already (`temper … | jq`), and the principled version is a known
+      # later door (GraphQL over this surface, where a caller opts into exactly
+      # the parts they want). Shipping one coarse "just ids" toggle now would
+      # occupy the space that door is for.
+      $ref: '../../openapi.json#/components/schemas/StageOutput'
 
-        ── ONE VARIANT TODAY, AND THE TAG ANSWERS EXACTLY ONE QUESTION ──────────
-
-        `[amended — 2026-08-09, ratification ⟨3⟩]` The `regions` variant is
-        RETIRED: survey produces the member RESOURCES of its matched regions
-        (see the RATIFICATION block), so resources are the only currency a
-        returned stage carries. The discriminator stays on a single member
-        deliberately — the tag answers "what was produced", a future currency
-        arrives as a new member additively, and collapsing the envelope now
-        would make that return a breaking change.
-
-        HOW rows were scored is a different question, answered per row
-        by `Scoring.score_kind`.
-
-        An earlier draft split this four ways — `fts_hits`, `vec_hits`,
-        `graph_hits` — so that two acts' rows could not share a list type. That
-        guard was real, but the name was a misnomer and it cost something worse:
-        **a row could not be read without knowing which envelope carried it.**
-        The quantity WAS the field name, so the envelope was load-bearing for
-        interpreting the row, and a client needed one type per act rather than
-        one per currency.
-
-        ── WHAT STILL PREVENTS `unified_search`'s CONFLATION ────────────────────
-
-        `unified_search` renamed `fts_norm`/`vec_norm` to
-        `fts_score`/`vector_score` and SUMMED them into `combined_score`. The
-        lesson is that incommensurable quantities must not be silently addable.
-
-        The protection is structural and unchanged: arms are keyed separately in
-        `returned`, and there is no merged ordered list anywhere for two acts'
-        rows to fall into. Combining two arms takes a deliberate act.
-
-        What changed is that the difference is now DATA rather than schema —
-        every hit carries `score_kind` beside its number. That is strictly more
-        legible than a bare field name: `fts_norm` requires the reader to already
-        know what it means, while `score_kind: "fts_norm"` is a machine-readable
-        assertion that kinds exist, differ, and must be compared before anything
-        is combined. A client can check it; nothing about `hit.fts_norm` invites
-        checking anything.
-
-        ── THERE IS NO `ids` VARIANT ────────────────────────────────────────────
-
-        A returned stage is always hydrated. Ids remain the pipe's INTERNAL
-        currency — the only value that crosses a stage boundary is membership,
-        and an intermediate stage that merely feeds a downstream one is never
-        hydrated at all. What is removed is `ids` as a thing you can ASK to be
-        given back: subselecting a result set is a client concern with a good
-        answer already (`temper … | jq`), and the principled version is a known
-        later door (GraphQL over this surface, where a caller opts into exactly
-        the parts they want). Shipping one coarse "just ids" toggle now would
-        occupy the space that door is for.
-      oneOf:
-        - $ref: '#/components/schemas/ResourcesOutput'
-      discriminator:
-        propertyName: produced
-        mapping:
-          resources: '#/components/schemas/ResourcesOutput'
-
-    ResourcesOutput:
-      description: |
-        Produced by every composable act: `find-exact`, both `find-about-*`
-        acts, `find-resources-with`, `follow-from`, and — since the ratification
-        redesign — `survey`, whose rows are the member resources of its matched
-        regions.
-
-        `find-resources-with` produces this currency and yet can never RETURN
-        it: it orders nothing, so `outcome.returns` refuses it as
-        `stage_not_returnable`. Producing a currency and being returnable are
-        different properties, and this is the act that separates them.
-      type: object
-      required: [produced, hits]
-      properties:
-        produced: { type: string, enum: [resources] }
-        hits:
-          type: array
-          items: { $ref: '#/components/schemas/ResourceHit' }
-
+    # `ResourcesOutput` was hand-written here as a TARGET — the shape survey
+    # would produce when it landed. It is RETIRED `[2026-08-16]`: the survey act
+    # is live, and the generated `StageOutput` in `openapi.json` carries the
+    # resources arm inline in its `oneOf`. There is no named `ResourcesOutput`
+    # schema to `$ref` because the generated document never needed a standalone
+    # name for one arm of a tagged union — retiring `StageOutput` above subsumes
+    # it. The ruling that named it stays on the `StageOutput` block.
+    #
     # `RegionsOutput` and `RegionHit` were defined here and are RETIRED by the
     # ratification's survey redesign (`[decided — 2026-08-09, Pete]`): "ultimately
     # callers want the resources, not our internal deterministic-agglomerative-
@@ -1031,6 +1024,10 @@ components:
       $ref: '../../openapi.json#/components/schemas/CompositionTrace'
 
     StageTrace:
+      # `[retired — 2026-08-16]` The survey act is live (PR #696, #697), so the
+      # hand-written target retires into a `$ref` against the generated document.
+      # The shape is `openapi.json`'s now — a restatement can drift; a `$ref` cannot.
+      #
       # STAGE IDENTITY: this AMENDs the merged types. `[decided — 2026-08-08]`
       #
       # The REQUEST names stages: `ActInvocation.name`, `StageInput.stage`,
@@ -1043,71 +1040,29 @@ components:
       # about what the ASKER can read and an ordinal is not their vocabulary. But
       # this AMENDs types merged in PR #663 and regenerates the query JSON-Schema
       # fixtures, so it is flagged rather than assumed.
-      type: object
-      required: [stage, act, disposition, narrowed_by, input_ids, input_unusable]
-      properties:
-        stage: { $ref: '#/components/schemas/StageName' }
-        act: { $ref: '#/components/schemas/ActName' }
-        disposition: { $ref: '#/components/schemas/StageDisposition' }
-        relation:
-          description: |
-            Whether this stage NARROWED or REACHED. Echoed back so a reader of the
-            trace can tell without knowing the act vocabulary — "did stage 3
-            narrow or expand?" is the question `composition-is-legible` most
-            obviously owes an answer to, and a caller reading only the response
-            has no other way to get it. Absent for a stage with no input.
-          $ref: '#/components/schemas/StageRelation'
-        input_source: { $ref: '#/components/schemas/InputSource' }
-        narrowed_by:
-          type: array
-          items: { $ref: '#/components/schemas/NarrowedBy' }
-        # Identical to `StageResult`'s pair, and they must stay identical: the
-        # trace covers every stage, the results cover only the returned ones, so
-        # these are the ONLY numbers a reader gets for an intermediate stage.
-        # (`input_contributed` removed from both at once — see `StageResult`.)
-        input_ids: { type: integer, format: int64 }
-        input_unusable:
-          description: Invisible / nonexistent / malformed as ONE number — see `StageResult`.
-          type: integer
-          format: int64
-        regions_matched:
-          description: |
-            Present only on a `survey` stage: the regions its funnel admitted,
-            in funnel order. `[ratified — 2026-08-09, Pete, ⟨3⟩]` This is where
-            regions live now that survey produces resources — the funnel is
-            DISCLOSED rather than returned.
-
-            Two numbers per region, and they are not rivals: `salience` is what
-            the map thinks is prominent (asker-independent, and an INPUT to the
-            score — `region_score` is `0.4·sal_norm + 0.6·query_cos`, where
-            `sal_norm` is a rank over salience); `region_score` is how well the
-            region answered YOUR question. The stage's rows are ordered by the
-            score; reading the disclosure by `salience` answers "what does this
-            map think matters", a different question.
-
-            Every region here was admitted by the same visibility gate that
-            admitted the stage's rows — nothing is disclosed that the caller
-            could not survey directly.
-          type: array
-          items:
-            type: object
-            required: [region_id, salience, region_score]
-            properties:
-              region_id: { type: string, format: uuid }
-              salience: { type: number, format: float }
-              region_score: { type: number, format: float }
-        # `meta_truncated` (and the `MetaTruncated` shape) were defined here —
-        # removed with `meta_detail`, ADJ-4 `[2026-08-10, Pete]`: they existed
-        # only to serve the metadata-budget concept, whose job nobody could
-        # state. If a metadata budget ever materializes, both return designed,
-        # additively. (Item 5's keying ratification is untouched — the
-        # names-not-ordinals rule loses one application site, not the rule.)
-        refusal:
-          description: |
-            Present iff `disposition` is `refused` — see `StageResult.refusal`.
-            Identical there and here, and the trace's copy is the ONLY refusal
-            record for an intermediate stage. `[ruled — 2026-08-10, Pete, ADJ-3]`
-          $ref: '#/components/schemas/ActRefusal'
+      #
+      # `regions_matched` was hand-written here as a TARGET for the survey
+      # redesign — regions as trace disclosure rather than a returnable currency.
+      # `[ratified — 2026-08-09, Pete, ⟨3⟩]` This is where regions live now that
+      # survey produces resources — the funnel is DISCLOSED rather than returned.
+      # Two numbers per region, and they are not rivals: `salience` is what the
+      # map thinks is prominent (asker-independent, an INPUT to the score);
+      # `region_score` is how well the region answered YOUR question. Every region
+      # here was admitted by the same visibility gate that admitted the stage's
+      # rows — nothing is disclosed that the caller could not survey directly.
+      #
+      # `refusal` rides the trace identically to `StageResult.refusal` — the pair
+      # rule, `[ruled — 2026-08-10, Pete, ADJ-3]`: the trace's copy is the ONLY
+      # refusal record for an intermediate stage. Preserved here as the argument;
+      # the generated shape carries the field.
+      #
+      # The generated `StageTrace` carries `produced_ids` and `inputs` (replacing
+      # the old `relation`/`input_source` pair), both of which the hand-written
+      # target predated. Retiring into the `$ref` means the contract now defers
+      # to the generated shape for everything the Rust types carry, and the
+      # `regions_matched` ruling stays here as the argument the generated
+      # document structurally cannot hold.
+      $ref: '../../openapi.json#/components/schemas/StageTrace'
 
     InputSource:
       # TRANSCRIBED from trace.rs:17-33, RENAMED from `BoundsSource` — it reports
@@ -1175,21 +1130,18 @@ components:
       $ref: '../../openapi.json#/components/schemas/IdKind'
 
     IdSet:
-      description: The one value that crosses a stage boundary. Membership, never rank.
-      type: object
-      required: [kind, ids]
-      properties:
-        kind: { $ref: '#/components/schemas/IdKind' }
-        # `provenance` was defined here — the anchor a REGION set had to carry
-        # (`Required for region; absent for every other kind`). RETIRED with the
-        # ⟨3⟩ redesign: with region sets refused at validation, no admitted
-        # input can carry it, and a field only a refused input could use is a
-        # claim with no referent. An upstream survey needs no wire provenance —
-        # it holds its own anchor. Returns additively if caller-named region
-        # bounds ever become an accepted input shape.
-        ids:
-          type: array
-          items: { type: string, format: uuid }
+      # `[retired — 2026-08-16]` The survey act is live (PR #696, #697), so the
+      # hand-written target retires into a `$ref` against the generated document.
+      # The shape is `openapi.json`'s now — a restatement can drift; a `$ref` cannot.
+      #
+      # `provenance` was defined here — the anchor a REGION set had to carry
+      # (`Required for region; absent for every other kind`). RETIRED with the
+      # ⟨3⟩ redesign: with region sets refused at validation, no admitted
+      # input can carry it, and a field only a refused input could use is a
+      # claim with no referent. An upstream survey needs no wire provenance —
+      # it holds its own anchor. Returns additively if caller-named region
+      # bounds ever become an accepted input shape.
+      $ref: '../../openapi.json#/components/schemas/IdSet'
 
     # `BoundsMode` is gone — it is `StageRelation`, defined beside `StageInput`
     # where the relation it describes actually lives.
