@@ -1,8 +1,9 @@
-<!-- config-hash: {{ config_hash }} -->
 ---
 name: temper
 description: Use when managing knowledge base tasks, sessions, or search — task start/create/done, session save, semantic search, context discovery, or any /temper command invocation
 ---
+
+<!-- config-hash: {{ config_hash }} -->
 
 # Temper Workflow Skill
 
