@@ -1,66 +1,17 @@
--- The ordering operator: `PropertyOp::Compare`, a third arm of the closed operator set
--- declared in §12 of `2026-08-05-query-builder-compositional-design.md` ("open keys, closed
--- operators"). `Compare` carries one bound and a closed `OrdOp` direction (`gt`/`gte`/`lt`/`lte`),
--- compiled to jsonb's native ordering (`<`, `>`, `<=`, `>=`) under a `jsonb_typeof` type guard.
+-- The ordering operator: `PropertyOp::Compare` (§12: open keys, closed operators).
+-- Spec: 01a00a79-1dd7-7ae2-9d34-b801eb509904. Task: 01a001af-02a9-7c02-9977-195aeecadefb.
+-- Additive: two `CREATE OR REPLACE FUNCTION` (ungated bodies), two new `IMMUTABLE` helper
+-- functions. No DROP, no signature change, no default change. Gated wrappers delegate unchanged.
 --
--- `[ruled — 2026-08-16, Pete]` Three contract decisions, recorded in the spec
--- (`01a00a79-1dd7-7ae2-9d34-b801eb509904`) and NOT re-litigated here:
---   1. ONE `Compare` variant with four directions. `Between` is NOT added — it composes from
---      `gte` AND `lte` through the existing AND-across-the-list, and adding it would cost a
---      second value slot and SQL branch for one saved probe.
---   2. jsonb NATIVE ordering, type-guarded by `jsonb_typeof(property_value) = jsonb_typeof($bound)`.
---      Cross-type rows fall to `ELSE false` — an honest empty, not a type-confusion match. jsonb
---      defines a total type ordering (`null < boolean < number < string < array < object`), so
---      without the guard a numeric bound against a string-valued key would match EVERY string row
---      (`string > number` is true in jsonb's ordering) — a type-confusion artifact, not an answer.
---   3. Type is INFERRED from the caller's bound value, never declared on the operator. No `as`
---      field: per-VALUE inference (the trap rules out per-key — `temper-pr` is 68 string / 7
---      numeric on ONE key, so no per-key answer exists; each caller sends one bound with one
---      JSON type, and the guard makes the other-type rows honest empties).
---
--- `probe_count` for `Compare` is 1 (one bound, one comparison per row that carries the key), like
--- `HasKey` — not like `Contains { values }` whose cost is `Σ|values|`. The 256 probe ceiling and
--- the cap arithmetic are unchanged; the refusal text generalized from "containment probes" to
--- "probes" since the set now includes comparisons.
---
--- This migration is `additive`: it adds a `WHEN 'compare'` arm to the `CASE q.op` in BOTH
--- predicate bodies and narrows the `ELSE false` catch (which already existed for unknown
--- operators). No existing arm's semantics change. No DROP, no signature change, no default
--- change. The gated wrappers (`query_find_resources_with`, `query_follow_from`) delegate to the
--- ungated bodies and pass `p_properties` / `p_edge_properties` through unchanged.
---
--- The two bodies CANNOT be unified into a shared function, and that is measured rather than
--- stylistic (carried — `20260808000020:308`): a `LANGUAGE sql STABLE` predicate whose body
--- contains a sublink does not inline — the `EXISTS` loses its Index Only Scan on
--- `uq_kb_properties_active` and becomes a per-row call. They are held to a differential witness
--- instead: `crates/temper-substrate/tests/property_predicate_parity.rs`, which is
--- `artifact-tests`-gated and runs only under `cargo make test-artifacts` locally (CI's Substrate
--- Artifact Tests job runs it). A symmetric edit — both bodies wrong identically — passes the
--- differential; the companion test `the_shared_predicate_admits_and_denies_the_cases_it_is_supposed_to`
--- pins the expected verdicts and catches that.
---
--- `[boyscout — this PR]` The `predicates` CTE — the wire-parse that turns the caller's jsonb into
--- (property_key, op, vals, direction, bound) columns — is extracted here as ONE `IMMUTABLE`
--- function, after the PR that added `Compare` made it a fourth identical copy. The measured
--- blocker on extracting the operator DISPATCH (`20260808000020:308`: a `LANGUAGE sql STABLE`
--- body with a sublink does not inline and loses its Index Only Scan) DOES NOT apply to the
--- wire-parse: it is a pure expression over the input parameter with NO sublink and NO
--- correlation, so it inlines as `IMMUTABLE`. Measured plan-identical to the inline CTE:
--- same cost, same Index Only Scan on `uq_kb_properties_active`, same Filter, same SubPlan
--- structure. The extraction is the same bar `20260815000050` set for view extraction.
---
--- What this BUYS: a future `PropertyOp` arm is a one-place edit for the parse (this function),
--- not two — which is the drift surface the parity test exists to catch. The operator dispatch
--- (`CASE q.op` with its `EXISTS` sublink) stays as two copies, held to the differential witness,
--- because THAT is the part that does not inline. The wire-parse and the operator dispatch are
--- different extraction problems with different measured answers, and splitting them here is
--- the boyscout: one extracted, one not, each for a measured reason.
+-- Two extractions (boyscout — this PR): the wire-parse and the operator dispatch were duplicated
+-- identically across four bodies. Both are `IMMUTABLE` (pure functions of their arguments, no
+-- table reads) so both inline — measured plan-identical to the inline CTE, Index Only Scan on
+-- uq_kb_properties_active preserved. The measured blocker (20260808000020:308) was about a
+-- `STABLE` body with a correlated sublink; neither helper has one. A future PropertyOp arm is
+-- now a one-place edit for both, not two. Differential witness in property_predicate_parity.rs.
 
--- The wire-parse: one `jsonb` argument → (property_key, op, vals, direction, bound) rows.
--- `IMMUTABLE` because it is a pure function of its argument (no table reads, no correlation).
--- The raise-guards (`CASE jsonb_typeof`) are the same ones the inline CTE carried: they stop
--- `jsonb_array_elements` raising on a non-array argument, which a `WHERE` beside the lateral
--- SRF would run AFTER the expansion that already raised.
+-- The wire-parse: one jsonb argument → (property_key, op, vals, direction, bound) rows.
+-- IMMUTABLE; raise-guards stop jsonb_array_elements raising on a non-array.
 CREATE OR REPLACE FUNCTION _temper_property_predicates_parse(p_props jsonb)
 RETURNS TABLE (property_key text, op text, vals jsonb, direction text, bound jsonb)
 LANGUAGE sql IMMUTABLE AS $$
@@ -75,10 +26,36 @@ LANGUAGE sql IMMUTABLE AS $$
                WHEN 'array' THEN p_props ELSE '[]'::jsonb END) AS q
 $$;
 
-COMMENT ON FUNCTION _temper_property_predicates_parse(jsonb) IS
-    'The wire-parse behind both predicate bodies: one jsonb argument → (property_key, op, vals, direction, bound) rows. IMMUTABLE — a pure function of its argument, no table reads, no correlation — so it inlines and the Index Only Scan on uq_kb_properties_active survives (measured plan-identical to the inline CTE). The raise-guards are the same the inline CTE carried. Extracted from four identical copies (20260815000010, 20260815000040, this migration) so a future PropertyOp arm is a one-place parse edit, not two — the operator dispatch (CASE q.op with its EXISTS sublink) stays as two copies because THAT does not inline (20260808000020:308).';
+-- The operator dispatch: does this property_value match this predicate?
+-- IMMUTABLE (all scalars/jsonb, no table reads); the `contains` EXISTS is over a function,
+-- not a table, so it does not block inlining. Fail-closed: unknown op → false, missing
+-- value → bound is NULL → jsonb_typeof guard is falsy, missing direction → inner ELSE false.
+CREATE OR REPLACE FUNCTION _temper_property_op_match(
+    p_op text, p_vals jsonb, p_direction text, p_bound jsonb, p_property_value jsonb
+) RETURNS boolean
+LANGUAGE sql IMMUTABLE AS $$
+    SELECT CASE p_op
+             WHEN 'has_key'  THEN true
+             WHEN 'contains' THEN EXISTS (
+               SELECT 1 FROM jsonb_array_elements(p_vals) AS v
+                WHERE p_property_value @> v)
+             WHEN 'compare' THEN
+                   jsonb_typeof(p_property_value) = jsonb_typeof(p_bound)
+               AND CASE p_direction
+                     WHEN 'gt'  THEN p_property_value >  p_bound
+                     WHEN 'gte' THEN p_property_value >= p_bound
+                     WHEN 'lt'  THEN p_property_value <  p_bound
+                     WHEN 'lte' THEN p_property_value <= p_bound
+                     ELSE false END
+             ELSE false END
+$$;
 
--- ── `__temper_ungated_find_resources_with`: add the `compare` arm ──────────────────────────────
+COMMENT ON FUNCTION _temper_property_predicates_parse(jsonb) IS
+    'Wire-parse: one jsonb argument → (property_key, op, vals, direction, bound) rows. IMMUTABLE, inlines. Extracted from four identical copies so a future PropertyOp arm is a one-place parse edit.';
+COMMENT ON FUNCTION _temper_property_op_match(text, jsonb, text, jsonb, jsonb) IS
+    'Operator dispatch: does property_value match this predicate? IMMUTABLE (no table reads), inlines. compare is type-guarded by jsonb_typeof. Extracted from two identical copies so a future PropertyOp arm is a one-place dispatch edit. See 20260816000010 and property_predicate_parity.rs.';
+
+-- ── `__temper_ungated_find_resources_with`: compare arm + extracted helpers ───────────────────
 CREATE OR REPLACE FUNCTION __temper_ungated_find_resources_with(
     p_visible_ids    uuid[],
     p_doc_types      text[],
@@ -95,11 +72,6 @@ CREATE OR REPLACE FUNCTION __temper_ungated_find_resources_with(
     p_properties     jsonb)
 RETURNS TABLE (resource_id uuid)
 LANGUAGE sql STABLE AS $$
-  -- The wire shape parsed once into columns by the shared `IMMUTABLE` parse function. The
-  -- `predicates` alias is kept so the `CASE q.op` below reads identically to the edge body —
-  -- the operator dispatch is the two-copy part the differential witness holds, and keeping
-  -- the alias name makes the two read the same to a reviewer. `Compare` adds `direction` and
-  -- `bound`; `Contains` still carries its list in `vals`; `HasKey` carries neither.
   WITH predicates AS (
     SELECT * FROM _temper_property_predicates_parse(p_properties)
   )
@@ -122,21 +94,12 @@ LANGUAGE sql STABLE AS $$
              SELECT 1 FROM kb_profiles p
               WHERE p.id = h.owner_profile_id AND p.handle = p_owner_handle))
        AND (p_title_contains IS NULL OR r.title ILIKE '%' || p_title_contains || '%')
-       -- AND-containment, both sides folded. A resource with no `tags` is excluded because the
-       -- `coalesce` makes it the EMPTY ARRAY — NOT because it is NULL. Drop the `coalesce` and
-       -- every tag filter becomes NULL and matches nothing.
        AND (p_tags IS NULL OR (
              SELECT coalesce(array_agg(DISTINCT lower(pe.element #>> '{}')), '{}')
                FROM kb_property_elements pe
               WHERE pe.owner_table = 'kb_resources' AND pe.owner_id = r.id
                 AND pe.property_key = 'tags'
            ) @> ARRAY(SELECT lower(x) FROM unnest(p_tags) AS x))
-       -- Three guards, distinct jobs: `jsonb_typeof` fails closed, the `CASE` stops
-       -- `jsonb_array_elements` raising, the null-key test stops `jsonb_build_object` raising.
-       --
-       -- Reading `pe.element` rather than `fp.property_value` WIDENS this: an ARRAY-shaped facet
-       -- value explodes, and a one-element array wrapping an object does not contain that object
-       -- while the element does (jsonb's array-containment exception is primitives only).
        AND (p_facets IS NULL OR (
              jsonb_typeof(p_facets) = 'array'
              AND NOT EXISTS (
@@ -148,46 +111,17 @@ LANGUAGE sql STABLE AS $$
                      AND pe.property_key = 'facet'
                      AND f->>'key' IS NOT NULL
                      AND pe.element @> jsonb_build_object(f->>'key', f->>'value')))))
-       -- Open key space, closed operator set. AND across the list, OR within one predicate's
-       -- values. NULL narrows nothing; a malformed argument narrows to zero, and the fail-closed
-       -- test must stay HERE rather than in `predicates`, which is empty for an absent argument and
-       -- a malformed one alike — the distinction does not survive the parse.
-       --
-       -- `has_key` needs no value test: the row's existence in the view IS the answer, which is why
-       -- it can be asked of a `[]`-valued key that the element relation cannot see at all.
-       --
-       -- `compare` is type-guarded: `jsonb_typeof(property_value) = jsonb_typeof($bound)` segments
-       -- by JSON type before the comparison, so a row whose JSON type differs from the bound's is
-       -- an honest empty rather than a type-confusion match. jsonb's total type ordering
-       -- (`null < boolean < number < string < array < object`) means without the guard a numeric
-       -- bound against a string-valued key matches EVERY string row — a type-confusion artifact.
-       -- A missing `value` makes `bound` NULL; `jsonb_typeof(NULL)` is NULL, so the guard is
-       -- falsy and the whole arm denies. A missing `direction` falls to the inner `ELSE false`.
-       -- Both match the established fail-closed rule: a malformed argument narrows to zero.
+       -- Fail-closed stays HERE (not in the parse function): an absent argument and a malformed
+       -- one both yield an empty predicates set, so the distinction does not survive the parse.
        AND (p_properties IS NULL OR (
              jsonb_typeof(p_properties) = 'array'
-             AND NOT EXISTS (                       -- no listed predicate FAILS to match
+             AND NOT EXISTS (
                SELECT 1 FROM predicates q
                 WHERE NOT EXISTS (
                   SELECT 1 FROM kb_resource_properties rp
                    WHERE rp.resource_id = r.id
                      AND rp.property_key = q.property_key
-                     AND CASE q.op
-                           WHEN 'has_key'  THEN true
-                           WHEN 'contains' THEN EXISTS (   -- OR within one predicate's values
-                             SELECT 1 FROM jsonb_array_elements(q.vals) AS v
-                              WHERE rp.property_value @> v)
-                           WHEN 'compare' THEN
-                                 jsonb_typeof(rp.property_value) = jsonb_typeof(q.bound)
-                             AND CASE q.direction
-                                   WHEN 'gt'  THEN rp.property_value >  q.bound
-                                   WHEN 'gte' THEN rp.property_value >= q.bound
-                                   WHEN 'lt'  THEN rp.property_value <  q.bound
-                                   WHEN 'lte' THEN rp.property_value <= q.bound
-                                   ELSE false
-                                 END
-                           ELSE false                      -- an operator the closed set lacks
-                         END))))
+                     AND _temper_property_op_match(q.op, q.vals, q.direction, q.bound, rp.property_value)))))
        AND (p_anchor_id IS NULL OR (
              COALESCE(anchor_readable_by_profile(p_anchor_reader, p_anchor_table, p_anchor_id),
                       false)
@@ -195,13 +129,7 @@ LANGUAGE sql STABLE AS $$
              AND h.anchor_id = p_anchor_id));
 $$;
 
--- The gated wrapper delegates and is byte-identical in signature; no second `CREATE OR REPLACE`
--- is needed because the wrapper passes `p_properties` through and its body did not change. The
--- incumbent `CREATE OR REPLACE FUNCTION __temper_ungated_find_resources_with` with the DEFAULT
--- arity above already re-points the 12-arity incumbent's delegate (`20260815000040:134-154`), and
--- that delegate passes `NULL::jsonb` for `p_properties`, so it is unaffected by the new arm.
-
--- ── `__temper_ungated_follow_from`: add the `compare` arm to the edge predicate ─────────────────
+-- ── `__temper_ungated_follow_from`: compare arm + extracted helpers ────────────────────────────
 CREATE OR REPLACE FUNCTION __temper_ungated_follow_from(
     p_visible_ids      uuid[],
     p_seed_ids         uuid[],
@@ -214,10 +142,6 @@ CREATE OR REPLACE FUNCTION __temper_ungated_follow_from(
     p_edge_properties  jsonb)
 RETURNS TABLE (resource_id uuid, graph_score real, via jsonb)
 LANGUAGE sql STABLE AS $$
-  -- The wire shape parsed by the shared `IMMUTABLE` parse function (same one the resource body
-  -- uses — see the function's COMMENT for why it inlines where the operator dispatch cannot).
-  -- The `WITH RECURSIVE` is preserved because the walk below is recursive; the `predicates`
-  -- alias is kept so the `CASE q.op` reads identically to the resource body.
   WITH RECURSIVE
   predicates AS (
     SELECT * FROM _temper_property_predicates_parse(p_edge_properties)
@@ -240,35 +164,15 @@ LANGUAGE sql STABLE AS $$
             OR e.edge_kind::text = ANY(p_edge_kinds))
        AND (p_labels IS NULL OR array_length(p_labels, 1) IS NULL
             OR e.label = ANY(p_labels))
-       -- Fail-closed lives here and cannot move into `predicates`: that CTE is empty for an absent
-       -- argument and a malformed one alike, so the distinction does not survive the parse.
-       -- `compare` carries the same `jsonb_typeof` type guard as the resource body — see the
-       -- sibling migration's `WHERE` for the full rationale. Edge-owned properties are zero on
-       -- this deployment but the shape is identical for both subjects by design (`§12`).
        AND (p_edge_properties IS NULL OR (
              jsonb_typeof(p_edge_properties) = 'array'
-             AND NOT EXISTS (                       -- no listed predicate FAILS to match
+             AND NOT EXISTS (
                SELECT 1 FROM predicates q
                 WHERE NOT EXISTS (
                   SELECT 1 FROM kb_edge_properties ep
                    WHERE ep.edge_id = e.id
                      AND ep.property_key = q.property_key
-                     AND CASE q.op
-                           WHEN 'has_key'  THEN true
-                           WHEN 'contains' THEN EXISTS (   -- OR within one predicate's values
-                             SELECT 1 FROM jsonb_array_elements(q.vals) AS v
-                              WHERE ep.property_value @> v)
-                           WHEN 'compare' THEN
-                                 jsonb_typeof(ep.property_value) = jsonb_typeof(q.bound)
-                             AND CASE q.direction
-                                   WHEN 'gt'  THEN ep.property_value >  q.bound
-                                   WHEN 'gte' THEN ep.property_value >= q.bound
-                                   WHEN 'lt'  THEN ep.property_value <  q.bound
-                                   WHEN 'lte' THEN ep.property_value <= q.bound
-                                   ELSE false
-                                 END
-                           ELSE false                      -- an operator the closed set lacks
-                         END))))
+                     AND _temper_property_op_match(q.op, q.vals, q.direction, q.bound, ep.property_value)))))
   ),
   walk AS (
     SELECT s.id AS node, 1.0::double precision AS score, 0 AS hop, ARRAY[s.id] AS path,
@@ -315,20 +219,8 @@ LANGUAGE sql STABLE AS $$
    ORDER BY r.graph_score DESC, r.node;
 $$;
 
--- The gated wrapper `query_follow_from` delegates to `__temper_ungated_follow_from` and passes
--- `p_edge_properties` through; its signature did not change, so no second `CREATE OR REPLACE` is
--- needed.
-
-COMMENT ON FUNCTION __temper_ungated_find_resources_with(
-        uuid[], text[], text[], jsonb, text, text, uuid, text, text, varchar, uuid, uuid, jsonb) IS
-    'The selection core, with the closed operator set widened to include `compare`: property_value <direction> $bound over jsonb native ordering, type-guarded by jsonb_typeof(property_value) = jsonb_typeof($bound) so cross-type rows are honest empties rather than type-confusion matches. Two `CREATE OR REPLACE FUNCTION` at byte-identical signatures: the bodies are replaced to add the `WHEN ''compare''` arm to the `CASE q.op`; no DROP, no signature change, no default change. The two predicate bodies CANNOT be unified into a shared function (measured — 20260808000020:308: a LANGUAGE sql STABLE body with a sublink does not inline and loses its Index Only Scan); they are held to a differential witness in property_predicate_parity.rs. `compare` is one probe (one bound, one comparison per row), like has_key; the 256 probe ceiling is unchanged. See migration 20260815000040 for the container it rides on and 2026-08-05-query-builder-compositional-design.md §12 for the closed-operator contract.';
-
-COMMENT ON FUNCTION __temper_ungated_follow_from(
-        uuid[], uuid[], int, double precision, text[], text[], uuid[], int, jsonb) IS
-    'The walk, with the closed operator set widened to include `compare`: same type-guarded jsonb native ordering as the resource body, applied inside `adj` because it constrains which edge may be TRAVERSED. Two `CREATE OR REPLACE FUNCTION` at byte-identical signatures; no DROP, no signature change, no default change. Edge-owned properties are zero on this deployment but the shape is identical for both subjects by design (§12). The two predicate bodies are held to a differential witness rather than unified (measured; see the sibling migration 20260816000010). See 2026-08-05-query-builder-compositional-design.md §12.';
-
 SELECT declare_migration(
     20260816000010,
     'additive',
-    'Widens the closed PropertyOp set with a third arm, `Compare { direction, value }`, carrying a closed OrdOp sub-enum (gt/gte/lt/lte). Three contract rulings (task 01a001af-02a9-7c02-9977-195aeecadefb, spec 01a00a79-1dd7-7ae2-9d34-b801eb509904): ONE variant with four directions, no Between (composes from gte AND lte); jsonb NATIVE ordering type-guarded by jsonb_typeof(property_value) = jsonb_typeof($bound) so cross-type rows are honest empties, not type-confusion matches; type INFERRED from the caller''s bound value, no declared `as` field. probe_count for compare is 1, like has_key; the 256 probe ceiling is unchanged. Two CREATE OR REPLACE FUNCTION at byte-identical signatures (the two ungated bodies cannot be unified — measured, 20260808000020:308); no DROP, no signature change, no default change. The gated wrappers delegate and are unaffected. Differential witness in property_predicate_parity.rs gains compare cases in both directions and both type-guard directions; the companion test pins expected verdicts so a symmetric mistake on both bodies cannot pass. Rulings, measurements and the type-instability corpus live in the spec — deliberately not here, because an applied migration cannot have its prose corrected.'
+    'Widens the closed PropertyOp set with Compare { direction, value } (OrdOp: gt/gte/lt/lte). Three rulings (spec 01a00a79): one variant, no Between; jsonb native ordering type-guarded by jsonb_typeof; type inferred from the caller''s bound. Also extracts two IMMUTABLE helpers — the wire-parse and the operator dispatch — from four duplicated copies into one each (both inline, measured plan-identical, Index Only Scan preserved). probe_count for compare is 1; the 256 probe ceiling is unchanged. No DROP, no signature change. Differential witness in property_predicate_parity.rs gains compare cases including both type-guard directions.'
 );
