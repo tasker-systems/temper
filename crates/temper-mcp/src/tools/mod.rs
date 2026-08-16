@@ -8,6 +8,7 @@ pub mod ingest;
 pub mod invitations;
 pub mod invocations;
 pub mod profiles;
+pub mod query;
 pub mod relationships;
 pub mod resources;
 pub mod search;
