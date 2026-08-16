@@ -870,4 +870,74 @@ mod tests {
             advertised
         );
     }
+
+    /// **Every `#[tool]` method must call `ensure_profile_from_parts` before dispatching.**
+    ///
+    /// The MCP surface authenticates per-request from the JWT claims injected into the HTTP
+    /// extensions. A `#[tool]` method that skips `ensure_profile_from_parts` compiles fine and
+    /// is advertised by the router — it just runs unauthenticated, silently. The consolidation
+    /// that restructured every tool body could have dropped the call in any one of them; this
+    /// gate catches that.
+    ///
+    /// It parses this file's own source rather than reflecting on the router, because the
+    /// router's `Tool` entries carry only the description + schema + a function pointer — there
+    /// is no way to inspect the function body at runtime to see whether it calls
+    /// `ensure_profile_from_parts`. Source parsing is the cheapest faithful check.
+    ///
+    /// **What it covers:** every `#[tool]` method body in this file. The split is on
+    /// `#[tool(`, and each segment runs from the attribute to the next `#[tool(` or end of
+    /// file — so a method that calls `ensure_profile_from_parts` anywhere in its body passes.
+    /// A method that calls it conditionally (inside an `if`) would also pass; the invariant is
+    /// "the call is present", not "the call is unconditional", and every existing call IS
+    /// unconditional (the first line of every method body).
+    #[test]
+    fn every_tool_method_calls_ensure_profile_from_parts() {
+        let source = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/service.rs"),
+        )
+        .expect("read service.rs");
+
+        // Parse only the tool-router impl block — the #[tool] methods live between
+        // `#[tool_router]` and `#[tool_handler]` (or `#[cfg(test)]`, whichever comes first).
+        // The test module's doc comments mention `#[tool(` in backticks, which would split
+        // as false segments; scoping to the impl block avoids that.
+        let impl_start = source
+            .find("#[tool_router]")
+            .expect("#[tool_router] attribute not found");
+        let impl_end = source[impl_start..]
+            .find("#[tool_handler]")
+            .or_else(|| source[impl_start..].find("#[cfg(test)]"))
+            .expect("end of tool-router impl not found");
+        let impl_block = &source[impl_start..impl_start + impl_end];
+
+        let tool_segments: Vec<&str> = impl_block.split("#[tool(").skip(1).collect();
+
+        assert!(
+            !tool_segments.is_empty(),
+            "no #[tool] attributes found in the tool-router impl — the split found nothing, \
+             so this test checks nothing"
+        );
+
+        let mut missing: Vec<String> = Vec::new();
+        for segment in &tool_segments {
+            if !segment.contains("ensure_profile_from_parts") {
+                let fn_name = segment
+                    .split("async fn ")
+                    .nth(1)
+                    .and_then(|s| s.split('(').next())
+                    .unwrap_or("<unknown>")
+                    .trim();
+                missing.push(fn_name.to_string());
+            }
+        }
+
+        assert!(
+            missing.is_empty(),
+            "these #[tool] methods do not call ensure_profile_from_parts — every tool must \
+             authenticate before dispatching:\n  {}\n\
+             The call is the first line of every existing tool body; a new tool that omits it \
+             runs unauthenticated.",
+            missing.join("\n  ")
+        );
+    }
 }
