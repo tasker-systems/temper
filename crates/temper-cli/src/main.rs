@@ -1164,14 +1164,19 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 print!("{}", content);
                 Ok(())
             }
-            SkillAction::Install { path } => {
+            SkillAction::Install { path, target } => {
                 let config = temper_cli::config::load(cli.vault.as_deref())?;
+                let home = dirs::home_dir().ok_or_else(|| {
+                    temper_cli::error::TemperError::Config(
+                        "cannot determine home directory".to_string(),
+                    )
+                })?;
                 let skill_dir = if let Some(p) = path {
                     std::path::PathBuf::from(p)
                 } else {
-                    config.skill_output.clone()
+                    target.default_skill_dir(&home)
                 };
-                let report = temper_cli::commands::skill::install(&config, &skill_dir)?;
+                let report = temper_cli::commands::skill::install(&config, &skill_dir, target)?;
                 if report.is_no_op() {
                     temper_cli::output::success(format!(
                         "Skill already up to date ({} files): {}",
@@ -1191,9 +1196,9 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 }
                 Ok(())
             }
-            SkillAction::Check => {
+            SkillAction::Check { target } => {
                 let config = temper_cli::config::load(cli.vault.as_deref())?;
-                temper_cli::commands::skill::check(&config)
+                temper_cli::commands::skill::check(&config, target)
             }
         },
         Commands::Memory { action } => match action {

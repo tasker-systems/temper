@@ -236,7 +236,7 @@ pub enum Commands {
     },
     /// List the pending team invitations addressed to you
     Invitations,
-    /// Manage Claude Code skill
+    /// Manage agent skill (install for Claude Code or opencode)
     Skill {
         #[command(subcommand)]
         action: SkillAction,
@@ -1832,12 +1832,25 @@ pub enum SkillAction {
     Generate,
     /// Install skill directory and command wrapper
     Install {
-        /// Override install directory (default: ~/.claude/skills/temper)
+        /// Which agent to install for. Determines the default skill directory and command
+        /// wrapper location: `claude` writes to `~/.claude/skills/temper/` +
+        /// `~/.claude/commands/temper.md`; `opencode` writes to
+        /// `~/.config/opencode/skills/temper/` + `~/.config/opencode/command/temper.md`.
+        /// Defaults to `claude` for back-compat.
+        #[arg(long, default_value = "claude")]
+        target: SkillTarget,
+
+        /// Override the skill install directory (overrides the target's default)
         #[arg(long)]
         path: Option<String>,
     },
     /// Check skill status
-    Check,
+    Check {
+        /// Which agent to check for. Determines the expected command-wrapper location.
+        /// Defaults to `claude`.
+        #[arg(long, default_value = "claude")]
+        target: SkillTarget,
+    },
     /// Emit the MCP (`agent-skills/`) projection into a directory.
     ///
     /// Config-free by construction — unlike `install`, this reads no config and bakes in no
@@ -1848,6 +1861,18 @@ pub enum SkillAction {
         #[arg(long)]
         path: String,
     },
+}
+
+/// The agent target for `skill install`. Each target knows its own default skill directory and
+/// command-wrapper location — the install paths are the only thing that differs; the skill content
+/// and the wrapper template are shared (opencode reads the same `SKILL.md` + command frontmatter
+/// format Claude Code does, via its Claude-Code-compat skill discovery).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum SkillTarget {
+    /// Claude Code — skill to `~/.claude/skills/temper/`, wrapper to `~/.claude/commands/temper.md`
+    Claude,
+    /// opencode — skill to `~/.config/opencode/skills/temper/`, wrapper to `~/.config/opencode/command/temper.md`
+    Opencode,
 }
 
 #[derive(Subcommand, Debug)]

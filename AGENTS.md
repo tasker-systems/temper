@@ -1,8 +1,7 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this
-repository. The shared reference material lives in `docs/agents/` — read the relevant file before
-starting work. The same content is also reachable via [AGENTS.md](AGENTS.md) for other agents.
+This file provides guidance to AI agents working with code in this repository. The shared
+reference material lives in `docs/agents/` — read the relevant file before starting work.
 
 ## Quick reference
 
@@ -28,5 +27,5 @@ agent-first: with a non-TTY stdout (how agents invoke it) output defaults to JSO
 ## Skills
 
 This repo ships a temper skill that teaches the workflow. Install it with
-`temper skill install --target claude`. The skill teaches session lifecycle, grounding, and
-outcome registers — read it after install.
+`temper skill install --target opencode` (or `--target claude` for Claude Code). The skill teaches
+session lifecycle, grounding, and outcome registers — read it after install.

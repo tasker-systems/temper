@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use askama::Template;
 use clap::CommandFactory;
@@ -879,15 +879,44 @@ impl InstallReport {
     }
 }
 
+// ── Skill targets ────────────────────────────────────────────────────────────
+
+use crate::cli::SkillTarget;
+
+/// The per-target install paths: where the skill directory lives and where the command wrapper
+/// goes. Each agent has its own config home; the skill content and the wrapper template are shared
+/// (opencode discovers Claude-Code-compat skills and reads the same command frontmatter format).
+impl SkillTarget {
+    /// The default skill directory under the target's config home.
+    pub fn default_skill_dir(&self, home: &Path) -> PathBuf {
+        match self {
+            SkillTarget::Claude => home.join(".claude/skills/temper"),
+            SkillTarget::Opencode => home.join(".config/opencode/skills/temper"),
+        }
+    }
+
+    /// The command-wrapper directory under the target's config home.
+    fn command_dir(&self, home: &Path) -> PathBuf {
+        match self {
+            SkillTarget::Claude => home.join(".claude/commands"),
+            SkillTarget::Opencode => home.join(".config/opencode/command"),
+        }
+    }
+}
+
 /// Install skill directory and command wrapper.
 ///
 /// 1. Generate all skill files
 /// 2. Write skill files (except command-wrapper.md) into `skill_dir`
-/// 3. Write command-wrapper.md to `~/.claude/commands/temper.md`
+/// 3. Write command-wrapper.md to the target's command directory
+///
+/// `target` selects the command-wrapper location (Claude vs opencode config home). `skill_dir` is
+/// already resolved by the caller (from `--path` or the target's default) — the install function
+/// itself is path-agnostic.
 ///
 /// Skips writes when the destination already matches the generated content,
 /// returning an `InstallReport` that lists every file whose bytes changed.
-pub fn install(config: &Config, skill_dir: &Path) -> Result<InstallReport> {
+pub fn install(config: &Config, skill_dir: &Path, target: SkillTarget) -> Result<InstallReport> {
     let files = generate_skill_files(config)?;
     let mut report = InstallReport {
         total: files.len(),
@@ -922,11 +951,11 @@ pub fn install(config: &Config, skill_dir: &Path) -> Result<InstallReport> {
         }
     }
 
-    // Write command-wrapper.md to ~/.claude/commands/temper.md
+    // Write command-wrapper.md to the target's command directory
     if let Some(wrapper_content) = files.get("command-wrapper.md") {
         let home = dirs::home_dir()
             .ok_or_else(|| TemperError::Config("cannot determine home directory".to_string()))?;
-        let commands_dir = home.join(".claude/commands");
+        let commands_dir = target.command_dir(&home);
         std::fs::create_dir_all(&commands_dir).map_err(|e| {
             TemperError::Config(format!("cannot create {}: {}", commands_dir.display(), e))
         })?;
@@ -953,7 +982,7 @@ fn write_if_changed(dest: &Path, content: &str) -> Result<bool> {
 }
 
 /// Check skill installation status.
-pub fn check(config: &Config) -> Result<()> {
+pub fn check(config: &Config, target: SkillTarget) -> Result<()> {
     // 1. Check skill directory exists — a missing directory short-circuits
     //    the remaining checks.
     let skill_dir = &config.skill_output;
@@ -969,7 +998,7 @@ pub fn check(config: &Config) -> Result<()> {
 
     check_expected_files(skill_dir);
     check_config_hash_staleness(skill_dir)?;
-    check_command_wrapper();
+    check_command_wrapper(target);
 
     Ok(())
 }
@@ -1047,11 +1076,11 @@ fn check_config_hash_staleness(skill_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Check the command wrapper at `~/.claude/commands/temper.md`.
-fn check_command_wrapper() {
-    let wrapper_path = dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("~"))
-        .join(".claude/commands/temper.md");
+/// Check the command wrapper at the target's command path.
+fn check_command_wrapper(target: SkillTarget) {
+    let wrapper_path = target
+        .command_dir(&dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("~")))
+        .join("temper.md");
 
     if wrapper_path.exists() {
         output::status_icon(true, format!("Command wrapper: {}", wrapper_path.display()));
