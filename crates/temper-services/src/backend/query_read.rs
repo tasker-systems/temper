@@ -34,7 +34,7 @@ use temper_core::types::query::{BoundTerm, CompositionTrace, InputSource, StageI
 use temper_core::types::resource_view::{ResourceSection, ResourceView};
 use temper_substrate::readback;
 use temper_substrate::readback::query_exec::{execute, QueryRows};
-use temper_substrate::readback::query_plan::{compile, EMIT_FIND_WIDE};
+use temper_substrate::readback::query_plan::{compile, EMIT_FIND_WIDE, EMIT_SURVEY};
 
 /// Run a validated composition and answer in the shape `POST /api/query` publishes.
 ///
@@ -237,7 +237,7 @@ fn wants_a_vector(node: &StageNode) -> bool {
         StageNode::Act(inv) => declaration(&inv.act)
             .and_then(|d| d.served_by)
             .and_then(|mechanic| emitted_fragment_for(&mechanic))
-            .is_some_and(|fragment| fragment == EMIT_FIND_WIDE),
+            .is_some_and(|fragment| fragment == EMIT_FIND_WIDE || fragment == EMIT_SURVEY),
         StageNode::Combine(_) => false,
     }
 }
@@ -248,9 +248,10 @@ fn wants_a_vector(node: &StageNode) -> bool {
 /// statement per CALL and the arms are independent — two arms would otherwise be two round trips for
 /// no reason. The arms stay separate in the response; only the read is shared.
 ///
-/// **A returned stage that is not `Resources` is not hydrated here**, and today that is only
-/// `survey`, whose fragment the compiler cannot yet emit — so a composition naming it fails loudly
-/// at Postgres long before this. Region hydration is a declared hole, not a silent one.
+/// **A returned stage that is not `Resources` is not hydrated here** — and as of 2026-08-16 every
+/// returned act produces `Resources` (survey was the last non-`Resource` producer, and it now
+/// produces resources per the ratified ⟨3⟩ redesign). Region hydration is a declared hole, not a
+/// silent one.
 ///
 /// The open tier comes back BESIDE the views rather than merged into them, because `with` is
 /// per-arm. `[fixed — 2026-08-09]` Merging it into the shared views filled `open_meta` on every arm
@@ -1860,6 +1861,16 @@ mod tests {
             !wants_a_vector(&act_node("s", ActName::FindExact, None)),
             "the exact arm binds no vector — embedding for it pays ONNX inference to produce a \
              value nothing binds, and a failure would then refuse a stage that never needed one"
+        );
+
+        // `[added — 2026-08-16]` Survey also wants a vector — its within-region ranking is by
+        // `query_cos` (the resource's embedding similarity to the query). Without server-side
+        // embedding, survey would refuse `EmbeddingUnavailable` for every API/MCP caller that
+        // cannot embed client-side, which is exactly the gap `wants_a_vector` exists to close.
+        assert!(
+            wants_a_vector(&act_node("s", ActName::Survey, None)),
+            "survey is served by the survey core and must want a vector — its within-region rank \
+             is by query_cos, which needs the query embedded"
         );
     }
 }
