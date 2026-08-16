@@ -4172,6 +4172,16 @@ export interface components {
             trigger_kind: string;
         };
         /**
+         * @description The ordering direction for [`PropertyOp::Compare`]. A closed sub-enum, the same shape as
+         *     `Contains`'s `Vec` — a nested closed set inside one `PropertyOp` discriminant.
+         *
+         *     All four directions are needed: inclusivity matters for dates (*"on or after 2026-07-01"* is
+         *     `gte`, not `gt*). `Gt`/`Lt` are the half-open bounds; `Gte`/`Lte` are the closed ones; a
+         *     `Between` is `gte` AND `lte` composed through the existing AND-across-the-list.
+         * @enum {string}
+         */
+        OrdOp: "gt" | "gte" | "lt" | "lte";
+        /**
          * @description A high-degree standalone node surfaced where its cogmap home has no region
          *     (sparsity rule). `doc_type` is optional/free-form.
          */
@@ -4302,8 +4312,8 @@ export interface components {
             entitlements: components["schemas"]["Entitlements"];
         };
         /**
-         * @description A property narrowing operator. CLOSED — the key space is open, the operator set is not. Neither
-         *     operator takes a fragment of a query language; both bind their values.
+         * @description A property narrowing operator. CLOSED — the key space is open, the operator set is not. No
+         *     operator takes a fragment of a query language; all bind their values.
          */
         PropertyOp: {
             /** @enum {string} */
@@ -4312,6 +4322,11 @@ export interface components {
             /** @enum {string} */
             op: "contains";
             values: unknown[];
+        } | {
+            direction: components["schemas"]["OrdOp"];
+            /** @enum {string} */
+            op: "compare";
+            value: unknown;
         };
         /**
          * @description A property predicate: which key, and how. **The subject is the CONTAINER it sits in** — an

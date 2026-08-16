@@ -119,12 +119,16 @@ const MAX_PER_CANDIDATE_PROBES: usize = 256;
 /// How many containment probes a predicate list costs per candidate row.
 ///
 /// `max(1, …)` rather than `values.len()`: `has_key` carries no list and still costs a lookup.
+/// `Compare` carries one bound, not a list, so it counts as one probe for the same reason — and a
+/// range composed from `gte` AND `lte` costs two predicates, not one probe with two bounds, which
+/// is what keeps the cap arithmetic honest against the composed form.
 fn probe_count(props: &[PropertyPredicate]) -> usize {
     props
         .iter()
         .map(|p| match &p.op {
             PropertyOp::Contains { values } => values.len().max(1),
             PropertyOp::HasKey => 1,
+            PropertyOp::Compare { .. } => 1,
         })
         .sum()
 }
@@ -208,12 +212,11 @@ fn check_property_caps(
             Some(name),
             RefusalReason::FilterNotApplicable,
             format!(
-                "a {stage} admits at most {MAX_PER_CANDIDATE_PROBES} containment probes per \
-                 candidate {unit}; this stage supplied {probes}. A `contains` list is scanned in \
-                 full for every {unit} that carries the key — it short-circuits only on a MATCH — \
-                 so its length multiplies the {work} the same way the predicate count does, and a \
-                 long list of values that all miss is the expensive case rather than the harmless \
-                 one"
+                "a {stage} admits at most {MAX_PER_CANDIDATE_PROBES} probes per candidate {unit}; \
+                 this stage supplied {probes}. A `contains` list is scanned in full for every \
+                 {unit} that carries the key — it short-circuits only on a MATCH — so its length \
+                 multiplies the {work} the same way the predicate count does, and a long list of \
+                 values that all miss is the expensive case rather than the harmless one"
             ),
         ));
     }

@@ -171,6 +171,7 @@ lib/temper/generated/models/no_prior_standing.rb
 lib/temper/generated/models/no_standing.rb
 lib/temper/generated/models/node_home.rb
 lib/temper/generated/models/open_invocation_request.rb
+lib/temper/generated/models/ord_op.rb
 lib/temper/generated/models/orphan_node.rb
 lib/temper/generated/models/outcome_declaration.rb
 lib/temper/generated/models/plan_refusal.rb
@@ -183,6 +184,7 @@ lib/temper/generated/models/profile_with_entitlements.rb
 lib/temper/generated/models/property_op.rb
 lib/temper/generated/models/property_op_one_of.rb
 lib/temper/generated/models/property_op_one_of1.rb
+lib/temper/generated/models/property_op_one_of2.rb
 lib/temper/generated/models/property_predicate.rb
 lib/temper/generated/models/provenance_source.rb
 lib/temper/generated/models/provenance_source_one_of.rb

@@ -138,8 +138,8 @@ pub enum FilterField {
     Edge,
 }
 
-/// A property narrowing operator. CLOSED — the key space is open, the operator set is not. Neither
-/// operator takes a fragment of a query language; both bind their values.
+/// A property narrowing operator. CLOSED — the key space is open, the operator set is not. No
+/// operator takes a fragment of a query language; all bind their values.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -173,6 +173,53 @@ pub enum PropertyOp {
     /// not what makes the predicate span the population, and a caller who lists only the array
     /// shape silently answers for one half of it.
     Contains { values: Vec<serde_json::Value> },
+    /// `property_value <direction> $value` over jsonb's native ordering, type-guarded.
+    ///
+    /// **The type is inferred from the caller's bound, never declared on the operator.**
+    /// `jsonb_typeof(property_value) = jsonb_typeof($value)` segments by JSON type before the
+    /// comparison, so a row whose JSON type differs from the bound's is an **honest empty** rather
+    /// than a type-confusion match. jsonb defines a total type ordering
+    /// (`null < boolean < number < string < array < object`), so without the guard a numeric
+    /// bound against a string-valued key would match **every** string row (`string > number` is
+    /// true in jsonb's ordering) — a type-confusion artifact, not an answer. The guard makes each
+    /// comparison run only within a homogeneous sub-population.
+    ///
+    /// **Per-VALUE inference, not per-key — and the distinction is the trap.** `temper-pr` is
+    /// 68 string / 7 numeric on ONE key, so no per-key answer exists; each caller sends one bound
+    /// with one JSON type, and the guard makes the other-type rows honest empties. A numeric bound
+    /// compares the 7 numeric rows; a string bound compares the 68 string rows; neither is wrong.
+    ///
+    /// **Numbers stored as JSON STRINGS** that need numeric comparison are out of scope: that is a
+    /// convention the key should fix (store numbers as JSON numbers), and `temper-seq` (132 numeric
+    /// rows) already does. A comparison operator is not a type-coercion mechanism.
+    ///
+    /// `probe_count` for `Compare` is **1** — one bound, one comparison per row that carries the
+    /// key — like `HasKey`, not like `Contains { values }` whose cost is `Σ|values|`. `Between` is
+    /// NOT added: a closed range composes from `gte` AND `lte` via the existing AND-across-the-list,
+    /// and adding it saves one probe at the cost of a second value slot and a second SQL branch.
+    Compare {
+        direction: OrdOp,
+        value: serde_json::Value,
+    },
+}
+
+/// The ordering direction for [`PropertyOp::Compare`]. A closed sub-enum, the same shape as
+/// `Contains`'s `Vec` — a nested closed set inside one `PropertyOp` discriminant.
+///
+/// All four directions are needed: inclusivity matters for dates (*"on or after 2026-07-01"* is
+/// `gte`, not `gt*). `Gt`/`Lt` are the half-open bounds; `Gte`/`Lte` are the closed ones; a
+/// `Between` is `gte` AND `lte` composed through the existing AND-across-the-list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum OrdOp {
+    Gt,
+    Gte,
+    Lt,
+    Lte,
 }
 
 /// A property predicate: which key, and how. **The subject is the CONTAINER it sits in** — an
@@ -372,8 +419,11 @@ mod tests {
     }
 
     #[test]
-    fn has_key_and_contains_are_the_whole_v1_vocabulary() {
-        // No operator takes a fragment of a query language. Both bind.
+    fn has_key_contains_and_compare_are_the_whole_vocabulary() {
+        // No operator takes a fragment of a query language. All three bind.
+        //
+        // `[2026-08-16]` Renamed from `has_key_and_contains_are_the_whole_v1_vocabulary` when
+        // `Compare` joined the closed set — the "v1" framing is gone with the second addition.
         let hk = PropertyPredicate {
             key: "keywords".to_string(),
             op: PropertyOp::HasKey,
@@ -384,11 +434,51 @@ mod tests {
                 values: vec![serde_json::json!("high")],
             },
         };
-        for p in [hk, ct] {
+        let cmp = PropertyPredicate {
+            key: "date".to_string(),
+            op: PropertyOp::Compare {
+                direction: OrdOp::Gte,
+                value: serde_json::json!("2026-07-01"),
+            },
+        };
+        for p in [hk, ct, cmp] {
             assert_eq!(
                 serde_json::from_str::<PropertyPredicate>(&serde_json::to_string(&p).unwrap())
                     .unwrap(),
                 p
+            );
+        }
+    }
+
+    #[test]
+    fn compare_serializes_internally_tagged_and_round_trips_all_four_directions() {
+        // The wire shape the SQL fragment parses: `{"op":"compare","direction":"gte","value":...}`.
+        // `OrdOp` is `rename_all = "snake_case"`, so `Gte` → `"gte"` (no ambiguity with `Gt`).
+        for (direction, wire) in [
+            (OrdOp::Gt, "gt"),
+            (OrdOp::Gte, "gte"),
+            (OrdOp::Lt, "lt"),
+            (OrdOp::Lte, "lte"),
+        ] {
+            let p = PropertyPredicate {
+                key: "date".to_string(),
+                op: PropertyOp::Compare {
+                    direction,
+                    value: serde_json::json!("2026-07-01"),
+                },
+            };
+            let serialized = serde_json::to_string(&p).unwrap();
+            assert_eq!(
+                serialized,
+                format!(
+                    r#"{{"key":"date","op":{{"op":"compare","direction":"{wire}","value":"2026-07-01"}}}}"#,
+                ),
+                "direction {direction:?} did not serialize to the expected wire shape"
+            );
+            assert_eq!(
+                serde_json::from_str::<PropertyPredicate>(&serialized).unwrap(),
+                p,
+                "round-trip failed for direction {direction:?}"
             );
         }
     }
