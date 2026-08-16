@@ -13,3 +13,4 @@ pub mod relationships;
 pub mod resources;
 pub mod search;
 pub mod steward;
+pub mod trail;
