@@ -361,6 +361,18 @@ impl TemperMcpService {
     }
 
     #[tool(
+        description = "Read the event trail (append-only history) of a graph element — a resource (node) or a relationship (edge). A time-ordered list of the events that produced and mutated it: created, updated, relationship asserted/folded, facets set, etc. Each event carries its actor, time, and replay-sufficient payload. An unreadable or nonexistent element returns an empty trail, never an error. Pass `kind` (node | edge) and `element` (a resource ref for a node, an edge UUID for an edge; the decorated `slug-<uuid>` form is accepted and the slug half ignored)."
+    )]
+    async fn element_trail(
+        &self,
+        Parameters(input): Parameters<tools::trail::ElementTrailInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::trail::element_trail(self, input).await
+    }
+
+    #[tool(
         description = "Run a composed query — a DAG of act invocations (find-exact, find-about-anywhere, find-about-within, follow-from, find-resources-with) and set combinations (union, intersect, difference), with per-stage filters and property predicates. The `plan` object IS the composition contract; its schema describes every stage, act, filter, and combinator. A refused plan returns every refusal at once — each names its stage and reason — so the plan can be repaired in one round trip. Set `trace: false` to omit the per-stage trace and receive only the returned arms."
     )]
     async fn run_query(

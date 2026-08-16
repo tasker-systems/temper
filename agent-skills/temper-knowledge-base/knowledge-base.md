@@ -26,6 +26,7 @@ sessions, research, or wants to look up / store information across conversations
 | Build a large / resumable body as ordered blocks | Tools: `ingest_begin` → `ingest_append` → `ingest_finalize` | Segmented lifecycle; `ingest_blocks` reads landed segments to resume |
 | Attach provenance sources without rewriting the body | Tool: `annotate_resource` | Provenance-only backfill — body_hash + embeddings unchanged |
 | Read a resource's per-block provenance | Tool: `get_block_provenance` | Which sources each content block was distilled from |
+| Read a resource or relationship's event history | Tool: `element_trail` | Append-only ledger — who created/updated/touched it and when |
 | Read a resource with content via tool | Tool: `get_resource` with `include_content: true` | When resource browsing isn't available |
 | Delete a resource | Tool: `delete_resource` | Soft-delete, tools only |
 | Create a new context | Tool: `create_context` | Mutation — tools only |
@@ -292,6 +293,23 @@ Input: { "resource": "<resource UUID>" }
 
 Returns each content block's provenance in (block, accretion) order — the sources each block
 was distilled from, including any preserved span-locator fragments.
+
+### `element_trail` — read an element's event history
+
+The append-only ledger for one node (resource) or edge (relationship): a time-ordered list of
+the events that produced and mutated it — created, updated, relationship asserted/folded, facets
+set, etc. Each event carries its actor, time, and replay-sufficient payload. Use for orientation,
+audit, and debugging ("what happened to this resource?"). Visibility is gated inside the read:
+an unreadable or nonexistent element returns an empty trail, never an error.
+
+```
+Tool: element_trail
+Input: { "kind": "node", "element": "<resource UUID or slug-<uuid>>" }
+```
+
+`kind` selects the trail function: `node` (a resource) or `edge` (a relationship). `element` is a
+ref resolved trailing-UUID-only — a resource ref for a node, an edge UUID for an edge. The
+decorated `slug-<uuid>` form is accepted and the slug half ignored.
 
 ### Segmented ingest lifecycle (large / resumable builds)
 
