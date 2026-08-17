@@ -1174,7 +1174,45 @@ input_unusable: bigint,
  * statements is dropped from the rows and still counted here. The two are different questions
  * and only the gap between them is interesting.
  */
-produced_ids: bigint, narrowed_by: Array<NarrowedBy>, };
+produced_ids: bigint, 
+/**
+ * Complete / partial / indeterminate — **for every stage, not only the returned ones.** NOT a
+ * total; see [`Extent`].
+ *
+ * **The pair rule**: [`super::envelope::StageResult::extent`] carries the same value, and the
+ * two must stay identical for the same reason as [`Self::input_ids`], [`Self::input_unusable`]
+ * and [`Self::refusal`] — the trace covers every stage and the results only the returned ones,
+ * so disagreeing copies would leave a reader unable to tell which was right.
+ *
+ * **It is a fact about THIS stage's own bound.** A combinator applies none, so it reports
+ * `Complete`, meaning *"I dropped nothing"* rather than *"the corpus behind my arms is
+ * exhausted"*: an arm's `Partial` is not propagated up, because that would make one stage's
+ * extent a claim about another stage's bound. Every arm is a stage and carries its own entry
+ * here, which is how a reader sees that an `intersect` was computed against a truncated walk.
+ */
+extent: Extent, 
+/**
+ * The APPLIED value of every admitted term: the page this stage actually RAN with, clamped to
+ * the act's published ceiling and defaulted where the caller named nothing.
+ *
+ * **The pair rule** again — identical to [`super::envelope::StageResult::terms_applied`], from
+ * one [`super::registry::applied_terms`] call rather than two. That function's own doc argues
+ * it from the other end: *"Computed twice, they would eventually differ, and the difference
+ * would be a response claiming a page size that did not run."* It already had two consumers
+ * (the compiler binds these values, the assembler reports them); this adds a second READER of
+ * the map the assembler already holds, never a third computation.
+ *
+ * Empty for a combinator, which admits no terms — a union runs no page of its own.
+ *
+ * **No "you were clamped" flag rides beside this, and this field does not add one.** That call
+ * is not taken here — it belongs to [`super::registry::applied_terms`], which states it:
+ * ceilings are published per act, so the applied value is the whole story, and clamping to a
+ * ceiling nobody published would be the bug rather than the silence. `temper-services`'
+ * `the_page_a_stage_reports_is_the_clamped_one_the_statement_actually_ran` pins the other half
+ * — *"reporting the request back would make `terms_applied` an echo rather than a
+ * disclosure"* — so what rides here is what ran, never what was asked for.
+ */
+terms_applied: { [key in BoundTerm]?: bigint }, narrowed_by: Array<NarrowedBy>, };
 
 /**
  * What a composition WOULD return, derived from the act declarations without running anything.

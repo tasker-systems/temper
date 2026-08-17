@@ -124,8 +124,16 @@ pub const EMIT_FIND_RESOURCES_WITH: &str = "__temper_ungated_find_resources_with
 ///
 /// `[ruled — 2026-08-14, Pete]` *"Depth 3 is too large for a neighborhood traversal of this kind"*
 /// is a claim about what `follow-from` MEANS, which puts it in gamma's category rather than
-/// `limit`'s: `BoundTerm` does not grow a variant and `accepts_bound_terms` stays `[Limit]`. The
-/// measurement behind the 2 is spec §5 — path rows went 4,134 to 33,684 for one extra hop.
+/// `limit`'s: `BoundTerm` does not grow a `Depth` variant, and no widening of
+/// `accepts_bound_terms` reaches this constant. The measurement behind the 2 is spec §5 — path rows
+/// went 4,134 to 33,684 for one extra hop.
+///
+/// `[amended — 2026-08-17]` The ruling stands; the inventory beside it did not. This said
+/// `accepts_bound_terms` *"stays `[Limit]`"*, and `20260817000020` added `Offset` to it
+/// (`registry.rs:361`). That is the ruling holding rather than bending: a page boundary says
+/// nothing about what the act MEANS, only about which part of its answer you are looking at, so
+/// `offset` joined `limit`'s category exactly as the ruling sorts them. Depth did not move, and the
+/// list is no longer restated here — a copy of it is what went stale.
 ///
 /// It lives HERE, at the one place a walk is emitted, rather than as a fragment default, so there is
 /// exactly one answer to "how deep is a neighbourhood" and it is in the compiler that decides it.
@@ -593,6 +601,10 @@ fn emit_act_body(
                 // polarity from the visible set beside it.
                 bound: narrowing.bound_expr(),
                 limit: &limit,
+                // `[2026-08-17]` The page NUMBER, from the same `paging_for` the find arms read —
+                // so the offset that runs is the offset `applied_terms` reports, and the walk
+                // cannot page differently from what the response says it paged.
+                offset: &offset,
             });
             // **`via` crosses into the stage contract as a fourth column.** Every other act emits
             // `NULL::jsonb` for it — see `final_select`, which shares one column list across hit
@@ -708,7 +720,7 @@ enum CoreCall<'a> {
         limit: &'a str,
         offset: &'a str,
     },
-    /// The walk: a seed set, the two definitional constants, both edge axes, a bound, and a limit.
+    /// The walk: a seed set, the two definitional constants, both edge axes, a bound, and a page.
     ///
     /// **`depth` and `gamma` are constants this compiler writes, not slots a caller fills.** The
     /// act fixes both — depth at 2, gamma at the rate its `orders_by` sentence describes — so they
@@ -734,6 +746,25 @@ enum CoreCall<'a> {
         /// reached by ARITY, and an untyped NULL in the ninth position cannot be resolved against a
         /// name that also has an eight-parameter form.
         edge_properties: String,
+        /// The page offset (`20260817000020`) — a bound `$n::int`, or the literal `0`.
+        ///
+        /// **Declared last because it is rendered last.** Every field of this variant sits in its
+        /// positional order, which is the one property that keeps a positional call auditable by
+        /// reading the variant; `offset` is the tenth argument, so it is the tenth field. That is
+        /// why it is not tucked in beside `limit` the way [`CoreCall::Find`] pairs them.
+        ///
+        /// **No cast here, and that is a decision rather than an omission** — the rule
+        /// `edge_properties` records above is about UNTYPED arguments, and neither spelling
+        /// `paging_for` produces is one. `$n::int` casts itself; the absent sentinel is the bare
+        /// literal `0`, which Postgres types as `integer` at parse time (unlike `NULL` and a quoted
+        /// string, which are `unknown`), so it matches `p_offset int` exactly. The literal `2` in
+        /// `depth` has ridden this same call into `p_depth int` since `20260814000030` and is the
+        /// standing witness that a bare integer resolves here. Arity settles it independently: the
+        /// 10-arity carries no default on any parameter (`20260817000020`), the 9-arity carries
+        /// none either, and the 8-arity defaults only parameters 5-8 (`20260815000010:139-142`), so
+        /// nothing but the 10-arity can absorb ten arguments and there is no second candidate for
+        /// an argument's type to choose between.
+        offset: &'a str,
     },
     /// The selection core: eight narrowing slots, an anchor pair, and nothing else.
     ///
@@ -863,9 +894,10 @@ fn emit_ungated_core_call(c: &CoreCall) -> String {
             bound,
             limit,
             edge_properties,
+            offset,
         } => format!(
             "{core}({VISIBLE_IDS}, {seeds}, {depth}, {gamma}, {edge_kinds}, {labels}, {bound}, \
-             {limit}, {edge_properties})"
+             {limit}, {edge_properties}, {offset})"
         ),
         // The ONLY core that takes BOTH `VISIBLE_IDS` and `PRINCIPAL_BIND`: `wayfind_region_scores`
         // applies its own region visibility by principal, so the ungated core needs `$1` for the

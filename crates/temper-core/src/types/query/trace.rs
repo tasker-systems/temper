@@ -1,10 +1,13 @@
 //! Per-stage disclosure. Tier 1 of design §4.4 — mandatory, O(stages), never truncated.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::act::ActName;
 use super::disposition::{ActRefusal, StageDisposition};
 use super::envelope::NarrowedBy;
+use super::scalars::{BoundTerm, Extent};
 use super::stage::{StageName, StageRelation};
 
 /// Where a stage's input set came from: an earlier stage, or the caller.
@@ -174,6 +177,62 @@ pub struct StageTrace {
     // trace that disagrees with the rows beside it is worse than no trace: it reads as disclosure
     // and is not."*
     pub produced_ids: i64,
+    /// Complete / partial / indeterminate — **for every stage, not only the returned ones.** NOT a
+    /// total; see [`Extent`].
+    ///
+    /// **The pair rule**: [`super::envelope::StageResult::extent`] carries the same value, and the
+    /// two must stay identical for the same reason as [`Self::input_ids`], [`Self::input_unusable`]
+    /// and [`Self::refusal`] — the trace covers every stage and the results only the returned ones,
+    /// so disagreeing copies would leave a reader unable to tell which was right.
+    ///
+    /// **It is a fact about THIS stage's own bound.** A combinator applies none, so it reports
+    /// `Complete`, meaning *"I dropped nothing"* rather than *"the corpus behind my arms is
+    /// exhausted"*: an arm's `Partial` is not propagated up, because that would make one stage's
+    /// extent a claim about another stage's bound. Every arm is a stage and carries its own entry
+    /// here, which is how a reader sees that an `intersect` was computed against a truncated walk.
+    // # Why an intermediate stage needs it, which is the whole reason it is here
+    //
+    // `[added — 2026-08-17]` A walk-then-narrow composition (`follow-from` → `intersect` → rank)
+    // truncates at the WALK, and the walk is an intermediate: it never appears in `returned`, so
+    // nothing in the response disclosed whether its page was full. The intersect is then computed
+    // against a silently truncated set, and the final answer is plausible, well-formed and wrong —
+    // which is worse than an error, because nothing in it asks to be checked.
+    //
+    // This is `produced_ids`' argument arriving one field over, and it does NOT invert the way that
+    // one did: a count beside a returned stage's rows would be a third spelling of one fact,
+    // whereas `Partial` is not derivable from rows a reader does not have.
+    //
+    // Both copies are read off the ONE `extent_of` call that `temper-services`' `stage_numbers`
+    // makes — the same single-construction the refusal beside it already has. A second call site
+    // that happened to agree today is the drift this contract keeps removing.
+    //
+    // # A `truncated_by_ceiling` flag was REFUSED
+    //
+    // `[decided — 2026-08-17]` It would be a second spelling of `Extent::Partial` — free to
+    // disagree with it the moment either side gains a case, and silent about the third state
+    // `Extent::Indeterminate` carries. Same argument that keeps the retired
+    // `relation`/`input_source` pair from returning beside `inputs`.
+    pub extent: Extent,
+    /// The APPLIED value of every admitted term: the page this stage actually RAN with, clamped to
+    /// the act's published ceiling and defaulted where the caller named nothing.
+    ///
+    /// **The pair rule** again — identical to [`super::envelope::StageResult::terms_applied`], from
+    /// one [`super::registry::applied_terms`] call rather than two. That function's own doc argues
+    /// it from the other end: *"Computed twice, they would eventually differ, and the difference
+    /// would be a response claiming a page size that did not run."* It already had two consumers
+    /// (the compiler binds these values, the assembler reports them); this adds a second READER of
+    /// the map the assembler already holds, never a third computation.
+    ///
+    /// Empty for a combinator, which admits no terms — a union runs no page of its own.
+    ///
+    /// **No "you were clamped" flag rides beside this, and this field does not add one.** That call
+    /// is not taken here — it belongs to [`super::registry::applied_terms`], which states it:
+    /// ceilings are published per act, so the applied value is the whole story, and clamping to a
+    /// ceiling nobody published would be the bug rather than the silence. `temper-services`'
+    /// `the_page_a_stage_reports_is_the_clamped_one_the_statement_actually_ran` pins the other half
+    /// — *"reporting the request back would make `terms_applied` an echo rather than a
+    /// disclosure"* — so what rides here is what ran, never what was asked for.
+    pub terms_applied: BTreeMap<BoundTerm, i64>,
     pub narrowed_by: Vec<NarrowedBy>,
 }
 
@@ -209,6 +268,10 @@ mod tests {
             input_ids: 0,
             input_unusable: 0,
             produced_ids: 0,
+            // A stage that ran and matched nothing IS complete — an honest zero is a complete
+            // answer, and the helper's default stage is one of those.
+            extent: Extent::Complete,
+            terms_applied: BTreeMap::new(),
             narrowed_by: vec![],
         }
     }
@@ -379,6 +442,38 @@ mod tests {
                 v
             );
         }
+    }
+
+    /// **A trace entry says which page it ran and whether that page was full**, on the wire.
+    ///
+    /// `[added — 2026-08-17]` An intermediate stage never appears in `returned`, so before these two
+    /// fields a truncated walk feeding an `intersect` disclosed neither the page size it ran with nor
+    /// that it had been cut off. Asserted on the SERIALIZED form rather than on the struct, because
+    /// a field that fails to serialize is invisible to structural equality and this disclosure is
+    /// worth exactly what a client can read.
+    #[test]
+    fn a_trace_entry_discloses_the_page_it_ran_and_whether_that_page_was_truncated() {
+        let mut t = trace(
+            "neighbours",
+            ActName::FollowFrom,
+            StageDisposition::Answered,
+        );
+        t.produced_ids = 50;
+        t.terms_applied = BTreeMap::from([(BoundTerm::Limit, 50)]);
+        t.extent = Extent::Partial;
+
+        let json = serde_json::to_string(&t).unwrap();
+        assert!(json.contains(r#""limit":50"#), "got: {json}");
+        assert!(
+            json.contains(r#""extent":"partial""#),
+            "`Extent` is the incumbent name for \"was I truncated\"; a `truncated_by_ceiling` flag \
+             beside it would be a second spelling of this. Got: {json}"
+        );
+        assert!(
+            !json.contains("truncated_by"),
+            "no second spelling of `partial`: {json}"
+        );
+        assert_eq!(serde_json::from_str::<StageTrace>(&json).unwrap(), t);
     }
 
     #[test]

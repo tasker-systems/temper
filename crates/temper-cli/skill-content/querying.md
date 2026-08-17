@@ -103,6 +103,20 @@ counted here.
 `input_unusable` counts ids the act could not use, for any reason — invisible, nonexistent and
 malformed are deliberately one number.
 
+**`extent` and `terms_applied` are on every stage's trace too, and they are the ones that catch a
+silent truncation.** `terms_applied` is the page the stage actually ran — your `limit` clamped to the
+act's published ceiling, or the ceiling itself where you named none. `extent: partial` means it
+filled that page and there may be more behind it. This matters most where you never see the rows: a
+`follow-from` clamped to 50 feeding an `intersect` produces a well-formed final answer computed
+against a set that was cut off, and the walk's trace entry is the only place that says so.
+
+`partial` is a question, not a verdict: it over-reports at the boundary, because a stage that filled
+its page exactly is indistinguishable from one that filled it and had more waiting. **Settle it by
+asking for the next page** — every row-returning act, `follow-from` included, admits `offset`, so a
+second page that comes back empty proves the first was the whole set. Narrowing the walk is the
+other move, and the right one when the next page is not empty and you wanted a neighbourhood rather
+than an enumeration.
+
 Each returned stage also carries `disposition` (`answered` / `empty` / `withheld` / `refused`) and an
 `orders_by` naming the quantity it ranked on. **Two stages' scores are not comparable** — the
 response keys arms separately precisely so there is no merged list for incommensurable rows to fall

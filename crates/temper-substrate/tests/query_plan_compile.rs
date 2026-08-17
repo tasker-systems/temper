@@ -899,8 +899,8 @@ fn a_walk_compiles_to_the_provenance_core_and_carries_its_via_column() {
     let args: Vec<&str> = split_top_level(&call);
     assert_eq!(
         args.len(),
-        9,
-        "the walk core takes nine arguments; got:\n{call}"
+        10,
+        "the walk core takes ten arguments; got:\n{call}"
     );
     // **The arity IS the function selection here** `[2026-08-15]`. `20260815000010` widened the
     // walk by adding a ninth parameter with NO default, precisely so the eight-parameter incumbent
@@ -908,6 +908,12 @@ fn a_walk_compiles_to_the_provenance_core_and_carries_its_via_column() {
     // eight-argument call an error. So emitting eight arguments would not be a smaller call, it
     // would silently be a call to the OTHER function, the one that cannot apply an edge property
     // predicate. This count is what makes that visible.
+    //
+    // `[amended — 2026-08-17]` Nine became ten the same way and for the same reason:
+    // `20260817000020` added `p_offset` with no default, so there are now THREE arities of this
+    // name and emitting nine arguments would silently be a call to the middle one, the one that
+    // cannot page. The count is the only thing standing between a dropped offset and a plan that
+    // reports a page it never asked the database for.
 
     let seed_bind = args[1];
     let bound_bind = args[6];
@@ -1038,7 +1044,7 @@ fn an_edge_property_predicate_is_bound_as_the_serialized_typed_value() {
 
     let call = core_call_args(&compiled.sql, "__temper_ungated_follow_from");
     let args = split_top_level(&call);
-    assert_eq!(args.len(), 9, "the widened arity; got:\n{call}");
+    assert_eq!(args.len(), 10, "the widened arity; got:\n{call}");
     assert!(
         args[8].starts_with('$') && args[8].ends_with("::jsonb"),
         "the predicate list is BOUND, never interpolated — an open key space is caller text;          got {}",
@@ -1057,6 +1063,102 @@ fn an_edge_property_predicate_is_bound_as_the_serialized_typed_value() {
         bound,
         serde_json::json!([{"key": "confidence", "op": {"op": "contains", "values": ["high"]}}]),
         "the operator is NESTED, matching what the fragment reads at q->'op'->>'op'"
+    );
+}
+
+/// A declared offset reaches the walk's TENTH slot, and an undeclared one still occupies it.
+///
+/// `[added — 2026-08-17]` `20260817000020` gave the walk a `p_offset`, so `follow-from` stopped
+/// being the one row-returning act in the family whose second page was unreachable. Both halves are
+/// here because they fail in opposite directions:
+///
+///   * **the declared half** is about the VALUE travelling — the offset is bound and lands after
+///     the edge-property slot, not before it. Two adjacent slots and one of them `int` is exactly
+///     the transposition a positional call makes silently, and swapping the offset with the limit
+///     pages by the page size and sizes by the page number, which returns a plausible wrong answer
+///     rather than an error;
+///   * **the undeclared half** is about the SLOT never disappearing. `paging_for` renders an absent
+///     offset as the literal `0`, and a compiler that dropped the argument instead would emit nine
+///     arguments — still valid SQL, still resolving, but against the 9-arity that cannot page. That
+///     is a silent downgrade with no error anywhere, which is why the count is asserted beside the
+///     content.
+///
+/// The offset carries NO ceiling on any act (`registry.rs:653`), so unlike the limit there is no
+/// clamped value to distinguish from the caller's — 137 arrives as 137.
+#[test]
+fn a_declared_offset_reaches_the_walks_tenth_slot_and_an_absent_one_still_fills_it() {
+    let walk_with = |terms: std::collections::BTreeMap<BoundTerm, i64>| {
+        let walk = StageNode::Act(ActInvocation {
+            name: StageName::parse("near").unwrap(),
+            act: ActName::FollowFrom,
+            intention: None,
+            inputs: vec![StageInput::Caller {
+                relation: StageRelation::Seed,
+                ids: IdSet {
+                    kind: IdKind::Resource,
+                    provenance: None,
+                    ids: vec![Uuid::now_v7()],
+                },
+            }],
+            terms,
+            resource_filter: None,
+            edge_filter: None,
+            properties: vec![],
+        });
+        let c = Composition {
+            outcome: OutcomeDeclaration {
+                returns: vec![ReturnSpec {
+                    stage: StageName::parse("near").unwrap(),
+                    with: vec![],
+                }],
+            },
+            stages: vec![walk],
+        };
+        let v = validate(&c).expect("a seeded walk is well-formed");
+        compile(&v, ProfileId::new()).expect("it compiles")
+    };
+
+    let mut terms = std::collections::BTreeMap::new();
+    terms.insert(BoundTerm::Offset, 137);
+    let compiled = walk_with(terms);
+    let call = core_call_args(&compiled.sql, "__temper_ungated_follow_from");
+    let args = split_top_level(&call);
+    assert_eq!(args.len(), 10, "the offset-widened arity; got:\n{call}");
+    assert!(
+        args[9].starts_with('$') && args[9].ends_with("::int"),
+        "the offset is BOUND in the tenth slot, after the edge-property jsonb; got `{}` in:\n{call}",
+        args[9]
+    );
+    assert!(
+        args[8].ends_with("::jsonb"),
+        "the ninth slot is still the edge-property axis — the offset landed after it, not on top \
+         of it; got `{}` in:\n{call}",
+        args[8]
+    );
+    assert!(
+        compiled
+            .binds
+            .iter()
+            .any(|b| matches!(b, QueryBind::Int(137))),
+        "the caller's page number is bound as itself — `Offset` publishes no ceiling to clamp \
+         against; got {:?}",
+        compiled.binds
+    );
+
+    // No offset declared: the slot is the literal `0`, and it is still THERE. Nine arguments would
+    // resolve against the 9-arity that cannot page — valid SQL, no error, no second page ever.
+    let bare = walk_with(std::collections::BTreeMap::new());
+    let bare_call = core_call_args(&bare.sql, "__temper_ungated_follow_from");
+    let bare_args = split_top_level(&bare_call);
+    assert_eq!(
+        bare_args.len(),
+        10,
+        "an undeclared offset does not remove the argument; got:\n{bare_call}"
+    );
+    assert_eq!(
+        bare_args[9], "0",
+        "an absent offset is the literal 0 — page 1 is the right answer to a caller who named no \
+         page; got:\n{bare_call}"
     );
 }
 
