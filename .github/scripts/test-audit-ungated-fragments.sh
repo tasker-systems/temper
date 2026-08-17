@@ -36,13 +36,21 @@ ok()  { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 bad() { echo "  FAIL: $1"; shift; printf '    %s\n' "$@"; FAIL=$((FAIL + 1)); }
 
 # baseline_migrations DIR — a fixture migrations dir reproducing the two reviewed cores.
+#
+# The cores read `kb_resource_properties` (a view) in their FROM clauses, so the relation watch
+# can be exercised against it. The fixture includes a CREATE VIEW for it so the derivation picks
+# it up.
 baseline_migrations() {
     local d="$1"
     mkdir -p "$d"
     cat > "${d}/20260808000030_composable_find_family.sql" <<'EOF'
+CREATE VIEW kb_resource_properties AS SELECT id FROM kb_resources;
+
 CREATE FUNCTION __temper_ungated_find_exact(p_visible_ids uuid[], p_query text)
 RETURNS TABLE (resource_id uuid) LANGUAGE sql STABLE AS $$
-    SELECT v.resource_id FROM unnest(p_visible_ids) AS v(resource_id);
+    SELECT v.resource_id
+      FROM unnest(p_visible_ids) AS v(resource_id)
+      JOIN kb_resource_properties rp ON rp.id = v.resource_id;
 $$;
 
 CREATE FUNCTION __temper_ungated_find_wide(p_visible_ids uuid[], p_emb vector)
@@ -185,6 +193,40 @@ if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -qF "scan found NOTHING"; then
     ok "empty migrations dir: fails rather than passing vacuously"
 else
     bad "empty migrations dir: fails rather than passing vacuously" "exit=${RC}" "output: ${OUT}"
+fi
+
+# --- (h) BITE: a migration redefining a RELATION an ungated core reads, without naming the prefix ---
+#
+# This is the gap the relation watch closes. `20260815000050` did exactly this: redefined
+# `kb_edge_properties` and `kb_resource_properties` (relations the ungated predicates READ) after
+# trimming the prose that mentioned the cores. The prefix scan cannot see it; the relation scan
+# derives the relation name from the core's body and catches the redefinition.
+RELDEF="${FIXTURE_DIR}/reldef"
+baseline_migrations "$RELDEF"
+cat > "${RELDEF}/20260901000003_redefine_view.sql" <<'EOF'
+-- Redefines a view an ungated core reads, without mentioning any core.
+CREATE OR REPLACE VIEW kb_resource_properties AS
+SELECT id, owner_id FROM kb_resources WHERE NOT is_folded;
+EOF
+
+expect "relation redefinition: prefix scan is UNCHANGED (it cannot see it)" \
+"$RELDEF" "SQL files" \
+"20260808000030_composable_find_family.sql"
+
+RELACTUAL="$(section "SQL relations" "$RELDEF")"
+if printf '%s' "$RELACTUAL" | grep -qF "20260901000003_redefine_view.sql"; then
+    ok "  ...and the RELATION scan catches it"
+else
+    bad "  ...and the RELATION scan catches it" "expected 20260901000003 in SQL relations, got: [${RELACTUAL}]"
+fi
+
+set +e
+OUT="$(MIGRATIONS_DIR="$RELDEF" bash "$AUDIT_SCRIPT" 2>&1)"; RC=$?
+set -e
+if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -qF "20260901000003_redefine_view.sql"; then
+    ok "  ...and fails the guard, naming the file"
+else
+    bad "  ...and fails the guard, naming the file" "exit=${RC}" "output: ${OUT}"
 fi
 
 echo ""

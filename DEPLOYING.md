@@ -187,6 +187,36 @@ migration declared about itself, read straight out of the SQL the deploying bina
 The order every target still owns is **back up → migrate → verify → deploy**; what changed
 is that the middle step is automatic for the additive class and only for it.
 
+### Cutover command — what to actually run
+
+The build applies additive migrations with `temper-migrate --additive-only`
+(`scripts/vercel-build.sh`). A shape-breaking cutover is the same binary **without
+`--additive-only`** — the obvious move is to copy what the build runs, and that flag is
+precisely what halts. With it, the runner applies every additive migration, stops at the
+first shape-breaking one, exits non-zero, and writes **no ledger row** — so afterwards the
+database looks untouched at that version and the halt reads like the gate failing to notice
+an applied migration.
+
+```bash
+DATABASE_URL='<unpooled neondb_owner URI>' \
+  cargo run --release -p temper-migrate --bin temper-migrate
+```
+
+Two traps that both bit one session, on a preview:
+
+- **Connect as `neondb_owner`, unpooled.** `kb_migration_ledger` is owned by
+  `neondb_owner` and grants to nothing else, so any other role fails with
+  `permission denied for table kb_migration_ledger` — which names the table, not the
+  cause. Neon's console role dropdown offers `authenticator` adjacent to it. Unpooled
+  because the sqlx migrator takes an advisory lock, which is session state, and Neon's
+  pooled endpoint is PgBouncer in transaction mode (see `scripts/vercel-build.sh` § "WHY
+  THE UNPOOLED URL" for the same constraint on the build path).
+- **Resetting a preview branch after a manual apply throws the apply away.** Resetting the
+  Neon branch and then migrating is the documented recovery for a checksum divergence, and
+  the ordering is unforgiving: a reset **after** the manual apply discards it, and the next
+  build halts again with no sign of what happened — the symptom is indistinguishable from
+  the migration never having run. Always reset **before** the manual apply, never after.
+
 > **Three non-zero exits, three different next moves. Read the code before the message.**
 >
 > | Exit | What happened | What to do |

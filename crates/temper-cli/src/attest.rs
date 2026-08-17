@@ -44,12 +44,44 @@
 //!
 //! Success means: this bundle is a validly-signed, transparency-logged SLSA
 //! build-provenance attestation, issued by GitHub Actions' OIDC identity
-//! provider, for the **exact** workflow ref that builds our releases at the
-//! **exact** tag requested, and it commits to the **exact** sha256 digest of
-//! the archive in hand. It says nothing about whether the source the
+//! provider, for **our** release workflow running on `main`, **triggered by
+//! our release-tag chain** (`release-tag.yml` — the chain's entry workflow,
+//! pinned inside the signed predicate), and it commits to the **exact** sha256
+//! digest of the archive in hand. It says nothing about whether the source the
 //! workflow built from is what a reviewer expects — that is out of scope here,
 //! the same way `manifest.rs`'s per-file check says nothing about an active
 //! attacker who corrupts both an install dir and its co-located manifest.
+//!
+//! # Why `refs/heads/main`, not `refs/tags/{tag}`
+//!
+//! The release chain is branch-triggered by construction: `release-tag.yml`
+//! fires on a push to `main` (the `VERSION` file), creates and pushes the tag
+//! with `GITHUB_TOKEN`, then calls `release.yml` → `build-cli-binaries.yml` via
+//! `workflow_call`. A tag pushed with `GITHUB_TOKEN` does not trigger
+//! workflows, so `release.yml`'s own `on: push: tags: v*` never fires
+//! (`release-tag.yml:53-56` documents this). A reusable workflow called via
+//! `workflow_call` inherits the caller's `github.ref`, which is
+//! `refs/heads/main` throughout the chain — so the OIDC token's `ref` claim,
+//! and therefore the Fulcio cert SAN, carries `@refs/heads/main` for every
+//! release. The tag is carried by the archive filename
+//! (`temper-v{version}-{target}.tar.gz`) and the manifest's `version` field,
+//! not by the cert SAN. The digest match (already enforced below) is what
+//! binds to a specific release artifact.
+//!
+//! # Why the SLSA predicate's workflow path is pinned too
+//!
+//! The SAN carries `build-cli-binaries.yml`, but `build-cli-binaries.yml`
+//! carries its own `workflow_dispatch` trigger (`build-cli-binaries.yml:10-16`,
+//! free-string `version`), so a direct dispatch — not via the release-tag
+//! chain — would produce an attestation with the same SAN. The SLSA predicate
+//! inside the signed DSSE envelope carries
+//! `predicate.buildDefinition.externalParameters.workflow.path`, which names
+//! the chain's **entry** workflow: `release-tag.yml` for the legitimate
+//! chain, `build-cli-binaries.yml` for a direct dispatch. Pinning
+//! `release-tag.yml` in the predicate closes the direct-dispatch door: a
+//! directly-dispatched build's attestation fails the predicate check even
+//! though its SAN would pass. The predicate is signature-covered, so this is
+//! a real binding, not a heuristic.
 
 use sigstore_trust_root::TrustedRoot;
 use sigstore_types::{Bundle, Sha256Hash};
@@ -68,6 +100,24 @@ const RELEASE_REPO: &str = "tasker-systems/temper";
 /// build-provenance attestation. See `global-constraints.md`'s
 /// `build-cli-binaries.yml:177,189` references for the workflow this names.
 const RELEASE_WORKFLOW_FILE: &str = "build-cli-binaries.yml";
+
+/// The ref the release chain runs on. See the module docs for why this is
+/// `refs/heads/main` and not `refs/tags/{tag}` — the chain is branch-triggered
+/// by construction, and a reusable workflow inherits the caller's `github.ref`.
+const RELEASE_WORKFLOW_REF: &str = "refs/heads/main";
+
+/// The chain's entry workflow — the file that fires on a `VERSION`-file push
+/// to `main` and calls `release.yml` → `build-cli-binaries.yml`. The SLSA
+/// predicate's `externalParameters.workflow.path` names this for a legitimate
+/// release, and `build-cli-binaries.yml` for a direct `workflow_dispatch` —
+/// pinning `release-tag.yml` here closes the direct-dispatch door. See the
+/// module docs and the design spec for the full reasoning.
+const RELEASE_CHAIN_ENTRY_WORKFLOW: &str = ".github/workflows/release-tag.yml";
+
+/// The repository URL the SLSA predicate carries for our releases. Belt-and-
+/// braces alongside the SAN's `RELEASE_REPO`, but the predicate is a separate
+/// signed field so we assert it independently.
+const RELEASE_REPOSITORY_URL: &str = "https://github.com/tasker-systems/temper";
 
 /// GitHub Actions' OIDC issuer. Every Fulcio certificate it requests carries
 /// this URL in the Fulcio issuer extension (OID `1.3.6.1.4.1.57264.1.1`).
@@ -119,11 +169,30 @@ impl std::fmt::Display for AttestError {
 impl std::error::Error for AttestError {}
 
 /// Verify that `bundle_json` is a build-provenance attestation, signed by
-/// GitHub Actions for **our** release workflow at **exactly** `expected_tag`,
-/// covering an artifact whose sha256 digest is `archive_sha256_hex`.
+/// GitHub Actions for **our** release workflow on `main`, **triggered by our
+/// release-tag chain**, covering an artifact whose sha256 digest is
+/// `archive_sha256_hex`.
+///
+/// `expected_tag` is carried for caller context and digest binding — it is no
+/// longer interpolated into the cert SAN identity, because the release chain
+/// is branch-triggered and the SAN carries `@refs/heads/main` for every
+/// release (see the module docs). The binding to a *specific* release artifact
+/// is via the digest match, already enforced below.
 ///
 /// Verification runs entirely offline against the trust root pinned into this
 /// binary (`PINNED_TRUSTED_ROOT_JSON`) — no network access, no TUF fetch.
+///
+/// Two identity checks run, in order:
+/// 1. **Cert SAN** (via `sigstore-verify`'s `require_identity`) — the Fulcio
+///    certificate's SAN must be
+///    `https://github.com/{RELEASE_REPO}/.github/workflows/{RELEASE_WORKFLOW_FILE}@{RELEASE_WORKFLOW_REF}`.
+/// 2. **SLSA predicate workflow path** (custom, after `sigstore-verify`
+///    passes) — the signed in-toto statement's
+///    `predicate.buildDefinition.externalParameters.workflow.{path,repository}`
+///    must be `({RELEASE_CHAIN_ENTRY_WORKFLOW}, {RELEASE_REPOSITORY_URL})`.
+///    This closes the direct-dispatch door on `build-cli-binaries.yml`: a
+///    directly-dispatched build carries `build-cli-binaries.yml` as its
+///    workflow path and fails here.
 ///
 /// `archive_sha256_hex` is the archive's digest only — the ~99 MB archive
 /// itself is never read into memory here. The hex string is converted to raw
@@ -136,6 +205,8 @@ pub fn verify_release_attestation(
     bundle_json: &str,
     expected_tag: &str,
 ) -> Result<(), AttestError> {
+    let _ = expected_tag; // carried for caller context; see the doc above.
+
     let trusted_root = TrustedRoot::from_json(PINNED_TRUSTED_ROOT_JSON).map_err(|e| {
         AttestError::TrustRootUnusable(format!("pinned trust root failed to parse: {e}"))
     })?;
@@ -151,23 +222,110 @@ pub fn verify_release_attestation(
 
     let policy = VerificationPolicy::default()
         .require_issuer(GITHUB_ACTIONS_OIDC_ISSUER)
-        .require_identity(expected_identity(expected_tag));
+        .require_identity(expected_identity());
 
     sigstore_verify::verify(digest, &bundle, &policy, &trusted_root)
-        .map(|_| ())
-        .map_err(classify_verify_error)
+        .map_err(classify_verify_error)?;
+
+    // The SAN check above binds to "our release workflow on main." This check
+    // binds to "triggered by our release-tag chain" — the SLSA predicate
+    // inside the signed envelope names the chain's entry workflow, which is
+    // `release-tag.yml` for the legitimate chain and `build-cli-binaries.yml`
+    // for a direct dispatch. Without this, a directly-dispatched build's
+    // attestation would pass (same SAN) and verify on every consumer path.
+    verify_predicate_workflow_path(bundle_json)
 }
 
-/// The exact Fulcio SAN identity our release workflow's certificate carries
-/// at a given tag: `https://github.com/<repo>/.github/workflows/<file>@refs/tags/<tag>`.
+/// The exact Fulcio SAN identity our release workflow's certificate carries.
+/// The release chain is branch-triggered (`release-tag.yml` on push to `main`
+/// → `release.yml` → `build-cli-binaries.yml`, all via `workflow_call`), and a
+/// reusable workflow inherits the caller's `github.ref` — so the OIDC `ref`
+/// claim is `refs/heads/main` for every release, not `refs/tags/{tag}`. See
+/// the module docs for the full chain reasoning.
 ///
-/// This string **is** the security property this module enforces. Get the
+/// This string **is** the SAN security property this module enforces. Get the
 /// format wrong and either genuine releases stop verifying, or a wider set of
 /// bundles than intended starts passing.
-fn expected_identity(tag: &str) -> String {
+fn expected_identity() -> String {
     format!(
-        "https://github.com/{RELEASE_REPO}/.github/workflows/{RELEASE_WORKFLOW_FILE}@refs/tags/{tag}"
+        "https://github.com/{RELEASE_REPO}/.github/workflows/{RELEASE_WORKFLOW_FILE}@{RELEASE_WORKFLOW_REF}"
     )
+}
+
+/// Assert the SLSA predicate's `externalParameters.workflow.{path,repository}`
+/// match our release-tag chain. The predicate is inside the signed DSSE
+/// envelope, so it is signature-covered — this is a real binding, not a
+/// heuristic. See the module docs and [`verify_release_attestation`] for why
+/// this check exists alongside the SAN check.
+///
+/// Fails closed as [`AttestError::NotOurs`] when the path or repository field
+/// is absent or mismatched — never skip. A bundle we cannot read the predicate
+/// of is one we cannot vouch for.
+fn verify_predicate_workflow_path(bundle_json: &str) -> Result<(), AttestError> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+    let bundle: serde_json::Value = serde_json::from_str(bundle_json)
+        .map_err(|e| AttestError::NotOurs(format!("attestation bundle is not valid JSON: {e}")))?;
+    let payload_b64 = bundle
+        .get("dsseEnvelope")
+        .and_then(|env| env.get("payload"))
+        .and_then(|p| p.as_str())
+        .ok_or_else(|| {
+            AttestError::NotOurs("attestation bundle has no dsseEnvelope.payload".to_string())
+        })?;
+    let decoded = STANDARD.decode(payload_b64).map_err(|e| {
+        AttestError::NotOurs(format!("dsseEnvelope.payload is not valid base64: {e}"))
+    })?;
+    let statement: serde_json::Value = serde_json::from_slice(&decoded).map_err(|e| {
+        AttestError::NotOurs(format!(
+            "decoded dsseEnvelope payload is not valid JSON: {e}"
+        ))
+    })?;
+    let workflow = statement
+        .get("predicate")
+        .and_then(|p| p.get("buildDefinition"))
+        .and_then(|bd| bd.get("externalParameters"))
+        .and_then(|ep| ep.get("workflow"))
+        .ok_or_else(|| {
+            AttestError::NotOurs(
+                "attestation predicate has no buildDefinition.externalParameters.workflow \
+                 (cannot determine which workflow triggered this build)"
+                    .to_string(),
+            )
+        })?;
+
+    let path = workflow
+        .get("path")
+        .and_then(|p| p.as_str())
+        .ok_or_else(|| {
+            AttestError::NotOurs(
+                "attestation predicate's workflow.path is absent or not a string".to_string(),
+            )
+        })?;
+    let repository = workflow
+        .get("repository")
+        .and_then(|r| r.as_str())
+        .ok_or_else(|| {
+            AttestError::NotOurs(
+                "attestation predicate's workflow.repository is absent or not a string".to_string(),
+            )
+        })?;
+
+    if path != RELEASE_CHAIN_ENTRY_WORKFLOW {
+        return Err(AttestError::NotOurs(format!(
+            "attestation predicate workflow.path is {path:?}, expected \
+             {RELEASE_CHAIN_ENTRY_WORKFLOW:?} — this build was not triggered by the release-tag \
+             chain (a direct workflow_dispatch on build-cli-binaries.yml carries \
+             build-cli-binaries.yml as its path and is rejected here)"
+        )));
+    }
+    if repository != RELEASE_REPOSITORY_URL {
+        return Err(AttestError::NotOurs(format!(
+            "attestation predicate workflow.repository is {repository:?}, expected \
+             {RELEASE_REPOSITORY_URL:?}"
+        )));
+    }
+    Ok(())
 }
 
 /// Route a `sigstore-verify` failure into one of our two recovery classes.
@@ -198,6 +356,7 @@ fn classify_verify_error(err: sigstore_verify::Error) -> AttestError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine as _;
 
     /// A real GitHub build-provenance bundle, from the public `cli/cli`
     /// repo (`gh_2.96.0_macOS_arm64.zip`). Signed for `cli/cli`, not us —
@@ -247,24 +406,24 @@ mod tests {
     /// Without this rejection, `verify_release_attestation` would only prove
     /// "signed by GitHub Actions for some repo's release workflow" —
     /// which any public repo running `attest-build-provenance` satisfies —
-    /// rather than "signed for THIS repo's release workflow at THIS tag".
+    /// rather than "signed for THIS repo's release workflow on THIS chain".
     /// That would be barely better than no verification at all: an attacker
     /// (or just a confused build) could hand us any GitHub-attested artifact
     /// from anywhere and it would pass. Asserting the rejection is what
-    /// proves the tag-scoped identity check actually narrows trust, rather
-    /// than merely parsing the bundle successfully.
+    /// proves the identity check actually narrows trust, rather than merely
+    /// parsing the bundle successfully.
+    ///
+    /// The cli/cli fixture fails on the SAN (its cert identity is
+    /// `cli/cli`'s `deployment.yml@refs/heads/trunk`, not ours) before the
+    /// predicate-path check even runs. The dedicated predicate-path tests
+    /// below cover the case where the SAN would pass but the predicate fails.
     #[test]
     fn wrong_repo_identity_is_rejected() {
         let result =
             verify_release_attestation(FIXTURE_ARCHIVE_SHA256_HEX, FIXTURE_BUNDLE_JSON, "v2.96.0");
 
         match result {
-            Err(AttestError::NotOurs(reason)) => {
-                assert!(
-                    reason.contains("identity"),
-                    "expected an identity-mismatch reason, got: {reason}"
-                );
-            }
+            Err(AttestError::NotOurs(_)) => {}
             other => panic!("expected AttestError::NotOurs, got {other:?}"),
         }
     }
@@ -310,15 +469,124 @@ mod tests {
         assert!(matches!(result, Err(AttestError::NotOurs(_))));
     }
 
-    /// The identity string is the whole security property this module
+    /// The identity string is the whole SAN security property this module
     /// enforces — pin its exact shape so a future edit that changes the
     /// format is caught here rather than in a confusing verification
-    /// failure at release time.
+    /// failure at release time. The SAN carries `@refs/heads/main`, not
+    /// `@refs/tags/{tag}`, because the release chain is branch-triggered
+    /// (see the module docs).
     #[test]
     fn expected_identity_matches_the_release_workflow_ref() {
         assert_eq!(
-            expected_identity("v0.3.0"),
-            "https://github.com/tasker-systems/temper/.github/workflows/build-cli-binaries.yml@refs/tags/v0.3.0"
+            expected_identity(),
+            "https://github.com/tasker-systems/temper/.github/workflows/build-cli-binaries.yml@refs/heads/main"
         );
+    }
+
+    // ---- SLSA predicate workflow-path tests ----
+    //
+    // The SAN check (above) binds to "our release workflow on main." The
+    // predicate-path check binds to "triggered by our release-tag chain" —
+    // the SLSA predicate inside the signed envelope names the chain's entry
+    // workflow, which is `release-tag.yml` for the legitimate chain and
+    // `build-cli-binaries.yml` for a direct `workflow_dispatch`. These tests
+    // exercise the predicate check in isolation: they feed bundles whose
+    // `dsseEnvelope.payload` decodes to a statement carrying a known
+    // `predicate.buildDefinition.externalParameters.workflow` object, so the
+    // check can be tested without a real signed bundle (the signature is
+    // verified by `sigstore-verify` upstream; the predicate check runs only
+    // after that passes, so it only ever sees a bundle whose signature is
+    // already trusted).
+
+    /// Build a bundle whose `dsseEnvelope.payload` decodes to an in-toto
+    /// statement carrying `predicate.buildDefinition.externalParameters.workflow`
+    /// with the given `path`, `ref`, and `repository`. Mirrors the real bundle
+    /// shape closely enough for `verify_predicate_workflow_path` to exercise
+    /// the same base64 + nested-JSON path a genuine bundle takes.
+    fn bundle_with_workflow_path(path: &str, ref_: &str, repository: &str) -> String {
+        let payload = format!(
+            r#"{{"predicateType":"https://slsa.dev/provenance/v1","predicate":{{"buildDefinition":{{"externalParameters":{{"workflow":{{"ref":"{ref_}","repository":"{repository}","path":"{path}"}}}}}}}}}}"#
+        );
+        let payload_b64 = base64::engine::general_purpose::STANDARD.encode(payload.as_bytes());
+        format!(r#"{{"dsseEnvelope":{{"payload":"{payload_b64}"}}}}"#)
+    }
+
+    /// A bundle carrying our chain's entry workflow (`release-tag.yml`) and
+    /// repository passes the predicate check — this is the shape a legitimate
+    /// release attestation carries.
+    #[test]
+    fn predicate_workflow_path_accepts_release_tag_yml() {
+        let bundle = bundle_with_workflow_path(
+            RELEASE_CHAIN_ENTRY_WORKFLOW,
+            "refs/heads/main",
+            RELEASE_REPOSITORY_URL,
+        );
+        verify_predicate_workflow_path(&bundle)
+            .expect("a bundle carrying release-tag.yml + our repo must pass the predicate check");
+    }
+
+    /// THE DIRECT-DISPATCH DOOR. A bundle carrying `build-cli-binaries.yml`
+    /// as its workflow path — the shape a direct `workflow_dispatch` on
+    /// `build-cli-binaries.yml` (the free-string `version` door at
+    /// `build-cli-binaries.yml:10-16`) would produce — is rejected. Without
+    /// this check, such a bundle would pass the SAN (same
+    /// `build-cli-binaries.yml@refs/heads/main` identity) and verify on every
+    /// consumer path. This is the case Option 1 (SAN-only) would miss.
+    #[test]
+    fn predicate_workflow_path_rejects_direct_dispatch_on_build_cli_binaries() {
+        let bundle = bundle_with_workflow_path(
+            ".github/workflows/build-cli-binaries.yml",
+            "refs/heads/main",
+            RELEASE_REPOSITORY_URL,
+        );
+        let err = verify_predicate_workflow_path(&bundle)
+            .expect_err("a directly-dispatched build must fail the predicate check");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("release-tag.yml"),
+            "the rejection must name the expected chain entry workflow: {msg}"
+        );
+        assert!(
+            msg.contains("build-cli-binaries.yml"),
+            "the rejection must name the offending workflow path: {msg}"
+        );
+        assert!(matches!(err, AttestError::NotOurs(_)));
+    }
+
+    /// A bundle carrying a foreign repository is rejected — belt-and-braces
+    /// alongside the SAN's `RELEASE_REPO`, but the predicate is a separate
+    /// signed field so we assert it independently.
+    #[test]
+    fn predicate_workflow_path_rejects_foreign_repository() {
+        let bundle = bundle_with_workflow_path(
+            RELEASE_CHAIN_ENTRY_WORKFLOW,
+            "refs/heads/main",
+            "https://github.com/cli/cli",
+        );
+        let err = verify_predicate_workflow_path(&bundle)
+            .expect_err("a foreign-repository bundle must fail the predicate check");
+        assert!(matches!(err, AttestError::NotOurs(_)));
+    }
+
+    /// A bundle whose predicate is missing `buildDefinition.externalParameters.workflow`
+    /// entirely fails closed as `NotOurs` — we cannot determine which workflow
+    /// triggered this build, and "cannot tell" must never read as "trusted."
+    #[test]
+    fn predicate_workflow_path_fails_closed_when_workflow_field_absent() {
+        let payload = r#"{"predicateType":"https://slsa.dev/provenance/v1","predicate":{"buildDefinition":{"externalParameters":{}}}}"#;
+        let payload_b64 = base64::engine::general_purpose::STANDARD.encode(payload.as_bytes());
+        let bundle = format!(r#"{{"dsseEnvelope":{{"payload":"{payload_b64}"}}}}"#);
+        let err = verify_predicate_workflow_path(&bundle)
+            .expect_err("a bundle with no workflow field must fail closed");
+        assert!(matches!(err, AttestError::NotOurs(_)));
+    }
+
+    /// A bundle with no `dsseEnvelope.payload` at all fails closed — the
+    /// predicate check must never skip on a shape it cannot read.
+    #[test]
+    fn predicate_workflow_path_fails_closed_on_malformed_bundle() {
+        let err = verify_predicate_workflow_path("not json")
+            .expect_err("malformed bundle JSON must fail closed");
+        assert!(matches!(err, AttestError::NotOurs(_)));
     }
 }
