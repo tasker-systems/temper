@@ -1,0 +1,1415 @@
+# Register coverage — GENERATED, do not edit by hand.
+#
+# Regenerate:  uv run --project tools register-projection
+# Check:       bash .github/scripts/check-register-coverage-drift.sh
+#
+# WHAT THIS IS: a projection of what each outcome register CLAIMS as evidence, and whether that
+# evidence resolves to anything that exists in this repository. It reports; it does not adjudicate.
+#
+# An `uncovered` clause is NOT a defect — a witness may not precede its mechanism, so an uncovered
+# clause is frequently correct. An `unresolved` witness is a name that matched nothing in the
+# searched domain (recorded below as `search_domain`); whether that is a stale citation, a renamed
+# test, or a term of art is a judgment this file does not make.
+#
+# WHERE THE SOURCES DISAGREE, THE REGISTER'S OWN TABLE IS THE RECORD. `citations` and `advancing`
+# report the habit of declaring, not coverage. They are never summed.
+#
+# A diff here can mean the REMOTE changed, not this repository — unlike every other drift-checked
+# artifact in this tree, whose source is the tree itself.
+schema_version: 1
+source_system: https://temperkb.io
+context: '@me/temper'
+search_domain:
+- '**/*.rs (Rust function declarations)'
+- all files (path citations)
+- 'excluded: target, node_modules, .git, .venv, __pycache__, dist, public'
+totals:
+  goals_in_context: 63
+  goals_projected: 30
+  goals_projected_note: active goals only; non-active goals are not read
+  goals_yielding_no_clauses: 13
+  registers_without_a_machine_readable_witness_table: 15
+  clauses: 134
+  clauses_withdrawn: 2
+  witness_citations: 104
+  witness_citations_unresolved: 8
+registers:
+- goal_id: 019f25d6-e1a9-7360-8a35-6bdf8ef53940
+  goal_title: 'Teams in Temper: usable multi-user collaboration surface'
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: none
+    witness_table: false
+    unreadable: 'body does not parse as a register: no clause section found'
+  clauses: []
+  advancing:
+    total: 6
+    citing_nothing:
+    - 019f4473-3234-7623-9053-d9e00057d90a
+    - 019f6398-be41-7581-a2bf-4d9cb478583f
+    - 019f6399-13e2-7633-bf10-701093e337ad
+    - 019f6399-3c96-7273-97a7-53397682c881
+    - 019f6399-9431-7972-8d8c-a15f47b638ca
+    - 019f6786-196c-7441-9bbb-3a08c9eb3e63
+- goal_id: 019f47e2-0126-7a23-a905-20dc97848af6
+  goal_title: 'Cognitive-map build method: guides, skill habits, steward guidelines, README truth'
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: none
+    witness_table: false
+    unreadable: 'body does not parse as a register: no clause section found'
+  clauses: []
+  advancing:
+    total: 2
+    citing_nothing:
+    - 019f47e2-e268-7930-ac11-3f89f8e8f84c
+    - 019fce6b-7b9d-72b1-972b-75360fa23c25
+- goal_id: 019f4910-b2b3-7fc0-804d-b008fd909bee
+  goal_title: temper-rb — a native Ruby client for the temper API
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: none
+    witness_table: false
+    unreadable: 'body does not parse as a register: no clause section found'
+  clauses: []
+  advancing:
+    total: 19
+    citing_nothing:
+    - 019f4911-fbe5-7a72-8ef4-e4f506edbec3
+    - 019f4912-02cc-7cf2-83a3-3d4f8d5510b1
+    - 019f4912-0e46-76a0-a82b-0878aa2e5b9a
+    - 019f4912-2f31-7740-a075-1720845005bd
+    - 019f4912-3f20-7fd3-814f-13a5ddbe3cd7
+    - 019f4965-01f5-7892-8d70-e506516a5179
+    - 019f4a22-34b8-7993-8181-b9b91e8587f5
+    - 019f4bdc-4cd2-73f2-a866-4cc29606de66
+    - 019f4be3-4ee3-75e0-a904-966a0d722f3f
+    - 019f4f1d-a49e-7943-8536-5ee4da9671ac
+    - 019f51b8-b10d-79b2-8f87-f7b74363dc4d
+    - 019f5622-da71-75c1-bbe4-95fa00db392d
+    - 019f5623-070e-7471-b5ff-c8efd1fa109a
+    - 019f5dff-bba5-72f2-9b94-f90312f05425
+    - 019f5e00-142a-7953-93a0-efa61959eb84
+    - 019f5e00-c077-7ec0-8f94-64e5b0b83844
+    - 019f5e28-44fd-7dc3-a333-cfafaa28dc9d
+    - 019f5e58-e7cc-7e52-9576-5fd159dcf234
+    - 019f5e59-59a1-7dc2-b10d-8295f6d7722f
+- goal_id: 019f51e3-726b-75e3-ab55-0b80524073f2
+  goal_title: The ledger as a readable surface — lineage traversal, as-of reads, and effective time
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: none
+    witness_table: false
+    unreadable: 'body does not parse as a register: no clause section found'
+  clauses: []
+  advancing:
+    total: 12
+    citing_nothing:
+    - 019f51e3-de97-7643-a652-a623fb5e0ad4
+    - 019f51e4-333a-7951-993b-053e294b01b4
+    - 019f51e4-8b0d-7c53-a5c2-fce21b9ba0b8
+    - 019f51e4-dee5-7c53-a2d7-a56388841afd
+    - 019f51e5-3268-72e2-b97b-077f0995311c
+    - 019f6055-6aea-7aa2-a133-61552dd3d7e4
+    - 019f71d4-858a-7a30-a06e-cb5a2d9bb50d
+    - 019f71d4-d557-7511-b28f-5b437cbdec2c
+    - 019f71d4-f34c-7131-9c69-472aa05e4c5b
+    - 019f71d5-1007-7eb2-9a8c-9ad88c8a5c9c
+    - 019f71d5-6b4c-7ae2-b59f-2a782a3d89d8
+    - 019f7600-7ff6-7622-a11d-2803fcc2f74a
+- goal_id: 019f56e1-49f0-78e0-a843-75a96274ce1e
+  goal_title: 'Trunk-change awareness: a SCIP code graph teams and stewards can watch'
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: none
+    witness_table: false
+    unreadable: 'body does not parse as a register: no clause section found'
+  clauses: []
+  advancing:
+    total: 6
+    citing_nothing:
+    - 019f56e1-867e-7321-9f6a-2021abe2165f
+    - 019f56e1-a56e-77c3-b7ec-9fe1151bd723
+    - 019f56e1-ca96-7660-89a8-152fe6926450
+    - 019f56e1-ebb1-7611-a223-9d29d8c54586
+    - 019f56e2-0bd2-7952-b53f-505a20cfe20c
+    - 019f57c3-4ccc-7772-ad20-ad2ced553993
+- goal_id: 019f5bbc-fe24-7e10-bfdb-aae18f478563
+  goal_title: Rust ergonomics, hardening, and observability — dependency & instrumentation spikes
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: none
+    witness_table: false
+    unreadable: 'body does not parse as a register: no clause section found'
+  clauses: []
+  advancing:
+    total: 4
+    citing_nothing:
+    - 019f5bbd-7183-70d1-a885-6e54c820f06f
+    - 019f5bbd-df53-7210-ac6e-67e947aead79
+    - 019f5bbe-40f6-7963-a95a-e650deb650b6
+    - 019f5bbe-e468-70e2-a9b6-bc08cd052eee
+- goal_id: 019f5c66-755e-7fc1-bd87-ee2de8e4cd3f
+  goal_title: Unified visibility semantics for contexts and cognitive maps
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: prose
+    witness_table: true
+  clauses:
+  - name: no-survey-is-the-silent-default
+    interrogatable: true
+  - name: a-region-reads-the-same-from-every-door
+    interrogatable: true
+    citations_enables:
+    - 019fa605-62bd-7c20-9631-9f3b30485062
+    - 019fa605-c955-7193-9601-d8689c35e962
+    - 019fa606-237a-7cb0-887e-6fb91a3156b6
+  - name: no-metric-renders-without-its-frame
+    interrogatable: true
+  - name: region-history-is-answerable-from-the-row
+    interrogatable: true
+    citations_enables:
+    - 019fa605-c955-7193-9601-d8689c35e962
+  - name: no-zero-stands-for-an-absent-measurement
+    interrogatable: true
+  - name: no-returned-value-counts-what-the-caller-cannot-see
+    interrogatable: true
+  advancing:
+    total: 12
+    citing_nothing:
+    - 019f5c08-ef4c-7230-b227-eb9db4fc5d95
+    - 019f5c09-5b71-7863-b056-b25cfb699da7
+    - 019f5c6e-2e95-7730-89b2-b00033821f94
+    - 019f5c6e-4a81-76c3-9fa5-37c4769c818d
+    - 019f5c6e-92c3-7c11-bacc-e9a8c9d5c317
+    - 019f5c9b-c981-76b2-b9fc-792b0974e51f
+    - 019f9432-40a7-7b80-8ba5-19b1e4acd2ba
+    - 019f9432-f1b0-7cc3-b3ef-c96720182891
+    - 019f9433-5e08-7fb2-9816-2d89aa1e0cdb
+- goal_id: 019f5e07-cbfa-7d10-a7ef-9ff93e34d9c6
+  goal_title: External systems as subscribed emitters — webhook intake, declared blast radius, telos-differentiated
+    gleaning
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: none
+    witness_table: false
+    unreadable: 'body does not parse as a register: no clause section found'
+  clauses: []
+  advancing:
+    total: 6
+    citing_nothing:
+    - 019f5e15-0732-7a12-b734-04220f150043
+    - 019f6030-0c37-7540-9149-c8a84c7ab5eb
+    - 019f6087-9a32-77f1-9761-849196694626
+    - 019f6088-1d7b-7043-93ad-af6a4a3324d5
+    - 019f6088-e415-7a22-855d-084408f68203
+    - 019f629a-7981-7643-9c90-1d865f1850b2
+- goal_id: 019f6344-01a5-7fc0-9e22-a80585f801fc
+  goal_title: '@temper on Slack — act under each user''s real temper identity via explicit per-user account
+    linking'
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: none
+    witness_table: false
+    unreadable: 'body does not parse as a register: no clause section found'
+  clauses: []
+  advancing:
+    total: 11
+    citing_nothing:
+    - 019f6344-80ce-7142-a116-5e39a04eeb3e
+    - 019f6344-bace-7200-8d36-2c7da0d4267c
+    - 019f6345-11f6-7623-908d-34eb5d2829dd
+    - 019f6345-41bd-78f1-b3f2-b7a8fd9829be
+    - 019f6345-64d8-75d3-bfd8-1d0799228a3b
+    - 019f6345-f2bf-7ca1-8bb5-70d40622f1f8
+    - 019f7cd1-3998-75f1-ace3-5c113ce983db
+    - 019f7cd1-a3fb-79c1-aa3f-befd4b843b17
+    - 019f8fc5-0d7b-7b10-be5d-739adc43047f
+    - 019f90f1-e5a5-7e81-b747-1ec550b21b77
+    - 019f910b-579b-74c2-bf05-702aaed0a011
+- goal_id: 019f764f-e16b-7100-94ba-9e8ae719cba8
+  goal_title: 'Security Audit: Surfaces-In AuthN/AuthZ + Credential-Flow Pen-Test'
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: none
+    witness_table: false
+    unreadable: 'body does not parse as a register: no clause section found'
+  clauses: []
+  advancing:
+    total: 9
+    citing_nothing:
+    - 019f7673-f784-79d3-843c-cbaeb0ec8e5b
+    - 019f7674-1cc2-7373-a4c3-95224fe347eb
+    - 019f7674-7512-7300-be8c-2fc91296f75e
+    - 019f7674-c8a2-7481-b1c1-18c07788309f
+    - 019f7674-e88b-7a80-ad88-7699ca8e2b23
+    - 019f7675-a036-7e60-a3da-4c30063b90b5
+    - 019f76d2-c1df-7ef2-883d-3e65de2bce07
+    - 019f77a2-4860-7300-a04e-df0d750dc4c7
+    - 019f7c98-fbea-7a62-b5f0-5f8e0556b196
+- goal_id: 019f7cdb-a1b6-7e80-b19a-349a3d427671
+  goal_title: 'Give principal admission one owner (was: retire access_mode / regate has_system_access)'
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: none
+    witness_table: false
+    unreadable: 'body does not parse as a register: no clause section found'
+  clauses: []
+  advancing:
+    total: 14
+    citing_nothing:
+    - 019f7c27-b743-7733-970e-b3e391fbfd60
+    - 019f7cdc-3a65-73b0-8d2c-cd32243a51b8
+    - 019f7ce2-0b12-7420-b5f1-cb2ce78a743d
+    - 019f7f61-c9d0-75d1-94dc-c0644f47a6a7
+    - 019f8038-1bd7-7ee1-bffe-3c7c8bfe6877
+    - 019f809f-bce6-7913-80f4-1b0a17c8931a
+    - 019f80a9-89d4-78f2-a9f4-e0a267d37616
+    - 019f8951-d6c6-7540-9379-4114d8b61153
+    - 019f8a93-f179-7782-9cad-25df66ebdb69
+    - 019f8a94-a4c1-7633-9f7c-850df3369470
+    - 019f8a95-041c-76c3-936b-c849f0252c94
+    - 019f8ec3-793f-7c52-9378-47dda5d90a5d
+    - 019f8f90-9b38-7f52-826d-f3c5306c5b2c
+    - 019faf40-94ee-7bc0-9ac6-0a3f96d1431d
+- goal_id: 019f81e9-25f3-7fe1-b563-4acca2e391eb
+  goal_title: Evidential standing as substrate — the defensibility-of-claims machine
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: heading
+    witness_table: true
+  clauses:
+  - name: standing-is-legible-as-evidence-not-verdict
+    interrogatable: true
+  - name: the-shape-of-support-is-separably-readable
+    interrogatable: true
+  - name: evidence-can-be-contested-and-the-contest-is-visible
+    interrogatable: true
+  - name: no-principal-evaluates-its-own-claim
+    interrogatable: true
+  - name: standing-is-never-recomputed-from-its-own-prior-value
+    interrogatable: true
+  - name: no-repeater-counts-more-than-once
+    interrogatable: true
+  - name: incomplete-or-withdrawn-support-never-counts-as-support
+    interrogatable: true
+  - name: a-denial-never-becomes-an-existence-oracle
+    interrogatable: true
+  advancing:
+    total: 14
+    citing_nothing:
+    - 019f81ea-4263-77e0-87b2-780282ecea13
+    - 019f81ea-610b-7601-946d-bdcb0c18b36d
+    - 019f81ea-8132-78e2-ad9a-bac731de389c
+    - 019f81ea-d6a7-7cf1-a1cb-e06805620223
+    - 019f81ea-f627-78f2-a6cd-151eea16b238
+    - 019f81eb-1546-72a3-8752-ef83902aace0
+    - 019f96b4-ddf9-7260-ab18-53f64a916e51
+    - 019f9bb3-e2cf-7710-9b90-db4ebefb8f64
+    - 019f9bfb-62e2-7c62-85b2-e309ac1b18c1
+    - 019fa0a8-ae8f-78d1-9cec-6ccb9cdc2b92
+    - 019fa417-e7af-7113-b313-9df83a640256
+    - 019fa418-2e15-7d83-8e11-14d2cb18c7b3
+    - 019fa5eb-2819-7e71-bd27-0d2875f60960
+- goal_id: 019f9404-2a4e-7530-8744-92ae4ab6d83e
+  goal_title: OpenTelemetry across the deployable surface — one trace per user action
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: none
+    witness_table: false
+    unreadable: 'body does not parse as a register: no clause section found'
+  clauses: []
+  advancing:
+    total: 16
+    citing_nothing:
+    - 019f7c99-16ec-70c3-bb9b-138106282151
+    - 019f943b-3646-70e2-aba8-02f1a45c6d00
+    - 019f943b-b22f-7602-a417-6df251102aa0
+    - 019f943c-455f-7521-adc5-08838461030b
+    - 019f943d-192e-7073-bb37-3e6708534b24
+    - 019f943d-ce05-7eb3-a64e-cfae55ecb2b0
+    - 019f943d-f2f0-7df0-a725-f3842658b245
+    - 019f97a7-ad61-7e40-b325-73028060ac06
+    - 019f97fc-e6fd-7710-9fa6-0d1dc7585a11
+    - 019f9a23-704c-78f1-858b-89680c4e71f5
+    - 019f9a42-5515-7ef2-8359-e8289f9c7a6d
+    - 019fbf6a-b3f2-7ea0-b2e8-8e4ff1a3db31
+    - 019fbfc3-ff34-7e21-8a45-c2d5b3125c87
+    - 019fc795-c314-74c1-aaf5-753237856dce
+    - 019fce6a-fc0a-7230-9d38-74c135af0782
+    - 019fcf4e-51b9-7d90-88e1-1c165cf1b8be
+- goal_id: 019f99dd-dc9c-79f1-947c-e61bde2148a9
+  goal_title: 'Logging, spans and traces: one narration path, and a redaction registry before anything
+    leaves the building'
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: none
+    witness_table: false
+    unreadable: 'body does not parse as a register: no clause section found'
+  clauses: []
+  advancing:
+    total: 2
+    citing_nothing:
+    - 019f99de-94ff-7443-ac0e-ff4fade63c28
+    - 019f9a11-dcf6-7713-b52b-94e06cbb7796
+- goal_id: 019f9a34-3306-70d1-b07a-f23c99943751
+  goal_title: Adopt the Outcome-Register Convention for Temper Development
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: heading
+    witness_table: true
+  clauses:
+  - name: decomposition-preserves-rigor
+    interrogatable: true
+    citations_witnesses:
+    - 019f9bce-9a7f-79b3-8b2b-77e9ee064730
+    - 019f9bcf-30c0-7772-8833-340b90f22f6b
+    - 019f9bcf-bdba-7c50-a7e7-0ca4fc606ced
+    - 019f9bcf-e4ba-7c72-83c7-8cc9606cb6cd
+    citations_enables:
+    - 019fa03a-913b-7141-a173-1c804d9b7ccd
+  - name: the-register-holds-shape-without-an-incumbent
+    interrogatable: true
+    citations_witnesses:
+    - 019f975e-7be9-7ff3-a5bd-ef7ea72ff4a5
+    - 019f9a34-8098-7892-8eee-059175637391
+  - name: witnesses-discriminate
+    interrogatable: true
+    citations_witnesses:
+    - 019f9a34-c8ca-7bb2-a76c-0f58152929f7
+  - name: correction-costs-less-than-the-drift
+    withdrawn: true
+    interrogatable: true
+  - name: no-witness-precedes-its-mechanism
+    interrogatable: true
+  - name: no-clause-names-a-mechanism
+    interrogatable: true
+  - name: no-clause-is-uncovered-silently
+    interrogatable: true
+    citations_enables:
+    - 019fa03a-913b-7141-a173-1c804d9b7ccd
+    - 01a00776-ab08-77c0-a4c0-cbb14fe9973f
+  advancing:
+    total: 11
+    citing_nothing:
+    - 019fa89c-7d3f-7ae2-8388-400cbac9d865
+    - 019fa89d-2fec-74c2-8b6c-0c47892ee470
+    - 019fb350-ac30-71f2-8c7d-7a33ee6b2b85
+- goal_id: 019fa618-2d2a-7330-aac4-444cab85f2ce
+  goal_title: No flag silently does nothing — the filter surface tells the truth
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: heading
+    witness_table: true
+  clauses:
+  - name: an-accepted-flag-changes-the-answer
+    interrogatable: true
+  - name: a-value-that-resolves-to-nothing-is-refused
+    interrogatable: true
+  - name: an-axis-we-organize-by-is-queryable
+    interrogatable: true
+    citations_enables:
+    - 019fa61c-d279-7773-af42-dcac52506345
+  - name: no-filter-returns-what-it-was-asked-to-exclude
+    interrogatable: true
+  - name: no-surface-reports-a-count-its-filter-did-not-produce
+    interrogatable: true
+  advancing:
+    total: 8
+    citing_nothing:
+    - 019f9bbd-6b4d-78e1-a117-36e23b905d2b
+    - 019fa607-25f3-7bd0-88b4-ab8b7844225f
+    - 019fa84c-587c-7802-8c0e-ed5fad897502
+    - 019fae2b-c318-7de1-a6f9-8a8ea24a2133
+    - 019fae2c-9fb9-7eb0-b630-252732720e26
+    - 019faef9-48f7-75b2-a599-9c32ac0562e1
+    - 019faf20-7840-7ac0-a6a7-34d1ba160b41
+- goal_id: 019fa618-ce41-7762-97dd-179132503ea2
+  goal_title: What a door offers, and who may use it, is read — not discovered
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: prose
+    witness_table: true
+  clauses:
+  - name: a-doors-scope-is-readable-before-it-is-called
+    interrogatable: true
+    citations_enables:
+    - 01a00a66-c0d8-7162-a4a9-967732e792c1
+  - name: subject-decides-the-door
+    interrogatable: true
+    citations_enables:
+    - 01a00a66-c0d8-7162-a4a9-967732e792c1
+  - name: a-surface-claims-the-elevation-its-gate-enforces
+    interrogatable: true
+  - name: widening-a-gate-touches-every-surface-that-describes-it
+    interrogatable: true
+  - name: no-scope-gap-is-first-found-by-a-caller
+    interrogatable: true
+  - name: no-consequential-write-lands-on-a-door-that-cannot-confirm-it
+    interrogatable: true
+  - name: no-refusal-names-a-reason-the-gate-did-not-apply
+    interrogatable: true
+  advancing:
+    total: 4
+    citing_nothing:
+    - 019f766a-3fb0-7621-a3e1-6b72fa2e60a4
+    - 019f9bca-0def-7f31-95dd-65ffc2717e46
+    - 019fa9e4-0860-7d90-8b20-55eada87c302
+    - 01a00b15-30fa-7031-9b6d-f7fbfeb863a2
+- goal_id: 019fa619-f331-72e2-9569-c68774f7a1da
+  goal_title: Prose is a defect surface — a document that lies costs what a bug costs
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: prose
+    witness_table: true
+  clauses:
+  - name: a-guide-followed-exactly-produces-a-working-result
+    interrogatable: true
+  - name: a-document-asserts-only-what-was-decided
+    interrogatable: true
+  - name: a-claim-about-the-system-is-checkable-against-the-system
+    interrogatable: true
+  - name: no-document-describes-an-affordance-that-does-not-exist
+    interrogatable: true
+  - name: no-statement-of-remaining-work-outlives-the-work
+    interrogatable: true
+  advancing:
+    total: 3
+    citing_nothing:
+    - 019f93fd-308a-7192-b960-e22c49f713fa
+    - 019f97a8-cbdf-72b0-b4f2-f1996288a2f5
+    - 019f9a95-ae41-79f2-98e2-9af243752301
+- goal_id: 019fa844-2d80-7291-8416-35656104a8e3
+  goal_title: The registry and the repo disagree — prod's event-type schemas are not what we ship
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: prose
+    witness_table: true
+  clauses:
+  - name: the-registry-says-what-the-code-does
+    interrogatable: true
+  - name: the-registry-declares-its-own-authority
+    interrogatable: true
+  - name: drift-between-repo-and-registry-is-visible-without-being-looked-for
+    interrogatable: true
+  - name: no-deployment-carries-a-schema-that-contradicts-its-own-code
+    interrogatable: true
+  - name: no-enforcement-is-switched-on-against-unverified-rows
+    interrogatable: true
+  advancing:
+    total: 2
+    citing_nothing:
+    - 019f6b48-a562-7871-a48d-87945a796c7e
+    - 019f7509-7511-7d90-9bdb-2e08631208e7
+- goal_id: 019fa844-bef8-70e2-8f4d-3f5344d6c9d8
+  goal_title: CI pays for work nobody asked for — the build floor and the over-emitting rituals
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: prose
+    witness_table: true
+  clauses:
+  - name: the-pipeline-does-only-work-someone-asked-for
+    interrogatable: true
+  - name: a-build-floor-is-paid-once
+    interrogatable: true
+  - name: no-speedup-is-bought-by-running-less
+    interrogatable: true
+  - name: no-caching-layer-lets-a-stale-artifact-answer-for-a-fresh-one
+    interrogatable: true
+  advancing:
+    total: 2
+    citing_nothing:
+    - 019f7ca1-13f6-7783-b993-57e368cdca26
+    - 019f8a27-03bc-7da0-800b-1fe771cecfc8
+- goal_id: 019fafd9-a978-7860-ae39-23958b4471b8
+  goal_title: An asserted facet is readable — a consequential write that no door can confirm
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: heading
+    witness_table: true
+  clauses:
+  - name: an-asserted-facet-is-discoverable-by-anyone-who-may-read-its-owner
+    interrogatable: true
+    register_table:
+    - name: both_asserts_of_one_logical_facet_are_visible_with_their_weights
+      kind: function
+      resolves: false
+    - name: two_asserts_are_both_readable_through_the_deployed_surface
+      kind: function
+      resolves: false
+    - name: a_read_only_machine_principal_reads_facets_on_mcp_and_cannot_assert_one
+      kind: function
+      resolves: true
+      found_in: tests/e2e/tests/resource_facet_e2e_test.rs
+  - name: every-door-answers-the-same-question-the-same-way
+    interrogatable: true
+    register_table:
+    - name: two_asserts_are_both_readable_through_the_deployed_surface
+      kind: function
+      resolves: false
+    - name: a_read_only_machine_principal_reads_facets_on_mcp_and_cannot_assert_one
+      kind: function
+      resolves: true
+      found_in: tests/e2e/tests/resource_facet_e2e_test.rs
+    - name: the_cli_prints_every_live_facet_with_its_weight
+      kind: function
+      resolves: true
+      found_in: tests/e2e/tests/resource_facet_e2e_test.rs
+    unclassified_tokens:
+    - temper-client
+    - temper
+  - name: the-read-does-not-conceal-whether-a-key-was-asserted-twice
+    interrogatable: true
+    register_table:
+    - name: both_asserts_of_one_logical_facet_are_visible_with_their_weights
+      kind: function
+      resolves: false
+    - name: get_meta
+      kind: function
+      resolves: true
+      found_in: crates/temper-client/src/resources.rs
+  - name: a-facet-read-never-widens-who-can-see-what
+    interrogatable: true
+    register_table:
+    - name: unreadable_and_never_existed_refuse_identically
+      kind: function
+      resolves: true
+      found_in: crates/temper-api/tests/resource_facet_read_test.rs
+    - name: an_unreadable_resource_and_a_nonexistent_one_answer_identically
+      kind: function
+      resolves: true
+      found_in: tests/e2e/tests/resource_facet_e2e_test.rs
+    unclassified_tokens:
+    - ApiError
+  - name: a-consequential-write-is-never-unconfirmable-through-its-own-door
+    interrogatable: true
+  - name: reading-a-facet-never-becomes-a-licence-to-assert-one
+    interrogatable: true
+    register_table:
+    - name: a_read_grant_reads_facets_and_still_cannot_assert_one
+      kind: function
+      resolves: true
+      found_in: crates/temper-api/tests/resource_facet_read_test.rs
+    - name: a_read_only_machine_principal_reads_facets_on_mcp_and_cannot_assert_one
+      kind: function
+      resolves: true
+      found_in: tests/e2e/tests/resource_facet_e2e_test.rs
+  advancing:
+    total: 1
+    citing_nothing:
+    - 019fb024-3eb8-7f51-9321-8d0e7e807fe6
+- goal_id: 019fb087-ca8f-7343-9523-a1b06368e6a4
+  goal_title: A read declares its bounds — and expressive filters are what make bounds usable
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: heading
+    witness_table: true
+  clauses:
+  - name: every-bound-a-read-applies-is-visible-in-its-answer
+    interrogatable: true
+    citations_enables:
+    - 019fb049-0b50-78a2-a993-a55b00e2a71e
+  - name: filters-compose-to-narrow
+    interrogatable: true
+  - name: a-bound-is-expressible-wherever-an-answer-can-be-large
+    interrogatable: true
+    citations_enables:
+    - 019fb049-0b50-78a2-a993-a55b00e2a71e
+  - name: the-same-bound-term-means-the-same-thing-on-every-read
+    interrogatable: true
+    citations_enables:
+    - 019fb049-0b50-78a2-a993-a55b00e2a71e
+  - name: absence-from-a-bounded-answer-is-never-reported-as-absence-in-fact
+    interrogatable: true
+  - name: a-bound-is-never-introduced-where-it-silently-changes-a-published-answer
+    interrogatable: true
+  - name: narrowing-a-query-never-makes-the-answer-less-trustworthy
+    interrogatable: true
+  advancing:
+    total: 3
+    citing_nothing:
+    - 019f478a-dbbc-7760-bfbc-f9142d6fe4da
+    - 01a0013c-06d2-7f22-bafc-409154f72af3
+- goal_id: 019fb2dd-c27e-75f2-86b5-56363912e11e
+  goal_title: An index-rooted pull preserves the graph's shape on disk — structure and order survive,
+    or are named absent, never invented
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: heading
+    witness_table: true
+  clauses:
+  - name: the-graph-structure-is-recoverable-from-the-materialization-alone
+    interrogatable: true
+    citations_enables:
+    - 019fb2de-fe50-7b31-a56d-09217dc41ee1
+  - name: sibling-order-is-carried-when-the-graph-carries-it
+    interrogatable: true
+    citations_enables:
+    - 019fb2de-fe50-7b31-a56d-09217dc41ee1
+  - name: only-the-declared-edge-kinds-are-traversed
+    interrogatable: true
+    citations_enables:
+    - 01a00f58-886d-7430-af1c-e8333242e564
+  - name: the-walk-terminates-and-materializes-each-resource-at-most-once
+    interrogatable: true
+    citations_enables:
+    - 01a00f58-886d-7430-af1c-e8333242e564
+  - name: an-interrupted-pull-resumes-to-the-same-result
+    interrogatable: true
+    citations_enables:
+    - 019fb2de-fe50-7b31-a56d-09217dc41ee1
+  - name: structure-crosses-cli-api-and-mcp-as-one-vocabulary
+    interrogatable: true
+    citations_enables:
+    - 019fb2de-fe50-7b31-a56d-09217dc41ee1
+  - name: an-order-the-graph-does-not-carry-is-never-invented
+    interrogatable: true
+    citations_enables:
+    - 019fb2de-fe50-7b31-a56d-09217dc41ee1
+  - name: a-boundary-the-walk-hit-is-never-invisible-in-the-result
+    interrogatable: true
+  - name: the-flat-context-pull-is-never-changed-by-the-rooted-mode
+    interrogatable: true
+    citations_enables:
+    - 01a00f57-daf0-7af2-8afc-32918a10dcf2
+  - name: the-pulled-tree-and-its-manifest-never-become-authoritative
+    interrogatable: true
+  advancing:
+    total: 3
+    citing_nothing: []
+- goal_id: 019fb35b-c64e-7cd2-a7c0-aa117d1ab1a7
+  goal_title: The schema and the binary that speaks it never silently disagree
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: heading
+    witness_table: true
+  clauses:
+  - name: a-migrations-compatibility-with-a-lagging-binary-is-stated-not-remembered
+    interrogatable: true
+    register_table:
+    - name: .github/scripts/audit-migration-declarations.sh
+      kind: path
+      resolves: true
+      found_in: .github/scripts/audit-migration-declarations.sh
+    - name: test-audit-migration-declarations.sh
+      kind: path
+      resolves: true
+      found_in: .github/scripts/test-audit-migration-declarations.sh
+      matched_by: basename
+    citations_enables:
+    - 019fb4e5-2365-7880-8cf1-7fea6755d60e
+  - name: a-classification-is-checkable-against-the-migration-it-describes
+    interrogatable: true
+    register_table:
+    - name: .github/scripts/sqlx-schema-crosscheck.sh
+      kind: path
+      resolves: true
+      found_in: .github/scripts/sqlx-schema-crosscheck.sh
+    - name: sqlx-wire-diff.sh
+      kind: path
+      resolves: true
+      found_in: .github/scripts/sqlx-wire-diff.sh
+      matched_by: basename
+    unclassified_tokens:
+    - '20260730000010'
+    citations_enables:
+    - 019fb4e4-a331-7e01-b35a-78523ef663ec
+    - 019fb4e5-2365-7880-8cf1-7fea6755d60e
+  - name: the-commit-serving-an-environment-is-knowable-without-inference
+    interrogatable: true
+    register_table:
+    - name: crates/temper-api/src/handlers/health.rs
+      kind: path
+      resolves: true
+      found_in: crates/temper-api/src/handlers/health.rs
+    - name: test-rust.yml
+      kind: path
+      resolves: true
+      found_in: .github/workflows/test-rust.yml
+      matched_by: basename
+    unclassified_tokens:
+    - VERCEL_GIT_COMMIT_SHA
+    citations_witnesses:
+    - 019fb9fe-67ed-7280-bb73-c273a2e680ba
+    citations_enables:
+    - 01a00f59-30f6-7682-9a77-db8fdd656a91
+  - name: schema-evolution-is-exercised-before-production-sees-it
+    interrogatable: true
+    register_table:
+    - name: test-vercel-ignore-build.sh
+      kind: path
+      resolves: true
+      found_in: .github/scripts/test-vercel-ignore-build.sh
+      matched_by: basename
+    - name: test-vercel-build.sh
+      kind: path
+      resolves: true
+      found_in: .github/scripts/test-vercel-build.sh
+      matched_by: basename
+  - name: an-unsafe-pairing-is-refused-rather-than-discovered-per-request
+    interrogatable: true
+    citations_enables:
+    - 01a00f58-e28b-71d0-a2ab-8f53e0d49a56
+  - name: a-migration-never-applies-as-a-side-effect-of-serving-a-request
+    interrogatable: true
+  - name: a-shape-mutating-or-destructive-change-never-reaches-an-environment-whose-binary-predates-it
+    interrogatable: true
+    register_table:
+    - name: crates/temper-substrate/tests/migrate_additive_run.rs
+      kind: path
+      resolves: true
+      found_in: crates/temper-substrate/tests/migrate_additive_run.rs
+    - name: a_shape_breaking_migration_halts_the_run_and_is_not_applied
+      kind: function
+      resolves: true
+      found_in: crates/temper-substrate/tests/migrate_additive_run.rs
+    - name: the_run_stops_at_the_halt_rather_than_skipping_past_it
+      kind: function
+      resolves: true
+      found_in: crates/temper-substrate/tests/migrate_additive_run.rs
+    - name: an_undeclared_migration_halts_because_silence_is_not_safety
+      kind: function
+      resolves: true
+      found_in: crates/temper-substrate/tests/migrate_additive_run.rs
+    - name: crates/temper-migrate/src/ledger.rs
+      kind: path
+      resolves: true
+      found_in: crates/temper-migrate/src/ledger.rs
+    - name: temper-substrate/src/migrate_ledger.rs
+      kind: path
+      resolves: false
+    - name: test-vercel-build.sh
+      kind: path
+      resolves: true
+      found_in: .github/scripts/test-vercel-build.sh
+      matched_by: basename
+  - name: safety-is-never-inferred-from-a-green-pipeline
+    interrogatable: true
+  - name: a-target-is-never-assumed-to-resemble-another-target
+    interrogatable: true
+  advancing:
+    total: 7
+    citing_nothing:
+    - 019fb85f-5c50-7a93-925f-97199f67cec0
+    - 019fb8e8-61ba-7c13-8d4e-b0bef376680d
+  coverage_rows_naming_no_clause:
+  - every other negative-face clause
+- goal_id: 019fbaac-96e2-7620-ace2-667a0f8ff000
+  goal_title: The graph surface shows the reader's own material — derived structure organizes it and is
+    never mistaken for it
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: prose
+    witness_table: false
+    unreadable: no coverage table declares a witness column; this register's witnesses, if any, are stated
+      in prose and are not machine-readable here
+  clauses:
+  - name: surface-declares-its-kind
+    interrogatable: false
+    citations_enables:
+    - 019fbac4-50c1-75a0-8528-f64030453bfc
+  - name: navigation-never-silently-changes-kind
+    interrogatable: false
+    citations_enables:
+    - 019fbac4-50c1-75a0-8528-f64030453bfc
+  - name: entry-does-not-presume-organization
+    interrogatable: false
+    citations_enables:
+    - 019fbac4-50c1-75a0-8528-f64030453bfc
+  - name: legible-at-the-sizes-the-corpus-actually-reaches
+    interrogatable: false
+    citations_enables:
+    - 019fbac4-50c1-75a0-8528-f64030453bfc
+  - name: cross-kind-relationship-is-reachable
+    interrogatable: false
+  - name: displaced-structure-remains-reachable
+    interrogatable: false
+  - name: no-derived-thing-poses-as-authored
+    interrogatable: false
+  - name: no-reader-is-left-to-blame-themselves
+    interrogatable: false
+  - name: legibility-is-never-bought-with-silent-omission
+    interrogatable: false
+  - name: no-internal-vocabulary-is-load-bearing
+    interrogatable: false
+  - name: the-unstructured-reader-is-never-worse-off
+    interrogatable: false
+  advancing:
+    total: 4
+    citing_nothing:
+    - 019f0e9a-f0ce-7de2-a848-0d3e4cd3add4
+    - 019f2fbe-f4ac-7e83-955e-c4dc885856f3
+    - 019f4a25-75ab-7650-b602-eb68594de2fc
+- goal_id: 019fbdb9-f287-79c0-aab6-efa0b1de12c8
+  goal_title: Every question to Temper is answered by a situated act — acts compose by piping, no constant
+    decides between them, and no composition flatters
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: prose
+    witness_table: true
+  clauses:
+  - name: every-act-is-situated
+    interrogatable: true
+    register_table:
+    - name: follow_from_reaches_the_composing_doors_and_not_mcp
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/registry.rs
+    - name: the_stranded_mechanic_declares_no_door_at_all
+      kind: function
+      resolves: false
+    - name: follow_from_takes_resource_seeds_and_a_resource_bound
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/registry.rs
+    - name: every_declaration_states_what_the_asker_holds
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/registry.rs
+    - name: a_declaration_cannot_omit_what_the_asker_holds
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/act.rs
+    - name: every_declaration_accounts_for_every_door
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/registry.rs
+    - name: every_selecting_act_predicts_a_response_shape
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/registry.rs
+    - name: an_act_that_selects_nothing_predicts_no_response_shape
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/registry.rs
+    - name: an_act_that_orders_nothing_classifies_no_ordering_fragment
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/registry.rs
+    - name: the_search_family_declares_seven_acts_including_the_anti_act
+      kind: function
+      resolves: false
+    - name: unbuilt_acts_name_no_serving_function_and_built_ones_do
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/registry.rs
+    - name: every_declared_reach_has_a_production_call_site
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/tests/act_door_coverage_reachability.rs
+    citations_enables:
+    - 019fbddb-7185-7e02-8686-fb6c1d2b185e
+    - 019fcd3a-856c-7702-9251-9979fe128e04
+  - name: the-question-decides-within-an-act
+    interrogatable: true
+    register_table:
+    - name: the_intention_is_a_per_stage_field_and_two_stages_may_ask_different_questions
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/composition.rs
+    - name: two_stages_asking_different_questions_receive_different_vectors
+      kind: function
+      resolves: true
+      found_in: crates/temper-services/tests/query_run_composition_test.rs
+    - name: the_two_find_acts_order_by_a_principal_agnostic_quantity
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/registry.rs
+    - name: a_find_about_stage_without_a_threaded_intention_refuses_rather_than_substituting
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/validate/mod.rs
+    - name: a_stage_with_no_threaded_question_still_refuses_as_the_callers_omission
+      kind: function
+      resolves: true
+      found_in: crates/temper-substrate/tests/query_plan_compile.rs
+    - name: the_survey_quantity_declares_a_range_that_exceeds_one
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/registry.rs
+    - name: the_two_quantities_built_from_one_cosine_distance_do_not_share_a_scale
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/registry.rs
+    citations_enables:
+    - 019fbddc-bf0b-74c3-b48f-c06c799dec04
+  - name: no-cross-act-ranking
+    interrogatable: true
+    register_table:
+    - name: the_arms_are_keyed_separately_with_no_merged_ordered_list
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/envelope.rs
+    - name: search_returns_two_arms_each_with_its_own_quantity_and_no_sum
+      kind: function
+      resolves: true
+      found_in: crates/temper-api/tests/search_two_arms_test.rs
+    - name: no_quantity_field_exists_on_resource_view
+      kind: function
+      resolves: true
+      found_in: crates/temper-api/tests/search_two_arms_test.rs
+    - name: a_stage_is_homogeneous_in_its_score_kind
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/stage.rs
+    - name: two_acts_over_the_same_currency_are_still_told_apart_by_their_score_kind
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/stage.rs
+    - name: no_two_acts_order_by_the_same_name_and_none_of_them_is_a_bare_score
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/registry.rs
+    - name: a_hit_says_what_kind_of_score_it_carries_without_reference_to_its_envelope
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/stage.rs
+    - name: the_score_kind_a_row_carries_is_the_one_its_act_declared
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/envelope.rs
+    - name: a_downstream_stage_selects_ids_only_and_never_a_quantity
+      kind: function
+      resolves: true
+      found_in: crates/temper-substrate/tests/query_plan_compile.rs
+    - name: a_combinator_projects_membership_only_and_never_a_quantity
+      kind: function
+      resolves: true
+      found_in: crates/temper-substrate/tests/query_plan_compile.rs
+    citations_enables:
+    - 019fbddc-227f-7e41-8167-b9eb0db0a63e
+    - 019fcd3a-856c-7702-9251-9979fe128e04
+  - name: composition-is-legible
+    interrogatable: true
+    register_table:
+    - name: an_applied_edge_filter_is_echoed_in_the_narrowing_disclosure
+      kind: function
+      resolves: true
+      found_in: crates/temper-services/src/backend/query_read.rs
+    - name: a_stage_that_narrowed_by_nothing_discloses_an_empty_list
+      kind: function
+      resolves: true
+      found_in: crates/temper-services/src/backend/query_read.rs
+    - name: a_stage_with_two_inputs_discloses_both_relations_and_the_total
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/trace.rs
+    - name: a_trace_names_the_stage_the_caller_named_rather_than_its_position
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/trace.rs
+    - name: the_trace_echoes_whether_a_stage_narrowed_or_reached
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/trace.rs
+    - name: a_refused_trace_entry_carries_its_reason_and_an_answered_one_omits_the_key
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/trace.rs
+    - name: a_refused_stage_still_has_a_trace_entry
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/trace.rs
+    - name: every_stage_is_tallied_including_one_whose_rows_are_not_returned
+      kind: function
+      resolves: true
+      found_in: crates/temper-substrate/tests/query_plan_compile.rs
+    - name: a_stage_that_matched_nothing_is_tallied_zero_rather_than_going_unreported
+      kind: function
+      resolves: true
+      found_in: crates/temper-substrate/tests/query_plan_execute.rs
+    - name: an_id_the_principal_cannot_see_is_counted_unusable_without_saying_why
+      kind: function
+      resolves: true
+      found_in: crates/temper-substrate/tests/query_plan_execute.rs
+    - name: the_dropped_input_count_is_reported_without_saying_why
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/envelope.rs
+    - name: a_narrowing_echoes_back_without_requiring_counts
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/envelope.rs
+    - name: a_declared_doc_type_narrows_the_result_and_the_echo_reports_a_filter_that_ran
+      kind: function
+      resolves: false
+    - name: a_composition_posted_as_json_comes_back_hydrated
+      kind: function
+      resolves: true
+      found_in: tests/e2e/tests/query_route_e2e.rs
+    citations_witnesses:
+    - 01a00670-e069-7dd2-a213-7b1cf4317d02
+    citations_enables:
+    - 019fbddb-7185-7e02-8686-fb6c1d2b185e
+    - 019fbddc-227f-7e41-8167-b9eb0db0a63e
+    - 019fbddc-bf0b-74c3-b48f-c06c799dec04
+    - 01a00745-8318-7b03-8378-a9693266e199
+  - name: refusal-is-distinct-and-declared
+    interrogatable: true
+    register_table:
+    - name: empty_and_refused_are_distinguishable
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/disposition.rs
+    - name: a_refused_stage_carries_its_reason_and_an_answered_stage_omits_the_field
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/envelope.rs
+    - name: every_refusal_is_reported_not_just_the_first
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/validate/mod.rs
+    - name: exactly_one_refusal_reason_is_runtime_and_the_rest_are_static
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/disposition.rs
+    - name: every_refusal_this_crate_raises_is_a_known_reason
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/disposition.rs
+    - name: a_wide_find_without_an_embedding_refuses_as_the_servers_failure_not_the_callers
+      kind: function
+      resolves: true
+      found_in: crates/temper-substrate/tests/query_plan_compile.rs
+    - name: a_refused_plan_returns_400_with_every_refusal_in_one_round_trip
+      kind: function
+      resolves: true
+      found_in: tests/e2e/tests/query_route_e2e.rs
+    - name: a_refused_plan_prints_every_refusal_and_exits_non_zero
+      kind: function
+      resolves: true
+      found_in: tests/e2e/tests/query_cli_e2e.rs
+    citations_witnesses:
+    - 01a00670-e069-7dd2-a213-7b1cf4317d02
+    citations_enables:
+    - 019fbddc-227f-7e41-8167-b9eb0db0a63e
+  - name: claims-carry-standing
+    withdrawn: true
+    interrogatable: true
+  - name: common-questions-are-prepaid
+    interrogatable: true
+    citations_enables:
+    - 019fbddc-227f-7e41-8167-b9eb0db0a63e
+    - 01a0002b-9fd1-78c3-b1e4-7e3400e9b5d0
+    - 01a0003c-7468-7b31-b6b3-81913b78d150
+    - 01a00670-e069-7dd2-a213-7b1cf4317d02
+  - name: no-constant-decides-between-acts
+    interrogatable: true
+    register_table:
+    - name: no_two_acts_order_by_the_same_name_and_none_of_them_is_a_bare_score
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/registry.rs
+    - name: the_arms_are_keyed_separately_with_no_merged_ordered_list
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/envelope.rs
+    - name: search_returns_two_arms_each_with_its_own_quantity_and_no_sum
+      kind: function
+      resolves: true
+      found_in: crates/temper-api/tests/search_two_arms_test.rs
+  - name: visibility-is-never-presented-as-relevance
+    interrogatable: true
+    register_table:
+    - name: the_anti_act_is_declared_unbuilt_and_produces_nothing
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/registry.rs
+    - name: substantiate_is_absent_from_the_door_agents_use
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/registry.rs
+    unclassified_tokens:
+    - admit
+  - name: no-silent-question-substitution
+    interrogatable: true
+    register_table:
+    - name: the_retired_singular_input_key_is_refused_rather_than_dropped
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/envelope.rs
+    - name: a_mistyped_field_name_is_refused_rather_than_ignored
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/envelope.rs
+    - name: follow_from_bound_constrains_intermediate_nodes
+      kind: function
+      resolves: true
+      found_in: crates/temper-substrate/tests/search_graph_expand.rs
+    - name: a_bounded_walk_through_a_composition_constrains_intermediate_nodes
+      kind: function
+      resolves: true
+      found_in: crates/temper-substrate/tests/query_plan_execute.rs
+    - name: every_narrowing_this_door_cannot_apply_is_refused_and_none_is_silently_dropped
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/validate/mod.rs
+    - name: an_edge_filter_on_a_resource_only_act_is_declined_not_ignored
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/validate/mod.rs
+    - name: a_narrowing_this_door_cannot_apply_is_refused_rather_than_dropped
+      kind: function
+      resolves: true
+      found_in: crates/temper-services/tests/query_run_composition_test.rs
+    - name: a_find_about_stage_without_a_threaded_intention_refuses_rather_than_substituting
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/validate/mod.rs
+    - name: an_absent_intention_is_representable_so_a_stage_can_refuse_rather_than_substitute
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/composition.rs
+    - name: a_paging_term_beyond_the_slots_range_is_refused_rather_than_truncated
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/validate/mod.rs
+    - name: a_negative_paging_term_is_refused_rather_than_handed_to_postgres
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/validate/mod.rs
+    - name: an_empty_property_key_is_refused_rather_than_matching_everything
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/validate/mod.rs
+    - name: contains_with_no_values_is_refused_because_it_narrows_nothing
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/validate/mod.rs
+    - name: an_empty_anchor_set_is_refused_rather_than_read_as_unscoped
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/validate/mod.rs
+    - name: a_cycle_is_refused_rather_than_compiled
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/validate/mod.rs
+    - name: a_requested_limit_above_the_ceiling_still_clamps_to_it
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/registry.rs
+    - name: a_term_above_its_published_ceiling_is_clamped_to_the_ceiling_that_was_published
+      kind: function
+      resolves: true
+      found_in: crates/temper-substrate/tests/query_plan_compile.rs
+    citations_witnesses:
+    - 01a00670-e069-7dd2-a213-7b1cf4317d02
+  - name: the-answer-never-flatters
+    interrogatable: true
+    register_table:
+    - name: a_clean_check_exits_zero_and_still_declines_to_promise
+      kind: function
+      resolves: true
+      found_in: tests/e2e/tests/query_cli_e2e.rs
+    - name: the_outcome_tells_a_caller_which_optional_fields_will_be_null
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/validate/mod.rs
+    - name: the_dropped_input_count_is_reported_without_saying_why
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/envelope.rs
+    - name: a_tally_row_carries_no_id_so_a_non_returned_stages_rows_never_leave_the_database
+      kind: function
+      resolves: true
+      found_in: crates/temper-substrate/tests/query_plan_compile.rs
+    citations_witnesses:
+    - 01a00670-e069-7dd2-a213-7b1cf4317d02
+  advancing:
+    total: 37
+    citing_nothing:
+    - 019fd214-add4-7ab3-8653-0a07727bbfe2
+    - 019fd25e-95f0-7373-9a6e-0574deea5ab3
+    - 019fd25e-f3d7-7123-abaa-a6f2a20c22b4
+    - 019fd25f-5834-78d1-9884-455c78b7b5ed
+    - 019fd25f-c0ea-70d2-a442-c46d697c4598
+    - 019fd8f3-4955-7c20-be57-bc90b60d5122
+    - 019fdbf4-3d63-7f01-8397-062e4fcd5729
+    - 019fdc7d-f47f-7e03-a85b-62b984a1c8c1
+    - 019fdd33-c686-7f81-839a-17299e111afd
+    - 019fddc6-aace-7db0-a14d-5c610bc6506b
+    - 019fe1ec-a1ae-7c10-82a4-a5b18fe78b83
+    - 019ffc2c-f0e0-7d40-b375-06f639d264d1
+    - 019ffc6b-6a09-7412-9a33-815cab22c2ae
+    - 01a0003f-f1a4-7e70-9005-6f8a9c131ee2
+    - 01a000c2-033c-7451-8b13-b7aa7469d217
+    - 01a00163-c0bb-7651-909f-73e3f33d8a46
+    - 01a001ae-9c7b-7090-adce-28c556ea5c8f
+    - 01a001af-02a9-7c02-9977-195aeecadefb
+    - 01a001b0-10b9-7752-8d7a-770df8dcdb8c
+    - 01a00502-a774-7001-b5b2-0ce462158f1c
+    - 01a00510-e583-78b1-bdc5-f08f4ca483a8
+    - 01a0057e-bbaa-7d93-bd21-21cb9fab5101
+    - 01a00675-b111-79b2-8aac-e872f30acdd5
+    - 01a006f4-982d-7e41-9076-66f0d09fba03
+    - 01a0073b-4f95-7da2-a427-5533d3ddedd6
+    - 01a00a79-6ad9-70d3-9bb7-4bf3ec08df0a
+    - 01a00c0b-9a02-72a0-9bd5-a3e204d267b4
+    - 01a00c93-c1e7-7762-8109-49c71712e982
+- goal_id: 019fbf6a-34d7-7a00-9bb2-7d61faa2ce38
+  goal_title: Operational memory travels with the work, not with the machine — and what it says about
+    itself is true
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: heading
+    witness_table: false
+    unreadable: no coverage table declares a witness column; this register's witnesses, if any, are stated
+      in prose and are not machine-readable here
+  clauses:
+  - name: a-memory-reaches-every-environment-the-work-happens-in
+    interrogatable: false
+    citations_enables:
+    - 019fbef6-1d23-77f2-9394-8a75149314db
+    - 019fbf80-7da9-7042-9b6d-7dcb002d9080
+    - 019fbf9c-0024-71a0-b2e1-759b7aa4372f
+  - name: the-index-never-disagrees-with-what-it-indexes
+    interrogatable: false
+    citations_enables:
+    - 019fbf7f-67d9-7710-9474-b8babb98bb83
+  - name: a-claim-carries-when-it-was-last-checked
+    interrogatable: false
+  - name: a-correction-supersedes-rather-than-destroys
+    interrogatable: false
+    citations_enables:
+    - 019fbf80-7da9-7042-9b6d-7dcb002d9080
+  - name: a-memory-cannot-claim-a-reach-it-does-not-have
+    interrogatable: false
+  - name: a-machine-can-evaluate-this-without-adopting-it
+    interrogatable: false
+    citations_enables:
+    - 019fbf7f-c06c-7051-82c9-7a9d955a29ea
+    - 019fbf80-1ed2-70b0-a479-0f7e243cff81
+  - name: no-one-person-is-the-curator
+    interrogatable: false
+  - name: the-client-that-reads-a-memory-does-not-shape-it
+    interrogatable: false
+    citations_enables:
+    - 019fbf7f-c06c-7051-82c9-7a9d955a29ea
+  - name: the-index-stays-readable-as-the-corpus-grows
+    interrogatable: false
+    citations_enables:
+    - 019fbf67-e7b2-72c3-b5f3-2467a4dc5213
+    - 019fbf9b-c04d-7333-b0b4-dab43ef897f8
+    - 019fc07b-d3e3-7812-a1c9-1c18709d0284
+    - 01a00f59-8eef-7b40-b973-00c7f3b8d085
+  - name: a-memory-proven-load-bearing-is-distinguishable-from-one-nothing-has-needed
+    interrogatable: false
+    citations_enables:
+    - 019fbf67-e7b2-72c3-b5f3-2467a4dc5213
+  - name: a-write-must-never-silently-destroy-a-memorys-history
+    interrogatable: false
+    citations_enables:
+    - 019fbf9b-c04d-7333-b0b4-dab43ef897f8
+  - name: an-unexamined-claim-must-never-read-as-a-false-one
+    interrogatable: false
+  - name: a-claim-must-never-read-as-checked-when-nobody-checked-it
+    interrogatable: false
+    citations_enables:
+    - 019fbf80-7da9-7042-9b6d-7dcb002d9080
+  - name: decay-must-never-make-a-memory-unfindable
+    interrogatable: false
+  - name: a-near-duplicate-must-never-be-resolved-without-a-human
+    interrogatable: false
+  advancing:
+    total: 12
+    citing_nothing:
+    - 019fc062-5481-77f0-a0fa-e092d40759d4
+    - 019fc399-030f-7c23-be7f-4b2219e1959c
+- goal_id: 019fc46c-5731-75d2-b00f-891069ce6f31
+  goal_title: A write completes without waiting on projection — and a map's shape never claims to be settled
+    when it isn't
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: none
+    witness_table: true
+    unreadable: no clause declarations parsed
+  clauses: []
+  advancing:
+    total: 4
+    citing_nothing:
+    - 019fc49f-612d-7851-9ab3-c1be45e62afe
+    - 019fc4a1-2c21-71e2-ae64-113eda649c3c
+    - 019fc7ce-fe48-7300-8ef6-6a78f2a32b7a
+    - 01a00615-0b1a-7223-9533-cd1edbc08ba8
+  coverage_rows_naming_no_clause:
+  - a-stale-projection-never-reads-as-current
+  - a-write-returns-without-waiting-on-projection
+  - concurrent-arrivals-do-not-multiply-work
+  - no-act-waits-on-another-acts-projection
+  - no-recorded-change-is-absent-from-the-settled-shape
+  - projection-cost-tracks-what-changed
+  - projection-failure-is-never-silent
+  - projection-lag-is-readable
+- goal_id: 019fe15f-b4b7-74f2-8761-9ffbd59eb832
+  goal_title: A cold agent joins ongoing work by reading it — and what it declares is seen by whoever
+    arrives next
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: prose
+    witness_table: false
+    unreadable: no coverage table declares a witness column; this register's witnesses, if any, are stated
+      in prose and are not machine-readable here
+  clauses:
+  - name: intent-is-declared-not-inferred
+    interrogatable: false
+  - name: a-cold-reader-orients-in-one-read
+    interrogatable: false
+  - name: a-resuming-reader-receives-exactly-what-it-has-not-seen
+    interrogatable: false
+    citations_enables:
+    - 019fe160-74f8-7883-9f99-18d9c17dd559
+  - name: every-contribution-is-attributable
+    interrogatable: false
+  - name: a-contribution-declares-its-kind
+    interrogatable: false
+    citations_enables:
+    - 019fe160-74f8-7883-9f99-18d9c17dd559
+  - name: no-contribution-is-lost-or-reordered
+    interrogatable: false
+  - name: no-conversation-leaks-past-its-work-item
+    interrogatable: false
+  - name: no-contribution-is-misattributed-even-on-replay
+    interrogatable: false
+  - name: adding-conversation-never-degrades-the-work-item
+    interrogatable: false
+  - name: silence-is-not-absence
+    interrogatable: false
+  - name: no-durable-agent-identity-is-required-to-take-part
+    interrogatable: false
+  advancing:
+    total: 1
+    citing_nothing: []
+- goal_id: 01a00f76-5087-7be3-855e-5a12489831e3
+  goal_title: A register's coverage is projectable, and the projection never reads cleaner than the evidence
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: heading
+    witness_table: true
+  clauses:
+  - name: a-clause-the-projection-could-not-read-is-named-rather-than-omitted
+    interrogatable: true
+    citations_enables:
+    - 01a00f77-2c87-7c13-9296-df9765c08280
+  - name: a-cited-witness-resolves-to-something-that-exists-or-is-declared-unresolvable
+    interrogatable: true
+    citations_enables:
+    - 01a00f77-2c87-7c13-9296-df9765c08280
+  - name: sources-that-disagree-are-reported-as-disagreeing
+    interrogatable: true
+    citations_enables:
+    - 01a00f77-2c87-7c13-9296-df9765c08280
+  - name: regenerating-against-unchanged-sources-changes-nothing
+    interrogatable: true
+    citations_enables:
+    - 01a00f77-2c87-7c13-9296-df9765c08280
+  - name: an-unresolvable-witness-must-never-count-as-a-covered-clause
+    interrogatable: true
+  - name: a-total-must-never-be-reported-over-a-source-that-was-not-read
+    interrogatable: true
+  - name: the-projection-must-never-become-the-authority-over-the-register
+    interrogatable: true
+  advancing:
+    total: 1
+    citing_nothing: []
+  coverage_rows_naming_no_clause:
+  - every negative-face clause

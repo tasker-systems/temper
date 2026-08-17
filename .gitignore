@@ -32,3 +32,9 @@ crates/*/bindings/
 
 # Release artifacts built by package-skill.sh (published to the GitHub Release, never committed)
 /dist/
+
+# Python tooling under tools/ (uv-managed; see tools/pyproject.toml). The lockfile IS committed —
+# a tool that regenerates a checked-in artifact must resolve to the same dependencies everywhere.
+__pycache__/
+*.pyc
+.venv/
