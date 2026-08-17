@@ -151,22 +151,35 @@ async fn a_refused_plan_prints_every_refusal_and_exits_non_zero(pool: sqlx::PgPo
         "a plan that will not run must exit non-zero\nstdout: {stdout}\nstderr: {stderr}"
     );
 
+    // The e2e harness spawns the binary with piped stdout (non-TTY → JSON mode).
+    // In JSON mode the error rides stdout as a structured ErrorPayload. The
+    // refusals are in the `message` field (rendered by `render_refusals`).
+    let parsed: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("stdout is a JSON ErrorPayload: {stdout:?}");
+    let message = parsed["message"].as_str().expect("message field");
+
     // Both stages named, so the caller can repair each. Counting mentions rather than asserting one
     // substring is what makes this fail against a CLI that renders only the first refusal.
     assert!(
-        stderr.contains("one:") && stderr.contains("two:"),
-        "both refused stages must be named in one run; got:\n{stderr}"
+        message.contains("one:") && message.contains("two:"),
+        "both refused stages must be named in one run; got:\n{message}"
     );
     assert!(
-        stderr.contains("2 refusal(s)"),
-        "the caller must be told how many refusals there are; got:\n{stderr}"
+        message.contains("2 refusal(s)"),
+        "the caller must be told how many refusals there are; got:\n{message}"
     );
 
     // A caller fault is not reported as a server error — the misclassification the client's 400 arm
     // corrects. Before it, this arrived as `ClientError::Server { status: 400 }`.
     assert!(
-        !stderr.to_lowercase().contains("server error"),
-        "a refused plan was reported as a SERVER fault; got:\n{stderr}"
+        !message.to_lowercase().contains("server error"),
+        "a refused plan was reported as a SERVER fault; got:\n{message}"
+    );
+
+    // The code is "project" (TemperError::Project), not a server error code.
+    assert_eq!(
+        parsed["code"], "project",
+        "a refused plan must arrive under code 'project'; got: {parsed}"
     );
 }
 
@@ -251,10 +264,15 @@ async fn a_missing_plan_is_refused_before_any_request(pool: sqlx::PgPool) {
         .await
         .expect("spawn temper query");
 
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(!out.status.success(), "an empty plan must not be sent");
+    // In JSON mode (non-TTY piped stdout), the error rides stdout as a
+    // structured ErrorPayload. The message carries the refusal text.
+    let parsed: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("stdout is a JSON ErrorPayload: {stdout:?}");
+    let message = parsed["message"].as_str().expect("message field");
     assert!(
-        stderr.contains("no plan supplied"),
-        "the error must say what to pass; got:\n{stderr}"
+        message.contains("no plan supplied"),
+        "the error must say what to pass; got:\n{message}"
     );
 }

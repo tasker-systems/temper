@@ -1224,12 +1224,48 @@ pub fn list(_config: &Config, params: ListParams<'_>) -> Result<()> {
     })?;
 
     let envelope = build_list_envelope(&response, params.fields)?;
+
+    // When truncated, inject a diagnostics array into the envelope so an agent
+    // parsing stdout JSON can detect it without scraping stderr. The stderr
+    // warning still fires for TTY/TOON humans.
+    let envelope = if response.truncated {
+        inject_truncation_diagnostic(envelope, response.total, response.returned)
+    } else {
+        envelope
+    };
+
     let rendered = crate::format::render(&envelope, fmt)?;
     println!("{rendered}");
     if response.truncated {
         warn_truncated(response.total, response.returned);
     }
     Ok(())
+}
+
+/// Inject a `diagnostics` array into a `serde_json::Value` list envelope when
+/// the response is truncated. Additive — absent when not truncated, present
+/// with one warning entry when it is.
+fn inject_truncation_diagnostic(
+    mut envelope: serde_json::Value,
+    total: i64,
+    returned: i64,
+) -> serde_json::Value {
+    if let Some(obj) = envelope.as_object_mut() {
+        obj.insert(
+            "diagnostics".to_string(),
+            serde_json::json!([{
+                "level": "warning",
+                "code": "truncated",
+                "message": format!(
+                    "Showing {returned} of {total} matching results — the list is TRUNCATED. \
+                     Do not conclude a resource is absent or a set is complete from this page."
+                ),
+                "hint": "Re-run with --all (or a larger --limit, or --page/--offset to walk), \
+                         or narrow with --title-contains/--stage/--sort first."
+            }]),
+        );
+    }
+    envelope
 }
 
 /// Reassign a resource's owner via the API (`POST /api/resources/{id}/reassign`).

@@ -340,6 +340,7 @@ mod tests {
                 kind: SearchScope::Global,
                 size: None,
             },
+            diagnostics: vec![],
         };
         let out =
             crate::format::render(&doc, crate::format::OutputFormat::Json).expect("json render");
@@ -365,6 +366,221 @@ mod tests {
         assert!(
             parsed["exact"][0]["resource"].get("fts_norm").is_none(),
             "the arm's quantity stays on the hit, never on the resource: {out}"
+        );
+    }
+
+    #[test]
+    fn search_diagnostics_omitted_when_all_ok() {
+        use crate::commands::search_cmd::build_search_diagnostics;
+        use temper_core::types::api::{
+            ExactArm, SearchReason, SearchResponse, SearchScope, SearchScopeInfo, WideArm,
+        };
+
+        let response = SearchResponse {
+            exact: ExactArm {
+                hits: vec![],
+                reason: SearchReason::Ok,
+                hint: None,
+            },
+            wide: WideArm {
+                hits: vec![],
+                reason: SearchReason::Ok,
+                hint: None,
+                degraded: false,
+            },
+            scope: SearchScopeInfo {
+                kind: SearchScope::Global,
+                size: None,
+            },
+        };
+        let diags = build_search_diagnostics(&response);
+        assert!(
+            diags.is_empty(),
+            "no diagnostics when all arms are Ok and not degraded"
+        );
+    }
+
+    #[test]
+    fn search_diagnostics_include_wide_degraded() {
+        use crate::commands::search_cmd::build_search_diagnostics;
+        use temper_core::types::api::{
+            ExactArm, SearchReason, SearchResponse, SearchScope, SearchScopeInfo, WideArm,
+        };
+
+        let response = SearchResponse {
+            exact: ExactArm {
+                hits: vec![],
+                reason: SearchReason::Ok,
+                hint: None,
+            },
+            wide: WideArm {
+                hits: vec![],
+                reason: SearchReason::Ok,
+                hint: Some("try rephrasing".to_string()),
+                degraded: true,
+            },
+            scope: SearchScopeInfo {
+                kind: SearchScope::Global,
+                size: None,
+            },
+        };
+        let diags = build_search_diagnostics(&response);
+        assert_eq!(diags.len(), 1, "one diagnostic for wide-degraded");
+        assert_eq!(diags[0].code, "wide-degraded");
+        assert_eq!(diags[0].level, temper_core::types::DiagnosticLevel::Warning);
+        assert_eq!(diags[0].hint.as_deref(), Some("try rephrasing"));
+    }
+
+    #[test]
+    fn search_diagnostics_include_out_of_scope() {
+        use crate::commands::search_cmd::build_search_diagnostics;
+        use temper_core::types::api::{
+            ExactArm, SearchReason, SearchResponse, SearchScope, SearchScopeInfo, WideArm,
+        };
+
+        let response = SearchResponse {
+            exact: ExactArm {
+                hits: vec![],
+                reason: SearchReason::OutOfScope,
+                hint: None,
+            },
+            wide: WideArm {
+                hits: vec![],
+                reason: SearchReason::Ok,
+                hint: None,
+                degraded: false,
+            },
+            scope: SearchScopeInfo {
+                kind: SearchScope::Global,
+                size: None,
+            },
+        };
+        let diags = build_search_diagnostics(&response);
+        assert_eq!(diags.len(), 1, "one diagnostic for exact-out-of-scope");
+        assert_eq!(diags[0].code, "exact-out-of-scope");
+        assert_eq!(diags[0].level, temper_core::types::DiagnosticLevel::Info);
+    }
+
+    #[test]
+    fn search_diagnostics_include_both_arms_when_both_non_ok() {
+        use crate::commands::search_cmd::build_search_diagnostics;
+        use temper_core::types::api::{
+            ExactArm, SearchReason, SearchResponse, SearchScope, SearchScopeInfo, WideArm,
+        };
+
+        let response = SearchResponse {
+            exact: ExactArm {
+                hits: vec![],
+                reason: SearchReason::NoMatch,
+                hint: None,
+            },
+            wide: WideArm {
+                hits: vec![],
+                reason: SearchReason::OutOfScope,
+                hint: None,
+                degraded: false,
+            },
+            scope: SearchScopeInfo {
+                kind: SearchScope::Global,
+                size: None,
+            },
+        };
+        let diags = build_search_diagnostics(&response);
+        assert_eq!(diags.len(), 2, "both arms contribute diagnostics");
+        assert_eq!(diags[0].code, "exact-no-match");
+        assert_eq!(diags[1].code, "wide-out-of-scope");
+    }
+
+    #[test]
+    fn search_results_json_omits_diagnostics_when_empty() {
+        use temper_core::types::api::{ExactHit, SearchScope, SearchScopeInfo, WideHit};
+        let exact = vec![ExactHit {
+            resource: sample_resource(),
+            fts_norm: 0.5,
+        }];
+        let wide = vec![WideHit {
+            resource: sample_resource(),
+            vec_norm: 0.8,
+        }];
+        let doc = crate::commands::search_cmd::SearchResultsResponse {
+            exact,
+            wide,
+            scope: SearchScopeInfo {
+                kind: SearchScope::Global,
+                size: None,
+            },
+            diagnostics: vec![],
+        };
+        let out =
+            crate::format::render(&doc, crate::format::OutputFormat::Json).expect("json render");
+        assert!(
+            !out.contains("\"diagnostics\""),
+            "diagnostics should be absent when empty (skip_serializing_if): {out}"
+        );
+    }
+
+    #[test]
+    fn search_results_json_includes_diagnostics_when_present() {
+        use temper_core::types::api::{ExactHit, SearchScope, SearchScopeInfo, WideHit};
+        use temper_core::types::diagnostics::{Diagnostic, DiagnosticLevel};
+        let exact = vec![ExactHit {
+            resource: sample_resource(),
+            fts_norm: 0.5,
+        }];
+        let wide = vec![WideHit {
+            resource: sample_resource(),
+            vec_norm: 0.8,
+        }];
+        let doc = crate::commands::search_cmd::SearchResultsResponse {
+            exact,
+            wide,
+            scope: SearchScopeInfo {
+                kind: SearchScope::Global,
+                size: None,
+            },
+            diagnostics: vec![Diagnostic {
+                level: DiagnosticLevel::Warning,
+                code: "wide-degraded",
+                message: "The wide arm was degraded.".to_string(),
+                hint: Some("try rephrasing".to_string()),
+            }],
+        };
+        let out =
+            crate::format::render(&doc, crate::format::OutputFormat::Json).expect("json render");
+        assert!(
+            out.contains("\"diagnostics\""),
+            "json should include diagnostics: {out}"
+        );
+        assert!(
+            out.contains("\"wide-degraded\""),
+            "json should include the code: {out}"
+        );
+        assert!(
+            out.contains("\"warning\""),
+            "json should include the level: {out}"
+        );
+    }
+
+    #[test]
+    fn error_payload_json_is_parseable() {
+        use temper_core::error::TemperError;
+        let err = TemperError::NotFound("resource abc".to_string());
+        let payload = crate::error::render_error_payload(&err, Some("check the id and retry"));
+        let parsed: serde_json::Value =
+            serde_json::from_str(&payload).expect("error payload is valid JSON");
+        assert_eq!(parsed["code"], "not-found");
+        assert!(parsed["message"].as_str().unwrap().contains("resource abc"));
+        assert_eq!(parsed["hint"], "check the id and retry");
+    }
+
+    #[test]
+    fn error_payload_code_matches_variant() {
+        use temper_core::error::TemperError;
+        assert_eq!(TemperError::Forbidden.code(), "forbidden");
+        assert_eq!(TemperError::Network("down".to_string()).code(), "network");
+        assert_eq!(
+            TemperError::ForbiddenDetail("capability X".to_string()).code(),
+            "FORBIDDEN_DETAIL"
         );
     }
 }

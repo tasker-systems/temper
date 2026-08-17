@@ -19,6 +19,10 @@ use crate::projection::{check_context_staleness, read_cursor, StalenessOutcome};
 #[derive(Debug, serde::Serialize)]
 pub(crate) struct StatusReport {
     pub contexts: Vec<ContextStatus>,
+    /// Additive diagnostics — e.g. cloud-unreachable warnings. Absent when
+    /// everything is reachable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<temper_core::types::Diagnostic>,
 }
 
 /// Per-context entry in [`StatusReport`].
@@ -43,7 +47,10 @@ fn staleness_str(outcome: StalenessOutcome) -> &'static str {
 
 pub fn run(config: &Config, _verbose: bool, fmt: crate::format::OutputFormat) -> Result<()> {
     if config.contexts.is_empty() {
-        let report = StatusReport { contexts: vec![] };
+        let report = StatusReport {
+            contexts: vec![],
+            diagnostics: vec![],
+        };
         let rendered = crate::format::render(&report, fmt)?;
         println!("{rendered}");
         return Ok(());
@@ -60,6 +67,7 @@ pub fn run(config: &Config, _verbose: bool, fmt: crate::format::OutputFormat) ->
             output::warning("cloud unreachable — showing local cursor info only");
             let report = StatusReport {
                 contexts: degraded_items(config),
+                diagnostics: vec![cloud_unreachable_diagnostic()],
             };
             if let Ok(rendered) = crate::format::render(&report, fmt) {
                 println!("{rendered}");
@@ -70,6 +78,7 @@ pub fn run(config: &Config, _verbose: bool, fmt: crate::format::OutputFormat) ->
 
     let client_result = build_config_store_and_client();
 
+    let mut cloud_unreachable = false;
     let items: Vec<ContextStatus> = match client_result {
         Ok((_cfg, _store, client)) => {
             // Fetch all visible contexts from server (includes resource_count).
@@ -104,6 +113,7 @@ pub fn run(config: &Config, _verbose: bool, fmt: crate::format::OutputFormat) ->
                 }
                 Err(_) => {
                     // API call failed — degrade gracefully.
+                    cloud_unreachable = true;
                     output::warning("cloud unreachable — showing local cursor info only");
                     degraded_items(config)
                 }
@@ -111,12 +121,22 @@ pub fn run(config: &Config, _verbose: bool, fmt: crate::format::OutputFormat) ->
         }
         Err(_) => {
             // Client build failed (not authenticated, no config, etc.).
+            cloud_unreachable = true;
             output::warning("cloud unreachable — showing local cursor info only");
             degraded_items(config)
         }
     };
 
-    let report = StatusReport { contexts: items };
+    let diagnostics = if cloud_unreachable {
+        vec![cloud_unreachable_diagnostic()]
+    } else {
+        vec![]
+    };
+
+    let report = StatusReport {
+        contexts: items,
+        diagnostics,
+    };
     let rendered = crate::format::render(&report, fmt)?;
     println!("{rendered}");
 
@@ -184,6 +204,18 @@ fn count_projected_md_files(vault_root: &Path, owner: &str, context: &str) -> us
     count
 }
 
+/// Build a `cloud-unreachable` diagnostic for the status report's diagnostics tier.
+fn cloud_unreachable_diagnostic() -> temper_core::types::Diagnostic {
+    temper_core::types::Diagnostic {
+        level: temper_core::types::DiagnosticLevel::Warning,
+        code: "cloud-unreachable",
+        message: "Cloud unreachable — showing local cursor info only.".to_string(),
+        hint: Some(
+            "Check your network connection or run `temper auth` to re-authenticate.".to_string(),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,12 +277,17 @@ mod tests {
                 projected: 42,
                 server: Some(42),
             }],
+            diagnostics: vec![],
         };
         let out =
             crate::format::render(&report, crate::format::OutputFormat::Json).expect("json render");
         assert!(out.contains("\"contexts\""), "json: {out}");
         assert!(out.contains("\"staleness\": \"fresh\""), "json: {out}");
         assert!(out.contains("\"projected\": 42"), "json: {out}");
+        assert!(
+            !out.contains("\"diagnostics\""),
+            "json should omit empty diagnostics: {out}"
+        );
     }
 
     #[test]
@@ -262,10 +299,29 @@ mod tests {
                 projected: 42,
                 server: Some(42),
             }],
+            diagnostics: vec![],
         };
         let out =
             crate::format::render(&report, crate::format::OutputFormat::Toon).expect("toon render");
         assert!(out.contains("temper"), "toon: {out}");
         assert!(out.contains("fresh"), "toon: {out}");
+    }
+
+    #[test]
+    fn render_status_report_json_includes_diagnostics_when_present() {
+        let report = StatusReport {
+            contexts: vec![ContextStatus {
+                name: "temper".to_string(),
+                staleness: "skipped".to_string(),
+                projected: 0,
+                server: None,
+            }],
+            diagnostics: vec![cloud_unreachable_diagnostic()],
+        };
+        let out =
+            crate::format::render(&report, crate::format::OutputFormat::Json).expect("json render");
+        assert!(out.contains("\"diagnostics\""), "json: {out}");
+        assert!(out.contains("\"cloud-unreachable\""), "json: {out}");
+        assert!(out.contains("\"warning\""), "json: {out}");
     }
 }
