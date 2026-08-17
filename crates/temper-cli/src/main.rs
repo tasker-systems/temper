@@ -73,24 +73,34 @@ fn main() {
     // `shutdown`, not `force_flush`: this process really is ending, unlike the Vercel functions that
     // are frozen rather than exited and therefore flush per-request.
     if let Err(e) = &outcome {
-        match e {
-            temper_cli::error::TemperError::SystemAccessRequired(details) => {
-                temper_cli::access_gate::render_system_access_required(
-                    details.email.as_deref(),
-                    details.refusal.as_ref(),
-                    details.request_url.as_deref(),
-                    details.cli_command.as_deref(),
-                );
+        // In JSON mode, emit a structured ErrorPayload on stdout so an agent
+        // that merges streams and parses JSON gets a parseable payload even on
+        // failure. In TOON mode, keep the existing stderr prose rendering — a
+        // human at a TTY is no worse off than before.
+        let hint = temper_cli::reconcile_hint::reconcile_hint(was_lost_ack_write, e);
+        if output_format == OutputFormat::Json {
+            let payload = temper_cli::error::render_error_payload(e, hint);
+            println!("{payload}");
+        } else {
+            match e {
+                temper_cli::error::TemperError::SystemAccessRequired(details) => {
+                    temper_cli::access_gate::render_system_access_required(
+                        details.email.as_deref(),
+                        details.refusal.as_ref(),
+                        details.request_url.as_deref(),
+                        details.cli_command.as_deref(),
+                    );
+                }
+                _ => {
+                    temper_cli::output::error(format!("temper: {e}"));
+                }
             }
-            _ => {
-                temper_cli::output::error(format!("temper: {e}"));
+            // A network error on a `create`/`update` may be a lost acknowledgment,
+            // not a lost write: reconcile before retrying, or a blind retry mints a
+            // duplicate. Guidance goes to stderr, so it never touches the payload.
+            if let Some(hint) = hint {
+                temper_cli::output::hint(hint);
             }
-        }
-        // A network error on a `create`/`update` may be a lost acknowledgment,
-        // not a lost write: reconcile before retrying, or a blind retry mints a
-        // duplicate. Guidance goes to stderr, so it never touches the payload.
-        if let Some(hint) = temper_cli::reconcile_hint::reconcile_hint(was_lost_ack_write, e) {
-            temper_cli::output::hint(hint);
         }
         temper_telemetry::shutdown_telemetry();
         std::process::exit(1);
@@ -1454,7 +1464,12 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
             // than laundering it back through the `TemperError` return path.
             if let Err(e) = temper_cli::commands::update::run(check, version, force, output_format)
             {
-                temper_cli::output::error(format!("temper: {e}"));
+                if output_format == OutputFormat::Json {
+                    let payload = temper_cli::error::render_cli_error_payload(&e);
+                    println!("{payload}");
+                } else {
+                    temper_cli::output::error(format!("temper: {e}"));
+                }
                 // Drain here too: `process::exit` runs no destructors, and this arm is one of the
                 // four exits, not one of the two the invariant originally claimed.
                 temper_telemetry::shutdown_telemetry();

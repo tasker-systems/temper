@@ -219,11 +219,20 @@ async fn show_without_body_with_dotted_path_errors(pool: sqlx::PgPool) {
     .expect("cli run");
 
     assert!(!output.status.success(), "expected non-zero exit");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("jq"), "stderr should mention jq: {stderr}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // In JSON mode (non-TTY piped stdout), the error rides stdout as a
+    // structured ErrorPayload. The message should mention jq and echo the
+    // rejected dotted path.
+    let parsed: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("stdout is a JSON ErrorPayload: {stdout:?}");
+    let message = parsed["message"].as_str().expect("message field");
     assert!(
-        stderr.contains("managed_meta.stage"),
-        "stderr should echo the rejected path: {stderr}"
+        message.contains("jq"),
+        "message should mention jq: {message}"
+    );
+    assert!(
+        message.contains("managed_meta.stage"),
+        "message should echo the rejected path: {message}"
     );
 }
 

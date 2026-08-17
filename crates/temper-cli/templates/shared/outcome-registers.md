@@ -333,6 +333,11 @@ temper resource show <goal-ref>            # the register; --without body to ski
 #    `show` prints a serialized RECORD, not the markdown body — json or toon depending on the
 #    format in force. Neither is the body, so extract `content` explicitly; a bare redirect of
 #    `show` into a file and back would write the serialized record as the body.
+#
+#    ERROR PATH: check the exit code first. A non-zero exit means `show` failed — in JSON mode the
+#    explanation is a structured payload on stdout (`{ "error": { code, message, hint? } }`), not the
+#    record. Parse `.error.code` before `.content`; `jq -r .content` on an error payload yields
+#    `null`, which is a silent wrong answer, not a caught one.
 temper resource show <goal-ref> --format json | jq -r .content > register.md
 cat register.md | temper resource update <goal-ref>
 

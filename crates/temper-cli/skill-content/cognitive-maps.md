@@ -75,6 +75,11 @@ Open one **invocation envelope** per authoring pass; every authored act carries 
 ```bash
 # The server mints the id. In a script stdout is non-TTY, so temper emits JSON by default —
 # read the generic `id` key (every create-style response carries it).
+#
+# ERROR PATH: check the exit code first. A non-zero exit means `invocation open` failed — in JSON
+# mode the explanation is a structured payload on stdout (`{ "error": { code, message, hint? } }`),
+# not the created record. Parse `.error.code` before `.id`; `jq -r .id` on an error payload yields
+# `null`, which silently assigns an empty id and breaks every downstream command, not just this one.
 inv=$(temper invocation open --cogmap <MAP> --trigger-kind manual --format json | jq -r .id)
 # ... read the charter, then for each source you distill:
 

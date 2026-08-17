@@ -21,6 +21,7 @@ pub mod conflict;
 pub mod connection;
 pub mod context;
 pub mod device;
+pub mod diagnostics;
 pub mod element_trail;
 pub mod error_details;
 pub mod event;
@@ -80,6 +81,7 @@ pub use config::{
 pub use conflict::{ConflictRecord, TemperSystemAnnotation};
 pub use context::{ContextCreateRequest, ContextRow, ContextRowWithCounts};
 pub use device::DeviceSyncState;
+pub use diagnostics::{Diagnostic, DiagnosticLevel, ErrorPayload};
 pub use element_trail::{ElementEvent, ElementKind, EventTrail};
 pub use event::{EventQuery, EventResponse};
 pub use graph::{EdgeKind, Polarity};

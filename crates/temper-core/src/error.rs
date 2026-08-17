@@ -124,3 +124,43 @@ pub enum TemperError {
 }
 
 pub type Result<T> = std::result::Result<T, TemperError>;
+
+/// The stable `error.code` string each [`TemperError`] variant maps to on the
+/// CLI's structured stdout error payload.
+///
+/// Spelled here — alongside the variants it describes, and in the crate both
+/// the CLI and the API depend on — rather than as a literal in `main.rs` and
+/// nowhere else. The same pattern as [`FORBIDDEN_DETAIL_CODE`] and
+/// [`PLAN_REFUSED_CODE`]: a wire string a caller branches on is a named
+/// constant, not a spell.
+///
+/// `SystemAccessRequired` carries structured access-gate details that the
+/// enriched renderer in `access_gate.rs` handles; it gets its own code so the
+/// JSON error payload can distinguish it from a plain `Forbidden`.
+impl TemperError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::VaultNotFound => "vault-not-found",
+            Self::Config(_) => "config",
+            Self::Vault(_) => "vault",
+            Self::Project(_) => "project",
+            Self::Embedding(_) => "embedding",
+            Self::Index(_) => "index",
+            Self::Io(_) => "io",
+            Self::Yaml(_) => "yaml",
+            Self::Json(_) => "json",
+            Self::Toml(_) => "toml",
+            Self::Extraction(_) => "extraction",
+            Self::Api(_) => "api",
+            Self::Network(_) => "network",
+            Self::NotFound(_) => "not-found",
+            Self::BadRequest(_) => "bad-request",
+            Self::Conflict(_) => "conflict",
+            Self::ContentIntegrity(_) => "content-integrity",
+            Self::Forbidden => "forbidden",
+            Self::ForbiddenDetail(_) => FORBIDDEN_DETAIL_CODE,
+            Self::Unauthorized(_) => "unauthorized",
+            Self::SystemAccessRequired(_) => "system-access-required",
+        }
+    }
+}
