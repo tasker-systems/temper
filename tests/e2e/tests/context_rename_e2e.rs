@@ -177,10 +177,17 @@ async fn cli_rename(
     .await
     .expect("spawn temper");
 
-    (
-        out.status.success(),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
-    )
+    // In JSON mode (non-TTY piped stdout), the error rides stdout as a
+    // structured ErrorPayload. Combine stdout and stderr so the caller's
+    // assertions work regardless of which stream carries the message.
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    let combined = if stdout.trim().is_empty() {
+        stderr
+    } else {
+        stdout
+    };
+    (out.status.success(), combined)
 }
 
 /// An MCP service over the same pool, with its profile cache seeded for `sub`.

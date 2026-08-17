@@ -264,10 +264,15 @@ async fn a_missing_plan_is_refused_before_any_request(pool: sqlx::PgPool) {
         .await
         .expect("spawn temper query");
 
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(!out.status.success(), "an empty plan must not be sent");
+    // In JSON mode (non-TTY piped stdout), the error rides stdout as a
+    // structured ErrorPayload. The message carries the refusal text.
+    let parsed: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("stdout is a JSON ErrorPayload: {stdout:?}");
+    let message = parsed["message"].as_str().expect("message field");
     assert!(
-        stderr.contains("no plan supplied"),
-        "the error must say what to pass; got:\n{stderr}"
+        message.contains("no plan supplied"),
+        "the error must say what to pass; got:\n{message}"
     );
 }
