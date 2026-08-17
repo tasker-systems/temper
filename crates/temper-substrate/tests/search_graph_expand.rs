@@ -1086,3 +1086,254 @@ async fn the_incumbent_arity_is_still_unambiguously_callable(pool: sqlx::PgPool)
         "the eight-argument form resolves to one function and returns the same walk"
     );
 }
+
+// ── The page: an OFFSET beneath the limit (`20260817000020`) ────────────────────────────────────
+//
+// `follow_from_limit_truncates_the_ranked_nodes` above witnesses the LIMIT half and has since
+// `20260814000030`. It cannot witness the other half, and that is the gap this section closes: with
+// a limit alone, a caller sees the first page of the walk and there is no argument anywhere in the
+// chain that reaches the second. Every assertion below is about WHICH rows come back, never about
+// the offset being accepted — acceptance is the cheap half and a test asserting only it would pass
+// against a `p_offset` that was bound and then dropped.
+
+/// The walk through the WIDENED 10-arity — the only one that can carry a page.
+///
+/// **A sibling rather than a widening of [`follow_from`]**, following the precedent
+/// [`follow_from_with_properties`] set one arity down for `p_edge_properties`
+/// (`20260815000010`): the incumbent helper's nine call sites all page nothing, so widening it
+/// would rewrite every one of them to pass a `None` that says nothing about what they assert, and
+/// would put a paging argument in the signature of the helper whose whole job is to reach the
+/// arity that predates paging.
+///
+/// Depth 1 and gamma 0.5 are fixed here the way [`follow_from_with_properties`] fixes depth 2 and
+/// gamma 0.5. The corpus below is a STAR, so a second hop could only walk back to the hub — which
+/// `NOT u.to_node = ANY(w.path)` already excludes (`20260817000020:157`) — and a second hop over
+/// sixty neighbours would buy nothing the first does not already give.
+async fn follow_from_paged(
+    pool: &sqlx::PgPool,
+    principal: Uuid,
+    seeds: &[Uuid],
+    limit: Option<i32>,
+    offset: Option<i32>,
+) -> Vec<Walked> {
+    use sqlx::Row;
+    sqlx::query(
+        "SELECT resource_id, graph_score, via FROM query_follow_from(\
+         $1, $2::uuid[], 1, 0.5, NULL::text[], NULL::text[], NULL::uuid[], $3::int, NULL::jsonb, \
+         $4::int)",
+    )
+    .bind(principal)
+    .bind(seeds)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await
+    .unwrap()
+    .iter()
+    .map(|r| Walked {
+        id: r.get::<Uuid, _>("resource_id"),
+        score: r.get::<f32, _>("graph_score"),
+        via: r.get::<serde_json::Value, _>("via"),
+    })
+    .collect()
+}
+
+fn ids(rows: &[Walked]) -> Vec<Uuid> {
+    rows.iter().map(|w| w.id).collect()
+}
+
+/// A hub with `n` neighbours on **distinct, ascending edge weights**, returning the hub and the
+/// neighbour ids **in the order the walk must rank them**.
+///
+/// `graph_score` at hop 1 is `γ·weight` (`graph_expand_decay_and_max_over_paths` above pins that),
+/// so descending weight IS descending score and `ranked`'s `ORDER BY MAX(score) DESC, w.node`
+/// never reaches its uuid tiebreak. Equal weights would leave every page boundary decided by uuid
+/// — sound for disjointness, and fragile for anything said about WHICH row sits on one — so the
+/// expected order is a property of the fixture rather than of uuid minting order.
+async fn star(
+    pool: &sqlx::PgPool,
+    home: ContextId,
+    owner: ProfileId,
+    emitter: EntityId,
+    slug: &str,
+    n: usize,
+) -> (ResourceId, Vec<Uuid>) {
+    let hub = mk_embedded(
+        pool,
+        home,
+        owner,
+        emitter,
+        "hub",
+        &format!("temper://{slug}/hub"),
+        unit(0),
+    )
+    .await;
+    let mut ranked = Vec::with_capacity(n);
+    let mut weight = 0.01_f64;
+    for i in 0..n {
+        let leaf = mk_embedded(
+            pool,
+            home,
+            owner,
+            emitter,
+            &format!("n{i}"),
+            &format!("temper://{slug}/n{i}"),
+            unit(i + 1),
+        )
+        .await;
+        edge(pool, hub, leaf, home, emitter, EdgeKind::LeadsTo, weight).await;
+        weight += 0.01;
+        ranked.push(leaf.uuid());
+    }
+    // Built ascending by weight; the walk ranks descending by score, and score is monotone in
+    // weight at a single hop.
+    ranked.reverse();
+    (hub, ranked)
+}
+
+/// **A neighbourhood larger than the published ceiling can be enumerated — but only by paging.**
+///
+/// The ceiling is 50 (`registry.rs:388` — `bound_ceilings: BTreeMap::from([(BoundTerm::Limit,
+/// 50)])` on `FollowFrom`), and it is not expressed in SQL: these functions take whatever limit
+/// they are handed. So the ceiling is imposed HERE, by asking for exactly 50, which is what the
+/// compiler asks for on a caller's behalf when no limit is declared (`applied_terms` defaults an
+/// omitted `Limit` to the act's ceiling).
+///
+/// Sixty neighbours, so the ceiling genuinely bites: ten of them are unreachable by any single
+/// request at that ceiling, whatever else the caller varies.
+///
+/// **Before `p_offset` existed this test could not be written at all** — the ten-argument call
+/// resolves to nothing. Written against a `p_offset` that was accepted and ignored, it fires twice
+/// over: the second page would return fifty rows rather than ten, and the union of the two pages
+/// would hold fifty neighbours rather than sixty.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_neighbourhood_past_the_ceiling_is_reachable_only_by_paging(pool: sqlx::PgPool) {
+    use std::collections::BTreeSet;
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "pg").await;
+    let (hub, ranked) = star(&pool, home, owner, emitter, "pg", 60).await;
+
+    // The denominator, and it is half the test: sixty neighbours genuinely exist and are genuinely
+    // reachable, so a short page below is the ceiling biting rather than the corpus being small.
+    let whole = ids(&follow_from_paged(&pool, owner.uuid(), &[hub.uuid()], None, None).await);
+    assert_eq!(
+        whole, ranked,
+        "unbounded, the walk reaches every neighbour of the hub, in descending-weight order — so \
+         the tail asserted below is the fixture's tail rather than one read off this answer"
+    );
+    assert_eq!(whole.len(), 60, "sixty of them");
+
+    let first = ids(&follow_from_paged(&pool, owner.uuid(), &[hub.uuid()], Some(50), None).await);
+    assert_eq!(
+        first.len(),
+        50,
+        "one request at the published ceiling sees fifty of the sixty"
+    );
+
+    let second =
+        ids(&follow_from_paged(&pool, owner.uuid(), &[hub.uuid()], Some(50), Some(50)).await);
+    assert_eq!(
+        second.len(),
+        10,
+        "and the page behind it holds the other TEN — an offset that was bound and then ignored \
+         returns fifty here, which is the mutation this length distinguishes"
+    );
+
+    let seen: BTreeSet<Uuid> = first.iter().chain(second.iter()).copied().collect();
+    assert_eq!(
+        seen,
+        whole.iter().copied().collect::<BTreeSet<Uuid>>(),
+        "two pages enumerate the WHOLE neighbourhood — which is the acceptance criterion: a walk \
+         from a node with more than fifty matching neighbours can enumerate all of them"
+    );
+
+    // And the ten the ceiling sheds are exactly the ten the second page carries — the assertion
+    // that separates "paging returned some other rows" from "paging returned the REST".
+    let tail = &ranked[50..];
+    assert!(
+        tail.iter().all(|id| !first.contains(id)),
+        "the ten weakest neighbours are what the ceiling sheds, and no single request can reach \
+         them: {tail:?}"
+    );
+    assert!(
+        tail.iter().all(|id| second.contains(id)),
+        "and they are exactly what the second page returns: {second:?}"
+    );
+}
+
+/// **Two pages over an unchanged graph are disjoint, complete, and lose nothing at the boundary.**
+///
+/// Disjointness and completeness are the pair: either alone is satisfiable by a broken
+/// implementation. Pages that repeat rows are complete and not disjoint; pages that skip a row at
+/// every boundary are disjoint and not complete. Both are asserted, and then the stronger property
+/// that subsumes them — the three pages laid end to end ARE the single pass, row for row.
+///
+/// The order is the fixture's, not uuid minting order: [`star`] gives every edge a distinct weight,
+/// so `ranked`'s tiebreak is never consulted and `whole` below is predictable rather than merely
+/// observed.
+///
+/// Before `p_offset` existed the ten-argument call resolves to nothing, so this test cannot pass.
+/// Against an accepted-then-ignored offset every page would be page one: the pairwise
+/// intersections would be full rather than empty, and the union would hold five neighbours of
+/// twelve.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn two_pages_of_one_walk_are_disjoint_and_their_union_is_the_single_pass_answer(
+    pool: sqlx::PgPool,
+) {
+    use std::collections::BTreeSet;
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "dj").await;
+    let (hub, ranked) = star(&pool, home, owner, emitter, "dj", 12).await;
+
+    // The single pass, at a limit large enough to hold the whole answer — what the union of the
+    // pages must equal.
+    let whole = ids(&follow_from_paged(&pool, owner.uuid(), &[hub.uuid()], Some(12), None).await);
+    assert_eq!(
+        whole, ranked,
+        "the single pass returns the star in descending-weight order; the pages below are compared \
+         against THIS rather than against an order the test invented"
+    );
+
+    // Three pages of five, by explicit offset. `0` is spelled rather than left NULL, so the first
+    // page is the same KIND of request as the two behind it.
+    let p0 = ids(&follow_from_paged(&pool, owner.uuid(), &[hub.uuid()], Some(5), Some(0)).await);
+    let p1 = ids(&follow_from_paged(&pool, owner.uuid(), &[hub.uuid()], Some(5), Some(5)).await);
+    let p2 = ids(&follow_from_paged(&pool, owner.uuid(), &[hub.uuid()], Some(5), Some(10)).await);
+    assert_eq!(
+        (p0.len(), p1.len(), p2.len()),
+        (5, 5, 2),
+        "three pages of five over twelve rows: 5 + 5 + 2, and the short last page is where an \
+         ignored offset would instead return a third full one"
+    );
+
+    for (left, right, which) in [(&p0, &p1, "1|2"), (&p1, &p2, "2|3"), (&p0, &p2, "1|3")] {
+        let overlap: Vec<Uuid> = left
+            .iter()
+            .copied()
+            .filter(|id| right.contains(id))
+            .collect();
+        assert!(
+            overlap.is_empty(),
+            "pages {which} must be DISJOINT over an unchanged graph; they share {overlap:?}"
+        );
+    }
+
+    let union: BTreeSet<Uuid> = p0.iter().chain(&p1).chain(&p2).copied().collect();
+    assert_eq!(
+        union,
+        whole.iter().copied().collect::<BTreeSet<Uuid>>(),
+        "and COMPLETE: their union is the single-pass answer, so nothing was skipped"
+    );
+
+    // The strongest form, and the one that catches a row lost at a page boundary — which disjoint
+    // pages whose union happened to be short would also exhibit, but which set equality alone
+    // cannot localize.
+    let concatenated: Vec<Uuid> = p0.iter().chain(&p1).chain(&p2).copied().collect();
+    assert_eq!(
+        concatenated, whole,
+        "three pages laid end to end are the single pass, row for row and in order — no row is \
+         lost, repeated or reordered at a boundary"
+    );
+}

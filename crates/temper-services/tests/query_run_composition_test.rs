@@ -10,8 +10,9 @@
 
 use sqlx::PgPool;
 use temper_core::types::query::{
-    validate, ActInvocation, ActName, Composition, Intention, OutcomeDeclaration, ResourceFilter,
-    ReturnSpec, StageDisposition, StageName, StageNode, StageOutput, ValidatedComposition,
+    validate, ActInvocation, ActName, BoundTerm, Composition, Extent, IdKind, IdSet, Intention,
+    OutcomeDeclaration, ResourceFilter, ReturnSpec, StageDisposition, StageInput, StageName,
+    StageNode, StageOutput, StageRelation, ValidatedComposition,
 };
 use temper_core::types::resource_view::ResourceSection;
 use temper_services::backend::query_read::run_composition;
@@ -610,6 +611,159 @@ fn a_narrowing_this_door_cannot_apply_is_refused_rather_than_dropped() {
         errs.iter()
             .any(|e| e.reason == temper_core::types::query::RefusalReason::FilterNotApplicable),
         "got: {errs:?}"
+    );
+}
+
+/// One `leads_to` edge, weight 1.0 — everything the walk below needs beyond the resources
+/// themselves. The imports sit inside the body the way `query_plan_execute.rs`'s `edge` keeps them,
+/// so the write-path types do not enter this file's header for one fixture.
+async fn edge(pool: &PgPool, src: Uuid, tgt: Uuid, home: ContextId, emitter: EntityId) {
+    use temper_substrate::affinity::EdgeKind;
+    use temper_substrate::events::{fire, EdgeHome, SeedAction};
+    use temper_substrate::ids::ResourceId;
+    use temper_substrate::payloads::EdgePolarity;
+    let mut tx = pool.begin().await.unwrap();
+    fire(
+        &mut tx,
+        SeedAction::RelationshipAssert {
+            src: ResourceId::from(src),
+            tgt: ResourceId::from(tgt),
+            kind: EdgeKind::LeadsTo,
+            polarity: EdgePolarity::Forward,
+            label: Some("rel"),
+            weight: 1.0,
+            home: EdgeHome::Context(home),
+            emitter,
+        },
+    )
+    .await
+    .unwrap()
+    .relationship()
+    .unwrap();
+    tx.commit().await.unwrap();
+}
+
+/// A one-stage `follow-from` over caller-supplied seeds, carrying declared bound terms.
+///
+/// The stage is named `hits` so [`hits`] reads it, like every other plan in this file.
+fn walk_paged(seeds: Vec<Uuid>, terms: Vec<(BoundTerm, i64)>) -> ValidatedComposition {
+    let name = StageName::parse("hits").unwrap();
+    let c = Composition {
+        outcome: OutcomeDeclaration {
+            returns: vec![ReturnSpec {
+                stage: name.clone(),
+                with: vec![],
+            }],
+        },
+        stages: vec![StageNode::Act(ActInvocation {
+            name,
+            // A walk asks the corpus nothing, so it carries no intention.
+            act: ActName::FollowFrom,
+            intention: None,
+            inputs: vec![StageInput::Caller {
+                relation: StageRelation::Seed,
+                ids: IdSet {
+                    kind: IdKind::Resource,
+                    provenance: None,
+                    ids: seeds,
+                },
+            }],
+            terms: terms.into_iter().collect(),
+            resource_filter: None,
+            edge_filter: None,
+            properties: vec![],
+        })],
+    };
+    validate(&c).expect("a seeded walk with declared terms is well-formed")
+}
+
+/// **A caller told its walk may have been cut has a move that settles it, and taking that move
+/// yields the rest.**
+///
+/// `Extent::Partial` is a promise the caller can act on, and until `20260817000020` the walk could
+/// not keep it: `follow-from` accepted `Limit` alone, so a stage reporting `partial` offered a
+/// reader no way to see what was behind the page. The two halves are asserted together because
+/// either alone is satisfiable while the other is broken — a walk that always reports `partial` has
+/// no settling move, and a walk that pages correctly while reporting `complete` on a full page
+/// never tells the caller to page.
+///
+/// The `assemble` unit tests witness `Partial` over a hand-built `QueryRows`, which is where the
+/// derivation belongs. What they structurally cannot reach is that the offset a caller declares in
+/// response to it runs against a real database and returns the rows the first page did not.
+///
+/// **A declared limit of 2 over three neighbours, rather than 51 resources against the ceiling of
+/// 50.** `extent_of` reports `Partial` iff the stage produced at least its APPLIED limit, and 2 is
+/// as applied as 50 — the ceiling would only make this test fifty resources slower without changing
+/// which line it is that fires.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_partial_walk_is_settled_by_the_page_behind_it(pool: PgPool) {
+    use std::collections::BTreeSet;
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "walkpage").await;
+    let hub = mk(&pool, home, owner, emitter, "Hub", "composable fragments").await;
+    let mut leaves = BTreeSet::new();
+    for title in ["One", "Two", "Three"] {
+        let leaf = mk(&pool, home, owner, emitter, title, "composable fragments").await;
+        edge(&pool, hub, leaf, home, emitter).await;
+        leaves.insert(leaf);
+    }
+
+    let stage = StageName::parse("hits").unwrap();
+
+    let page1 = run_composition(
+        &pool,
+        owner,
+        &walk_paged(vec![hub], vec![(BoundTerm::Limit, 2)]),
+    )
+    .await
+    .expect("the walk runs");
+    let first: Vec<Uuid> = hits(&page1).iter().map(|h| h.resource.id.uuid()).collect();
+    assert_eq!(first.len(), 2, "the declared page: {first:?}");
+    assert_eq!(
+        page1.returned[&stage].terms_applied.get(&BoundTerm::Limit),
+        Some(&2),
+        "and it is the page the statement ran, not the one the caller asked for"
+    );
+    assert_eq!(
+        page1.returned[&stage].extent,
+        Extent::Partial,
+        "a page filled to its applied limit may have more behind it — this is what the caller is \
+         told, and what the next request answers"
+    );
+
+    // The move the disclosure licenses: skip what was already seen, ask again.
+    let page2 = run_composition(
+        &pool,
+        owner,
+        &walk_paged(
+            vec![hub],
+            vec![(BoundTerm::Limit, 2), (BoundTerm::Offset, 2)],
+        ),
+    )
+    .await
+    .expect("the second page runs");
+    let second: Vec<Uuid> = hits(&page2).iter().map(|h| h.resource.id.uuid()).collect();
+    assert_eq!(
+        second.len(),
+        1,
+        "the move yields the REST — one neighbour, not another two, which is what an offset that \
+         was accepted and then ignored would return: {second:?}"
+    );
+    assert_eq!(
+        page2.returned[&stage].extent,
+        Extent::Complete,
+        "and an unfilled page is the end of the walk, so the caller knows to stop paging"
+    );
+    assert!(
+        second.iter().all(|id| !first.contains(id)),
+        "the second page repeats nothing from the first: {first:?} then {second:?}"
+    );
+    assert_eq!(
+        first.iter().chain(&second).copied().collect::<BTreeSet<_>>(),
+        leaves,
+        "and the two pages together are every neighbour of the hub — the truncation the first page \
+         disclosed is fully recoverable"
     );
 }
 

@@ -1282,3 +1282,126 @@ async fn walk_ids(
         .map(|h| h.id)
         .collect()
 }
+
+/// The same one-stage walk **carrying declared bound terms** — a sibling of [`walk_plan`] rather
+/// than a widening of it, exactly as [`find_exact_paged`] sits beside [`one_find_exact`] rather
+/// than replacing it. Every existing [`walk_plan`] caller declares no terms, and threading a
+/// `Default::default()` through each of them would add an argument that says nothing at the sites
+/// that pass it.
+fn walk_plan_paged(seeds: Vec<Uuid>, terms: Vec<(BoundTerm, i64)>) -> ValidatedComposition {
+    let c = Composition {
+        outcome: OutcomeDeclaration {
+            returns: vec![ReturnSpec {
+                stage: StageName::parse("near").unwrap(),
+                with: vec![],
+            }],
+        },
+        stages: vec![StageNode::Act(ActInvocation {
+            name: StageName::parse("near").unwrap(),
+            act: ActName::FollowFrom,
+            intention: None,
+            inputs: vec![StageInput::Caller {
+                relation: StageRelation::Seed,
+                ids: IdSet {
+                    kind: IdKind::Resource,
+                    provenance: None,
+                    ids: seeds,
+                },
+            }],
+            terms: terms.into_iter().collect(),
+            resource_filter: None,
+            edge_filter: None,
+            properties: vec![],
+        })],
+    };
+    validate(&c).expect("a seeded walk with declared terms is well-formed")
+}
+
+/// **A declared `offset` on a WALK moves the window** — the composition-level analogue of
+/// [`a_declared_limit_returns_that_many_rows_and_an_offset_returns_a_different_one`], one act over.
+///
+/// `follow-from` declared `accepts_bound_terms: vec![BoundTerm::Limit]` until `20260817000020`,
+/// because the fragment had no slot to bind an offset into — so the walk was the one scoring act in
+/// the family whose second page was unreachable through a composition. Nothing between
+/// `ActInvocation::terms` and `OFFSET p_offset` was executed against a database until here: the
+/// compile-level tests can see that a bind reaches the tenth slot, and cannot see what the tenth
+/// slot then does.
+///
+/// **All three edges carry the same weight**, so `ranked`'s uuid tiebreak decides the order. That
+/// is fine for every assertion here, because each is about the window MOVING inside one order that
+/// is stable across calls — the order is TOTAL (`w.node` is a uuid, unique within the `GROUP BY`),
+/// which is the property the whole widening rests on — and none of them names which uuid sits
+/// where.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_declared_offset_moves_a_walks_window_and_the_pages_cover_the_neighbourhood(
+    pool: sqlx::PgPool,
+) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "walkpage").await;
+    let hub = mk(&pool, home, owner, emitter, "Hub", "alpha").await;
+    for title in ["One", "Two", "Three"] {
+        let leaf = mk(&pool, home, owner, emitter, title, "alpha").await;
+        edge(&pool, hub, leaf, home, emitter).await;
+    }
+
+    async fn page(
+        pool: &sqlx::PgPool,
+        owner: ProfileId,
+        hub: Uuid,
+        terms: Vec<(BoundTerm, i64)>,
+    ) -> Vec<Uuid> {
+        let v = walk_plan_paged(vec![hub], terms);
+        let rows = execute(pool, &compile(&v, owner).expect("compiles"))
+            .await
+            .expect("runs");
+        rows.hits_for("near").into_iter().map(|h| h.id).collect()
+    }
+
+    // The denominator: undeclared, `applied_terms` defaults the limit to the act's ceiling of 50,
+    // so all three neighbours come back and a short page below is the declared term biting rather
+    // than the star being small.
+    let all = page(&pool, owner, hub, vec![]).await;
+    assert_eq!(
+        all.len(),
+        3,
+        "the walk reaches all three neighbours: {all:?}"
+    );
+
+    let one = page(&pool, owner, hub, vec![(BoundTerm::Limit, 1)]).await;
+    assert_eq!(
+        one.len(),
+        1,
+        "the caller asked for one row and got: {one:?}"
+    );
+
+    let two = page(&pool, owner, hub, vec![(BoundTerm::Limit, 2)]).await;
+    assert_eq!(two.len(), 2, "and for two: {two:?}");
+
+    let skipped = page(
+        &pool,
+        owner,
+        hub,
+        vec![(BoundTerm::Limit, 1), (BoundTerm::Offset, 1)],
+    )
+    .await;
+    assert_eq!(skipped.len(), 1, "one row, from further in: {skipped:?}");
+    assert_ne!(
+        one[0], skipped[0],
+        "offset must move the window, not merely be accepted"
+    );
+    assert_eq!(
+        two[1], skipped[0],
+        "and it must move it by exactly one — the second row of a two-row page"
+    );
+
+    // An offset with NO declared limit still pages, against the defaulted ceiling rather than
+    // against nothing: the rest of the neighbourhood, in the order the unpaged answer had it.
+    let rest = page(&pool, owner, hub, vec![(BoundTerm::Offset, 1)]).await;
+    assert_eq!(
+        rest.as_slice(),
+        &all[1..],
+        "an offset beneath the defaulted ceiling returns the TAIL of the unpaged answer, so the \
+         two windows together cover the neighbourhood: {rest:?}"
+    );
+}
