@@ -429,6 +429,25 @@ sql_relations_current() {
 #   No new ungated FUNCTION: one `CREATE OR REPLACE` at a byte-identical signature. The new SQL
 #   file is listed because it redefines the ungated body, which is the same reason
 #   `20260815000010` is listed.
+# Reviewed 2026-08-17, task 01a0112c (the walk gains an offset):
+#   **A NEW UNGATED ARITY, which none of the entries above added** — read this one on its own
+#   terms rather than by analogy. `20260817000020` issues `CREATE FUNCTION` for a ten-parameter
+#   `__temper_ungated_follow_from`, so the closing sentence the two entries above share ("no new
+#   ungated FUNCTION") is FALSE here and is deliberately not repeated. `SQL_BASELINE` deduplicates
+#   by function NAME, so a new arity of an existing name does not move it — this block is the only
+#   place the addition is recorded, which is precisely why it is written out.
+#   1. VERDICT — unchanged, and the new parameter cannot reach it. `p_visible_ids` is still the
+#      sole visibility input and is still applied in `admitted`, upstream of `adj`. `p_offset` is
+#      applied in `ranked`, STRICTLY DOWNSTREAM of both, so it can only ever skip within a set the
+#      gate has already produced. Paging cannot surface a row the caller could not already see;
+#      the worst a wrong offset does is return fewer of the caller's own rows.
+#      The gated 10-arity `query_follow_from` computes `resources_visible_to(p_principal)` once
+#      and passes it down, identically to the arities it joins.
+#   2. EMITTER — untouched in the way that matters. `emit_ungated_core_call`'s `Walk` arm still
+#      writes the visible set as the FIRST argument from the `VISIBLE_IDS` constant, which no act
+#      arm can supply; `offset` was appended as the LAST argument. The emitter remains the single
+#      place the id source is fixed.
+#   3. RESIDUE — unchanged; still source discipline rather than a database permission.
 read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260808000030_composable_find_family.sql
 20260810000010_anchor_readability_both_kinds.sql
@@ -441,6 +460,7 @@ read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260816000010_range_operator.sql
 20260816000020_survey_act.sql
 20260817000010_decompose_walk.sql
+20260817000020_follow_from_offset.sql
 EOF
 
 # ── THE RELATION WATCH — derived from what the cores READ, not what names them ──

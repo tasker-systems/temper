@@ -3239,14 +3239,31 @@ export interface components {
             resource: components["schemas"]["ResourceView"];
         };
         /**
-         * @description Whether the caller received everything that matched.
+         * @description Whether anything remains BEYOND what the caller received.
          *
          *     NOT a total. A total costs a second query — the standing tax of pagination — and across a chain
          *     that tax is paid per stage; for a whole composition it is not even well-defined, because each
-         *     stage's output is the next stage's domain. `Partial` is answerable with a `limit + 1` probe.
+         *     stage's output is the next stage's domain. `Partial` is answerable with one more page.
          *
          *     This is what `every-bound-a-read-applies-is-visible-in-its-answer` actually asks for: the
          *     ability to distinguish "this is everything" from "this is some of it".
+         *
+         *     # It answers about the FAR edge of the page, never the near one
+         *
+         *     `[clarified — 2026-08-17, Pete]` The opening line read *"Whether the caller received everything
+         *     that matched"*, and `Complete` read *"Everything that matched is here"*. Under an `offset` those
+         *     are false, and were already false for the find acts before `follow-from` joined them: a stage
+         *     asking `{limit: 50, offset: 60}` of a 60-row set produces nothing, so `produced < limit` and the
+         *     extent is `Complete` — while sixty rows matched and none came back.
+         *
+         *     That is not a miscomputation, it is the question being narrower than the old sentence claimed.
+         *     The bound this reports against is the LIMIT, so it says *"the page was not cut off at its far
+         *     edge"*. What an `offset` skipped is disclosed by the offset itself, in `terms_applied`, and is
+         *     not folded in here, because folding it in would require the total this type exists to avoid.
+         *
+         *     **So `Complete` means "ask no further", not "you hold the whole set".** The two coincide exactly
+         *     when no offset was applied, which is the common case and the reason the loose reading survived
+         *     this long.
          */
         Extent: {
             /** @enum {string} */
@@ -5875,6 +5892,22 @@ export interface components {
             act: components["schemas"]["ActName"];
             disposition: components["schemas"]["StageDisposition"];
             /**
+             * @description Complete / partial / indeterminate — **for every stage, not only the returned ones.** NOT a
+             *     total; see [`Extent`].
+             *
+             *     **The pair rule**: [`super::envelope::StageResult::extent`] carries the same value, and the
+             *     two must stay identical for the same reason as [`Self::input_ids`], [`Self::input_unusable`]
+             *     and [`Self::refusal`] — the trace covers every stage and the results only the returned ones,
+             *     so disagreeing copies would leave a reader unable to tell which was right.
+             *
+             *     **It is a fact about THIS stage's own bound.** A combinator applies none, so it reports
+             *     `Complete`, meaning *"I dropped nothing"* rather than *"the corpus behind my arms is
+             *     exhausted"*: an arm's `Partial` is not propagated up, because that would make one stage's
+             *     extent a claim about another stage's bound. Every arm is a stage and carries its own entry
+             *     here, which is how a reader sees that an `intersect` was computed against a truncated walk.
+             */
+            extent: components["schemas"]["Extent"];
+            /**
              * Format: int64
              * @description How many ids this stage was handed **in total, across every input**. Zero for a stage with
              *     no input.
@@ -5932,6 +5965,35 @@ export interface components {
             produced_ids: number;
             refusal?: null | components["schemas"]["ActRefusal"];
             stage: components["schemas"]["StageName"];
+            /**
+             * @description The APPLIED value of every admitted term: the page this stage actually RAN with, clamped to
+             *     the act's published ceiling and defaulted where the caller named nothing.
+             *
+             *     **The pair rule** again — identical to [`super::envelope::StageResult::terms_applied`], from
+             *     one [`super::registry::applied_terms`] DEFINITION rather than two. That function's own doc
+             *     argues it from the other end: *"The one definition, and it exists because there are two
+             *     consumers who must not disagree… Computed twice, they would eventually differ, and the
+             *     difference would be a response claiming a page size that did not run."* It already had two
+             *     consumers (the compiler binds these values, the assembler reports them); this adds a second
+             *     READER of the map the assembler already holds, never a second definition of it.
+             *
+             *     **"One definition" is the claim; "one evaluation" is not.** `stage_numbers` is called once
+             *     per carrier, so a returned stage evaluates it twice. What forbids disagreement is that the
+             *     definition is pure — the property to preserve if it is ever edited.
+             *
+             *     Empty for a combinator, which admits no terms — a union runs no page of its own.
+             *
+             *     **No "you were clamped" flag rides beside this, and this field does not add one.** That call
+             *     is not taken here — it belongs to [`super::registry::applied_terms`], which states it:
+             *     ceilings are published per act, so the applied value is the whole story, and clamping to a
+             *     ceiling nobody published would be the bug rather than the silence. `temper-services`'
+             *     `the_page_a_stage_reports_is_the_clamped_one_the_statement_actually_ran` pins the other half
+             *     — *"reporting the request back would make `terms_applied` an echo rather than a
+             *     disclosure"* — so what rides here is what ran, never what was asked for.
+             */
+            terms_applied: {
+                [key: string]: number;
+            };
         };
         /**
          * @description The one authoritative standing state for a principal (spec D2).

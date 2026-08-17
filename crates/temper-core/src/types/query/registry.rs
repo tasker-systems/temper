@@ -358,8 +358,37 @@ pub fn search_family() -> Vec<ActDeclaration> {
             // have named a capability no caller could express.
             accepts_bounds: vec![IdKind::Resource],
             accepts_seeds: vec![IdKind::Resource],
-            accepts_bound_terms: vec![BoundTerm::Limit],
+            // **`Offset` joins `Limit`** `[amended — 2026-08-17]`. This read
+            // `vec![BoundTerm::Limit]`: the only row-returning act in the family admitting a page
+            // SIZE and no page NUMBER, which made its published ceiling of 50 an unpageable horizon
+            // rather than merely a small page. The three find acts publish the same 50 and can walk
+            // past it a page at a time; this act could not, so a node with more than 50 neighbours
+            // of the asked kind could never be walked in full and `{"offset": 50}` was refused
+            // outright as `BoundTermNotApplicable`. The damage is downstream and silent:
+            // walk-then-narrow (`follow-from` -> `intersect` -> rank) computes the intersect against
+            // an arbitrary 50-element subset and returns an answer that is plausible, well-formed
+            // and wrong.
+            //
+            // **A stable total page order already exists, and none was invented for this.** The
+            // fragment's `ranked` CTE orders `MAX(w.score) DESC, w.node` before it truncates
+            // — carried unchanged from `20260814000030:207` through the decomposition
+            // (`20260817000010:85`) into the body that now holds it, `20260817000020:172`, which
+            // this same change adds. The newest is the one named here, because an amendment citing the
+            // body its own sibling migration retires is the staleness this comment is warning
+            // about. So node id is the tiebreak and page 2 is exactly the rows page 1 did not take,
+            // over an unchanged graph — pages are separate statements at separate snapshots, and
+            // the total order buys determinism within one, never a cursor across two. The ordering field
+            // is `graph_score`, which `orders_by` below already describes: paging here is defined
+            // over a quantity this act publishes, not over an incidental scan order.
+            accepts_bound_terms: vec![BoundTerm::Limit, BoundTerm::Offset],
             accepts_filters: vec![FilterField::Edge],
+            // The `Limit` ceiling stays 50 — the ceiling was never the defect; a ceiling with no
+            // page number was. And `Offset` gets NO ceiling, as on every other act that pages:
+            // `applied_terms` reads absence here as *no ceiling*, and it is that same absence which
+            // keeps an omitted offset from acquiring a default — *"`Offset` has no ceiling on any
+            // act, so there is nothing for it to default to — and page 1 is the right answer to a
+            // caller who named no page"* (`applied_terms`' doc). A ceiling on the page NUMBER would
+            // reinstate the very horizon this amendment removes.
             bound_ceilings: BTreeMap::from([(BoundTerm::Limit, 50)]),
             produces: Some(IdKind::Resource),
             // No location: it returns nodes reached by walking, not chunks matched by a query, so
@@ -407,6 +436,16 @@ pub fn search_family() -> Vec<ActDeclaration> {
             // all. Flipping this to `Serves` because the mechanic exists would make the declaration
             // describe the code rather than the DEPLOYED system, which is the whole reason the
             // three were set to `Absent` in the first place.
+            //
+            // **`Offset` enters no `terms_unreachable` list** `[2026-08-17]`. The two serving doors
+            // take a raw JSON plan (`temper query` -> `resolve_plan`, and `/api/query` takes the
+            // `Composition` itself), so every wire field is reachable at them by construction — the
+            // sentence two paragraphs up, now load-bearing for a second term rather than only for
+            // `Limit`. A newly admitted term reaches those doors the moment it is admitted; there is
+            // no flag or param to add first, which is what distinguishes these doors from the find
+            // acts' `temper search`, where `--offset` had to ship before the axis could close. MCP
+            // carries no list at all because `Absent` has none: a door that cannot invoke the act
+            // falls short on nothing in particular.
             door_coverage: BTreeMap::from([
                 (
                     Door::Cli,
@@ -1567,6 +1606,52 @@ mod tests {
         let applied = applied_terms(&BTreeMap::new(), &d);
         assert_eq!(applied.get(&BoundTerm::Offset), None);
         assert_eq!(applied.len(), 1, "only the limit default was added");
+    }
+
+    /// The walk pages, and its ceiling is a page size rather than a horizon.
+    ///
+    /// `[amended — 2026-08-17]` `follow-from` admitted `Limit` alone — the only row-returning act
+    /// in the family with a page size and no page number — so the 50 it published was a hard stop:
+    /// a node with more than 50 neighbours of the asked kind could never be walked in full, and
+    /// `{"offset": 50}` was refused as `BoundTermNotApplicable`. The find acts share that ceiling
+    /// and could always walk past it. All three properties are asserted together because either
+    /// alternative — raising the ceiling, or dropping it — answers the symptom while leaving the
+    /// act unpageable, so a test pinning only one of the three would pass against both.
+    #[test]
+    fn the_walk_pages_like_the_find_acts_and_keeps_their_ceiling() {
+        let d = declaration(&ActName::FollowFrom).unwrap();
+        assert!(
+            d.accepts_bound_terms.contains(&BoundTerm::Offset),
+            "the one edge-traversing act must be able to name a page"
+        );
+        assert!(
+            !d.bound_ceilings.contains_key(&BoundTerm::Offset),
+            "a ceiling on the page NUMBER would reinstate the horizon this removes"
+        );
+        assert_eq!(
+            d.bound_ceilings.get(&BoundTerm::Limit),
+            Some(&50),
+            "the page SIZE ceiling is unchanged — it was never the defect"
+        );
+        // The term axis is the find acts' exactly, not a near-miss. An act that pages by its own
+        // slightly different rules is what `the-same-bound-term-means-the-same-thing-on-every-read`
+        // forbids, and an `accepts` list is where that divergence would first be legible.
+        assert_eq!(
+            d.accepts_bound_terms,
+            declaration(&ActName::FindExact)
+                .unwrap()
+                .accepts_bound_terms
+        );
+        // And the consequence at the one definition the compiler and the assembler both read: a
+        // requested page passes through unclamped, an omitted one stays absent, and the limit
+        // default is untouched by either.
+        let paged = applied_terms(&BTreeMap::from([(BoundTerm::Offset, 200)]), &d);
+        assert_eq!(paged.get(&BoundTerm::Offset), Some(&200));
+        assert_eq!(paged.get(&BoundTerm::Limit), Some(&50));
+        assert_eq!(
+            applied_terms(&BTreeMap::new(), &d).get(&BoundTerm::Offset),
+            None
+        );
     }
 
     /// An act that does not admit `Limit` gains nothing.

@@ -345,13 +345,20 @@ fn assemble(v: &ValidatedComposition, rows: &QueryRows, hydrated: &Hydrated) -> 
     }
 }
 
-/// The numbers every stage discloses, whether or not its rows come back.
+/// What every stage discloses, whether or not its rows come back.
 ///
 /// One computation for both the result and the trace, because the contract requires them to be
 /// identical — the trace covers every stage and the results cover only the returned ones, so these
-/// are the ONLY numbers a reader gets for an intermediate stage. Two computations would eventually
+/// are the ONLY facts a reader gets for an intermediate stage. Two computations would eventually
 /// disagree, and a caller reading a returned stage's `input_ids` in one place and the trace's in
 /// another would have no way to tell which was right.
+///
+/// **This is where the asymmetry between the two carriers is resolved, and that is why new pair-rule
+/// members land here rather than in either caller.** [`stage_trace`] runs for every stage and
+/// [`stage_result`] only for the returned ones, so a fact computed in the latter cannot reach the
+/// former, and a fact computed in BOTH is two spellings free to disagree. `terms_applied` and
+/// `extent` joined for exactly that reason `[2026-08-17]` — they were computed in [`stage_result`],
+/// so an intermediate walk disclosed neither the page it ran nor whether that page was truncated.
 struct StageNumbers {
     disposition: StageDisposition,
     /// Present iff the stage refused — the ONE construction both the result and the trace carry
@@ -367,6 +374,26 @@ struct StageNumbers {
     /// describing *the* input; a stage carrying a seed AND a bound has two, and a single relation
     /// filled from whichever came first is half the truth with no marker saying so.
     inputs: Vec<StageInputTrace>,
+    /// The page this stage RAN with — the caller's terms clamped to the act's published ceilings by
+    /// [`applied_terms`], which is called HERE and nowhere else on this path.
+    ///
+    /// `[moved here — 2026-08-17]` It was computed inside [`stage_result`], which runs only for the
+    /// stages a caller asked to have returned — so an intermediate stage disclosed no page size at
+    /// all, and adding a second [`applied_terms`] call inside [`stage_trace`] to fix that would have
+    /// been the drift `applied_terms`' own doc refuses: *"Computed twice, they would eventually
+    /// differ, and the difference would be a response claiming a page size that did not run."* This
+    /// struct is where the asymmetry is already resolved — both carriers reach it through the one
+    /// function, exactly as they do for the input numbers and the refusal.
+    terms_applied: std::collections::BTreeMap<BoundTerm, i64>,
+    /// Complete / partial / indeterminate, from the one [`extent_of`] DEFINITION, for the same reason as
+    /// [`Self::terms_applied`] beside it: a walk-then-narrow composition truncates at an
+    /// INTERMEDIATE stage, and a `Partial` a reader cannot see is a truncation that reaches the
+    /// final answer with nothing marking it.
+    ///
+    /// Reads [`Self::terms_applied`] — a stage is partial iff it filled the page it actually ran,
+    /// so deriving the two from separate term maps would let a stage claim `complete` against a
+    /// limit the statement never bound.
+    extent: Extent,
 }
 
 fn stage_numbers(node: &StageNode, rows: &QueryRows) -> StageNumbers {
@@ -420,6 +447,28 @@ fn stage_numbers(node: &StageNode, rows: &QueryRows) -> StageNumbers {
         detail: r.detail.clone(),
     });
 
+    // The one DEFINITION of this stage's page and extent — not one evaluation, and the difference
+    // is worth stating because the surrounding docs are easy to misread as the stronger claim.
+    // [`stage_result`] and [`stage_trace`] each call [`stage_numbers`], so for a RETURNED stage
+    // both lines below run twice. What makes the two copies unable to disagree is that this
+    // function is PURE in `(node, rows)`, not that it is called once.
+    //
+    // That is the same guarantee `applied_terms`' own doc claims — *"The one definition, and it
+    // exists because there are two consumers who must not disagree"* — and the same one the
+    // pre-existing pair-rule fields (`input_ids`, `input_unusable`, `refusal`) have always had.
+    // The property to preserve is therefore purity: if anything here ever consults a clock, an
+    // RNG or mutable state, the pair rule breaks while every doc still asserts it holds.
+    //
+    // The `match` is for the same reason as the refusal above: a combinator admits no terms, so
+    // its map is empty rather than defaulted.
+    let terms_applied = match node {
+        StageNode::Act(inv) => declaration(&inv.act)
+            .map(|d| applied_terms(&inv.terms, &d))
+            .unwrap_or_default(),
+        StageNode::Combine(_) => Default::default(),
+    };
+    let extent = extent_of(node, rows, &terms_applied);
+
     StageNumbers {
         // **A refusal outranks the row count, and that ordering is the whole point.** A refused
         // stage's CTE is `WHERE false`, so its tally is `produced = 0` — byte-identical to an honest
@@ -439,6 +488,8 @@ fn stage_numbers(node: &StageNode, rows: &QueryRows) -> StageNumbers {
         // rather than being spent on one boolean and dropped.
         produced_ids: produced,
         inputs,
+        terms_applied,
+        extent,
     }
 }
 
@@ -455,16 +506,12 @@ fn stage_result(
 ) -> StageResult {
     let name = spec.stage.as_str();
     let wants_open_meta = spec.with.contains(&ResourceSection::OpenMeta);
+    // `terms_applied` and `extent` are READ off this struct, never recomputed here — see its own
+    // doc. Both are duplicated onto the trace under the pair rule, and a second `applied_terms` or
+    // `extent_of` call site that agreed today is exactly the drift this file keeps removing.
     let n = stage_numbers(node, rows);
     let act = act_of(node);
     let decl = declaration(&act);
-    let terms = match node {
-        StageNode::Act(inv) => decl
-            .as_ref()
-            .map(|d| applied_terms(&inv.terms, d))
-            .unwrap_or_default(),
-        StageNode::Combine(_) => Default::default(),
-    };
 
     let hits: Vec<ResourceHit> = rows
         .hits_for(name)
@@ -529,11 +576,11 @@ fn stage_result(
         refusal: n.refusal,
         orders_by: decl.as_ref().and_then(|d| d.orders_by.clone()),
         produced,
-        extent: extent_of(node, rows, &terms),
+        extent: n.extent,
         // Carried only by acts that can produce one WITHOUT a second query, and none can: the
         // fragments return a page, not a count. Absent rather than guessed from the page size.
         total: None,
-        terms_applied: terms,
+        terms_applied: n.terms_applied,
         narrowed_by: narrowed_by(node, rows),
         input_ids: n.input_ids,
         input_unusable: n.input_unusable,
@@ -570,6 +617,11 @@ fn stage_trace(node: &StageNode, rows: &QueryRows) -> Option<StageTrace> {
         input_ids: n.input_ids,
         input_unusable: n.input_unusable,
         produced_ids: n.produced_ids,
+        // The pair rule's newest two members, from the same [`stage_numbers`] the refusal and the
+        // input counts come from. An intermediate stage ships no rows, so this is the ONLY account
+        // of the page it ran and of whether that page was full.
+        extent: n.extent,
+        terms_applied: n.terms_applied,
         narrowed_by: narrowed_by(node, rows),
     })
 }
@@ -583,6 +635,20 @@ fn stage_trace(node: &StageNode, rows: &QueryRows) -> Option<StageTrace> {
 ///
 /// `survey` is `Indeterminate`: its funnel width does not select from a set, it PRODUCES one, so
 /// there is no "rest" to have more of.
+///
+/// # It runs for EVERY stage now, and it answers about THAT STAGE's own bound
+///
+/// `[widened — 2026-08-17]` It was called once, from [`stage_result`], so only a returned stage had
+/// an extent. It is called once from [`stage_numbers`] instead, which every stage passes through.
+///
+/// **A combinator therefore reports `Complete`, and that means "I dropped nothing", not "the corpus
+/// behind my arms is exhausted".** A combinator applies no bound of its own — its `terms_applied` is
+/// empty by construction — so there is no limit here for its output to have filled. Propagating an
+/// arm's `Partial` up through the combinator was considered and NOT built: it would make one stage's
+/// extent a claim about a different stage's bound, where every other field on this trace is a fact
+/// about the stage carrying it. The recourse is exact rather than absent — each arm is a stage, so
+/// each arm now carries its own extent in the same trace, which is the disclosure a reader needs to
+/// see that an `intersect` was computed against a truncated walk.
 fn extent_of(
     node: &StageNode,
     rows: &QueryRows,
@@ -603,22 +669,30 @@ fn extent_of(
     // **Unreachable through `validate`, and kept anyway** — the same status
     // `query_plan.rs`'s `_` arm carries, said here too because a fact documented in one file and
     // silent in another teaches the next reader that only one of them is unreachable.
-    // `[since 2026-08-12]` `survey` left `CALLABLE_FRAGMENTS`, so `validate` refuses it as
-    // `NotSeparablyReachable` and no `ValidatedComposition` can carry a `survey` stage to this
-    // function. It stays because the arm is a fact about the ACT — a funnel produces its candidate
-    // set rather than selecting from one — that a lens slot restores rather than invents, and
-    // because the fallback below would otherwise answer `complete` over a corpus survey never
-    // counted.
+    // `[CORRECTED — 2026-08-17]` **This arm is REACHABLE, and the paragraph that stood here said
+    // the opposite.** It read: *"`[since 2026-08-12]` `survey` left `CALLABLE_FRAGMENTS`, so
+    // `validate` refuses it as `NotSeparablyReachable` and no `ValidatedComposition` can carry a
+    // `survey` stage to this function."* That stopped being true on 2026-08-16: `("query_survey",
+    // "__temper_ungated_survey")` is an entry in `CALLABLE_FRAGMENTS`
+    // (`temper_core::types::query::validate`), `Survey` declares `build_state: Served` with
+    // `served_by: Some("query_survey")`, and `query_plan.rs` carries a live `Some(EMIT_SURVEY)`
+    // emit arm.
     //
-    // **NOTHING TESTS THIS ARM, and that is a second fact rather than the same one restated.**
-    // `[declared — 2026-08-12, re-review]` The paragraph above justified itself by saying that a
-    // fact documented in one file and silent in another teaches the next reader that only one of
-    // them is unreachable — and then reproduced exactly that asymmetry one fact over, stating the
-    // unreachability and not the coverage. `a_refused_stage_reports_an_indeterminate_extent_rather_
-    // than_complete` is the only test in this file that reaches `Extent::Indeterminate`, and it
-    // drives a `find-about-anywhere` stage carrying an `EmbeddingUnavailable` refusal — so it
-    // exercises the REFUSAL arm above, never this one. `ActName::Survey` appears in this file
-    // exactly once, here. Same status as `query_plan.rs`'s `_` arm, now said the same way.
+    // The correction is recorded rather than quietly applied because the stale claim was
+    // load-bearing twice over. It justified the arm's own existence, and it justified the
+    // *absence of a test* for it — and this change widened `extent_of` to run for EVERY stage
+    // (see below), which enlarges the set of compositions that reach here. A dead arm nobody
+    // tests and a live arm nobody tests are different facts, and only the second is a gap.
+    //
+    // The arm itself is unchanged and still correct on the merits: a funnel PRODUCES its candidate
+    // set rather than selecting from one, so there is no remainder to report and the fallback below
+    // would otherwise answer `complete` over a corpus survey never counted.
+    //
+    // **STILL NOTHING TESTS THIS ARM**, and that is now a real coverage gap rather than a note
+    // about dead code. `a_refused_stage_reports_an_indeterminate_extent_rather_than_complete` is
+    // the only test in this file reaching `Extent::Indeterminate`, and it drives a
+    // `find-about-anywhere` stage carrying an `EmbeddingUnavailable` refusal — the REFUSAL arm
+    // above, never this one.
     if act_of(node) == ActName::Survey {
         return Extent::Indeterminate {
             reason:
@@ -1157,6 +1231,120 @@ mod tests {
         assert_ne!(
             *applied, asked,
             "reporting the request back would make `terms_applied` an echo rather than a disclosure"
+        );
+    }
+
+    /// **The page an INTERMEDIATE stage ran with, and whether it filled it.**
+    ///
+    /// `[added — 2026-08-17, with the fields it witnesses]` [`StageResult`] was the only carrier of
+    /// `terms_applied` and `extent`, and it exists only for the stages `returns` names. So in a
+    /// walk-then-narrow composition the truncation happens at the WALK — clamped to `follow-from`'s
+    /// published ceiling of 50 — and nothing in the response disclosed either the page it ran or
+    /// that the page was full. The narrowing beside it is then computed against a silently cut-off
+    /// set, and the final answer is plausible, well-formed and wrong.
+    ///
+    /// **The walk is deliberately NOT returned.** Returned, it would carry both facts on its
+    /// `StageResult` and this test would pass against the very defect it exists for.
+    #[test]
+    fn an_intermediate_stages_trace_reports_the_page_it_ran_and_that_the_page_was_truncated() {
+        let mut walk = act_node(
+            "near",
+            ActName::FollowFrom,
+            Some(StageInput::Upstream {
+                relation: StageRelation::Seed,
+                stage: name("seeds"),
+            }),
+        );
+        if let StageNode::Act(a) = &mut walk {
+            // A walk asks the corpus nothing — `ActInvocation::intention` names `follow-from` among
+            // the acts that carry none.
+            a.intention = None;
+            a.terms = std::collections::BTreeMap::from([(BoundTerm::Limit, 999)]);
+        }
+        let v = plan(
+            vec![act_node("seeds", ActName::FindExact, None), walk],
+            vec!["seeds"],
+        );
+        let rows = QueryRows {
+            hits: vec![],
+            // The walk filled its clamped page exactly, which is the truncation being disclosed.
+            tallies: vec![tally("seeds", 2, 0), tally("near", 50, 0)],
+            refusals: vec![],
+        };
+
+        let r = assemble(&v, &rows, &Hydrated::default());
+        assert!(
+            !r.returned.contains_key(&name("near")),
+            "the walk must be an intermediate, or this test cannot witness the defect"
+        );
+        let traced = r
+            .trace
+            .stages
+            .iter()
+            .find(|s| s.stage == name("near"))
+            .expect("every stage is traced, returned or not");
+
+        assert_eq!(
+            traced.terms_applied.get(&BoundTerm::Limit),
+            Some(&50),
+            "follow-from publishes a ceiling of 50, so the 999 the caller asked for is not the page \
+             the statement ran"
+        );
+        assert_eq!(
+            traced.extent,
+            Extent::Partial,
+            "a page filled to its applied limit may have more behind it — and a downstream stage \
+             narrowing against it is narrowing a truncated set"
+        );
+    }
+
+    /// **The pair rule for the two newest members**, on a stage that has both carriers.
+    ///
+    /// One [`applied_terms`] call and one [`extent_of`] call reach the result and the trace through
+    /// [`stage_numbers`]. Two call sites would agree today and drift later, and a reader holding a
+    /// result claiming one page and a trace claiming another has no way to tell which ran.
+    ///
+    /// The clamped-value assertions at the end are what stop this passing on two empty maps and two
+    /// `Complete`s, which is how an equality test of this shape goes vacuous.
+    #[test]
+    fn a_returned_stages_trace_and_result_report_the_same_page_and_the_same_extent() {
+        let mut node = act_node("hits", ActName::FindExact, None);
+        if let StageNode::Act(a) = &mut node {
+            a.terms = std::collections::BTreeMap::from([(BoundTerm::Limit, 999)]);
+        }
+        let v = plan(vec![node], vec!["hits"]);
+        let rows = QueryRows {
+            hits: vec![],
+            tallies: vec![tally("hits", 50, 0)],
+            refusals: vec![],
+        };
+
+        let r = assemble(&v, &rows, &Hydrated::default());
+        let result = &r.returned[&name("hits")];
+        let traced = r
+            .trace
+            .stages
+            .iter()
+            .find(|s| s.stage == name("hits"))
+            .expect("the returned stage is traced too");
+
+        assert_eq!(
+            traced.terms_applied, result.terms_applied,
+            "the trace and the result must not disagree about the page that ran"
+        );
+        assert_eq!(
+            traced.extent, result.extent,
+            "nor about whether that page was truncated"
+        );
+        assert_eq!(
+            traced.terms_applied.get(&BoundTerm::Limit),
+            Some(&50),
+            "and the shared value is the CLAMPED one — find-exact publishes 50"
+        );
+        assert_eq!(
+            traced.extent,
+            Extent::Partial,
+            "with a full page, so the equality above is not two `Complete`s agreeing by default"
         );
     }
 

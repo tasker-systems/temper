@@ -20,6 +20,9 @@ module Temper::Generated
 
     attr_accessor :disposition
 
+    # Complete / partial / indeterminate — **for every stage, not only the returned ones.** NOT a total; see [`Extent`].  **The pair rule**: [`super::envelope::StageResult::extent`] carries the same value, and the two must stay identical for the same reason as [`Self::input_ids`], [`Self::input_unusable`] and [`Self::refusal`] — the trace covers every stage and the results only the returned ones, so disagreeing copies would leave a reader unable to tell which was right.  **It is a fact about THIS stage's own bound.** A combinator applies none, so it reports `Complete`, meaning *\"I dropped nothing\"* rather than *\"the corpus behind my arms is exhausted\"*: an arm's `Partial` is not propagated up, because that would make one stage's extent a claim about another stage's bound. Every arm is a stage and carries its own entry here, which is how a reader sees that an `intersect` was computed against a truncated walk.
+    attr_accessor :extent
+
     # How many ids this stage was handed **in total, across every input**. Zero for a stage with no input.  A sum rather than a per-input figure, because [`Self::input_unusable`] beside it is one conflated number by design and a total is the only thing the two can be compared against. The per-input split is in [`Self::inputs`].
     attr_accessor :input_ids
 
@@ -39,6 +42,9 @@ module Temper::Generated
 
     # A stage's name, and — because [`StageName::parse`] is the only constructor — a proof that the name is a safe SQL identifier.  The compiler (beat C, Task 9) emits stage names as CTE identifiers. Parse-don't-validate is the whole design: a name that cannot be constructed cannot reach SQL, so there is deliberately no `new_unchecked`. The accepted shape is `[a-z][a-z0-9_]{0,62}` — a leading lowercase letter, then up to 62 more lowercase-alphanumeric-or-underscore characters (63 total).
     attr_accessor :stage
+
+    # The APPLIED value of every admitted term: the page this stage actually RAN with, clamped to the act's published ceiling and defaulted where the caller named nothing.  **The pair rule** again — identical to [`super::envelope::StageResult::terms_applied`], from one [`super::registry::applied_terms`] DEFINITION rather than two. That function's own doc argues it from the other end: *\"The one definition, and it exists because there are two consumers who must not disagree… Computed twice, they would eventually differ, and the difference would be a response claiming a page size that did not run.\"* It already had two consumers (the compiler binds these values, the assembler reports them); this adds a second READER of the map the assembler already holds, never a second definition of it.  **\"One definition\" is the claim; \"one evaluation\" is not.** `stage_numbers` is called once per carrier, so a returned stage evaluates it twice. What forbids disagreement is that the definition is pure — the property to preserve if it is ever edited.  Empty for a combinator, which admits no terms — a union runs no page of its own.  **No \"you were clamped\" flag rides beside this, and this field does not add one.** That call is not taken here — it belongs to [`super::registry::applied_terms`], which states it: ceilings are published per act, so the applied value is the whole story, and clamping to a ceiling nobody published would be the bug rather than the silence. `temper-services`' `the_page_a_stage_reports_is_the_clamped_one_the_statement_actually_ran` pins the other half — *\"reporting the request back would make `terms_applied` an echo rather than a disclosure\"* — so what rides here is what ran, never what was asked for.
+    attr_accessor :terms_applied
 
     class EnumAttributeValidator
       attr_reader :datatype
@@ -67,13 +73,15 @@ module Temper::Generated
       {
         :'act' => :'act',
         :'disposition' => :'disposition',
+        :'extent' => :'extent',
         :'input_ids' => :'input_ids',
         :'input_unusable' => :'input_unusable',
         :'inputs' => :'inputs',
         :'narrowed_by' => :'narrowed_by',
         :'produced_ids' => :'produced_ids',
         :'refusal' => :'refusal',
-        :'stage' => :'stage'
+        :'stage' => :'stage',
+        :'terms_applied' => :'terms_applied'
       }
     end
 
@@ -92,13 +100,15 @@ module Temper::Generated
       {
         :'act' => :'ActName',
         :'disposition' => :'StageDisposition',
+        :'extent' => :'Extent',
         :'input_ids' => :'Integer',
         :'input_unusable' => :'Integer',
         :'inputs' => :'Array<StageInputTrace>',
         :'narrowed_by' => :'Array<NarrowedBy>',
         :'produced_ids' => :'Integer',
         :'refusal' => :'ActRefusal',
-        :'stage' => :'String'
+        :'stage' => :'String',
+        :'terms_applied' => :'Hash<String, Integer>'
       }
     end
 
@@ -135,6 +145,12 @@ module Temper::Generated
         self.disposition = attributes[:'disposition']
       else
         self.disposition = nil
+      end
+
+      if attributes.key?(:'extent')
+        self.extent = attributes[:'extent']
+      else
+        self.extent = nil
       end
 
       if attributes.key?(:'input_ids')
@@ -178,6 +194,14 @@ module Temper::Generated
       else
         self.stage = nil
       end
+
+      if attributes.key?(:'terms_applied')
+        if (value = attributes[:'terms_applied']).is_a?(Hash)
+          self.terms_applied = value
+        end
+      else
+        self.terms_applied = nil
+      end
     end
 
     # Show invalid properties with the reasons. Usually used together with valid?
@@ -191,6 +215,10 @@ module Temper::Generated
 
       if @disposition.nil?
         invalid_properties.push('invalid value for "disposition", disposition cannot be nil.')
+      end
+
+      if @extent.nil?
+        invalid_properties.push('invalid value for "extent", extent cannot be nil.')
       end
 
       if @input_ids.nil?
@@ -218,6 +246,10 @@ module Temper::Generated
         invalid_properties.push("invalid value for \"stage\", must conform to the pattern #{pattern}.")
       end
 
+      if @terms_applied.nil?
+        invalid_properties.push('invalid value for "terms_applied", terms_applied cannot be nil.')
+      end
+
       invalid_properties
     end
 
@@ -227,12 +259,14 @@ module Temper::Generated
       warn '[DEPRECATED] the `valid?` method is obsolete'
       return false if @act.nil?
       return false if @disposition.nil?
+      return false if @extent.nil?
       return false if @input_ids.nil?
       return false if @input_unusable.nil?
       return false if @narrowed_by.nil?
       return false if @produced_ids.nil?
       return false if @stage.nil?
       return false if @stage !~ Regexp.new(/^[a-z][a-z0-9_]{0,62}$/)
+      return false if @terms_applied.nil?
       true
     end
 
@@ -254,6 +288,16 @@ module Temper::Generated
       end
 
       @disposition = disposition
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] extent Value to be assigned
+    def extent=(extent)
+      if extent.nil?
+        fail ArgumentError, 'extent cannot be nil'
+      end
+
+      @extent = extent
     end
 
     # Custom attribute writer method with validation
@@ -311,6 +355,16 @@ module Temper::Generated
       @stage = stage
     end
 
+    # Custom attribute writer method with validation
+    # @param [Object] terms_applied Value to be assigned
+    def terms_applied=(terms_applied)
+      if terms_applied.nil?
+        fail ArgumentError, 'terms_applied cannot be nil'
+      end
+
+      @terms_applied = terms_applied
+    end
+
     # Checks equality by comparing each attribute.
     # @param [Object] Object to be compared
     def ==(o)
@@ -318,13 +372,15 @@ module Temper::Generated
       self.class == o.class &&
           act == o.act &&
           disposition == o.disposition &&
+          extent == o.extent &&
           input_ids == o.input_ids &&
           input_unusable == o.input_unusable &&
           inputs == o.inputs &&
           narrowed_by == o.narrowed_by &&
           produced_ids == o.produced_ids &&
           refusal == o.refusal &&
-          stage == o.stage
+          stage == o.stage &&
+          terms_applied == o.terms_applied
     end
 
     # @see the `==` method
@@ -336,7 +392,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [act, disposition, input_ids, input_unusable, inputs, narrowed_by, produced_ids, refusal, stage].hash
+      [act, disposition, extent, input_ids, input_unusable, inputs, narrowed_by, produced_ids, refusal, stage, terms_applied].hash
     end
 
     # Builds the object from hash
