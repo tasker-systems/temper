@@ -106,21 +106,39 @@ time, which is late.
 A successful attestation check establishes something precise, and it is worth
 stating plainly before stating its boundary. The artifact in hand is
 byte-for-byte the one `build-cli-binaries.yml` produced, running in GitHub
-Actions, at the **exact** tag requested: signed by a Fulcio certificate whose
-SAN is
-`https://github.com/tasker-systems/temper/.github/workflows/build-cli-binaries.yml@refs/tags/<tag>`
-(`attest.rs`'s `expected_identity` — that string *is* the property), issued
-under GitHub Actions' OIDC issuer, chained to the pinned public-good Sigstore
-root, and present in Rekor's transparency log (`skip_tlog()` is never called).
-Both online paths check that signature over the digest of the **exact object
-each one just compared** — the manifest's for `--verify --online`, the
-archive's for `temper update`. That is a real property, correctly enforced.
+Actions on `main`, **triggered by the release-tag chain** (`release-tag.yml`):
+signed by a Fulcio certificate whose SAN is
+`https://github.com/tasker-systems/temper/.github/workflows/build-cli-binaries.yml@refs/heads/main`
+(`attest.rs`'s `expected_identity` — that string *is* the property), and whose
+SLSA predicate pins
+`predicate.buildDefinition.externalParameters.workflow.path` to
+`.github/workflows/release-tag.yml` (the chain's entry workflow — this closes
+the direct-`workflow_dispatch` door on `build-cli-binaries.yml`, which would
+otherwise carry the same SAN). Issued under GitHub Actions' OIDC issuer,
+chained to the pinned public-good Sigstore root, and present in Rekor's
+transparency log (`skip_tlog()` is never called). Both online paths check that
+signature over the digest of the **exact object each one just compared** — the
+manifest's for `--verify --online`, the archive's for `temper update`. That is
+a real property, correctly enforced.
 
-**The attestation binds the builder and the tag. It never binds the source.**
-Anyone with write access to this repo can push a `v*` tag whose workflow builds
-a backdoor, and it will verify perfectly on every path `temper` offers —
-correct signature, correct identity, correct Rekor inclusion proof, correct
-digest. This is inherent to build provenance, not a defect in this
+> **Why `refs/heads/main`, not `refs/tags/{tag}`:** the release chain is
+> branch-triggered by construction. `release-tag.yml` fires on a `VERSION`-file
+> push to `main`, creates and pushes the tag with `GITHUB_TOKEN`, then calls
+> `release.yml` → `build-cli-binaries.yml` via `workflow_call`. A tag pushed
+> with `GITHUB_TOKEN` does not trigger workflows, so `release.yml`'s own
+> `on: push: tags: v*` never fires (`release-tag.yml:53-56` documents this).
+> A reusable workflow called via `workflow_call` inherits the caller's
+> `github.ref`, which is `refs/heads/main` throughout the chain — so the OIDC
+> token's `ref` claim, and therefore the Fulcio cert SAN, carries
+> `@refs/heads/main` for every release. The tag is carried by the archive
+> filename and the manifest's `version` field, not by the cert SAN. The digest
+> match is what binds to a specific release artifact.
+
+**The attestation binds the builder and the chain. It never binds the source.**
+Anyone with write access to this repo can push a commit to `main` whose
+workflow builds a backdoor, and it will verify perfectly on every path `temper`
+offers — correct signature, correct identity, correct Rekor inclusion proof,
+correct digest. This is inherent to build provenance, not a defect in this
 implementation: SLSA provenance attests *the build*, and a build is only ever
 as trustworthy as the commit it ran against. No verification code closes this;
 what closes it is process — who holds repo write, and what review the release
@@ -129,10 +147,10 @@ PR gets on its way to `main`.
 Two things bound how bad this is in practice:
 
 - **The claim is falsifiable by anyone, not just by us.** The attestation names
-  the workflow file and the tag, so a reader can go read exactly what that
-  workflow did at that tag, and confirm the tag's commit is one that went
-  through review. The provenance makes the build *auditable*; it does not make
-  the audit unnecessary.
+  the workflow file, the chain's entry workflow, and the ref (`refs/heads/main`),
+  so a reader can go read exactly what that workflow did at that commit, and
+  confirm the commit is one that went through review. The provenance makes the
+  build *auditable*; it does not make the audit unnecessary.
 - **The boundary is the same for the out-of-band check.** `gh attestation
   verify` (see [install.md](install.md#out-of-band-audit--verify-without-trusting-tempers-own-code))
   removes any dependence on `temper`'s own verification code and on our pinned
