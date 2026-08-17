@@ -20,11 +20,23 @@
 #
 # ## Why it builds from source rather than shelling out to `temper`
 #
-# This repo deliberately keeps a STALE installed `temper` for parity validation (an old CLI is how
-# we notice when a change breaks older clients). A gate invoking the installed binary would compare
-# the committed projection against whatever happens to be on PATH instead of against what is in the
-# tree — green or red for reasons unrelated to the diff under review. `cargo make openapi` and the
+# A gate must compare the committed projection against what is IN THE TREE UNDER REVIEW, not against
+# whatever binary a given machine happens to have — otherwise it goes green or red for reasons
+# unrelated to the diff. In CI there is no installed `temper` at all. `cargo make openapi` and the
 # ts-rs gate build from source for exactly this reason; so does this.
+#
+# `[corrected — 2026-08-17, Pete]` This said the repo "deliberately keeps a STALE installed `temper`
+# for parity validation." **That is not true and it misleads.** The `temper` on PATH is rebuilt from
+# the working branch (`cargo install --path crates/temper-cli --all-features`) and is the CURRENT
+# build, not an old one; a genuinely stale binary is kept off-PATH and used only to exercise the
+# `curl | sh` installer. The real hazard is narrower and is an agent habit, not a repo policy:
+# reaching for `./target/debug/temper`, which is stale whenever it has not been rebuilt. Nothing here
+# needs an argument against using the PATH binary — a tool that wants live vault data SHOULD use it.
+# The argument for building from source is the tree-under-review one above, and it applies only to
+# gates projecting REPO content.
+#
+# Recorded rather than silently overwritten because the false version had already propagated: it was
+# read as ground truth about the environment while designing a different tool, on 2026-08-17.
 #
 # ## What it does NOT cover
 #
