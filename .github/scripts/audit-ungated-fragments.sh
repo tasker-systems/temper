@@ -419,6 +419,16 @@ sql_relations_current() {
 #   No new ungated FUNCTION: both bodies are `CREATE OR REPLACE` at byte-identical signatures.
 #   The new SQL file is listed because it edits two ungated bodies, which is the same reason
 #   `20260815000010` and `20260815000040` are listed.
+# Reviewed 2026-08-17, task 01a0057e (decompose the walk):
+#   1. VERDICT — unchanged. The refactor touches the walk's internal shape (undirected CTE,
+#      edge-ID carry) but not the gate contract: `p_visible_ids` is still the only visibility
+#      input, still applied in `admitted` upstream of `adj`, and NULL still admits nothing.
+#   2. EMITTER — untouched. No Rust call shape changed; the 8-arity overload and
+#      `query_follow_from` both delegate to the 9-arity body unchanged.
+#   3. RESIDUE — unchanged; still source discipline rather than a database permission.
+#   No new ungated FUNCTION: one `CREATE OR REPLACE` at a byte-identical signature. The new SQL
+#   file is listed because it redefines the ungated body, which is the same reason
+#   `20260815000010` is listed.
 read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260808000030_composable_find_family.sql
 20260810000010_anchor_readability_both_kinds.sql
@@ -430,6 +440,7 @@ read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260815000040_resource_property_predicates.sql
 20260816000010_range_operator.sql
 20260816000020_survey_act.sql
+20260817000010_decompose_walk.sql
 EOF
 
 # ── THE RELATION WATCH — derived from what the cores READ, not what names them ──
