@@ -210,3 +210,78 @@ def test_a_repeated_token_is_recorded_once_so_a_count_is_not_inflated_by_restate
 """
     read = read_register(body)
     assert read.table_witnesses["a-clause"] == ["t_one", "t_two"]
+
+
+# ── The fourth clause form ──────────────────────────────────────────────────────────────────────
+
+
+def test_clauses_declared_only_in_a_table_are_read():
+    """MEASURED, 2026-08-17. An August register — outcome-shaped, eight clauses, meaning test applied
+    in its own prose — declared every clause as a table row and parsed as ZERO. It was about to be
+    counted among the pre-register-era goals needing a retrofit. It needed nothing.
+
+    Fourth counterexample to this register's own equivalence claim that all registers can be read the
+    same way. The claim keeps failing in a NEW way each time, which is the argument for reporting the
+    form rather than assuming it."""
+    body = """
+## Clauses
+
+Invariants. No mechanism named.
+
+| Clause | States |
+|---|---|
+| `a-write-returns-without-waiting-on-projection` | A act completes without waiting |
+| `projection-lag-is-readable` | A reader can determine how far a shape trails |
+"""
+    clauses, _, report = parse_clauses(body)
+    assert clauses == [
+        "a-write-returns-without-waiting-on-projection",
+        "projection-lag-is-readable",
+    ]
+    assert "table" in report.clause_form
+
+
+def test_a_coverage_table_reports_on_clauses_and_does_not_declare_them():
+    """The discriminator is the witness column, and it is load-bearing rather than cosmetic. Reading
+    a COVERAGE table as a declaration destroys the only check that catches a coverage row naming a
+    clause the register does not have — including a typo'd restatement of a real one, which is the
+    case most worth catching because it reads as coverage.
+
+    The bite: without the witness-column discriminator, `a-clause-that-was-never-declared` becomes a
+    clause and the unmatched-row finding disappears."""
+    body = """
+## The clauses
+### `a-real-clause`
+
+## Declared coverage
+| Clause | Witnesses | State |
+|---|---|---|
+| `a-real-clause` | `t_one` | covered |
+| `a-clause-that-was-never-declared` | `t_two` | covered |
+"""
+    read = read_register(body)
+    assert read.clauses == ["a-real-clause"]
+    assert read.unmatched_rows == ["a-clause-that-was-never-declared"]
+
+
+def test_a_two_column_table_that_is_not_about_clauses_declares_nothing():
+    """MEASURED, 2026-08-17 — a false positive this reader introduced and then removed.
+
+    The first version of the table form required only "no witness column", which made EVERY
+    two-column table a declaration. The OTel register's table of six DEPLOYABLES then contributed
+    `temper-ui` as a clause, because a deployable name is kebab-case and backticked exactly like a
+    clause name is. One spurious clause is worse than a missing one here: it inflates the denominator
+    and it looks like a real finding.
+
+    The bite: without the clause-column requirement, `temper-ui` is returned as a clause."""
+    body = """
+## The surface — six deployables
+
+| Deployable | Note |
+|---|---|
+| `temper-ui` | separate Vercel project — the "two projects, one trace" problem |
+| `temper-api` | the Rust half |
+"""
+    clauses, _, report = parse_clauses(body)
+    assert clauses == [], "a table of deployables is not a table of clauses"
+    assert report.clause_form == "none"

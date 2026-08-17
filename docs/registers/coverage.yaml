@@ -28,9 +28,9 @@ totals:
   goals_in_context: 63
   goals_projected: 30
   goals_projected_note: active goals only; non-active goals are not read
-  goals_yielding_no_clauses: 13
+  goals_yielding_no_clauses: 12
   registers_without_a_machine_readable_witness_table: 15
-  clauses: 134
+  clauses: 142
   clauses_withdrawn: 2
   witness_citations: 114
   witness_citations_unresolved: 8
@@ -800,7 +800,7 @@ registers:
     never mistaken for it
   context: '@j-cole-taylor/temper'
   read:
-    clause_form: prose
+    clause_form: prose+table
     witness_table: false
     unreadable: no coverage table declares a witness column; this register's witnesses, if any, are stated
       in prose and are not machine-readable here
@@ -1252,7 +1252,7 @@ registers:
     itself is true
   context: '@j-cole-taylor/temper'
   read:
-    clause_form: heading
+    clause_form: heading+table
     witness_table: false
     unreadable: no coverage table declares a witness column; this register's witnesses, if any, are stated
       in prose and are not machine-readable here
@@ -1297,19 +1297,19 @@ registers:
     interrogatable: false
     citations_enables:
     - 019fbf67-e7b2-72c3-b5f3-2467a4dc5213
-  - name: a-write-must-never-silently-destroy-a-memorys-history
-    interrogatable: false
-    citations_enables:
-    - 019fbf9b-c04d-7333-b0b4-dab43ef897f8
-  - name: an-unexamined-claim-must-never-read-as-a-false-one
-    interrogatable: false
   - name: a-claim-must-never-read-as-checked-when-nobody-checked-it
     interrogatable: false
     citations_enables:
     - 019fbf80-7da9-7042-9b6d-7dcb002d9080
+  - name: a-write-must-never-silently-destroy-a-memorys-history
+    interrogatable: false
+    citations_enables:
+    - 019fbf9b-c04d-7333-b0b4-dab43ef897f8
+  - name: a-near-duplicate-must-never-be-resolved-without-a-human
+    interrogatable: false
   - name: decay-must-never-make-a-memory-unfindable
     interrogatable: false
-  - name: a-near-duplicate-must-never-be-resolved-without-a-human
+  - name: an-unexamined-claim-must-never-read-as-a-false-one
     interrogatable: false
   advancing:
     total: 12
@@ -1321,10 +1321,25 @@ registers:
     when it isn't
   context: '@j-cole-taylor/temper'
   read:
-    clause_form: none
+    clause_form: table
     witness_table: true
-    unreadable: no clause declarations parsed
-  clauses: []
+  clauses:
+  - name: a-write-returns-without-waiting-on-projection
+    interrogatable: true
+  - name: projection-lag-is-readable
+    interrogatable: true
+  - name: concurrent-arrivals-do-not-multiply-work
+    interrogatable: true
+  - name: projection-cost-tracks-what-changed
+    interrogatable: true
+  - name: no-act-waits-on-another-acts-projection
+    interrogatable: true
+  - name: a-stale-projection-never-reads-as-current
+    interrogatable: true
+  - name: projection-failure-is-never-silent
+    interrogatable: true
+  - name: no-recorded-change-is-absent-from-the-settled-shape
+    interrogatable: true
   advancing:
     total: 4
     citing_nothing:
@@ -1332,15 +1347,6 @@ registers:
     - 019fc4a1-2c21-71e2-ae64-113eda649c3c
     - 019fc7ce-fe48-7300-8ef6-6a78f2a32b7a
     - 01a00615-0b1a-7223-9533-cd1edbc08ba8
-  coverage_rows_naming_no_clause:
-  - a-stale-projection-never-reads-as-current
-  - a-write-returns-without-waiting-on-projection
-  - concurrent-arrivals-do-not-multiply-work
-  - no-act-waits-on-another-acts-projection
-  - no-recorded-change-is-absent-from-the-settled-shape
-  - projection-cost-tracks-what-changed
-  - projection-failure-is-never-silent
-  - projection-lag-is-readable
 - goal_id: 019fe15f-b4b7-74f2-8761-9ffbd59eb832
   goal_title: A cold agent joins ongoing work by reading it — and what it declares is seen by whoever
     arrives next
