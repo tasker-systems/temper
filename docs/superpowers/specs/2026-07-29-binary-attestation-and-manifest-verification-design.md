@@ -109,7 +109,24 @@ flowchart TD
 ```
 
 Cert identity verified on the Rust path: issuer = GitHub Actions OIDC, SAN =
-`https://github.com/tasker-systems/temper/.github/workflows/build-cli-binaries.yml@refs/tags/v{ver}`.
+`https://github.com/tasker-systems/temper/.github/workflows/build-cli-binaries.yml@refs/heads/main`.
+The SLSA predicate's `buildDefinition.externalParameters.workflow.path` is also
+pinned to `.github/workflows/release-tag.yml` (the chain's entry workflow),
+which closes the direct-`workflow_dispatch` door on `build-cli-binaries.yml`.
+
+> **Why `refs/heads/main`, not `refs/tags/{tag}`:** the release chain is
+> branch-triggered by construction — `release-tag.yml` fires on a `VERSION`-file
+> push to `main`, creates and pushes the tag with `GITHUB_TOKEN`, then calls
+> `release.yml` → `build-cli-binaries.yml` via `workflow_call`. A tag pushed with
+> `GITHUB_TOKEN` does not trigger workflows (`release-tag.yml:53-56` documents
+> this), so `release.yml`'s own `on: push: tags: v*` never fires. A reusable
+> workflow called via `workflow_call` inherits the caller's `github.ref`, which
+> is `refs/heads/main` throughout the chain — so the OIDC token's `ref` claim,
+> and therefore the Fulcio cert SAN, carries `@refs/heads/main` for every
+> release. The tag is carried by the archive filename
+> (`temper-v{version}-{target}.tar.gz`) and the manifest's `version` field, not
+> by the cert SAN. The digest match (enforced in `verify_release_attestation`)
+> is what binds to a specific release artifact.
 
 ### 3. The pinned trust root
 
