@@ -128,6 +128,11 @@ not been closed must still be **stated**. The register is the goal's body, so th
 # in force (`--format` → TEMPER_FORMAT → `[cli]` config → toon on a TTY, json otherwise). NEITHER
 # is the body, so pin the format and extract `content`; a bare `show > file` piped back would
 # write the serialized record as the body.
+#
+# ERROR PATH: check the exit code first. A non-zero exit means `show` failed — in JSON mode the
+# explanation is a structured payload on stdout (`{ "error": { code, message, hint? } }`), not the
+# record. Parse `.error.code` before reaching for `.content`; `jq -r .content` on an error payload
+# yields `null`, which is a silent wrong answer, not a caught one.
 temper resource show <goal-ref> --format json | jq -r .content > register.md
 # edit register.md, then:
 cat register.md | temper resource update <goal-ref>
