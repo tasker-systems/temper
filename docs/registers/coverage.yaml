@@ -28,8 +28,12 @@ totals:
   goals_in_context: 63
   goals_projected: 30
   goals_projected_note: active goals only; non-active goals are not read
-  goals_yielding_no_clauses: 12
-  registers_without_a_machine_readable_witness_table: 15
+  registers_with_no_clauses_read: 12
+  registers_with_clauses_and_a_witness_table: 15
+  registers_with_clauses_but_no_witness_table: 3
+  witness_table_note: 'absence of a witness table is not a defect: a register whose mechanism is unbuilt
+    has no witnesses to name, and giving it an empty table would read as ''checked, found nothing'' rather
+    than ''nothing to check yet'''
   clauses: 142
   clauses_withdrawn: 2
   witness_citations: 114
@@ -374,6 +378,8 @@ registers:
     citations_witnesses:
     - 019f975e-7be9-7ff3-a5bd-ef7ea72ff4a5
     - 019f9a34-8098-7892-8eee-059175637391
+    citations_enables:
+    - 01a00fd8-a106-7cd2-9c6c-537010acff47
   - name: witnesses-discriminate
     interrogatable: true
     citations_witnesses:
@@ -391,7 +397,7 @@ registers:
     - 019fa03a-913b-7141-a173-1c804d9b7ccd
     - 01a00776-ab08-77c0-a4c0-cbb14fe9973f
   advancing:
-    total: 11
+    total: 12
     citing_nothing:
     - 019fa89c-7d3f-7ae2-8388-400cbac9d865
     - 019fa89d-2fec-74c2-8b6c-0c47892ee470
@@ -802,8 +808,9 @@ registers:
   read:
     clause_form: prose+table
     witness_table: false
-    unreadable: no coverage table declares a witness column; this register's witnesses, if any, are stated
-      in prose and are not machine-readable here
+    unreadable: 'no coverage table declares a witness column, so no witness of this register is machine-readable
+      here. This is the CORRECT state for a register whose mechanism is unbuilt: it has no witnesses to
+      name. Do not read it as a formatting backlog'
   clauses:
   - name: surface-declares-its-kind
     interrogatable: false
@@ -1254,8 +1261,9 @@ registers:
   read:
     clause_form: heading+table
     witness_table: false
-    unreadable: no coverage table declares a witness column; this register's witnesses, if any, are stated
-      in prose and are not machine-readable here
+    unreadable: 'no coverage table declares a witness column, so no witness of this register is machine-readable
+      here. This is the CORRECT state for a register whose mechanism is unbuilt: it has no witnesses to
+      name. Do not read it as a formatting backlog'
   clauses:
   - name: a-memory-reaches-every-environment-the-work-happens-in
     interrogatable: false
@@ -1354,8 +1362,9 @@ registers:
   read:
     clause_form: prose
     witness_table: false
-    unreadable: no coverage table declares a witness column; this register's witnesses, if any, are stated
-      in prose and are not machine-readable here
+    unreadable: 'no coverage table declares a witness column, so no witness of this register is machine-readable
+      here. This is the CORRECT state for a register whose mechanism is unbuilt: it has no witnesses to
+      name. Do not read it as a formatting backlog'
   clauses:
   - name: intent-is-declared-not-inferred
     interrogatable: false

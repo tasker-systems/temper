@@ -124,8 +124,21 @@ def build_document(context_ref: str, repo_root: str) -> dict:
             "goals_in_context": t.goals_in_context,
             "goals_projected": t.goals_projected,
             "goals_projected_note": "active goals only; non-active goals are not read",
-            "goals_yielding_no_clauses": t.goals_unreadable,
-            "registers_without_a_machine_readable_witness_table": t.registers_without_witness_table,
+            # Three MUTUALLY EXCLUSIVE buckets, replacing a single count that read as a defect
+            # backlog and was acted on as one. `[2026-08-17]` A combined
+            # "registers without a machine-readable witness table: 15" was taken to mean fifteen
+            # registers needing a formatting conversion. It meant twelve with no clauses at all plus
+            # three whose mechanisms are unbuilt — and for those three, having no witness table is
+            # the CORRECT state. None of the fifteen names a single test in prose. The job the metric
+            # implied did not exist.
+            "registers_with_no_clauses_read": t.goals_unreadable,
+            "registers_with_clauses_and_a_witness_table": t.registers_with_witness_table,
+            "registers_with_clauses_but_no_witness_table": t.registers_clauses_but_no_witness_table,
+            "witness_table_note": (
+                "absence of a witness table is not a defect: a register whose mechanism is unbuilt "
+                "has no witnesses to name, and giving it an empty table would read as 'checked, "
+                "found nothing' rather than 'nothing to check yet'"
+            ),
             "clauses": t.clauses,
             "clauses_withdrawn": t.clauses_withdrawn,
             "witness_citations": t.witness_citations,

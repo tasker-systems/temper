@@ -296,8 +296,9 @@ def read_register(body: str) -> RegisterRead:
         )
     elif not found_table:
         report.unreadable_reason = (
-            "no coverage table declares a witness column; this register's witnesses, if any, "
-            "are stated in prose and are not machine-readable here"
+            "no coverage table declares a witness column, so no witness of this register is "
+            "machine-readable here. This is the CORRECT state for a register whose mechanism is "
+            "unbuilt: it has no witnesses to name. Do not read it as a formatting backlog"
         )
 
     declared = set(clauses)

@@ -141,7 +141,8 @@ class Totals:
     clauses_withdrawn: int
     witness_citations: int
     witness_citations_unresolved: int
-    registers_without_witness_table: int
+    registers_with_witness_table: int
+    registers_clauses_but_no_witness_table: int
 
 
 def totals(views: list[RegisterView], goals_in_context: int) -> Totals:
@@ -156,5 +157,8 @@ def totals(views: list[RegisterView], goals_in_context: int) -> Totals:
         clauses_withdrawn=withdrawn,
         witness_citations=len(cited),
         witness_citations_unresolved=sum(1 for w in cited if not w.resolved),
-        registers_without_witness_table=sum(1 for v in views if not v.witness_table),
+        registers_with_witness_table=sum(1 for v in views if v.witness_table),
+        registers_clauses_but_no_witness_table=sum(
+            1 for v in views if v.clauses and not v.witness_table
+        ),
     )

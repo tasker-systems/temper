@@ -141,9 +141,15 @@ def test_a_body_that_is_not_a_register_says_so_rather_than_reporting_zero_clause
 
 
 def test_a_register_with_no_witness_column_is_declared_unreadable_not_reported_as_uncovered():
-    """Live shape: several registers state witnesses in prose and carry a `| Clause | State |`
-    table. Reporting those clauses as having no witnesses would be a false negative that reads as a
-    finding — the noise that trains a reader to stop looking."""
+    """Live shape: three registers carry a `| Clause | State |` table with no witness column.
+    Reporting those clauses as having no witnesses would be a false negative that reads as a
+    finding — the noise that trains a reader to stop looking.
+
+    **The message must not presume witnesses exist somewhere in prose.** `[2026-08-17]` It used to
+    say the register's witnesses "are stated in prose and are not machine-readable here", and that
+    presumption turned a correct state into an apparent backlog: all three such registers were
+    proposed for a "convert prose witnesses to a table" pass, and NONE of them names a single test
+    anywhere in its body. Their mechanisms are unbuilt, so they have no witnesses to name."""
     body = """
 ## The clauses
 ### `some-clause`
@@ -151,12 +157,15 @@ def test_a_register_with_no_witness_column_is_declared_unreadable_not_reported_a
 ## Declared coverage
 | Clause | State |
 |---|---|
-| `some-clause` | witnessed, described in the prose above |
+| `some-clause` | declared uncovered — mechanism unbuilt |
 """
     read = read_register(body)
     assert read.clauses == ["some-clause"]
     assert read.report.witness_table_found is False
-    assert "not machine-readable" in read.report.unreadable_reason
+    assert "machine-readable" in read.report.unreadable_reason
+    assert "CORRECT state" in read.report.unreadable_reason, (
+        "absence of a witness table must not read as a defect to be cleared"
+    )
 
 
 def test_a_coverage_row_naming_no_declared_clause_is_reported_rather_than_dropped():
