@@ -72,3 +72,48 @@ impl From<TemperError> for CliError {
 
 /// Result alias for CLI commands that can raise a [`CliError`].
 pub type CliResult<T> = std::result::Result<T, CliError>;
+
+/// Render a [`TemperError`] as a JSON `ErrorPayload` string for stdout.
+///
+/// In JSON mode, `main.rs` calls this instead of `output::error` (stderr prose)
+/// so an agent that merges streams and parses JSON gets a parseable payload
+/// even on failure. The exit code stays non-zero; the structured payload is the
+/// explanation an agent can branch on.
+pub fn render_error_payload(e: &TemperError, hint: Option<&str>) -> String {
+    let payload = temper_core::types::ErrorPayload {
+        code: e.code(),
+        message: format!("{e}"),
+        hint: hint.map(|h| h.to_string()),
+    };
+    serde_json::to_string_pretty(&payload).unwrap_or_else(|_| {
+        // If serialization fails (it should not — ErrorPayload is plain strings),
+        // fall back to a minimal object so the payload is still valid JSON.
+        format!(
+            "{{\n  \"code\": \"{}\",\n  \"message\": \"{}\"\n}}",
+            e.code(),
+            e
+        )
+    })
+}
+
+/// Render a [`CliError`] as a JSON `ErrorPayload` string for stdout.
+///
+/// `CliError::Install` maps to code `"install"`; `CliError::Temper` delegates to
+/// the inner [`TemperError`]'s code.
+pub fn render_cli_error_payload(e: &CliError) -> String {
+    let (code, message) = match e {
+        CliError::Install(msg) => ("install", format!("Install error: {msg}")),
+        CliError::Temper(e) => (e.code(), format!("{e}")),
+    };
+    let payload = temper_core::types::ErrorPayload {
+        code,
+        message,
+        hint: None,
+    };
+    serde_json::to_string_pretty(&payload).unwrap_or_else(|_| {
+        format!(
+            "{{\n  \"code\": \"{}\",\n  \"message\": \"{}\"\n}}",
+            code, e
+        )
+    })
+}
