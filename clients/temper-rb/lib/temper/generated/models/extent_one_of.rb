@@ -14,7 +14,7 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # Everything that matched is here.
+  # Nothing remains beyond this page. With no `offset` that is \"everything that matched is here\"; with one, it is \"nothing further\" and says nothing about what the offset skipped.
   class ExtentOneOf < ApiModelBase
     attr_accessor :extent
 

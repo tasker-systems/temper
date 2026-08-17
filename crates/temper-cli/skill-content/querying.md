@@ -112,10 +112,26 @@ against a set that was cut off, and the walk's trace entry is the only place tha
 
 `partial` is a question, not a verdict: it over-reports at the boundary, because a stage that filled
 its page exactly is indistinguishable from one that filled it and had more waiting. **Settle it by
-asking for the next page** — every row-returning act, `follow-from` included, admits `offset`, so a
-second page that comes back empty proves the first was the whole set. Narrowing the walk is the
-other move, and the right one when the next page is not empty and you wanted a neighbourhood rather
-than an enumeration.
+asking for the next page** — every act that admits `limit` now admits `offset`, `follow-from`
+included, so a second page that comes back empty means the first was the whole set as of that
+moment. Narrowing the walk is the other move, and the right one when the next page is not empty and
+you wanted a neighbourhood rather than an enumeration.
+
+Two limits on that recourse, both worth knowing before you lean on it:
+
+- **Pages are separate statements, not a cursor.** Nothing spans them in a transaction, so a write
+  landing between two requests re-ranks the set: a row can be skipped by both pages or returned by
+  both. Over a quiet graph the pages tile exactly; over a busy one, treat "empty second page" as
+  strong evidence rather than proof.
+- **Do not union per-page answers through a `difference`.** Unioning pages is sound when the paged
+  stage feeds a `union` or an `intersect`, because both distribute over it. `difference` does not:
+  `X − (A∪B)` is not `(X−A) ∪ (X−B)`, and the union of per-page results is strictly over-inclusive —
+  you can get an answer *worse* than the truncated one it was meant to repair. Page the walk, union
+  the **walk's** pages, then take the difference once.
+
+The converse is not a paging surface at all: an act that admits no `limit` returns a set rather than
+a page, so it has no `offset` either and can never report `partial`. `find-resources-with` is the
+one to know — it is row-returning and takes no bound terms, so there is nothing to page past.
 
 Each returned stage also carries `disposition` (`answered` / `empty` / `withheld` / `refused`) and an
 `orders_by` naming the quantity it ranked on. **Two stages' scores are not comparable** — the

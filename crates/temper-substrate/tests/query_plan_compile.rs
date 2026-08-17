@@ -1135,14 +1135,34 @@ fn a_declared_offset_reaches_the_walks_tenth_slot_and_an_absent_one_still_fills_
          of it; got `{}` in:\n{call}",
         args[8]
     );
+    // **Follow the placeholder to its bind, rather than asking whether 137 is bound SOMEWHERE.**
+    // `[strengthened — 2026-08-17]` The assertion here was
+    // `binds.iter().any(|b| matches!(b, QueryBind::Int(137)))`, which the docstring above claimed
+    // caught a limit/offset transposition and did not: with `{offset: 137}` and no limit,
+    // `applied_terms` yields `{Limit: 50, Offset: 137}`, so swapping `paging_for`'s two return
+    // values still emits ten arguments, still puts an `::int` in the tenth slot, still leaves jsonb
+    // in the ninth, and still binds 137 — one slot to the left. Every assertion passed. Resolving
+    // the slot's own `$n` to its bind is what actually pins the pairing.
+    let slot_bind = |arg: &str| -> usize {
+        arg.trim_start_matches('$')
+            .trim_end_matches("::int")
+            .parse::<usize>()
+            .unwrap_or_else(|_| panic!("expected a bound placeholder, got `{arg}` in:\n{call}"))
+    };
+    let offset_bind = slot_bind(args[9]);
     assert!(
-        compiled
-            .binds
-            .iter()
-            .any(|b| matches!(b, QueryBind::Int(137))),
-        "the caller's page number is bound as itself — `Offset` publishes no ceiling to clamp \
-         against; got {:?}",
-        compiled.binds
+        matches!(compiled.binds[offset_bind - 1], QueryBind::Int(137)),
+        "the placeholder standing in the TENTH slot must carry the caller's page NUMBER — `Offset` \
+         publishes no ceiling to clamp against, so 137 arrives as itself; got {:?} in:\n{call}",
+        compiled.binds[offset_bind - 1]
+    );
+    let limit_bind = slot_bind(args[7]);
+    assert!(
+        matches!(compiled.binds[limit_bind - 1], QueryBind::Int(50)),
+        "and the EIGHTH slot must carry the page SIZE — the ceiling, defaulted because this caller \
+         named no limit. Asserted beside the offset because it is the half a transposition moves: \
+         swapped, this slot holds 137 and pages by the page size; got {:?} in:\n{call}",
+        compiled.binds[limit_bind - 1]
     );
 
     // No offset declared: the slot is the literal `0`, and it is still THERE. Nine arguments would

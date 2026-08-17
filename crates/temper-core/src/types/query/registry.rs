@@ -371,9 +371,13 @@ pub fn search_family() -> Vec<ActDeclaration> {
             //
             // **A stable total page order already exists, and none was invented for this.** The
             // fragment's `ranked` CTE orders `MAX(w.score) DESC, w.node` before it truncates
-            // (`20260817000010_decompose_walk.sql:85`, the current body — `20260814000030` was
-            // superseded when the walk was decomposed and no longer describes it), so node id is
-            // the tiebreak and page 2 is exactly the rows page 1 did not take. The ordering field
+            // — carried unchanged from `20260814000030:207` through the decomposition
+            // (`20260817000010:85`) into the body that now holds it, `20260817000020:172`, which
+            // this same change adds. The newest is the one named here, because an amendment citing the
+            // body its own sibling migration retires is the staleness this comment is warning
+            // about. So node id is the tiebreak and page 2 is exactly the rows page 1 did not take,
+            // over an unchanged graph — pages are separate statements at separate snapshots, and
+            // the total order buys determinism within one, never a cursor across two. The ordering field
             // is `graph_score`, which `orders_by` below already describes: paging here is defined
             // over a quantity this act publishes, not over an incidental scan order.
             accepts_bound_terms: vec![BoundTerm::Limit, BoundTerm::Offset],

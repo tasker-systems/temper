@@ -385,7 +385,7 @@ struct StageNumbers {
     /// struct is where the asymmetry is already resolved — both carriers reach it through the one
     /// function, exactly as they do for the input numbers and the refusal.
     terms_applied: std::collections::BTreeMap<BoundTerm, i64>,
-    /// Complete / partial / indeterminate, from the ONE [`extent_of`] call, for the same reason as
+    /// Complete / partial / indeterminate, from the one [`extent_of`] DEFINITION, for the same reason as
     /// [`Self::terms_applied`] beside it: a walk-then-narrow composition truncates at an
     /// INTERMEDIATE stage, and a `Partial` a reader cannot see is a truncation that reaches the
     /// final answer with nothing marking it.
@@ -447,8 +447,20 @@ fn stage_numbers(node: &StageNode, rows: &QueryRows) -> StageNumbers {
         detail: r.detail.clone(),
     });
 
-    // The ONE `applied_terms` call, and the ONE `extent_of` call, for the same reason as the
-    // refusal above: a combinator admits no terms, so its map is empty rather than defaulted.
+    // The one DEFINITION of this stage's page and extent — not one evaluation, and the difference
+    // is worth stating because the surrounding docs are easy to misread as the stronger claim.
+    // [`stage_result`] and [`stage_trace`] each call [`stage_numbers`], so for a RETURNED stage
+    // both lines below run twice. What makes the two copies unable to disagree is that this
+    // function is PURE in `(node, rows)`, not that it is called once.
+    //
+    // That is the same guarantee `applied_terms`' own doc claims — *"The one definition, and it
+    // exists because there are two consumers who must not disagree"* — and the same one the
+    // pre-existing pair-rule fields (`input_ids`, `input_unusable`, `refusal`) have always had.
+    // The property to preserve is therefore purity: if anything here ever consults a clock, an
+    // RNG or mutable state, the pair rule breaks while every doc still asserts it holds.
+    //
+    // The `match` is for the same reason as the refusal above: a combinator admits no terms, so
+    // its map is empty rather than defaulted.
     let terms_applied = match node {
         StageNode::Act(inv) => declaration(&inv.act)
             .map(|d| applied_terms(&inv.terms, &d))
@@ -657,22 +669,30 @@ fn extent_of(
     // **Unreachable through `validate`, and kept anyway** — the same status
     // `query_plan.rs`'s `_` arm carries, said here too because a fact documented in one file and
     // silent in another teaches the next reader that only one of them is unreachable.
-    // `[since 2026-08-12]` `survey` left `CALLABLE_FRAGMENTS`, so `validate` refuses it as
-    // `NotSeparablyReachable` and no `ValidatedComposition` can carry a `survey` stage to this
-    // function. It stays because the arm is a fact about the ACT — a funnel produces its candidate
-    // set rather than selecting from one — that a lens slot restores rather than invents, and
-    // because the fallback below would otherwise answer `complete` over a corpus survey never
-    // counted.
+    // `[CORRECTED — 2026-08-17]` **This arm is REACHABLE, and the paragraph that stood here said
+    // the opposite.** It read: *"`[since 2026-08-12]` `survey` left `CALLABLE_FRAGMENTS`, so
+    // `validate` refuses it as `NotSeparablyReachable` and no `ValidatedComposition` can carry a
+    // `survey` stage to this function."* That stopped being true on 2026-08-16: `("query_survey",
+    // "__temper_ungated_survey")` is an entry in `CALLABLE_FRAGMENTS`
+    // (`temper_core::types::query::validate`), `Survey` declares `build_state: Served` with
+    // `served_by: Some("query_survey")`, and `query_plan.rs` carries a live `Some(EMIT_SURVEY)`
+    // emit arm.
     //
-    // **NOTHING TESTS THIS ARM, and that is a second fact rather than the same one restated.**
-    // `[declared — 2026-08-12, re-review]` The paragraph above justified itself by saying that a
-    // fact documented in one file and silent in another teaches the next reader that only one of
-    // them is unreachable — and then reproduced exactly that asymmetry one fact over, stating the
-    // unreachability and not the coverage. `a_refused_stage_reports_an_indeterminate_extent_rather_
-    // than_complete` is the only test in this file that reaches `Extent::Indeterminate`, and it
-    // drives a `find-about-anywhere` stage carrying an `EmbeddingUnavailable` refusal — so it
-    // exercises the REFUSAL arm above, never this one. `ActName::Survey` appears in this file
-    // exactly once, here. Same status as `query_plan.rs`'s `_` arm, now said the same way.
+    // The correction is recorded rather than quietly applied because the stale claim was
+    // load-bearing twice over. It justified the arm's own existence, and it justified the
+    // *absence of a test* for it — and this change widened `extent_of` to run for EVERY stage
+    // (see below), which enlarges the set of compositions that reach here. A dead arm nobody
+    // tests and a live arm nobody tests are different facts, and only the second is a gap.
+    //
+    // The arm itself is unchanged and still correct on the merits: a funnel PRODUCES its candidate
+    // set rather than selecting from one, so there is no remainder to report and the fallback below
+    // would otherwise answer `complete` over a corpus survey never counted.
+    //
+    // **STILL NOTHING TESTS THIS ARM**, and that is now a real coverage gap rather than a note
+    // about dead code. `a_refused_stage_reports_an_indeterminate_extent_rather_than_complete` is
+    // the only test in this file reaching `Extent::Indeterminate`, and it drives a
+    // `find-about-anywhere` stage carrying an `EmbeddingUnavailable` refusal — the REFUSAL arm
+    // above, never this one.
     if act_of(node) == ActName::Survey {
         return Extent::Indeterminate {
             reason:

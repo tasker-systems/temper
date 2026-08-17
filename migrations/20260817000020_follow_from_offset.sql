@@ -1,88 +1,33 @@
--- `follow-from` gains an OFFSET: the walk can be PAGED past its published ceiling.
+-- `follow-from` gains an OFFSET, so a walk wider than the act's published ceiling of 50 can be
+-- paged instead of truncated at the first page.
 --
--- ── WHY AN OFFSET AND NOT A LARGER CEILING ──────────────────────────────────────────────────────
+-- WHY AN OFFSET RATHER THAN A LARGER CEILING. The ceiling is published per act and is the same 50
+-- the three find acts publish, so raising it here alone would make one reported number mean
+-- different things per act — and however large it grew, only the first page would ever be
+-- reachable. The find acts pair that ceiling with an offset; the walk could not, because the
+-- fragment had no slot. This adds the slot. `registry.rs` gains the matching `BoundTerm::Offset`
+-- in the same change: a declaration describes the DEPLOYED system, so neither half is true alone.
 --
--- The ceiling is 50, published on the act and identical to the find family's
--- (`registry.rs:161,207,233,363` — `bound_ceilings: BTreeMap::from([(BoundTerm::Limit, 50)])` on
--- `FindExact`, `FindAboutAnywhere`, `FindAboutWithin` and `FollowFrom` alike). Raising it for this
--- one act would make the number mean something different per act while still being reported through
--- the same `applied_terms` channel, and it would not fix the actual gap: however large the ceiling,
--- a caller can still only ever see the FIRST page of it.
+-- WHY THE PAGE IS SOUND. `ranked`'s `ORDER BY MAX(w.score) DESC, w.node` is untouched. `w.node` is
+-- the GROUP BY key and a uuid, so the order was already TOTAL and no tiebreak was added for paging
+-- — paging became expressible because one was already there. Cutting inside `ranked` rather than
+-- on the final SELECT is also what keeps `via` describing only the rows that ship.
 --
--- The gap is narrower than "the ceiling is too small". The three find acts already declare
--- `accepts_bound_terms: vec![BoundTerm::Limit, BoundTerm::Offset]` (`registry.rs:159,205,231`) and
--- their fragments already end `LIMIT p_limit OFFSET p_offset` (`20260808000030:174,233,289`).
--- `FollowFrom` declares `accepts_bound_terms: vec![BoundTerm::Limit]` (`registry.rs:361`) — and
--- could not have declared more, because THE FRAGMENT HAS NO SLOT. So the walk is the one scoring
--- act in the family whose second page is unreachable, and the fix is the parameter the others
--- already have rather than a number nobody else's ceiling agrees with.
+-- WHY NO `DEFAULT` ON ANY PARAMETER OF THE NEW ARITIES. A default makes the incumbent arity
+-- ambiguous and every existing call to it an error at run time — measured on pg18 one arity down,
+-- and recorded in `20260815000010`'s register note. Reaching the new form means naming all ten
+-- arguments.
 --
--- `Offset` deliberately carries no ceiling anywhere (`registry.rs:653`: "`Offset` has no ceiling on
--- any act, so there is nothing for it to default to"). This file adds none.
+-- WHY THE INCUMBENT ARITIES BECOME DELEGATIONS. One body per arm: two copies of this walk would
+-- drift silently, both still returning plausible rows. The widest arity holds the body and 8 -> 9
+-- -> 10 delegates down to it.
 --
--- ── THE TIEBREAK ALREADY EXISTED. IT WAS NOT INVENTED HERE ──────────────────────────────────────
+-- Additive: two CREATE FUNCTION, two CREATE OR REPLACE at unchanged signatures, no DROP. A DROP is
+-- non-additive and halts `temper-migrate --additive-only` at deploy.
 --
--- Paging is sound only over a TOTAL order — a `LIMIT/OFFSET` pair over ties returns an arbitrary and
--- unstable slice. `ranked` has ordered by `MAX(w.score) DESC, w.node` since `20260814000030:207`,
--- unchanged through `20260816000010:224` and `20260817000010:85`. `w.node` is a uuid and unique
--- within the GROUP BY, so the order is already total.
---
--- That is a CONSTRAINT this file honors, not a property it establishes: the `ORDER BY` is untouched,
--- and a second tiebreak is NOT added. One exists; adding another would silently reorder pages
--- against the incumbent for no benefit. The same rule is written down for the find arms at
--- `20260806000020:275` — "The tiebreak is part of the contract".
---
--- ── NO `DEFAULT` ON THE WIDENED SIGNATURES, AND THAT IS LOAD-BEARING ────────────────────────────
---
--- `20260815000010` measured the consequence and recorded it twice, on the function comment and in
--- its own register note: "measured on pg18, a default on the added parameter makes the incumbent
--- 8-arity call ambiguous and therefore breaks `search_graph_expand`, the compiler's emitted call and
--- four test call sites at run time."
---
--- The same rule applies one arity up and for the same reason: a `DEFAULT` on `p_offset` would make
--- every existing 9-argument call resolvable against two candidates. So the new 10-arity carries NO
--- default on ANY parameter, and reaching it requires naming all ten arguments. The two incumbent
--- arities keep their exact signatures and pass `NULL`.
---
--- `OFFSET NULL` is "no offset", the same way `LIMIT NULL` is "unbounded" — which this walk has
--- relied on since it was written: `search_graph_expand` passes `NULL` into `p_limit`
--- (`20260814000030:275`) and the 8-arity core declares `p_limit int DEFAULT NULL`
--- (`20260815000010:142`), both reaching a body whose `ranked` ends in a bare `LIMIT p_limit`. The
--- delegators below rely on the OFFSET half of that same clause, so it is stated as measured rather
--- than as read: `[verified — 2026-08-17, pg18 local]`
---
---     WITH t(n) AS (SELECT * FROM generate_series(1,5))
---     SELECT count(*) FROM (SELECT n FROM t ORDER BY n LIMIT NULL OFFSET NULL) s;  -- 5
---     WITH t(n) AS (SELECT * FROM generate_series(1,5))
---     SELECT count(*) FROM (SELECT n FROM t ORDER BY n LIMIT NULL OFFSET 2) s;     -- 3
---
--- Five of five under `OFFSET NULL` is "no offset"; the second row proves the clause was live rather
--- than ignored, which one query alone would not have distinguished.
---
--- Note the find family spells its idle offset `p_offset int DEFAULT 0` (`20260808000030:145,190`)
--- rather than NULL. That is a different position in the call graph — a DEFAULT is exactly what this
--- file may not have — and `0` and `NULL` are the same slice.
---
--- ── WHAT IS STILL NOT A CALLER INPUT ────────────────────────────────────────────────────────────
---
--- `p_depth` and `p_gamma` remain DEFINITIONAL `[ruled — 2026-08-14, Pete]` and are untouched here.
--- The ruling is recorded in full at `20260814000030:43-56`: gamma because `orders_by.means` is a
--- fixed sentence describing what `graph_score` IS, depth because "depth 3 is too large for a
--- neighborhood traversal of this kind" is a claim about what `follow-from` MEANS. `limit` was
--- always in the other category, and `offset` joins it — a page boundary says nothing about what the
--- act means, only about which part of its answer you are looking at.
---
--- ── ONE BODY PER ARM ────────────────────────────────────────────────────────────────────────────
---
--- Same move as `20260815000010`: the widest arity carries the walk, and the incumbent arity is
--- re-pointed at it by `CREATE OR REPLACE` at a byte-identical signature. The 8-arity delegators
--- (`20260815000010:134,170`) are untouched and reach the body through the 9-arity, so the chain is
--- 8 -> 9 -> 10 and the walk exists exactly once. The body below is `20260817000010`'s, carried
--- across unchanged apart from the added `OFFSET`.
---
--- Additive: two CREATE FUNCTION and two CREATE OR REPLACE at byte-identical signatures. No DROP —
--- a DROP is non-additive, halts `temper-migrate --additive-only` at deploy, and blocks every
--- subsequent deploy on that target until an operator takes a cutover (`20260814000030:14-17`).
+-- Everything else — the measurements, the paging/consistency semantics, the alternatives weighed —
+-- is in task 01a0112c-4155-7b62-9a63-85e79c970125 and the PR, deliberately not here: a migration is
+-- immutable once applied, so anything in it that dates cannot be corrected.
 -- ═══════════════════════════════════════════════════════════════════════════════════════════════
 
 -- ── 1. The ungated core, widened ────────────────────────────────────────────────────────────────
@@ -156,14 +101,8 @@ LANGUAGE sql STABLE AS $$
      WHERE w.hop < p_depth
        AND NOT u.to_node = ANY(w.path)
   ),
-  -- `ORDER BY MAX(w.score) DESC, w.node` is unchanged from 20260814000030:207 and is what makes the
-  -- OFFSET sound: `w.node` is a uuid, unique within the GROUP BY, so the order is already TOTAL and
-  -- page N+1 cannot repeat or skip a row of page N. The tiebreak was not added for paging; paging
-  -- became expressible because it was already there.
-  --
-  -- The whole ranking is still computed before the page is cut — an offset reduces what is
-  -- DESCRIBED (the `via` subquery runs per surviving row), never what is walked. That is the same
-  -- bound the limit gives and the reason both are applied HERE rather than on the final SELECT.
+  -- The ORDER BY is the total order the OFFSET needs; it predates paging and is untouched. Pages
+  -- tile exactly within one snapshot — never across two, since each page is its own statement.
   ranked AS (
     SELECT w.node, MAX(w.score)::real AS graph_score
       FROM walk w
@@ -214,10 +153,9 @@ $$;
 
 -- ── 3. The 9-arity core, re-pointed ─────────────────────────────────────────────────────────────
 --
--- Signature byte-identical to 20260817000010:11-21 (which is itself byte-identical to
--- 20260815000010:28-37) — same ten identifiers, same types, still no defaults. Its body stops being
--- the walk and becomes a delegation, so the walk exists in one place. The 8-arity delegator at
--- 20260815000010:134 reaches this one and needs no edit.
+-- Unchanged signature, so this REPLACES the 9-arity rather than overloading it. Its body stops
+-- being the walk and becomes a delegation, leaving the walk in one place. The 8-arity delegator
+-- reaches this one and needs no edit.
 CREATE OR REPLACE FUNCTION __temper_ungated_follow_from(
     p_visible_ids     uuid[],
     p_seed_ids        uuid[],
@@ -238,8 +176,7 @@ $$;
 
 -- ── 4. The 9-arity gated wrapper, re-pointed ────────────────────────────────────────────────────
 --
--- Signature byte-identical to 20260815000010:151-160. It delegates sideways to the widened wrapper
--- rather than down to the core, exactly as its 8-arity sibling delegates to it — so
+-- Unchanged signature. Delegates sideways to the widened wrapper rather than down to the core, so
 -- `resources_visible_to` is still computed exactly once per call.
 CREATE OR REPLACE FUNCTION query_follow_from(
     p_principal       uuid,
@@ -261,7 +198,7 @@ $$;
 
 COMMENT ON FUNCTION __temper_ungated_follow_from(
         uuid[], uuid[], int, double precision, text[], text[], uuid[], int, jsonb, int) IS
-    'The walk, widened with p_offset so it can be PAGED. NULL is no offset, the same way NULL p_limit is unbounded; the two are applied together in `ranked`, before provenance is described, so a page bounds what is DESCRIBED rather than what is walked. Paging is sound only because `ranked` was already ordered by MAX(score) DESC, w.node — a total order, since w.node is a uuid unique within the GROUP BY — and that tiebreak dates to 20260814000030 rather than to this widening: no second tiebreak was added, because adding one would silently reorder pages against the incumbent for nothing. A larger ceiling was refused instead: the ceiling of 50 is published per act and is the find family''s number too, so raising it here alone would make the same reported value mean different things per act while still leaving only the first page reachable. Offset carries no ceiling on any act and gains none here. p_depth and p_gamma remain definitional rather than caller inputs (ruled 2026-08-14) and are untouched. Carries NO DEFAULT on any parameter, and that is load-bearing for the same measured reason 20260815000010 recorded one arity down: a default makes the 9-arity incumbent ambiguous and every existing call to it an error. This arity holds the only copy of the walk; the 9- and 8-arity signatures delegate to it.';
+    'The walk, widened with p_offset so it can be PAGED past the act''s published ceiling. NULL is no offset, as NULL p_limit is unbounded; both are applied in `ranked` before provenance is described, so a page bounds what is DESCRIBED rather than what is walked. Sound because `ranked` was already ordered by MAX(score) DESC, w.node — a total order predating this change, to which no second tiebreak was added. Carries NO DEFAULT on any parameter: a default makes the 9-arity incumbent ambiguous and every existing call to it an error, measured one arity down by 20260815000010. This arity holds the only copy of the walk; 8 and 9 delegate to it. Rationale: task 01a0112c-4155-7b62-9a63-85e79c970125.';
 
 COMMENT ON FUNCTION query_follow_from(
         uuid, uuid[], int, double precision, text[], text[], uuid[], int, jsonb, int) IS
@@ -270,5 +207,5 @@ COMMENT ON FUNCTION query_follow_from(
 SELECT declare_migration(
     20260817000020,
     'additive',
-    'Gives the follow-from walk an offset so a result set larger than the act''s published ceiling can be PAGED. Adds p_offset to __temper_ungated_follow_from and query_follow_from as a new 10-arity of each, applied as OFFSET p_offset beneath the existing LIMIT p_limit inside `ranked` — before the via subquery, so a page bounds what is described rather than what is walked. A larger ceiling was refused as the alternative: 50 is published on the act and is the same number the three find acts publish (registry.rs:161,207,233,363), so raising it for this act alone would make one reported value mean different things per act and would still leave only the first page reachable; the actual gap is that FindExact, FindAboutAnywhere and FindAboutWithin declare accepts_bound_terms Limit + Offset and end their fragments LIMIT p_limit OFFSET p_offset, while FollowFrom declares Limit alone because the fragment had no slot. The ORDER BY MAX(score) DESC, w.node in `ranked` is UNCHANGED and is what makes paging sound — w.node is a uuid unique within the GROUP BY, so the order was already total; the tiebreak dates to 20260814000030 and no second one was added here. Offset carries no ceiling on any act (registry.rs:653) and gains none. p_depth and p_gamma remain definitional rather than caller inputs (ruled 2026-08-14, 20260814000030:43-56) and are untouched. TWO CREATE FUNCTION (widened core and widened gated wrapper) and TWO CREATE OR REPLACE at byte-identical signatures re-pointing the 9-arity core and the 9-arity wrapper to delegate with NULL::int; the 8-arity delegators from 20260815000010 are untouched and reach the body through the 9-arity, so the walk exists exactly once and the chain is 8 -> 9 -> 10. NO DROP anywhere, which is the point rather than an accident: a DROP is non-additive, halts temper-migrate --additive-only at deploy and blocks every subsequent deploy on that target until an operator takes a cutover. The widened signatures carry NO DEFAULT on any parameter, honoring the rule 20260815000010 measured on pg18 one arity down — a default on the added parameter makes the incumbent arity ambiguous and every existing call to it an error at run time, which would break search_graph_expand, the compiler''s emitted call and the substrate test call sites.'
+    'Gives the follow-from walk an offset so a neighbourhood larger than the act''s published ceiling of 50 can be paged rather than truncated at page one. Adds p_offset as a tenth parameter of __temper_ungated_follow_from and query_follow_from, applied as OFFSET p_offset beneath the existing LIMIT inside `ranked`. TWO CREATE FUNCTION (widened core and gated wrapper) and TWO CREATE OR REPLACE re-pointing the 9-arity core and wrapper to delegate; the 8-arity delegators are untouched, so the walk exists exactly once and the chain is 8 -> 9 -> 10. NO DROP, and NO DEFAULT on any parameter of the new arities — a default makes the incumbent arity ambiguous at run time, measured on pg18 by 20260815000010. registry.rs admits BoundTerm::Offset in the same change. Design and measurements: task 01a0112c-4155-7b62-9a63-85e79c970125.'
 );

@@ -130,7 +130,7 @@ pub const EMIT_FIND_RESOURCES_WITH: &str = "__temper_ungated_find_resources_with
 ///
 /// `[amended — 2026-08-17]` The ruling stands; the inventory beside it did not. This said
 /// `accepts_bound_terms` *"stays `[Limit]`"*, and `20260817000020` added `Offset` to it
-/// (`registry.rs:361`). That is the ruling holding rather than bending: a page boundary says
+/// (`registry.rs:383`). That is the ruling holding rather than bending: a page boundary says
 /// nothing about what the act MEANS, only about which part of its answer you are looking at, so
 /// `offset` joined `limit`'s category exactly as the ruling sorts them. Depth did not move, and the
 /// list is no longer restated here — a copy of it is what went stale.

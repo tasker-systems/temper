@@ -1087,6 +1087,125 @@ async fn the_incumbent_arity_is_still_unambiguously_callable(pool: sqlx::PgPool)
     );
 }
 
+/// The TIEBREAK that makes paging sound, pinned where deleting it would otherwise go unnoticed.
+///
+/// Every argument for the offset's soundness — the migration header, both `COMMENT ON FUNCTION`
+/// bodies, `declare_migration`, and `registry.rs`'s amended declaration — rests on one clause:
+/// `ranked` orders by `MAX(w.score) DESC, w.node`, and `w.node` is the GROUP BY key and a uuid, so
+/// the order is TOTAL. Without the second key, `LIMIT`/`OFFSET` over score ties slices an arbitrary
+/// order and pages may repeat or drop rows.
+///
+/// **Nothing witnessed that clause, and the behavioural tests structurally cannot.** `star` gives
+/// every edge a distinct weight precisely so the tiebreak is never consulted — that is what keeps
+/// the order assertions deterministic — and the equal-weight fixtures elsewhere page one row at a
+/// time. Delete `, w.node` and the whole suite stays green in practice, because Postgres' order for
+/// a tied set is arbitrary rather than adversarial. A behavioural test for this would be a flake:
+/// it would demand that an unspecified order come out wrong, which it usually will not.
+///
+/// So this asserts the clause STRUCTURALLY, and that is the honest instrument for the claim. It
+/// pins the premise the prose everywhere else asserts, and it fails loudly if a future edit drops
+/// the key while keeping the paging.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_pages_are_cut_under_a_total_order_and_the_tiebreak_is_still_there(pool: sqlx::PgPool) {
+    use sqlx::Row;
+
+    let src: String = sqlx::query(
+        "SELECT p.prosrc FROM pg_proc p
+           JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE p.proname = '__temper_ungated_follow_from' AND n.nspname = 'public'
+            AND p.prosrc ILIKE '%WITH RECURSIVE%'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap()
+    .get("prosrc");
+
+    // Collapse whitespace so the assertion survives reformatting but not deletion.
+    let flat = src.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    assert!(
+        flat.contains("ORDER BY MAX(w.score) DESC, w.node"),
+        "the walk's ranking must stay TOTAL — `w.node` is the tiebreak that makes LIMIT/OFFSET \
+         cut a stable slice, and every soundness claim on the offset cites it. Body:\n{flat}"
+    );
+    assert!(
+        flat.contains("LIMIT p_limit OFFSET p_offset"),
+        "and the page must still be cut inside `ranked`, under that order rather than after it \
+         — cutting on the outer SELECT would apply the limit before the offset. Body:\n{flat}"
+    );
+}
+
+/// ONE BODY PER ARM, asserted against the catalog rather than trusted from the migration text.
+///
+/// `20260814000030`'s header states the rule this pins: *"two bodies drift, and the drift is silent
+/// because both keep returning plausible rows."* Every widening of this walk (`20260815000010`,
+/// `20260816000010`, `20260817000010`, `20260817000020`) has re-pointed the incumbent arities at the
+/// widest one by `CREATE OR REPLACE` so the recursion exists exactly once.
+///
+/// **Nothing could previously detect a violation.** `20260817000020` was reviewed by reading its
+/// four statements, and a `CREATE OR REPLACE` that left a stale copy of the walk in the 9-arity
+/// instead of a delegation would have passed the entire suite: the paged tests reach the 10-arity,
+/// and the 8- and 9-arity tests only assert that rows come back. Two walks answering plausibly and
+/// differently is precisely the failure the rule exists against, so the rule gets a witness.
+///
+/// Reads `prosrc` because the delegation is invisible from the outside — that is the point. A
+/// behavioural test cannot distinguish "delegates" from "holds an identical second copy", and it is
+/// the second copy, once it drifts, that this is defending against.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_walk_exists_exactly_once_and_every_other_arity_delegates(pool: sqlx::PgPool) {
+    use sqlx::Row;
+
+    for name in ["__temper_ungated_follow_from", "query_follow_from"] {
+        let rows = sqlx::query(
+            "SELECT p.pronargs::int AS nargs, (p.prosrc ILIKE '%WITH RECURSIVE%') AS has_walk
+               FROM pg_proc p
+               JOIN pg_namespace n ON n.oid = p.pronamespace
+              WHERE p.proname = $1 AND n.nspname = 'public'
+              ORDER BY p.pronargs",
+        )
+        .bind(name)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+
+        assert!(
+            rows.len() > 1,
+            "{name}: the arity chain is the thing under test — one arity means the re-point never \
+             happened, so the assertions below would be vacuous"
+        );
+
+        let holders: Vec<i32> = rows
+            .iter()
+            .filter(|r| r.get::<bool, _>("has_walk"))
+            .map(|r| r.get::<i32, _>("nargs"))
+            .collect();
+
+        // `query_follow_from` is gated and holds NO recursion at any arity — it computes the
+        // visible set and delegates down. Only the ungated core carries the walk, and only once.
+        let expected = if name == "__temper_ungated_follow_from" {
+            1
+        } else {
+            0
+        };
+        assert_eq!(
+            holders.len(),
+            expected,
+            "{name}: expected {expected} arity to hold the recursion, found {holders:?} — a second \
+             body is a silent drift site, both halves returning plausible rows"
+        );
+
+        if let Some(&holder) = holders.first() {
+            let widest = rows.iter().map(|r| r.get::<i32, _>("nargs")).max().unwrap();
+            assert_eq!(
+                holder, widest,
+                "{name}: the body must sit on the WIDEST arity ({widest}), not {holder} — a \
+                 narrower holder cannot express the parameters the wider signatures accept, so the \
+                 wider ones would have to carry their own copy"
+            );
+        }
+    }
+}
+
 // ── The page: an OFFSET beneath the limit (`20260817000020`) ────────────────────────────────────
 //
 // `follow_from_limit_truncates_the_ranked_nodes` above witnesses the LIMIT half and has since
@@ -1193,7 +1312,7 @@ async fn star(
 
 /// **A neighbourhood larger than the published ceiling can be enumerated — but only by paging.**
 ///
-/// The ceiling is 50 (`registry.rs:388` — `bound_ceilings: BTreeMap::from([(BoundTerm::Limit,
+/// The ceiling is 50 (`registry.rs:392` — `bound_ceilings: BTreeMap::from([(BoundTerm::Limit,
 /// 50)])` on `FollowFrom`), and it is not expressed in SQL: these functions take whatever limit
 /// they are handed. So the ceiling is imposed HERE, by asking for exactly 50, which is what the
 /// compiler asks for on a caller's behalf when no limit is declared (`applied_terms` defaults an
@@ -1330,6 +1449,15 @@ async fn two_pages_of_one_walk_are_disjoint_and_their_union_is_the_single_pass_a
     // The strongest form, and the one that catches a row lost at a page boundary — which disjoint
     // pages whose union happened to be short would also exhibit, but which set equality alone
     // cannot localize.
+    // **This holds HERE because `star` gives every edge a distinct weight, and it is not a general
+    // guarantee.** `[qualified — 2026-08-17]` The page is cut inside `ranked` on the `double
+    // precision` score, while the value returned and re-sorted by the outer `SELECT` is its `::real`
+    // cast. Two nodes whose doubles differ but whose `real` casts are equal are ordered by score
+    // inside `ranked` and by uuid outside it, so if such a pair straddles a boundary the
+    // concatenation can differ from the single pass by a transposition across it. Disjointness and
+    // coverage are unaffected — the cut key is genuinely total — which is why the assertions above
+    // are the ones stated as properties of paging, and this one is stated as a property of THIS
+    // fixture. Distinct weights keep the two keys agreeing, so it is exact here.
     let concatenated: Vec<Uuid> = p0.iter().chain(&p1).chain(&p2).copied().collect();
     assert_eq!(
         concatenated, whole,

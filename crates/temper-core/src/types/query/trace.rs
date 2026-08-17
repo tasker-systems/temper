@@ -202,13 +202,16 @@ pub struct StageTrace {
     // one did: a count beside a returned stage's rows would be a third spelling of one fact,
     // whereas `Partial` is not derivable from rows a reader does not have.
     //
-    // Both copies are read off the ONE `extent_of` call that `temper-services`' `stage_numbers`
-    // makes — the same single-construction the refusal beside it already has. A second call site
-    // that happened to agree today is the drift this contract keeps removing.
+    // Both copies are read off the one `extent_of` DEFINITION that `temper-services`' `stage_numbers`
+    // holds — the same single-definition the refusal beside it already has. Note what that does and
+    // does not promise: `stage_numbers` is called once per CARRIER, so for a returned stage it
+    // evaluates twice. The copies cannot disagree because that function is pure, not because it runs
+    // once. A second definition that happened to agree today is the drift this contract removes; a
+    // second evaluation of the same pure definition is not.
     //
     // # A `truncated_by_ceiling` flag was REFUSED
     //
-    // `[decided — 2026-08-17]` It would be a second spelling of `Extent::Partial` — free to
+    // `[decided — 2026-08-17, Pete]` It would be a second spelling of `Extent::Partial` — free to
     // disagree with it the moment either side gains a case, and silent about the third state
     // `Extent::Indeterminate` carries. Same argument that keeps the retired
     // `relation`/`input_source` pair from returning beside `inputs`.
@@ -217,11 +220,16 @@ pub struct StageTrace {
     /// the act's published ceiling and defaulted where the caller named nothing.
     ///
     /// **The pair rule** again — identical to [`super::envelope::StageResult::terms_applied`], from
-    /// one [`super::registry::applied_terms`] call rather than two. That function's own doc argues
-    /// it from the other end: *"Computed twice, they would eventually differ, and the difference
-    /// would be a response claiming a page size that did not run."* It already had two consumers
-    /// (the compiler binds these values, the assembler reports them); this adds a second READER of
-    /// the map the assembler already holds, never a third computation.
+    /// one [`super::registry::applied_terms`] DEFINITION rather than two. That function's own doc
+    /// argues it from the other end: *"The one definition, and it exists because there are two
+    /// consumers who must not disagree… Computed twice, they would eventually differ, and the
+    /// difference would be a response claiming a page size that did not run."* It already had two
+    /// consumers (the compiler binds these values, the assembler reports them); this adds a second
+    /// READER of the map the assembler already holds, never a second definition of it.
+    ///
+    /// **"One definition" is the claim; "one evaluation" is not.** `stage_numbers` is called once
+    /// per carrier, so a returned stage evaluates it twice. What forbids disagreement is that the
+    /// definition is pure — the property to preserve if it is ever edited.
     ///
     /// Empty for a combinator, which admits no terms — a union runs no page of its own.
     ///
@@ -462,13 +470,24 @@ mod tests {
         t.terms_applied = BTreeMap::from([(BoundTerm::Limit, 50)]);
         t.extent = Extent::Partial;
 
-        let json = serde_json::to_string(&t).unwrap();
-        assert!(json.contains(r#""limit":50"#), "got: {json}");
-        assert!(
-            json.contains(r#""extent":"partial""#),
-            "`Extent` is the incumbent name for \"was I truncated\"; a `truncated_by_ceiling` flag \
-             beside it would be a second spelling of this. Got: {json}"
+        // **Navigate the document; do not grep it.** `[strengthened — 2026-08-17]` These were
+        // `json.contains(r#""extent":"partial""#)` and `json.contains(r#""limit":50"#)`. `Extent`
+        // is `#[serde(tag = "extent")]`, so the field serializes as `"extent":{"extent":"partial"}`
+        // and the substring matched the INNER tag — it would have passed with the field renamed,
+        // nested elsewhere, or moved to another struct in the same document. The stated purpose,
+        // catching a field that fails to serialize, needs the path from the root.
+        let v: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&t).unwrap()).unwrap();
+        assert_eq!(
+            v["terms_applied"]["limit"], 50,
+            "the page this stage RAN with rides on the trace, keyed by term: {v}"
         );
+        assert_eq!(
+            v["extent"]["extent"], "partial",
+            "`Extent` is the incumbent name for \"was I truncated\", and it is on the TRACE — the \
+             carrier that covers intermediate stages, where a truncation is otherwise invisible: {v}"
+        );
+        let json = serde_json::to_string(&t).unwrap();
         assert!(
             !json.contains("truncated_by"),
             "no second spelling of `partial`: {json}"
