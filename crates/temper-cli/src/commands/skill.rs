@@ -371,7 +371,7 @@ code first.** A non-zero exit means the command failed; in JSON mode the explana
 is a structured payload on **stdout**, not stderr prose:
 
 ```bash
-temper resource show <ref> --format json > out.json 2>err.log
+temper resource show <ref> > out.json 2>err.log
 if [ $? -ne 0 ]; then
   # parse the structured error from stdout — never assume success
   jq -r '.error.code // "?", .error.message // "?", .error.hint // ""' out.json
@@ -382,7 +382,7 @@ fi
 
 The shape is `{ "error": { "code": "<stable-code>", "message": "<human text>", "hint": "<optional>" } }`. The `code` field is a `&'static str` stable across releases; `hint` is optional. Treat the `code` as the machine-readable key and `message` as the human text — do not grep `message` for control flow.
 
-Successful results are unchanged: the same `jq` recipes (e.g. `jq -r .content`, `jq -r .id`) work as before. A successful payload **may** carry a `diagnostics` array — advisory notices (degraded arms, truncated lists, empty scope) surfaced from the API. They are non-fatal: the exit code is zero and the result is usable. Inspect `.diagnostics[]` if you want to surface them to a user, but do **not** treat a non-empty `diagnostics` as a failure.
+Successful results are unchanged: the same `jq` recipes (e.g. `jq -r .content`, `jq -r .id`) work as before. A successful payload **may** carry a `diagnostics` array — advisory notices (degraded arms, truncated lists, empty scope) surfaced from the API. They are non-fatal: the exit code is zero and the result is usable. Inspect `.diagnostics[]` if you want to surface them to a user, but do **not** treat a non-empty `diagnostics` as a failure. (In a non-TTY script `temper` emits JSON by default; pin the format explicitly when the script's stdout may be a TTY.)
 
 ## Skill-Only Commands
 
