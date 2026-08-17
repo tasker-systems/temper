@@ -49,12 +49,18 @@ def test_a_data_row_whose_prose_mentions_clauses_and_witnesses_is_not_read_as_a_
     assert witnesses["refusal-is-distinct"] == ["third_real_test"]
 
 
-def test_the_witness_column_index_does_not_latch_across_tables():
-    """A second measured bug. The index persisted after its table ended, so an unrelated later table
-    contributed phantom tokens — on the real register, a numbered table hundreds of lines below the
-    coverage table donated `sal_norm` as a witness for a clause called `2`.
+def test_the_witness_column_index_does_not_latch_past_the_end_of_its_table():
+    """A second measured bug: the index persisted after its table ended, so later rows were read
+    through a column mapping that no longer applied.
 
-    The bite: with latching this yields a phantom entry from the second table.
+    **This test was rewritten because its first version did not bite.** It used a second table WITH
+    its own header row — and a header row resets the index by itself, so reverting the reset changed
+    nothing and 29 tests stayed green. It was passing for a reason unrelated to what it named, which
+    is the precise failure this whole tool exists to catch, committed inside its own test suite.
+
+    The discriminating case is a table row with NO header of its own: a stray row after prose, which
+    is what a hand-written register produces when a table is edited. Only the end-of-table reset can
+    stop the previous table's column mapping being applied to it.
     """
     body = """
 ### `a-real-clause`
@@ -63,15 +69,13 @@ def test_the_witness_column_index_does_not_latch_across_tables():
 |---|---|---|
 | **a-real-clause** | `a_real_test` | covered |
 
-Some prose between the tables.
+Some prose, and then a stray row that never declared a header of its own.
 
-| # | Thing | Note |
-|---|---|---|
 | **2** | `sal_norm` | unrelated |
 """
     witnesses, _, _ = parse_witness_tables(body)
     assert witnesses == {"a-real-clause": ["a_real_test"]}, (
-        "a table with no witness column must contribute nothing, even after a table that had one"
+        "once a table ends, its witness column must not be applied to anything that follows"
     )
 
 
