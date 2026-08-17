@@ -20,7 +20,8 @@ schema_version: 1
 source_system: https://temperkb.io
 context: '@me/temper'
 search_domain:
-- '**/*.rs (Rust function declarations)'
+- '**/*.rs (Rust `fn` declarations)'
+- '**/*.py (Python `def` declarations)'
 - all files (path citations)
 - 'excluded: target, node_modules, .git, .venv, __pycache__, dist, public'
 totals:
@@ -31,7 +32,7 @@ totals:
   registers_without_a_machine_readable_witness_table: 15
   clauses: 134
   clauses_withdrawn: 2
-  witness_citations: 104
+  witness_citations: 114
   witness_citations_unresolved: 8
 registers:
 - goal_id: 019f25d6-e1a9-7360-8a35-6bdf8ef53940
@@ -1388,10 +1389,52 @@ registers:
   clauses:
   - name: a-clause-the-projection-could-not-read-is-named-rather-than-omitted
     interrogatable: true
+    register_table:
+    - name: test_a_data_row_whose_prose_mentions_clauses_and_witnesses_is_not_read_as_a_header
+      kind: function
+      resolves: true
+      found_in: tools/tests/test_registers.py
+    - name: test_the_witness_column_index_does_not_latch_past_the_end_of_its_table
+      kind: function
+      resolves: true
+      found_in: tools/tests/test_registers.py
+    - name: test_a_body_that_is_not_a_register_says_so_rather_than_reporting_zero_clauses
+      kind: function
+      resolves: true
+      found_in: tools/tests/test_registers.py
+    - name: test_a_register_with_no_witness_column_is_declared_unreadable_not_reported_as_uncovered
+      kind: function
+      resolves: true
+      found_in: tools/tests/test_registers.py
+    - name: test_a_coverage_row_naming_no_declared_clause_is_reported_rather_than_dropped
+      kind: function
+      resolves: true
+      found_in: tools/tests/test_registers.py
     citations_enables:
     - 01a00f77-2c87-7c13-9296-df9765c08280
   - name: a-cited-witness-resolves-to-something-that-exists-or-is-declared-unresolvable
     interrogatable: true
+    register_table:
+    - name: test_a_renamed_test_does_not_resolve_which_is_the_founding_defect
+      kind: function
+      resolves: true
+      found_in: tools/tests/test_symbols.py
+    - name: test_a_path_that_exists_nowhere_does_not_resolve
+      kind: function
+      resolves: true
+      found_in: tools/tests/test_symbols.py
+    - name: test_a_non_witness_token_is_never_reported_as_unresolved
+      kind: function
+      resolves: true
+      found_in: tools/tests/test_symbols.py
+    - name: test_a_bare_filename_resolves_by_basename_and_declares_the_weaker_match
+      kind: function
+      resolves: true
+      found_in: tools/tests/test_symbols.py
+    - name: test_prose_terms_in_a_witness_cell_are_not_witnesses
+      kind: function
+      resolves: true
+      found_in: tools/tests/test_symbols.py
     citations_enables:
     - 01a00f77-2c87-7c13-9296-df9765c08280
   - name: sources-that-disagree-are-reported-as-disagreeing

@@ -28,6 +28,12 @@ from dataclasses import dataclass
 # register citing a non-test function as its witness is making a claim this tool does not adjudicate.
 _FN_RE = re.compile(r"(?:async\s+)?fn\s+([a-z_][A-Za-z0-9_]*)")
 
+# Python `def name(`. Added because this repo's own register-coverage witnesses are pytest functions,
+# and a Rust-only index reported ten of them as missing evidence the moment the register cited them.
+# Third instance of the same class: **the domain is the answer.** Scan a language and its tests
+# resolve; miss it and every citation into it reads as a stale pointer.
+_PY_FN_RE = re.compile(r"^\s*def\s+([a-z_][A-Za-z0-9_]*)", re.MULTILINE)
+
 _EXCLUDED = ("target", "node_modules", ".git", ".venv", "__pycache__", "dist", "public")
 
 # ── Token shape ─────────────────────────────────────────────────────────────────────────────────
@@ -116,19 +122,20 @@ def build_index(repo_root: str) -> SymbolIndex:
     for name in _EXCLUDED:
         excludes += ["-g", f"!{name}"]
 
-    fn_out = _run(
-        ["rg", "--no-ignore-vcs", "--with-filename", "--no-heading", "-o",
-         "--glob", "*.rs", *excludes, _FN_RE.pattern],
-        repo_root,
-    )
     functions: dict[str, str] = {}
-    for line in fn_out.splitlines():
-        # `path:match` — split once, since a match cannot contain a colon.
-        path, _, match = line.partition(":")
-        m = _FN_RE.search(match)
-        if not m:
-            continue
-        functions.setdefault(m.group(1), path)
+    for glob, pattern in (("*.rs", _FN_RE), ("*.py", _PY_FN_RE)):
+        out = _run(
+            ["rg", "--no-ignore-vcs", "--hidden", "--with-filename", "--no-heading", "-o",
+             "--glob", glob, *excludes, pattern.pattern],
+            repo_root,
+        )
+        for line in out.splitlines():
+            # `path:match` — split once, since a match cannot contain a colon.
+            path, _, match = line.partition(":")
+            m = pattern.search(match)
+            if not m:
+                continue
+            functions.setdefault(m.group(1), path)
 
     # `--hidden` is required, not optional. Without it every path under `.github/` is invisible, and
     # the most-cited script witness in the corpus lives there — so a real, present file resolved as
@@ -146,7 +153,8 @@ def build_index(repo_root: str) -> SymbolIndex:
         paths=paths,
         basenames=basenames,
         domain=[
-            "**/*.rs (Rust function declarations)",
+            "**/*.rs (Rust `fn` declarations)",
+            "**/*.py (Python `def` declarations)",
             "all files (path citations)",
             f"excluded: {', '.join(_EXCLUDED)}",
         ],
