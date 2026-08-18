@@ -13,7 +13,6 @@
 
 	interface Props {
 		filters: VaultFilters;
-		facets: Record<string, number> | null;
 		revealed: string | null;
 		fixedContext: boolean;
 		contexts: ContextRowWithCounts[];
