@@ -66,6 +66,19 @@ pub struct ResourceListParams {
     /// Context filter: UUID string or `@owner/slug` decorated ref.
     /// Bare context names are rejected server-side (spec Decision 1).
     pub context_ref: Option<String>,
+    /// Doc-type filter: one name, or a comma-separated list of them, in which case the filter is
+    /// the UNION (a row matching any listed name is kept). Multi-select is the odd one out among
+    /// the filters here — `tags` narrows with each addition because a resource has many tags,
+    /// while a resource has exactly one doc type, so ANDing two names could only ever match
+    /// nothing. A single name behaves exactly as it always has.
+    ///
+    /// A CSV string rather than a `Vec` for the same reason as `tags` and `cogmap_ids`: the list
+    /// endpoint is a GET whose params ride the query string, and serde_urlencoded does not encode
+    /// sequences. Each piece is trimmed and empties are dropped; a CSV that trims away entirely is
+    /// no filter at all rather than a filter matching nothing.
+    ///
+    /// Unknown names are **not** rejected — an unrecognized doc type matches no row, as it always
+    /// has. See `ResourceFacets::doc_type` for the histogram that makes the reachable set visible.
     pub doc_type_name: Option<String>,
     pub owner: Option<String>,
     pub q: Option<String>,
@@ -134,14 +147,36 @@ pub struct ResourceListParams {
     pub sections: Option<String>,
 }
 
-/// Aggregated doc-type facet counts for the current filter set.
+/// Aggregated facet histograms for a list page: one per filterable dimension that publishes
+/// counts (`doc_type`, `stage`, `status`).
+///
+/// **Each histogram EXCLUDES its own filter predicate and is scoped by the others.** A histogram
+/// computed after its own predicate has been applied can only ever have one key — the key the
+/// caller already selected — which tells a browse UI nothing it did not already know and leaves
+/// every alternative unreachable, because the count that would justify offering it was filtered
+/// away. So `facets.doc_type` answers "what would each doc-type yield under the *rest* of this
+/// filter set", not "what is in this page". `total` is the fully-filtered count and is the number
+/// that describes the page; these three describe its neighbourhood.
+///
+/// Consequence for callers: filtering by doc-type and then reading `facets.doc_type` returns the
+/// whole distribution, including kinds no row on the page has. That is the point, not a leak — the
+/// counts are computed over the caller's already-visible set.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ResourceFacets {
+    /// Doc-type histogram over the visible set filtered by `stage` and `status` but **not** by
+    /// `doc_type_name` — so every reachable kind keeps a count and a browse UI can offer it.
     pub doc_type: std::collections::HashMap<String, i64>,
+    /// Stage histogram over the visible set filtered by `doc_type_name` and `status` but **not**
+    /// by `stage`. Rows carrying no `temper-stage` are absent rather than counted under a
+    /// synthetic key: "has no stage" is not a stage a caller can select.
+    pub stage: std::collections::HashMap<String, i64>,
+    /// Status histogram over the visible set filtered by `doc_type_name` and `stage` but **not**
+    /// by `status`. Rows carrying no `temper-status` are absent, for the same reason as `stage`.
+    pub status: std::collections::HashMap<String, i64>,
 }
 
 /// Paginated response for resource list endpoints, with doc-type facets.

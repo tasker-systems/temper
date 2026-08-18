@@ -10,9 +10,12 @@
 //! carries the search_path).
 //!
 //! `list` filters (context_ref/doc_type_name/stage/status/tags/owner/`q`-title), sorts, and paginates the
-//! visible set in SQL (`filtered_visible_page`), reconstructing only the page; `context_ref` is resolved
+//! visible set (`filtered_visible_page`), reconstructing only the page; `context_ref` is resolved
 //! to a context UUID before filtering so bare names are rejected (spec Decision 1). Full-text/vector `q`
 //! on the list endpoint is search's job (a named deferral) — list `q` is a trivial title `ILIKE`.
+//! Most filters are SQL predicates; `doc_type_name`/`stage`/`status` are applied Rust-side because
+//! each publishes a facet histogram that must be computed WITHOUT its own predicate (see
+//! `ResourceFacets`) — a predicate applied in SQL is one the histogram can no longer see past.
 
 use std::collections::HashMap;
 
@@ -61,8 +64,8 @@ fn search_stage_err(stage: &str, e: impl std::fmt::Display) -> ApiError {
 }
 
 /// One page of the filtered, visible resource set: the page's substrate ids (already
-/// sorted + paginated), the FILTERED total (before limit/offset), and the doc_type
-/// histogram over the filtered set (`ResourceFacets` = "current filter set").
+/// sorted + paginated), the FILTERED total (before limit/offset), and the three facet
+/// histograms, each computed WITHOUT its own predicate (see [`ResourceFacets`]).
 ///
 /// `offset`/`limit` are the values this page was actually cut with, not the caller's raw
 /// params — a negative offset is floored at 0 and a negative limit means "no limit". The
@@ -72,9 +75,22 @@ fn search_stage_err(stage: &str, e: impl std::fmt::Display) -> ApiError {
 struct VisiblePage {
     page_ids: Vec<Uuid>,
     total: i64,
-    facets: HashMap<String, i64>,
+    facets: ResourceFacets,
     offset: i64,
     limit: Option<i64>,
+}
+
+/// One scanned row of the visible set, decoded once for the filter + histogram passes below.
+///
+/// The three histograms and the kept set each walk the same rows looking at the same three
+/// columns; `sqlx::Row::get` re-decodes (and re-allocates) a `String` on every call, so reading
+/// them straight off the `PgRow` four times would decode the whole visible set four times. This is
+/// the decode, held once.
+struct ScannedRow {
+    id: Uuid,
+    doc_type: Option<String>,
+    stage: Option<String>,
+    status: Option<String>,
 }
 
 /// The ORDER BY column expression for a sort field. Enum-controlled (no caller string
@@ -104,9 +120,25 @@ fn validate_goal_status(value: &str) -> ApiResult<()> {
 }
 
 /// Resolve the visible set, apply the `ResourceListParams` filters (context_ref /
-/// doc_type_name / stage / status / tags / owner / `q` title-match) + sort + pagination IN SQL, and
+/// doc_type_name / stage / status / tags / owner / `q` title-match) + sort + pagination, and
 /// return only the page's ids (so the caller reconstructs the page, not every visible
 /// row — this also fixes the prior all-rows N+1).
+///
+/// **`doc_type_name`, `stage` and `status` are the three filters that are NOT SQL predicates.**
+/// Each of them publishes a facet histogram, and a histogram is only useful to a caller choosing
+/// what to select next if it counts the options it did NOT select — which means it must be
+/// computed over the set filtered by the OTHER two. Filtering in SQL destroys exactly that
+/// information: it was the doc_type predicate's presence in the WHERE clause that collapsed
+/// `facets.doc_type` to the single key the caller had already chosen, leaving a browse UI unable
+/// to show or reach any other kind. So the query returns the set narrowed by every filter that has
+/// no histogram (`context_ref`, `owner`, `q`, `goal`, `tags`, `cogmap_ids`), carrying `doc_type`,
+/// `stage` and `status` as columns, and the four passes below cut the three histograms and the
+/// kept set out of it.
+///
+/// This costs **no extra statement** — the rows were already being fetched in full and paginated
+/// Rust-side (see the `skip`/`take` at the end), so this reuses the incumbent shape rather than
+/// introducing one. `list_page_query_count_test` is the guard that it stays one query per page: a
+/// histogram computed by a second probe query would pass this function's own tests and fail that.
 ///
 /// `context_ref` is a UUID string or `@owner/slug` decorated ref. It is resolved to a
 /// context UUID before the SQL runs — bare names are rejected with `BadRequest` (spec
@@ -199,6 +231,33 @@ async fn filtered_visible_page(
         }
         None => None,
     };
+    // Doc-type filter: CSV → a trimmed, empty-dropped set. Same trim/empty handling as the tag
+    // parser above, and for the same reason — a caller writing "task, goal" is not asking for
+    // " goal", and a CSV that trims away entirely is no filter rather than a filter that matches
+    // nothing (absent and empty must not mean two different things at one door).
+    //
+    // A SET rather than a list because the semantics are UNION, not containment: a resource has
+    // exactly one doc type, so ANDing two names could only ever match zero rows. This is the one
+    // multi-value filter here that widens with each addition; `tags` narrows, because a resource
+    // has many tags. Membership is exact and case-SENSITIVE, unchanged from the single-value SQL
+    // predicate this replaces — doc-type names are a closed lowercase vocabulary, and folding case
+    // here would be a second, unshared normalization the write path does not perform.
+    //
+    // An unknown name is deliberately kept, not rejected: it simply matches nothing, exactly as
+    // before. Validating the vocabulary is a separate change with its own compatibility question.
+    let doc_type_filter: Option<std::collections::HashSet<String>> =
+        match params.doc_type_name.as_deref() {
+            Some(csv) => {
+                let names: std::collections::HashSet<String> = csv
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|n| !n.is_empty())
+                    .map(str::to_string)
+                    .collect();
+                (!names.is_empty()).then_some(names)
+            }
+            None => None,
+        };
     let sort = params.sort.unwrap_or_default();
     let dir = match params.order.unwrap_or_default() {
         SortOrder::Asc => "ASC",
@@ -208,8 +267,15 @@ async fn filtered_visible_page(
     // INNER JOIN dt (every resource carries exactly one `doc_type` property, as in
     // `readback::reconstruct`); LEFT JOIN the `kb_resource_workflow_props` pivot view
     // (migration 20260709000002) for the optional workflow keys used by filters/sort.
+    //
+    // `stage`/`status` are SELECTED but not filtered on: they are the two columns whose predicates
+    // moved to Rust, and their histograms need the values for rows the filter would have removed.
+    // They come from the pivot view's LEFT JOIN, so a resource carrying no `temper-stage` /
+    // `temper-status` yields NULL — which the passes below skip rather than counting under a
+    // synthetic key.
     let sql = format!(
-        "SELECT r.id AS id, dt.property_value #>> '{{}}' AS doc_type_name
+        "SELECT r.id AS id, dt.property_value #>> '{{}}' AS doc_type_name,
+                wp.stage AS stage, wp.status AS status
            FROM kb_resources r
            JOIN resources_visible_to($1) v ON v.resource_id = r.id
            JOIN kb_resource_homes h ON h.resource_id = r.id
@@ -231,20 +297,23 @@ async fn filtered_visible_page(
             -- quietly change who can see what.
             AND r.ingest_state = 'complete'
             AND ($2::uuid IS NULL OR c.id = $2)
-            AND ($3::text IS NULL OR dt.property_value #>> '{{}}' = $3)
-            AND ($4::text IS NULL OR wp.stage = $4)
-            AND ($5::uuid IS NULL OR h.owner_profile_id = $5)
-            AND ($6::text IS NULL OR p.handle = $6)
-            AND ($7::text IS NULL OR r.title ILIKE '%' || $7 || '%')
-            AND ($8::uuid IS NULL OR EXISTS (
+            -- The doc_type, stage and status predicates are DELIBERATELY ABSENT. Each publishes a
+            -- facet histogram, and a histogram narrowed by its own predicate has exactly one key —
+            -- the one already chosen — so a browse UI could neither show nor reach the
+            -- alternatives. They are applied in Rust below, where each histogram is cut from the
+            -- set narrowed by the other two. Every predicate that remains here has no histogram,
+            -- so filtering it early is free.
+            AND ($3::uuid IS NULL OR h.owner_profile_id = $3)
+            AND ($4::text IS NULL OR p.handle = $4)
+            AND ($5::text IS NULL OR r.title ILIKE '%' || $5 || '%')
+            AND ($6::uuid IS NULL OR EXISTS (
                   SELECT 1 FROM kb_edges ge
                    WHERE ge.source_table = 'kb_resources' AND ge.source_id = r.id
-                     AND ge.target_table = 'kb_resources' AND ge.target_id = $8
-                     AND ge.edge_kind = 'leads_to' AND ge.label = $9
+                     AND ge.target_table = 'kb_resources' AND ge.target_id = $6
+                     AND ge.edge_kind = 'leads_to' AND ge.label = $7
                      AND NOT ge.is_folded))
-            AND ($10::uuid[] IS NULL OR (h.anchor_table = 'kb_cogmaps' AND h.anchor_id = ANY($10)
+            AND ($8::uuid[] IS NULL OR (h.anchor_table = 'kb_cogmaps' AND h.anchor_id = ANY($8)
                  AND cogmap_readable_by_profile($1, h.anchor_id)))
-            AND ($11::text IS NULL OR wp.status = $11)
             -- Tag filter. A correlated subquery in the same idiom as the goal filter above,
             -- rather than a join: tags live in `kb_properties` under the single key `tags`, not as
             -- a column on the `kb_resource_workflow_props` pivot (which holds one scalar per key).
@@ -257,9 +326,9 @@ async fn filtered_visible_page(
             -- time.
             --
             -- A resource with no `tags` property is excluded because the `coalesce` makes it the
-            -- EMPTY ARRAY and `'{{}}' @> $12` is false — NOT because it is NULL.
+            -- EMPTY ARRAY and `'{{}}' @> $9` is false — NOT because it is NULL.
             -- `[corrected — 2026-08-15, found in review]` This said it *aggregates to NULL, and
-            -- `NULL @> $12` is NULL, so it is correctly excluded*. `array_agg` over zero rows IS
+            -- `NULL @> $9` is NULL, so it is correctly excluded*. `array_agg` over zero rows IS
             -- NULL, but the `coalesce` sits inside this expression and never lets that NULL out, so
             -- the stated mechanism is not the one operating. The outcome was right and the reason
             -- was wrong, which is the dangerous combination: a reader who dropped the `coalesce`
@@ -276,45 +345,107 @@ async fn filtered_visible_page(
             -- definition, and this reads it, so a shape convention cannot be lost or wrongly
             -- inherited here (design §6.3). The view's `NOT is_folded` is the liveness predicate
             -- this used to spell itself.
-            AND ($12::text[] IS NULL OR (
+            AND ($9::text[] IS NULL OR (
                   SELECT coalesce(array_agg(DISTINCT lower(pe.element #>> '{{}}')), '{{}}')
                     FROM kb_property_elements pe
                    WHERE pe.owner_table = 'kb_resources' AND pe.owner_id = r.id
                      AND pe.property_key = 'tags'
-                ) @> $12)
+                ) @> $9)
           ORDER BY {sort_col} {dir}, r.id ASC",
         sort_col = sort_column_sql(sort),
     );
 
     // The goal filter matches the live `advances`→goal edge minted by the create/update
     // projection — same `edge_kind`='leads_to' and label (`GOAL_EDGE_LABEL`). They must agree.
+    //
+    // The binds are POSITIONAL: this sequence is `$1..$9` in order, and nothing checks the
+    // correspondence at compile time — a bind dropped or added out of order silently applies one
+    // caller's filter as another's. Read it against the WHERE clause above, one for one:
+    // $1 profile_id, $2 context_id, $3 owner_self, $4 owner_handle, $5 q, $6 goal,
+    // $7 GOAL_EDGE_LABEL, $8 cogmap_ids, $9 tag_filter.
     let rows = sqlx::query(&sql)
         .bind(profile_id)
         .bind(context_id)
-        .bind(params.doc_type_name.as_deref())
-        .bind(params.stage.as_deref())
         .bind(owner_self)
         .bind(owner_handle)
         .bind(params.q.as_deref())
         .bind(params.goal)
         .bind(super::db_backend::GOAL_EDGE_LABEL)
         .bind(cogmap_ids)
-        .bind(params.status.as_deref())
         .bind(tag_filter.as_deref())
         .fetch_all(pool)
         .await
         .map_err(api_err)?;
 
-    let total = rows.len() as i64;
-    let mut facets: HashMap<String, i64> = HashMap::new();
-    let mut all_ids: Vec<Uuid> = Vec::with_capacity(rows.len());
-    for row in &rows {
-        let id: Uuid = row.get("id");
-        if let Some(dt) = row.get::<Option<String>, _>("doc_type_name") {
-            *facets.entry(dt).or_insert(0) += 1;
+    // Decode once (see [`ScannedRow`]); the four passes below all read the same three columns.
+    let scanned: Vec<ScannedRow> = rows
+        .iter()
+        .map(|row| ScannedRow {
+            id: row.get("id"),
+            doc_type: row.get("doc_type_name"),
+            stage: row.get("stage"),
+            status: row.get("status"),
+        })
+        .collect();
+
+    // The three moved predicates, as closures — so each pass below states which ones it applies,
+    // and the one it omits is visible at the call site rather than buried in a condition. A row
+    // whose column is NULL fails a present filter (it is not the requested stage) but is admitted
+    // by an absent one, which is the same behaviour `wp.stage = $N` had against a LEFT JOIN.
+    let doc_type_ok = |row: &ScannedRow| match &doc_type_filter {
+        Some(wanted) => row
+            .doc_type
+            .as_deref()
+            .is_some_and(|dt| wanted.contains(dt)),
+        None => true,
+    };
+    let stage_ok = |row: &ScannedRow| match params.stage.as_deref() {
+        Some(wanted) => row.stage.as_deref() == Some(wanted),
+        None => true,
+    };
+    let status_ok = |row: &ScannedRow| match params.status.as_deref() {
+        Some(wanted) => row.status.as_deref() == Some(wanted),
+        None => true,
+    };
+
+    // Each histogram omits its OWN predicate and applies the other two, so it counts the options
+    // the caller did not pick — the counts a browse UI needs to offer them. `total`, below, is the
+    // fully-filtered count and remains the number that describes the page.
+    let mut doc_type_facets: HashMap<String, i64> = HashMap::new();
+    for row in scanned.iter().filter(|r| stage_ok(r) && status_ok(r)) {
+        if let Some(doc_type) = &row.doc_type {
+            *doc_type_facets.entry(doc_type.clone()).or_insert(0) += 1;
         }
-        all_ids.push(id);
     }
+    // A NULL stage/status is SKIPPED rather than counted under a synthetic key: "carries no
+    // temper-stage" is not a stage a caller can select, so a bucket for it would offer a filter
+    // value that does not exist. Most doc types carry neither key, so this is the common row.
+    let mut stage_facets: HashMap<String, i64> = HashMap::new();
+    for row in scanned.iter().filter(|r| doc_type_ok(r) && status_ok(r)) {
+        if let Some(stage) = &row.stage {
+            *stage_facets.entry(stage.clone()).or_insert(0) += 1;
+        }
+    }
+    let mut status_facets: HashMap<String, i64> = HashMap::new();
+    for row in scanned.iter().filter(|r| doc_type_ok(r) && stage_ok(r)) {
+        if let Some(status) = &row.status {
+            *status_facets.entry(status.clone()).or_insert(0) += 1;
+        }
+    }
+    let facets = ResourceFacets {
+        doc_type: doc_type_facets,
+        stage: stage_facets,
+        status: status_facets,
+    };
+
+    // The kept set: every predicate, in the SQL's ORDER BY order (a filter preserves order, so
+    // pagination below is unaffected by where the filtering happens).
+    let all_ids: Vec<Uuid> = scanned
+        .iter()
+        .filter(|r| doc_type_ok(r) && stage_ok(r) && status_ok(r))
+        .map(|r| r.id)
+        .collect();
+    let total = all_ids.len() as i64;
 
     let offset = params.offset.unwrap_or(0).max(0);
     let limit = params.limit.filter(|l| *l >= 0);
@@ -347,7 +478,9 @@ pub struct ResourceViewPage {
     pub views: Vec<ResourceView>,
     /// The FILTERED match count — every row the filters admit, before `limit`/`offset`.
     pub total: i64,
-    /// The doc-type histogram over the filtered set (`ResourceFacets` = "current filter set").
+    /// The doc-type/stage/status histograms. **Not** over the same set as `total`: each excludes
+    /// its own filter predicate (see [`ResourceFacets`]), so they describe what is reachable from
+    /// here while `total` describes the page itself.
     pub facets: ResourceFacets,
     /// The effective page size applied, or `None` for an uncapped page.
     pub limit: Option<i64>,
@@ -437,8 +570,10 @@ async fn fill_sections(
 /// the page. Do not reintroduce the loop — `list_page_is_one_batched_read_not_one_query_per_row`
 /// measures it.
 ///
-/// `total` = the FILTERED count (before limit/offset); `facets.doc_type` = the doctype histogram
-/// over the filtered set.
+/// `total` = the FILTERED count (before limit/offset). The three `facets` histograms are over
+/// DIFFERENT sets — each excludes its own filter predicate, so `facets.doc_type` counts kinds this
+/// page holds none of (see [`ResourceFacets`]). Summing a histogram will not give `total`, and it
+/// is not meant to.
 pub async fn list_views_select(
     pool: &PgPool,
     profile_id: ProfileId,
@@ -477,9 +612,7 @@ pub async fn list_views_select(
     Ok(ResourceViewPage {
         views,
         total: page.total,
-        facets: ResourceFacets {
-            doc_type: page.facets,
-        },
+        facets: page.facets,
         limit: page.limit,
         offset: page.offset,
     })

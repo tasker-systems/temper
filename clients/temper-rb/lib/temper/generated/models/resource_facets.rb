@@ -14,14 +14,23 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # Aggregated doc-type facet counts for the current filter set.
+  # Aggregated facet histograms for a list page: one per filterable dimension that publishes counts (`doc_type`, `stage`, `status`).  **Each histogram EXCLUDES its own filter predicate and is scoped by the others.** A histogram computed after its own predicate has been applied can only ever have one key — the key the caller already selected — which tells a browse UI nothing it did not already know and leaves every alternative unreachable, because the count that would justify offering it was filtered away. So `facets.doc_type` answers \"what would each doc-type yield under the *rest* of this filter set\", not \"what is in this page\". `total` is the fully-filtered count and is the number that describes the page; these three describe its neighbourhood.  Consequence for callers: filtering by doc-type and then reading `facets.doc_type` returns the whole distribution, including kinds no row on the page has. That is the point, not a leak — the counts are computed over the caller's already-visible set.
   class ResourceFacets < ApiModelBase
+    # Doc-type histogram over the visible set filtered by `stage` and `status` but **not** by `doc_type_name` — so every reachable kind keeps a count and a browse UI can offer it.
     attr_accessor :doc_type
+
+    # Stage histogram over the visible set filtered by `doc_type_name` and `status` but **not** by `stage`. Rows carrying no `temper-stage` are absent rather than counted under a synthetic key: \"has no stage\" is not a stage a caller can select.
+    attr_accessor :stage
+
+    # Status histogram over the visible set filtered by `doc_type_name` and `stage` but **not** by `status`. Rows carrying no `temper-status` are absent, for the same reason as `stage`.
+    attr_accessor :status
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
-        :'doc_type' => :'doc_type'
+        :'doc_type' => :'doc_type',
+        :'stage' => :'stage',
+        :'status' => :'status'
       }
     end
 
@@ -38,7 +47,9 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
-        :'doc_type' => :'Hash<String, Integer>'
+        :'doc_type' => :'Hash<String, Integer>',
+        :'stage' => :'Hash<String, Integer>',
+        :'status' => :'Hash<String, Integer>'
       }
     end
 
@@ -71,6 +82,22 @@ module Temper::Generated
       else
         self.doc_type = nil
       end
+
+      if attributes.key?(:'stage')
+        if (value = attributes[:'stage']).is_a?(Hash)
+          self.stage = value
+        end
+      else
+        self.stage = nil
+      end
+
+      if attributes.key?(:'status')
+        if (value = attributes[:'status']).is_a?(Hash)
+          self.status = value
+        end
+      else
+        self.status = nil
+      end
     end
 
     # Show invalid properties with the reasons. Usually used together with valid?
@@ -82,6 +109,14 @@ module Temper::Generated
         invalid_properties.push('invalid value for "doc_type", doc_type cannot be nil.')
       end
 
+      if @stage.nil?
+        invalid_properties.push('invalid value for "stage", stage cannot be nil.')
+      end
+
+      if @status.nil?
+        invalid_properties.push('invalid value for "status", status cannot be nil.')
+      end
+
       invalid_properties
     end
 
@@ -90,6 +125,8 @@ module Temper::Generated
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
       return false if @doc_type.nil?
+      return false if @stage.nil?
+      return false if @status.nil?
       true
     end
 
@@ -103,12 +140,34 @@ module Temper::Generated
       @doc_type = doc_type
     end
 
+    # Custom attribute writer method with validation
+    # @param [Object] stage Value to be assigned
+    def stage=(stage)
+      if stage.nil?
+        fail ArgumentError, 'stage cannot be nil'
+      end
+
+      @stage = stage
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] status Value to be assigned
+    def status=(status)
+      if status.nil?
+        fail ArgumentError, 'status cannot be nil'
+      end
+
+      @status = status
+    end
+
     # Checks equality by comparing each attribute.
     # @param [Object] Object to be compared
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
-          doc_type == o.doc_type
+          doc_type == o.doc_type &&
+          stage == o.stage &&
+          status == o.status
     end
 
     # @see the `==` method
@@ -120,7 +179,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [doc_type].hash
+      [doc_type, stage, status].hash
     end
 
     # Builds the object from hash
