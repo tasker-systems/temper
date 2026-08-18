@@ -13,7 +13,7 @@
 //! profile from the JWT claims before executing.
 
 use rmcp::{
-    handler::server::{common::Extension, router::tool::ToolRouter, wrapper::Parameters},
+    handler::server::{common::Extension, wrapper::Parameters},
     model::{
         CallToolResult, ListResourceTemplatesResult, ListResourcesResult, PaginatedRequestParams,
         ReadResourceRequestParams, ReadResourceResult, ServerCapabilities, ServerInfo,
@@ -31,15 +31,26 @@ use crate::middleware::BearerToken;
 use crate::tools;
 
 /// Central MCP service. One instance per client session.
+///
+/// The `ToolRouter` is **not** stored as a field. Under rmcp ≥ 1.4 the `#[tool_handler]` macro
+/// defaults to `Self::tool_router()` — rebuilding the router per `call_tool` / `list_tools`
+/// call — so a stored field would be dead weight: built in `new` and never read. Temper runs the
+/// streamable-HTTP transport in **stateless mode** (`with_stateful_mode(false)` in
+/// `router::build_router`), which calls the service factory — and thus `new` — once per HTTP
+/// request, so each service instance serves exactly one call. Building the router in `new` and
+/// reading it in `call_tool` is the same number of builds as building it in `call_tool` alone;
+/// the field bought nothing. Removing it also keeps the code aligned with the doc below: each
+/// invocation creates a fresh service, and the router is just as fresh.
+///
+/// `ToolRouter<Self>` is imported only because the `#[tool_router]` macro references it in its
+/// generated associated function; no value of that type lives on this struct.
 #[derive(Clone)]
 pub struct TemperMcpService {
     pub api_state: AppState,
-    tool_router: ToolRouter<Self>,
     /// Cached profile resolved from the Auth0 `sub` claim.
     profile: Arc<Mutex<Option<Profile>>>,
 }
 
-// Manual impl: `ToolRouter` does not implement Debug, so `tool_router` is omitted.
 impl std::fmt::Debug for TemperMcpService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TemperMcpService")
@@ -54,7 +65,6 @@ impl TemperMcpService {
     pub fn new(api_state: AppState) -> Self {
         Self {
             api_state,
-            tool_router: Self::tool_router(),
             profile: Arc::new(Mutex::new(None)),
         }
     }
@@ -724,6 +734,14 @@ mod tests {
     /// `tests/steward_skill_recipe_test.rs` pairs `"search"` with `schema_for!(SearchParams)` too,
     /// but that table is hand-written and validates the skill doc — it could drift from the router
     /// without anything noticing, which is the drift this closes.
+    ///
+    /// **rmcp 1.8 strips the top-level `title` and `description`** from the advertised input
+    /// schema (`schema_for_input` → `validate_and_strip` in `rmcp/handler/server/common.rs`),
+    /// deliberately, because the wrapper type name ("SearchParams") and its doc comment are noise
+    /// to the LLM. That is a presentation concern of the SDK, not a change in *which type* this
+    /// door declares — so the expected schema is stripped the same way before comparing. A real
+    /// drift (a wrapper, a subset, a hand-rolled twin) still fails this test: the `properties` map
+    /// and `type` are unaffected by the strip.
     #[test]
     fn the_search_tool_advertises_exactly_the_shared_search_params_schema() {
         let advertised = TemperMcpService::tool_router()
@@ -733,9 +751,16 @@ mod tests {
             .expect("the router advertises a `search` tool")
             .input_schema;
 
-        let shared =
+        let mut shared =
             serde_json::to_value(schemars::schema_for!(temper_core::types::api::SearchParams))
                 .expect("SearchParams schema serializes");
+        // Mirror rmcp 1.8's `validate_and_strip`: drop the top-level wrapper-type metadata so
+        // the comparison is against the schema the door actually advertises, not the raw
+        // schemars output. rmcp strips these because the type name and doc are noise to the LLM.
+        if let Some(obj) = shared.as_object_mut() {
+            obj.remove("title");
+            obj.remove("description");
+        }
 
         assert_eq!(
             serde_json::to_value(&*advertised).expect("advertised schema serializes"),
