@@ -10,7 +10,7 @@ temper-core = { path = "../temper-core", features = ["web-api", "mcp"] }
 temper-workflow = { path = "../temper-workflow", features = ["web-api", "mcp"] }
 temper-telemetry = { path = "../temper-telemetry" }
 
-rmcp = { version = "1.3", features = [
+rmcp = { version = "1.8", features = [
     "server",
     "transport-streamable-http-server",
 ] }
