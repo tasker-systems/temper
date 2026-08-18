@@ -544,7 +544,7 @@ git commit -m "feat(ui): kind-aware column derivation with a schema drift guard"
 
 **Interfaces:**
 - Consumes: everything exported by `vault-filters.ts` (Task 3).
-- Produces: `<FilterBar {filters} {facets} {revealed} {fixedContext} {contexts} />` for Task 7.
+- Produces: `<FilterBar {filters} {revealed} {fixedContext} {contexts} />` for Task 7. **No `facets` prop** — `revealed` is already computed by `VaultBrowser` via `revealedKind`, so the bar never needs the histogram itself. (An earlier draft of this line declared one; it was dead on arrival and removed.)
 - `contexts: ContextRowWithCounts[]` is the option list for the Context select. It is **not** a new fetch: `(app)/+layout.server.ts:37-48` already loads `/api/contexts` for the sidebar, so it arrives as layout data. Task 7 threads it through `VaultBrowser`. Each option's value is the decorated `` `${owner_ref}/${slug}` `` ref, which is exactly what the door's `context_ref` accepts (`resource.rs:66-69` — "UUID string or `@owner/slug` decorated ref. Bare context names are rejected server-side").
 
 **Grounded facts:**
