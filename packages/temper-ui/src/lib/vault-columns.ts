@@ -1,3 +1,5 @@
+import type { ResourceSortField } from '$lib/types';
+
 /**
  * One column as `wx-svelte-grid` expects it (`VaultGrid.svelte:34-40`). `id` is
  * both the grid's cell key and, for managed columns, the `managed_meta` lookup
@@ -91,4 +93,62 @@ export function columnsFor(kind: string | null): VaultColumn[] {
 
 	columns.push({ id: 'updated', header: 'Updated', width: 110, sort: true });
 	return columns;
+}
+
+/**
+ * Every field the door accepts for `sort` (`ResourceSortField`). A header click may only
+ * reach the URL with a value in here, and a `sort` param outside it never came from this UI
+ * — the door rejects it before a page is ever rendered.
+ */
+export const SORTABLE_FIELDS: ReadonlySet<string> = new Set<ResourceSortField>([
+	'updated',
+	'created',
+	'title',
+	'stage',
+	'seq',
+	'context_name',
+	'doc_type_name',
+]);
+
+/**
+ * `SORTABLE_FIELDS` intersected with the columns actually on screen, so no header offers a
+ * sort for a column that isn't shown. Values are door-facing sort fields
+ * (`column.sortKey ?? column.id`), not grid column ids — the two differ for `temper-stage`.
+ */
+export function visibleSortFields(columns: VaultColumn[]): Set<string> {
+	return new Set(
+		columns
+			.filter((c) => c.sort && SORTABLE_FIELDS.has(c.sortKey ?? c.id))
+			.map((c) => c.sortKey ?? c.id),
+	);
+}
+
+/** An active sort no visible column can carry the indicator for. */
+export interface OrphanSort {
+	field: string;
+	order: 'asc' | 'desc';
+}
+
+/**
+ * The sort the door is applying that no visible column marks — or `null` when the visible
+ * columns cover it.
+ *
+ * The column set narrows with the visible kind, so a sort survives its own column
+ * disappearing: sort an all-task set by Stage, deselect the `task` chip, and the set goes
+ * mixed, `columnsFor(null)` emits no stage column, and every header renders unsorted — while
+ * the door is still ordering by `wp.stage`. The URL and the screen then disagree, and the
+ * screen is the one that is wrong.
+ *
+ * Naming it beats clearing it: the sort is a thing the user asked for and is still getting,
+ * and a URL someone pastes to a colleague must show them the same ordering it shows the
+ * sender. The grid renders this as a chip with a clear affordance, so the state is both
+ * visible and escapable.
+ */
+export function orphanSort(
+	sortField: string | null,
+	order: string | null,
+	visible: ReadonlySet<string>,
+): OrphanSort | null {
+	if (!sortField || !SORTABLE_FIELDS.has(sortField) || visible.has(sortField)) return null;
+	return { field: sortField, order: order === 'asc' ? 'asc' : 'desc' };
 }

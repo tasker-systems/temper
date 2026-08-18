@@ -27,7 +27,9 @@ export interface VaultList {
 	total: number;
 	returned: number;
 	truncated: boolean;
-	limit: number;
+	/** The page size the server actually applied, or `null` for an uncapped page. */
+	limit: number | null;
+	/** The offset the page actually starts at — already floored at 0 by the server. */
 	offset: number;
 	facets: VaultFacets;
 }
@@ -49,18 +51,82 @@ export function toVaultFacets(facets: ResourceFacets): VaultFacets {
 }
 
 /**
- * Convert one list response into page data. `params` is the query the server actually sent,
- * so `limit`/`offset` describe the page that came back rather than what the URL asked for.
+ * Convert one list response into page data.
+ *
+ * `limit`/`offset` come from the ENVELOPE, never from the request URL. The door normalizes
+ * before it cuts the page — a negative offset is floored at 0, a negative limit means
+ * uncapped — and echoes what it applied precisely so callers do not have to guess
+ * (`substrate_read.rs:70-74`: "two derivations of 'the effective page' would drift, and the
+ * reported one would be the one that is not the truth"). Re-deriving them from the query is
+ * that second derivation: `?offset=-10` over 100 rows had the grid render `-9–40 of 100`,
+ * page `0/2`, and a Next button that jumped to `offset=40` — silently skipping rows 40–49.
+ *
+ * `limit` stays `number | null` rather than being coerced: `null` is "uncapped", which is a
+ * different statement from any page size, and `Number(null)` is `0`, which is a third.
  */
-export function toVaultList(response: ResourceListResponse, params: URLSearchParams): VaultList {
+export function toVaultList(response: ResourceListResponse): VaultList {
 	return {
 		rows: response.rows,
 		total: Number(response.total),
 		returned: Number(response.returned),
 		truncated: response.truncated,
-		limit: Number(params.get('limit')),
-		offset: Number(params.get('offset') ?? 0),
+		limit: response.limit === null ? null : Number(response.limit),
+		offset: Number(response.offset),
 		facets: toVaultFacets(response.facets),
+	};
+}
+
+/** What the grid's paging chrome renders, derived once from the envelope's own numbers. */
+export interface PageState {
+	/** 1-based index of the first row on this page; `0` when the page is empty. */
+	rangeStart: number;
+	/** 1-based index of the last row on this page; `0` when the page is empty. */
+	rangeEnd: number;
+	currentPage: number;
+	totalPages: number;
+	hasPrev: boolean;
+	hasNext: boolean;
+	/** The offset the Previous button navigates to — never negative. */
+	prevOffset: number;
+	/** The offset the Next button navigates to. */
+	nextOffset: number;
+	/** Is there more than one page to move between at all? */
+	paged: boolean;
+}
+
+/**
+ * Paging chrome from the page the server actually returned.
+ *
+ * An uncapped page (`limit === null`, i.e. `--all`) is one page by definition, and so is a
+ * `limit <= 0` echo — `Math.floor(0 / 0)` is `NaN` and `Math.ceil(n / 0)` is `Infinity`, so
+ * both would otherwise render as a page counter that is not a number.
+ *
+ * `hasNext` is `truncated`, the server's own answer to "are there matching rows beyond this
+ * page" (`offset + returned < total`), rather than a page-count comparison the UI computes.
+ */
+export function pageState(list: {
+	total: number;
+	returned: number;
+	truncated: boolean;
+	limit: number | null;
+	offset: number;
+}): PageState {
+	const { total, returned, truncated, limit, offset } = list;
+	const capped = limit !== null && limit > 0;
+	const currentPage = capped ? Math.floor(offset / limit) + 1 : 1;
+	return {
+		rangeStart: returned === 0 ? 0 : offset + 1,
+		rangeEnd: returned === 0 ? 0 : offset + returned,
+		currentPage,
+		// `currentPage` is a floor, never a ceiling: an offset past the end of the filtered set
+		// is a real page the user can be sitting on, and "3/1" would be a counter that cannot
+		// be true. The Previous button (`hasPrev`) is how they get back from there.
+		totalPages: capped ? Math.max(1, currentPage, Math.ceil(total / limit)) : 1,
+		hasPrev: offset > 0,
+		hasNext: truncated,
+		prevOffset: capped ? Math.max(0, offset - limit) : 0,
+		nextOffset: capped ? offset + limit : offset,
+		paged: capped && (offset > 0 || truncated),
 	};
 }
 

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { MANAGED_KEY_ORDER } from './properties';
-import { columnsFor, KIND_KEYS } from './vault-columns';
+import { columnsFor, KIND_KEYS, orphanSort, visibleSortFields } from './vault-columns';
 
 const schemaProps = (kind: string): string[] => {
 	const path = new URL(
@@ -84,5 +84,52 @@ describe('columnsFor', () => {
 
 	it('gives no sortKey to columns whose id is already the sort field', () => {
 		expect(columnsFor(null).find((c) => c.id === 'title')!.sortKey).toBeUndefined();
+	});
+});
+
+describe('visibleSortFields', () => {
+	it('names door-facing sort fields, not grid column ids', () => {
+		const fields = visibleSortFields(columnsFor('task'));
+		expect(fields.has('stage')).toBe(true);
+		expect(fields.has('temper-stage')).toBe(false);
+	});
+
+	it('omits a column that is not marked sortable', () => {
+		expect(visibleSortFields(columnsFor('goal')).has('status')).toBe(false);
+	});
+
+	it('omits the stage field once the stage column is gone', () => {
+		expect(visibleSortFields(columnsFor(null)).has('stage')).toBe(false);
+	});
+});
+
+describe('orphanSort', () => {
+	const mixed = visibleSortFields(columnsFor(null));
+
+	// The repro: sort an all-task set by Stage, deselect the `task` chip, and the stage column
+	// disappears while the door keeps ordering by `wp.stage`. Every header then renders
+	// unsorted — the URL and the screen disagree, and the screen is the one that is wrong.
+	it('names a sort no visible column can mark', () => {
+		expect(orphanSort('stage', 'desc', mixed)).toEqual({ field: 'stage', order: 'desc' });
+	});
+
+	it('is null when a visible column carries the indicator', () => {
+		expect(orphanSort('stage', 'asc', visibleSortFields(columnsFor('task')))).toBeNull();
+		expect(orphanSort('title', 'asc', mixed)).toBeNull();
+	});
+
+	it('is null when nothing is sorted', () => {
+		expect(orphanSort(null, null, mixed)).toBeNull();
+	});
+
+	// A `sort` the door rejects never renders a page at all, so naming it would be noise.
+	it('ignores a sort field the door does not accept', () => {
+		expect(orphanSort('bogus', 'desc', mixed)).toBeNull();
+	});
+
+	it('defaults a missing or unrecognized order to desc, matching what handleSort writes', () => {
+		expect(orphanSort('stage', null, mixed)?.order).toBe('desc');
+		expect(orphanSort('stage', 'sideways', mixed)?.order).toBe('desc');
+		expect(orphanSort('stage', 'asc', mixed)?.order).toBe('asc');
 	});
 });

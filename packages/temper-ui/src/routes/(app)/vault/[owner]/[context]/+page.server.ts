@@ -19,6 +19,6 @@ export const load: PageServerLoad = async ({ locals, url, params: routeParams })
 	return {
 		owner: routeParams.owner,
 		context: routeParams.context,
-		list: toVaultList(resources, params),
+		list: toVaultList(resources),
 	};
 };

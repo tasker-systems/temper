@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
-	import { parseFilters, toggleDocType } from '$lib/vault-filters';
+	import { docTypeChips, parseFilters, toggleDocType } from '$lib/vault-filters';
 
 	interface Props {
 		facets: Record<string, number> | null;
@@ -11,13 +11,10 @@
 
 	let activeDocTypes = $derived(parseFilters($page.url).docTypes);
 
-	let sorted = $derived(
-		facets
-			? Object.entries(facets)
-					.sort(([, a], [, b]) => b - a)
-					.map(([name, count]) => ({ name, count }))
-			: []
-	);
+	// `docTypeChips` — not the histogram directly — because the door emits no zero-count keys,
+	// so a selected doc-type that admits nothing would render no chip at all, and the chip is
+	// the only control that can deselect it.
+	let sorted = $derived(docTypeChips(facets, activeDocTypes));
 
 	function toggle(name: string) {
 		goto(toggleDocType($page.url, name), { replaceState: true });
@@ -26,8 +23,7 @@
 
 {#if sorted.length > 0}
 	<div class="flex flex-wrap gap-1.5">
-		{#each sorted as { name, count }}
-			{@const active = activeDocTypes.includes(name)}
+		{#each sorted as { name, count, active } (name)}
 			<button
 				class="inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-mono tracking-wide transition-colors
 					{active

@@ -33,8 +33,12 @@
 		 * when `list` is `null`.
 		 */
 		loadError?: string | null;
-		/** Contexts for the Context select, from the `(app)` layout's already-loaded copy. */
-		contexts: ContextRowWithCounts[];
+		/**
+		 * Contexts for the Context select, from the `(app)` layout's already-loaded copy, or
+		 * `null` when that read failed. Passed through as-is: only the select can tell the
+		 * difference between "no contexts" and "we could not find out", and it must.
+		 */
+		contexts: ContextRowWithCounts[] | null;
 		/** The route pins `context_ref` itself, so the Context select is not offered. */
 		fixedContext?: boolean;
 		/** Leading caption segment, e.g. the owner on a context page. */

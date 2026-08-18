@@ -3,41 +3,56 @@
 	import { page } from '$app/stores';
 	import { untrack } from 'svelte';
 	import type { ContextRowWithCounts } from '$lib/types';
-	import { buildFilterUrl, type VaultFilters } from '$lib/vault-filters';
-
-	// Enum sources: `crates/temper-workflow/schemas/task.schema.json` (stage) and
-	// `goal.schema.json` (status). `schema.rs:830/843` carries matching literals but is
-	// test-fixture code, not the source — never cite it for these values.
-	const STAGES = ['backlog', 'in-progress', 'done', 'cancelled'] as const;
-	const STATUSES = ['active', 'completed', 'paused', 'cancelled'] as const;
+	import {
+		draftNavigationSettled,
+		draftNavigationStarted,
+		draftTyped,
+		draftUrlChanged,
+		newDraft
+	} from '$lib/vault-draft';
+	import { buildFilterUrl, STAGES, STATUSES, type VaultFilters } from '$lib/vault-filters';
 
 	interface Props {
 		filters: VaultFilters;
 		revealed: string | null;
 		fixedContext: boolean;
-		contexts: ContextRowWithCounts[];
+		/**
+		 * Contexts for the Context select, or `null` when the layout could not read them.
+		 * `null` is not an empty list: an empty list says "there is nothing to filter by",
+		 * which is exactly the claim a failed fetch may not make.
+		 */
+		contexts: ContextRowWithCounts[] | null;
 	}
 
 	let { filters, revealed, fixedContext, contexts }: Props = $props();
 
 	// Local drafts for the free-text controls so keystrokes don't each trigger a navigation.
-	// The URL (via `filters`) is still the source of truth — resynced whenever it changes
-	// out from under us (browser back/forward, another control's navigation).
-	let qDraft = $state(untrack(() => filters.q ?? ''));
+	// The URL (via `filters`) is still the source of truth, but only when this control has
+	// nothing outstanding — see `vault-draft.ts` for why a bare resync ate keystrokes.
+	let q = $state(untrack(() => newDraft(filters.q ?? '')));
 	let tagDraft = $state('');
 	let qDebounce: ReturnType<typeof setTimeout>;
 
 	$effect(() => {
-		qDraft = filters.q ?? '';
+		const incoming = filters.q ?? '';
+		q = draftUrlChanged(untrack(() => q), incoming);
 	});
 
-	function navigate(patch: Partial<VaultFilters>) {
-		goto(buildFilterUrl($page.url, patch), { replaceState: true });
+	// Returns the navigation so the `q` draft can tell when its own round-trip has settled —
+	// until then an incoming URL value is this control's own echo, not an external change.
+	function navigate(patch: Partial<VaultFilters>): Promise<void> {
+		return goto(buildFilterUrl($page.url, patch), { replaceState: true });
 	}
 
-	function onQInput() {
+	function onQInput(event: Event) {
+		q = draftTyped(q, (event.currentTarget as HTMLInputElement).value);
 		clearTimeout(qDebounce);
-		qDebounce = setTimeout(() => navigate({ q: qDraft.trim() || null }), 300);
+		qDebounce = setTimeout(() => {
+			q = draftNavigationStarted(q);
+			navigate({ q: q.requested || null }).finally(() => {
+				q = draftNavigationSettled(q);
+			});
+		}, 300);
 	}
 
 	function onContextChange(event: Event) {
@@ -81,7 +96,7 @@
 		<input
 			id="filter-q"
 			type="text"
-			bind:value={qDraft}
+			value={q.draft}
 			oninput={onQInput}
 			placeholder="title contains…"
 			class="w-48 rounded border border-zinc-700/50 bg-zinc-800/50 px-2.5 py-1 text-xs text-zinc-200
@@ -94,18 +109,37 @@
 			<label for="filter-context" class="text-[10px] uppercase tracking-widest text-zinc-500"
 				>context</label
 			>
-			<select
-				id="filter-context"
-				value={filters.contextRef ?? ''}
-				onchange={onContextChange}
-				class="rounded border border-zinc-700/50 bg-zinc-800/50 px-2.5 py-1 text-xs text-zinc-200
-				       outline-none focus:border-quiet-border"
-			>
-				<option value="">All contexts</option>
-				{#each contexts as ctx (ctx.id)}
-					<option value={`${ctx.owner_ref}/${ctx.slug}`}>{ctx.name}</option>
-				{/each}
-			</select>
+			<!--
+				A failed context read renders as unavailable, not as "no contexts". An empty
+				select reads as "there is nothing to filter by" — a claim about the vault that a
+				fetch which never answered cannot support. The sidebar can degrade to an empty
+				list (a context that doesn't render is simply not offered); a filter control
+				cannot, because absence there is an assertion.
+			-->
+			{#if contexts === null}
+				<select
+					id="filter-context"
+					disabled
+					title="The context list could not be read — reload to try again."
+					class="rounded border border-amber-500/30 bg-zinc-800/50 px-2.5 py-1 text-xs text-zinc-500
+					       outline-none"
+				>
+					<option value="">contexts unavailable</option>
+				</select>
+			{:else}
+				<select
+					id="filter-context"
+					value={filters.contextRef ?? ''}
+					onchange={onContextChange}
+					class="rounded border border-zinc-700/50 bg-zinc-800/50 px-2.5 py-1 text-xs text-zinc-200
+					       outline-none focus:border-quiet-border"
+				>
+					<option value="">All contexts</option>
+					{#each contexts as ctx (ctx.id)}
+						<option value={`${ctx.owner_ref}/${ctx.slug}`}>{ctx.name}</option>
+					{/each}
+				</select>
+			{/if}
 		</div>
 	{/if}
 

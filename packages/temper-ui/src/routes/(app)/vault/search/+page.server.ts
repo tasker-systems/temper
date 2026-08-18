@@ -28,7 +28,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 			`/api/resources?${params}`,
 			locals.accessToken!,
 		);
-		list = toVaultList(resources, params);
+		list = toVaultList(resources);
 	} catch (err) {
 		loadError = searchFailureMessage(err instanceof ApiError ? err.status : null);
 	}

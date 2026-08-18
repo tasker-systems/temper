@@ -15,5 +15,5 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		locals.accessToken!,
 	);
 
-	return { list: toVaultList(resources, params) };
+	return { list: toVaultList(resources) };
 };
