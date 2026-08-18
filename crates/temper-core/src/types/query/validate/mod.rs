@@ -1156,6 +1156,39 @@ mod tests {
             .any(|e| e.reason == RefusalReason::BoundTermNotApplicable));
     }
 
+    /// **A bound term an act does not admit is refused before execution.** The admission arm of
+    /// `BoundTermNotApplicable` — `!decl.accepts_bound_terms.contains(term)` in `capability.rs` —
+    /// had no witness anywhere in the tree. The negative-value arm was witnessed
+    /// ([`a_negative_paging_term_is_refused_rather_than_handed_to_postgres`]) and the declaration
+    /// arm was witnessed by [`survey_declines_limit_because_its_bound_is_a_funnel_width`], but
+    /// nothing would go red if `survey` or `find-resources-with` silently gained `Offset`.
+    ///
+    /// `[added — 2026-08-18]` PR #708 ADDED a term to an act, which makes the blast radius of
+    /// "which acts admit which terms" exactly the thing that is unguarded. `find-resources-with`
+    /// declares `accepts_bound_terms: vec![]` while being row-returning — the shape most likely to
+    /// acquire one by mistake — and `survey` admits `Regions` and not `Offset`. Both must refuse
+    /// `Offset` statically, before execution.
+    ///
+    /// Parameterised over both acts so the test fails if the admission check is removed for
+    /// EITHER an act that admits no terms at all or one that admits a different term.
+    #[test]
+    fn an_offset_on_an_act_that_does_not_admit_it_is_refused_before_execution() {
+        for a in [ActName::FindResourcesWith, ActName::Survey] {
+            let mut node = act("s", a.clone(), None);
+            if let StageNode::Act(inv) = &mut node {
+                inv.terms.insert(BoundTerm::Offset, 10);
+            }
+            let c = plan_with_intention(vec![node], vec!["s"]);
+            let errs = validate(&c).unwrap_err();
+            assert!(
+                errs.iter()
+                    .any(|e| e.reason == RefusalReason::BoundTermNotApplicable),
+                "{a:?} does not admit `offset` and must refuse it statically, before execution; \
+                 got: {errs:?}"
+            );
+        }
+    }
+
     /// **Every narrowing this door drops is refused — all nine, not the one that had a test.**
     ///
     /// A narrowing is "declined, never ignored": accepting one the compiler emits no slot for
