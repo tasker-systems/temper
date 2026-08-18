@@ -15,6 +15,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	return {
 		rows: resources.rows,
 		total: Number(resources.total),
+		returned: Number(resources.returned),
+		truncated: resources.truncated,
 		limit: Number(params.get('limit')),
 		offset: Number(params.get('offset') ?? 0),
 		facets: Object.fromEntries(

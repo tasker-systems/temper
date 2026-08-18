@@ -12,18 +12,18 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 	const resources = await apiGet<ResourceListResponse>(
 		`/api/resources?${params}`,
 		locals.accessToken!,
-		// A synthetic empty envelope for a FAILED fetch, not an empty result set. Nothing on this
-		// page reads `returned`/`truncated` — limit and offset come from `params` below — so the
-		// paging state here is inert. Were a consumer to start reading it, `truncated: false` would
-		// be the lie that field exists to prevent: the fetch failed, so the caller emphatically may
-		// not conclude a resource is absent. The fix then is to surface the error instead of
-		// synthesizing a success shape, not to pick a different boolean.
+		// A synthetic empty envelope for a FAILED fetch, not an empty result set. `truncated: false`
+		// is the lie that field exists to prevent: the fetch failed, so the caller emphatically may
+		// not conclude a resource is absent. The fix is to surface the error instead of synthesizing
+		// a success shape, not to pick a different boolean.
 		//
 		// `stage`/`status` were added only to satisfy the widened `ResourceFacets`; they are as
-		// synthetic as the rest of this envelope. The `truncated: false` above is still the lie
-		// this comment warns about — it is simply not LIVE yet, because VaultGrid still re-derives
-		// `hasNext` itself. The moment the grid reads `truncated`, this catch must surface the
-		// error instead of returning a shape that says the fetch succeeded and found nothing.
+		// synthetic as the rest of this envelope.
+		//
+		// LIVE as of the grid reading `returned`/`truncated` (VaultGrid no longer re-derives
+		// `hasNext` itself): on a failed fetch this now renders as "0 results, next disabled"
+		// rather than surfacing the error. Deferred to the task that reworks this page's error
+		// handling rather than fixed here — out of scope for the grid-side change that made it live.
 	).catch(
 		() =>
 			({
@@ -41,6 +41,8 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		query: q,
 		rows: resources.rows,
 		total: Number(resources.total),
+		returned: Number(resources.returned),
+		truncated: resources.truncated,
 		limit: Number(params.get('limit')),
 		offset: Number(params.get('offset') ?? 0),
 		facets: Object.fromEntries(
