@@ -18,12 +18,18 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		// be the lie that field exists to prevent: the fetch failed, so the caller emphatically may
 		// not conclude a resource is absent. The fix then is to surface the error instead of
 		// synthesizing a success shape, not to pick a different boolean.
+		//
+		// `stage`/`status` were added only to satisfy the widened `ResourceFacets`; they are as
+		// synthetic as the rest of this envelope. The `truncated: false` above is still the lie
+		// this comment warns about — it is simply not LIVE yet, because VaultGrid still re-derives
+		// `hasNext` itself. The moment the grid reads `truncated`, this catch must surface the
+		// error instead of returning a shape that says the fetch succeeded and found nothing.
 	).catch(
 		() =>
 			({
 				rows: [],
 				total: BigInt(0),
-				facets: { doc_type: {} },
+				facets: { doc_type: {}, stage: {}, status: {} },
 				returned: BigInt(0),
 				truncated: false,
 				limit: null,
