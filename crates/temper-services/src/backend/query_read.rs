@@ -1890,6 +1890,47 @@ mod tests {
         );
     }
 
+    /// **A `survey` stage reports `Indeterminate`, and the reason names the funnel.** A region
+    /// funnel PRODUCES its candidate set rather than selecting from one, so there is no remainder
+    /// to report — the same `Indeterminate` the refusal arm returns, reached for a different
+    /// reason and through a different arm of `extent_of`.
+    ///
+    /// `[added — 2026-08-18]` The `survey` arm of `extent_of` was live and untested. Its doc block
+    /// claimed for months that `survey` had left `CALLABLE_FRAGMENTS` and no
+    /// `ValidatedComposition` could carry a `survey` stage to the function — a stale
+    /// unreachability claim that justified the arm having no test. That stopped being true on
+    /// 2026-08-16, and PR #708 corrected the claim and widened `extent_of` to run for every
+    /// stage, which enlarged the set of compositions reaching this arm. This test fails if the
+    /// `survey` arm is removed: without it, a `survey` stage with no refusal and no limit falls
+    /// through to `Complete`, which is a false claim over a corpus the survey never counted.
+    #[test]
+    fn a_survey_stage_reports_an_indeterminate_extent_because_a_funnel_produces_its_set() {
+        let v = plan(
+            vec![act_node("shape", ActName::Survey, None)],
+            vec!["shape"],
+        );
+        let rows = QueryRows {
+            hits: vec![],
+            tallies: vec![tally("shape", 0, 0)],
+            refusals: vec![],
+        };
+        let r = assemble(&v, &rows, &Hydrated::default());
+        match &r.returned[&name("shape")].extent {
+            temper_core::types::query::Extent::Indeterminate { reason } => {
+                assert!(
+                    reason.contains("funnel"),
+                    "the reason must name the funnel — a funnel produces its candidate set rather \
+                     than selecting from one, so there is no remainder to report; got: {reason:?}"
+                );
+            }
+            other => panic!(
+                "expected Indeterminate for a survey stage; got {other:?}. Removing the `survey` \
+                 arm of `extent_of` makes this fall through to `Complete`, which is a false claim \
+                 over a corpus a survey never counted."
+            ),
+        }
+    }
+
     /// A stage that ran and matched nothing IS complete — an honest zero is a complete answer.
     #[test]
     fn a_stage_that_ran_and_matched_nothing_is_complete_because_it_did_consult_the_corpus() {

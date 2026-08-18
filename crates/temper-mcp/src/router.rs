@@ -50,9 +50,18 @@ pub fn build_router(api_state: AppState, mcp_config: McpConfig) -> Router {
     // StreamableHttpService handles POST /mcp, GET /mcp (SSE), DELETE /mcp.
     // Using stateless mode (json_response + !stateful_mode) for Vercel
     // serverless compatibility — each invocation is independent.
+    //
+    // `disable_allowed_hosts`: rmcp 1.4+ added DNS-rebinding protection that rejects any `Host`
+    // header not in a loopback-only allowlist (`localhost`, `127.0.0.1`, `::1`). On Vercel the
+    // `Host` header is the deployment domain (production `temperkb.io`, dynamic preview URLs),
+    // so the default allowlist would 400 every production request. Temper's auth middleware
+    // (`require_mcp_auth`) is the real gate here, and a static host allowlist cannot track
+    // Vercel's per-deployment preview domains. The rebinding check is a local-server guard and
+    // is not the right gate for a serverless deployment behind Vercel's edge + temper's own auth.
     let config = StreamableHttpServerConfig::default()
         .with_stateful_mode(false)
-        .with_json_response(true);
+        .with_json_response(true)
+        .disable_allowed_hosts();
 
     let mcp_service = StreamableHttpService::new(
         move || Ok(TemperMcpService::new(api_state.clone())),
