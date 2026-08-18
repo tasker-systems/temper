@@ -36,8 +36,8 @@ totals:
     than ''nothing to check yet'''
   clauses: 142
   clauses_withdrawn: 2
-  witness_citations: 114
-  witness_citations_unresolved: 8
+  witness_citations: 129
+  witness_citations_unresolved: 10
 registers:
 - goal_id: 019f25d6-e1a9-7360-8a35-6bdf8ef53940
   goal_title: 'Teams in Temper: usable multi-user collaboration surface'
@@ -1221,10 +1221,16 @@ registers:
       kind: function
       resolves: true
       found_in: crates/temper-substrate/tests/query_plan_compile.rs
+    - name: an_intermediate_stages_trace_reports_the_page_it_ran_and_that_the_page_was_truncated
+      kind: function
+      resolves: false
+    - name: a_partial_walk_is_settled_by_the_page_behind_it
+      kind: function
+      resolves: false
     citations_witnesses:
     - 01a00670-e069-7dd2-a213-7b1cf4317d02
   advancing:
-    total: 37
+    total: 40
     citing_nothing:
     - 019fd214-add4-7ab3-8653-0a07727bbfe2
     - 019fd25e-95f0-7373-9a6e-0574deea5ab3
@@ -1254,6 +1260,9 @@ registers:
     - 01a00a79-6ad9-70d3-9bb7-4bf3ec08df0a
     - 01a00c0b-9a02-72a0-9bd5-a3e204d267b4
     - 01a00c93-c1e7-7762-8109-49c71712e982
+    - 01a010ec-98b9-7220-b6f4-b210c7a7fe39
+    - 01a0112c-4155-7b62-9a63-85e79c970125
+    - 01a0149c-c723-7612-9f13-42cced6dfb5a
 - goal_id: 019fbf6a-34d7-7a00-9bb2-7d61faa2ce38
   goal_title: Operational memory travels with the work, not with the machine — and what it says about
     itself is true
@@ -1454,20 +1463,87 @@ registers:
     - 01a00f77-2c87-7c13-9296-df9765c08280
   - name: sources-that-disagree-are-reported-as-disagreeing
     interrogatable: true
+    register_table:
+    - name: test_the_four_sources_are_emitted_as_separate_keys_and_never_summed
+      kind: function
+      resolves: true
+      found_in: tools/tests/test_projection_witnesses.py
+    - name: test_an_enables_citation_and_a_witnesses_citation_are_not_the_same_field
+      kind: function
+      resolves: true
+      found_in: tools/tests/test_projection_witnesses.py
+    citations_witnesses:
+    - 01a011b1-eed9-70d2-9dba-991fd1fe15c0
     citations_enables:
     - 01a00f77-2c87-7c13-9296-df9765c08280
   - name: regenerating-against-unchanged-sources-changes-nothing
     interrogatable: true
+    register_table:
+    - name: test_rendering_the_same_document_twice_produces_byte_identical_output
+      kind: function
+      resolves: true
+      found_in: tools/tests/test_projection_witnesses.py
+    - name: test_shuffling_the_input_order_does_not_change_the_rendered_output
+      kind: function
+      resolves: true
+      found_in: tools/tests/test_projection_witnesses.py
+    - name: test_no_timestamp_or_generated_at_key_appears_in_the_rendered_output
+      kind: function
+      resolves: true
+      found_in: tools/tests/test_projection_witnesses.py
+    citations_witnesses:
+    - 01a011b1-eed9-70d2-9dba-991fd1fe15c0
     citations_enables:
     - 01a00f77-2c87-7c13-9296-df9765c08280
   - name: an-unresolvable-witness-must-never-count-as-a-covered-clause
     interrogatable: true
+    register_table:
+    - name: test_a_clause_with_an_unresolved_witness_carries_no_verdict_field
+      kind: function
+      resolves: true
+      found_in: tools/tests/test_projection_witnesses.py
+    - name: test_the_totals_report_the_unresolved_count_and_never_fold_it_into_a_covered_figure
+      kind: function
+      resolves: true
+      found_in: tools/tests/test_projection_witnesses.py
+    citations_witnesses:
+    - 01a011b1-eed9-70d2-9dba-991fd1fe15c0
   - name: a-total-must-never-be-reported-over-a-source-that-was-not-read
     interrogatable: true
+    register_table:
+    - name: test_a_truncated_listing_page_raises_rather_than_being_projected_as_a_whole
+      kind: function
+      resolves: true
+      found_in: tools/tests/test_projection_witnesses.py
+    - name: test_a_non_truncated_page_returns_its_rows
+      kind: function
+      resolves: true
+      found_in: tools/tests/test_projection_witnesses.py
+    - name: test_totals_carry_their_denominators_beside_their_counts
+      kind: function
+      resolves: true
+      found_in: tools/tests/test_projection_witnesses.py
+    citations_witnesses:
+    - 01a011b1-eed9-70d2-9dba-991fd1fe15c0
   - name: the-projection-must-never-become-the-authority-over-the-register
     interrogatable: true
+    register_table:
+    - name: test_the_header_names_the_register_s_own_table_as_the_record
+      kind: function
+      resolves: true
+      found_in: tools/tests/test_projection_witnesses.py
+    - name: test_no_emitted_doc_carries_a_verdict_or_covered_field
+      kind: function
+      resolves: true
+      found_in: tools/tests/test_projection_witnesses.py
+    - name: test_the_source_layer_only_reads_and_never_writes_to_the_knowledge_base
+      kind: function
+      resolves: true
+      found_in: tools/tests/test_projection_witnesses.py
+    citations_witnesses:
+    - 01a011b1-eed9-70d2-9dba-991fd1fe15c0
   advancing:
-    total: 1
+    total: 2
     citing_nothing: []
   coverage_rows_naming_no_clause:
   - every negative-face clause
