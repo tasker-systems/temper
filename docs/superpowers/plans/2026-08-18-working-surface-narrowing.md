@@ -413,6 +413,8 @@ export interface VaultColumn {
 	width?: number;
 	flexgrow?: number;
 	sort: boolean;
+	/** The `ResourceSortField` name to send, when it differs from `id`. */
+	sortKey?: string;
 }
 export const KIND_KEYS: Readonly<Record<string, readonly string[]>>;
 export function columnsFor(kind: string | null): VaultColumn[];
@@ -421,6 +423,7 @@ export function columnsFor(kind: string | null): VaultColumn[];
 **Grounded facts:**
 - Column objects must keep the shape `VaultGrid.svelte:34-40` already passes to `wx-svelte-grid` — `{ id, header, flexgrow|width, sort }`.
 - Sortable ids are constrained by `ResourceSortField` (`generated/resource.ts:178`): `updated | created | title | stage | seq | context_name | doc_type_name`. **`status` is NOT sortable** — the goal's status column must be emitted with `sort: false`, or the header offers a sort the door cannot serve.
+- **The column id and the sort field are different strings, deliberately.** The id is `temper-stage`, because Task 6 reads cell data as `r.managed_meta[id]`; the sort field the door accepts is `stage`. So `temper-stage` carries `sort: true` **and** `sortKey: 'stage'`, while `temper-status` carries `sort: false` and no `sortKey`. Sending `sort=temper-stage` would be rejected by the door as an invalid enum value — a header offering a sort that errors.
 - Order defers to `MANAGED_KEY_ORDER` (`lib/properties.ts:21`).
 - `KIND_KEYS` is `task → ['temper-stage']`, `goal → ['temper-status']`, everything else `→ []`. `temper-mode`/`temper-effort` are deliberately excluded (spec D7) — they are pre-work estimates revised during the work, so a column built on them ranks by a stale prediction.
 
@@ -499,6 +502,16 @@ describe('columnsFor', () => {
 	it('marks the stage column sortable', () => {
 		expect(columnsFor('task').find((c) => c.id === 'temper-stage')!.sort).toBe(true);
 	});
+
+	// The id is the managed_meta key; the sort field the door accepts is `stage`.
+	// Sending `sort=temper-stage` is rejected as an invalid ResourceSortField.
+	it('carries a sortKey for the stage column, distinct from its id', () => {
+		expect(columnsFor('task').find((c) => c.id === 'temper-stage')!.sortKey).toBe('stage');
+	});
+
+	it('gives no sortKey to columns whose id is already the sort field', () => {
+		expect(columnsFor(null).find((c) => c.id === 'title')!.sortKey).toBeUndefined();
+	});
 });
 ```
 
@@ -532,6 +545,7 @@ git commit -m "feat(ui): kind-aware column derivation with a schema drift guard"
 **Interfaces:**
 - Consumes: everything exported by `vault-filters.ts` (Task 3).
 - Produces: `<FilterBar {filters} {facets} {revealed} {fixedContext} {contexts} />` for Task 7.
+- `contexts: ContextRowWithCounts[]` is the option list for the Context select. It is **not** a new fetch: `(app)/+layout.server.ts:37-48` already loads `/api/contexts` for the sidebar, so it arrives as layout data. Task 7 threads it through `VaultBrowser`. Each option's value is the decorated `` `${owner_ref}/${slug}` `` ref, which is exactly what the door's `context_ref` accepts (`resource.rs:66-69` — "UUID string or `@owner/slug` decorated ref. Bare context names are rejected server-side").
 
 **Grounded facts:**
 - Sibling to read first: `packages/temper-ui/src/lib/components/vault/PropertySet.svelte` and `HomeChip.svelte` — match their Svelte 5 runes style (`$props()`, `$derived`), Tailwind class usage, and the `quiet-*` colour tokens.
@@ -574,7 +588,7 @@ git commit -m "feat(ui): filter bar with procedurally revealed kind-scoped filte
 - `VaultGrid.svelte:34-40` — replace the hardcoded const with a required `columns: VaultColumn[]` prop. Do not keep a default; a silent fallback would hide a mis-wired page.
 - `VaultGrid.svelte:56-63` already maps `managed_meta['temper-stage']` onto a `stage` key. Generalise it: for each column id starting with `temper-`, read `r.managed_meta[id] ?? ''`.
 - `VaultGrid.svelte:73` currently derives `hasNext` as `offset + limit < total`. Replace with the envelope's `truncated`, which the server derives as `offset + returned < total` (`resource.rs:208`) — deliberately *not* `total > returned`, which is true on the last page of a walk where nothing is in fact hidden.
-- `SORTABLE` (`:18-26`) must be intersected with the active columns, so a header cannot offer a sort for a column that is not shown.
+- `SORTABLE` (`:18-26`) must be intersected with the active columns, so a header cannot offer a sort for a column that is not shown. `handleSort` (`:86-94`) must send `column.sortKey ?? column.id` — the revealed stage column's id is `temper-stage` but the door's sort field is `stage`, and `sort=temper-stage` is rejected as an invalid enum. `sortMarks` (`:43-50`) must map the URL's sort field back the same way, or the active-sort indicator lands on no column.
 - The empty state at `:108-111` currently reads "No resources found." When any filter is active it must name what is narrowing and offer to clear — an unqualified "none" over a filtered set is the overstatement this arm exists to remove.
 
 - [ ] **Step 1: Make the changes**
@@ -615,6 +629,8 @@ git commit -m "feat(ui): grid takes derived columns and reads the envelope's pag
 - [ ] **Step 1: Build `VaultBrowser.svelte`**
 
 Heading + `FilterBar` + `FacetChips` + `VaultGrid`, deriving `filters` via `parseFilters($page.url)`, `revealed` via `revealedKind(filters, facets.doc_type)`, and `columns` via `columnsFor(revealed)`.
+
+`VaultBrowser` takes `contexts: ContextRowWithCounts[]` and passes it to `FilterBar`. Each page supplies it from the already-loaded layout data (`(app)/+layout.server.ts:37-48`) — do **not** add a `/api/contexts` fetch to any page server; the sidebar's copy is the incumbent and a second fetch would be a second source of truth for the same list.
 
 - [ ] **Step 2: Collapse the three pages onto it**
 
