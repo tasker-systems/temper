@@ -6,13 +6,14 @@
  * is deleted rather than written as `''`. `nav.ts` keeps its `withParams` private and is
  * Atlas-scoped, so it is duplicated here rather than imported.
  *
- * **Empty means absent, for every filter.** A param whose value is empty or only
- * whitespace (`?stage=`, `?q=%20`, `?doc_type_name=,,`) parses as though the param were
- * not there at all. This is one uniform rule rather than a per-filter accident: before it,
- * `?stage=` parsed as the empty string, which `activeFilterCount` counted as zero while
- * the door still applied it — so the grid rendered "No resources found." with no
- * Clear-filters affordance, for a filter the UI did not believe existed. The CSV filters
- * already behaved this way; the scalars now match them.
+ * **Empty means absent, for every filter — at BOTH ends.** A param whose value is empty
+ * or only whitespace (`?stage=`, `?q=%20`, `?doc_type_name=,,`) parses as though the param
+ * were not there at all, and `doorParams` deletes it from the query the loaders forward so
+ * the door reads it the same way. Parsing alone is not enough: `activeFilterCount` counted
+ * `?stage=` as zero while the door still applied `Some("")`, so the grid rendered "No
+ * resources found." with no Clear-filters affordance, for a filter the UI did not believe
+ * existed. The CSV filters already parsed this way; the scalars now match them, and the
+ * forwarded query now matches both.
  *
  * Every mutation deletes `?offset` — narrowing the filter set always resets to page one
  * (matches `FacetChips.svelte:28` and `VaultGrid.svelte:92`).
@@ -62,6 +63,59 @@ const KIND_SCOPED_FILTERS: Readonly<Record<'stage' | 'status', string>> = {
 	stage: 'task',
 	status: 'goal',
 };
+
+/**
+ * The query params `parseFilters` interprets, in the door's own spelling.
+ *
+ * This is deliberately the SAME list `doorParams` strips empties from: the UI's belief about
+ * what is filtering comes from `parseFilters`, and the door's filter set comes from the query
+ * string, so the two agree only if every param one of them treats as empty-means-absent is
+ * treated that way by the other too. Adding a filter to `parseFilters` without adding its key
+ * here re-opens that gap.
+ */
+export const FILTER_PARAM_KEYS = [
+	'doc_type_name',
+	'stage',
+	'status',
+	'context_ref',
+	'q',
+	'tags',
+] as const;
+
+/**
+ * The query string to send the door: the caller's own, minus the filter params whose value is
+ * empty or whitespace-only.
+ *
+ * The three vault loaders forward the raw query string, so `parseFilters` alone is display-only
+ * — making it read `?stage=` / `?q=%20` as absent changed what the UI BELIEVES is filtering
+ * while `ResourceListParams.stage` stayed a plain `Option<String>` and `substrate_read.rs`
+ * kept applying `Some("")` / `Some(" ")` to every row. That half-change is worse than no
+ * change: `?stage=%20` used to count as one active filter and render the "Clear filters" link,
+ * and with only the parse fixed it counted as zero and rendered "No resources found." with no
+ * way out but editing the URL. Stripping the same params here is the other half.
+ *
+ * Only `FILTER_PARAM_KEYS` are touched, because only they are what `parseFilters` reports on.
+ * The other params the loaders forward are left exactly as given:
+ *   - `limit` / `offset` / `sort` / `order` — not filters, and empty is not silently absent to
+ *     the door either: they deserialize into `Option<i64>` / a closed enum, so `?limit=` is a
+ *     400 the page surfaces as an error, not a page that quietly renders as unfiltered.
+ *   - `owner`, `goal`, `cogmap_ids`, `sections` — the vault UI neither writes nor parses them,
+ *     so stripping one could only change a hand-written query the UI makes no claim about.
+ *
+ * Pure `URLSearchParams` in / out so it is testable without a request, and multi-valued params
+ * keep their non-empty values rather than being dropped whole (`?stage=&stage=done` is still a
+ * `done` filter).
+ */
+export function doorParams(search: URLSearchParams): URLSearchParams {
+	const out = new URLSearchParams(search);
+	for (const key of FILTER_PARAM_KEYS) {
+		const values = out.getAll(key);
+		if (!values.some((v) => v.trim() === '')) continue;
+		out.delete(key);
+		for (const v of values.filter((v) => v.trim() !== '')) out.append(key, v);
+	}
+	return out;
+}
 
 /**
  * Trim to `null`. Empty and whitespace-only are the same as absent — see the uniform rule

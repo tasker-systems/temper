@@ -120,7 +120,11 @@ export function pageState(list: {
 		currentPage,
 		// `currentPage` is a floor, never a ceiling: an offset past the end of the filtered set
 		// is a real page the user can be sitting on, and "3/1" would be a counter that cannot
-		// be true. The Previous button (`hasPrev`) is how they get back from there.
+		// be true. `hasPrev` is still true there, but nothing renders it: `VaultGrid` branches
+		// on `rows.length === 0` BEFORE the paging chrome, so an over-offset page shows the
+		// empty state and no Previous button. The way back is the "Clear filters" link (which
+		// deletes `offset` along with the filters) when a filter is active, and the browser's
+		// own Back otherwise.
 		totalPages: capped ? Math.max(1, currentPage, Math.ceil(total / limit)) : 1,
 		hasPrev: offset > 0,
 		hasNext: truncated,

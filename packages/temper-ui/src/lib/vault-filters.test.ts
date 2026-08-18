@@ -4,6 +4,8 @@ import {
 	activeFilterCount,
 	buildFilterUrl,
 	docTypeChips,
+	doorParams,
+	FILTER_PARAM_KEYS,
 	kindScopedClears,
 	parseFilters,
 	revealedKind,
@@ -59,9 +61,72 @@ describe('parseFilters', () => {
 	});
 
 	// The counter and the door must agree about what is narrowing the set, or the empty state
-	// says "No resources found" where it should offer a way out.
-	it('makes an empty filter param invisible to the active count, as the door sees it', () => {
+	// says "No resources found" where it should offer a way out. Counting it as zero is only
+	// half of that agreement — the other half is that the loaders never forward it. (Asserting
+	// the count alone constrained nothing: `''` was already falsy before the parse was fixed.)
+	it('hides an empty filter param from the count AND from the door', () => {
 		expect(activeFilterCount(parseFilters(at('?stage=')))).toBe(0);
+		expect(doorParams(at('?stage=').searchParams).has('stage')).toBe(false);
+	});
+});
+
+describe('doorParams', () => {
+	const door = (search: string) => doorParams(at(search).searchParams);
+
+	// The finding this closes: the door applied `Some("")` to every row while the UI counted
+	// zero active filters, so the grid said "No resources found." with no Clear-filters link.
+	it('drops an empty filter param instead of forwarding it', () => {
+		expect(door('?stage=').has('stage')).toBe(false);
+		expect(door('?q=').has('q')).toBe(false);
+		expect([...door('?stage=&status=&context_ref=&q=&doc_type_name=&tags=').keys()]).toEqual([]);
+	});
+
+	// The regression the parse-only fix introduced: `?stage=%20` used to count as one filter and
+	// render the way out; parsed-as-absent it counted as zero while the door still narrowed on
+	// `' '`. Stripping it here is what makes the zero count true.
+	it('drops a whitespace-only filter param', () => {
+		expect(door('?stage=%20').has('stage')).toBe(false);
+		expect(door('?q=%20%20').has('q')).toBe(false);
+	});
+
+	it('leaves a filter that carries a value untouched', () => {
+		const params = door('?stage=done&q=atlas&doc_type_name=task,goal&tags=ci');
+		expect(params.get('stage')).toBe('done');
+		expect(params.get('q')).toBe('atlas');
+		expect(params.get('doc_type_name')).toBe('task,goal');
+		expect(params.get('tags')).toBe('ci');
+	});
+
+	// Not filters: `?limit=` is a 400 the page surfaces, not a silently-unfiltered page, and
+	// rewriting it here would turn a rejected request into a default-limit one.
+	it('leaves the non-filter params alone, empty or not', () => {
+		const params = door('?limit=&offset=&sort=&order=&owner=');
+		for (const key of ['limit', 'offset', 'sort', 'order', 'owner']) {
+			expect(params.get(key), key).toBe('');
+		}
+	});
+
+	it('keeps the non-empty values of a repeated filter param', () => {
+		const params = door('?stage=&stage=done');
+		expect(params.getAll('stage')).toEqual(['done']);
+	});
+
+	it("does not mutate the caller's params", () => {
+		const source = at('?stage=').searchParams;
+		doorParams(source);
+		expect(source.get('stage')).toBe('');
+	});
+
+	// The stripped set and the parsed set are the same set, in both directions — a filter
+	// `parseFilters` reads but `doorParams` does not strip is the exact shape of the original
+	// finding, and one it strips but the parse ignores would silently drop a live filter.
+	it('strips exactly the params parseFilters interprets', () => {
+		for (const key of FILTER_PARAM_KEYS) {
+			expect(activeFilterCount(parseFilters(at(`?${key}=x`))), key).toBe(1);
+			expect(door(`?${key}=x`).get(key), key).toBe('x');
+			expect(activeFilterCount(parseFilters(at(`?${key}=%20`))), key).toBe(0);
+			expect(door(`?${key}=%20`).has(key), key).toBe(false);
+		}
 	});
 });
 

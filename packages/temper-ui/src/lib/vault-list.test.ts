@@ -62,10 +62,14 @@ describe('toVaultList', () => {
 		expect(list.offset).toBe(75);
 	});
 
-	it('reports the floored offset the server applied, not the negative one asked for', () => {
-		// `?offset=-10` — the door floors it at 0 and says so. Believing the URL rendered
-		// `-9–40 of 100` and a Next that jumped to offset 40, skipping rows 40–49.
+	it('reports the offset the server applied, whether it floored it or not', () => {
+		// Two requests from the same URL family, two different echoes: `?offset=-10` comes back
+		// floored to 0, `?offset=999` past the end comes back untouched. Only a value read from
+		// the envelope satisfies both — a constant, or anything re-derived from the request,
+		// fails one of them. (Believing the URL's `-10` rendered `-9–40 of 100` and a Next
+		// that jumped to offset 40, skipping rows 40–49.)
 		expect(toVaultList(response({ offset: BigInt(0) })).offset).toBe(0);
+		expect(toVaultList(response({ offset: BigInt(999) })).offset).toBe(999);
 	});
 
 	it('keeps an uncapped limit as null rather than coercing it to a number', () => {

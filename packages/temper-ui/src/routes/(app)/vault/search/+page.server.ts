@@ -1,5 +1,6 @@
 import { ApiError, apiGet } from '$lib/server/api';
 import type { ResourceListResponse } from '$lib/types';
+import { doorParams } from '$lib/vault-filters';
 import { searchFailureMessage, toVaultList, type VaultList } from '$lib/vault-list';
 import type { PageServerLoad } from './$types';
 
@@ -7,7 +8,9 @@ const DEFAULT_LIMIT = 50;
 
 export const load: PageServerLoad = async ({ url, locals }) => {
 	const q = url.searchParams.get('q') ?? '';
-	const params = new URLSearchParams(url.searchParams);
+	// `doorParams`: an empty/whitespace-only filter param is dropped rather than forwarded, so
+	// the door and `parseFilters` agree about what is narrowing the set.
+	const params = doorParams(url.searchParams);
 	if (!params.has('limit')) params.set('limit', String(DEFAULT_LIMIT));
 
 	// A failed read reaches the page AS A FAILURE. This load used to answer a failed fetch with
