@@ -61,7 +61,7 @@ Create.**
 - **App ID** — integer (e.g. `4640564`)
 - **App slug** — URL slug (e.g. `tasker-systems-temper-readonly`)
 - **App name** — display name
-- **Client ID** — starts with `Iv` (e.g. `Iv23lik8iid5l4DWGwYp`)
+- **Client ID** — starts with `Iv` (e.g. `Iv23abcdefghijklmnop`)
 - **Client secret** — generate one if not already generated
 - **Private key** — generate and download the `.pem` file
 
@@ -230,16 +230,16 @@ This is a reference, not a one-shot script — it assumes you've collected the v
 set -euo pipefail
 
 # --- Config ---
-ORG_SLUG="tasker-systems"
-ORG_NAME="Tasker Systems"
-APP_SLUG="tasker-systems-temper-readonly"
-APP_NAME="tasker-systems-temper-readonly"
-APP_ID=4640564
-CLIENT_ID="Iv23lik8iid5l4DWGwYp"
-CONNECTOR_NAME="tasker-systems-temper-readonly"
-VERCEL_TEAM_ID="team_M0kLALFEPQBAfgOWbDEjpicu"
-VERCEL_TEAM_SLUG="jcoletaylors-projects"
-TEMPER_PROJECT_ID="prj_ra0MmQYksfePnXvHiTiOGoKigQvY"
+ORG_SLUG="<your-github-org>"
+ORG_NAME="<Your Org>"
+APP_SLUG="<your-org>-temper-readonly"
+APP_NAME="<your-org>-temper-readonly"
+APP_ID=<app-id-from-the-App-settings-page>
+CLIENT_ID="<Iv23...-from-the-App-settings-page>"
+CONNECTOR_NAME="<your-org>-temper-readonly"
+VERCEL_TEAM_ID="<team_...>"
+VERCEL_TEAM_SLUG="<your-vercel-team-slug>"
+TEMPER_PROJECT_ID="<prj_...>"
 
 # --- Step 1: verify the App exists ---
 echo "=== Verifying GitHub App ==="

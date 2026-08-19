@@ -181,7 +181,7 @@ impossible, not just out of order.
 | 12 | `temper admin saml verify` | `saml-setup.sh` | [self-hosting-saml.md](./self-hosting-saml.md) |
 | 13 | Telos-charter: `temper cogmap create` → `temper cogmap reconcile` → bind `+everyone` | `system-bootstrap.sh` | [org-bootstrap.md §§ 3–5](./org-bootstrap.md#3-birth-the-org-identity-cognitive-map) |
 | 14 | (optional) UI deploy: confidential OIDC client, `API_BASE_URL`, `SESSION_SECRET` | manual | [self-hosting.md § Deploy the UI (optional)](./self-hosting.md#deploy-the-ui-optional) |
-| 15 | Verify: health, `temper login`, resource round-trip | manual | [self-hosting.md § Verify](./self-hosting.md#verify) |
+| 15 | Verify: health, `temper auth login`, resource round-trip | manual | [self-hosting.md § Verify](./self-hosting.md#verify) |
 | — | → team-self-cognition + Eve steward: **DEFERRED** | — | [vercel-eve.md](./vercel-eve.md) |
 
 **The expected path.** The happy path is: run

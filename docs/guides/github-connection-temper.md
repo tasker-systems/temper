@@ -252,10 +252,10 @@ set -euo pipefail
 
 # --- Config ---
 TEAM_SLUG="temper-system"
-CONNECTOR_UID="github/tasker-systems-temper-readonly"
-INSTALLATION_ID="154768494"
+CONNECTOR_UID="github/<your-org>-temper-readonly"
+INSTALLATION_ID="<installation-id-from-the-install-URL>"
 REACH="org"
-COVERS="tasker-systems"
+COVERS="<your-github-org>"
 
 # --- Step 1: provision ---
 CONNECTION=$(temper admin connection provision \

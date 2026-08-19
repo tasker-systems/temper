@@ -92,9 +92,16 @@ agent-specific bypass and no ambient authority: every call resolves to one concr
 `profile_id`, and every gate evaluates that id.
 
 An agent profile **can** hold team memberships — registration takes `--team <ref>[:role]`
-(repeatable) and also enrolls the machine in the gating team as `watcher`, so it clears the
-`system_access` gate. That is the point of the design: a machine's reach is ordinary teams
-and ordinary grants, bounded to what its minter could confer on a human, so **machine RBAC
+(repeatable). **Registration does not admit the principal.** Every mint door births a
+principal `denied`, and `has_system_access` reads one thing only — whether that principal
+has an `approved` row in `kb_principal_standing`. Neither team membership nor registration
+writes one, so a correctly registered machine with correct reach still gets
+`403 SYSTEM_ACCESS_REQUIRED` on every call until an operator runs
+`temper admin access approve <profile_id>`. Nothing before that step fails, which is what
+makes it easy to omit.
+
+Membership is still the point of the design: a machine's reach is ordinary teams and ordinary
+grants, bounded to what its minter could confer on a human, so **machine RBAC
 falls out of the same predicates as human RBAC** — there is no machine-specific
 authorization path to keep in sync. What team membership still does *not* buy an agent, any
 more than it buys a human, is cogmap write. See
