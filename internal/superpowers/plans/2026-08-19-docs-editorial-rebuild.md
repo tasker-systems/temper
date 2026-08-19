@@ -325,3 +325,156 @@ the same defect class this rebuild exists to remove.
 cogmap concepts ascend to `/cognitive-maps/*`; anything reaching for the *why* ascends to
 `/theory/*`. Per `site-ia.md`, `/theory` is a destination arrived at, not a front door — do not
 open a page by sending a reader there cold.
+
+---
+
+## Appendix B — the user path, grounded
+
+Established by reading source and running the tree's own binary (`./target/debug/temper`, 0.3.3
+— the PATH binary is 0.3.1 and was not used for any claim). This is the spine
+`playbooks/authenticate.md` is written from.
+
+### A brand-new hosted user is blocked, deliberately
+
+Every OAuth signup is **born `denied`**. `profile_service.rs:456-469` is the shared mint site
+for both human doors; `transition.rs:33-39` returns `Standing::Denied` for
+`Provisioner::OauthFirstLogin`. `has_system_access` reads `kb_principal_standing` for an
+`approved` row and nothing else, so every gated request 403s.
+
+It is intentional, and the code says so at `crates/temper-services/src/auth/mod.rs:888-900`:
+
+> *"The community edition has no paywall. An OAuth signup being born Denied — requiring an
+> admin to enable it — IS the access-control mechanism, deliberately (spec §8). Do not 'fix'
+> this because new users are locked out. That is the feature."*
+
+**Team invitations do not confer access** — `accept_invitation` writes team membership only, and
+`/api/invitations/accept` sits on the auth-only router. **`request-access` does not either**: it
+moves `denied → requested`, which is still not `approved`.
+
+`[decided — 2026-08-19, Pete]` **The docs state this plainly as a step.** The users door stops
+promising that install + connector is "enough to run `temper warmup`".
+
+### The minimum sequence
+
+1. `install.sh` — binary + ONNX + PATH. Writes **no** config. Its exit message says
+   `Run: temper --help` and never names `temper init`.
+2. `temper init` — **interactively**, answering "hosted". Writes `~/.config/temper/config.toml`.
+   A first-run warning about auth is expected, not a failure.
+   **Do not tell readers to use `--no-interactive` with no flags**: it writes
+   `provider = "none"`, and `temper auth login` then dies with an internal string. The
+   non-interactive hosted form needs all four `--instance-url/--auth-domain/--auth-client-id/
+   --auth-audience` flags, whose hosted values are baked constants in `init.rs:27-30`.
+3. `temper auth login` — browser, Authorization Code + **PKCE with a localhost listener**
+   (explicitly not device code). Token cached at `~/.config/temper/auth.json`, 0600 — a
+   **different file** from `config.toml`, which is why `auth status` works with no config.
+4. `temper auth request-access --message "…"` — **required for every new user.**
+5. **Wait for an admin.** `temper admin requests review <id> --approve`. Poll with
+   `temper auth status`. Nothing before this point fails, which is what makes it a surprise.
+6. `temper warmup --context @me/default`.
+
+### Two asymmetries a writer will get wrong
+
+- **`warmup` requires a ref and rejects a bare name**; **`pull` takes a bare positional name**.
+  So `temper pull default` is right and `temper warmup --context default` is a 400. Init's own
+  closing advice uses the `pull` form.
+- **`TEMPER_TOKEN` alone is not enough** — `TEMPER_API_URL` is also required, because
+  `cloud.api_url` defaults to empty and the client fails at send time. `TEMPER_PROVIDER` and
+  `TEMPER_DEVICE_ID` are optional. **And the escape does not cover everything**: `warmup`,
+  `resource *`, `skill *`, `check`, `status` and `memory *` go through the strict config loader
+  and still demand `config.toml` on disk.
+
+### The Claude Code path
+
+`temper skill install --target claude` writes ~20 files to `~/.claude/skills/temper/` plus
+`~/.claude/commands/temper.md`. **It requires `temper init` but NOT authentication** — it makes
+no network call and builds no client. So it slots in after step 2 and is independent of 3–5.
+Targets are `claude` and `opencode`, and only those two.
+
+**The fork to state in both pages:** Claude Code drives the CLI and wants `temper skill install`.
+Claude Desktop / claude.ai cannot run a binary, so it drives MCP over HTTP and wants the
+connector URL plus the uploaded skill zip — **that reader never runs `temper init` or
+`temper auth login` at all**, authenticating through the connector's own OAuth prompt.
+
+---
+
+## Appendix C — the ref grammar, grounded
+
+The core parser is `temper_core::context_ref::parse_context_ref`
+(`crates/temper-core/src/context_ref.rs:87-121`). **There are four resolvers and they do not
+agree** — that disagreement is the page's real subject.
+
+### The table
+
+| form | names | accepted | rejected |
+|---|---|---|---|
+| `<uuid>` | a context, canonically | **everywhere** — all four resolvers, CLI, MCP, REST | nowhere |
+| `@me/<slug>` | your own profile-owned context | server-backed surfaces; `context transfer/rename/shape/region-metrics/materialize`; `admin reembed` | **`context share` / `context unshare`**; all MCP `context_manage` |
+| `@<handle>/<slug>` | a named profile's context | everything `@me/` is, **plus** share/unshare | MCP `context_manage`; `context create --owner` |
+| `+<team-slug>/<slug>` | a team-owned context | every context-ref position incl. share/unshare | MCP `context_manage` |
+| `+<team-slug>` (no `/slug`) | a **team**, not a context | team-typed args only | any context-ref position → `MissingSlug` |
+| `<team-slug>` bare | a team | team-typed args only | context-ref positions |
+| `<slug>-<uuid>` decorated | a **resource**, cogmap, edge or team | resource refs, `--cogmap`, edge endpoints, team args | **all context-ref positions** |
+| `<name>` bare | nothing addressable | `context subscribe`/`unsubscribe` (local config only) | everywhere else → 400 |
+
+### The two grammars problem
+
+`sluggify(title)-<uuid>` is the **resource** ref (`crates/temper-core/src/refs.rs:1-7`,
+trailing-UUID-only, decoration ignored). It is **never** a context ref. A reader who has
+internalised "the slug half is decoration" will try it on a context and get `BareName` — an
+error naming neither grammar. **The page must teach two grammars, not "refs".**
+
+### Traps the page must carry
+
+1. **`@me` is rejected by exactly two commands**, `context share` and `unshare`, client-side
+   only, at `context_cmd.rs:181-186`. **No test covers it** — it is one unguarded `if`. The page
+   must also say how to get your handle: there is no `temper profile` command; `context list` is
+   the only surface that prints `owner_ref`.
+2. **A malformed ref reports "not found", not a grammar error.** Neither share-path resolver
+   calls `parse_context_ref` — both hand-roll `split_once('/')` — so a syntax error sends the
+   reader hunting permissions.
+3. **`context create` is NOT idempotent.** It auto-suffixes: a re-run yields `my-project-2`.
+4. **Rename re-addresses the context** and breaks every stored ref — the argument for storing
+   the UUID.
+5. **MCP `context_manage` takes UUIDs only**, while the sibling read tool advertises refs. An
+   agent following our own skill docs will pass `@me/temper` into a UUID field.
+6. **`subscribe`/`pull` use "context" for two different things** — identical help wording,
+   opposite requirement.
+
+### The model sentence for the concept
+
+**Read inherits up the team tree; write does not. Sharing is read-only; transferring ownership
+is the only path to shared authorship.** (`migrations/20260712000010_context_read_predicates.sql:171-199`.)
+
+---
+
+## Appendix D — live falsehoods folded into the beats
+
+`[decided — 2026-08-19, Pete]` No third truth-fix PR; these ride the rewrite of their pages.
+**Named here because folding them in is exactly how they get lost.** Each is verified.
+
+| page | claim | truth | lands in |
+|---|---|---|---|
+| `team-self-cognition-bootstrap.md:120` | "`context create` is idempotent by name+owner" | auto-suffixes to `-2`; a re-run silently forks the context. Wrong in the dangerous direction — scripts follow it | Beat C3 |
+| `doors/for-users.md:16` | install + connector is "enough to run `temper warmup`" | needs config **and** token **and** approved standing **and** a context ref | Beat E |
+| `l0-content-delivery.md:127` | `access_mode = 'open'` is "the prod default" | the column was dropped; **survived #726** | Beat C3 |
+| `cloud-agents.md:34` | `TEMPER_TOKEN` alone suffices headless | needs `TEMPER_API_URL` too — **fix while lifting the table, do not lift the error** | Beat A |
+| `teams.md:122-124` | `context share <context> <team-uuid>` | team arg also takes bare or `+`-prefixed slug; `@me` is uniquely rejected here | Beats B1 + C1 |
+
+## Appendix E — product defects found, out of scope, not fixed
+
+Filed here rather than silently passed over. None is a documentation problem.
+
+- **`temper init --no-interactive` with no flags writes a dead config** (`provider = "none"`),
+  and `temper auth login` then returns `"no OAuth config — call with_oauth() first"`. The
+  actionable message exists at `temper-client/src/config.rs:60-65` and is **swallowed** at
+  `:112-115`, downgraded to `tracing::debug!`.
+- **Token expiry does not refresh on the ordinary command path.** `resolve_token`
+  (`http.rs:185-198`) errors; only `export-token` calls the refreshing entry point. Compounded
+  by `auth status` reporting `authenticated: true` on an expired token — `expires_at` is the
+  only tell.
+- **`TEMPER_VAULT` cannot substitute for a config file**: `config::load` calls
+  `load_global_config()` before consulting it. Looks unintentional.
+- **The `@me`-rejection on share has no test.**
+- **`projection.rs:115-119` justifies matching `@me` by slug alone** with a claim
+  (`"profile-to-profile context sharing is not supported"`) that `context share` itself refutes.
+- **The installer's exit message dead-ends** at `Run: temper --help`, never naming `temper init`.
