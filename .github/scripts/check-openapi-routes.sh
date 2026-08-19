@@ -59,6 +59,8 @@ ALLOWLIST='/api/access/admin/requests
 /api/connections/{id}/webhook-events
 /api/connections/{id}/tool-manifest
 /api/connections/{id}/reach
+/api/subscriptions
+/api/subscriptions/{id}
 /internal/saml/reconcile
 /internal/slack/link-state
 /internal/slack/mint

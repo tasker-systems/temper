@@ -27,6 +27,7 @@ pub mod resources;
 pub mod search;
 pub mod slack;
 pub mod steward;
+pub mod subscription;
 pub mod teams;
 pub mod upload;
 
@@ -180,6 +181,11 @@ impl TemperClient {
     /// Operator-only connection provisioning (temper's authed link to a remote system).
     pub fn connections(&self) -> connection::ConnectionsClient<'_> {
         connection::ConnectionsClient::new(&self.http)
+    }
+
+    /// Operator-only subscription management (a team/context/cogmap subscribes to a connection).
+    pub fn subscriptions(&self) -> subscription::SubscriptionsClient<'_> {
+        subscription::SubscriptionsClient::new(&self.http)
     }
 
     /// Team lifecycle sub-client (create / add-member / list).

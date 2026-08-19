@@ -3,6 +3,7 @@ pub mod admin_connection;
 pub mod admin_machine;
 pub mod admin_saml;
 pub mod admin_slack;
+pub mod admin_subscription;
 pub mod auth;
 pub mod check;
 pub mod cogmap;
