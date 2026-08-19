@@ -127,13 +127,12 @@ script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-ts-rs-drif
 description = "Run every .github/scripts/audit-*.sh tripwire, and fail if CI runs one this task does not"
 # These pin reviewed sets — grant write-sites, unauthenticated routes, handler-side authz calls,
 # signature-secret distinctness, credential types deriving Debug, ungated fragments, migration
-# declarations, sqlx macro exceptions, ignored tests, contract cross-refs, attestation subject
-# paths, and unattributed decision-voiced prose — against baselines a human approved.
+# declarations, sqlx macro exceptions, ignored tests, attestation subject paths, and unattributed
+# decision-voiced prose — against baselines a human approved.
 #
 # `[renamed from security-tripwires — 2026-08-15]` The name had stopped being true: half the set is
-# not security. `audit-unattributed-decisions` is prose hygiene, `audit-ignored-tests` is test
-# hygiene, `audit-contract-crossrefs` is documentation. Kept as an alias below so anything invoking
-# the old name still works.
+# not security. `audit-unattributed-decisions` is prose hygiene and `audit-ignored-tests` is test
+# hygiene. Kept as an alias below so anything invoking the old name still works.
 #
 # # THE SET IS DERIVED, BECAUSE THE HAND-MAINTAINED ONE ROTTED
 #
@@ -143,7 +142,7 @@ description = "Run every .github/scripts/audit-*.sh tripwire, and fail if CI run
 #
 # It then stopped doing that for more than half of them. It listed FIVE scripts by name; CI ran
 # TWELVE `[measured — 2026-08-15]`. The seven it never gained — ungated-fragments,
-# unattributed-decisions, ignored-tests, contract-crossrefs, attest-subject-path,
+# unattributed-decisions, ignored-tests, attest-subject-path,
 # sqlx-macro-exceptions, migration-declarations — were exactly as CI-only as the original five had
 # been, and the task that existed to close that gap read as though it had.
 #
