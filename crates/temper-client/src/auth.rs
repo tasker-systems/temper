@@ -275,6 +275,17 @@ pub struct StoredAuth {
     pub device_id: Option<String>,
 }
 
+impl StoredAuth {
+    /// Whether this credential is past its expiry.
+    ///
+    /// The comparison lived inline in three places (token resolution in `http.rs`, the refresh
+    /// path below, and — missing entirely — `auth_status`). Naming it is what makes the third
+    /// site's absence visible rather than a thing you have to notice.
+    pub fn is_expired(&self) -> bool {
+        self.expires_at <= Utc::now()
+    }
+}
+
 impl std::fmt::Debug for StoredAuth {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StoredAuth")
@@ -484,7 +495,12 @@ pub fn auth_status(store: &dyn TokenStore) -> Result<AuthStatus> {
             profile_id: None,
         }),
         Some(a) => Ok(AuthStatus {
-            authenticated: true,
+            // A credential on disk is not a session. `authenticated` answers "can this be
+            // used", and an expired token cannot — every real call rejects it with
+            // `TokenExpired`, which made `auth status` the one surface disagreeing with all
+            // the others. `expires_at` is still reported below, so a `false` here explains
+            // itself rather than looking like "never logged in".
+            authenticated: !a.is_expired(),
             provider: Some(a.provider),
             expires_at: Some(a.expires_at),
             profile_id: a.profile_id,
@@ -744,7 +760,7 @@ pub async fn get_valid_token(
         return Ok(refreshed.access_token.expose_secret().to_string());
     }
 
-    if auth.expires_at <= Utc::now() {
+    if auth.is_expired() {
         return Err(ClientError::TokenExpired);
     }
 
@@ -927,6 +943,42 @@ mod tests {
     // We test via the path-parameterised helpers since the default path may
     // already exist on a developer machine.
 
+    // `auth_status` is called for real here rather than simulated. The test this replaces
+    // rebuilt `AuthStatus` inline with `authenticated: stored.is_some()`, so it asserted its
+    // own copy of the logic and could not have caught the expiry bug below no matter what
+    // `auth_status` did.
+
+    #[test]
+    fn status_reports_not_authenticated_for_an_expired_token() {
+        let store = MemoryTokenStore::with_auth(make_auth(Utc::now() - Duration::hours(1)));
+        let status = auth_status(&store).unwrap();
+
+        // The bite: this returned `true` for any token file that merely loaded, while every
+        // real call was already failing with `TokenExpired`.
+        assert!(
+            !status.authenticated,
+            "an expired credential is not a session"
+        );
+    }
+
+    #[test]
+    fn status_still_reports_the_expiry_that_made_it_unauthenticated() {
+        let expired_at = Utc::now() - Duration::hours(1);
+        let store = MemoryTokenStore::with_auth(make_auth(expired_at));
+        let status = auth_status(&store).unwrap();
+
+        // Otherwise `authenticated: false` is indistinguishable from never having logged in,
+        // and the reader has nothing to act on.
+        assert_eq!(status.expires_at, Some(expired_at));
+        assert!(status.provider.is_some());
+    }
+
+    #[test]
+    fn status_reports_authenticated_for_a_live_token() {
+        let store = MemoryTokenStore::with_auth(make_auth(Utc::now() + Duration::hours(1)));
+        assert!(auth_status(&store).unwrap().authenticated);
+    }
+
     #[test]
     fn status_unauthenticated_when_no_file() {
         let dir = TempDir::new().unwrap();
@@ -935,13 +987,7 @@ mod tests {
         let stored = load_auth_from(&path).unwrap();
         assert!(stored.is_none());
 
-        // Simulate what auth_status() does with no stored auth.
-        let status = AuthStatus {
-            authenticated: stored.is_some(),
-            provider: stored.as_ref().map(|a| a.provider.clone()),
-            expires_at: stored.as_ref().map(|a| a.expires_at),
-            profile_id: stored.as_ref().and_then(|a| a.profile_id),
-        };
+        let status = auth_status(&MemoryTokenStore::empty()).unwrap();
         assert!(!status.authenticated);
         assert!(status.provider.is_none());
     }
