@@ -113,7 +113,8 @@ pub async fn show_visible(
 
 /// Bind a cognitive map to a team (write a `kb_team_cogmaps` row).
 ///
-/// Auth before writes: admin-only. Idempotent — `INSERT … ON CONFLICT DO NOTHING`;
+/// Auth before writes: system-admin, OR a team manager (owner/maintainer) who administers the
+/// map, on a non-gating team. Idempotent — `INSERT … ON CONFLICT DO NOTHING`;
 /// `bound: false` when the binding already existed.
 pub async fn bind_team(
     pool: &PgPool,

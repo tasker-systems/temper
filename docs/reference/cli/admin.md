@@ -40,7 +40,7 @@ Show system settings, or update them when any flag is provided
 Usage: temper admin settings [OPTIONS]
 
 Options:
-      --gating-team <GATING_TEAM_SLUG>  Gating team slug (the team whose ownership confers a system admin)
+      --gating-team <GATING_TEAM_SLUG>  Gating team slug recorded in instance settings. Ownership of this team does NOT by itself confer system-admin: `is_system_admin` reads the principal-governance grant and nothing else
       --vault <VAULT>                   Path to vault (overrides TEMPER_VAULT and auto-detection)
       --format <FORMAT>                 Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
       --instance-name <INSTANCE_NAME>   Human-facing instance name

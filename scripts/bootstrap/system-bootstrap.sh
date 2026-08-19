@@ -64,7 +64,6 @@ prof() { yq -r "$1 // \"\"" "$PROFILE"; }
 # ── Profile values ───────────────────────────────────────────────────────────────────────────────
 INSTANCE_NAME="$(prof '.instance_name')"
 GATING_TEAM="$(prof '.root.gating_team_slug')"
-ACCESS_MODE="$(prof '.root.access_mode')"
 FIRST_ADMIN="$(prof '.root.first_admin_profile_id')"
 EVERYONE_SLUG="$(prof '.auto_join_team.slug')"
 EVERYONE_NAME="$(prof '.auto_join_team.name')"
@@ -78,9 +77,11 @@ LANDMARKS_MANIFEST="$(prof '.org_identity.landmarks_manifest')"
 [ -f "$GENESIS_MANIFEST" ]   || die "genesis manifest not found: $GENESIS_MANIFEST"
 
 # ── Phase 0 — the irreducible SQL root step (operator-with-DB-credentials) ────────────────────────
-# Set gating_team_slug + access_mode and promote the first admin. The `system_access='admin'` UPDATE
-# fires the auto-join trigger, which mints the admin as OWNER of the gating team — so is_system_admin
-# resolves true. Mirrors `root_bootstrap_first_admin` in tests/e2e/tests/admin_surface_e2e.rs.
+# Set gating_team_slug, then ADMIT and PROMOTE the first admin. Since D11 these are two independent
+# rows and each predicate reads exactly one table: has_system_access -> kb_principal_standing
+# ('approved'), is_system_admin -> kb_principal_governance. Neither reads team membership, and the
+# kb_profiles.system_access / kb_system_settings.access_mode columns were dropped in Phase 2.
+# Mirrors `root_bootstrap_first_admin` in tests/e2e/tests/context_transfer_e2e.rs.
 if [ "$RUN_ROOT" -eq 1 ]; then
   info "Phase 0 — SQL root step (gating + first admin)"
   command -v psql >/dev/null 2>&1 || die "psql not found — required for --run-root"
@@ -88,30 +89,36 @@ if [ "$RUN_ROOT" -eq 1 ]; then
   [ -n "$GATING_TEAM" ]  || die "profile missing .root.gating_team_slug (needed for --run-root)"
   [ -n "$FIRST_ADMIN" ] && [ "$FIRST_ADMIN" != "REPLACE-WITH-FIRST-ADMIN-PROFILE-UUID" ] \
     || die "set .root.first_admin_profile_id in the profile before --run-root"
-  ACCESS_MODE_SQL="${ACCESS_MODE:-open}"
   if [ "$DRY_RUN" -eq 1 ]; then
-    printf '   (dry-run) psql <DATABASE_URL> -f - <<root.sql (gating=%s mode=%s admin=%s)\n' \
-      "$GATING_TEAM" "$ACCESS_MODE_SQL" "$FIRST_ADMIN"
+    printf '   (dry-run) psql <DATABASE_URL> -f - <<root.sql (gating=%s admin=%s)\n' \
+      "$GATING_TEAM" "$FIRST_ADMIN"
   else
     psql "$DATABASE_URL" --set=ON_ERROR_STOP=1 \
-      --set=gating="$GATING_TEAM" --set=mode="$ACCESS_MODE_SQL" --set=admin="$FIRST_ADMIN" <<'SQL'
+      --set=gating="$GATING_TEAM" --set=admin="$FIRST_ADMIN" <<'SQL'
 INSERT INTO kb_teams (slug, name) VALUES (:'gating', :'gating')
   ON CONFLICT (slug) DO NOTHING;
-UPDATE kb_system_settings SET gating_team_slug = :'gating', access_mode = :'mode' WHERE id = 1;
-UPDATE kb_profiles SET system_access = 'admin' WHERE id = :'admin'::uuid;
+UPDATE kb_system_settings SET gating_team_slug = :'gating' WHERE id = 1;
+SELECT principal_standing_apply(:'admin'::uuid, 'approve', 'approved', NULL, 'root bootstrap');
+SELECT principal_governance_set(:'admin'::uuid, true, NULL, 'root bootstrap');
 SQL
+    # Verify BOTH predicates. They are independent; one without the other is a silent half-state.
+    # Deliberately a separate psql call: psql does NOT interpolate :'var' inside a dollar-quoted
+    # DO block, so an in-band assertion would never see the uuid.
+    root_check="$(psql "$DATABASE_URL" -tAX --set=admin="$FIRST_ADMIN" \
+      -c "SELECT has_system_access(:'admin'::uuid)::text || ',' || is_system_admin(:'admin'::uuid)::text")"
+    [ "$root_check" = "true,true" ] \
+      || die "root bootstrap verify failed (has_system_access,is_system_admin = $root_check)"
   fi
 else
   info "Phase 0 — SKIPPED (run the SQL root step manually first; see docs/guides/org-bootstrap.md)"
 fi
 
 # ── Phase 1 — instance settings (admin-gated, surfaced) ───────────────────────────────────────────
-if [ -n "$INSTANCE_NAME" ] || [ -n "$GATING_TEAM" ] || [ -n "$ACCESS_MODE" ]; then
+if [ -n "$INSTANCE_NAME" ] || [ -n "$GATING_TEAM" ]; then
   info "Phase 1 — admin settings"
   settings_args=(admin settings --format json)
   [ -n "$INSTANCE_NAME" ] && settings_args+=(--instance-name "$INSTANCE_NAME")
   [ -n "$GATING_TEAM" ]   && settings_args+=(--gating-team "$GATING_TEAM")
-  [ -n "$ACCESS_MODE" ]   && settings_args+=(--access-mode "$ACCESS_MODE")
   run temper "${settings_args[@]}"
 fi
 

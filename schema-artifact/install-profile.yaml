@@ -23,11 +23,10 @@ instance_name: "Acme Temper"
 # applier runs it only when DATABASE_URL is set AND --run-root is passed; otherwise it is a manual
 # prerequisite (see the runbook). The gating team is created here if absent.
 root:
-  # The team whose OWNERS are system admins (is_system_admin reads ownership of this team).
+  # The gating team. NOTE: since D11 this confers no authorization by itself — is_system_admin
+  # reads kb_principal_governance, not team ownership. The slug is still recorded as instance
+  # configuration and the team is created here if absent.
   gating_team_slug: "temper-system"
-  # access_mode: open (default) | invite_only. With `open`, gating_team_slug only enables
-  # system-admin-by-team-ownership; the invite/join-request flow engages only under invite_only.
-  access_mode: "open"
   # The first admin's profile id (uuidv7). Found via `SELECT id FROM kb_profiles WHERE …` after the
   # operator has authenticated once (a profile auto-provisions on first authed request).
   first_admin_profile_id: "REPLACE-WITH-FIRST-ADMIN-PROFILE-UUID"
