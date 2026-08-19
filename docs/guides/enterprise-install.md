@@ -174,7 +174,7 @@ impossible, not just out of order.
 | 5 | Deploy backend; `sqlx migrate run` against `DATABASE_URL_UNPOOLED` | manual | [self-hosting.md § Run migrations](./self-hosting.md#run-migrations) |
 | 6 | Apply the `kb_saml_idp` row (`saml-setup.sh --apply-db`, or `psql` the `--sql-out` file by hand) | `saml-setup.sh` (`--apply-db`) | [self-hosting-saml.md](./self-hosting-saml.md) |
 | 7 | First admin signs in via SAML → JIT `kb_profiles` row | manual | [self-hosting-saml.md](./self-hosting-saml.md) |
-| 8 | SQL root step: gating team + first admin; VERIFY `is_system_admin(<uuid>) = true` | `system-bootstrap.sh --run-root` | [org-bootstrap.md § 0](./org-bootstrap.md#0-the-irreducible-sql-root-step-operator-with-db-credentials) |
+| 8 | SQL root step: gating team + first admin; VERIFY `has_system_access(<uuid>)` AND `is_system_admin(<uuid>)` both true | `system-bootstrap.sh --run-root` | [org-bootstrap.md § 0](./org-bootstrap.md#0-the-irreducible-sql-root-step-operator-with-db-credentials) |
 | 9 | `temper admin settings` (instance name, gating team, mode) | `system-bootstrap.sh` | [org-bootstrap.md § 1](./org-bootstrap.md#1-instance-settings) |
 | 10 | `temper team create everyone --auto-join-role watcher` | `system-bootstrap.sh` | [org-bootstrap.md § 2](./org-bootstrap.md#2-create-the-everyone-team) |
 | 11 | `temper admin saml map-group` (after teams exist) | `saml-setup.sh` (emit / `--apply-db`) | [self-hosting-saml.md](./self-hosting-saml.md) |
@@ -216,15 +216,14 @@ steps 2–3, 6, and 11–12 for the Auth0 app registration documented in
 Five ways this install silently misbehaves instead of failing loudly. Each has bitten a real
 install; read this before step 8.
 
-> **`is_system_admin` reads gating-team ownership, not `system_access`.** It is true only when
-> the profile is an **`owner`** member of the team whose slug equals
-> `kb_system_settings.gating_team_slug` — `kb_profiles.system_access = 'admin'` does nothing for
-> it, and `gating_team_slug` is `NULL` by canonical-seed default, which denies **everyone**
-> ([self-hosting-saml.md](./self-hosting-saml.md#7-verify) — a missing `gating_team_slug` "fails
-> silently with 403s"; [l0-content-delivery.md § The gotcha](./l0-content-delivery.md#the-gotcha-l0-writes-are-fail-closed)
-> spells out both halves; confirmed in the field 2026-07-02). **Set both halves at step 8** — the
-> gating team *and* the owner membership — and verify with `is_system_admin(<uuid>) = true` before
-> moving on, not just that the SQL ran.
+> **Admission and admin-ness are two independent rows, and each reads exactly one table.**
+> `has_system_access` reads `kb_principal_standing` (an `approved` row); `is_system_admin` reads
+> `kb_principal_governance`. Neither reads team membership, and a fresh instance has neither row,
+> so it denies **everyone** — silently, as 403s rather than a startup failure
+> ([l0-content-delivery.md § The gotcha](./l0-content-delivery.md#the-gotcha-l0-writes-are-fail-closed)
+> spells this out for the L0 write gate). **Write both rows at step 8** and verify **both**
+> predicates — `has_system_access(<uuid>)` and `is_system_admin(<uuid>)` each returning true —
+> before moving on, not just that the SQL ran. One without the other is a silent half-state.
 >
 > **`API_BASE_URL` pointed at the UI's own public origin creates a self-proxy loop → `508 Loop
 > Detected`.** It must be the API backend's own distinct origin — its `*.vercel.app` URL or a

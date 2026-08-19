@@ -87,10 +87,17 @@ Find the first admin's profile id (it must have signed in once already):
 SELECT id, handle FROM kb_profiles WHERE handle = '<the-operator-handle>';
 ```
 
-Then point the gating slug at a gating team and promote the profile. The
-`system_access = 'admin'` update fires the auto-join trigger, which mints the profile
-as **owner** of the gating team — and `is_system_admin` reads gating-team ownership,
-so this is what makes the profile a system admin:
+Then admit the profile and promote it. **These are two separate things**, and each reads
+exactly one table:
+
+- **Admission** — may this principal use the instance at all? `has_system_access` reads
+  `kb_principal_standing` and nothing else. Without an `approved` row here, every gated
+  request is a `403 SYSTEM_ACCESS_REQUIRED`.
+- **Governance** — may this principal change the rules? `is_system_admin` reads
+  `kb_principal_governance` and nothing else.
+
+Neither reads team membership. Owning the gating team does not make anyone an admin, and
+being an admin does not admit you.
 
 ```sql
 -- Create the gating team if it does not exist (temper-system is the conventional slug).
@@ -99,17 +106,22 @@ INSERT INTO kb_teams (slug, name) VALUES ('temper-system', 'Temper System')
 
 UPDATE kb_system_settings SET gating_team_slug = 'temper-system' WHERE id = 1;
 
-UPDATE kb_profiles SET system_access = 'admin' WHERE id = '<first-admin-profile-uuid>';
+-- Admit the profile. Prefer the function over a raw INSERT: it records the transition in
+-- kb_principal_standing_events and emits the corresponding event.
+SELECT principal_standing_apply(
+    '<first-admin-profile-uuid>'::uuid, 'approve', 'approved', NULL, 'root bootstrap');
 
--- Confirm the grant took:
-SELECT is_system_admin('<first-admin-profile-uuid>');  -- expect: true
+-- Promote it to system admin.
+SELECT principal_governance_set(
+    '<first-admin-profile-uuid>'::uuid, true, NULL, 'root bootstrap');
+
+-- Confirm BOTH took — they are independent, and one without the other is a silent half-state:
+SELECT has_system_access('<first-admin-profile-uuid>'::uuid);  -- expect: true
+SELECT is_system_admin('<first-admin-profile-uuid>'::uuid);    -- expect: true
 ```
 
-This is exercised verbatim as `root_bootstrap_first_admin` in
-`tests/e2e/tests/admin_surface_e2e.rs`. Leaving `access_mode = 'open'` (the default)
-keeps blast radius low: `gating_team_slug` then only enables
-system-admin-by-team-ownership; the invite / join-request flow engages exclusively
-under `access_mode = 'invite_only'`.
+The same sequence is exercised as `root_bootstrap_first_admin` in
+`tests/e2e/tests/context_transfer_e2e.rs`, via the `approved_admin` helper.
 
 > **Snapshot prod before a hand-run data change.** On Neon, create a copy-on-write
 > backup branch first — see [releasing.md](https://github.com/tasker-systems/temper/blob/main/internal/development/releasing.md) / [DEPLOYING.md](../../DEPLOYING.md).
@@ -234,7 +246,9 @@ team-visible resource becomes reachable through the bound map. The test is
 
 - **Cogmap-write gate vs. team roles.** Org cogmaps bound to the everyone-team will
   eventually want **maintainers of that team** to write them, not only system admins.
-  The interim gate for `cogmap create` / `reconcile` / `bind` is `is_system_admin`.
+  `cogmap reconcile` is admin-gated. `cogmap create` is open to any authenticated profile
+  (the creator is granted read+write+grant on the map they make), and `cogmap bind` takes
+  system-admin **or** a team owner/maintainer who administers the map.
 - **Plan/diff (Terraform-like) applier semantics.** The applier is stateless and
   idempotent; a desired-vs-actual diff is deferred.
 - **Graduating the applier to a `temper admin init` subcommand.** It stays an external
