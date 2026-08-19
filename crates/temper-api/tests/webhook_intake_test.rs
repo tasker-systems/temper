@@ -1,3 +1,4 @@
+#![cfg(feature = "test-db")]
 //! The intake transport, end to end over HTTP (S3 of "external systems as subscribed emitters").
 //!
 //! These go through the **router**, not through `intake_service`. Chunk B and chunk C already
