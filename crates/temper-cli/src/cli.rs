@@ -1244,6 +1244,11 @@ pub enum AdminAction {
         #[command(subcommand)]
         action: AdminConnectionAction,
     },
+    /// Manage subscriptions — a team/context/cogmap subscribes to a connection's events
+    Subscription {
+        #[command(subcommand)]
+        action: AdminSubscriptionAction,
+    },
     /// Re-embed chunks whose vectors were produced by an older model (the drain does the work)
     ///
     /// Nothing is destroyed: a stale vector stays searchable until a fresh one replaces it. Staleness
@@ -1451,6 +1456,46 @@ pub enum AdminConnectionAction {
         #[arg(long)]
         team: String,
     },
+}
+
+/// Subcommands for `temper admin subscription`.
+#[derive(Subcommand)]
+pub enum AdminSubscriptionAction {
+    /// Create a subscription. The two-leg authz gate (authoring-team manage-capable + reach
+    /// grant held on the connection) runs server-side.
+    Create {
+        /// The subscriber kind: `kb_contexts` | `kb_cogmaps` | `kb_teams`.
+        #[arg(long = "subscriber-table")]
+        subscriber_table: String,
+        /// The subscriber row id (UUID).
+        #[arg(long = "subscriber-id")]
+        subscriber_id: String,
+        /// The team whose manage-capable role authorizes this subscription (UUID). For
+        /// `kb_teams` subscribers, this must equal `--subscriber-id`.
+        #[arg(long = "authoring-team-id")]
+        authoring_team_id: String,
+        /// The connection id (UUID).
+        #[arg(long = "connection-id")]
+        connection_id: String,
+        /// The selector: a JSON string, or `@file.json` to read from a file. The shape is the
+        /// `SubscriptionSelector` enum (`{"kind": "git_hub_repository", "repo": "acme/temper", ...}`).
+        #[arg(long)]
+        selector: String,
+    },
+    /// List subscriptions visible to the caller.
+    List {
+        /// Include revoked subscriptions.
+        #[arg(long = "include-revoked")]
+        include_revoked: bool,
+        /// Optional: filter to subscriptions against this connection (UUID).
+        #[arg(long = "connection-id")]
+        connection_id: Option<String>,
+    },
+    /// Show one subscription.
+    Show { id: String },
+    /// Revoke a subscription. Rows are never deleted — a revoked subscription stops matching
+    /// but stays resolvable for the delivery row's research-corpus property.
+    Revoke { id: String },
 }
 
 #[derive(Subcommand)]
