@@ -162,6 +162,12 @@ jobs:
       - name: Check the committed CLI reference is up to date (cli reference drift)
         run: bash .github/scripts/check-cli-reference-drift.sh
 
+      # And the config half. Same shape, different source: this one projects the TemperConfig
+      # TYPE (via a schemars JSON Schema, so the doc comments come along) rather than the CLI's
+      # rendered help. It carries its own completeness cross-check for the same reason.
+      - name: Check the committed config reference is up to date (config reference drift)
+        run: bash .github/scripts/check-config-reference-drift.sh
+
       # Security tripwires (internal/development/security-audit-playbook.md). Pure static enumerators:
       # each pins a security-relevant set (grant write-sites, unauthenticated routes, handler-side
       # authz) against a reviewed baseline and fails when the set grows silently. They prove nothing
@@ -328,6 +334,9 @@ jobs:
 
       - name: Guard test — check-cli-reference-drift
         run: bash .github/scripts/test-check-cli-reference-drift.sh
+
+      - name: Guard test — check-config-reference-drift
+        run: bash .github/scripts/test-check-config-reference-drift.sh
 
       - name: Guard test — check-docs-public-only
         run: bash .github/scripts/test-check-docs-public-only.sh

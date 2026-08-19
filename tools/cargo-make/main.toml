@@ -37,6 +37,7 @@ dependencies = [
   "ts-rs-drift",
   "skills-drift",
   "cli-reference-drift",
+  "config-reference-drift",
   "docs-public-only",
   "ts-check"
 ]
@@ -68,6 +69,17 @@ description = "Fail if docs/reference/cli has drifted from the binary's --help t
 # Re-emitting and diffing proves the tree is reproducible; only a second, independent derivation
 # proves it is complete. See .github/scripts/check-cli-reference-drift.sh.
 script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-cli-reference-drift.sh"]
+
+[tasks.config-reference-drift]
+description = "Fail if docs/reference/config has drifted from the TemperConfig that produces it"
+# The sibling of cli-reference-drift, one tier over: that one projects the CLI's rendered --help,
+# this one projects the config TYPE. Its descriptions are the doc comments on TemperConfig, lifted
+# into a schemars JSON Schema so the page renders from a compiled artifact rather than from a parse
+# of config.rs.
+#
+# Also carries a completeness cross-check, and here it is load-bearing rather than precautionary:
+# three traversal bugs in the renderer silently omitted 10 of 27 fields, all behind a clean diff.
+script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-config-reference-drift.sh"]
 
 [tasks.docs-public-only]
 description = "Fail if docs/ contains internal material — the publish-safety invariant"
