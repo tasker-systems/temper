@@ -166,18 +166,37 @@ existence. It is not an optional nicety; it is structural.
 
 ### Intake
 
+> **Amended 2026-08-19 against shipped code (S2 chunk B, S3).** The sketch below was corrected in
+> two places rather than left to be re-derived, because an implementer builds the code block, not
+> the prose beside it. Both corrections are already live.
+>
+> - **One path, not one per provider.** The provider arrives in the attestation's **signed**
+>   `trigger` claim, so a `<provider>` path segment would be unsigned duplicate information — the
+>   same reason the connector is read from the JWT and never from the unsigned `x-trigger-*`
+>   mirror headers.
+> - **One permissive event type, not one per remote event.** `webhook_received` (migration
+>   `20260819000020`) is the registered foreign type; the provider's own event name rides
+>   `metadata`, not the `event_type` name. A type-per-remote-event would make the registry grow
+>   with every provider's taxonomy and would put a value temper does not control into a key.
+
 ```
-POST /webhooks/<provider>
-  → verify signature
-  → resolve emitter          the connection's entity
+POST /api/intake/webhook                             one path; provider comes from the SIGNED claim
+  → verify attestation       RS256/JWKS + anti-decoy client_id; yields {provider, connector_uid}
+  → resolve connection       credential->>'connector' = connector_uid  (indexed, partial)
+  → read event name          the provider's own header, keyed on the signed provider.
+                             NOTE the attestation covers NEITHER body NOR headers, so this is no
+                             weaker than the payload; what is recorded is its PROVENANCE.
+                             No rule, or no value ⇒ FAIL LOUDLY. Never default, never guess.
   → match subscriptions      declared, indexed; coarse (payload-only)
   → append ONE event:
-        event_type   "github.pull_request.merged"   (payload_schema NULL — the reserved path)
+        event_type   "webhook_received"              (payload_schema NULL — the reserved path)
         payload      the raw body, verbatim
+        metadata     {provider_event_type, provider_event_type_source}
         anchor       the connection's home context
         references   [{rel:"touches", target:{kind:"kb_cogmaps", id:…}}, …]   ← matched subs only
   → project delivery rows    one per matched subscription
-  → ack
+  → ack                      202 — INCLUDING a zero-match payload. The empty radius is the noise
+                             filter; non-2xx makes the remote retry a payload routed nowhere.
 ```
 
 An event has exactly **one** `producing_anchor`, so a payload matching three subscribers cannot be
