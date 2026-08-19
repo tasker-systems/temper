@@ -32,5 +32,6 @@ pub mod slack_link_state;
 pub mod slack_mint_service;
 pub mod standing_service;
 pub mod steward_service;
+pub mod subscription_service;
 pub mod team_service;
 pub mod workflow_job_service;
