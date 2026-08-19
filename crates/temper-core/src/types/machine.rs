@@ -1,5 +1,5 @@
 //! Machine-principal registration types. See
-//! `docs/superpowers/specs/2026-07-10-machine-principal-registration-design.md`.
+//! `internal/superpowers/specs/2026-07-10-machine-principal-registration-design.md`.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

@@ -15,7 +15,7 @@ A `v*` tag invokes [`.github/workflows/release.yml`](.github/workflows/release.y
 
 No Vercel deploy, no schema migration, no production side effects. Releasing and
 deploying are decoupled by design (see
-[docs/superpowers/specs/2026-06-25-multi-target-deployment-model-design.md](docs/superpowers/specs/2026-06-25-multi-target-deployment-model-design.md)).
+[internal/superpowers/specs/2026-06-25-multi-target-deployment-model-design.md](internal/superpowers/specs/2026-06-25-multi-target-deployment-model-design.md)).
 
 ## Release checklist
 

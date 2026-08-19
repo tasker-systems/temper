@@ -16,11 +16,11 @@ artifact for M2M (machine-to-machine) agent principals — the auth-seam plan's 
 > Operator-facing companion (mint / reach / rotate / revoke):
 > [../guides/machine-credentials.md](../guides/machine-credentials.md). Implementation
 > designs: Stage 4
-> ([spec](../superpowers/specs/2026-07-02-auth-seam-stage-4-m2m-implementation-design.md)),
+> (spec: `internal/superpowers/specs/2026-07-02-auth-seam-stage-4-m2m-implementation-design.md`),
 > registration Phase A
-> ([spec](../superpowers/specs/2026-07-10-machine-principal-registration-design.md)), the
+> (spec: `internal/superpowers/specs/2026-07-10-machine-principal-registration-design.md`), the
 > issuer grant Phase B1
-> ([spec](../superpowers/specs/2026-07-10-machine-principal-phase-b1-issuer-grant-design.md)).
+> (spec: `internal/superpowers/specs/2026-07-10-machine-principal-phase-b1-issuer-grant-design.md`).
 
 ## The boundary: who mints vs. who validates
 
@@ -378,8 +378,7 @@ still works with temper-mcp (one-time browser consent) and was the pre-Stage-4 b
 an escape hatch. **Avoid** the `user`-subject-as-a-human path — it proxies as that human and
 conflates authorship.
 
-Spec:
-[../superpowers/specs/2026-07-02-shared-auth-orchestration-seam-design.md](../superpowers/specs/2026-07-02-shared-auth-orchestration-seam-design.md)
+Spec: `internal/superpowers/specs/2026-07-02-shared-auth-orchestration-seam-design.md`
 (Stage 4). Creating the *Auth0 application* is an operator/console step outside the repo;
 registering it with Temper (`temper admin machine provision`) is not — without it the token
 is a 401.

@@ -36,7 +36,7 @@ import { requireEnv, temperFetch } from "../lib/temper-auth.js";
  * tick's runs are queryable, not just greppable. The fan-out prompt therefore does NOT mention the
  * correlation: one tick is one dispatch act plus N run-grain sessions, and an agent that passed the tick
  * id to a write tool's `correlation_id` would collapse act grain into run grain.
- * Design: docs/superpowers/specs/2026-07-06-steward-dispatch-correlation-id-design.md
+ * Design: internal/superpowers/specs/2026-07-06-steward-dispatch-correlation-id-design.md
  */
 export default defineSchedule({
   cron: "0 * * * *", // hourly, UTC; the server's threshold + single-flight gate what actually runs

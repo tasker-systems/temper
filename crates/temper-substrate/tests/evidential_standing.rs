@@ -12,7 +12,7 @@
 //! Set 5 retired the pairwise-independence model (`kb_independence_pairs`,
 //! `resource_independence_breadth`, `refresh_independence_pairs`) and the edge-based
 //! `resource_adversarial_survival` reader — spec
-//! `docs/superpowers/specs/2026-07-23-set5-adversary-citation-audit-design.md` §3.4. The four Set-3
+//! `internal/superpowers/specs/2026-07-23-set5-adversary-citation-audit-design.md` §3.4. The four Set-3
 //! tests that drove those objects (`silence_default_is_correlated`,
 //! `affirmed_independence_raises_breadth`, `zero_challenges_is_not_survival`,
 //! `band_is_read_time_over_components`) were DELETED with them rather than left to fail: a test of
@@ -658,7 +658,7 @@ async fn is_resource_visible_false_for_an_unreadable_one(pool: sqlx::PgPool) {
 
 // ── Set 5 Task 3 — the three citation axes and the re-thresholded band ──────────────────────────
 //
-// Spec `docs/superpowers/specs/2026-07-23-set5-adversary-citation-audit-design.md` §3.1/§3.2/§4.1,
+// Spec `internal/superpowers/specs/2026-07-23-set5-adversary-citation-audit-design.md` §3.1/§3.2/§4.1,
 // migration `20260724000120_standing_citation_components.sql`. Every audit below goes through the
 // production write path (`writes::record_citation_audit`), never a hand-rolled INSERT.
 

@@ -4,7 +4,7 @@
 #
 # WHY THIS EXISTS
 # ---------------
-# `[2026-08-13, PR D]` `docs/api/query.openapi.yaml` used to hand-write 37 schemas, 34 of which
+# `[2026-08-13, PR D]` `internal/api/query.openapi.yaml` used to hand-write 37 schemas, 34 of which
 # `openapi.json` had come to publish independently. Two statements of one wire type is a drift site
 # by construction, and it drifted: in the week before D the file accumulated five new lag entries,
 # one of them SILENT — it named a refusal code, `COMPOSITION_INVALID`, that no line of `crates/`
@@ -58,14 +58,14 @@ SPEC="openapi.json"
 CONTRACTS=()
 while IFS= read -r found; do
   [[ -n "$found" ]] && CONTRACTS+=("$found")
-done < <(find docs/api -name '*.openapi.yaml' -type f 2>/dev/null | sort)
+done < <(find internal/api -name '*.openapi.yaml' -type f 2>/dev/null | sort)
 
 if [[ ! -f "$SPEC" ]]; then
   echo "FATAL: $SPEC not found — cannot resolve any cross-reference against it." >&2
   exit 1
 fi
 if [[ ${#CONTRACTS[@]} -eq 0 ]]; then
-  echo "FATAL: no hand-written contract found under docs/api/. If they moved, move this scan with" >&2
+  echo "FATAL: no hand-written contract found under internal/api/. If they moved, move this scan with" >&2
   echo "       them — an empty scope makes every check below pass having verified nothing." >&2
   exit 1
 fi

@@ -9,7 +9,7 @@ use crate::error::{ClientError, Result};
 
 /// Environment variable names honored by cloud-mode / ephemeral sessions.
 ///
-/// See `docs/superpowers/specs/2026-04-18-cloud-mode-and-portable-memory-design.md`
+/// See `internal/superpowers/specs/2026-04-18-cloud-mode-and-portable-memory-design.md`
 /// for the design rationale.
 pub const TEMPER_TOKEN_ENV: &str = "TEMPER_TOKEN";
 pub const TEMPER_PROVIDER_ENV: &str = "TEMPER_PROVIDER";
@@ -585,7 +585,7 @@ pub fn parse_jwt_claims(jwt: &str) -> Result<JwtClaims> {
 /// **Refresh-less by design.** The returned [`StoredAuth`] has
 /// `refresh_token: None` because env-var auth deliberately does not carry
 /// a refresh token. Per Unit B.4 §Q1/W1
-/// (`docs/superpowers/specs/2026-04-19-cloud-mode-auth0-design.md`),
+/// (`internal/superpowers/specs/2026-04-19-cloud-mode-auth0-design.md`),
 /// exporting a refresh token to a cloud session would entangle it with the
 /// user's local Auth0 grant under refresh-token rotation: the first side
 /// to refresh invalidates the other's RT, and the next refresh triggers

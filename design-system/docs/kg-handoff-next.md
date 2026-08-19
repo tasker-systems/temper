@@ -106,7 +106,7 @@ This is *not* ready to start. Per the original `kg-handoff.md`:
 
 > Deferred until the structural mode has shipped and been used in anger for ~2 weeks; until we've seen which aggregators users actually click into (inform which emergent-edge view is most valuable); and until a decision on precompute vs on-the-fly Jaccard.
 
-When it's time, the scoping doc goes in `docs/superpowers/specs/`. Rough shape: server computes aggregator-to-aggregator edges by shared-member Jaccard similarity, exposed via a `mode` query param on `/api/graph/subgraph` or a new endpoint; client adds a `mode: 'structural' | 'meta-doc'` prop to `KnowledgeGraph.svelte` and swaps elements accordingly.
+When it's time, the scoping doc goes in `internal/superpowers/specs/`. Rough shape: server computes aggregator-to-aggregator edges by shared-member Jaccard similarity, exposed via a `mode` query param on `/api/graph/subgraph` or a new endpoint; client adds a `mode: 'structural' | 'meta-doc'` prop to `KnowledgeGraph.svelte` and swaps elements accordingly.
 
 ---
 

@@ -5,7 +5,7 @@
 //! `CloudBackend`. Surfaces never instantiate `CloudBackend` directly;
 //! they always go through this helper.
 //!
-//! See `docs/superpowers/specs/2026-05-21-cloud-only-vault-deprecation-design.md`.
+//! See `internal/superpowers/specs/2026-05-21-cloud-only-vault-deprecation-design.md`.
 
 use std::sync::Arc;
 

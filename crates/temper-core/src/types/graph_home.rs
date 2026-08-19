@@ -2,7 +2,7 @@
 //! **build / research** verb-lens footprint (Beat B). `build` = the contexts your
 //! work lives in (personal + team); `research` = the cogmaps you can reach. The
 //! `you` node is dropped (self implied). See
-//! docs/superpowers/specs/2026-07-07-atlas-beat-b-home-reframe-spec.md.
+//! internal/superpowers/specs/2026-07-07-atlas-beat-b-home-reframe-spec.md.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

@@ -5,7 +5,7 @@
 //! is reported as absence — never as a placeholder — so `/api/health` can distinguish
 //! "this build did not record a commit" from "this build is at commit X".
 //!
-//! Design: docs/superpowers/specs/2026-07-30-schema-binary-pairing-design.md § 5.
+//! Design: internal/superpowers/specs/2026-07-30-schema-binary-pairing-design.md § 5.
 
 fn main() {
     // Rebuild when the variable appears, changes, or disappears.

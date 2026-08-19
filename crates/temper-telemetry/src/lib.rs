@@ -15,7 +15,7 @@
 //!
 //! ## Extraction landed before export, and stays a field afterwards
 //!
-//! `docs/development/span-field-conventions.md` recorded the gap extraction closed: *"No W3C trace
+//! `internal/development/span-field-conventions.md` recorded the gap extraction closed: *"No W3C trace
 //! context. Nothing extracts or propagates `traceparent`, so spans do not yet join across
 //! deployables."* A trace id in a JSON log line is worth having on its own — it is what lets a Slack
 //! mention's three hops be grepped into one story.

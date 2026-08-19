@@ -102,7 +102,7 @@ cargo install --path crates/temper-cli --locked --features embed,extract\n\
 /// which is false advice for a script install.
 ///
 /// Also states the Windows declared hole from the binary-attestation design
-/// (`docs/superpowers/specs/2026-07-29-binary-attestation-and-manifest-verification-design.md`,
+/// (`internal/superpowers/specs/2026-07-29-binary-attestation-and-manifest-verification-design.md`,
 /// "Out of scope → Deferred"): `install.ps1` writes no per-file manifest, so a
 /// Windows install is hash-verified only (the archive checksum) and has no
 /// attestation-verified update path — `temper version --verify` there always

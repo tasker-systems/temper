@@ -247,6 +247,6 @@ team-visible resource becomes reachable through the bound map. The test is
 - Root-step reference: `root_bootstrap_first_admin`
   (`tests/e2e/tests/admin_surface_e2e.rs`).
 - Template / shape: [l0-content-delivery.md](./l0-content-delivery.md).
-- Design: `docs/superpowers/specs/2026-06-28-org-provisioning-bootstrap-surface-design.md`
+- Design: `internal/superpowers/specs/2026-06-28-org-provisioning-bootstrap-surface-design.md`
   (§4 Chunk 7, the capstone).
 - Self-hosting deploy that produces the blank install: [self-hosting.md](./self-hosting.md).

@@ -249,7 +249,7 @@ fn parse_team_role(role: &str) -> ApiResult<TeamRole> {
 /// Recorded as a decision rather than left to read as an oversight, and pinned by
 /// `connection_service::tests::reach_to_the_gating_team_is_allowed_for_a_non_admin`. Full
 /// reasoning for all three gates:
-/// `docs/superpowers/specs/2026-07-22-scoped-authority-policy-layer-design.md` §6.1.
+/// `internal/superpowers/specs/2026-07-22-scoped-authority-policy-layer-design.md` §6.1.
 pub(crate) async fn contain_target_team(
     pool: &PgPool,
     authority: MachineAuthority,

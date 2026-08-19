@@ -14,7 +14,7 @@
 //!
 //! Every arm **calls** its incumbent predicate; none restates one, per `super`'s module doc
 //! (`authz/mod.rs:12-16`). Design:
-//! `docs/superpowers/specs/2026-07-30-context-rename-design.md` §"`ContextAdminAuthority`".
+//! `internal/superpowers/specs/2026-07-30-context-rename-design.md` §"`ContextAdminAuthority`".
 
 use async_trait::async_trait;
 use sqlx::PgPool;

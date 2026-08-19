@@ -3,7 +3,8 @@
 The queries an operator runs to answer *is the drain keeping up?* for the two `api/internal` drains —
 region materialization and embedding.
 
-Companion to [the drain instrumentation design](../superpowers/specs/2026-08-03-drain-instrumentation-design.md)
+Companion to the drain instrumentation design
+(`internal/superpowers/specs/2026-08-03-drain-instrumentation-design.md`)
 and [OpenTelemetry setup](open-telemetry-setup.md). Datasource: the Tempo datasource
 (`grafanacloud-traces`).
 

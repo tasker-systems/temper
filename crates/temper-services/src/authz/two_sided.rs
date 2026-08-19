@@ -115,7 +115,7 @@ impl ScopedAuthority for TwoSidedAuthority {
     ///
     /// Its third sibling, `machine_authz::contain_target_team`, deliberately has no such exclusion.
     /// All three reasons: spec §6.1 in
-    /// `docs/superpowers/specs/2026-07-22-scoped-authority-policy-layer-design.md`.
+    /// `internal/superpowers/specs/2026-07-22-scoped-authority-policy-layer-design.md`.
     async fn resolve(pool: &PgPool, caller: ProfileId, scope: TwoSidedScope) -> ApiResult<Self> {
         if access_service::is_system_admin(pool, caller).await? {
             return Ok(TwoSidedAuthority::SystemAdmin);

@@ -6,7 +6,7 @@
 //! `ResourceListResponse` unconditionally now, over `ResourceView` rows, and `?sections=` varies
 //! which *parts* of that one shape are filled.
 //!
-//! Three witnesses, per the plan (`docs/superpowers/plans/2026-08-06-resource-view-convergence.md`,
+//! Three witnesses, per the plan (`internal/superpowers/plans/2026-08-06-resource-view-convergence.md`,
 //! Task 7). The third is the convergence witness — and its bite-check is on record as **failing to
 //! bite** the property Task 1 owns: re-adding a hoisted `stage` column to `ResourceView` leaves it
 //! green, because both sides gain the field, and only `no_workflow_field_is_hoisted` catches it.

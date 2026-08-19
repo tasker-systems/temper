@@ -35,7 +35,7 @@
 #   - a new unauthenticated/self-gated/signature route FAILS until acknowledged, and
 #   - a silently deleted auth layer FAILS immediately.
 # Auth-covered routes (auth_only/gated) grow freely and never trip this.
-# See docs/development/security-audit-playbook.md § 1.
+# See internal/development/security-audit-playbook.md § 1.
 #
 # USAGE
 #   .github/scripts/audit-route-auth.sh          # verify (CI mode)

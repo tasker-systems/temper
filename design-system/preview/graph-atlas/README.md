@@ -3,7 +3,7 @@
 Visual targets from the **2026-07-03 graph-visualization rethink** brainstorm. These are
 the reference mockups the spec and implementation plan point at — "what we were aiming for."
 
-**Spec:** [`docs/superpowers/specs/2026-07-03-temper-ui-graph-visualization-atlas-design.md`](../../../docs/superpowers/specs/2026-07-03-temper-ui-graph-visualization-atlas-design.md)
+**Spec:** [`internal/superpowers/specs/2026-07-03-temper-ui-graph-visualization-atlas-design.md`](../../../internal/superpowers/specs/2026-07-03-temper-ui-graph-visualization-atlas-design.md)
 
 Open the `.html` files directly in a browser (they are standalone; they link `../_shared.css`
 for fonts/tokens).

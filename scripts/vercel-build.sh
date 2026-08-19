@@ -2,7 +2,7 @@
 # Vercel Build Command — the deploy applies its own additive schema.
 #
 # WHY THIS EXISTS
-#   Spec §3 (docs/superpowers/specs/2026-07-30-schema-binary-pairing-design.md):
+#   Spec §3 (internal/superpowers/specs/2026-07-30-schema-binary-pairing-design.md):
 #
 #     "A migration declaring itself additive is applied during the build phase, by a
 #      binary that contains it."

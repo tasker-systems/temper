@@ -3,8 +3,8 @@
 This runbook births + binds a **team self-cognition map**: a cognitive map born 1:1 with a
 team, whose ingest source is the team's own temper resources, and whose telos is "understand how
 this team works" (see [`schema-artifact/manifests/team-self-cognition.yaml`](../../schema-artifact/manifests/team-self-cognition.yaml)).
-This is the foundation the Eve steward (see the
-[act-model + cogmap-resource vocabulary design](../superpowers/specs/2026-06-30-steward-act-model-cogmap-resource-vocabulary-design.md))
+This is the foundation the Eve steward (see the act-model + cogmap-resource vocabulary design,
+`internal/superpowers/specs/2026-06-30-steward-act-model-cogmap-resource-vocabulary-design.md`)
 tends going forward — this SoP only covers birth + bind, not ongoing stewardship.
 
 **Audience:** an operator (or the steward's own deploy step) standing up self-cognition for a
@@ -158,8 +158,8 @@ cargo build -p temper-cli --bin temper --features embed
 Creating the specific **`temper` team + `building` context** and re-homing an existing personal
 corpus into it is a **one-time operator migration for J's own install**, not a step most installs
 need — this runbook is the reusable, team-agnostic procedure; that specific migration is deferred
-and tracked outside this durable deliverable (see the Deferred section of the
-[T2 implementation plan](../superpowers/plans/2026-06-30-t2-templated-team-telos-genesis.md)).
+and tracked outside this durable deliverable (see the Deferred section of the T2 implementation
+plan, `internal/superpowers/plans/2026-06-30-t2-templated-team-telos-genesis.md`).
 
 ## Deferred seams
 
@@ -180,5 +180,5 @@ and tracked outside this durable deliverable (see the Deferred section of the
   [`schema-artifact/manifests/org-identity.yaml`](../../schema-artifact/manifests/org-identity.yaml).
 - The reusable genesis manifest:
   [`schema-artifact/manifests/team-self-cognition.yaml`](../../schema-artifact/manifests/team-self-cognition.yaml).
-- Steward architecture this map feeds: `docs/superpowers/specs/2026-06-30-steward-act-model-cogmap-resource-vocabulary-design.md`.
-- Implementation plan this SoP delivers: `docs/superpowers/plans/2026-06-30-t2-templated-team-telos-genesis.md`.
+- Steward architecture this map feeds: `internal/superpowers/specs/2026-06-30-steward-act-model-cogmap-resource-vocabulary-design.md`.
+- Implementation plan this SoP delivers: `internal/superpowers/plans/2026-06-30-t2-templated-team-telos-genesis.md`.

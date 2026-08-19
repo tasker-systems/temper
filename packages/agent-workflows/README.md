@@ -3,12 +3,12 @@
 Deployed agent runtimes over the temper-mcp surface. **Eve** is the first runtime
 binding; **Claude Managed Agents (CMA)** is a planned second (the two runtimes are
 near-isomorphic — see
-`docs/research/2026-06-18-vercel-eve-and-claude-managed-agents-investigation.md`).
+`internal/research/2026-06-18-vercel-eve-and-claude-managed-agents-investigation.md`).
 
 ## Agents
 
 - `steward/` — the team self-cognition steward (Eve). Design:
-  `docs/superpowers/specs/2026-07-01-t5-eve-steward-agent-directory-design.md`.
+  `internal/superpowers/specs/2026-07-01-t5-eve-steward-agent-directory-design.md`.
 
 ## Why this package is workspace-isolated
 

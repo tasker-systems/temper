@@ -1,6 +1,6 @@
 //! Wire types for the citation auditor's dispatch tick (Set 5, Task 13).
 //!
-//! Spec `docs/superpowers/specs/2026-07-23-set5-adversary-citation-audit-design.md` §6.1.
+//! Spec `internal/superpowers/specs/2026-07-23-set5-adversary-citation-audit-design.md` §6.1.
 //!
 //! **The whole reason this module exists rather than reusing [`crate::types::workflow_job::ClaimedJob`]
 //! is the grain mismatch, and it is worth stating once, here.** `audit_drift_sweep` is

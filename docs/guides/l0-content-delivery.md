@@ -177,7 +177,7 @@ declares its ambient steward wake = never.
 - Birth migration: `migrations/20260625000001_l0_kernel_cogmap.sql`.
 - Charter-set primitive: `migrations/20260629000001_cogmap_charter_set.sql`.
 - Manifest: `schema-artifact/manifests/l0-kernel.yaml`.
-- Design: `docs/superpowers/specs/2026-06-25-cognitive-map-agent-invocation-architecture-design.md`
-  (L0 kernel cognitive map), `docs/superpowers/specs/2026-06-28-l0-telos-charter-delivery-design.md`
+- Design: `internal/superpowers/specs/2026-06-25-cognitive-map-agent-invocation-architecture-design.md`
+  (L0 kernel cognitive map), `internal/superpowers/specs/2026-06-28-l0-telos-charter-delivery-design.md`
   (telos charter delivery, PR #199).
 - Neon backup convention: [releasing.md](./releasing.md), [DEPLOYING.md](../../DEPLOYING.md).

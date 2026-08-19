@@ -2,7 +2,7 @@
 
 //! The deploy applies its own additive schema, and refuses the rest — against a real database.
 //!
-//! Spec §3 (`docs/superpowers/specs/2026-07-30-schema-binary-pairing-design.md`), step 4.
+//! Spec §3 (`internal/superpowers/specs/2026-07-30-schema-binary-pairing-design.md`), step 4.
 //!
 //! # Why this exists alongside the unit tests
 //!

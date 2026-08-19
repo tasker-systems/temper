@@ -133,7 +133,7 @@ jobs:
       - name: Check the committed agent-skills projection is up to date (skills drift)
         run: bash .github/scripts/check-skills-drift.sh
 
-      # Security tripwires (docs/development/security-audit-playbook.md). Pure static enumerators:
+      # Security tripwires (internal/development/security-audit-playbook.md). Pure static enumerators:
       # each pins a security-relevant set (grant write-sites, unauthenticated routes, handler-side
       # authz) against a reviewed baseline and fails when the set grows silently. They prove nothing
       # on their own — they force a reviewer to answer the attenuation / auth-posture question.
@@ -186,7 +186,7 @@ jobs:
         run: bash .github/scripts/audit-ignored-tests.sh
 
       # Not a security tripwire — a CONTRACT one, and it exists to keep an argument honest.
-      # PR D stopped `docs/api/query.openapi.yaml` restating 31 schemas `openapi.json` already
+      # PR D stopped `internal/api/query.openapi.yaml` restating 31 schemas `openapi.json` already
       # publishes, on the grounds that "a restatement can drift; a `$ref` cannot." True about
       # drift, silent about the other failure: a `$ref` whose target is renamed away does not
       # drift, it DANGLES, and nothing in this repo reads that file. Rename a Rust type — an
@@ -278,6 +278,27 @@ jobs:
 
       - name: Guard test — check-openapi-routes
         run: bash .github/scripts/test-check-openapi-routes.sh
+
+      # THE GATE ITSELF, not only its harness. docs/ is synced wholesale to the public
+      # documentation site, so the safety property is structural: everything under docs/ is
+      # public, and nothing else lives there. It was got wrong once and published internal
+      # security audits. `cargo make check` runs this too, but no CI job runs cargo-make, so
+      # until this step existed the invariant was enforced only on whichever laptop happened to
+      # run the full local check.
+      #
+      # It lives HERE and not in rust-quality because it is pure bash — no toolchain, no
+      # database, one second — and rust-quality is gated on `inputs.run-rust-quality`. Sitting
+      # there, the only way to reach it for a docs-only PR was to force the WHOLE Rust and
+      # TypeScript pipeline on (measured: `^docs/` in RUST_COUPLED flipped a one-line docs edit
+      # from SKIP_ALL into test-rust + test-typescript + rust-quality). guard-tests carries no
+      # such gate, so detect-ci-scope now only has to invoke this workflow — see the docs/ arm
+      # of the SKIP_ALL branch in detect-ci-scope.sh, which sets RUN_CODE_QUALITY=true while
+      # leaving every heavy job off.
+      - name: Check docs/ holds only public documentation
+        run: bash .github/scripts/check-docs-public-only.sh
+
+      - name: Guard test — check-docs-public-only
+        run: bash .github/scripts/test-check-docs-public-only.sh
 
       - name: Guard test — audit-route-auth (per-builder layer wiring)
         run: bash .github/scripts/test-audit-route-auth.sh

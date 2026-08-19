@@ -4,7 +4,7 @@
 //! shared across all surfaces (CLI-local-vault, CLI-cloud, MCP, API-HTTP)
 //! and both backends (DbBackend in temper-api, CloudBackend in temper-cli).
 //!
-//! See `docs/superpowers/specs/2026-05-01-shared-core-execution-paths-design.md`.
+//! See `internal/superpowers/specs/2026-05-01-shared-core-execution-paths-design.md`.
 
 mod actions;
 mod backend;

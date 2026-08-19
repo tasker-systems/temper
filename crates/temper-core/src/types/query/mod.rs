@@ -1,6 +1,6 @@
 //! The v0 query-envelope contract. These types ARE the contract: the published spec is generated
 //! from them in T3 and ships with the other generated artifacts, so there is no hand-written
-//! second copy. See `docs/superpowers/specs/2026-08-03-query-envelope-contract-v0-design.md` for
+//! second copy. See `internal/superpowers/specs/2026-08-03-query-envelope-contract-v0-design.md` for
 //! the design reasoning.
 
 pub mod act;

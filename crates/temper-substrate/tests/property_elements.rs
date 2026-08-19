@@ -2,7 +2,7 @@
 //! The owner-agnostic element relation, and the write-time `tags` normalization beside it.
 //!
 //! Task `01a00502-a774-7001-b5b2-0ce462158f1c`. Design
-//! `docs/superpowers/specs/2026-08-14-property-conventions-and-predicate-container-design.md`
+//! `internal/superpowers/specs/2026-08-14-property-conventions-and-predicate-container-design.md`
 //! §6.2 (*"a shape convention lives in a view, and the view is owner-agnostic"*) and §7, ruled on
 //! 2026-08-15.
 //!

@@ -20,7 +20,7 @@ Temper is a knowledge base for builders — a structured markdown vault that giv
 | `assets/` | Logos, favicon, brand mark, social preview, diagrams. |
 | `fonts/` | Font-loading instructions. (Temper doesn't self-host fonts.) |
 | `preview/` | The Design System cards — each small HTML showing one concept. |
-| `preview/graph-atlas/` | Design targets for the graph-visualization rethink (Atlas direction + semantic-zoom tiers). See its `README.md` and the [Atlas spec](../docs/superpowers/specs/2026-07-03-temper-ui-graph-visualization-atlas-design.md). |
+| `preview/graph-atlas/` | Design targets for the graph-visualization rethink (Atlas direction + semantic-zoom tiers). See its `README.md` and the [Atlas spec](../internal/superpowers/specs/2026-07-03-temper-ui-graph-visualization-atlas-design.md). |
 | `ui_kits/landing/` | Public marketing site components + a reconstructed landing page. |
 | `ui_kits/app/` | Authed vault browser — sidebar, grid, markdown viewer, palette. |
 
@@ -33,7 +33,7 @@ All design decisions trace to real files in the Temper production repository. Pa
 | Source | What we lifted |
 |---|---|
 | `github.com/tasker-systems/temper` → `README.md` | Product framing, tone of voice, command vocabulary |
-| `docs/brand-direction.md` | Color names, persona voice, diagram strategy — this was the canonical brand brief |
+| `internal/brand-direction.md` | Color names, persona voice, diagram strategy — this was the canonical brand brief |
 | `packages/temper-ui/src/app.css` | Every color var, every `.ed-*` editorial class, Tailwind `@theme` scale |
 | `packages/temper-ui/src/app.html` | Font stack (`JetBrains Mono` via Google; Georgia system), meta copy |
 | `packages/temper-ui/src/lib/components/landing/*.svelte` | Hero, Section, CliBlock, AgentTranscript, Nav, Footer, Wordmark |
@@ -86,7 +86,7 @@ Temper's voice is **literate technical** — write as if explaining to a sharp c
 - **Casing:** Sentence case for headings. Product name `temper` is **lowercase** in running copy (the wordmark is always lowercase). "Temper Cloud" and "Temper Blue" take initial caps because they're proper nouns.
 - **Emoji:** never. Not in copy, not in UI, not in diagrams.
 
-### Vocabulary table (from `docs/brand-direction.md`)
+### Vocabulary table (from `internal/brand-direction.md`)
 
 | Prefer | Over |
 |---|---|

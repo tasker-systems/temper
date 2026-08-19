@@ -1396,7 +1396,7 @@ body
     fn harvest_ignores_links_that_do_not_name_a_bare_md_file() {
         let index = "\
 - [a real memory](feedback_real.md)
-- [a design doc](docs/superpowers/specs/2026-08-01-memories-in-temper-design.md)
+- [a design doc](internal/superpowers/specs/2026-08-01-memories-in-temper-design.md)
 - [an issue](https://github.com/tasker-systems/temper/issues/581)
 - [a temper resource](temper://019fbef0-437d-73b0-b4f5-bd082241cf89)
 ";

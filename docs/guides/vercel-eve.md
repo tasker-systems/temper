@@ -518,7 +518,7 @@ Four readings that look like failures but are not:
   gate list to read **before** restoring it.
 - `packages/agent-workflows/steward/agent/subagents/auditor/instructions.md` — what the auditor
   weighs, the scale, and why its work list is handed to it rather than derived.
-- `docs/superpowers/specs/2026-07-01-t5-eve-steward-agent-directory-design.md` — the steward directory design.
-- `docs/superpowers/specs/2026-07-05-steward-fan-out-drift-sweep-design.md` — the fan-out design.
-- `docs/superpowers/specs/2026-07-23-set5-adversary-citation-audit-design.md` — the citation-audit
+- `internal/superpowers/specs/2026-07-01-t5-eve-steward-agent-directory-design.md` — the steward directory design.
+- `internal/superpowers/specs/2026-07-05-steward-fan-out-drift-sweep-design.md` — the fan-out design.
+- `internal/superpowers/specs/2026-07-23-set5-adversary-citation-audit-design.md` — the citation-audit
   design (§5.2 credential isolation, §5.3 model isolation, §6 dispatch).

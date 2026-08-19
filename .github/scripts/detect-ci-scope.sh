@@ -13,6 +13,14 @@
 #      extension test alone is not sufficient and never was — see RUST_COUPLED,
 #      which vetoes both classes for the doc-extension files a Rust gate owns.
 #
+#      ONE narrower exception rides on top: `docs/` is doc-extension AND
+#      gate-owned, but its gate (check-docs-public-only.sh) is pure bash living
+#      in code-quality's `guard-tests` job. So a docs/ change keeps every heavy
+#      job OFF and only turns RUN_CODE_QUALITY on — see DOCS_GATED below. It is
+#      deliberately NOT in RUST_COUPLED: that veto exists for files a RUST gate
+#      owns, and paying a full Rust + TypeScript pipeline to reach a one-second
+#      bash script is a mis-sized bill, not a safety property.
+#
 #   2. RUST-INERT — a change whose every non-doc file lives in a tree that is
 #      provably inert to the Rust corpus (the TS packages and the SDK clients)
 #      skips the Rust half of CI: the whole test-rust workflow AND the
@@ -264,6 +272,12 @@ RUST_INERT_ROOTS='^packages/temper-cloud/|^packages/temper-ui/|^packages/agent-w
 #   scripts/migration-declaration-corpus.txt — `include_str!`d by temper-migrate
 #     and read by code-quality's awk-side parity check.
 #
+# `docs/**` is gate-owned too but is deliberately NOT here, and the distinction is
+# the point of this list: RUST_COUPLED means "a RUST gate owns it", and its veto
+# buys the whole Rust corpus. check-docs-public-only.sh is pure bash and runs in
+# the ungated `guard-tests` job, so reaching it costs one job invocation, not a
+# pipeline. It is handled by DOCS_GATED below.
+#
 # `scripts/install/install.sh` is `include_str!`d too but needs no entry: `.sh`
 # is not a doc extension, so it already forces a full run.
 #
@@ -277,6 +291,44 @@ RUST_COUPLED='^packages/temper-ui/src/lib/types/generated/|^packages/agent-workf
 HAS_RUST_COUPLED=false
 if changes_match "$RUST_COUPLED"; then
     HAS_RUST_COUPLED=true
+fi
+
+# ---------------------------------------------------------------------------
+# DOCS_GATED: doc-extension trees that a gate owns, where the gate is PURE BASH.
+#
+# `docs/` is synced wholesale to the public documentation site, and
+# check-docs-public-only.sh asserts that everything under it is public
+# documentation and nothing else lives there. It was got wrong once and
+# published internal security audits. The regression it exists to catch is a
+# returning internal tree — `docs/superpowers/*.md`, `docs/security/*.md` —
+# which is markdown by extension and therefore precisely what the docs-only
+# skip would wave through. So the gate MUST be reachable on a docs-only change,
+# or the one change class it exists for is the one class it never sees.
+#
+# Reachability is all it needs, and that is the whole reason this is a separate
+# class from RUST_COUPLED. The gate is one second of bash and it runs in
+# code-quality's `guard-tests` job, which carries NO `inputs.run-rust-quality`
+# gate — so making it run costs exactly one thing: RUN_CODE_QUALITY=true, which
+# is what ci.yml's `if: needs.detect-scope.outputs.run-code-quality == 'true'`
+# reads. Every heavy job stays off. Putting `^docs/` in RUST_COUPLED reached the
+# same gate by conscripting the entire Rust and TypeScript pipeline (measured: a
+# one-line edit to docs/guides/releasing.md turned SKIP_ALL=true into
+# RUN_TEST_RUST + RUN_TEST_TYPESCRIPT + RUN_RUST_QUALITY), which is a bill sized
+# to the wrong gate rather than a safety property.
+#
+# The coupling this creates is real and must be maintained in BOTH directions:
+# if check-docs-public-only.sh ever moves back into a gated job, or grows a
+# dependency on a toolchain, this class is no longer sufficient and the entry
+# belongs in RUST_COUPLED again. test-check-docs-public-only.sh asserts the
+# reachability half behaviourally — it runs this detector and requires
+# RUN_CODE_QUALITY=true for a docs-only change — so the two cannot drift apart
+# silently.
+# ---------------------------------------------------------------------------
+DOCS_GATED_ROOTS='^docs/'
+
+HAS_DOCS_GATED=false
+if changes_match "$DOCS_GATED_ROOTS"; then
+    HAS_DOCS_GATED=true
 fi
 
 # Are ALL non-doc files inside an inert root? (grep -v the inert roots over the
@@ -392,12 +444,16 @@ if [ -z "$LOAD_BEARING_FILES" ] && [ "$HAS_SELF" = "false" ] && \
     SKIP_ALL=true
 fi
 
-debug "HAS_DOCS=$HAS_DOCS HAS_SELF=$HAS_SELF HAS_NON_DOC=$HAS_NON_DOC HAS_NON_PRODUCT=$HAS_NON_PRODUCT HAS_RUBY=$HAS_RUBY HAS_AGENTS_TS=$HAS_AGENTS_TS HAS_RUST_COUPLED=$HAS_RUST_COUPLED ALL_NON_DOC_INERT=$ALL_NON_DOC_INERT -> DOCS_ONLY=$DOCS_ONLY SKIP_ALL=$SKIP_ALL RUST_INERT=$RUST_INERT"
+debug "HAS_DOCS=$HAS_DOCS HAS_SELF=$HAS_SELF HAS_NON_DOC=$HAS_NON_DOC HAS_NON_PRODUCT=$HAS_NON_PRODUCT HAS_RUBY=$HAS_RUBY HAS_AGENTS_TS=$HAS_AGENTS_TS HAS_RUST_COUPLED=$HAS_RUST_COUPLED HAS_DOCS_GATED=$HAS_DOCS_GATED ALL_NON_DOC_INERT=$ALL_NON_DOC_INERT -> DOCS_ONLY=$DOCS_ONLY SKIP_ALL=$SKIP_ALL RUST_INERT=$RUST_INERT"
 
 # ---------------------------------------------------------------------------
 # Compute job flags.
 #
-#   docs-only    -> nothing runs.
+#   docs-only    -> nothing runs, with ONE exception: a change touching `docs/`
+#                   still invokes code-quality (RUN_CODE_QUALITY=true) so its
+#                   ungated, pure-bash guard-tests job reaches the docs/ gate.
+#                   rust-quality, test-rust and test-typescript stay OFF — the
+#                   gate is bash, so it does not need them.
 #   rust-inert   -> the Rust corpus (test-rust + the rust-quality job) is off,
 #                   but code-quality is still INVOKED so its typescript-quality
 #                   and guard-tests jobs run; TypeScript tests run too. This is
@@ -414,7 +470,6 @@ debug "HAS_DOCS=$HAS_DOCS HAS_SELF=$HAS_SELF HAS_NON_DOC=$HAS_NON_DOC HAS_NON_PR
 # conservative posture above.
 # ---------------------------------------------------------------------------
 if [ "$SKIP_ALL" = "true" ]; then
-    RUN_CODE_QUALITY=false
     RUN_RUST_QUALITY=false
     RUN_TEST_RUST=false
     RUN_TEST_TYPESCRIPT=false
@@ -427,7 +482,16 @@ if [ "$SKIP_ALL" = "true" ]; then
     else
         SKIP_REASON="non-product trees only"
     fi
-    SCOPE_SUMMARY="${SKIP_REASON}: skipping code-quality, test-rust, test-typescript, test-ruby, test-agents-ts"
+    # The one thing a skip-all change can still owe: docs/ has a pure-bash gate
+    # in code-quality's ungated guard-tests job. Invoking the workflow is the
+    # entire cost — every heavy job above stays off. See DOCS_GATED_ROOTS.
+    if [ "$HAS_DOCS_GATED" = "true" ]; then
+        RUN_CODE_QUALITY=true
+        SCOPE_SUMMARY="${SKIP_REASON}: skipping test-rust, test-typescript, test-ruby, test-agents-ts and the rust-quality job; running code-quality for its pure-bash guard-tests (the docs/ gate)"
+    else
+        RUN_CODE_QUALITY=false
+        SCOPE_SUMMARY="${SKIP_REASON}: skipping code-quality, test-rust, test-typescript, test-ruby, test-agents-ts"
+    fi
 else
     # code-quality.yml is invoked for every non-docs change so its TypeScript
     # and guard-test jobs always run; the Rust half is the part that scopes off.

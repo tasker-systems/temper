@@ -2823,7 +2823,7 @@ impl Backend for DbBackend {
     /// reader post (inert) envelopes as ledger noise.
     ///
     /// **This deliberately amends F2**, which kept a READ gate for delegated opens
-    /// (`docs/superpowers/specs/2026-07-06-container-write-cascade-and-authz-hardening-design.md`
+    /// (`internal/superpowers/specs/2026-07-06-container-write-cascade-and-authz-hardening-design.md`
     /// §"self-attributed vs delegated"). That split was justified by "the substrate's parent→originating
     /// delegation lineage is the real control" — but the substrate check is
     /// `cogmaps_share_a_team(parent, originating)`, which takes **two cogmap ids and no principal**, so it

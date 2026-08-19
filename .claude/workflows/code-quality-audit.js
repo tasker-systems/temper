@@ -15,7 +15,7 @@ export const meta = {
 // { rubricDoc, units } to retarget without editing the script.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const RUBRIC_DOC = (args && args.rubricDoc) || 'docs/development/code-quality-best-practices.md'
+const RUBRIC_DOC = (args && args.rubricDoc) || 'internal/development/code-quality-best-practices.md'
 
 const RULE_IDS = [
   'CQ-1', 'CQ-2', 'CQ-3', 'CQ-4', 'CQ-5', 'CQ-6', 'CQ-7',

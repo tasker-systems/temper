@@ -666,7 +666,7 @@ one-workspace deployment ceiling (a structural property of eve + `@vercel/connec
 - [machine-credentials.md](machine-credentials.md) — the *other* non-human credential model. A Slack
   minted token is emphatically **not** a machine principal: it acts as a human, with a human's
   reach.
-- [../development/security-audit-playbook.md](../development/security-audit-playbook.md) — how to
+- `internal/development/security-audit-playbook.md` — how to
   re-verify this trust boundary from the surfaces in.
 - [enterprise-install.md](enterprise-install.md) — the full environment-variable surface.
 - [`packages/agent-workflows/mention/CLAUDE.md`](../../packages/agent-workflows/mention/CLAUDE.md) —

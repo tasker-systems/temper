@@ -7,7 +7,7 @@ project that consumes this repo on its own schedule, with its own database and
 configuration. The repo's CI does **not** deploy any site.
 
 Design rationale:
-[docs/superpowers/specs/2026-06-25-multi-target-deployment-model-design.md](docs/superpowers/specs/2026-06-25-multi-target-deployment-model-design.md).
+[internal/superpowers/specs/2026-06-25-multi-target-deployment-model-design.md](internal/superpowers/specs/2026-06-25-multi-target-deployment-model-design.md).
 
 ## The deployment unit: an independent Vercel project
 
@@ -114,7 +114,7 @@ CI checks the declaration two ways: that one exists at all, and that what it cla
 survives contact with the `.sqlx` caches — the only artifact in the repo that records
 the *binary's* side of the contract. **When either check goes red, or a write path
 fails in production, go to
-[docs/development/schema-binary-pairing-playbook.md](docs/development/schema-binary-pairing-playbook.md)** —
+[internal/development/schema-binary-pairing-playbook.md](internal/development/schema-binary-pairing-playbook.md)** —
 it is organised by what you are looking at, and it also states what these checks
 cannot see.
 
@@ -362,8 +362,8 @@ resources are full-text-searchable but not vector-searchable until the drain cat
 **Observability**: each drain pass returns `{ claimed, completed, failed, chunks_embedded }`.
 A failed embed is retried by the queue's reaper and marked `dead` after max attempts;
 `dead` jobs are the re-drive signal (a `reindex`/sweep follow-up). Operator guidance on
-bulk vs interactive ingest lives in [docs/upload-lifecycle.md](docs/upload-lifecycle.md#choosing-an-ingest-surface-cli-vs-mcp);
-the full design is [docs/superpowers/specs/2026-07-07-async-embedding-off-request-path-design.md](docs/superpowers/specs/2026-07-07-async-embedding-off-request-path-design.md).
+bulk vs interactive ingest lives in [internal/upload-lifecycle.md](internal/upload-lifecycle.md#choosing-an-ingest-surface-cli-vs-mcp);
+the full design is [internal/superpowers/specs/2026-07-07-async-embedding-off-request-path-design.md](internal/superpowers/specs/2026-07-07-async-embedding-off-request-path-design.md).
 
 ## Server-side query-embed cold starts (issue #427)
 

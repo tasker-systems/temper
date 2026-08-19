@@ -23,7 +23,7 @@
 //! sealed proof-about-a-value that makes the unchecked path unrepresentable. This module names
 //! that shape once so the remaining gates inherit it instead of re-deriving it.
 //!
-//! Design: `docs/superpowers/specs/2026-07-22-scoped-authority-policy-layer-design.md`.
+//! Design: `internal/superpowers/specs/2026-07-22-scoped-authority-policy-layer-design.md`.
 
 mod audit_gate;
 mod connection;
@@ -213,7 +213,7 @@ pub(crate) async fn authorize<A: ScopedAuthority>(
 ///   see (the language cannot enumerate trait impls at runtime, and `include_str!` takes no dynamic
 ///   path, so a source scan's file list decays somewhere less visible than what it replaced). A
 ///   count assertion here would only *look* like coverage. Declared an uncovered remainder in
-///   `docs/superpowers/plans/2026-07-30-context-rename.md` Part 5; if the guard is later wanted it
+///   `internal/superpowers/plans/2026-07-30-context-rename.md` Part 5; if the guard is later wanted it
 ///   belongs in `.github/scripts/audit-*.sh`, which pins a reviewed *set* and `rg`s the directory,
 ///   so a new `authz/*.rs` is caught for free.
 /// * **(c) `ContextAdminAuthority` is the only divergent authority** — the tenth impl, and the

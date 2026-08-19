@@ -1,6 +1,6 @@
 #![cfg(feature = "artifact-tests")]
 //! Deliverable 2 of the generalized access-capability arc (design doc
-//! `docs/superpowers/specs/2026-06-30-generalized-access-capability-model-design.md` §3.3/§3.5/§4 step 1):
+//! `internal/superpowers/specs/2026-06-30-generalized-access-capability-model-design.md` §3.3/§3.5/§4 step 1):
 //! the `kb_access_grants` table + the `can()` seam land **alongside** the existing access functions with
 //! **no behavior change**. These tests pin the new affordance and the leak-safety invariant (Q-B):
 //!

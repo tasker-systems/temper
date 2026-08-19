@@ -1175,7 +1175,7 @@ async fn record_citation_audit_with_stamps_the_invocation_and_authorship(pool: s
 
 // ── Task 5 — audit_drift_sweep (SQL) ─────────────────────────────────────────────────────────────
 //
-// Spec `docs/superpowers/specs/2026-07-23-set5-adversary-citation-audit-design.md` §6.2-6.3,
+// Spec `internal/superpowers/specs/2026-07-23-set5-adversary-citation-audit-design.md` §6.2-6.3,
 // migration `20260724000130_audit_drift_sweep.sql`. Every fixture below builds through the SAME
 // production writes as the rest of this file (`create_resource_with` via `make_home`/`make_resource`,
 // `citation_audit` via `fire_audit`, `writes::delete_resource`) plus the cogmap/team-membership
@@ -1808,7 +1808,7 @@ async fn sweep_orders_by_uncovered_descending(pool: sqlx::PgPool) {
 // ── Tier-1 staleness — `resource_has_stale_citation` + the `stale` disjunct ──────────────────────
 //
 // Migration `20260726000010_auditor_tier1_staleness.sql`, design
-// `docs/superpowers/specs/2026-07-25-auditor-tier1-staleness-watermark-design.md` (rev. 2).
+// `internal/superpowers/specs/2026-07-25-auditor-tier1-staleness-watermark-design.md` (rev. 2).
 //
 // THE DEFECT THESE WITNESS: `audit_drift_sweep` selected on `coverage < magnitude`, so once a
 // finding was fully covered it never re-entered the queue — a `block_mutated` could change an

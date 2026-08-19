@@ -52,7 +52,7 @@ reads truthfully.
 author a team-owned context) is deliberate and is **not** the pre-Q-A "membership implies
 write". Q-A removed write for teams merely *joined-for-read* to a cogmap; *owning* a
 context is a strictly stronger relationship. (Spec:
-`docs/superpowers/specs/2026-07-06-container-write-cascade-and-authz-hardening-design.md`.)
+`internal/superpowers/specs/2026-07-06-container-write-cascade-and-authz-hardening-design.md`.)
 
 ## The gate map — every authoring op
 

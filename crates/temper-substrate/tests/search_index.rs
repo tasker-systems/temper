@@ -652,7 +652,7 @@ async fn create_resource_homes_in_cogmap(pool: sqlx::PgPool) {
     assert_eq!(anchor, cogmap_id.uuid());
 }
 
-/// SQLA audit chunk 3 (docs/code-reviews/2026-07-08-sql-function-audit.md, SQLA-3 /
+/// SQLA audit chunk 3 (internal/code-reviews/2026-07-08-sql-function-audit.md, SQLA-3 /
 /// folded-block-leaks-into-fts): a charter supersede folds the old blocks, but their
 /// chunks stay `is_current` (the new charter arrives as fresh block ids). The rebuilt
 /// search_vector must aggregate only chunks of LIVE blocks — mirroring

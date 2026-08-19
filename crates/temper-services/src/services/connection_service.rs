@@ -1672,7 +1672,7 @@ mod tests {
     /// neither standing (`has_system_access` reads `kb_principal_standing`) nor admin-ness
     /// (`is_system_admin` reads `kb_principal_governance`), so for this act it is just a team.
     ///
-    /// Spec §6.1, `docs/superpowers/specs/2026-07-22-scoped-authority-policy-layer-design.md`.
+    /// Spec §6.1, `internal/superpowers/specs/2026-07-22-scoped-authority-policy-layer-design.md`.
     /// If a future change makes this red, that is a behaviour change to the asymmetry — read §6.1
     /// before editing this test.
     #[sqlx::test(migrator = "crate::MIGRATOR")]

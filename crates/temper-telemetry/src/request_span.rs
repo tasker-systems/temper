@@ -28,7 +28,7 @@
 //! logs instead of deferring to a classifier's notion of failure.
 //!
 //! Not given up: span names, the field set, and the `response` event with `status` and
-//! `latency_ms`. Those are the convention `docs/development/span-field-conventions.md` describes and
+//! `latency_ms`. Those are the convention `internal/development/span-field-conventions.md` describes and
 //! `tests/e2e/tests/logging_test.rs` gates, and they are unchanged — which is what makes this a
 //! change of *mechanism* rather than of contract. `latency_ms` in particular has to survive: it is
 //! the meter the exporter's own cost is measured with.
@@ -147,7 +147,7 @@ where
     // entering here would be a second way to say so that only works while the span is current.
     //
     // Emitted **before** `drop(span)`, necessarily: an event recorded after the span closes cannot be
-    // attached to it, and this event is the convention `docs/development/span-field-conventions.md`
+    // attached to it, and this event is the convention `internal/development/span-field-conventions.md`
     // describes and `tests/e2e/tests/logging_test.rs` gates.
     // ## The error rule is the OTel HTTP server semantic convention, and the choice is deliberate
     //
