@@ -1,10 +1,21 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 	import ContextNavGroup from './ContextNavGroup.svelte';
-	import type { ContextRowWithCounts } from '$lib/types';
+	import { navContextsState } from '$lib/nav-groups';
+	import { sidebarGroups } from '$lib/stores/sidebar.svelte';
+	import type { ContextRowWithCounts, TeamRow } from '$lib/types';
 
 	interface Props {
-		contexts: ContextRowWithCounts[];
+		/**
+		 * `null` when the layout could not read the context list — NOT an empty
+		 * list. An empty nav says "you belong to nothing", a claim about the reader
+		 * that a fetch which never answered cannot support.
+		 */
+		contexts: ContextRowWithCounts[] | null;
+		/** Teams the reader is a member of; `null` on a failed read. */
+		teams: TeamRow[] | null;
+		/** The reader's own profile id — which group of places is theirs. */
+		selfProfileId: string;
 		user: { display_name: string; email: string } | null;
 		/** Operator-configured instance brand ("temper @ acme"); null → default. */
 		instanceName?: string | null;
@@ -12,12 +23,19 @@
 		onToggle: () => void;
 	}
 
-	let { contexts, user, instanceName = null, collapsed, onToggle }: Props = $props();
+	let {
+		contexts,
+		teams,
+		selfProfileId,
+		user,
+		instanceName = null,
+		collapsed,
+		onToggle
+	}: Props = $props();
 
 	let brand = $derived(instanceName?.trim() || 'temper');
 
-	let myContexts = $derived(contexts.filter((c) => c.kb_owner_table === 'kb_profiles'));
-	let teamContexts = $derived(contexts.filter((c) => c.kb_owner_table === 'kb_teams'));
+	let navState = $derived(navContextsState(contexts, teams, selfProfileId));
 
 	let pathname = $derived($page.url.pathname as string);
 	let isAllActive = $derived(pathname === '/vault/all' || pathname === '/vault');
@@ -113,12 +131,31 @@
 				Graph
 			</a>
 
-			{#if myContexts.length > 0}
-				<ContextNavGroup label="Contexts" contexts={myContexts} />
-			{/if}
-
-			{#if teamContexts.length > 0}
-				<ContextNavGroup label="Teams" contexts={teamContexts} />
+			<!--
+				Three rendered states, never two. A failed context read is inert and
+				marked, the way the vault filter bar's Context select is
+				(`vault/FilterBar.svelte`); an empty read says so plainly. Collapsing
+				them together would put "we could not ask" and "there is nothing"
+				behind the same blank.
+			-->
+			{#if navState.kind === 'unavailable'}
+				<div
+					class="mx-3 mt-4 rounded border border-amber-500/30 bg-zinc-800/50 px-2.5 py-1.5
+					       text-xs text-zinc-500"
+					title="The context list could not be read — reload to try again."
+				>
+					contexts unavailable
+				</div>
+			{:else if navState.kind === 'empty'}
+				<div class="px-3 pt-4 pb-1 text-xs text-zinc-600">No contexts</div>
+			{:else}
+				{#each navState.groups as group (group.key)}
+					<ContextNavGroup
+						{group}
+						collapsed={sidebarGroups.isCollapsed(group.key)}
+						onToggle={() => sidebarGroups.toggle(group.key)}
+					/>
+				{/each}
 			{/if}
 		</nav>
 
