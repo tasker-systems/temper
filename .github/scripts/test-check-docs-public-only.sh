@@ -127,27 +127,60 @@ run_case "docs/ present but empty: FAILS rather than reporting a vacuous clean" 
 
 # --- WIRING: a gate that runs nowhere passes everywhere ---
 
-assert_wired() {
+# A textual `grep` over the whole file is NOT enough here, and this is the specific
+# weakness a re-review found: commenting the CI step out, or moving `^docs/` into an
+# unused variable, left both assertions green while restoring the exact hole they
+# exist to detect. Both are now checked by BEHAVIOUR or by uncommented-line match.
+
+assert_uncommented() {
     local name="$1" file="$2" needle="$3"
-    if grep -qF "$needle" "${REPO_ROOT}/${file}"; then
+    # Match the needle only on a line whose first non-space character is not `#`.
+    if grep -F "$needle" "${REPO_ROOT}/${file}" | grep -qvE '^[[:space:]]*#'; then
         echo "  PASS: ${name}"
         PASS=$((PASS + 1))
     else
-        echo "  FAIL: ${name} — '${needle}' not found in ${file}"
+        echo "  FAIL: ${name} — '${needle}' absent or only present commented-out in ${file}"
         FAIL=$((FAIL + 1))
     fi
 }
 
-assert_wired "the gate runs in code-quality.yml (not only in cargo make check)" \
+assert_uncommented "the gate runs in code-quality.yml, on a live (uncommented) line" \
     ".github/workflows/code-quality.yml" \
     "bash .github/scripts/check-docs-public-only.sh"
 
 # The regression this gate catches is a tree of *.md files, and detect-ci-scope.sh
 # skips the entire pipeline for a markdown-only change. Wiring without this veto
 # leaves the gate present and unreachable on precisely its own failure mode.
-assert_wired "a docs/ change vetoes the docs-only CI skip (^docs/ in RUST_COUPLED)" \
-    ".github/scripts/detect-ci-scope.sh" \
-    '|^docs/'
+#
+# Asserted BEHAVIOURALLY: ask the real detector what it decides for a docs/ change.
+# A textual check passed when `^docs/` was parked in a dead variable.
+# Input MUST go through --stdin. Without it the detector falls back to `git diff`
+# against the base ref, i.e. the real branch — which is never docs-only, so the
+# assertion passed no matter what RUST_COUPLED contained. That is the vacuous-pass
+# this block exists to prevent, and it had it.
+docs_only_verdict="$(echo 'docs/guides/releasing.md' \
+    | bash "${REPO_ROOT}/.github/scripts/detect-ci-scope.sh" --stdin 2>/dev/null || true)"
+if echo "$docs_only_verdict" | grep -qE '^DOCS_ONLY=false'; then
+    echo "  PASS: a docs/ change does NOT classify as docs-only (the skip is vetoed)"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: a docs/ change still classifies as docs-only — the gate is unreachable in CI"
+    FAIL=$((FAIL + 1))
+fi
+
+# Every forbidden name is pinned individually. Deriving the count from the variable
+# let a name be dropped silently — including `security`, whose exposure prompted all
+# of this.
+for name in superpowers development agents code-reviews security decisions research \
+            specs experiments registers api cognitive-maps; do
+    if grep -qE "^FORBIDDEN=.*\\b${name}\\b" "${REPO_ROOT}/.github/scripts/check-docs-public-only.sh"; then
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: '${name}' is missing from the gate's FORBIDDEN list"
+        FAIL=$((FAIL + 1))
+    fi
+done
+echo "  PASS: all 12 forbidden tree names pinned individually"
 
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed (total: $((PASS + FAIL)))"
