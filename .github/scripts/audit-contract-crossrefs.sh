@@ -58,7 +58,7 @@ SPEC="openapi.json"
 CONTRACTS=()
 while IFS= read -r found; do
   [[ -n "$found" ]] && CONTRACTS+=("$found")
-done < <(find docs/api -name '*.openapi.yaml' -type f 2>/dev/null | sort)
+done < <(find internal/api -name '*.openapi.yaml' -type f 2>/dev/null | sort)
 
 if [[ ! -f "$SPEC" ]]; then
   echo "FATAL: $SPEC not found — cannot resolve any cross-reference against it." >&2
