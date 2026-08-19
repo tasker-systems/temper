@@ -1,6 +1,6 @@
 # Releasing Temper
 
-This guide is for maintainers cutting a new `temper` CLI release. End users looking for install instructions should read [install.md](install.md) instead.
+This guide is for maintainers cutting a new `temper` CLI release. End users looking for install instructions should read [install.md](../../docs/guides/install.md) instead.
 
 ## The Release Pipeline in One Picture
 
@@ -84,7 +84,7 @@ It is the MCP packaging of the temper skill, uploaded by a user to Claude Deskto
 **Customize → Skills → +**. Built by the `build-skill-bundle` job from the committed
 `agent-skills/temper-knowledge-base/` tree, attested like every other published artifact, and
 reproducible locally with `cargo make skill-package`. See
-[claude-desktop-setup.md](claude-desktop-setup.md) for the user-facing side.
+[claude-desktop-setup.md](../../docs/guides/claude-desktop-setup.md) for the user-facing side.
 
 **Two things about it are deliberate and easy to "tidy" into breakage.**
 
@@ -152,7 +152,7 @@ Two things bound how bad this is in practice:
   confirm the commit is one that went through review. The provenance makes the
   build *auditable*; it does not make the audit unnecessary.
 - **The boundary is the same for the out-of-band check.** `gh attestation
-  verify` (see [install.md](install.md#out-of-band-audit--verify-without-trusting-tempers-own-code))
+  verify` (see [install.md](../../docs/guides/install.md#out-of-band-audit--verify-without-trusting-tempers-own-code))
   removes any dependence on `temper`'s own verification code and on our pinned
   root — a genuinely stronger position — but it verifies the same predicate
   over the same subject, so it inherits the same limit. Nothing in the
@@ -163,7 +163,7 @@ than left implicit:
 
 - **The bootstrap installer is unsigned.** The
   `curl -fsSL …/main/scripts/install/install.sh | sh` line in
-  [install.md](install.md#quick-install) fetches over HTTPS from
+  [install.md](../../docs/guides/install.md#quick-install) fetches over HTTPS from
   `raw.githubusercontent.com` and is authenticated by TLS and GitHub's control
   of that host — nothing more. That matters more than it first looks, because
   it is the recovery path every trust-root failure names: both
@@ -387,7 +387,7 @@ The per-platform matrix entries in `build-cli-binaries.yml` are self-documenting
 
 ## Related files
 
-- [`docs/guides/install.md`](install.md) — user-facing install instructions
+- [`docs/guides/install.md`](../../docs/guides/install.md) — user-facing install instructions
 - `internal/superpowers/specs/2026-04-17-temper-cli-binary-release-design.md` — original design doc
 - `internal/superpowers/specs/2026-07-29-binary-attestation-and-manifest-verification-design.md` — per-file manifest + attestation design
 - `internal/superpowers/spikes/2026-07-29-sigstore-crate-evaluation.md` — why the trust root is pinned, and which crate/root

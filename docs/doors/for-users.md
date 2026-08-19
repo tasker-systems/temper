@@ -36,3 +36,8 @@ understanding. The conceptual walkthrough is at
 
 - **[Operational memory](../guides/operational-memory.md)** — how durable memories are captured
   and recalled, and what makes one worth keeping.
+
+## Every command
+
+[The CLI reference](../reference/cli/README.md) lists every `temper` command and flag. It is
+emitted from the built binary's `--help`, so it describes the CLI you actually have.
