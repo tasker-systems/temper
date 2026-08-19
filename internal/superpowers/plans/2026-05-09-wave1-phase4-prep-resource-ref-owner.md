@@ -12,7 +12,7 @@
 
 ## Spec reference
 
-[`docs/superpowers/specs/2026-05-09-wave1-phase4-vault-backend-design.md`](../specs/2026-05-09-wave1-phase4-vault-backend-design.md), section "Phase 4-prep — ResourceRef::Scoped gains owner field".
+[`internal/superpowers/specs/2026-05-09-wave1-phase4-vault-backend-design.md`](../specs/2026-05-09-wave1-phase4-vault-backend-design.md), section "Phase 4-prep — ResourceRef::Scoped gains owner field".
 
 ## Scope
 
@@ -539,7 +539,7 @@ gh pr create --title "Wave 1 Phase 4-prep: ResourceRef::Scoped gains owner field
 - Replace hardcoded `owner: "@me".to_string()` in `DbBackend::show_resource` and `translators::resolve_to_id` with the ref's `owner`.
 - Identity-preserving: every caller passes `"@me"` so today's solo-mode behavior is unchanged. Adds a `+team-acme` test that proves the team-owner case routes correctly.
 
-This is Phase 4-prep per spec `docs/superpowers/specs/2026-05-09-wave1-phase4-vault-backend-design.md`. Strict prerequisite for Phase 4a's `ManifestManager` API.
+This is Phase 4-prep per spec `internal/superpowers/specs/2026-05-09-wave1-phase4-vault-backend-design.md`. Strict prerequisite for Phase 4a's `ManifestManager` API.
 
 ## Test plan
 - [x] `cargo make check`

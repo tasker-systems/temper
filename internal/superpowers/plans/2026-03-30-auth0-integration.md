@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (jsonwebtoken, reqwest, sha2, base64, url), TypeScript (jose), Auth0 (`temperkb.us.auth0.com`)
 
-**Spec:** `docs/superpowers/specs/2026-03-30-auth0-integration-design.md`
+**Spec:** `internal/superpowers/specs/2026-03-30-auth0-integration-design.md`
 
 ---
 

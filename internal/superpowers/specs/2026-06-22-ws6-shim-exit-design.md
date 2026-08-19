@@ -115,4 +115,4 @@ prod-shaped `ResourceRow` read usage.
 - `crates/temper-api/src/backend/next_backend.rs` (`reconstruct_resource_row`, the read selector arms)
 - `crates/temper-next/src/readback/`, `crates/temper-next/src/events`
 - [[project_shared_kernel_two_domains]], [[project_neutral_api_temper_workflow]]
-- Endgame: `docs/superpowers/specs/2026-06-22-ws6-migration-endgame-design.md`
+- Endgame: `internal/superpowers/specs/2026-06-22-ws6-migration-endgame-design.md`

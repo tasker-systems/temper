@@ -1,7 +1,7 @@
 # Atlas Beat A — Cogmap Panorama as Knowledge Field (spec)
 
 **Status:** implementation spec, ready for plan. First beat of the Atlas reshape.
-**North star:** `docs/superpowers/specs/2026-07-06-atlas-reshape-projection-class-north-star.md` (vault research `019f39ca`).
+**North star:** `internal/superpowers/specs/2026-07-06-atlas-reshape-projection-class-north-star.md` (vault research `019f39ca`).
 **Subsumes:** territory-label task `019f38b3` (both problems). **Goal:** `019f28a1`.
 
 ---

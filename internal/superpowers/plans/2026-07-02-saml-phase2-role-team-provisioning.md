@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (axum, sqlx, temper-services/temper-api/temper-core), TypeScript (temper-cloud serverless, Neon serverless Postgres, Vitest, pino), sqlx migrations, ts-rs.
 
-**Design spec:** [docs/superpowers/specs/2026-07-01-saml-phase2-role-team-provisioning-design.md](../specs/2026-07-01-saml-phase2-role-team-provisioning-design.md)
+**Design spec:** [internal/superpowers/specs/2026-07-01-saml-phase2-role-team-provisioning-design.md](../specs/2026-07-01-saml-phase2-role-team-provisioning-design.md)
 
 ## Global Constraints
 
@@ -41,7 +41,7 @@ Create `migrations/20260702000001_saml_group_provisioning.sql`:
 
 ```sql
 -- SAML Phase 2: role + team provisioning (reconcile-on-login).
--- Additive-only. See docs/superpowers/specs/2026-07-01-saml-phase2-role-team-provisioning-design.md §5.
+-- Additive-only. See internal/superpowers/specs/2026-07-01-saml-phase2-role-team-provisioning-design.md §5.
 
 -- 1. Provenance on team membership. Existing rows are native by definition (the DEFAULT backfills them).
 CREATE TYPE team_member_source AS ENUM ('native', 'idp');

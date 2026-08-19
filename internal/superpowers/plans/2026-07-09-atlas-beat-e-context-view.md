@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (Axum, sqlx, utoipa), PostgreSQL 17/18, SvelteKit 5 (runes), d3-force, TypeScript, vitest, cargo-nextest, ts-rs.
 
-**Spec:** [`docs/superpowers/specs/2026-07-09-atlas-beat-e-context-view-design.md`](../specs/2026-07-09-atlas-beat-e-context-view-design.md) — read §3 (D1–D10) before starting.
+**Spec:** [`internal/superpowers/specs/2026-07-09-atlas-beat-e-context-view-design.md`](../specs/2026-07-09-atlas-beat-e-context-view-design.md) — read §3 (D1–D10) before starting.
 
 ## Global Constraints
 

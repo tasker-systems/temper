@@ -12,8 +12,8 @@ Mid-implementation pause after Work Set A. The branch holds 10 commits ahead of 
 
 Read in order:
 
-1. **Spec:** `docs/superpowers/specs/2026-05-10-cloud-only-sync-and-find-resource-design.md` — the architecture and decisions.
-2. **Plan:** `docs/superpowers/plans/2026-05-10-cloud-only-sync-and-find-resource.md` — 15-task implementation plan with concrete code and verification per task.
+1. **Spec:** `internal/superpowers/specs/2026-05-10-cloud-only-sync-and-find-resource-design.md` — the architecture and decisions.
+2. **Plan:** `internal/superpowers/plans/2026-05-10-cloud-only-sync-and-find-resource.md` — 15-task implementation plan with concrete code and verification per task.
 3. **Session note:** `@me/temper/session/2026-05-10-2026-05-10-cloud-only-sync-bug-brainstorm-spec-plan-work-set-a-landed.md` — what happened, full decision log.
 4. **This handoff** — what's next.
 

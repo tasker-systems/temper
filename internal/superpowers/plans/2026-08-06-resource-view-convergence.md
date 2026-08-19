@@ -20,7 +20,7 @@ document's summaries.
 | **Decision** | [A resource has one shape — `ResourceView` collapses three projections, workflow metadata stops being hoisted, and sections replace `--meta-only`](https://temperkb.io) — `019fd71e-792e-7560-8890-8ffde06dbe24` |
 | **Task** | `019fd25e-95f0-7373-9a6e-0574deea5ab3` — see its `## Scope amendment` section |
 | **Frame register** | `019fbdb9-f287-79c0-aab6-efa0b1de12c8` |
-| **Amends** | §3 of `docs/superpowers/specs/2026-08-05-query-builder-compositional-design.md` (its per-kind projection is narrower than what lands here) |
+| **Amends** | §3 of `internal/superpowers/specs/2026-08-05-query-builder-compositional-design.md` (its per-kind projection is narrower than what lands here) |
 
 **Branch:** `jct/search-exact-and-wide-step1`, which already carries phase-1 steps 1, 2, 3 and 5
 (`30e08f59`, `05b025c7`, `59ee9100`) plus a merge of `origin/main`.

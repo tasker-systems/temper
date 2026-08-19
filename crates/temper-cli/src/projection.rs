@@ -4,7 +4,7 @@
 //! on-disk markdown file and records a per-context staleness cursor. The
 //! projection is read-only by convention: editing a projected file changes
 //! nothing on the server. See
-//! `docs/superpowers/specs/2026-05-21-cloud-only-vault-deprecation-design.md`.
+//! `internal/superpowers/specs/2026-05-21-cloud-only-vault-deprecation-design.md`.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

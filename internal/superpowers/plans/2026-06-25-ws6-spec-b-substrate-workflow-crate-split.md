@@ -381,4 +381,4 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ## Execution Handoff
 
-Plan complete and saved to `docs/superpowers/plans/2026-06-25-ws6-spec-b-substrate-workflow-crate-split.md`.
+Plan complete and saved to `internal/superpowers/plans/2026-06-25-ws6-spec-b-substrate-workflow-crate-split.md`.

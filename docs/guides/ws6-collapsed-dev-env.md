@@ -2,7 +2,7 @@
 
 How to run local development against the **collapsed** single-schema shape that the
 WS6 endgame produces — *before* the live schema rename has happened. This lets the
-code plan (`docs/superpowers/plans/2026-06-22-ws6-endgame-collapse-code.md`) be
+code plan (`internal/superpowers/plans/2026-06-22-ws6-endgame-collapse-code.md`) be
 developed and tested TDD-style against the post-collapse world.
 
 ## The idea

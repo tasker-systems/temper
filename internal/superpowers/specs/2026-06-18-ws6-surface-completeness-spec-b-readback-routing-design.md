@@ -2,8 +2,8 @@
 
 **Date:** 2026-06-18
 **Status:** Design / spec. Second of two specs for the WS6 surface-completeness port; lands on the same branch (`jct/ws6-surface-completeness-addressing-collapse`) as **Spec A (addressing-model collapse)** and ships as a single A+B PR.
-**Parent strategy:** `docs/superpowers/specs/2026-06-16-ws6-flip-readiness-strategy.md` (§ "Surface-completeness port", item 2).
-**Companion spec:** `docs/superpowers/specs/2026-06-17-ws6-surface-completeness-spec-a-addressing-collapse-design.md` (the A/B seam is defined there, §1).
+**Parent strategy:** `internal/superpowers/specs/2026-06-16-ws6-flip-readiness-strategy.md` (§ "Surface-completeness port", item 2).
+**Companion spec:** `internal/superpowers/specs/2026-06-17-ws6-surface-completeness-spec-a-addressing-collapse-design.md` (the A/B seam is defined there, §1).
 
 ## What this is
 
@@ -95,8 +95,8 @@ Spec B is the last surface-completeness item before flip-readiness: with it, eve
 
 ## Connections
 
-- Companion: `docs/superpowers/specs/2026-06-17-ws6-surface-completeness-spec-a-addressing-collapse-design.md` (A/B seam, §1).
-- Parent strategy: `docs/superpowers/specs/2026-06-16-ws6-flip-readiness-strategy.md`.
-- Adjudication (identity contract, §7 slug fate): `docs/superpowers/specs/2026-06-12-ws6-convergence-delta-adjudication-design.md`.
+- Companion: `internal/superpowers/specs/2026-06-17-ws6-surface-completeness-spec-a-addressing-collapse-design.md` (A/B seam, §1).
+- Parent strategy: `internal/superpowers/specs/2026-06-16-ws6-flip-readiness-strategy.md`.
+- Adjudication (identity contract, §7 slug fate): `internal/superpowers/specs/2026-06-12-ws6-convergence-delta-adjudication-design.md`.
 - Readback floor + `ResourceRowParity` invariants: `crates/temper-next/src/readback/mod.rs`.
 - Goal: `substrate-kernel-to-cognitive-map` (temper context), workstream 6.

@@ -5,11 +5,11 @@
 **Mode:** plan
 **Effort:** medium (in spec; implementation splits across three sub-PRs)
 **Predecessors (merged in PR #65):**
-- `docs/superpowers/plans/2026-05-02-wave1-phase1-operations-scaffolding.md`
-- `docs/superpowers/plans/2026-05-02-wave1-phase2-shared-actions.md`
+- `internal/superpowers/plans/2026-05-02-wave1-phase1-operations-scaffolding.md`
+- `internal/superpowers/plans/2026-05-02-wave1-phase2-shared-actions.md`
 
-**Parent spec:** `docs/superpowers/specs/2026-05-01-shared-core-execution-paths-design.md` (#4)
-**Companion spec:** `docs/superpowers/specs/2026-05-01-cloud-first-reframe-and-manifest-redefinition-design.md` (#3 — Phase 6)
+**Parent spec:** `internal/superpowers/specs/2026-05-01-shared-core-execution-paths-design.md` (#4)
+**Companion spec:** `internal/superpowers/specs/2026-05-01-cloud-first-reframe-and-manifest-redefinition-design.md` (#3 — Phase 6)
 **Backlog task:** `2026-05-03-wave-1-phase-3-write-the-dbbackend-implementation-plan`
 
 ---
@@ -159,7 +159,7 @@ One spec, three plans, three PRs. Each is independently shippable.
 
 **3c — MCP tool migration (subsequent session).** Same pattern in `crates/temper-mcp/src/tools/resources.rs`: each tool constructs `DbBackend` from its in-process state with `Surface::Mcp` and dispatches. The existing `ensure_managed_identity_keys` send-side wiring stays as-is (Phase 5 symmetric defense — DbBackend is on the receive side of MCP). Round-trip tests in `tests/e2e/` (under the embed-gated CI job) pass unmodified.
 
-Each sub-phase is a separate plan document under `docs/superpowers/plans/`, written when its session begins.
+Each sub-phase is a separate plan document under `internal/superpowers/plans/`, written when its session begins.
 
 ## Forward-Looking Constraints & Inherited Guidance
 

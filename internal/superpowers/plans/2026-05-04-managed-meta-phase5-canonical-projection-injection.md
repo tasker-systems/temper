@@ -36,7 +36,7 @@
 **Tech Stack:** Rust 2021, serde_json, sqlx (for DB-backed integration tests).
 
 **Specs:**
-- `docs/superpowers/specs/2026-05-03-schema-driven-managed-meta-design.md` — Phase 5 row in the migration table.
+- `internal/superpowers/specs/2026-05-03-schema-driven-managed-meta-design.md` — Phase 5 row in the migration table.
 - Updated as Task 1 of this plan to resolve open question Q3 (server-side title/slug column-extraction site) and to record the wire-vs-DB dual-write framing the user landed on 2026-05-04.
 
 **Predecessor state (verified by direct read 2026-05-04):**
@@ -66,7 +66,7 @@ This plan ends with: server-stored `managed_meta` JSONB always contains `temper-
 
 | File | Change |
 |---|---|
-| `docs/superpowers/specs/2026-05-03-schema-driven-managed-meta-design.md` | Resolve open question Q3 with wire-vs-DB dual-write framing; refine Phase 5 row |
+| `internal/superpowers/specs/2026-05-03-schema-driven-managed-meta-design.md` | Resolve open question Q3 with wire-vs-DB dual-write framing; refine Phase 5 row |
 | `crates/temper-core/src/operations/actions.rs` | Add `ensure_managed_identity_keys` function + unit tests |
 | `crates/temper-core/src/operations/mod.rs` | Re-export `ensure_managed_identity_keys` if needed for ergonomic callers |
 | `crates/temper-cli/src/actions/ingest.rs` | Call helper inside `build_ingest_payload` after serializing typed `ManagedMeta` |
@@ -88,16 +88,16 @@ This plan ends with: server-stored `managed_meta` JSONB always contains `temper-
 ## Task 1: Update spec — resolve Q3 and clarify wire-vs-DB dual-write
 
 **Files:**
-- Modify: `docs/superpowers/specs/2026-05-03-schema-driven-managed-meta-design.md`
+- Modify: `internal/superpowers/specs/2026-05-03-schema-driven-managed-meta-design.md`
 
 This task is documentation-only; no code changes, no test changes. Lands as its own commit so the spec edit is reviewable independently from the implementation.
 
 - [ ] **Step 1: Update the "Open Questions" section**
 
-In `docs/superpowers/specs/2026-05-03-schema-driven-managed-meta-design.md`, replace the body of open question Q3 with the resolution:
+In `internal/superpowers/specs/2026-05-03-schema-driven-managed-meta-design.md`, replace the body of open question Q3 with the resolution:
 
 ```markdown
-3. **Server-side title/slug column extraction site (RESOLVED 2026-05-04):** Investigation showed `kb_resources.title`/`slug` are NOT extracted from `managed_meta` JSONB — they are populated from top-level `IngestPayload.title`/`slug` and `ResourceUpdateRequest.title`/`slug` fields. The asymmetry is the actual hash-invariant gap: the JSONB never had `temper-title`/`temper-slug` server-side, while the local canonical form does. Resolution: a shared `temper-core::operations::ensure_managed_identity_keys` helper injects the keys into the JSONB from the top-level fields, run on both the send side (CLI / MCP) and the receive side (`ingest_service::ingest`, `resource_service::update`) for defense in depth. See Phase 5 plan: `docs/superpowers/plans/2026-05-04-managed-meta-phase5-canonical-projection-injection.md`.
+3. **Server-side title/slug column extraction site (RESOLVED 2026-05-04):** Investigation showed `kb_resources.title`/`slug` are NOT extracted from `managed_meta` JSONB — they are populated from top-level `IngestPayload.title`/`slug` and `ResourceUpdateRequest.title`/`slug` fields. The asymmetry is the actual hash-invariant gap: the JSONB never had `temper-title`/`temper-slug` server-side, while the local canonical form does. Resolution: a shared `temper-core::operations::ensure_managed_identity_keys` helper injects the keys into the JSONB from the top-level fields, run on both the send side (CLI / MCP) and the receive side (`ingest_service::ingest`, `resource_service::update`) for defense in depth. See Phase 5 plan: `internal/superpowers/plans/2026-05-04-managed-meta-phase5-canonical-projection-injection.md`.
 ```
 
 - [ ] **Step 2: Update the "Why dual-write not generated columns" section**
@@ -142,7 +142,7 @@ Callers: send-side runs it after serializing `ManagedMeta → Value` and before 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add docs/superpowers/specs/2026-05-03-schema-driven-managed-meta-design.md
+git add internal/superpowers/specs/2026-05-03-schema-driven-managed-meta-design.md
 git commit -m "$(cat <<'EOF'
 docs(spec): resolve managed-meta Q3 — projection-key injection
 
@@ -159,7 +159,7 @@ dual-write (top-level title/slug + JSONB) is acceptable as ergonomic sugar; DB-l
 dual-write (columns + JSONB) is intentional for query ergonomics. Wire-collapse is
 deferred as a follow-up cleanup if drift is observed.
 
-Phase 5 plan in docs/superpowers/plans/2026-05-04-managed-meta-phase5-canonical-projection-injection.md.
+Phase 5 plan in internal/superpowers/plans/2026-05-04-managed-meta-phase5-canonical-projection-injection.md.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
@@ -762,7 +762,7 @@ Edit the top of this plan document to add an "Execution status (final)" callout 
 - [ ] **Step 9: Commit the plan-status update**
 
 ```bash
-git add docs/superpowers/plans/2026-05-04-managed-meta-phase5-canonical-projection-injection.md
+git add internal/superpowers/plans/2026-05-04-managed-meta-phase5-canonical-projection-injection.md
 git commit -m "$(cat <<'EOF'
 docs(plans): finalize managed-meta phase 5 — projection-key injection landed
 

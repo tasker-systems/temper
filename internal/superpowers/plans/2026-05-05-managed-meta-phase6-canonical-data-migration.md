@@ -8,7 +8,7 @@
 
 **Tech Stack:** PostgreSQL 18 with sqlx migrations, `temper-core` canonical-hash functions (`crates/temper-core/src/hash.rs`), `temper-api` integration test fixtures.
 
-**Spec:** `docs/superpowers/specs/2026-05-05-managed-meta-phase6-canonical-data-migration-design.md`
+**Spec:** `internal/superpowers/specs/2026-05-05-managed-meta-phase6-canonical-data-migration-design.md`
 
 **Umbrella:** `2026-05-03-schema-driven-managed-meta-alignment-temper-prefix-everywhere-schemas-as-contract`
 
@@ -364,8 +364,8 @@ Capture the output (e.g. `20260505140000`). This becomes part of the filename.
 -- concept rows, and reset affected hashes to the empty-string sentinel so
 -- Phase 5's receive-side wiring re-stamps them on next sync push.
 --
--- See: docs/superpowers/specs/2026-05-05-managed-meta-phase6-canonical-data-migration-design.md
--- See: docs/superpowers/plans/2026-05-05-managed-meta-phase6-canonical-data-migration.md
+-- See: internal/superpowers/specs/2026-05-05-managed-meta-phase6-canonical-data-migration-design.md
+-- See: internal/superpowers/plans/2026-05-05-managed-meta-phase6-canonical-data-migration.md
 --
 -- Idempotent: re-running this migration is safe. Each UPDATE has a guard
 -- predicate that skips already-canonical rows. Migration B (separate file,

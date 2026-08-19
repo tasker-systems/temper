@@ -6,7 +6,7 @@
 **Effort:** large (multi-session; single PR)
 **Branch:** `jct/wave1-phase4-completion`
 
-**Spec:** `docs/superpowers/specs/2026-05-11-wave1-phase4-vaultbackend-design.md`
+**Spec:** `internal/superpowers/specs/2026-05-11-wave1-phase4-vaultbackend-design.md`
 **Predecessor (merged):** PR #77 — Wave 1 Phase 4a, VaultBackend foundation (dark-launched)
 **Vault tasks absorbed by this plan:**
 - `2026-05-11-complete-per-doctype-write-dispatch-for-task-goal-session-research` (Phase A)
@@ -529,7 +529,7 @@ git diff main...HEAD -- crates/temper-cli/src/commands/resource.rs \
 ```
 
 **Spec-compliance review prompt (opus):**
-> Confirm the branch implements Wave 1 Phase 4 completion per spec at `docs/superpowers/specs/2026-05-11-wave1-phase4-vaultbackend-design.md` and unified plan at `docs/superpowers/plans/2026-05-13-wave1-phase4-completion.md`. Focus on:
+> Confirm the branch implements Wave 1 Phase 4 completion per spec at `internal/superpowers/specs/2026-05-11-wave1-phase4-vaultbackend-design.md` and unified plan at `internal/superpowers/plans/2026-05-13-wave1-phase4-completion.md`. Focus on:
 > 1. Per-doctype write logic lives in `vault_backend/per_doctype.rs` for all 6 doctypes (concept, decision, task, goal, session, research).
 > 2. Existing creator wrappers (`actions::task::create`, `actions::goal::create`, `commands::session::save`, `commands::research::save`) delegate to `per_doctype::write_for` for the file-write half and handle publish/discovery/output at the wrapper layer.
 > 3. `commands/resource.rs::{create,update,delete}` Local-mode arms exclusively dispatch through `VaultBackend`. Grep for direct `Frontmatter::write_to`, `manifest_io::save_manifest`, `publish_local_write_best_effort` in Local arms — zero expected.
@@ -552,7 +552,7 @@ git diff main...HEAD -- crates/temper-cli/src/commands/resource.rs \
 **Owner:** subagent (opus)
 
 **Dispatch prompt:**
-> Review branch `jct/wave1-phase4-completion` against the spec at `docs/superpowers/specs/2026-05-11-wave1-phase4-vaultbackend-design.md` and the unified plan at `docs/superpowers/plans/2026-05-13-wave1-phase4-completion.md`. Focus:
+> Review branch `jct/wave1-phase4-completion` against the spec at `internal/superpowers/specs/2026-05-11-wave1-phase4-vaultbackend-design.md` and the unified plan at `internal/superpowers/plans/2026-05-13-wave1-phase4-completion.md`. Focus:
 > - Per-doctype pull-in (Phase A): each wrapper delegates cleanly to per_doctype::write_for; no per-doctype business logic leaked into VaultBackend or per_doctype's bare-write functions; surface UX preserved for `temper task create`, `temper goal create`, `temper session save`, `temper research save`.
 > - Save-or-update overload at the session/research surface preserved; hard-error-on-exists semantics for `temper resource create --type {session,research}` correctly diverges.
 > - Resource-arm migration (Phase B): cloud-mode delete + `cloud_mode_update` byte-for-byte; cloud-mode create differs only by inlining the deleted helper.
@@ -616,8 +616,8 @@ The `match VaultState` branch in resource.rs stays in place — Phase 5 collapse
 - delete-commands-resource-rs-resolve-resource-id-after-phase-4b → done
 
 ## Reference
-- Spec: docs/superpowers/specs/2026-05-11-wave1-phase4-vaultbackend-design.md
-- Plan: docs/superpowers/plans/2026-05-13-wave1-phase4-completion.md
+- Spec: internal/superpowers/specs/2026-05-11-wave1-phase4-vaultbackend-design.md
+- Plan: internal/superpowers/plans/2026-05-13-wave1-phase4-completion.md
 - Predecessor: PR #77 (Wave 1 Phase 4a foundation)
 ```
 

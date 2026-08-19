@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (sqlx, Axum, temper-core/temper-services), PostgreSQL, ts-rs codegen, SvelteKit 5 + TypeScript, Vitest.
 
-**Spec:** `docs/superpowers/specs/2026-07-05-atlas-beat2b-node-content-design.md`
+**Spec:** `internal/superpowers/specs/2026-07-05-atlas-beat2b-node-content-design.md`
 
 ## Global Constraints
 

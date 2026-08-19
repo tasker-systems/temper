@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Spec:** [`docs/superpowers/specs/2026-07-11-context-regions-and-wayfinding-design.md`](../specs/2026-07-11-context-regions-and-wayfinding-design.md)
+**Spec:** [`internal/superpowers/specs/2026-07-11-context-regions-and-wayfinding-design.md`](../specs/2026-07-11-context-regions-and-wayfinding-design.md)
 **Temper goal:** `019f512a-024b-7461-9403-24ac02044665` (tasks T1–T9)
 **This plan covers:** T1, T2, T3, T4.
 
@@ -308,7 +308,7 @@ COMMENT ON TABLE kb_cogmap_regions IS
     'TRANSITIONAL NAME. Holds regions for ANY anchor — contexts as well as cogmaps. Key on '
     '(home_anchor_table, home_anchor_id); `cogmap_id` is VESTIGIAL (dual-written for the pre-M2 code '
     'path, never read by new code). M3 drops cogmap_id and renames this to kb_regions. See '
-    'docs/superpowers/specs/2026-07-11-context-regions-and-wayfinding-design.md §3.6.';
+    'internal/superpowers/specs/2026-07-11-context-regions-and-wayfinding-design.md §3.6.';
 COMMENT ON COLUMN kb_cogmap_regions.cogmap_id IS
     'VESTIGIAL. Superseded by (home_anchor_table, home_anchor_id). NULL-meaningless for context '
     'regions. Dropped in M3. Do not read this in new code.';

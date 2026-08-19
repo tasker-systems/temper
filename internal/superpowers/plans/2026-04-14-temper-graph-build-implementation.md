@@ -16,7 +16,7 @@
 - `serde_yaml::Value` for frontmatter mutation
 - `cargo-nextest` + TDD pattern as established in Session 3 of frontmatter consolidation
 
-**Spec:** `docs/superpowers/specs/2026-04-14-temper-graph-build-refined-design.md`
+**Spec:** `internal/superpowers/specs/2026-04-14-temper-graph-build-refined-design.md`
 
 ---
 

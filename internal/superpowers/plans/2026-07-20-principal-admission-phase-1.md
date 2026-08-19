@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (new crate `temper-principal`; changes in temper-services, temper-substrate, temper-api, temper-cli), PostgreSQL 18 local / 17 Neon (sqlx migrations), cargo-make + cargo-nextest.
 
-**Spec:** `docs/superpowers/specs/2026-07-20-principal-admission-state-machine-design.md`. Read §16 (status) → §3 (D1–D17) → §6 (the transition table) before starting. **§6's transition table is authoritative over §5's diagram** (spec §5).
+**Spec:** `internal/superpowers/specs/2026-07-20-principal-admission-state-machine-design.md`. Read §16 (status) → §3 (D1–D17) → §6 (the transition table) before starting. **§6's transition table is authoritative over §5's diagram** (spec §5).
 
 **Task:** `019f7f61-c9d0-75d1-94dc-c0644f47a6a7`. Plan/large. Branch: cut a fresh branch off `main` (see Global Constraints).
 
@@ -4332,7 +4332,7 @@ Run against the spec after the last task, before opening the PR.
 
 ## Execution Handoff
 
-Plan complete and saved to `docs/superpowers/plans/2026-07-20-principal-admission-phase-1.md`. Two execution options:
+Plan complete and saved to `internal/superpowers/plans/2026-07-20-principal-admission-phase-1.md`. Two execution options:
 
 **1. Subagent-Driven (recommended)** — a fresh subagent per task, review between tasks, fast iteration. Beat A (Tasks 1–3) is genuinely independent and self-contained; Beats B–H are sequential and each needs the previous beat's schema.
 

@@ -7,7 +7,7 @@ currently renders an "Emergent view — not implemented" stub.
 **Related:**
 - `design-system/docs/kg-handoff.md` (§ *PR 6 — meta-doc mode*)
 - `design-system/docs/kg-handoff-next.md` (§ *Deferred work — 4. PR 6*)
-- `docs/superpowers/specs/2026-04-17-knowledge-graph-mvp-concept-visualization-design.md`
+- `internal/superpowers/specs/2026-04-17-knowledge-graph-mvp-concept-visualization-design.md`
   (the structural-mode spec; extension posture is already set up for this)
 - `design-system/preview/kg-scene-v2.html` (visual reference, v2 variant)
 - R11 D2, D3 (original research — not checked in; referenced in

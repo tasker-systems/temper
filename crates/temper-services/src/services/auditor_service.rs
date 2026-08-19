@@ -1,6 +1,6 @@
 //! Read path + grain reconciliation for the citation auditor's dispatch tick (Set 5, Task 13).
 //!
-//! Spec `docs/superpowers/specs/2026-07-23-set5-adversary-citation-audit-design.md` §6.1-6.3.
+//! Spec `internal/superpowers/specs/2026-07-23-set5-adversary-citation-audit-design.md` §6.1-6.3.
 //!
 //! Service-direct (the read-path convention, mirroring [`crate::services::steward_service`]): the
 //! surface passes a resolved principal + optional cap; [`drift_sweep`] gates through

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, Axum (temper-api), sqlx macros against Postgres, temper-client (reqwest wrapper), clap (temper-cli), ts-rs (wire type generation), cargo-nextest, `#[sqlx::test]`.
 
-**Spec:** `docs/superpowers/specs/2026-07-02-team-read-member-lifecycle-design.md`
+**Spec:** `internal/superpowers/specs/2026-07-02-team-read-member-lifecycle-design.md`
 **Task:** `019f25d9-c112-7042-bf0c-62a0f6a1d981` (goal `teams-in-temper`)
 
 ## Global Constraints

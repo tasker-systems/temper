@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript (ESM, NodeNext), vitest, `node:http` for the mocks, eve (agent framework), Vercel AI Gateway, npm (isolated projects — **not** bun workspace members).
 
-**Spec:** [docs/superpowers/specs/2026-07-13-steward-m2m-shared-credentials-and-model-config-design.md](../specs/2026-07-13-steward-m2m-shared-credentials-and-model-config-design.md)
+**Spec:** [internal/superpowers/specs/2026-07-13-steward-m2m-shared-credentials-and-model-config-design.md](../specs/2026-07-13-steward-m2m-shared-credentials-and-model-config-design.md)
 
 ## Global Constraints
 
@@ -2289,7 +2289,7 @@ Also update the `$comment` "Consumed by" list already added in Task 2 if any pat
 Modify `packages/agent-workflows/steward/CLAUDE.md`. Replace its contents:
 
 ```markdown
-> This is the Temper team-self-cognition **steward** — an Eve agent. Design: docs/superpowers/specs/2026-07-01-t5-eve-steward-agent-directory-design.md. It is a workspace-isolated Eve project; run tooling from THIS directory, not the repo root.
+> This is the Temper team-self-cognition **steward** — an Eve agent. Design: internal/superpowers/specs/2026-07-01-t5-eve-steward-agent-directory-design.md. It is a workspace-isolated Eve project; run tooling from THIS directory, not the repo root.
 
 **Auth:** the M2M mint lives in `temper-ts` (`ClientCredentials`), taken as an npm `file:`
 dependency — a deliberate bridge until temper-ts publishes, at which point the dependency becomes a

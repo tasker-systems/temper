@@ -16,7 +16,7 @@ implementation.
 **sibling projection family** on the substrate kernel — kept architecturally distinct from the curated
 resource/edge/cogmap graph and joined to it **only by symbol-string citation**.
 
-> **Companion research:** [`docs/research/2026-07-12-scip-code-graph-integration-research.md`](../../research/2026-07-12-scip-code-graph-integration-research.md).
+> **Companion research:** [`internal/research/2026-07-12-scip-code-graph-integration-research.md`](../../research/2026-07-12-scip-code-graph-integration-research.md).
 > Read it for the **SCIP substance** — the wire format, the symbol grammar. Its *framing* is superseded
 > by this document, and **its `kb_code_symbols` DDL block contains an outright bug** (§0.5, T3).
 >

@@ -1,8 +1,8 @@
 # `TemperQueryBuilder` — the compositional surface, v0 design
 
-> ## `[SUPERSEDED IN PART — 2026-08-08]` The wire contract now lives in `docs/api/query.openapi.yaml`
+> ## `[SUPERSEDED IN PART — 2026-08-08]` The wire contract now lives in `internal/api/query.openapi.yaml`
 >
-> **Ground in [`docs/api/query.openapi.yaml`](../../api/query.openapi.yaml) for anything about the
+> **Ground in [`internal/api/query.openapi.yaml`](../../api/query.openapi.yaml) for anything about the
 > request or response SHAPE.** It is hand-written, reviewed field by field, and it is the committed
 > target. This document remains authoritative for the *reasoning* — why a DAG and not an expression
 > language, why the executor does not transfer, why GraphQL is deferred — and for everything below
@@ -37,7 +37,7 @@ flatters](./019fbdb9-f287-79c0-aab6-efa0b1de12c8).
 [`visibility_profile` declares the act's ordering fragment](./019fd2ea-daa6-72b3-a92a-9b75485c586e) ·
 [A declaration is a description](./019fd377-ee04-7223-861b-3e0bebabaceb).
 
-**Contract authority:** `docs/superpowers/specs/2026-08-03-query-envelope-contract-v0-design.md`.
+**Contract authority:** `internal/superpowers/specs/2026-08-03-query-envelope-contract-v0-design.md`.
 This document does not restate that contract; it amends it where noted below and builds the executor
 the contract was written for. Where the two disagree, the amendments here are the later word.
 
@@ -131,7 +131,7 @@ teach one lesson rather than two.
 > region row and `region_score`, `survey` as `Indeterminate`, and the region-row projection — is
 > superseded by ratification ⟨3⟩ (2026-08-09): `survey` produces the member **resources** of its
 > salience-matched regions; regions are trace disclosure, not a returnable currency. See the
-> RATIFICATION block in [`docs/api/query.openapi.yaml`](../../api/query.openapi.yaml).
+> RATIFICATION block in [`internal/api/query.openapi.yaml`](../../api/query.openapi.yaml).
 
 ### v1 already needs two kinds, so this is not future-proofing
 

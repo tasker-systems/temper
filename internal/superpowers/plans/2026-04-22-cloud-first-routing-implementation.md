@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust workspace (temper-cli, temper-client, temper-core), cargo-make + cargo-nextest, sqlx for DB, existing `push_one_resource` / `pull_one_resource` primitives from Unit A, `temp-env` for env-var scoped tests, `tempfile::TempDir` for filesystem fixtures.
 
-**Reference spec:** `docs/superpowers/specs/2026-04-22-cloud-first-routing-and-mode-collapse-design.md`
+**Reference spec:** `internal/superpowers/specs/2026-04-22-cloud-first-routing-and-mode-collapse-design.md`
 
 ---
 
@@ -26,7 +26,7 @@
 - `crates/temper-cli/src/actions/mod.rs` — register `show_cache` module.
 
 **Deleted files:**
-- `docs/superpowers/plans/2026-04-19-unit-b-2-cloud-mode-dispatch.md` — superseded by this plan (done in Task 10).
+- `internal/superpowers/plans/2026-04-19-unit-b-2-cloud-mode-dispatch.md` — superseded by this plan (done in Task 10).
 
 ---
 
@@ -1625,7 +1625,7 @@ git commit -m "docs(skill): temper update implies push (cloud-first routing)"
 **Purpose:** Run the full quality gate, confirm acceptance criteria one-by-one, delete the superseded old plan file.
 
 **Files:**
-- Delete: `docs/superpowers/plans/2026-04-19-unit-b-2-cloud-mode-dispatch.md`
+- Delete: `internal/superpowers/plans/2026-04-19-unit-b-2-cloud-mode-dispatch.md`
 
 - [ ] **Step 10.1: Full quality gate**
 
@@ -1640,7 +1640,7 @@ Expected: all integration + e2e tests pass.
 
 - [ ] **Step 10.2: Walk the acceptance criteria from the spec**
 
-Open `docs/superpowers/specs/2026-04-22-cloud-first-routing-and-mode-collapse-design.md` to the Acceptance Criteria section. For each bullet, identify the test that exercises it:
+Open `internal/superpowers/specs/2026-04-22-cloud-first-routing-and-mode-collapse-design.md` to the Acceptance Criteria section. For each bullet, identify the test that exercises it:
 
 | Criterion | Covered by |
 |-----------|------------|
@@ -1668,7 +1668,7 @@ Expected: no output.
 
 - [ ] **Step 10.4: Delete the superseded plan file**
 
-Run: `git rm docs/superpowers/plans/2026-04-19-unit-b-2-cloud-mode-dispatch.md`
+Run: `git rm internal/superpowers/plans/2026-04-19-unit-b-2-cloud-mode-dispatch.md`
 
 - [ ] **Step 10.5: Commit the sweep**
 

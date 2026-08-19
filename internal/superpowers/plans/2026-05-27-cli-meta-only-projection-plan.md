@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust workspace, axum (API), clap (CLI), rmcp (MCP), schemars/utoipa/ts-rs derives on shared types, sqlx with `--features test-db`, cargo-nextest, e2e tests in `tests/e2e/`.
 
-**Spec:** `docs/superpowers/specs/2026-05-27-cli-meta-only-projection-design.md`
+**Spec:** `internal/superpowers/specs/2026-05-27-cli-meta-only-projection-design.md`
 
 ---
 
@@ -298,7 +298,7 @@ Nested-path projection rejected with a typed ProjectionError that
 points the caller at jq. This boundary is load-bearing on the
 "we do not own a query language" rejection in the spec.
 
-Spec: docs/superpowers/specs/2026-05-27-cli-meta-only-projection-design.md
+Spec: internal/superpowers/specs/2026-05-27-cli-meta-only-projection-design.md
 EOF
 )"
 ```

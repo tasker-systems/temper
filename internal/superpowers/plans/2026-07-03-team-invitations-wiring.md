@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (axum, sqlx macros, clap), PostgreSQL 18 + pgvector, ts-rs for wire types, cargo-nextest, e2e crate driving CLI ↔ API ↔ DB.
 
-**Design spec:** `docs/superpowers/specs/2026-07-03-team-invitations-wiring-design.md` — read it before starting; every task's requirements implicitly include it.
+**Design spec:** `internal/superpowers/specs/2026-07-03-team-invitations-wiring-design.md` — read it before starting; every task's requirements implicitly include it.
 
 ## Global Constraints
 

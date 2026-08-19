@@ -14,7 +14,7 @@
 
 ## Spec reference
 
-`docs/superpowers/specs/2026-05-09-rationalization-comments-audit-sweep-design.md` (committed in `035e014`).
+`internal/superpowers/specs/2026-05-09-rationalization-comments-audit-sweep-design.md` (committed in `035e014`).
 
 ## Pre-flight (one-time)
 
@@ -51,7 +51,7 @@ Replace lines 553-569 (the existing docstring on `pub fn stored_auth_from_env`) 
 /// **Refresh-less by design.** The returned [`StoredAuth`] has
 /// `refresh_token: None` because env-var auth deliberately does not carry
 /// a refresh token. Per Unit B.4 §Q1/W1
-/// (`docs/superpowers/specs/2026-04-19-cloud-mode-auth0-design.md`),
+/// (`internal/superpowers/specs/2026-04-19-cloud-mode-auth0-design.md`),
 /// exporting a refresh token to a cloud session would entangle it with the
 /// user's local Auth0 grant under refresh-token rotation: the first side
 /// to refresh invalidates the other's RT, and the next refresh triggers
@@ -719,7 +719,7 @@ We then ran a repo-wide grep for similar shapes — `acceptable tradeoff`, `for 
 
 ## Status (refreshed 2026-05-09)
 
-The 2026-05-09 sweep (spec: `docs/superpowers/specs/2026-05-09-rationalization-comments-audit-sweep-design.md`) verified each finding against current code post-Wave 1 Phase 3b/3c and resolved the actionable ones.
+The 2026-05-09 sweep (spec: `internal/superpowers/specs/2026-05-09-rationalization-comments-audit-sweep-design.md`) verified each finding against current code post-Wave 1 Phase 3b/3c and resolved the actionable ones.
 
 ### Findings — current state
 
@@ -727,7 +727,7 @@ The 2026-05-09 sweep (spec: `docs/superpowers/specs/2026-05-09-rationalization-c
 
 - **A.2** (`crates/temper-api/src/handlers/graph.rs`, cross-owner deferral) — ✅ resolved 2026-05-09. Comment rewritten to a v1-scope-boundary statement naming the missing design dependency (permission model + handle resolution).
 
-- **A.3** (`crates/temper-client/src/auth.rs`, env-var refresh-less auth) — ✅ resolved 2026-05-09 as **doc-not-architecture**. The B.4 spec (`docs/superpowers/specs/2026-04-19-cloud-mode-auth0-design.md`) recommends W1 (access-token-only export); refresh-less is the deliberate contract, not a deferral. Doc rewrite + 1h-pre-expiry stderr warning at the cloud-mode bootstrap site. `stored_auth_from_env()` confirmed load-bearing as the parsing primitive shared by `MemoryTokenStore::from_env()` and `DiskTokenStore::load()`'s env fallback.
+- **A.3** (`crates/temper-client/src/auth.rs`, env-var refresh-less auth) — ✅ resolved 2026-05-09 as **doc-not-architecture**. The B.4 spec (`internal/superpowers/specs/2026-04-19-cloud-mode-auth0-design.md`) recommends W1 (access-token-only export); refresh-less is the deliberate contract, not a deferral. Doc rewrite + 1h-pre-expiry stderr warning at the cloud-mode bootstrap site. `stored_auth_from_env()` confirmed load-bearing as the parsing primitive shared by `MemoryTokenStore::from_env()` and `DiskTokenStore::load()`'s env fallback.
 
 - **B.1** (`packages/temper-ui/src/lib/components/graph/KnowledgeGraph.svelte:46-49`, meta-doc mode stub) — ⏸ still UI-deferred per `feedback_ui_last`. Re-triage when UI work resumes.
 

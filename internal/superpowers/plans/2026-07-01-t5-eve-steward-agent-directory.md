@@ -90,7 +90,7 @@ export default defineAgent({
 
 The scaffold drops `AGENTS.md` and `CLAUDE.md` with generic Eve guidance. Keep them (they help future editors) but prepend a one-line pointer at the top of `packages/agent-workflows/steward/CLAUDE.md`:
 ```md
-> This is the Temper team-self-cognition **steward** — an Eve agent. Design: docs/superpowers/specs/2026-07-01-t5-eve-steward-agent-directory-design.md. It is a workspace-isolated Eve project; run tooling from THIS directory, not the repo root.
+> This is the Temper team-self-cognition **steward** — an Eve agent. Design: internal/superpowers/specs/2026-07-01-t5-eve-steward-agent-directory-design.md. It is a workspace-isolated Eve project; run tooling from THIS directory, not the repo root.
 ```
 
 - [ ] **Step 5: Verify typecheck passes**
@@ -524,7 +524,7 @@ git commit -m "feat(steward): hourly cron backstop (real dispatch → T6) (T5)"
 
 **Files:**
 - Create: `packages/agent-workflows/README.md`
-- Modify: `docs/superpowers/specs/2026-07-01-t5-eve-steward-agent-directory-design.md` (D1 toolchain line)
+- Modify: `internal/superpowers/specs/2026-07-01-t5-eve-steward-agent-directory-design.md` (D1 toolchain line)
 - Modify: `CLAUDE.md` (one line registering the new package + its isolation)
 
 **Interfaces:**
@@ -539,12 +539,12 @@ Create `packages/agent-workflows/README.md`:
 
 Deployed agent runtimes over the temper-mcp surface. **Eve** is the first runtime
 binding; **Claude Managed Agents (CMA)** is a planned second (the two runtimes are
-near-isomorphic — see docs/research/2026-06-18-vercel-eve-and-claude-managed-agents-investigation.md).
+near-isomorphic — see internal/research/2026-06-18-vercel-eve-and-claude-managed-agents-investigation.md).
 
 ## Agents
 
 - `steward/` — the team self-cognition steward (Eve). Design:
-  docs/superpowers/specs/2026-07-01-t5-eve-steward-agent-directory-design.md.
+  internal/superpowers/specs/2026-07-01-t5-eve-steward-agent-directory-design.md.
 
 ## Why this package is workspace-isolated
 
@@ -593,7 +593,7 @@ Expected: both pass (they only touch temper-cloud). Then confirm the steward sti
 - [ ] **Step 5: Commit**
 
 ```bash
-git add packages/agent-workflows/README.md docs/superpowers/specs/2026-07-01-t5-eve-steward-agent-directory-design.md CLAUDE.md
+git add packages/agent-workflows/README.md internal/superpowers/specs/2026-07-01-t5-eve-steward-agent-directory-design.md CLAUDE.md
 git commit -m "docs(steward): agent-workflows README + spec/CLAUDE reconciliation (T5)"
 ```
 

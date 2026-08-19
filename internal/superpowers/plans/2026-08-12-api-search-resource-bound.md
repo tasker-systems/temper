@@ -8,7 +8,7 @@
 
 **Tech Stack:** PostgreSQL 18 + pgvector, Rust (sqlx, clap 4, axum), cargo-nextest.
 
-**Spec:** [`docs/superpowers/specs/2026-08-12-api-query-door-design.md`](../specs/2026-08-12-api-query-door-design.md) ⟨6⟩ — read it first; it carries the measurement this plan rests on.
+**Spec:** [`internal/superpowers/specs/2026-08-12-api-query-door-design.md`](../specs/2026-08-12-api-query-door-design.md) ⟨6⟩ — read it first; it carries the measurement this plan rests on.
 
 ## Global Constraints
 

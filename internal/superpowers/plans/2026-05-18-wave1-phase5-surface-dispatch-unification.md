@@ -9,7 +9,7 @@
 > - Full crate suite, workspace tests, and e2e tests run once at end-of-branch (PR-prep, Task 19). Not per-task.
 > - Final opus code review at end-of-branch as usual.
 
-**Spec:** `docs/superpowers/specs/2026-05-18-wave1-phase5-surface-dispatch-unification-design.md`
+**Spec:** `internal/superpowers/specs/2026-05-18-wave1-phase5-surface-dispatch-unification-design.md`
 
 **Predecessor (merged):** PR #80 — Wave 1 Phase 4 completion (VaultBackend writes, per-doctype dispatch, helper deletions).
 
@@ -22,9 +22,9 @@
 **Branch:** `jct/wave1-phase5-surface-dispatch-unification`
 
 **Reference docs:**
-- Spec: `docs/superpowers/specs/2026-05-18-wave1-phase5-surface-dispatch-unification-design.md`
-- Sibling spec (Phase 4): `docs/superpowers/specs/2026-05-11-wave1-phase4-vaultbackend-design.md`
-- Sibling plan (Phase 4 completion): `docs/superpowers/plans/2026-05-13-wave1-phase4-completion.md` and `2026-05-14-wave1-phase4-completion-b5b-c1-c2.md` (study these for execution shape)
+- Spec: `internal/superpowers/specs/2026-05-18-wave1-phase5-surface-dispatch-unification-design.md`
+- Sibling spec (Phase 4): `internal/superpowers/specs/2026-05-11-wave1-phase4-vaultbackend-design.md`
+- Sibling plan (Phase 4 completion): `internal/superpowers/plans/2026-05-13-wave1-phase4-completion.md` and `2026-05-14-wave1-phase4-completion-b5b-c1-c2.md` (study these for execution shape)
 
 ---
 
@@ -168,7 +168,7 @@ NOTE: `Surface::CliCloud` may not exist as an enum variant. Grep `enum Surface` 
 //! Mirror of `vault_backend/`. Translators are pure cmd→wire functions
 //! (unit-tested); dispatch is exercised end-to-end via `tests/e2e/`.
 //!
-//! See `docs/superpowers/specs/2026-05-18-wave1-phase5-surface-dispatch-unification-design.md`.
+//! See `internal/superpowers/specs/2026-05-18-wave1-phase5-surface-dispatch-unification-design.md`.
 
 mod cloud_backend;
 mod ctx;
@@ -1325,7 +1325,7 @@ EOF
 //! that surfaces dispatch one command through — no per-mode code at the
 //! surface level.
 //!
-//! See `docs/superpowers/specs/2026-05-18-wave1-phase5-surface-dispatch-unification-design.md`.
+//! See `internal/superpowers/specs/2026-05-18-wave1-phase5-surface-dispatch-unification-design.md`.
 
 use tokio::runtime::Runtime;
 

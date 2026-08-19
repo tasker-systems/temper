@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- **Spec:** `docs/superpowers/specs/2026-07-10-machine-principal-phase-b1-issuer-grant-design.md`. Decisions D1–D9.
+- **Spec:** `internal/superpowers/specs/2026-07-10-machine-principal-phase-b1-issuer-grant-design.md`. Decisions D1–D9.
 - **SHA-256, never argon2** (D1). Reuse `hashToken()` on the TS side; `format!("{:x}", Sha256::new()...finalize())` on the Rust side (lowercase hex, matches TS). No new crypto dependency.
 - **The verifier does not change** (D4). Do not touch `normalize_machine` (`temper-services/src/auth/normalize.rs`) or `resolve_machine_from_claims`. No JWKS change.
 - **`issuer='temper'` marks the credential; `auth_provider` stays `'auth0-m2m'`** (D5) — the machine-principal namespace `normalize_machine` emits for all machine tokens. Reuse `crate::auth::MACHINE_PROVIDER_TAG`.

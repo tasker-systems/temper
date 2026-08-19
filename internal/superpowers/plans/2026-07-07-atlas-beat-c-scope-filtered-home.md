@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - **Branch:** `jct/atlas-reshape` (held — build, do not PR). Commit per beat-task locally.
-- **Spec:** `docs/superpowers/specs/2026-07-07-atlas-beat-c-scope-filtered-home-spec.md` — every task's requirements implicitly include it.
+- **Spec:** `internal/superpowers/specs/2026-07-07-atlas-beat-c-scope-filtered-home-spec.md` — every task's requirements implicitly include it.
 - **Migration edited in place** (`20260707140000_...`) because it is branch-local + unshipped; after editing, `cargo make db-reset` (drop+recreate+re-apply) — never rely on an incremental `migrate run` for an edited file.
 - **Fixture-first (`[[feedback_local_proddata_render_harness_for_ui]]`):** visual specifics (scope-chip treatment, recency→glow curve) are locked on `/dev/atlas` in Task 1, then implemented. Do not guess visuals ahead of the spike.
 - **Visibility-scoped reads:** the recency column must never expose an `updated_at` from a resource the caller can't see — reuse the exact join set of the existing `resource_count` subquery (`resources_visible_to` + `is_active`).
@@ -65,7 +65,7 @@ Keep the `sanitize-atlas-fixtures.mjs` edit and the spec §10 edit. The `.local.
 
 ```bash
 cargo fmt --manifest-path Cargo.toml
-git add docs/superpowers/specs/2026-07-07-atlas-beat-c-scope-filtered-home-spec.md packages/temper-ui/scripts/sanitize-atlas-fixtures.mjs
+git add internal/superpowers/specs/2026-07-07-atlas-beat-c-scope-filtered-home-spec.md packages/temper-ui/scripts/sanitize-atlas-fixtures.mjs
 git commit -m "spike(atlas): Beat C Task 1 — lock scope-chip + recency-glow visuals on /dev/atlas"
 ```
 

@@ -2,8 +2,8 @@
 
 **Date:** 2026-06-17
 **Status:** Design / spec. First of two specs for the WS6 surface-completeness port; worked sequentially with **Spec B (readback routing for `by_uri` + MCP enrichment)** and landed as a single PR.
-**Parent strategy:** `docs/superpowers/specs/2026-06-16-ws6-flip-readiness-strategy.md` (§ "Surface-completeness port", item 2).
-**Binding contract:** Adjudication 5 (slug-retirement surface contract), `docs/superpowers/specs/2026-06-12-ws6-convergence-delta-adjudication-design.md:253-279`.
+**Parent strategy:** `internal/superpowers/specs/2026-06-16-ws6-flip-readiness-strategy.md` (§ "Surface-completeness port", item 2).
+**Binding contract:** Adjudication 5 (slug-retirement surface contract), `internal/superpowers/specs/2026-06-12-ws6-convergence-delta-adjudication-design.md:253-279`.
 
 ## What this is
 
@@ -139,4 +139,4 @@ No new `temper_next` SQL; this is purely the consequence of the type collapse on
 - `crates/temper-cli/src/projection.rs:151-173,231,251,292` — projection filename construction + stale-file sweep.
 - `crates/temper-core/src/vault.rs:106` — `canonical_uri` (decorated-form lineage).
 - `~30 ResourceRef::Scoped / ::scoped(` call sites across CLI, MCP, API, core (`commands.rs`, `actions.rs`) — the collapse blast radius.
-- Adjudication 5 + §D: `docs/superpowers/specs/2026-06-12-ws6-convergence-delta-adjudication-design.md:253-279,437-439`.
+- Adjudication 5 + §D: `internal/superpowers/specs/2026-06-12-ws6-convergence-delta-adjudication-design.md:253-279,437-439`.

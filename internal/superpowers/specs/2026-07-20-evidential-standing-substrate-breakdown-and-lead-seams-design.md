@@ -336,7 +336,7 @@ Each is scoped by the breakdown and earns its own spec→plan→implementation:
 - **Set 3** — the `independence_pairs` and maturity component-memo DDL, refresh clocks (Rust,
   not triggers — see the 2026-07-21 correction under §2.3), the exact band **thresholds** and the
   shape presentation (a tuning + surfacing pass). **Now planned:**
-  [`docs/superpowers/plans/2026-07-21-set3-maturity-projection.md`](plans/2026-07-21-set3-maturity-projection.md).
+  [`internal/superpowers/plans/2026-07-21-set3-maturity-projection.md`](plans/2026-07-21-set3-maturity-projection.md).
 - **Set 5** — the adversary persona's jobs-to-be-done, its spatial reliability profile, and
   the concrete adversarial-challenge / survived event vocabulary the projection reads.
 - **Set 6** — the promotion gate (what standing shape licenses promotion), the redaction/

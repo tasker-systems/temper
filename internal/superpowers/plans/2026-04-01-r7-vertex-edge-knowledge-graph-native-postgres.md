@@ -53,7 +53,7 @@ The R3 research phase established the constraint: **Neon does not support Apache
 
 | Component | Status | Location |
 |-----------|--------|----------|
-| `SearchMode::Graph` enum variant | Defined, unimplemented | `crates/temper-core/src/types/search.rs` (type); `docs/superpowers/plans/2026-03-27-r5-indexing-sync-resource-management.md` (design) |
+| `SearchMode::Graph` enum variant | Defined, unimplemented | `crates/temper-core/src/types/search.rs` (type); `internal/superpowers/plans/2026-03-27-r5-indexing-sync-resource-management.md` (design) |
 | `SearchMode` serde support | `"graph"` serializes/deserializes correctly | Tests in R5 plan confirm `serde_json::to_string(&SearchMode::Graph)` → `"graph"` |
 | `SearchService::search()` | Stubs Graph mode to semantic (empty results) | `crates/temper-api` via I3 plan |
 | `build_frontmatter()` | Emits: `temper-id`, `title`, `context`, `doc_type`, `ingestion_source`, `created` | `crates/temper-cli/src/actions/ingest.rs` L285–301 |

@@ -9,8 +9,8 @@
 **Tech Stack:** Rust 2021, serde, thiserror.
 
 **Specs:**
-- `docs/superpowers/specs/2026-05-01-shared-core-execution-paths-design.md` (#4) — Phase 2 section
-- `docs/superpowers/plans/2026-05-02-wave1-phase1-operations-scaffolding.md` — predecessor plan, all tasks complete
+- `internal/superpowers/specs/2026-05-01-shared-core-execution-paths-design.md` (#4) — Phase 2 section
+- `internal/superpowers/plans/2026-05-02-wave1-phase1-operations-scaffolding.md` — predecessor plan, all tasks complete
 
 **Predecessor state (Phase 1, landed):** `temper-core/src/operations/` has `surface.rs`, `resource_ref.rs`, `inputs.rs`, `commands.rs`, `events.rs`, `output.rs`, `backend.rs`. Backend trait declared but not yet implemented.
 

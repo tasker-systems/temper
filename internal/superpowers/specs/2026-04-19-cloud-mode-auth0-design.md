@@ -5,7 +5,7 @@
 **Goal:** `temper-cloud-portable-memory`
 **Task:** `2026-04-19-unit-b-4-auth0-research-for-cloud-mode-token-issuance`
 **Branch:** `jct/temper-cloud-mode-portable-memory`
-**Parent spec:** `docs/superpowers/specs/2026-04-18-cloud-mode-and-portable-memory-design.md` §Unit B.4
+**Parent spec:** `internal/superpowers/specs/2026-04-18-cloud-mode-and-portable-memory-design.md` §Unit B.4
 **Unblocks:** Unit B.2 (cloud-mode dispatch rewrites)
 **Introduces:** Unit D (server-minted cloud session tokens — W2)
 
@@ -353,7 +353,7 @@ Per-session revocation + in-cloud refresh via grants that are fully isolated fro
 
 ## Out of scope for this research block
 
-- **B.2 implementation** — lives in a separate plan artifact (`docs/superpowers/plans/2026-04-XX-unit-b-2-cloud-mode-dispatch.md`, to be written at B.2 task start).
+- **B.2 implementation** — lives in a separate plan artifact (`internal/superpowers/plans/2026-04-XX-unit-b-2-cloud-mode-dispatch.md`, to be written at B.2 task start).
 - **Working directory layout** — Unit B.3's problem.
 - **Claude Desktop MCP auth flow changes** — Claude Desktop runs its own device flow via `temper-mcp`'s discovery endpoints; no changes needed here.
 - **Second token provider** — the `Provider` enum shape is the change; building a `SelfHosted` variant is a separate future spec.

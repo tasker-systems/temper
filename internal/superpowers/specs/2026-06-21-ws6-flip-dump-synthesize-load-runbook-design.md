@@ -274,8 +274,8 @@ throwaway PG17 container**, committed as **`docker-compose.flip.yml`**:
 
 ## References
 
-- Strategy: `docs/superpowers/specs/2026-06-16-ws6-flip-readiness-strategy.md`
-- Adjudication (§D hard cutover): `docs/superpowers/specs/2026-06-12-ws6-convergence-delta-adjudication-design.md`
+- Strategy: `internal/superpowers/specs/2026-06-16-ws6-flip-readiness-strategy.md`
+- Adjudication (§D hard cutover): `internal/superpowers/specs/2026-06-12-ws6-convergence-delta-adjudication-design.md`
 - Synthesis core: `crates/temper-next/src/synthesis/mod.rs`, `bootstrap.rs`, `source.rs`, `parity.rs`
 - Entrypoint: `crates/temper-next/src/main.rs` (`synthesize`), `substrate.rs` (connect/search_path)
 - Cutover flag: `crates/temper-api/src/services/backend_selection_service.rs`, read at `main.rs:34`

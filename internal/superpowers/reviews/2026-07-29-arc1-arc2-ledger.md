@@ -1,4 +1,4 @@
-# SDD ledger — plan: docs/superpowers/plans/2026-07-29-binary-attestation-and-manifest-verification.md
+# SDD ledger — plan: internal/superpowers/plans/2026-07-29-binary-attestation-and-manifest-verification.md
 
 BASE: eac7e5e6b0bfdff5f6b5b173fc1fa4545d0c0606
 Execution model: subagents WRITE ONLY (no cargo); controller runs all gates and commits.

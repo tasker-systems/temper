@@ -180,5 +180,5 @@ and tracked outside this durable deliverable (see the Deferred section of the
   [`schema-artifact/manifests/org-identity.yaml`](../../schema-artifact/manifests/org-identity.yaml).
 - The reusable genesis manifest:
   [`schema-artifact/manifests/team-self-cognition.yaml`](../../schema-artifact/manifests/team-self-cognition.yaml).
-- Steward architecture this map feeds: `docs/superpowers/specs/2026-06-30-steward-act-model-cogmap-resource-vocabulary-design.md`.
-- Implementation plan this SoP delivers: `docs/superpowers/plans/2026-06-30-t2-templated-team-telos-genesis.md`.
+- Steward architecture this map feeds: `internal/superpowers/specs/2026-06-30-steward-act-model-cogmap-resource-vocabulary-design.md`.
+- Implementation plan this SoP delivers: `internal/superpowers/plans/2026-06-30-t2-templated-team-telos-genesis.md`.

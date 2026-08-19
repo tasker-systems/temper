@@ -8,7 +8,7 @@
 
 **Tech Stack:** PostgreSQL 18 (native `uuidv7()`), pgvector, sqlx compile-time macros, Rust (temper-api, temper-core), TypeScript (temper-cloud Vercel workflows), cargo-nextest.
 
-**Spec:** [`docs/superpowers/specs/2026-04-20-chunk-dedup-and-revisions-design.md`](../specs/2026-04-20-chunk-dedup-and-revisions-design.md) — read this first for the why.
+**Spec:** [`internal/superpowers/specs/2026-04-20-chunk-dedup-and-revisions-design.md`](../specs/2026-04-20-chunk-dedup-and-revisions-design.md) — read this first for the why.
 
 ---
 
@@ -463,7 +463,7 @@ Create `migrations/20260420000006_chunk_dedup_functions.sql`:
 -- New signatures: (resource_id, audit_id, body_hash, chunks). Return
 -- changes from INT (chunk count) to UUID (the new revision id).
 --
--- Spec: docs/superpowers/specs/2026-04-20-chunk-dedup-and-revisions-design.md
+-- Spec: internal/superpowers/specs/2026-04-20-chunk-dedup-and-revisions-design.md
 
 -- First-create path. No existing chunks; just insert all at version 1.
 CREATE FUNCTION persist_resource_chunks(

@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- **Spec:** `docs/superpowers/specs/2026-06-29-search-substrate-beat3-surface-b-wayfinding-design.md`. This plan implements §3 (Half 1) + the §6 `p_scope_ids` additive filter. **Half 2 (`--wayfind`/`--lens`/`--regions`, §4) and `--cogmap` on `edge assert` are OUT OF SCOPE here** (see "Deferred" below).
+- **Spec:** `internal/superpowers/specs/2026-06-29-search-substrate-beat3-surface-b-wayfinding-design.md`. This plan implements §3 (Half 1) + the §6 `p_scope_ids` additive filter. **Half 2 (`--wayfind`/`--lens`/`--regions`, §4) and `--cogmap` on `edge assert` are OUT OF SCOPE here** (see "Deferred" below).
 - **Migrations are immutable once shipped.** Never edit `20260624*`–`20260629000003*`. Add NEW migration files only. Next free names: `20260629000004_*`, `20260629000005_*`.
 - **`--all-features` for every build/clippy/check.** `cargo make check` runs `SQLX_OFFLINE=true` against committed `.sqlx/` caches.
 - **After changing any macro SQL or function schema:** regenerate caches — `cargo sqlx prepare --workspace -- --all-features`, and for test-target queries `cargo make prepare-api`. `unified_search` is called via **runtime `query_as`** (the `::vector` cast forbids the macro), so its signature change needs NO workspace-cache entry — but new `query_scalar!`/`query!` macro calls do.

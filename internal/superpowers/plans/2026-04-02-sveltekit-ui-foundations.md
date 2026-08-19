@@ -8,7 +8,7 @@
 
 **Tech Stack:** SvelteKit 2, Svelte 5 (runes), Tailwind CSS v4, adapter-vercel (nodejs22.x), postgres.js, ts-rs, cargo-make
 
-**Spec:** `docs/superpowers/specs/2026-04-02-sveltekit-ui-foundations-design.md`
+**Spec:** `internal/superpowers/specs/2026-04-02-sveltekit-ui-foundations-design.md`
 
 ---
 

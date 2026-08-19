@@ -2,7 +2,7 @@
 
 > ## `[STALE IN PART — 2026-08-08]` Do not execute a task from this plan without reading the wire contract first
 >
-> **[`docs/api/query.openapi.yaml`](../../api/query.openapi.yaml) is the committed target.** Beats A
+> **[`internal/api/query.openapi.yaml`](../../api/query.openapi.yaml) is the committed target.** Beats A
 > and B of this plan are MERGED (PR #663) and produced the types in
 > `crates/temper-core/src/types/query/` — and the contract amends six of those shapes. So the plan's
 > completed tasks are not a description of what should now exist.
@@ -10,7 +10,7 @@
 > `[amended — 2026-08-10]` Concretely: everything in this plan touching response shape, output
 > currency, `survey`'s produced kind, `bounds_*`/`terms_*` field naming, `ActResult`,
 > `StageOutput::Ids`, `meta_detail`/`meta_truncated`, or the validate route is superseded by
-> [`docs/api/query.openapi.yaml`](../../api/query.openapi.yaml) (ratified 2026-08-09, amended
+> [`internal/api/query.openapi.yaml`](../../api/query.openapi.yaml) (ratified 2026-08-09, amended
 > through 2026-08-10). The contract is authoritative; this plan is history, and its code sketches
 > must not be built from.
 >
@@ -29,7 +29,7 @@ built in this plan.
 **Tech Stack:** Rust, sqlx 0.8 (runtime `query_as`, not the macros — see Global Constraints),
 PostgreSQL 17/18, schemars + ts-rs + utoipa for generated artifacts, cargo-nextest.
 
-**Spec:** `docs/superpowers/specs/2026-08-05-query-builder-compositional-design.md`. Every task cites
+**Spec:** `internal/superpowers/specs/2026-08-05-query-builder-compositional-design.md`. Every task cites
 the section it implements. **Read the cited section — this plan is an index over the spec, not a
 replacement for it.**
 
@@ -1426,7 +1426,7 @@ nothing."*
 **Files:**
 - Modify: `crates/temper-substrate/src/readback/query_plan.rs`
 - Modify: `crates/temper-substrate/tests/query_plan_compile.rs`
-- Modify: `docs/superpowers/specs/2026-08-05-query-builder-compositional-design.md` (§12's open measurement)
+- Modify: `internal/superpowers/specs/2026-08-05-query-builder-compositional-design.md` (§12's open measurement)
 
 - [ ] **Step 1: Measure the OR emission before choosing it**
 
@@ -1498,7 +1498,7 @@ OR-composed within a `Contains` list per Step 1's measurement. Every predicate c
 
 ```bash
 cargo nextest run -p temper-substrate --test query_plan_compile
-git add crates/temper-substrate/ docs/superpowers/specs/
+git add crates/temper-substrate/ internal/superpowers/specs/
 git commit -m "query: emit property predicates against the indexes that already exist"
 ```
 
@@ -1543,7 +1543,7 @@ declared holes.
 - [ ] **Step 4: Commit the finding**
 
 ```bash
-git add docs/superpowers/specs/2026-08-05-query-builder-compositional-design.md migrations/ 2>/dev/null
+git add internal/superpowers/specs/2026-08-05-query-builder-compositional-design.md migrations/ 2>/dev/null
 git commit -m "query: answer the edge-provenance check against the deployed walk"
 ```
 

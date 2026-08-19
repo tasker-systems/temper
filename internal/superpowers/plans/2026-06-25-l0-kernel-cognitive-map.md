@@ -314,7 +314,7 @@ Add this paragraph to `CLAUDE.md` (in the Key Patterns section, after the cloud-
   migrations** that call the same mutation functions (`facet_set`/`relationship_assert`/`block_mutated`)
   against L0's reserved id (never by editing the birth migration, which is immutable). Its charter
   declares ambient steward wake = never. See
-  `docs/superpowers/specs/2026-06-25-cognitive-map-agent-invocation-architecture-design.md`.
+  `internal/superpowers/specs/2026-06-25-cognitive-map-agent-invocation-architecture-design.md`.
 ```
 
 - [ ] **Step 2: Verify the file is coherent**

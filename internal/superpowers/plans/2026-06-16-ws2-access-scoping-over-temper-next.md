@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (temper-next, temper-api), PostgreSQL 18 + pgvector, sqlx (runtime schema-qualified `query` for `temper_next` — never the `query!` macros, per the module discipline), cargo-nextest. Tests run under the `artifact-tests` feature (the `temper-next-write` nextest group, which owns + resets the `temper_next` namespace) and the `next-backend` feature for temper-api.
 
-**Spec:** `docs/superpowers/specs/2026-06-16-ws2-access-scoping-over-temper-next-design.md`. Read it before starting. Load-bearing invariants carried verbatim below.
+**Spec:** `internal/superpowers/specs/2026-06-16-ws2-access-scoping-over-temper-next-design.md`. Read it before starting. Load-bearing invariants carried verbatim below.
 
 **Build/test notes (CONFORM — these bite):**
 - `next-backend` builds need `SQLX_OFFLINE=true` (CLAUDE.md temper-next note). All `cargo make` tasks set it.

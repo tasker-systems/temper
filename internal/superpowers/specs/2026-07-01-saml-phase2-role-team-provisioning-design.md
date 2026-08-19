@@ -370,7 +370,7 @@ env). Documented in the self-hosting env-var table.
 
 - **Admin-via-group + the org-provisioning-bootstrap arc.** The `temper-admins → gating-team owner` mapping row
   works mechanically, but the gating team and its slug are configured by the org-provisioning surface
-  (`docs/superpowers/specs/2026-06-28-org-provisioning-bootstrap-surface-design.md`, still design-stage). Phase 2
+  (`internal/superpowers/specs/2026-06-28-org-provisioning-bootstrap-surface-design.md`, still design-stage). Phase 2
   does not depend on that arc landing — it just documents that the *first* owner remains the SQL root step.
 - **Emptied-groups semantics** (§6) — resolved by decision 9: an *absent* attribute is no-signal (skip, never
   revoke), a *present-but-empty* attribute is a genuine revoke. A future per-IdP "never revoke even on empty" flag

@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- **Spec:** `docs/superpowers/specs/2026-07-02-auth-seam-stage-4-m2m-implementation-design.md`. Contract: `docs/auth/machine-token-contract.md`.
+- **Spec:** `internal/superpowers/specs/2026-07-02-auth-seam-stage-4-m2m-implementation-design.md`. Contract: `docs/auth/machine-token-contract.md`.
 - **Scope:** 4a (TS one-liner) + 4b (Rust seam) only. **4c is out of scope** — do not touch `buildAsMetadata` or `handleToken`.
 - **Machine detection signal:** `gty == "client-credentials"` — NEVER `azp` presence (human Auth0 tokens carry `azp` too).
 - **Client-id source:** `azp` primary; fall back to stripping `@clients` off `sub`.

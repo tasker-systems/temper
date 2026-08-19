@@ -6,7 +6,7 @@ working. Start at the section that matches what you are seeing.
 The mechanisms this describes are the migration classification (`declare_migration`), the
 declaration check (`audit-migration-declarations.sh`), the wire diff (`sqlx-wire-diff.sh`) and the
 cross-check (`sqlx-schema-crosscheck.sh`). Design:
-[`docs/superpowers/specs/2026-07-30-schema-binary-pairing-design.md`](../superpowers/specs/2026-07-30-schema-binary-pairing-design.md).
+[`internal/superpowers/specs/2026-07-30-schema-binary-pairing-design.md`](../superpowers/specs/2026-07-30-schema-binary-pairing-design.md).
 The rule they enforce is in [`DEPLOYING.md`](../../DEPLOYING.md).
 
 > **The one symptom worth memorising.** A pairing break looks like: **writes fail totally, reads stay

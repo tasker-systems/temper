@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (temper-core, temper-api), SvelteKit 2 + Svelte 5, SVAR Svelte DataGrid, Tailwind v4, marked + dompurify, PostgreSQL 18.
 
-**Spec:** `docs/superpowers/specs/2026-04-09-authed-vault-browser-design.md`
+**Spec:** `internal/superpowers/specs/2026-04-09-authed-vault-browser-design.md`
 
 **Branch:** `jct/temper-authed-dashboard-ui` (continuing existing branch, 4 commits ahead of main)
 

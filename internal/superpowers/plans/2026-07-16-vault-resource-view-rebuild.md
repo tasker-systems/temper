@@ -8,7 +8,7 @@
 
 **Tech Stack:** SvelteKit 2 / Svelte 5 (runes: `$props`, `$derived`, `$state`), TypeScript, Vitest 3 (`environment: 'node'`), Rust/sqlx (one line).
 
-**Spec:** `docs/superpowers/specs/2026-07-16-vault-resource-view-rebuild-design.md`
+**Spec:** `internal/superpowers/specs/2026-07-16-vault-resource-view-rebuild-design.md`
 **Design artifact:** `design-system/preview/comp-resource-view.html` — the agreed render at fidelity. **Open it before writing any component.**
 
 ## Global Constraints

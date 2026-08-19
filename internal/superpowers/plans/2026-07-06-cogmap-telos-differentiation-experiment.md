@@ -8,7 +8,7 @@
 
 **Tech Stack:** `temper` CLI (team + cogmap subcommands), temperkb.io MCP tools, `neonctl` + `psql` for production reads, ONNX client-side embedding (already linked in the CLI).
 
-**Spec:** `docs/superpowers/specs/2026-07-06-cogmap-telos-differentiation-experiment-design.md` (read §2 grounding findings and §11 resolved IDs before starting).
+**Spec:** `internal/superpowers/specs/2026-07-06-cogmap-telos-differentiation-experiment-design.md` (read §2 grounding findings and §11 resolved IDs before starting).
 
 ## Global Constraints
 
@@ -24,9 +24,9 @@
 
 Experiment artifacts (committed for reproducibility) live under one directory:
 
-- `docs/experiments/2026-07-06-cogmap-telos-differentiation/map2-storyteller-design.manifest.yaml` — Map 2 genesis manifest (charter).
-- `docs/experiments/2026-07-06-cogmap-telos-differentiation/map3-cogmaps-for-storyteller.manifest.yaml` — Map 3 genesis manifest (charter).
-- `docs/experiments/2026-07-06-cogmap-telos-differentiation/RUN-LOG.md` — the live capture: produced ids, per-phase observations, verification outputs. This is the running record the tasks append to.
+- `internal/experiments/2026-07-06-cogmap-telos-differentiation/map2-storyteller-design.manifest.yaml` — Map 2 genesis manifest (charter).
+- `internal/experiments/2026-07-06-cogmap-telos-differentiation/map3-cogmaps-for-storyteller.manifest.yaml` — Map 3 genesis manifest (charter).
+- `internal/experiments/2026-07-06-cogmap-telos-differentiation/RUN-LOG.md` — the live capture: produced ids, per-phase observations, verification outputs. This is the running record the tasks append to.
 
 Production state (maps, nodes, edges, teams) lives in temperkb.io, not the repo.
 
@@ -34,7 +34,7 @@ Production state (maps, nodes, edges, teams) lives in temperkb.io, not the repo.
 
 ### Task 0: Pre-flight & baseline capture
 
-**Files:** Create `docs/experiments/2026-07-06-cogmap-telos-differentiation/RUN-LOG.md`
+**Files:** Create `internal/experiments/2026-07-06-cogmap-telos-differentiation/RUN-LOG.md`
 **Executor:** Orchestrator (me)
 **Interfaces:**
 - Produces: `CS` (psql connection string), a captured `steward_candidate_baseline` set that Task 4 diffs against.
@@ -64,10 +64,10 @@ Expected: 8 × `ok`.
 
 - [ ] **Step 5: Create RUN-LOG.md and commit the experiment dir scaffold**
 
-Write `docs/experiments/2026-07-06-cogmap-telos-differentiation/RUN-LOG.md` with headings: `## Baseline (Task 0)`, `## Genesis IDs (Tasks 1–4)`, `## Phase 1 authoring (Task 5)`, `## Phase 2 cross-map (Task 6)`, `## Phase 3 findings (Task 7)`. Paste the Step-3 baseline under Baseline.
+Write `internal/experiments/2026-07-06-cogmap-telos-differentiation/RUN-LOG.md` with headings: `## Baseline (Task 0)`, `## Genesis IDs (Tasks 1–4)`, `## Phase 1 authoring (Task 5)`, `## Phase 2 cross-map (Task 6)`, `## Phase 3 findings (Task 7)`. Paste the Step-3 baseline under Baseline.
 
 ```bash
-git add docs/experiments/2026-07-06-cogmap-telos-differentiation/RUN-LOG.md
+git add internal/experiments/2026-07-06-cogmap-telos-differentiation/RUN-LOG.md
 git commit -m "chore(experiment): run-log scaffold + steward candidate baseline"
 ```
 
@@ -93,7 +93,7 @@ Expected: one member — `j-cole-taylor` (owner). **`agent-y23aq…` MUST NOT ap
 - [ ] **Step 3: Append the team id to RUN-LOG.md and commit**
 
 ```bash
-git add docs/experiments/2026-07-06-cogmap-telos-differentiation/RUN-LOG.md
+git add internal/experiments/2026-07-06-cogmap-telos-differentiation/RUN-LOG.md
 git commit -m "chore(experiment): record cogmap-experiment team id"
 ```
 
@@ -167,13 +167,13 @@ telos:
 
 - [ ] **Step 3: Verify both manifests parse as YAML**
 
-Run: `python3 -c "import yaml,sys; [yaml.safe_load(open(f)) for f in sys.argv[1:]]; print('both parse')" docs/experiments/2026-07-06-cogmap-telos-differentiation/map2-storyteller-design.manifest.yaml docs/experiments/2026-07-06-cogmap-telos-differentiation/map3-cogmaps-for-storyteller.manifest.yaml`
+Run: `python3 -c "import yaml,sys; [yaml.safe_load(open(f)) for f in sys.argv[1:]]; print('both parse')" internal/experiments/2026-07-06-cogmap-telos-differentiation/map2-storyteller-design.manifest.yaml internal/experiments/2026-07-06-cogmap-telos-differentiation/map3-cogmaps-for-storyteller.manifest.yaml`
 Expected: `both parse`.
 
 - [ ] **Step 4: Commit the manifests**
 
 ```bash
-git add docs/experiments/2026-07-06-cogmap-telos-differentiation/*.manifest.yaml
+git add internal/experiments/2026-07-06-cogmap-telos-differentiation/*.manifest.yaml
 git commit -m "feat(experiment): genesis manifests for Map 2 + Map 3 charters"
 ```
 
@@ -189,12 +189,12 @@ git commit -m "feat(experiment): genesis manifests for Map 2 + Map 3 charters"
 
 - [ ] **Step 1: Genesis Map 2**
 
-Run: `temper cogmap create --manifest docs/experiments/2026-07-06-cogmap-telos-differentiation/map2-storyteller-design.manifest.yaml`
+Run: `temper cogmap create --manifest internal/experiments/2026-07-06-cogmap-telos-differentiation/map2-storyteller-design.manifest.yaml`
 Expected: JSON returning the minted `cogmap_id` + `telos_resource_id`. Record as `MAP2_ID` / `MAP2_TELOS_ID`.
 
 - [ ] **Step 2: Genesis Map 3**
 
-Run: `temper cogmap create --manifest docs/experiments/2026-07-06-cogmap-telos-differentiation/map3-cogmaps-for-storyteller.manifest.yaml`
+Run: `temper cogmap create --manifest internal/experiments/2026-07-06-cogmap-telos-differentiation/map3-cogmaps-for-storyteller.manifest.yaml`
 Expected: JSON with `MAP3_ID` / `MAP3_TELOS_ID`. Record both.
 
 - [ ] **Step 3: Verify each charter delivered (statement + 5 questions + framing)**

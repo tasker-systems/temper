@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, clap, dialoguer 0.12, validator 0.20 (derive), anstream, anstyle, serde_json, jsonschema, tracing
 
-**Spec:** `docs/superpowers/specs/2026-04-08-cli-output-standardization-and-init-walkthrough-design.md`
+**Spec:** `internal/superpowers/specs/2026-04-08-cli-output-standardization-and-init-walkthrough-design.md`
 
 **Branch:** `jct/cli-enhancements-and-init-walkthrough`
 

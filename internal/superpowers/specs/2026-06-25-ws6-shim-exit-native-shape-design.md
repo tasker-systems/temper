@@ -219,6 +219,6 @@ delete dead code → (optional) `read_selector` rename.
 - `crates/temper-mcp/src/service.rs:177` (stale hash-required claim)
 - `migrations/20260624000001_canonical_schema.sql` (`kb_resources`, `kb_events`, `kb_content_blocks`,
   `kb_properties`), `…02_canonical_functions.sql` (mutation functions — `updated` maintenance)
-- Superseded: `docs/superpowers/specs/2026-06-22-ws6-shim-exit-design.md`
+- Superseded: `internal/superpowers/specs/2026-06-22-ws6-shim-exit-design.md`
 - [[project_shared_kernel_two_domains]], [[project_neutral_api_temper_workflow]],
   [[project_ws6_flip_already_executed]]

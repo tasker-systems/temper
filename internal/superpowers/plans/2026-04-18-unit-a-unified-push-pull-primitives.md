@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust workspace, tokio async, reqwest via temper-client, cargo-nextest, sqlx against Docker Postgres for e2e. clap v4 for CLI arg parsing.
 
-**Design reference:** `docs/superpowers/specs/2026-04-18-cloud-mode-and-portable-memory-design.md` (Unit A section).
+**Design reference:** `internal/superpowers/specs/2026-04-18-cloud-mode-and-portable-memory-design.md` (Unit A section).
 
 **Branch:** `jct/temper-cloud-mode-portable-memory` (already checked out; working branch for all of Units A/B/C).
 
@@ -113,7 +113,7 @@ Unit A scaffolding: types only, no behavior change. Later tasks add the
 push_one_resource / pull_one_resource functions and wire them through
 sync_orchestration + new commands.
 
-Refs: docs/superpowers/specs/2026-04-18-cloud-mode-and-portable-memory-design.md"
+Refs: internal/superpowers/specs/2026-04-18-cloud-mode-and-portable-memory-design.md"
 ```
 
 ---

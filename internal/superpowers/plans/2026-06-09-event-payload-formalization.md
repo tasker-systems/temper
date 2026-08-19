@@ -4,7 +4,7 @@
 
 **Goal:** Make the temper-next ledger replay-sufficient: typed payloads + references on every event, identity-as-input (Rust pre-generates ids), `_event_append`/`_project_*` split so replay is the same code path as normal operation, registry-published JSON-Schemas, and four proof obligations (roundtrip, replay, schema agreement, CAS retention).
 
-**Architecture:** Approach A (payload-first) per `docs/superpowers/specs/2026-06-09-event-payload-formalization-design.md`. Rust (`fire(SeedAction)`) serializes a typed payload struct and calls a SQL mutation function; the function `_event_append`s the event row (payload verbatim) and projects **from the payload** via a `_project_<type>` half. Content-bearing events carry block→chunk *structure* (ids + hashes); prose+embeddings travel in a **content sidecar** persisted to `kb_chunk_content`/`kb_chunks` (the CAS), never written to the ledger.
+**Architecture:** Approach A (payload-first) per `internal/superpowers/specs/2026-06-09-event-payload-formalization-design.md`. Rust (`fire(SeedAction)`) serializes a typed payload struct and calls a SQL mutation function; the function `_event_append`s the event row (payload verbatim) and projects **from the payload** via a `_project_<type>` half. Content-bearing events carry block→chunk *structure* (ids + hashes); prose+embeddings travel in a **content sidecar** persisted to `kb_chunk_content`/`kb_chunks` (the CAS), never written to the ledger.
 
 **Tech Stack:** Rust (temper-next crate), plpgsql (schema-artifact), sqlx `query!` macros with per-crate offline cache (`cargo make prepare-next`), schemars (gated), cargo-nextest (`temper-next-write` serial group).
 
@@ -2052,7 +2052,7 @@ git commit -m "event-payloads task 12: replay proof — ledger walk through the 
 ### Task 13: Wrap-up — quality gates, spec amendments, suites
 
 **Files:**
-- Modify: `docs/superpowers/specs/2026-06-09-event-payload-formalization-design.md` (append amendments section)
+- Modify: `internal/superpowers/specs/2026-06-09-event-payload-formalization-design.md` (append amendments section)
 
 - [ ] **Step 1: Record the plan-time refinements in the spec** — append to the spec, before `## Connections`:
 
@@ -2097,7 +2097,7 @@ Expected: no uncommitted cache changes (or commit them here).
 - [ ] **Step 4: Final commit**
 
 ```bash
-git add docs/superpowers/specs/2026-06-09-event-payload-formalization-design.md crates/temper-next/.sqlx
+git add internal/superpowers/specs/2026-06-09-event-payload-formalization-design.md crates/temper-next/.sqlx
 git commit -m "event-payloads task 13: spec amendments from plan grounding; quality gates green"
 ```
 

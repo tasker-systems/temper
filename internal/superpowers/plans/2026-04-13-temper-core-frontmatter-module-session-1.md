@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust 2021, `serde_yaml` 0.9, `serde_json` 1, `jsonschema` 0.45 (already in `temper-core`), `cargo-nextest` for tests, inline `#[cfg(test)] mod tests` per file plus a dedicated integration test file with synthetic fixtures and golden outputs.
 
-**Reference spec:** `docs/superpowers/specs/2026-04-13-temper-core-frontmatter-consolidation-design.md`. When this plan is silent on a design question, the spec is authoritative.
+**Reference spec:** `internal/superpowers/specs/2026-04-13-temper-core-frontmatter-consolidation-design.md`. When this plan is silent on a design question, the spec is authoritative.
 
 **Scope boundaries for Session 1:**
 - **In scope:** new module, `DocType` enum, all files in the Module Layout, full unit + integration tests, golden outputs, manual `temper doctor` smoke check, one or more commits on `jct/frontmatter-consolidation`, PR (additive only).
@@ -3123,7 +3123,7 @@ gh pr create --title "feat(frontmatter): temper-core::frontmatter module (sessio
   --body "$(cat <<'EOF'
 ## Summary
 
-Session 1 of the frontmatter consolidation work (spec: `docs/superpowers/specs/2026-04-13-temper-core-frontmatter-consolidation-design.md`). Adds a new `temper-core::frontmatter` module with full unit and integration test coverage. Zero behavior change to existing code paths — nothing in production consumes the new module yet; that's sessions 2 and 3.
+Session 1 of the frontmatter consolidation work (spec: `internal/superpowers/specs/2026-04-13-temper-core-frontmatter-consolidation-design.md`). Adds a new `temper-core::frontmatter` module with full unit and integration test coverage. Zero behavior change to existing code paths — nothing in production consumes the new module yet; that's sessions 2 and 3.
 
 What landed:
 - New `temper-core::frontmatter` module with `Frontmatter` aggregate type, `DocType` enum, `KNOWN_OPEN_FIELDS` registry, parse + tier-split + canonical display ordering + projections + mutation + serialize + write_to + hashes.
@@ -3167,7 +3167,7 @@ Wait for CI to report green on all jobs. If anything fails, fix in place and pus
 
 ## Execution Handoff
 
-**Plan complete and saved to `docs/superpowers/plans/2026-04-13-temper-core-frontmatter-module-session-1.md`. Two execution options:**
+**Plan complete and saved to `internal/superpowers/plans/2026-04-13-temper-core-frontmatter-module-session-1.md`. Two execution options:**
 
 **1. Subagent-Driven (recommended)** — I dispatch a fresh subagent per task, review between tasks, fast iteration.
 

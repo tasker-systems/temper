@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Land the `kb_team_contexts` + default-personal-team artifact amendment with leak-safety scenario proofs, per the WS6 adjudication spec §2 (`docs/superpowers/specs/2026-06-12-ws6-convergence-delta-adjudication-design.md`).
+**Goal:** Land the `kb_team_contexts` + default-personal-team artifact amendment with leak-safety scenario proofs, per the WS6 adjudication spec §2 (`internal/superpowers/specs/2026-06-12-ws6-convergence-delta-adjudication-design.md`).
 
 **Architecture:** Pure artifact-side work (the WS2 pattern, PR #129's mold): DDL + SQL-function amendments in `schema-artifact/`, scenario-model/loader extensions in `crates/temper-next/src/scenario/access/`, and a new declarative access-scenario fixture whose checks ARE the leak-safety proof. Context-shares enter visibility exactly where team grants live (`vis_team` / `resources_visible_to`), so producer-intersection leak-safety composes without any new trust path. The default personal team is a trigger (molded on `sync_system_membership`) so solo maps read their own contexts through unchanged intersection mechanics.
 

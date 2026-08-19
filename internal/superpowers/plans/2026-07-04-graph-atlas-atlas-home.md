@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (Axum, sqlx macros, ts-rs), PostgreSQL (STABLE SQL fns + `.sqlx` caches), SvelteKit 5 (runes, no `$effect`), d3 (named submodules), vitest (node env).
 
-**Design spec:** `docs/superpowers/specs/2026-07-04-graph-atlas-atlas-home-design.md`
+**Design spec:** `internal/superpowers/specs/2026-07-04-graph-atlas-atlas-home-design.md`
 
 ## Global Constraints
 
@@ -99,7 +99,7 @@ Create `crates/temper-core/src/types/graph_home.rs`:
 ```rust
 //! Wire types for the Atlas Home read (`GET /api/graph/home`) — the
 //! you→teams→cogmaps membership graph. See
-//! docs/superpowers/specs/2026-07-04-graph-atlas-atlas-home-design.md.
+//! internal/superpowers/specs/2026-07-04-graph-atlas-atlas-home-design.md.
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

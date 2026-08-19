@@ -1781,7 +1781,7 @@ EOF
 
 - [ ] **Step 1: Verify zero remaining callers via grep**
 
-Use the Grep tool to confirm no production or test code outside `hash.rs` itself references the three legacy symbols. Expected output: only `crates/temper-core/src/hash.rs` and the spec / plan docs in `docs/superpowers/` appear.
+Use the Grep tool to confirm no production or test code outside `hash.rs` itself references the three legacy symbols. Expected output: only `crates/temper-core/src/hash.rs` and the spec / plan docs in `internal/superpowers/` appear.
 
 ```
 (Grep tool query: "split_frontmatter_tiers|compute_frontmatter_hashes_from_yaml|normalize::split_frontmatter_block" with glob "**/*.rs" — expect zero hits outside hash.rs)
@@ -2221,7 +2221,7 @@ All cross-task type references are consistent. ✓
 
 ## Execution Handoff
 
-Plan complete and saved to `docs/superpowers/plans/2026-04-13-temper-core-frontmatter-module-session-2.md`.
+Plan complete and saved to `internal/superpowers/plans/2026-04-13-temper-core-frontmatter-module-session-2.md`.
 
 **Recommended execution:** Subagent-Driven (matches Session 1's pattern — fresh general-purpose subagent per task, two-stage spec + code review between tasks, per-task commits on `jct/frontmatter-consolidation`). Session 2 is the highest-risk session in this multi-session task; the two-stage review cadence is worth the overhead.
 

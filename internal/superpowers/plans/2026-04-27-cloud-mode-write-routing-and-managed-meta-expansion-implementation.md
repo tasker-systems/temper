@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust workspace (axum + sqlx + utoipa for the API; clap + reqwest for the CLI). PostgreSQL 18 + pgvector. ts-rs for TypeScript codegen. cargo-nextest for tests. Pre-existing chunk-dedupe primitive from the ingest pipeline.
 
-**Spec:** [`docs/superpowers/specs/2026-04-27-cloud-mode-write-routing-and-managed-meta-expansion-design.md`](../specs/2026-04-27-cloud-mode-write-routing-and-managed-meta-expansion-design.md)
+**Spec:** [`internal/superpowers/specs/2026-04-27-cloud-mode-write-routing-and-managed-meta-expansion-design.md`](../specs/2026-04-27-cloud-mode-write-routing-and-managed-meta-expansion-design.md)
 
 ---
 
@@ -42,7 +42,7 @@
 - `/Users/petetaylor/.claude/skills/temper/subagent-guidance.md` — cloud-mode write principle.
 
 **Deleted:**
-- `docs/superpowers/plans/2026-04-19-unit-b-2-cloud-mode-dispatch.md` — superseded plan.
+- `internal/superpowers/plans/2026-04-19-unit-b-2-cloud-mode-dispatch.md` — superseded plan.
 
 ---
 
@@ -2135,7 +2135,7 @@ git commit -m "test(e2e): regression-guard cloud list returns remote-only resour
 ## Task 23: Stale plan cleanup
 
 **Files:**
-- Delete: `docs/superpowers/plans/2026-04-19-unit-b-2-cloud-mode-dispatch.md`
+- Delete: `internal/superpowers/plans/2026-04-19-unit-b-2-cloud-mode-dispatch.md`
 
 - [ ] **Step 1: Grep for stragglers**
 
@@ -2152,7 +2152,7 @@ For each hit:
 - [ ] **Step 3: Delete the file**
 
 ```bash
-git rm docs/superpowers/plans/2026-04-19-unit-b-2-cloud-mode-dispatch.md
+git rm internal/superpowers/plans/2026-04-19-unit-b-2-cloud-mode-dispatch.md
 ```
 
 - [ ] **Step 4: Verify no remaining references**

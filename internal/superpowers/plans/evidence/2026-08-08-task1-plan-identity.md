@@ -1,7 +1,7 @@
 # Evidence: the interiority extraction is plan-identical, and the pin needed re-applying
 
 `[measured — 2026-08-08]` Task 2 of
-`docs/superpowers/plans/2026-08-08-composable-search-fragments.md`, over migration
+`internal/superpowers/plans/2026-08-08-composable-search-fragments.md`, over migration
 `20260808000020_search_arm_shared_interiority.sql`.
 
 ## Verdict

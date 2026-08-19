@@ -8,7 +8,7 @@
 
 **Tech Stack:** SvelteKit 2, Svelte 5 (runes mode), Tailwind CSS v4. Type-check via `bun run check` (svelte-kit sync + svelte-check). Visual verification via `bun run dev` and a browser.
 
-**Spec:** `docs/superpowers/specs/2026-05-12-theory-tier-migration-design.md`
+**Spec:** `internal/superpowers/specs/2026-05-12-theory-tier-migration-design.md`
 
 ---
 

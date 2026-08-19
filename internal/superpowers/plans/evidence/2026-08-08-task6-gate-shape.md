@@ -12,7 +12,7 @@ harness — `scripts/measure/gate-shape-comparison.sql` contains shapes A and B 
 (b)'s figures are attested by this document alone.
 
 `[measured — 2026-08-08]` Task 6 of
-`docs/superpowers/plans/2026-08-08-composable-search-fragments.md` — the decision gate that can
+`internal/superpowers/plans/2026-08-08-composable-search-fragments.md` — the decision gate that can
 cancel Tasks 7–9.
 
 ## Decision

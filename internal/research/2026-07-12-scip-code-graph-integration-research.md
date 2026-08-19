@@ -21,7 +21,7 @@ resource/edge knowledge graph — while remaining faithful to the event-ledger s
 > **Do not take its framing, its roadmap (§11), or its open questions (§10) as current.** Several of
 > those "open questions" were operational questions in architectural costume and are now settled;
 > the retention answer in §9 is sized for the wrong access pattern. The current design is
-> [`docs/superpowers/specs/2026-07-12-scip-code-graph-integration-spec.md`](../superpowers/specs/2026-07-12-scip-code-graph-integration-spec.md).
+> [`internal/superpowers/specs/2026-07-12-scip-code-graph-integration-spec.md`](../superpowers/specs/2026-07-12-scip-code-graph-integration-spec.md).
 
 ---
 
@@ -206,7 +206,7 @@ intelligence:
   which index." Default is the latest index for the repo's default branch, but the model natively
   supports querying any commit's index and **diffing across indexes** (a PR's blast radius). Two
   branches' indexes coexist; neither is canonical — the code-graph analog of "two teams weight the
-  same artifact differently and both are right" (`docs/cognitive-maps/05-how-maps-relate.md:32-42`).
+  same artifact differently and both are right" (`(public)/cognitive-maps/how-maps-relate`).
   Here it is "two commits observe the same symbol differently, and both are true observations."
 
 So the code-graph is *different in kind* (structural, closed-ontology, disposable projection) while
@@ -404,7 +404,7 @@ run; `correlation_id` groups a multi-tool ingest (TS + Rust indexes for the same
 
 ### 4.4 "No view from nowhere" as a query contract
 
-The philosophy (`docs/cognitive-maps/05-how-maps-relate.md:37`; enforced as *deny = zero rows, never
+The philosophy (`(public)/cognitive-maps/how-maps-relate`; enforced as *deny = zero rows, never
 an error* across the read functions, `crates/temper-services/src/backend/substrate_read.rs:366`)
 lands on the code-graph as two hard rules:
 
@@ -543,7 +543,7 @@ Either way: **the code graph is never queried through `graph_traverse`, and cura
 ### 7.3 Cogmaps — situated meaning over ground-truth structure
 
 A cognitive map is *curated, telos-seeded, steward-tended understanding*
-(`docs/cognitive-maps/01-what-a-cognitive-map-is.md`). The code graph is *mechanical ground truth*.
+(`(public)/cognitive-maps/what-a-cognitive-map-is`). The code graph is *mechanical ground truth*.
 They compose without merging:
 
 - A cogmap region ("the auth subsystem") can be **backed by a set of symbols** via citations (§7.2),
@@ -638,7 +638,7 @@ Suggested phasing (each phase an additive, independently-shippable slice — mat
 wave/phase convention and additive-migration discipline):
 
 - **Phase 0 — Spec & schema.** Ratify §3 tables, §4.1 event types, and the membrane invariant (§7,
-  §10.7) as a design doc under `docs/superpowers/specs/`. Decide the §10 open questions (esp.
+  §10.7) as a design doc under `internal/superpowers/specs/`. Decide the §10 open questions (esp.
   occurrence retention, vantage default, diff semantics).
 - **Phase 1 — Decoder + ingest.** `temper-scip` crate (prost decode + symbol-string parser +
   validation); `code_index_ingested` event + projector; CAS blob storage; idempotent upload path
@@ -677,15 +677,15 @@ grammar §1.2; roles/relationships §1.3.
   `migrations/20260712000010_context_read_predicates.sql:84-124,171-199`.
 - Cogmaps & regions: `kb_cogmaps` `:243-251`; region tables `:684-755`; producer
   `crates/temper-substrate/src/{substrate,write,affinity}.rs`;
-  `docs/cognitive-maps/*.md`; wayfinding `docs/superpowers/specs/2026-07-11-context-regions-and-wayfinding-design.md`.
+  `(public)/cognitive-maps/`; wayfinding `internal/superpowers/specs/2026-07-11-context-regions-and-wayfinding-design.md`.
 - Ingest, blocks, provenance, embeddings, search: `crates/temper-ingest/src/{embed,chunk,pipeline}.rs`;
   streaming ingest `migrations/20260708000012_streaming_ingest.sql`,
   `crates/temper-mcp/src/tools/ingest.rs`; annotate-only provenance + span locators (issue #355)
   `migrations/20260710000001_block_provenance_annotate.sql`,
-  `docs/superpowers/specs/2026-07-10-issue-355-annotate-only-provenance-and-span-locators-design.md`;
+  `internal/superpowers/specs/2026-07-10-issue-355-annotate-only-provenance-and-span-locators-design.md`;
   `unified_search` `migrations/20260711000050_search_vector_scope_aware.sql`,
   `crates/temper-substrate/src/readback/mod.rs`.
 - Machine principals: `migrations/20260711000010_machine_clients.sql`.
-- "No view from nowhere": `docs/cognitive-maps/05-how-maps-relate.md:32-42`;
+- "No view from nowhere": `(public)/cognitive-maps/how-maps-relate`;
   deny-is-zero-rows `crates/temper-services/src/backend/substrate_read.rs:366`.
 - Deploy discipline (additive-only-on-`main`): `DEPLOYING.md:38-65`.

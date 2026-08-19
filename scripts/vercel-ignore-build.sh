@@ -11,7 +11,7 @@
 #   which is precisely the pairing rehearsal the schema/binary goal needs, so PRs that
 #   touch migrations/ are worth the build and nothing else is.
 #
-#   Design: docs/superpowers/specs/2026-07-30-schema-binary-pairing-design.md § 4.
+#   Design: internal/superpowers/specs/2026-07-30-schema-binary-pairing-design.md § 4.
 #
 # THIS RUNS IN VERCEL'S BUILD CONTAINER, SPAWNED VIA `sh -c` — POSIX sh, not bash.
 #

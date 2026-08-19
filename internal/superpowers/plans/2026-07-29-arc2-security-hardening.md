@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (`temper-cli`), POSIX sh (`install.sh`), bash (`.github/scripts/`), GitHub Actions YAML.
 
-**Source of truth:** [`docs/superpowers/specs/2026-07-29-arc2-security-review-adjudication.md`](../specs/2026-07-29-arc2-security-review-adjudication.md) and the five reviews in [`docs/superpowers/reviews/`](../reviews/). Read the adjudication before starting — **but see "Adjudication corrections" below; three of its claims are wrong on disk and following them verbatim would cause a regression.**
+**Source of truth:** [`internal/superpowers/specs/2026-07-29-arc2-security-review-adjudication.md`](../specs/2026-07-29-arc2-security-review-adjudication.md) and the five reviews in [`internal/superpowers/reviews/`](../reviews/). Read the adjudication before starting — **but see "Adjudication corrections" below; three of its claims are wrong on disk and following them verbatim would cause a regression.**
 
 ## Execution model — who runs what
 

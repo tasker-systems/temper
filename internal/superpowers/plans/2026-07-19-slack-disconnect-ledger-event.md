@@ -131,7 +131,7 @@ new type. The coupling is manual and the const's own doc-comment names this test
 > line the policy draws is **actor ≠ subject**.
 >
 > Rationale, enforcement, and revisiting conditions:
-> [docs/decisions/2026-07-19-admin-disconnect-is-not-subject-readable.md](../../decisions/2026-07-19-admin-disconnect-is-not-subject-readable.md).
+> [internal/decisions/2026-07-19-admin-disconnect-is-not-subject-readable.md](../../decisions/2026-07-19-admin-disconnect-is-not-subject-readable.md).
 > Because absence-of-arm is doing policy work, that doc is what distinguishes "deliberately absent"
 > from "nobody wrote it yet." A future arm proposal must revisit it first.
 

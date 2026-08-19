@@ -133,7 +133,7 @@ jobs:
       - name: Check the committed agent-skills projection is up to date (skills drift)
         run: bash .github/scripts/check-skills-drift.sh
 
-      # Security tripwires (docs/development/security-audit-playbook.md). Pure static enumerators:
+      # Security tripwires (internal/development/security-audit-playbook.md). Pure static enumerators:
       # each pins a security-relevant set (grant write-sites, unauthenticated routes, handler-side
       # authz) against a reviewed baseline and fails when the set grows silently. They prove nothing
       # on their own — they force a reviewer to answer the attenuation / auth-posture question.
@@ -186,7 +186,7 @@ jobs:
         run: bash .github/scripts/audit-ignored-tests.sh
 
       # Not a security tripwire — a CONTRACT one, and it exists to keep an argument honest.
-      # PR D stopped `docs/api/query.openapi.yaml` restating 31 schemas `openapi.json` already
+      # PR D stopped `internal/api/query.openapi.yaml` restating 31 schemas `openapi.json` already
       # publishes, on the grounds that "a restatement can drift; a `$ref` cannot." True about
       # drift, silent about the other failure: a `$ref` whose target is renamed away does not
       # drift, it DANGLES, and nothing in this repo reads that file. Rename a Rust type — an

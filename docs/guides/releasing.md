@@ -204,7 +204,7 @@ in the same commit rather than letting the docs drift ahead of the mechanism.
 at build time and compiled into the binary** (`crates/temper-cli/trust/sigstore-public-good-trusted-root.json`,
 embedded via `include_str!` in `attest.rs`) — deliberately not fetched live
 over TUF at verify time. See
-[docs/superpowers/spikes/2026-07-29-sigstore-crate-evaluation.md](../superpowers/spikes/2026-07-29-sigstore-crate-evaluation.md)
+[internal/superpowers/spikes/2026-07-29-sigstore-crate-evaluation.md](../superpowers/spikes/2026-07-29-sigstore-crate-evaluation.md)
 for why: the Rust TUF ecosystem is unsettled, and pinning converts an open
 ecosystem problem into a closed, auditable release-engineering one — the same
 `EXPECTED_MODEL_SHA256` doctrine (`crates/temper-ingest/build.rs`) applied to
@@ -388,9 +388,9 @@ The per-platform matrix entries in `build-cli-binaries.yml` are self-documenting
 ## Related files
 
 - [`docs/guides/install.md`](install.md) — user-facing install instructions
-- [`docs/superpowers/specs/2026-04-17-temper-cli-binary-release-design.md`](../superpowers/specs/2026-04-17-temper-cli-binary-release-design.md) — original design doc
-- [`docs/superpowers/specs/2026-07-29-binary-attestation-and-manifest-verification-design.md`](../superpowers/specs/2026-07-29-binary-attestation-and-manifest-verification-design.md) — per-file manifest + attestation design
-- [`docs/superpowers/spikes/2026-07-29-sigstore-crate-evaluation.md`](../superpowers/spikes/2026-07-29-sigstore-crate-evaluation.md) — why the trust root is pinned, and which crate/root
+- [`internal/superpowers/specs/2026-04-17-temper-cli-binary-release-design.md`](../superpowers/specs/2026-04-17-temper-cli-binary-release-design.md) — original design doc
+- [`internal/superpowers/specs/2026-07-29-binary-attestation-and-manifest-verification-design.md`](../superpowers/specs/2026-07-29-binary-attestation-and-manifest-verification-design.md) — per-file manifest + attestation design
+- [`internal/superpowers/spikes/2026-07-29-sigstore-crate-evaluation.md`](../superpowers/spikes/2026-07-29-sigstore-crate-evaluation.md) — why the trust root is pinned, and which crate/root
 - [`tools/scripts/release/`](../../tools/scripts/release/) — the shell scripts driving `release-prepare`
 - [`.github/workflows/release.yml`](../../.github/workflows/release.yml) — the tag-driven release workflow
 - [`.github/workflows/build-cli-binaries.yml`](../../.github/workflows/build-cli-binaries.yml) — the reusable build matrix

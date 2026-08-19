@@ -38,7 +38,7 @@ These facts were verified against the tree at plan time. They are load-bearing �
 
 ## File structure
 
-- **Modify** `docs/superpowers/specs/2026-06-15-ws6-chunk4b-new-substrate-read-path-design.md` — add the show/by_uri parity-floor amendment.
+- **Modify** `internal/superpowers/specs/2026-06-15-ws6-chunk4b-new-substrate-read-path-design.md` — add the show/by_uri parity-floor amendment.
 - **Modify** `crates/temper-api/Cargo.toml` — feature-gated `temper-next` dep + a `next-backend` feature.
 - **Modify** `crates/temper-next/src/readback/mod.rs` — add `ResourceRowParity` + `resource_row()`.
 - **Create** `crates/temper-api/src/backend/next_backend.rs` — `NextBackend` (feature-gated).
@@ -55,7 +55,7 @@ These facts were verified against the tree at plan time. They are load-bearing �
 ## Task 1: Amend the 4b spec with the show parity-floor decision
 
 **Files:**
-- Modify: `docs/superpowers/specs/2026-06-15-ws6-chunk4b-new-substrate-read-path-design.md`
+- Modify: `internal/superpowers/specs/2026-06-15-ws6-chunk4b-new-substrate-read-path-design.md`
 
 - [ ] **Step 1: Insert a parity-floor subsection after the "Architecture (Approach A, continued)" section**
 
@@ -76,7 +76,7 @@ Grounding during planning showed the spec's "reconstructed into `ResourceRow`" c
 - [ ] **Step 2: Commit**
 
 ```bash
-git add docs/superpowers/specs/2026-06-15-ws6-chunk4b-new-substrate-read-path-design.md
+git add internal/superpowers/specs/2026-06-15-ws6-chunk4b-new-substrate-read-path-design.md
 git commit -m "WS6 4b: spec amendment — show/by_uri invariant-subset parity floor"
 ```
 

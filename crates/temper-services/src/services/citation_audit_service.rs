@@ -1,7 +1,7 @@
 //! Citation-audit service — the write path's one caller-facing check on top of
 //! `DbBackend::record_citation_audit`, and the attributed trail read beside it (Set 5, Task 8 and
 //! the per-auditor collapse Beat 3; spec
-//! `docs/superpowers/specs/2026-07-23-set5-adversary-citation-audit-design.md` §4.1-4.2, §5.2).
+//! `internal/superpowers/specs/2026-07-23-set5-adversary-citation-audit-design.md` §4.1-4.2, §5.2).
 //!
 //! **Why the trail read lives here and not in `evidential_standing_service`.** That module's own
 //! doc scopes it to *"the one live read over a finding's standing shape"* — a fixed-width aggregate

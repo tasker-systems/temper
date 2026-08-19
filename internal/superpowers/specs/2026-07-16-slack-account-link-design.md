@@ -59,7 +59,7 @@ grant (sharing one RT across sessions trips Auth0 RT-rotation reuse-detection an
 family — `temper-client/src/auth.rs:586-610`).
 
 The research points T3 at Unit D's Auth0 **Management API** mint
-(`docs/superpowers/specs/2026-04-19-cloud-mode-auth0-design.md:84-88`). That blueprint was written
+(`internal/superpowers/specs/2026-04-19-cloud-mode-auth0-design.md:84-88`). That blueprint was written
 for a different problem — minting a session for a user who is **not** in a browser
 (`temper auth create-cloud-session`). T2 has a browser and a consent screen, which is the natural
 moment to obtain `offline_access`.
@@ -578,4 +578,4 @@ gate, the redacting `Debug`s, and the honest limitations called out below.)*
 | AS mandates PKCE S256 + state | `packages/temper-cloud/src/oauth/endpoints.ts:96,99,101,117,199` |
 | Both instance types | `packages/temper-cloud/src/oauth/metadata.ts:93-95` |
 | Mention agent delivery point | `packages/agent-workflows/mention/agent/channels/slack.ts:28,32,36,51` |
-| Unit D blueprint (not used — D1) | `docs/superpowers/specs/2026-04-19-cloud-mode-auth0-design.md:84-88,159-164,190-198` |
+| Unit D blueprint (not used — D1) | `internal/superpowers/specs/2026-04-19-cloud-mode-auth0-design.md:84-88,159-164,190-198` |

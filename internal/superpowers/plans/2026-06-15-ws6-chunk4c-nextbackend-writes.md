@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (temper-next, temper-api, temper-core), PostgreSQL 18 + pgvector (the `temper_next` namespace), sqlx (`!`-macros target `temper_next`; regenerate with `cargo make prepare-next`), nextest.
 
-**Spec:** `docs/superpowers/specs/2026-06-15-ws6-chunk4c-nextbackend-writes-design.md`. Read it — this plan is an index + sequence + grounding over it, not a replacement.
+**Spec:** `internal/superpowers/specs/2026-06-15-ws6-chunk4c-nextbackend-writes-design.md`. Read it — this plan is an index + sequence + grounding over it, not a replacement.
 
 **Load-bearing invariant (spec, adjudication §0/§3, carried verbatim):** *"all writes through atomic SQL mutation functions that emit + project in one transaction"* and *"replay is the same code path as normal operation"* — every new function uses the `_event_append` / `_project_*` split, never a direct projection write.
 

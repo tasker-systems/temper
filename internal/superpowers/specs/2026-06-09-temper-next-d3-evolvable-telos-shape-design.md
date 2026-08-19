@@ -4,8 +4,8 @@
 **Date:** 2026-06-09
 **Builds on:** deliverables 1+2 (`jct/temper-next-event-firing-charter-blocks`) — content-block/chunk
 correctness + event-firing parity + charter-as-content-blocks.
-**Design sources:** `docs/superpowers/specs/2026-06-07-scenario-yaml-seed-dsl-design.md` (roadmap
-deliverable 3); `docs/superpowers/specs/2026-06-04-domain-b-charter-questions-regulation-edge-semantics-design.md`
+**Design sources:** `internal/superpowers/specs/2026-06-07-scenario-yaml-seed-dsl-design.md` (roadmap
+deliverable 3); `internal/superpowers/specs/2026-06-04-domain-b-charter-questions-regulation-edge-semantics-design.md`
 (questions-as-blocks, telos-charter composition); goal `substrate-kernel-to-cognitive-map` (Arc 2 seed
 question-set).
 **Grounding discipline:** per `implementation-grounding.md` — every step carries a CONFORM / EXTEND /

@@ -15,7 +15,7 @@ gap. A general ts-rs drift gate lands last, after #498 brings the second TS cons
 **Tech Stack:** Rust (temper-principal, temper-services, temper-api), sqlx, axum, trybuild, ts-rs,
 bash CI guards, cargo-make.
 
-**Spec:** `docs/superpowers/specs/2026-07-23-linked-identity-state-machine-design.md` — **Revision 2**.
+**Spec:** `internal/superpowers/specs/2026-07-23-linked-identity-state-machine-design.md` — **Revision 2**.
 Read the spec section each task cites; this plan is an index over it. **Read spec §0 first** — it
 records what Revision 1 got wrong and why, and several tasks below exist because of it.
 

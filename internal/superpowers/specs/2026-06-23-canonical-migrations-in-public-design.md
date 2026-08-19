@@ -182,7 +182,7 @@ The committed WIP `f66cb9e` plus the remaining flip tail (the test surface — u
 referencing deleted services; Tasks 9/10 = surface-parity gate + synthesis deletion) now target
 `public` instead of `temper_next`. That is mostly a provisioning change handled by §4; the
 test-surface rewrite and Tasks 9/10 are tracked by the flip plan
-(`docs/superpowers/plans/2026-06-22-ws6-endgame-collapse-code.md`), not duplicated here.
+(`internal/superpowers/plans/2026-06-22-ws6-endgame-collapse-code.md`), not duplicated here.
 
 ## Sequencing
 

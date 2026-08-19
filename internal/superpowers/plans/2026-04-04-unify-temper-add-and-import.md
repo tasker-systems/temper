@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, clap, tokio, temper-cli/temper-client/temper-ingest
 
-**Spec:** `docs/superpowers/specs/2026-04-04-unify-temper-add-and-import-design.md`
+**Spec:** `internal/superpowers/specs/2026-04-04-unify-temper-add-and-import-design.md`
 
 ---
 

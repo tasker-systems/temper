@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, Askama 0.12, clap 4, sha2
 
-**Spec:** `docs/superpowers/specs/2026-04-02-rebuild-temper-skill-design.md`
+**Spec:** `internal/superpowers/specs/2026-04-02-rebuild-temper-skill-design.md`
 
 ---
 

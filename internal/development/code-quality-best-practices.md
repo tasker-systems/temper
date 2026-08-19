@@ -8,7 +8,7 @@ swallowing an error to make a test pass. Correctness is the floor, not the bar.
 This doc folds in and supersedes the terse **Code Quality Rules** that lived in `CLAUDE.md`
 (which now points here). It draws on three external influences, adapted to Temper's stack:
 
-- the sibling **tasker-core** project's `docs/development/best-practices-rust.md`,
+- the sibling **tasker-core** project's `internal/development/best-practices-rust.md`,
 - Microsoft's [Pragmatic Rust Guidelines](https://microsoft.github.io/rust-guidelines/) (the `M-*` rule IDs below are theirs — shared vocabulary across both sibling projects),
 - [rust-skills](https://github.com/leonardomso/rust-skills) and the [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/).
 
@@ -264,7 +264,7 @@ index in its own doc and runs the same audit harness against it.
 
 ## References
 
-- tasker-core (sibling project) — `docs/development/best-practices-rust.md`
+- tasker-core (sibling project) — `internal/development/best-practices-rust.md`
 - [Microsoft Pragmatic Rust Guidelines](https://microsoft.github.io/rust-guidelines/) — `M-*` rule IDs
 - [rust-skills](https://github.com/leonardomso/rust-skills)
 - [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/)

@@ -5,7 +5,7 @@
 # WHY THIS EXISTS
 # ---------------
 # A grant is the one write that hands out capability. The 2026-07-18 security audit
-# (docs/code-reviews/2026-07-18-authn-authz-credential-flow-audit.md) turned up F-0: a grant
+# (internal/code-reviews/2026-07-18-authn-authz-credential-flow-audit.md) turned up F-0: a grant
 # path that inserted the request's capability bits verbatim, with no `conferred ⊆ held`
 # attenuation — a read+grant principal could self-escalate to write+delete+grant. The plan that
 # introduced the grant chokepoint also *missed one of the callers* ("the fifth insert_grant
@@ -17,7 +17,7 @@
 #   1. AUTHORITY  — is the grantor authorized to administer this subject's access?
 #   2. ATTENUATION — is the conferred capability a subset of what the grantor holds
 #                    (`conferred ⊆ held`), and can `principal_id` be the caller itself?
-# See docs/development/security-audit-playbook.md § "the one lesson that matters most".
+# See internal/development/security-audit-playbook.md § "the one lesson that matters most".
 #
 # USAGE
 #   .github/scripts/audit-grant-sinks.sh            # verify against the baseline (CI mode)
@@ -265,7 +265,7 @@ site answers BOTH:
   1. AUTHORITY   — the grantor is authorized to administer this subject's access.
   2. ATTENUATION — conferred capability ⊆ what the grantor holds, and principal_id is not a
                    silent self-grant (a read+grant holder must not confer write/delete/grant).
-See docs/development/security-audit-playbook.md.
+See internal/development/security-audit-playbook.md.
 
 diff (baseline → current):
 MSG

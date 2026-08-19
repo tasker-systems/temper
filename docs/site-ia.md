@@ -298,12 +298,12 @@ they are where a careless change degrades something already good.
   `working-context-framing-schema.md`, `feature-development-and-coordination-substrate.md`,
   `temper-confidence-inventory.md` (the attention thesis; substrate-as-trunk; PKM-as-
   projection; translation-is-irreducible).
-- **The cognitive-maps set & its register/discipline:** `docs/cognitive-maps/` (the genre
+- **The cognitive-maps set & its register/discipline:** `(public)/cognitive-maps/the-set` (the genre
   split, the threaded seed, cross-reference-by-concept, partner-not-lecturer voice).
 - **The middle-tier grounding (extensibility, the neutral contract):**
-  `docs/superpowers/plans/2026-06-18-invocation-envelope-and-authorship-metadata.md` and
-  `docs/superpowers/plans/2026-06-18-temper-agents-neutral-contract-crate.md`; the Eve/CMA
-  comparison research under `docs/research/`.
+  `internal/superpowers/plans/2026-06-18-invocation-envelope-and-authorship-metadata.md` and
+  `internal/superpowers/plans/2026-06-18-temper-agents-neutral-contract-crate.md`; the Eve/CMA
+  comparison research under `internal/research/`.
 - **Operator runbook (the deployment floor):** `docs/guides/self-hosting.md`.
 - **Superseded:** `docs/theory-ia-proposal.md` (removed; see the scar above).
 

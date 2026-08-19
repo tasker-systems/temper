@@ -921,7 +921,7 @@ git commit -m "test(charter): e2e admin reconcile delivers L0 telos charter, ide
 
 ## Execution Handoff
 
-Plan complete and saved to `docs/superpowers/plans/2026-06-28-l0-telos-charter-delivery.md`. Two execution options:
+Plan complete and saved to `internal/superpowers/plans/2026-06-28-l0-telos-charter-delivery.md`. Two execution options:
 
 1. **Subagent-Driven (recommended)** — fresh subagent per task, review at the end of the plan (per the repo's consolidated-review convention), fast iteration. Per-task: focused test + `cargo make check`; full-workspace nextest at PR-prep.
 2. **Inline Execution** — execute tasks in this session with checkpoints.

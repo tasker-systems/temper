@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (sqlx, axum, tokio), PostgreSQL 18 (local) / 17 (Neon), pgvector, ts-rs, cargo-make, cargo-nextest.
 
-**Spec:** `docs/superpowers/specs/2026-07-08-streaming-resumable-ingestion-design.md`
+**Spec:** `internal/superpowers/specs/2026-07-08-streaming-resumable-ingestion-design.md`
 
 ## Global Constraints
 

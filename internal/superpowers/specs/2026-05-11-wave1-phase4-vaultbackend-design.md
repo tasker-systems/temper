@@ -12,8 +12,8 @@
 - Owner-threading sweep (PR #75)
 - Cloud-only sync handling + `find_resource` refactor (PR #76)
 
-**Parent spec:** `docs/superpowers/specs/2026-05-01-shared-core-execution-paths-design.md` (#4)
-**Companion spec:** `docs/superpowers/specs/2026-05-01-cloud-first-reframe-and-manifest-redefinition-design.md` (#3 — Phase 6)
+**Parent spec:** `internal/superpowers/specs/2026-05-01-shared-core-execution-paths-design.md` (#4)
+**Companion spec:** `internal/superpowers/specs/2026-05-01-cloud-first-reframe-and-manifest-redefinition-design.md` (#3 — Phase 6)
 **Originating task:** `2026-05-11-wave-1-phase-4-write-vaultbackend-impl-plan-extract-from-commands-resource-rs`
 
 ---
@@ -299,7 +299,7 @@ resource.rs`'s Local-mode write paths to dispatch through `VaultBackend`.
   call site through one `Surface::dispatch`. Keeping 4b narrow keeps
   the diff reviewable.
 
-Each sub-phase is a separate plan document under `docs/superpowers/plans/`,
+Each sub-phase is a separate plan document under `internal/superpowers/plans/`,
 written when its session begins.
 
 ## Forward-Looking Constraints & Inherited Guidance

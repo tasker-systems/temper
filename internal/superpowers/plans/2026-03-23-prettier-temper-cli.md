@@ -8,7 +8,7 @@
 
 **Tech Stack:** anstream 0.6, anstyle 1.0 (both already in Cargo.toml), clap (styles integration)
 
-**Spec:** `docs/superpowers/specs/2026-03-23-prettier-temper-cli-design.md`
+**Spec:** `internal/superpowers/specs/2026-03-23-prettier-temper-cli-design.md`
 
 ---
 

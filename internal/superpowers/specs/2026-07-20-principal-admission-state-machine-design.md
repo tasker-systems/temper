@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-20
 **Status:** design complete and **planned**. Phase 1's implementation plan is
-[`docs/superpowers/plans/2026-07-20-principal-admission-phase-1.md`](../plans/2026-07-20-principal-admission-phase-1.md).
+[`internal/superpowers/plans/2026-07-20-principal-admission-phase-1.md`](../plans/2026-07-20-principal-admission-phase-1.md).
 Phase 2 (the drops) is not yet planned.
 **Supersedes in part:** the `access_mode` retirement goal (`019f7cdb-a1b6-7e80-b19a-349a3d427671`)
 

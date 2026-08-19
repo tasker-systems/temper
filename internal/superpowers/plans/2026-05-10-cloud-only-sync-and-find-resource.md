@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust workspace (`cargo make`, `cargo nextest`), `temper-core` (shared types incl. `DocType`, `Manifest`, `ManifestEntryState`), `temper-cli` (CLI commands + sync actions), `temper-client` (HTTP client for API fallback), `temper-api` (server diff, unchanged in this PR), e2e harness at `tests/e2e/`.
 
-**Spec:** `docs/superpowers/specs/2026-05-10-cloud-only-sync-and-find-resource-design.md`
+**Spec:** `internal/superpowers/specs/2026-05-10-cloud-only-sync-and-find-resource-design.md`
 
 ---
 

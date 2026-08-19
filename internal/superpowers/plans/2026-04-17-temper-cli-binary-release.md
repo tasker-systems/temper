@@ -8,7 +8,7 @@
 
 **Tech Stack:** Bash (POSIX sh for installer), PowerShell 5.1+ (Windows installer), GitHub Actions, cargo-make, Rust (`std::env::current_exe`, `dirs`), `gh` CLI.
 
-**Spec:** `docs/superpowers/specs/2026-04-17-temper-cli-binary-release-design.md`
+**Spec:** `internal/superpowers/specs/2026-04-17-temper-cli-binary-release-design.md`
 
 ---
 
@@ -1062,7 +1062,7 @@ Note whether `main.toml` currently loads `base-tasks.toml` via `extend` or `[env
 #   cargo make release-check    — dry-run: what would release-prepare do?
 #   cargo make release-prepare  — real run: bump version, open release PR
 #
-# See: docs/superpowers/specs/2026-04-17-temper-cli-binary-release-design.md
+# See: internal/superpowers/specs/2026-04-17-temper-cli-binary-release-design.md
 
 [tasks.release-check]
 description = "Dry-run release preparation — detect changes, show next version"

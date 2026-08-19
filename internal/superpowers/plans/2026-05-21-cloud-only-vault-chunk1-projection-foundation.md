@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, Axum (API), sqlx (compile-time-checked SQL), `temper-client` (HTTP client), `cargo-nextest` (tests), `tempfile` (test fixtures). The e2e harness spawns a real Axum server + Postgres via `#[sqlx::test]`.
 
-**Source spec:** `docs/superpowers/specs/2026-05-21-cloud-only-vault-deprecation-design.md` (Chunk 1).
+**Source spec:** `internal/superpowers/specs/2026-05-21-cloud-only-vault-deprecation-design.md` (Chunk 1).
 
 ---
 
@@ -395,7 +395,7 @@ Create `crates/temper-cli/src/projection.rs`:
 //! on-disk markdown file and records a per-context staleness cursor. The
 //! projection is read-only by convention: editing a projected file changes
 //! nothing on the server. See
-//! `docs/superpowers/specs/2026-05-21-cloud-only-vault-deprecation-design.md`.
+//! `internal/superpowers/specs/2026-05-21-cloud-only-vault-deprecation-design.md`.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

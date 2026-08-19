@@ -3,7 +3,7 @@
 **Date:** 2026-06-15
 **Workstream:** 6 (migration / convergence), `substrate-kernel-to-cognitive-map`
 **Predecessors:** 4a landed the gate (`kb_backend_selection` flag + `select_backend` / `require_legacy_backend` seam, gated OFF) on `jct/ws6-chunk4-gate-decomposition`. Chunk 3 built `temper-next::readback` (the §9 read homes over `temper_next.*`) + `tests/parity_reads.rs`.
-**Master:** `docs/superpowers/specs/2026-06-12-ws6-convergence-delta-adjudication-design.md` (§9 read-home floor, §D deployment); chunk-4 decomposition: `2026-06-14-ws6-chunk4-gated-surface-ports-design.md`.
+**Master:** `internal/superpowers/specs/2026-06-12-ws6-convergence-delta-adjudication-design.md` (§9 read-home floor, §D deployment); chunk-4 decomposition: `2026-06-14-ws6-chunk4-gated-surface-ports-design.md`.
 
 ## Context
 

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (sqlx runtime queries, axum, utoipa, rmcp, clap), PostgreSQL (pgvector), ts-rs codegen, cargo-nextest.
 
-**Spec:** `docs/superpowers/specs/2026-06-28-cogmap-analytics-read-surface-design.md`
+**Spec:** `internal/superpowers/specs/2026-06-28-cogmap-analytics-read-surface-design.md`
 
 ## Global Constraints
 

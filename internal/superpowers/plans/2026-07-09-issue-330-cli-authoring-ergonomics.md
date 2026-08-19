@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust workspace (temper-cli, temper-core, temper-workflow, temper-services, temper-api, temper-client, temper-mcp), clap, serde, sqlx, PostgreSQL 18 + pgvector, cargo-make, cargo-nextest.
 
-**Spec:** `docs/superpowers/specs/2026-07-09-issue-330-cli-authoring-ergonomics-design.md`
+**Spec:** `internal/superpowers/specs/2026-07-09-issue-330-cli-authoring-ergonomics-design.md`
 
 ## Global Constraints
 
@@ -621,7 +621,7 @@ A scripted authoring pass could not use a naive `json.load()`: `--edges` raised 
 
 `actions/search.rs`'s `render_search_results_json_is_passthrough_array` encoded the contract this PR deliberately breaks. It is rewritten, not deleted.
 
-Design: `docs/superpowers/specs/2026-07-09-issue-330-cli-authoring-ergonomics-design.md`
+Design: `internal/superpowers/specs/2026-07-09-issue-330-cli-authoring-ergonomics-design.md`
 
 Refs #330
 
@@ -1563,7 +1563,7 @@ PR 2 of 3 for #330.
 - `show_detail_select` composes the two existing readbacks instead of adding a joined query — **no new `sqlx::query!` macro, no `.sqlx` cache regeneration.**
 - The e2e is differential: it asserts `--meta-only`'s keys are a subset of full `show`'s, so the two paths check each other rather than a typed-out expectation.
 
-Design: `docs/superpowers/specs/2026-07-09-issue-330-cli-authoring-ergonomics-design.md`
+Design: `internal/superpowers/specs/2026-07-09-issue-330-cli-authoring-ergonomics-design.md`
 
 Refs #330
 
@@ -2414,7 +2414,7 @@ The agent didn't fail to discover `resource facet` — it was told the verb didn
 - **No `disposition` column.** `kb_invocations` never had one — `close` writes the disposition into `status`. Deriving it beats denormalizing two columns that must never disagree. An unknown status escalates rather than degrading to `None`.
 - **No `cancelled` alias.** Two words for one disposition would muddy a vocabulary the schema CHECK, the SQL function, and the core enum all agree on.
 
-Design: `docs/superpowers/specs/2026-07-09-issue-330-cli-authoring-ergonomics-design.md`
+Design: `internal/superpowers/specs/2026-07-09-issue-330-cli-authoring-ergonomics-design.md`
 
 Closes #330
 

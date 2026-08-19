@@ -4,7 +4,7 @@
 
 **Goal:** Make the temper CLI cloud-only: `backend_select` returns `CloudBackend` unconditionally, the `VaultState` mode switch is removed, every `match VaultState` collapses to its cloud branch, and `create`/`update`/`delete` rewrite (or remove) the affected local projection file on success.
 
-**Architecture:** This is Chunk 3 of the 8-chunk cloud-only-vault deprecation (spec: `docs/superpowers/specs/2026-05-21-cloud-only-vault-deprecation-design.md`), the first chunk of PR B. It is the breaking mode flip. The redesign keeps `CloudBackend`, the `Backend` trait, and `temper-client` — the cloud write path is already built. `vault_backend/` is **not** deleted here: it is `pub`-exported from `temper-cli`'s lib, so it survives Chunk 3 as compiled-but-unreferenced code that triggers no dead-code warning; Chunk 4 deletes it. `Surface::CliLocalVault` therefore also stays (vault_backend still constructs it). The projection write-on-success is surface-side, mirroring Chunk 2's `temper resource show`, enabled by a `build_backend` that now also hands back the API client.
+**Architecture:** This is Chunk 3 of the 8-chunk cloud-only-vault deprecation (spec: `internal/superpowers/specs/2026-05-21-cloud-only-vault-deprecation-design.md`), the first chunk of PR B. It is the breaking mode flip. The redesign keeps `CloudBackend`, the `Backend` trait, and `temper-client` — the cloud write path is already built. `vault_backend/` is **not** deleted here: it is `pub`-exported from `temper-cli`'s lib, so it survives Chunk 3 as compiled-but-unreferenced code that triggers no dead-code warning; Chunk 4 deletes it. `Surface::CliLocalVault` therefore also stays (vault_backend still constructs it). The projection write-on-success is surface-side, mirroring Chunk 2's `temper resource show`, enabled by a `build_backend` that now also hands back the API client.
 
 **Tech Stack:** Rust, tokio, `temper-client` (HTTP), clap, cargo-make + cargo-nextest. clippy runs with `-D warnings` (dead-code is a build error). Quality gates this session: rust-analyzer LSP, superpowers TDD, `cargo make check`, greptile review.
 
@@ -88,7 +88,7 @@ Replace lines 1–47 of `backend_select.rs` (the module doc comment through the 
 //! `CloudBackend`. Surfaces never instantiate `CloudBackend` directly;
 //! they always go through this helper.
 //!
-//! See `docs/superpowers/specs/2026-05-21-cloud-only-vault-deprecation-design.md`.
+//! See `internal/superpowers/specs/2026-05-21-cloud-only-vault-deprecation-design.md`.
 
 use tokio::runtime::Runtime;
 

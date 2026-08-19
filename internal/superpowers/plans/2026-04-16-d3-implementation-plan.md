@@ -3,7 +3,7 @@
 **Date:** 2026-04-16
 **Context:** temper
 **Goal:** llm-wiki
-**Design:** `docs/superpowers/specs/2026-04-16-d3-temper-index-and-graph-index-implementation.md`
+**Design:** `internal/superpowers/specs/2026-04-16-d3-temper-index-and-graph-index-implementation.md`
 **Status:** Implementation plan
 
 ---

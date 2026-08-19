@@ -387,4 +387,4 @@ Internal (Temper, current state — file:line):
 - MCP discovery + DCR proxy: `crates/temper-mcp/src/discovery.rs`, `crates/temper-mcp/src/middleware.rs`
 - CLI login (auth-code + PKCE): `crates/temper-client/src/login.rs`
 - Deployment topology: `vercel.json`
-- Prior federation design: `docs/superpowers/specs/2026-07-01-saml-sp-temper-authorization-server-design.md`
+- Prior federation design: `internal/superpowers/specs/2026-07-01-saml-sp-temper-authorization-server-design.md`

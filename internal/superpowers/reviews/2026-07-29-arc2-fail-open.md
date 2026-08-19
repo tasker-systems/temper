@@ -165,7 +165,7 @@ stating that the check covers the listed files only, not the absence of others.
 ### F5 — LOW (design/implementation drift) — the fresh-install door has *no* attestation leg, and does not say so
 
 The design's flow diagram
-(`docs/superpowers/specs/2026-07-29-…-design.md:104`) shows the `install.sh` path as
+(`internal/superpowers/specs/2026-07-29-…-design.md:104`) shows the `install.sh` path as
 `archive .sha256 — MANDATORY / per-file manifest — MANDATORY / attestation — best-effort via gh`.
 `rg 'gh |attestation|cosign' scripts/install/install.sh` returns two hits, **both inside comments**
 (lines 129, 328). There is no `gh attestation verify` call, best-effort or otherwise.

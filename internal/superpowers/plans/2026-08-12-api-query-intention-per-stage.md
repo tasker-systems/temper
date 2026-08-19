@@ -15,7 +15,7 @@ side-channel.
 **Tech Stack:** Rust (serde, schemars, ts-rs, utoipa, sqlx), cargo-nextest. No database change, no
 migration, no `.sqlx` regeneration.
 
-**Spec:** [`docs/superpowers/specs/2026-08-12-api-query-door-design.md`](../specs/2026-08-12-api-query-door-design.md) ⟨7⟩ — read it first. It carries the ruling, the argument, and the provenance finding this plan rests on.
+**Spec:** [`internal/superpowers/specs/2026-08-12-api-query-door-design.md`](../specs/2026-08-12-api-query-door-design.md) ⟨7⟩ — read it first. It carries the ruling, the argument, and the provenance finding this plan rests on.
 
 **Why now, and not later:** ⟨4⟩'s timing argument applies unchanged. Nothing consumes this contract,
 so moving `query` from the envelope onto the stage is **free now and a breaking change to every
@@ -62,7 +62,7 @@ is where the counter goes. Do not pre-optimise it.
 - **Run it package-scoped** — `-p temper-core`, never `--workspace`. Feature unification changes the emitted schema; `-p` is what the regen emits and what the gate compares.
 - **`readback/` tests are gated `artifact-tests`.** A run scoped `--features test-db` compiles them to nothing and reads green. Task 3's verification needs `cargo make test-artifacts`.
 - **ts-rs types regenerate too**: `cargo make generate-ts-types` — `Intention`, `ActInvocation` and `Composition` all carry `ts(export, export_to = "query.ts")`.
-- **`docs/api/query.openapi.yaml` is NOT edited here.** The contract is provisional and **D owns it** — this is the same call PR A took for ⟨5⟩'s flip. Record the lag in the spec's D section instead; see Task 6.
+- **`internal/api/query.openapi.yaml` is NOT edited here.** The contract is provisional and **D owns it** — this is the same call PR A took for ⟨5⟩'s flip. Record the lag in the spec's D section instead; see Task 6.
 
 ---
 
@@ -408,9 +408,9 @@ answering a question the boolean could not. That is a future feature, not a rema
 
 ### Task 6: record the contract lag; do not edit the yaml
 
-**Files:** Modify `docs/superpowers/specs/2026-08-12-api-query-door-design.md` (the D section only).
+**Files:** Modify `internal/superpowers/specs/2026-08-12-api-query-door-design.md` (the D section only).
 
-**Tag: CONFORM** to the standing ruling that `docs/api/query.openapi.yaml` is **provisional** and D
+**Tag: CONFORM** to the standing ruling that `internal/api/query.openapi.yaml` is **provisional** and D
 owns it. PR A set the precedent for exactly this: ⟨5⟩'s flip falsified two passages and *"the yaml
 is deliberately **not edited by PR A** — the contract is provisional and D owns it — so the
 correction is recorded here rather than applied."*

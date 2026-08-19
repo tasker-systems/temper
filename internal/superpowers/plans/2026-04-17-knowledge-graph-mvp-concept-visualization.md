@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Spec:** `docs/superpowers/specs/2026-04-17-knowledge-graph-mvp-concept-visualization-design.md`
+**Spec:** `internal/superpowers/specs/2026-04-17-knowledge-graph-mvp-concept-visualization-design.md`
 
 **Goal:** Ship a context-scoped D3 force-directed knowledge-graph view showing concepts + their depth-2 neighborhood, so the `jct/temper-index-llm-wiki` branch can close with a visible demonstration of the LLM-wiki pipeline's output.
 

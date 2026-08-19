@@ -8,8 +8,8 @@
 
 **Tech Stack:** Rust, ratatui, crossterm
 
-**Spec:** `docs/superpowers/specs/2026-03-25-tui-polish-and-navigation-design.md`
-**Prior plan:** `docs/superpowers/plans/2026-03-25-tui-polish-and-navigation.md`
+**Spec:** `internal/superpowers/specs/2026-03-25-tui-polish-and-navigation-design.md`
+**Prior plan:** `internal/superpowers/plans/2026-03-25-tui-polish-and-navigation.md`
 **Branch:** `jcoletaylor/tui-polish-and-navigation-improvements`
 
 ---

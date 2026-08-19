@@ -2,7 +2,7 @@
 
 **Task:** `019f8a93-f179-7782-9cad-25df66ebdb69` (build/large, plan-first).
 **Goal:** `019f7cdb-a1b6-7e80-b19a-349a3d427671`.
-**Spec:** [`docs/superpowers/specs/2026-07-20-principal-admission-state-machine-design.md`](../specs/2026-07-20-principal-admission-state-machine-design.md) — §8, §9, §11, §14/D18, §6.
+**Spec:** [`internal/superpowers/specs/2026-07-20-principal-admission-state-machine-design.md`](../specs/2026-07-20-principal-admission-state-machine-design.md) — §8, §9, §11, §14/D18, §6.
 **Phase 1 plan (executed):** [`2026-07-20-principal-admission-phase-1.md`](./2026-07-20-principal-admission-phase-1.md).
 **Grounded against:** `main` @ `fa504238` (PR #512 merge), live dev DB, 2026-07-22.
 

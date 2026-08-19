@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- **Spec:** `docs/superpowers/specs/2026-06-29-search-substrate-beat3-surface-b-wayfinding-design.md` §4 (the wayfind funnel) + §5 (cold-start) + §7 (gating) + §8 (tuning) + §9 (acceptance). Half 1 plan (the pattern to mirror): `docs/superpowers/plans/2026-06-29-cogmap-wayfind-surface-b-half1.md`.
+- **Spec:** `internal/superpowers/specs/2026-06-29-search-substrate-beat3-surface-b-wayfinding-design.md` §4 (the wayfind funnel) + §5 (cold-start) + §7 (gating) + §8 (tuning) + §9 (acceptance). Half 1 plan (the pattern to mirror): `internal/superpowers/plans/2026-06-29-cogmap-wayfind-surface-b-half1.md`.
 - **Migrations are immutable once shipped.** Never edit `20260624*`–`20260629000005*`. Add NEW files only. Next free name: **`20260629000006_*`**.
 - **`--all-features` for every build/clippy/check.** `cargo make check` runs `SQLX_OFFLINE=true` against committed `.sqlx/` caches.
 - **sqlx caches:** `wayfind_scope_ids` is called via **runtime `query_as`** (takes a `vector` param — the `::vector` cast forbids the macro), so it needs **no** `.sqlx` cache entry, exactly like `unified_search`. Keep all new vector-bearing calls runtime. If a non-vector `query_scalar!`/`query!` macro is added, run the ritual: `cargo sqlx prepare --workspace -- --all-features` → `cargo make prepare-services` → `cargo make prepare-api`. After adding the migration, `cargo clean -p temper-substrate` (and `-p temper-api`) so `sqlx::migrate!()` picks up the new file (memory `project_sqlx_migrate_macro_stale_cache`).

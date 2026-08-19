@@ -131,7 +131,7 @@ let markdown = chunks.into_iter().map(|c| {
 
 ## Spec Invariants (carried verbatim — GD-4; read the cited §§ before implementing)
 
-From `docs/superpowers/specs/2026-06-12-ws6-convergence-delta-adjudication-design.md`:
+From `internal/superpowers/specs/2026-06-12-ws6-convergence-delta-adjudication-design.md`:
 
 - **§0 (backfill unit):** *"Backfill is genesis-event synthesis from current projected state — the old ledger is not the migration source."* *"Synthesis covers active state only: soft-deleted resources … are not synthesized."* *"Per live resource: `resource_created` (with block/chunk manifests per §8) → `property_asserted` per surviving key (§7) → `relationship_asserted` per edge (§4); folded rows synthesize as assert + fold event pairs."*
 - **§1c (producing anchor):** *"the subject's home anchor — `('kb_contexts', ctx)` for context-homed resources; edge events anchor at the edge's home."*
@@ -524,7 +524,7 @@ git commit -m "WS6 chunk2: synthesis scaffolding — source reads, prod-shape fi
 
 ### Task 4.5: `kb_contexts` owner-scoped, slugged shape (§2 amendment 2026-06-13)
 
-**Tag: AMEND** — `schema-artifact/01_schema.sql:98-102` (`kb_contexts(id, name UNIQUE, created)`). Authorized by the §2 **Amendment (2026-06-13)** in `docs/superpowers/specs/2026-06-12-ws6-convergence-delta-adjudication-design.md` (read it). Closes the global-`name UNIQUE` gap: contexts become owner-scoped, slugged namespaces. Must land **before** the Task 5 bootstrap rework (which writes the new columns).
+**Tag: AMEND** — `schema-artifact/01_schema.sql:98-102` (`kb_contexts(id, name UNIQUE, created)`). Authorized by the §2 **Amendment (2026-06-13)** in `internal/superpowers/specs/2026-06-12-ws6-convergence-delta-adjudication-design.md` (read it). Closes the global-`name UNIQUE` gap: contexts become owner-scoped, slugged namespaces. Must land **before** the Task 5 bootstrap rework (which writes the new columns).
 
 **Invariant to preserve (verbatim, §2 amendment):** *"uuid stays the reference everything else uses … `contexts_visible_to` stays retired; `kb_team_contexts` is still the sharing mechanism, orthogonal to owner."* No SQL function reads `kb_contexts.name`/`slug` (verified: `02_functions.sql` references `kb_contexts` only as an anchor-table string literal joined by uuid — `02_functions.sql:146,170,237`), so this changes no function.
 
@@ -772,7 +772,7 @@ git commit -m "WS6 §2 amendment: kb_contexts owner-scoped + slugged (access-sce
 
 ## Execution Handoff
 
-**Plan complete and saved to `docs/superpowers/plans/2026-06-13-ws6-chunk2-3-synthesis-parity.md`. Two execution options:**
+**Plan complete and saved to `internal/superpowers/plans/2026-06-13-ws6-chunk2-3-synthesis-parity.md`. Two execution options:**
 
 **1. Subagent-Driven (recommended)** — dispatch a fresh subagent per task, review between tasks, fast iteration. Per `hybrid-execution` Variant B: orchestrator reviews each commit; the two flagged verification gaps (Task 6 originator, Task 8 edge-home) get controller grounding before those tasks dispatch.
 

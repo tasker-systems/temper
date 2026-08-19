@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (sqlx 0.8.6, utoipa, axum), POSIX sh (Vercel build container), bash (CI guard tests), cargo-make, Vercel + Neon.
 
-**Source spec:** [docs/superpowers/specs/2026-07-30-schema-binary-pairing-design.md](../specs/2026-07-30-schema-binary-pairing-design.md) — goal `019fb35b-c64e-7cd2-a7c0-aa117d1ab1a7`.
+**Source spec:** [internal/superpowers/specs/2026-07-30-schema-binary-pairing-design.md](../specs/2026-07-30-schema-binary-pairing-design.md) — goal `019fb35b-c64e-7cd2-a7c0-aa117d1ab1a7`.
 
 ## Scope
 
@@ -276,7 +276,7 @@ Create `scripts/vercel-ignore-build.sh`:
 #   which is precisely the pairing rehearsal the schema/binary goal needs, so PRs that
 #   touch migrations/ are worth the build and nothing else is.
 #
-#   Design: docs/superpowers/specs/2026-07-30-schema-binary-pairing-design.md § 4.
+#   Design: internal/superpowers/specs/2026-07-30-schema-binary-pairing-design.md § 4.
 #
 # CHANGED_PATHS is injected by the guard test; in a real build it is derived from
 # VERCEL_GIT_PREVIOUS_SHA, which Vercel sets in the build environment.
@@ -474,7 +474,7 @@ which already bakes a compile-time value this way:
 //! is reported as absence — never as a placeholder — so `/api/health` can distinguish
 //! "this build did not record a commit" from "this build is at commit X".
 //!
-//! Design: docs/superpowers/specs/2026-07-30-schema-binary-pairing-design.md § 5.
+//! Design: internal/superpowers/specs/2026-07-30-schema-binary-pairing-design.md § 5.
 
 fn main() {
     // Rebuild when the variable appears, changes, or disappears.

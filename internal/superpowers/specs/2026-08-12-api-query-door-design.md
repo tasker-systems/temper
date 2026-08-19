@@ -9,7 +9,7 @@ Successor to the coverage map (session `019fed80-6d1b-7830-85c0-28cc2bfb7daf`), 
 this document answers: *"the door — still the next beat, still opens with a design conversation: how
 a DAG is expressed through a flag surface and a tool schema."*
 
-The wire contract [`docs/api/query.openapi.yaml`](../../api/query.openapi.yaml) remains
+The wire contract [`internal/api/query.openapi.yaml`](../../api/query.openapi.yaml) remains
 **provisional** `[decided — 2026-08-09, Pete]`; alignment with it is bidirectional and adjudicated
 case by case. Nothing here re-opens its RATIFICATION block or the ADJ rulings.
 
@@ -440,7 +440,7 @@ ruled. Recorded because it is a specimen of the class ⟨7⟩'s provenance findi
 | **A2** | A composition asks one question **per find act**, not one per composition | `temper-core`, `temper-substrate`, `temper-services` | no |
 | **B** | The door opens, end to end | `temper-api`, `temper-cli`, `temper-client`, `temper-services`, e2e | yes |
 | **C** | The CLI can check a plan offline | `temper-cli` | no |
-| **D** | The contract catches up to the code | `docs/api/query.openapi.yaml` | no |
+| **D** | The contract catches up to the code | `internal/api/query.openapi.yaml` | no |
 
 B carries API and CLI together deliberately: the CLI is what drives the e2e test, so interop is
 demonstrated in the PR that creates it rather than in a later one.

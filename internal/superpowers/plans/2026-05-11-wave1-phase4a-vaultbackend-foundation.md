@@ -6,8 +6,8 @@
 **Effort:** medium (foundation; dark-launched, no callers rewired)
 **Branch:** `jct/wave1-phase4a-vaultbackend-foundation`
 
-**Spec:** `docs/superpowers/specs/2026-05-11-wave1-phase4-vaultbackend-design.md`
-**Parent spec:** `docs/superpowers/specs/2026-05-01-shared-core-execution-paths-design.md` (#4)
+**Spec:** `internal/superpowers/specs/2026-05-11-wave1-phase4-vaultbackend-design.md`
+**Parent spec:** `internal/superpowers/specs/2026-05-01-shared-core-execution-paths-design.md` (#4)
 **Predecessors merged:** PR #65 (Phases 1+2), PR #69 (Phase 3a), PR #71 (3b+3c), PR #74 (4-prep), PR #75 (owner threading), PR #76 (cloud-only sync fix)
 
 ---
@@ -827,7 +827,7 @@ cargo nextest run --manifest-path tests/e2e/Cargo.toml --features test-db,test-e
 **Spec-compliance review.** Dispatch an opus subagent with the spec
 doc + the diff (`git diff main...HEAD`). Prompt: "Confirm Phase 4a as
 implemented matches the spec at
-docs/superpowers/specs/2026-05-11-wave1-phase4-vaultbackend-design.md.
+internal/superpowers/specs/2026-05-11-wave1-phase4-vaultbackend-design.md.
 Flag any divergence as either (a) implementer interpretation drift
 that should be corrected, or (b) spec ambiguity that should be
 clarified in the spec. Report under 400 words with file:line refs."
@@ -847,7 +847,7 @@ clarified in the spec. Report under 400 words with file:line refs."
 **Dispatch prompt:**
 > Review branch `jct/wave1-phase4a-vaultbackend-foundation` against
 > the spec at
-> `docs/superpowers/specs/2026-05-11-wave1-phase4-vaultbackend-design.md`.
+> `internal/superpowers/specs/2026-05-11-wave1-phase4-vaultbackend-design.md`.
 > Focus on:
 > - Backend trait impl correctness (does the trait promise match what
 >   the impl delivers, especially for read-asymmetric methods like
@@ -888,7 +888,7 @@ existing CLI tests pass unmodified.
 ```
 ## Summary
 - Lands the `VaultBackend` foundation per the spec at
-  `docs/superpowers/specs/2026-05-11-wave1-phase4-vaultbackend-design.md`.
+  `internal/superpowers/specs/2026-05-11-wave1-phase4-vaultbackend-design.md`.
 - Implements `Backend` for `VaultBackend` covering all 6 trait methods.
 - Dark-launched: no callers rewired. `commands/*.rs` is unchanged
   except for ambient imports. 4b (next session) does the wiring.

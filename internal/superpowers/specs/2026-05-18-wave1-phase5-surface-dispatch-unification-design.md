@@ -11,10 +11,10 @@
 - Phase 4 completion (PR #80): `commands/resource.rs::{create,update,delete}` Local-mode arms migrated through `VaultBackend`; per-doctype write pull-in; C1/C2 helper deletions
 - Event substrate foundations (PR #81): `temper-events` crate, `event_substrate` schema
 
-**Parent spec:** `docs/superpowers/specs/2026-05-01-shared-core-execution-paths-design.md` (#4)
+**Parent spec:** `internal/superpowers/specs/2026-05-01-shared-core-execution-paths-design.md` (#4)
 **Sibling specs:**
-- `docs/superpowers/specs/2026-05-11-wave1-phase4-vaultbackend-design.md` (Phase 4)
-- `docs/superpowers/specs/2026-05-07-wave1-phase3-dbbackend-design.md` (Phase 3)
+- `internal/superpowers/specs/2026-05-11-wave1-phase4-vaultbackend-design.md` (Phase 4)
+- `internal/superpowers/specs/2026-05-07-wave1-phase3-dbbackend-design.md` (Phase 3)
 
 ---
 

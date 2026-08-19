@@ -520,7 +520,7 @@ fn apply_transport_layers(app: Router<AppState>, state: AppState) -> Router {
 /// the response body, so the span outlives every middleware and no flush can ever see it. See
 /// `temper_telemetry::request_span` for the measurement behind that. The span name, the field set,
 /// and the `response` event are unchanged — this is a change of mechanism, not of the convention in
-/// `docs/development/span-field-conventions.md`.
+/// `internal/development/span-field-conventions.md`.
 async fn root_span(
     request: axum::extract::Request,
     next: axum::middleware::Next,

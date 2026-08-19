@@ -2,7 +2,7 @@
 
 Task: `p0-make-the-openapi-spec-authoritative-019f4911-fbe5-7a72-8ef4-e4f506edbec3`
 Goal: `temper-rb — a native Ruby client for the temper API` (`019f4910-…`)
-Design: `docs/superpowers/specs/2026-07-09-temper-rb-ruby-bindings-design.md`
+Design: `internal/superpowers/specs/2026-07-09-temper-rb-ruby-bindings-design.md`
 
 ## Decision
 

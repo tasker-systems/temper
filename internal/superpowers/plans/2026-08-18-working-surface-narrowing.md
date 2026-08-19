@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (sqlx runtime `query()`, axum), SvelteKit 2 / Svelte 5 runes, vitest, biome, ts-rs codegen.
 
-**Spec:** `docs/superpowers/specs/2026-08-18-working-surface-narrowing-design.md` — read it before Task 1. Vault copy: `01a0159b-cd6e-7e63-9352-6d85ff437924`.
+**Spec:** `internal/superpowers/specs/2026-08-18-working-surface-narrowing-design.md` — read it before Task 1. Vault copy: `01a0159b-cd6e-7e63-9352-6d85ff437924`.
 
 ## Global Constraints
 

@@ -459,7 +459,7 @@ updating all callers, not a runtime cutover; and crate extraction is post-cutove
 - Goal record: `substrate-kernel-to-cognitive-map` WS6 (update status line when this lands)
 
 **Status (2026-06-14):** Chunks 2+3 landed on `jct/ws6-chunk2-3-synthesis-parity` (plan:
-`docs/superpowers/plans/2026-06-13-ws6-chunk2-3-synthesis-parity.md`). Chunk 2 = strictly-additive
+`internal/superpowers/plans/2026-06-13-ws6-chunk2-3-synthesis-parity.md`). Chunk 2 = strictly-additive
 install migration (single-sourced from the shared artifact body) + the explicitly-invoked
 synthesis-from-state operation (genesis-event synthesis per §0/§1/§4/§7/§8, §2 owner-scoped-contexts
 amendment) + the per-resource body-text parity gate (§8). Chunk 3 = the read-only parity-read harness

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, Axum, sqlx (compile-time-checked macros), PostgreSQL 17/18, clap, cargo-nextest, cargo-make.
 
-**Spec:** [docs/superpowers/specs/2026-07-10-machine-principal-registration-design.md](../specs/2026-07-10-machine-principal-registration-design.md). Decisions D1–D14 are binding; read them before Task 1.
+**Spec:** [internal/superpowers/specs/2026-07-10-machine-principal-registration-design.md](../specs/2026-07-10-machine-principal-registration-design.md). Decisions D1–D14 are binding; read them before Task 1.
 
 ## Global Constraints
 
@@ -269,7 +269,7 @@ Create `crates/temper-core/src/types/machine.rs`:
 
 ```rust
 //! Machine-principal registration types. See
-//! `docs/superpowers/specs/2026-07-10-machine-principal-registration-design.md`.
+//! `internal/superpowers/specs/2026-07-10-machine-principal-registration-design.md`.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -2397,7 +2397,7 @@ In `/Users/petetaylor/projects/tasker-systems/temper/CLAUDE.md`, add to the **Ke
   needs `temper admin machine rebind`, which binds the new `client_id` to the existing agent profile.
   `revoke` denies authentication and nothing else — grants and memberships hang off the profile.
   No secret is ever stored. See
-  [docs/superpowers/specs/2026-07-10-machine-principal-registration-design.md](docs/superpowers/specs/2026-07-10-machine-principal-registration-design.md).
+  [internal/superpowers/specs/2026-07-10-machine-principal-registration-design.md](internal/superpowers/specs/2026-07-10-machine-principal-registration-design.md).
 ```
 
 - [ ] **Step 6: Full check and commit**

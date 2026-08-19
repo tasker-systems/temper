@@ -4,7 +4,7 @@
 **Workstream:** 6 (migration / convergence), `substrate-kernel-to-cognitive-map`
 **Branch:** `jct/ws6-chunk4-gate-decomposition` (continues 4a + 4b; all 4× ship as ONE PR)
 **Predecessors:** 4a (backend-selection gate) + 4b (new-substrate read path) landed on this branch.
-**Masters:** chunk-4 decomposition `docs/superpowers/specs/2026-06-14-ws6-chunk4-gated-surface-ports-design.md`; adjudication `docs/superpowers/specs/2026-06-12-ws6-convergence-delta-adjudication-design.md` (§4 edges, §5 shared types, §7 key fate, §9 read floor, §D deployment).
+**Masters:** chunk-4 decomposition `internal/superpowers/specs/2026-06-14-ws6-chunk4-gated-surface-ports-design.md`; adjudication `internal/superpowers/specs/2026-06-12-ws6-convergence-delta-adjudication-design.md` (§4 edges, §5 shared types, §7 key fate, §9 read floor, §D deployment).
 
 ## Context
 

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (ort, hf-hub, tokenizers, ndarray, kreuzberg), Axum, sqlx, pgvector, clap
 
-**Spec:** `docs/superpowers/specs/2026-03-31-i5d-cloud-routed-search-design.md`
+**Spec:** `internal/superpowers/specs/2026-03-31-i5d-cloud-routed-search-design.md`
 
 **Design principles:**
 - **Thin commands**: CLI commands parse args and format output. All business logic lives in `src/actions/`.

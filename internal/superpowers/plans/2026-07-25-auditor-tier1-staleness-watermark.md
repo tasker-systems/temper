@@ -1,6 +1,6 @@
 # Implementation plan — auditor tier-1 staleness watermark
 
-**Spec:** [`docs/superpowers/specs/2026-07-25-auditor-tier1-staleness-watermark-design.md`](../specs/2026-07-25-auditor-tier1-staleness-watermark-design.md)
+**Spec:** [`internal/superpowers/specs/2026-07-25-auditor-tier1-staleness-watermark-design.md`](../specs/2026-07-25-auditor-tier1-staleness-watermark-design.md)
 **Branch:** `jct/auditor-tier1-staleness-watermark` (off `76d0de12`)
 **Rev. 4** — 2026-07-26. Session notes `019f9ebc-6959-7230-8bdf-bbdec1cbbdf6` + this session's.
 

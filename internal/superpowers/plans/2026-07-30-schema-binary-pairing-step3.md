@@ -14,9 +14,9 @@ merge base and fails when the wire contract moves without a migration admitting 
 **Tech Stack:** Rust (sqlx 0.8.6 macros), PostgreSQL (migrations + one SQL function), bash (CI guard
 tests), Python 3 (the call-site enumerator, already shipped), cargo-make, GitHub Actions.
 
-**Source spec:** [docs/superpowers/specs/2026-07-30-schema-binary-pairing-design.md](../specs/2026-07-30-schema-binary-pairing-design.md)
+**Source spec:** [internal/superpowers/specs/2026-07-30-schema-binary-pairing-design.md](../specs/2026-07-30-schema-binary-pairing-design.md)
 §1, §2, §6 — goal `019fb35b-c64e-7cd2-a7c0-aa117d1ab1a7`.
-**Input classification:** [docs/development/sqlx-macro-exception-classification.md](../../development/sqlx-macro-exception-classification.md).
+**Input classification:** [internal/development/sqlx-macro-exception-classification.md](../../development/sqlx-macro-exception-classification.md).
 
 ---
 
@@ -230,7 +230,7 @@ the finding — reconcile it against the classification doc before proceeding.
 - Create: `.github/scripts/audit-sqlx-macro-exceptions.sh` (or extend the Python enumerator — see Step 1)
 - Create: `.github/scripts/test-audit-sqlx-macro-exceptions.sh` (bash guard test)
 - Modify: `.github/workflows/code-quality.yml` — one step in the `guard-tests` job
-- Modify: `docs/development/code-quality-best-practices.md:165` — the prose rule becomes enforced
+- Modify: `internal/development/code-quality-best-practices.md:165` — the prose rule becomes enforced
 
 **Interfaces:**
 - Consumes: Tasks A1–A2 (the count must be 46 before this can be seeded).
@@ -297,7 +297,7 @@ member, `substrate_read.rs:265`, and it is the case the existing prose rule alre
       indentation (six spaces for `- name:`, eight for `run:`).
 
 - [ ] **Step 7: Make the prose rule point at its enforcer** — *AMEND*
-      `docs/development/code-quality-best-practices.md:165`, which currently reads (verbatim):
+      `internal/development/code-quality-best-practices.md:165`, which currently reads (verbatim):
 
 ```
   `query_as!()` / `query_scalar!()`. Runtime `query_as` is acceptable only where a `::vector`

@@ -12,7 +12,7 @@
 
 ## Spec deviation (recorded)
 
-The approved spec (`docs/superpowers/specs/2026-06-11-scenario-steps-over-corpus-seeds-design.md`) originally described D2 smoke runbooks as operating "over the telos blocks alone." Grounding during planning showed region members are *resources homed in the cogmap* (`substrate::load` → `kb_resource_homes`, telos included), so a charter-only seed materializes to a degenerate one-region partition and the smoke assertions would be vacuous. The spec's D2 paragraph was corrected: smoke runbooks now seed 3–4 concept resources via `create_resource` steps for a non-degenerate shape. The seed stays charter-only; the scenario supplies material. No change to deliverable shape or scope.
+The approved spec (`internal/superpowers/specs/2026-06-11-scenario-steps-over-corpus-seeds-design.md`) originally described D2 smoke runbooks as operating "over the telos blocks alone." Grounding during planning showed region members are *resources homed in the cogmap* (`substrate::load` → `kb_resource_homes`, telos included), so a charter-only seed materializes to a degenerate one-region partition and the smoke assertions would be vacuous. The spec's D2 paragraph was corrected: smoke runbooks now seed 3–4 concept resources via `create_resource` steps for a non-degenerate shape. The seed stays charter-only; the scenario supplies material. No change to deliverable shape or scope.
 
 ---
 

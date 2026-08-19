@@ -3,7 +3,7 @@
 #
 # WHY THIS EXISTS
 # ---------------
-# Spec §2 (docs/superpowers/specs/2026-07-30-schema-binary-pairing-design.md), verbatim:
+# Spec §2 (internal/superpowers/specs/2026-07-30-schema-binary-pairing-design.md), verbatim:
 #   "Diff the `.sqlx` caches against the merge-base. A change to `describe.columns[].type_info`
 #    **or** `describe.parameters.Left[]` means this PR moves the wire contract."
 #

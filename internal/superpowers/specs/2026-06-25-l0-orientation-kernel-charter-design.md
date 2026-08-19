@@ -5,7 +5,7 @@
 **Context:** Workstream 7 (Agent surface) under goal `substrate-kernel-to-cognitive-map`.
 **Companions:**
 - Architecture: [2026-06-25-cognitive-map-agent-invocation-architecture-design.md](2026-06-25-cognitive-map-agent-invocation-architecture-design.md) (defines L0 as the deterministic kernel tier)
-- Plan (birth mechanism, done): [docs/superpowers/plans/2026-06-25-l0-kernel-cognitive-map.md](../plans/2026-06-25-l0-kernel-cognitive-map.md) — L0 born empty (SQL-native, `system-default` cogmap)
+- Plan (birth mechanism, done): [internal/superpowers/plans/2026-06-25-l0-kernel-cognitive-map.md](../plans/2026-06-25-l0-kernel-cognitive-map.md) — L0 born empty (SQL-native, `system-default` cogmap)
 - Postures source: research `2026-05-23-cognitive-maps-and-the-projection-class-insight` (names the insight) + `projection-class-plurality--research-area-decomposition` (`019e54bb`, the posture list + the agent-arrival sharpening)
 - Charter form: `2026-06-10-charter-bootstrapping-procedure-design.md`; exemplar `crates/temper-next/tests/fixtures/seeds/temper-foundational.yaml`
 

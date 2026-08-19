@@ -236,8 +236,8 @@ For this session (public pages only), no environment variables are required beyo
 
 | File | Description |
 |------|-------------|
-| `docs/superpowers/specs/mockups/2026-04-03-landing-page-full.html` | Complete landing page mockup — all 7 sections, nav, footer. Open in a browser or read the HTML source for exact CSS values, spacing, and structure. |
-| `docs/superpowers/specs/mockups/2026-04-03-landing-page-agent-section.html` | Agent workflow section options — Option A (conversation transcript) is the chosen design for §4.5. |
+| `internal/superpowers/specs/mockups/2026-04-03-landing-page-full.html` | Complete landing page mockup — all 7 sections, nav, footer. Open in a browser or read the HTML source for exact CSS values, spacing, and structure. |
+| `internal/superpowers/specs/mockups/2026-04-03-landing-page-agent-section.html` | Agent workflow section options — Option A (conversation transcript) is the chosen design for §4.5. |
 
 ### How to use these mockups
 

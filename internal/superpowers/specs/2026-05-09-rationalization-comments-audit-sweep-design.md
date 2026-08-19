@@ -36,7 +36,7 @@ A grep across `crates/temper-api/src/backend/`, `handlers/`, and `crates/temper-
 
 ### Component 1 — A.3: env-var auth doc rewrite + expiry warning
 
-**Why this is doc-not-architecture.** Reading `docs/superpowers/specs/2026-04-19-cloud-mode-auth0-design.md` (Unit B.4) reframes A.3:
+**Why this is doc-not-architecture.** Reading `internal/superpowers/specs/2026-04-19-cloud-mode-auth0-design.md` (Unit B.4) reframes A.3:
 
 - The B.4 spec recommends **W1 — access-token-only export, no refresh-token export**.
 - Reason: exporting a user's RT to a cloud session would break Auth0's refresh-token rotation. Local CLI and cloud session sharing the same RT means whichever one refreshes first invalidates the other; on the second's next refresh, Auth0 flags a breach and kills the entire grant family.
@@ -56,7 +56,7 @@ Replace the docstring on `pub fn stored_auth_from_env()` at `crates/temper-clien
 
 - Drop the "Unit B.4 research work, not B.1" sentence entirely.
 - State the W1 contract: refresh-less env-var auth is **intentional architectural choice** (Auth0 RT-rotation security), not a deferral. 24h Auth0-default AT TTL is the ceiling.
-- Reference `docs/superpowers/specs/2026-04-19-cloud-mode-auth0-design.md` §Q1/W1 so the rationale is findable.
+- Reference `internal/superpowers/specs/2026-04-19-cloud-mode-auth0-design.md` §Q1/W1 so the rationale is findable.
 - Note the function's role as a parsing primitive (used by both `MemoryTokenStore` and `DiskTokenStore`), not a user-facing API. The user-facing surface is `MemoryTokenStore::from_env_required()`.
 - Note the recovery path: when an env-var token approaches expiry, the cloud-mode bootstrap warns (Component 1's expiry warning, below); on actual expiry, callers receive `ClientError::TokenExpired` and must re-export.
 

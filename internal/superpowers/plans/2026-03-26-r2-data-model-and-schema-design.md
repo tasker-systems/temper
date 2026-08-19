@@ -9,7 +9,7 @@
 **Tech Stack:** PostgreSQL 18 + pgvector 0.8.2 (local Docker), sqlx 0.8 + sqlx-cli, temper CLI for research note management.
 
 **References:**
-- R2 design spec: `docs/superpowers/specs/2026-03-26-r2-data-model-and-schema-design.md`
+- R2 design spec: `internal/superpowers/specs/2026-03-26-r2-data-model-and-schema-design.md`
 - Storyteller migration pattern: `../storyteller/crates/storyteller-storykeeper/migrations/`
 - Storyteller migrator: `../storyteller/crates/storyteller-storykeeper/src/database/migrator.rs`
 
@@ -92,7 +92,7 @@ Write the full R2 schema into `migrations/20260326000001_r2_schema.sql`:
 ```sql
 -- R2: Data Model & Schema Design — Temper Cloud Schema
 -- Postgres 18 + pgvector 0.8.2
--- Design spec: docs/superpowers/specs/2026-03-26-r2-data-model-and-schema-design.md
+-- Design spec: internal/superpowers/specs/2026-03-26-r2-data-model-and-schema-design.md
 
 -- Extensions
 CREATE EXTENSION IF NOT EXISTS vector;

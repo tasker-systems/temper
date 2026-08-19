@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, serde, ts-rs (v10, behind a `typescript` feature), cargo-make, cargo-nextest.
 
-**Spec:** `docs/superpowers/specs/2026-06-18-temper-agents-neutral-contract-crate-design.md`
+**Spec:** `internal/superpowers/specs/2026-06-18-temper-agents-neutral-contract-crate-design.md`
 
 ## Global Constraints
 
@@ -73,7 +73,7 @@ Create `crates/temper-agents/src/lib.rs`:
 //!
 //! A deliberately thin layer (WS7 decision #6). Owns the
 //! [`profile::DeploymentProfile`] policy object. See the design spec under
-//! `docs/superpowers/specs/2026-06-18-temper-agents-neutral-contract-crate-design.md`.
+//! `internal/superpowers/specs/2026-06-18-temper-agents-neutral-contract-crate-design.md`.
 
 pub mod profile;
 ```
@@ -370,7 +370,7 @@ Replace the contents of `crates/temper-agents/src/lib.rs` with:
 //! [`profile::DeploymentProfile`] policy object and re-exports the
 //! invocation-envelope + agent-authorship contract from `temper-next`
 //! ([`envelope`]). See the design spec under
-//! `docs/superpowers/specs/2026-06-18-temper-agents-neutral-contract-crate-design.md`.
+//! `internal/superpowers/specs/2026-06-18-temper-agents-neutral-contract-crate-design.md`.
 
 pub mod envelope;
 pub mod profile;
@@ -413,7 +413,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 **Interfaces:** none — pure removal.
 
-**⚠️ Do NOT touch the `temper-llm-model` / `temper-llm-run` *managed-meta frontmatter fields*** in `temper-core` (`schemas/base.schema.json`, `src/frontmatter/fields.rs`, `src/types/managed_meta.rs`, `src/frontmatter/document.rs`) or `temper-next` (`src/synthesis/key_fate.rs`). Those are unrelated to the crate and must stay. **Do NOT rewrite historical plan/spec docs** under `docs/superpowers/` that mention `temper-llm` — they are point-in-time records. The only references to *the crate* that change are the three files listed above (plus the auto-regenerated `Cargo.lock`).
+**⚠️ Do NOT touch the `temper-llm-model` / `temper-llm-run` *managed-meta frontmatter fields*** in `temper-core` (`schemas/base.schema.json`, `src/frontmatter/fields.rs`, `src/types/managed_meta.rs`, `src/frontmatter/document.rs`) or `temper-next` (`src/synthesis/key_fate.rs`). Those are unrelated to the crate and must stay. **Do NOT rewrite historical plan/spec docs** under `internal/superpowers/` that mention `temper-llm` — they are point-in-time records. The only references to *the crate* that change are the three files listed above (plus the auto-regenerated `Cargo.lock`).
 
 - [ ] **Step 1: Delete the two crate directories**
 

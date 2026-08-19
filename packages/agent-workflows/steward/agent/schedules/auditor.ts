@@ -89,7 +89,7 @@ import {
  * ─────────────────────────────────────────────────────────────────────────────────────────────
  *
  * Citation-auditor fan-out dispatcher (Set 5; spec
- * `docs/superpowers/specs/2026-07-23-set5-adversary-citation-audit-design.md` §6).
+ * `internal/superpowers/specs/2026-07-23-set5-adversary-citation-audit-design.md` §6).
  *
  * CONFORM to `schedules/steward.ts` on all three of its load-bearing shapes, deliberately:
  *

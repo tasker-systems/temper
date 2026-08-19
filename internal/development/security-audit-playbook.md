@@ -2,7 +2,7 @@
 
 A repeatable procedure (for a human or an agent) to re-verify Temper's trust boundary. It
 encodes the method used in the 2026-07-18 audit
-([docs/code-reviews/2026-07-18-authn-authz-credential-flow-audit.md](../code-reviews/2026-07-18-authn-authz-credential-flow-audit.md))
+([internal/code-reviews/2026-07-18-authn-authz-credential-flow-audit.md](../code-reviews/2026-07-18-authn-authz-credential-flow-audit.md))
 **and the blind spot that audit initially fell into**, so the next run cannot repeat it.
 
 > **The one lesson that matters most.** A grant audit has **two independent axes**, and the

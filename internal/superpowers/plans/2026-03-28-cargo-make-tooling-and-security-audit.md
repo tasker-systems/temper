@@ -221,7 +221,7 @@ git commit -m "build: add cargo-make main.toml with workspace composite tasks"
 #   cargo make docker-up   Start PostgreSQL
 #   cargo make docker-down Stop PostgreSQL
 #
-# See: docs/superpowers/specs/2026-03-28-cargo-make-tooling-and-security-audit-design.md
+# See: internal/superpowers/specs/2026-03-28-cargo-make-tooling-and-security-audit-design.md
 
 extend = "./tools/cargo-make/main.toml"
 
@@ -555,11 +555,11 @@ Compile all findings with severity and recommended fixes. Known issues to docume
 ### Task 10: Write audit findings document and commit all changes
 
 **Files:**
-- Create: `docs/security/2026-03-28-pre-deployment-audit.md`
+- Create: `internal/security/2026-03-28-pre-deployment-audit.md`
 
 - [ ] **Step 1: Write the audit findings document**
 
-Create `docs/security/2026-03-28-pre-deployment-audit.md` with all findings from Tasks 8 and 9, organized by severity:
+Create `internal/security/2026-03-28-pre-deployment-audit.md` with all findings from Tasks 8 and 9, organized by severity:
 
 ```markdown
 # Pre-Deployment Security & Architecture Audit
@@ -595,7 +595,7 @@ Create `docs/security/2026-03-28-pre-deployment-audit.md` with all findings from
 - [ ] **Step 2: Commit the findings document and any remaining fixes**
 
 ```bash
-git add docs/security/2026-03-28-pre-deployment-audit.md
+git add internal/security/2026-03-28-pre-deployment-audit.md
 git commit -m "docs: pre-deployment security and architecture audit findings"
 ```
 

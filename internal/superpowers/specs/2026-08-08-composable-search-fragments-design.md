@@ -3,7 +3,7 @@
 > ## `[STILL VALID, WITH ONE GAP NAMED — 2026-08-08 evening]`
 >
 > This is a SQL design and the wire contract does not supersede it. Ground the surface in
-> [`docs/api/query.openapi.yaml`](../../api/query.openapi.yaml); ground the fragments here.
+> [`internal/api/query.openapi.yaml`](../../api/query.openapi.yaml); ground the fragments here.
 >
 > **One gap the contract surfaced that this design did not see.** §4 gives the twins `p_bound_ids`
 > and treats a bound set as a scope — correct — but `search_graph_expand` takes `p_seed_ids`, and a

@@ -103,12 +103,12 @@ Drive the presets; confirm with the human:
 
 - [ ] **Step 5: Record the locked decisions**
 
-Update spec §10.1/§10.2 in `docs/superpowers/specs/2026-07-07-atlas-beat-b-home-reframe-spec.md` with the chosen answers. Confirm the final field names in the `home` fixture (they are the contract for Tasks 2–9). **Exit criteria:** (a) human-approved interaction; (b) frozen `home` fixture shape.
+Update spec §10.1/§10.2 in `internal/superpowers/specs/2026-07-07-atlas-beat-b-home-reframe-spec.md` with the chosen answers. Confirm the final field names in the `home` fixture (they are the contract for Tasks 2–9). **Exit criteria:** (a) human-approved interaction; (b) frozen `home` fixture shape.
 
 - [ ] **Step 6: Commit the spec update (fixture override stays gitignored)**
 
 ```bash
-git add docs/superpowers/specs/2026-07-07-atlas-beat-b-home-reframe-spec.md
+git add internal/superpowers/specs/2026-07-07-atlas-beat-b-home-reframe-spec.md
 git commit -m "docs(atlas): Beat B — lock Home rest-haze + tint decisions from harness spike"
 ```
 

@@ -111,7 +111,7 @@ async fn readable_event_types(
     //   and no reason to hide a person's own act from them. The line the policy draws is
     //   actor != subject — NOT "disconnects are secret".
     //   Rationale, the three independent things that enforce it, and the conditions for revisiting:
-    //   docs/decisions/2026-07-19-admin-disconnect-is-not-subject-readable.md. That doc exists
+    //   internal/decisions/2026-07-19-admin-disconnect-is-not-subject-readable.md. That doc exists
     //   precisely because the fail-closed default is doing policy work here, which makes
     //   "deliberately absent" and "not written yet" indistinguishable in the code. A future arm
     //   proposal for this type must revisit that doc FIRST.

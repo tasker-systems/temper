@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (axum, sqlx, reqwest), PostgreSQL, TypeScript (eve@0.18.1 agent).
 
-**Spec:** [`docs/superpowers/specs/2026-07-16-slack-account-link-design.md`](../specs/2026-07-16-slack-account-link-design.md). Read it first — it carries the *why* for every decision below.
+**Spec:** [`internal/superpowers/specs/2026-07-16-slack-account-link-design.md`](../specs/2026-07-16-slack-account-link-design.md). Read it first — it carries the *why* for every decision below.
 
 ## Global Constraints
 

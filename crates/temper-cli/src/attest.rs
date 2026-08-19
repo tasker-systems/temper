@@ -25,7 +25,7 @@
 //!
 //! # Crate choice (recap; full reasoning in the spike)
 //!
-//! See `docs/superpowers/spikes/2026-07-29-sigstore-crate-evaluation.md`. In
+//! See `internal/superpowers/spikes/2026-07-29-sigstore-crate-evaluation.md`. In
 //! short: `sigstore-verify` (NOT the similarly-named `sigstore-verification`)
 //! because its trust root is a required, caller-supplied constructor
 //! argument with no network TUF fetch, its `verify()` is synchronous, and its

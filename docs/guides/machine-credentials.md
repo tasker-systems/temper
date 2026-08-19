@@ -312,6 +312,6 @@ temper admin machine show <machine-id>
   (`packages/temper-cloud/tests/integration/oauth/client-credentials.test.ts`).
 - **Design specs** — the *rationale*, not the current state. They are design records written before
   the work shipped, so where a spec and this guide disagree, trust the guide (and the code it cites):
-  - Registration, rotation & revocation gate (Phase A): `docs/superpowers/specs/2026-07-10-machine-principal-registration-design.md`
-  - Temper as a `client_credentials` issuer (Phase B1): `docs/superpowers/specs/2026-07-10-machine-principal-phase-b1-issuer-grant-design.md`
-  - Team-owner registration + reach containment (Phase B2): `docs/superpowers/specs/2026-07-11-machine-principal-phase-b2-team-owner-registration-design.md`
+  - Registration, rotation & revocation gate (Phase A): `internal/superpowers/specs/2026-07-10-machine-principal-registration-design.md`
+  - Temper as a `client_credentials` issuer (Phase B1): `internal/superpowers/specs/2026-07-10-machine-principal-phase-b1-issuer-grant-design.md`
+  - Team-owner registration + reach containment (Phase B2): `internal/superpowers/specs/2026-07-11-machine-principal-phase-b2-team-owner-registration-design.md`

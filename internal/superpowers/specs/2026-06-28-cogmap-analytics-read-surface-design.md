@@ -4,7 +4,7 @@
 **Goal:** `substrate-kernel-to-cognitive-map` (WS7 — operational surface)
 **Task:** `019ee5a4` — Surface `cogmap_shape` + cognitive-map analytics read side
 **Predecessor:** PR #196 (`cogmap_shape` surface-tier read, merged `f75221e`)
-**Surfacing spec:** `docs/superpowers/specs/2026-06-19-cognitive-map-substrate-surfacing-design.md`
+**Surfacing spec:** `internal/superpowers/specs/2026-06-19-cognitive-map-substrate-surfacing-design.md`
 
 ## Context
 

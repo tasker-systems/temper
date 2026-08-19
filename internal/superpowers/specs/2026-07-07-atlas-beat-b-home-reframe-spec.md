@@ -2,7 +2,7 @@
 
 **Status:** implementation spec, ready for plan. Second beat of the Atlas reshape
 (built after A; sequenced ahead of C deliberately — see below).
-**North star:** `docs/superpowers/specs/2026-07-06-atlas-reshape-projection-class-north-star.md` (vault research `019f39ca`).
+**North star:** `internal/superpowers/specs/2026-07-06-atlas-reshape-projection-class-north-star.md` (vault research `019f39ca`).
 **Companion:** builder/researcher personas decision doc (vault `@me/temper`, written alongside this spec).
 **Goal:** `019f28a1`. **Builds on:** Beat A field-effect + force layout (shipped, held on `jct/atlas-reshape`).
 

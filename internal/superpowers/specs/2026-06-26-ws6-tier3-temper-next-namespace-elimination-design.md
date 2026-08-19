@@ -6,7 +6,7 @@
 namespace collapse the WS6 Spec B crate-split deferred. It also closes the documented
 crate↔namespace mismatch (`temper-substrate` crate over a `temper_next` namespace) from
 the crate-split spec's "Known compromises #2".
-**Predecessor:** `docs/superpowers/specs/2026-06-25-ws6-spec-b-substrate-workflow-crate-split-design.md`
+**Predecessor:** `internal/superpowers/specs/2026-06-25-ws6-spec-b-substrate-workflow-crate-split-design.md`
 (rename + workflow extraction, merged as #172/#175/#176). Tier 1 of the post-rename audit
 (dead flip/re-home tooling) landed in #176. This spec is Tier 2 + Tier 3 of that audit.
 

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (clap, serde, sha2, reqwest), POSIX sh, GitHub Actions, sigstore (crate selected by Task 1).
 
-**Spec:** `docs/superpowers/specs/2026-07-29-binary-attestation-and-manifest-verification-design.md` — read it before starting. This plan is an index over that spec, not a replacement for it.
+**Spec:** `internal/superpowers/specs/2026-07-29-binary-attestation-and-manifest-verification-design.md` — read it before starting. This plan is an index over that spec, not a replacement for it.
 
 ## Global Constraints
 
@@ -41,7 +41,7 @@ assert!(INSTALL_SH.contains("Verifying checksum"));
 **This task writes no production code. Its deliverable is a decision plus evidence.** Its outcome selects the architecture for Task 9. A BLOCKED result is a legitimate, expected outcome — not a failure.
 
 **Files:**
-- Create: `docs/superpowers/spikes/2026-07-29-sigstore-crate-evaluation.md`
+- Create: `internal/superpowers/spikes/2026-07-29-sigstore-crate-evaluation.md`
 - Scratch (do not commit): a throwaway crate outside the workspace
 
 **Spec sections to read:** "The pinned trust root", "The spike, and its BLOCKED arm"
@@ -140,7 +140,7 @@ Record, with evidence (quoted output, not narration):
 - [ ] **Step 8: Commit**
 
 ```bash
-git add docs/superpowers/spikes/2026-07-29-sigstore-crate-evaluation.md
+git add internal/superpowers/spikes/2026-07-29-sigstore-crate-evaluation.md
 git commit -m "spike: evaluate sigstore crates for pinned-root attestation verification"
 ```
 

@@ -6,7 +6,7 @@
 
 **Architecture:** Enforce all three behaviors **server-side** so MCP / HTTP / CLI inherit them. Create-authz drops the surface `is_system_admin` gate; the backend genesis path gains a reserved-id guard (caller-supplied ids honored only for admins) — the creator-grant it already mints then applies to non-admins for free. Bind/unbind gains a two-sided gate centralized in the service layer.
 
-**Tech Stack:** Rust (axum, sqlx, rmcp), PostgreSQL + pgvector. Design spec: `docs/superpowers/specs/2026-07-07-democratize-cogmap-creation-design.md`.
+**Tech Stack:** Rust (axum, sqlx, rmcp), PostgreSQL + pgvector. Design spec: `internal/superpowers/specs/2026-07-07-democratize-cogmap-creation-design.md`.
 
 ## Global Constraints
 

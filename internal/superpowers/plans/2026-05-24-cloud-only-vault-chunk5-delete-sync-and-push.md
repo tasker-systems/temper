@@ -105,7 +105,7 @@ Land the plan file before any code change so subsequent commits reference it. No
 - [ ] **Step 1: Commit the plan file**
 
 ```bash
-git add docs/superpowers/plans/2026-05-24-cloud-only-vault-chunk5-delete-sync-and-push.md
+git add internal/superpowers/plans/2026-05-24-cloud-only-vault-chunk5-delete-sync-and-push.md
 git commit -m "cloud-only(ch5): record the chunk 5 implementation plan"
 ```
 
@@ -832,7 +832,7 @@ commits added in this chunk (since the predecessor commit 35399b5
 "cloud-only(ch4): record the chunk 4 implementation plan").
 
 The plan is at:
-  docs/superpowers/plans/2026-05-24-cloud-only-vault-chunk5-delete-sync-and-push.md
+  internal/superpowers/plans/2026-05-24-cloud-only-vault-chunk5-delete-sync-and-push.md
 
 The plan resolves an explicit plan-gate question by deferring
 `manifest_io.rs` and `temper-core::types::{manifest,sync}` deletion to
@@ -906,9 +906,9 @@ delete-not-repoint for pull_command_test)
 
 ## Connections
 - Branch (no PR yet): jct/cloud-only-vault-pr-b
-- Plan: docs/superpowers/plans/2026-05-24-cloud-only-vault-chunk5-delete-sync-and-push.md
+- Plan: internal/superpowers/plans/2026-05-24-cloud-only-vault-chunk5-delete-sync-and-push.md
 - Predecessor session: 2026-05-23-cloud-only-vault-chunk-4-landed-vault-backend-deleted-variants-removed-6500-loc-net
-- Spec: docs/superpowers/specs/2026-05-21-cloud-only-vault-deprecation-design.md
+- Spec: internal/superpowers/specs/2026-05-21-cloud-only-vault-deprecation-design.md
 
 ## Next Steps
 - Chunk 6: HNSW + graph + search rework (drops actions::search, commands::search_cmd, actions::index_build, actions::graph_index/cluster, tests/e2e/tests/graph_build_e2e_test)

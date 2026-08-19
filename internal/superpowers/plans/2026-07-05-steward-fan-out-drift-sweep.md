@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (temper-core types, temper-substrate migrations, temper-services `DbBackend` + services, temper-api handlers), PostgreSQL 18/17 (sqlx compile-checked macros), TypeScript/Eve (agent-workflows/steward).
 
-**Design spec:** `docs/superpowers/specs/2026-07-05-steward-fan-out-drift-sweep-design.md`
+**Design spec:** `internal/superpowers/specs/2026-07-05-steward-fan-out-drift-sweep-design.md`
 
 ## Global Constraints
 
@@ -88,7 +88,7 @@ Create `migrations/20260705000001_workflow_jobs.sql`:
 -- A single hand-rolled table + four SQL primitives, borrowing tasker-core's DURABLE-state
 -- mechanics (SKIP LOCKED claim, attempts/max_attempts gating, lease-expiry reaping, partial-unique
 -- in-flight dedup) while skipping its pgmq transport + DAG/DLQ apparatus (scale-adapted, not
--- cargo-culted). See docs/superpowers/specs/2026-07-05-steward-fan-out-drift-sweep-design.md §6.
+-- cargo-culted). See internal/superpowers/specs/2026-07-05-steward-fan-out-drift-sweep-design.md §6.
 --
 -- ADDITIVE, additive-only-on-`main`: a new table + four new functions; no existing object altered.
 

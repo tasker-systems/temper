@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, axum (temper-api), sqlx (unchanged — no SQL/schema change), cargo-nextest, trybuild (new dev-dependency in temper-services).
 
-Design spec: `docs/superpowers/specs/2026-07-22-admin-authz-enclosure-design.md`. Read §3 (design), the "What gets the proof" section, and the "Authz-site inventory" before starting.
+Design spec: `internal/superpowers/specs/2026-07-22-admin-authz-enclosure-design.md`. Read §3 (design), the "What gets the proof" section, and the "Authz-site inventory" before starting.
 
 ## Global Constraints
 

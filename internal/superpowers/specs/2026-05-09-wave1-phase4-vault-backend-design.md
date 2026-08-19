@@ -2,8 +2,8 @@
 
 **Status:** Draft for plan-writing
 **Date:** 2026-05-09
-**Parent spec:** [`docs/superpowers/specs/2026-05-01-shared-core-execution-paths-design.md`](2026-05-01-shared-core-execution-paths-design.md)
-**Predecessor spec:** [`docs/superpowers/specs/2026-05-07-wave1-phase3-dbbackend-design.md`](2026-05-07-wave1-phase3-dbbackend-design.md)
+**Parent spec:** [`internal/superpowers/specs/2026-05-01-shared-core-execution-paths-design.md`](2026-05-01-shared-core-execution-paths-design.md)
+**Predecessor spec:** [`internal/superpowers/specs/2026-05-07-wave1-phase3-dbbackend-design.md`](2026-05-07-wave1-phase3-dbbackend-design.md)
 **Goal:** `path-to-alpha`
 
 ## Summary
@@ -378,8 +378,8 @@ These are intentionally left for the implementation plan to resolve, not the spe
 
 ## Connections
 
-- Parent spec: `docs/superpowers/specs/2026-05-01-shared-core-execution-paths-design.md`
-- Predecessor spec: `docs/superpowers/specs/2026-05-07-wave1-phase3-dbbackend-design.md`
-- Companion spec (Phase 6 state machine): `docs/superpowers/specs/2026-05-01-cloud-first-reframe-and-manifest-redefinition-design.md`
+- Parent spec: `internal/superpowers/specs/2026-05-01-shared-core-execution-paths-design.md`
+- Predecessor spec: `internal/superpowers/specs/2026-05-07-wave1-phase3-dbbackend-design.md`
+- Companion spec (Phase 6 state machine): `internal/superpowers/specs/2026-05-01-cloud-first-reframe-and-manifest-redefinition-design.md`
 - Predecessor session: `wave-1-phase-3c-mcp-migration-complete-3b-regressions-fixed-ready-for-pr`
 - Goal: `path-to-alpha`

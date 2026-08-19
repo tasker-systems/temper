@@ -8,7 +8,7 @@
 
 **Tech Stack:** reqwest + rustls, tokio, serde, hyper (callback server), open (browser launch)
 
-**Spec:** `docs/superpowers/specs/2026-03-29-i5-temper-developer-experience-design.md`
+**Spec:** `internal/superpowers/specs/2026-03-29-i5-temper-developer-experience-design.md`
 
 ---
 

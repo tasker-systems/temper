@@ -788,7 +788,7 @@ commits added in this chunk (since the predecessor session, which ended
 at commit 322cdeb "cloud-only(ch3): review followups").
 
 The plan is at:
-  docs/superpowers/plans/2026-05-23-cloud-only-vault-chunk4-delete-vault-backend.md
+  internal/superpowers/plans/2026-05-23-cloud-only-vault-chunk4-delete-vault-backend.md
 
 The plan resolves an explicit plan-gate question by deferring `manifest_io`
 deletion to Chunk 5 — this is INTENDED. Do not flag the surviving
@@ -844,9 +844,9 @@ cat <<'EOF' | temper resource create --type session --title "Cloud-only vault Ch
 
 ## Connections
 - Branch (no PR yet): jct/cloud-only-vault-pr-b
-- Plan: docs/superpowers/plans/2026-05-23-cloud-only-vault-chunk4-delete-vault-backend.md
+- Plan: internal/superpowers/plans/2026-05-23-cloud-only-vault-chunk4-delete-vault-backend.md
 - Predecessor session: 2026-05-23-cloud-only-vault-chunk-3-landed-on-pr-b-branch-16-plan-tasks-2-inserted
-- Spec: docs/superpowers/specs/2026-05-21-cloud-only-vault-deprecation-design.md
+- Spec: internal/superpowers/specs/2026-05-21-cloud-only-vault-deprecation-design.md
 
 ## Next Steps
 - Chunk 5: delete sync engine + push + manifest_io + temper-core::types::{manifest,sync}

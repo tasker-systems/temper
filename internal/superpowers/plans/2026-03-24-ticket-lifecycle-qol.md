@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, clap (CLI), uuid (v7), serde_yaml, chrono, tempfile (tests)
 
-**Spec:** `docs/superpowers/specs/2026-03-24-ticket-lifecycle-qol-design.md`
+**Spec:** `internal/superpowers/specs/2026-03-24-ticket-lifecycle-qol-design.md`
 
 ---
 

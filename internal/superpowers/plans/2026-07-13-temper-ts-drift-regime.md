@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- **Spec:** `docs/superpowers/specs/2026-07-13-temper-ts-drift-regime-design.md`. Read it before Task 1.
+- **Spec:** `internal/superpowers/specs/2026-07-13-temper-ts-drift-regime-design.md`. Read it before Task 1.
 - **`clients/temper-ts` is workspace-isolated.** It is NOT a bun workspace member and NOT a cargo member. Run all npm commands **from inside `clients/temper-ts`** (`cd clients/temper-ts && npm ci`). A root `npm install` inherits the root's bun `overrides` and fails.
 - **`openapi-typescript` is pinned EXACTLY** — `"openapi-typescript": "7.13.0"`, no caret. A moving generator makes the drift gate fail on days when nothing changed. (Verified: two runs of 7.13.0 against the real spec are byte-identical, and the emitted header carries no timestamp or version.)
 - **Never hand-edit `src/generated/schema.ts`.** It is a product of `openapi.json`, which is a product of the Axum router.

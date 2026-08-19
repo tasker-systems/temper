@@ -7,7 +7,7 @@
 *"A context can be re-addressed by those who administer it, and by no one else."*
 Read it with `temper resource show a-context-can-be-re-addressed-by-those-who-administer-it-and-by-no-one-else-019fb4db-7732-78d2-9ad4-73d44b053c03`.
 
-**Spec (the *how*, approved):** `docs/superpowers/specs/2026-07-30-context-rename-design.md` —
+**Spec (the *how*, approved):** `internal/superpowers/specs/2026-07-30-context-rename-design.md` —
 **read it before starting.** This plan is an *index + sequence + grounding evidence* over that spec,
 not a replacement for it. Every task cites the spec section its implementer must read.
 

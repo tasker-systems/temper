@@ -7,11 +7,11 @@ fail-open hunt · tripwire coverage). No reviewer was given the others' findings
 
 **Individual reviews (committed, read these for the evidence behind each finding):**
 
-- [`docs/superpowers/reviews/2026-07-29-arc2-threat-model.md`](../reviews/2026-07-29-arc2-threat-model.md)
-- [`docs/superpowers/reviews/2026-07-29-arc2-supply-chain.md`](../reviews/2026-07-29-arc2-supply-chain.md)
-- [`docs/superpowers/reviews/2026-07-29-arc2-fail-open.md`](../reviews/2026-07-29-arc2-fail-open.md)
-- [`docs/superpowers/reviews/2026-07-29-arc2-tripwires.md`](../reviews/2026-07-29-arc2-tripwires.md)
-- [`docs/superpowers/reviews/2026-07-29-arc1-arc2-ledger.md`](../reviews/2026-07-29-arc1-arc2-ledger.md) —
+- [`internal/superpowers/reviews/2026-07-29-arc2-threat-model.md`](../reviews/2026-07-29-arc2-threat-model.md)
+- [`internal/superpowers/reviews/2026-07-29-arc2-supply-chain.md`](../reviews/2026-07-29-arc2-supply-chain.md)
+- [`internal/superpowers/reviews/2026-07-29-arc2-fail-open.md`](../reviews/2026-07-29-arc2-fail-open.md)
+- [`internal/superpowers/reviews/2026-07-29-arc2-tripwires.md`](../reviews/2026-07-29-arc2-tripwires.md)
+- [`internal/superpowers/reviews/2026-07-29-arc1-arc2-ledger.md`](../reviews/2026-07-29-arc1-arc2-ledger.md) —
   the implementation ledger: every task, every gate result, every controller finding and correction,
   in order. This is the recovery map for a fresh session.
 

@@ -337,7 +337,7 @@ async fn graph_expand_filters_and_scope(pool: sqlx::PgPool) {
 // ── The provenance sibling ──────────────────────────────────────────────────────────────────────
 //
 // `query_follow_from` / `__temper_ungated_follow_from` (`20260814000030`), design
-// `docs/superpowers/specs/2026-08-14-follow-from-mechanic-design.md`.
+// `internal/superpowers/specs/2026-08-14-follow-from-mechanic-design.md`.
 //
 // **The four tests above are now this walk's regression suite too**, and that is the point of the
 // re-point rather than a side effect: `search_graph_expand` delegates here, so decay, MAX-over-paths,

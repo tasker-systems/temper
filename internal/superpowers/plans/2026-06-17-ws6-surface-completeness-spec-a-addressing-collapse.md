@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust workspace (temper-core, temper-cli, temper-mcp, temper-api, temper-client), clap, sqlx (offline macros + runtime queries), axum, rmcp (MCP). Tests via cargo-nextest. Build/check via cargo-make.
 
-**Spec:** `docs/superpowers/specs/2026-06-17-ws6-surface-completeness-spec-a-addressing-collapse-design.md`
+**Spec:** `internal/superpowers/specs/2026-06-17-ws6-surface-completeness-spec-a-addressing-collapse-design.md`
 
 ## Global Constraints
 

@@ -8,9 +8,9 @@
 
 **Related work:**
 - Umbrella plan task: `2026-05-03-schema-driven-managed-meta-alignment-temper-prefix-everywhere-schemas-as-contract`.
-- Backbone spec: `docs/superpowers/specs/2026-05-03-schema-driven-managed-meta-design.md` — defines the canonical key set this migration is bringing legacy data into compliance with.
-- Phase 1 plan: `docs/superpowers/plans/2026-05-04-managed-meta-phase1-schema-contract-foundation.md` — landed the schema/serde rename and the `date` drop from managed-tier.
-- Phase 5 plan: `docs/superpowers/plans/2026-05-04-managed-meta-phase5-canonical-projection-injection.md` — landed the symmetric send-side + receive-side `ensure_managed_identity_keys` injection that this phase relies on for the post-deploy safety net.
+- Backbone spec: `internal/superpowers/specs/2026-05-03-schema-driven-managed-meta-design.md` — defines the canonical key set this migration is bringing legacy data into compliance with.
+- Phase 1 plan: `internal/superpowers/plans/2026-05-04-managed-meta-phase1-schema-contract-foundation.md` — landed the schema/serde rename and the `date` drop from managed-tier.
+- Phase 5 plan: `internal/superpowers/plans/2026-05-04-managed-meta-phase5-canonical-projection-injection.md` — landed the symmetric send-side + receive-side `ensure_managed_identity_keys` injection that this phase relies on for the post-deploy safety net.
 - Adjacent (out of scope): Phase 8 (re-enable `show_cache` tier-2) and Phase 9 (`temper doctor fix` legacy vault rewrite). Both are unblocked once this phase lands; both are separate plans.
 
 ---

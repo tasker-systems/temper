@@ -220,7 +220,7 @@ The two write surfaces split on **where embeddings are computed**, which determi
 
 **Interim operator guidance (permanent):** route **bulk / large imports through the CLI**, and use MCP for **interactive, incremental** writes where per-call embed cost is negligible. This holds regardless of the async work below and is good practice permanently — the CLI is the "bring your own vectors" fast path.
 
-The async-embedding work (issue #299, design spec `docs/superpowers/specs/2026-07-07-async-embedding-off-request-path-design.md`) moves the server-side embed **off the request path**: the create returns as soon as chunk text is persisted (immediately FTS-searchable), and the vector is backfilled by a queued job (vector-searchable shortly after). The create return contract stays uniform — no polling, no alternate return shape. Once that lands, large MCP/HTTP creates return promptly too; the CLI guidance above still stands as the lowest-latency path for bulk work.
+The async-embedding work (issue #299, design spec `internal/superpowers/specs/2026-07-07-async-embedding-off-request-path-design.md`) moves the server-side embed **off the request path**: the create returns as soon as chunk text is persisted (immediately FTS-searchable), and the vector is backfilled by a queued job (vector-searchable shortly after). The create return contract stays uniform — no polling, no alternate return shape. Once that lands, large MCP/HTTP creates return promptly too; the CLI guidance above still stands as the lowest-latency path for bulk work.
 
 ## Database Schema
 

@@ -8,13 +8,13 @@
 
 **Tech Stack:** Rust (temper-core, temper-events, temper-api, temper-cli, temper-mcp), PostgreSQL 18, sqlx compile-time macros, axum, rmcp (MCP), cargo-nextest.
 
-**Spec:** `docs/superpowers/specs/2026-05-22-limb1-relationship-events-edge-projection-design.md`
+**Spec:** `internal/superpowers/specs/2026-05-22-limb1-relationship-events-edge-projection-design.md`
 
 ---
 
 ## Critical execution notes
 
-- **The schema cutover (Task 7) has no intermediate green state.** Renaming `kb_resource_edges` columns and dropping the `edge_type` enum breaks every `sqlx::query!` macro that references them the instant the migration runs against the dev DB. Tasks 1–6 are all *additive* and stay green individually. Task 7 bundles the breaking migration with every Rust repair it forces, and commits once. This mirrors limb 0's "all code first, then one consolidated verify+commit" (see `docs/superpowers/specs/2026-05-21-event-ledger-unification-design.md`).
+- **The schema cutover (Task 7) has no intermediate green state.** Renaming `kb_resource_edges` columns and dropping the `edge_type` enum breaks every `sqlx::query!` macro that references them the instant the migration runs against the dev DB. Tasks 1–6 are all *additive* and stay green individually. Task 7 bundles the breaking migration with every Rust repair it forces, and commits once. This mirrors limb 0's "all code first, then one consolidated verify+commit" (see `internal/superpowers/specs/2026-05-21-event-ledger-unification-design.md`).
 - **`DATABASE_URL` must point at a migrated dev DB** for sqlx macros to compile. After Task 5's and Task 7's migrations, run `cargo sqlx prepare --workspace -- --all-features` and commit the `.sqlx/` changes (see `feedback_sql_query_patterns` / the CLAUDE.md SQL section). Per-crate prepare may be needed for feature-gated test queries — see `project_sqlx_per_crate_cache_for_feature_gated_tests`.
 - **Run `cargo make fix && cargo make check` before every commit.** The pre-commit hook is a backstop, not the first line.
 - **Test scope per task:** focused test + the touched crate's suite (`cargo nextest run -p <crate> --features test-db`). Full-workspace nextest belongs at PR-prep only.
@@ -600,7 +600,7 @@ Create `migrations/20260522100001_relationship_event_taxonomy.sql`:
 
 ```sql
 -- Relationship-event taxonomy — phase 1 of limb 1 (edges as event projections).
--- Spec: docs/superpowers/specs/2026-05-22-limb1-relationship-events-edge-projection-design.md
+-- Spec: internal/superpowers/specs/2026-05-22-limb1-relationship-events-edge-projection-design.md
 -- This migration is ADDITIVE: new enums + registry/topic rows. The breaking
 -- kb_resource_edges cutover is a separate later migration.
 
@@ -752,7 +752,7 @@ Create `migrations/20260522100002_edges_as_projection.sql`:
 ```sql
 -- Edges as projection — phase-2 schema cutover for limb 1.
 -- kb_resource_edges becomes a projection of the relationship-event stream.
--- Spec: docs/superpowers/specs/2026-05-22-limb1-relationship-events-edge-projection-design.md
+-- Spec: internal/superpowers/specs/2026-05-22-limb1-relationship-events-edge-projection-design.md
 
 -- ─── 1. Synthesize a genesis relationship_asserted event per existing edge ──
 -- Pre-existing edges must become real ledger history, or a full rebuild loses

@@ -10,7 +10,7 @@
 
 **Tech Stack:** Rust, serde 1.0.228, schemars 1.2.1, ts-rs, utoipa, cargo-nextest, cargo-make.
 
-**Source of truth for shape:** `docs/superpowers/specs/2026-08-03-query-envelope-contract-v0-design.md`. If this plan and that spec disagree, the spec wins — amend the spec rather than diverging silently.
+**Source of truth for shape:** `internal/superpowers/specs/2026-08-03-query-envelope-contract-v0-design.md`. If this plan and that spec disagree, the spec wins — amend the spec rather than diverging silently.
 
 ## Global Constraints
 
@@ -252,7 +252,7 @@ Create `crates/temper-core/src/types/query/mod.rs`:
 ```rust
 //! The v0 query-envelope contract. These types ARE the contract: the published spec is generated
 //! from them in T3 and ships with the other generated artifacts, so there is no hand-written
-//! second copy. See `docs/superpowers/specs/2026-08-03-query-envelope-contract-v0-design.md` for
+//! second copy. See `internal/superpowers/specs/2026-08-03-query-envelope-contract-v0-design.md` for
 //! the design reasoning.
 
 pub mod id_set;

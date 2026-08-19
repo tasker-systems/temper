@@ -13,7 +13,7 @@ metrics pipeline in this repo and this plan does not add one.
 **Tech Stack:** Rust, `tracing` + `tracing-opentelemetry`, `sqlx` (compile-time checked), nextest,
 `opentelemetry_sdk::trace::InMemorySpanExporter` for span assertions.
 
-**Spec:** `docs/superpowers/specs/2026-08-03-drain-instrumentation-design.md`. Read it before Task 1
+**Spec:** `internal/superpowers/specs/2026-08-03-drain-instrumentation-design.md`. Read it before Task 1
 — this plan is an index over it, not a replacement for it.
 
 ## Global Constraints

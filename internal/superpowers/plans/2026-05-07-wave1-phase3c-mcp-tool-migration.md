@@ -12,9 +12,9 @@
 
 **Tech Stack:** Rust 2024, async-trait (already in DbBackend), tokio, sqlx with compile-time-checked queries (unchanged by this phase — 3c moves dispatch, not SQL), rmcp for MCP transport, schemars for tool param schemas.
 
-**Spec:** `docs/superpowers/specs/2026-05-07-wave1-phase3-dbbackend-design.md`
-**Predecessor (3a, merged):** `docs/superpowers/plans/2026-05-07-wave1-phase3a-dbbackend-foundation.md`
-**Predecessor (3b, same branch — MUST land before 3c starts):** `docs/superpowers/plans/2026-05-07-wave1-phase3b-http-handler-migration.md`
+**Spec:** `internal/superpowers/specs/2026-05-07-wave1-phase3-dbbackend-design.md`
+**Predecessor (3a, merged):** `internal/superpowers/plans/2026-05-07-wave1-phase3a-dbbackend-foundation.md`
+**Predecessor (3b, same branch — MUST land before 3c starts):** `internal/superpowers/plans/2026-05-07-wave1-phase3b-http-handler-migration.md`
 
 **Branch:** `jct/wave1-phase3bc-handler-mcp-migration` (same branch as 3b — both phases ship as one PR or two stacked PRs from the same branch).
 

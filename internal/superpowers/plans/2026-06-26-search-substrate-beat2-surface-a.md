@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (sqlx runtime queries — the `::vector` cast forbids the compile-time macros), PostgreSQL 17/18 + pgvector (HNSW) + GIN tsvector, temper-substrate `artifact-tests` (`#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]` ephemeral `public`-schema DBs), ts-rs for the TS type.
 
-Design spec: `docs/superpowers/specs/2026-06-26-search-substrate-beat2-surface-a-design.md`.
+Design spec: `internal/superpowers/specs/2026-06-26-search-substrate-beat2-surface-a-design.md`.
 
 ## Global Constraints
 

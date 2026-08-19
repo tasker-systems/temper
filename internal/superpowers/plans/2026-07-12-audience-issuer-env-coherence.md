@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, `jsonwebtoken` (`Validation`), `tracing`, cargo-make, cargo-nextest.
 
-**Spec:** [`docs/superpowers/specs/2026-07-12-audience-issuer-env-coherence-design.md`](../specs/2026-07-12-audience-issuer-env-coherence-design.md)
+**Spec:** [`internal/superpowers/specs/2026-07-12-audience-issuer-env-coherence-design.md`](../specs/2026-07-12-audience-issuer-env-coherence-design.md)
 
 ## Global Constraints
 

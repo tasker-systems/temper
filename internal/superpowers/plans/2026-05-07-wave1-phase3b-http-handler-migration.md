@@ -1,12 +1,12 @@
 # Wave 1 Phase 3b — HTTP Handler Migration Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. **Cannot write to file in this session — copy this content into `docs/superpowers/plans/2026-05-07-wave1-phase3b-http-handler-migration.md`.**
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. **Cannot write to file in this session — copy this content into `internal/superpowers/plans/2026-05-07-wave1-phase3b-http-handler-migration.md`.**
 
 **Goal:** Make `DbBackend` the canonical write-path dispatch target for HTTP handlers. Migrate the four write-path handlers (`POST /api/resources`, `PATCH /api/resources/{id}`, `POST /api/ingest`, `PUT /api/ingest/{id}`, `PUT /api/resources/{id}/meta`) and their three sibling service functions (`resource_service::create`, `ingest_service::update`, `meta_service::update_meta`) into a single unified flow through `DbBackend::create_resource` / `DbBackend::update_resource`. Read-only handlers and the search handler stay service-direct (the trait projects to lossy types — see "Architecture decisions").
 
 **Predecessors:**
-- Plan: `docs/superpowers/plans/2026-05-07-wave1-phase3a-dbbackend-foundation.md`
-- Spec: `docs/superpowers/specs/2026-05-07-wave1-phase3-dbbackend-design.md` (canonical reference; this plan supersedes the spec's "Sub-phase decomposition" handler list, see *§Verified inventory* below)
+- Plan: `internal/superpowers/plans/2026-05-07-wave1-phase3a-dbbackend-foundation.md`
+- Spec: `internal/superpowers/specs/2026-05-07-wave1-phase3-dbbackend-design.md` (canonical reference; this plan supersedes the spec's "Sub-phase decomposition" handler list, see *§Verified inventory* below)
 
 **Branch:** `jct/wave1-phase3bc-handler-mcp-migration` — same branch will carry 3c.
 

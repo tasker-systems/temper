@@ -6,7 +6,7 @@
 
 **Architecture:** Two limbs. **Limb 2 (context-share)** mirrors the shipped `cogmap bind`/`unbind` stack almost 1:1 (wire types → service with `is_system_admin` gate → API handler+route → client → CLI). **Limb 1 (SAML emitter)** is a pure typed core (one `SamlProvisionConfig` struct renders env + SQL, consistency-by-construction; Rust-native ed25519 PKCS#8 keygen) wrapped by a `temper admin saml` command shell that emits by default and, with `--apply`, shells out to `psql` (mirroring `open_in_editor`). Emit is inert (no auth); `--apply`/`--from-seen`/`verify --db` are gated by possession of `DATABASE_URL` + `psql`.
 
-**Tech Stack:** Rust (clap, dialoguer, ed25519-dalek, pkcs8, rand, base64, sqlx, axum, reqwest), the temper workspace crates (`temper-core`, `temper-services`, `temper-api`, `temper-client`, `temper-cli`). Spec: `docs/superpowers/specs/2026-07-02-admin-saml-provisioning-and-context-share-design.md`.
+**Tech Stack:** Rust (clap, dialoguer, ed25519-dalek, pkcs8, rand, base64, sqlx, axum, reqwest), the temper workspace crates (`temper-core`, `temper-services`, `temper-api`, `temper-client`, `temper-cli`). Spec: `internal/superpowers/specs/2026-07-02-admin-saml-provisioning-and-context-share-design.md`.
 
 ## Global Constraints
 

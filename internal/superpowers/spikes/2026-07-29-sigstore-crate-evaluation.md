@@ -1,8 +1,8 @@
 # Spike: sigstore crate selection for pinned-root attestation verification
 
 **Date:** 2026-07-29
-**Plan task:** Task 1 of `docs/superpowers/plans/2026-07-29-binary-attestation-and-manifest-verification.md`
-**Spec:** `docs/superpowers/specs/2026-07-29-binary-attestation-and-manifest-verification-design.md`
+**Plan task:** Task 1 of `internal/superpowers/plans/2026-07-29-binary-attestation-and-manifest-verification.md`
+**Spec:** `internal/superpowers/specs/2026-07-29-binary-attestation-and-manifest-verification-design.md`
 
 ## The question
 

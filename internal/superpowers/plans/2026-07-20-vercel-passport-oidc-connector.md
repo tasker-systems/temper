@@ -1,7 +1,7 @@
 # Implementation plan — OIDC upstream connector + typed deployment posture (Option B1)
 
 Companion to the research/design doc
-[`docs/superpowers/specs/2026-07-20-vercel-passport-native-integration-research.md`](../specs/2026-07-20-vercel-passport-native-integration-research.md).
+[`internal/superpowers/specs/2026-07-20-vercel-passport-native-integration-research.md`](../specs/2026-07-20-vercel-passport-native-integration-research.md).
 
 **Goal.** Add an `oidc` upstream federation connector behind Temper's existing Authorization Server,
 as a sibling of the SAML SP, and make an instance's auth posture first-class and typed. Target

@@ -8,7 +8,7 @@
 
 **Tech Stack:** PostgreSQL 18, pgvector 0.8.2, sqlx 0.8 (FromRow/Type derives only), Rust (type definitions only — no runtime implementation)
 
-**Design Spec:** `docs/superpowers/specs/2026-03-27-r4-crate-architecture-auth-access-control-design.md`
+**Design Spec:** `internal/superpowers/specs/2026-03-27-r4-crate-architecture-auth-access-control-design.md`
 
 ---
 

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, ratatui 0.29, crossterm 0.28, pulldown-cmark (new), tokio
 
-**Spec:** `docs/superpowers/specs/2026-03-25-tui-polish-and-navigation-design.md`
+**Spec:** `internal/superpowers/specs/2026-03-25-tui-polish-and-navigation-design.md`
 
 ---
 

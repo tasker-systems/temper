@@ -125,7 +125,7 @@ Land the plan file before any code change so subsequent commits reference it. No
 - [ ] **Step 1: Commit the plan file**
 
 ```bash
-git add docs/superpowers/plans/2026-05-25-cloud-only-vault-chunk6-delete-hnsw-and-rework-search.md
+git add internal/superpowers/plans/2026-05-25-cloud-only-vault-chunk6-delete-hnsw-and-rework-search.md
 git commit -m "cloud-only(ch6): record the chunk 6 implementation plan"
 ```
 
@@ -975,7 +975,7 @@ commits added since the predecessor commit e48e7ee
 "cloud-only(ch5): review followups (CLAUDE.md sync-recovery guidance)".
 
 The plan is at:
-  docs/superpowers/plans/2026-05-25-cloud-only-vault-chunk6-delete-hnsw-and-rework-search.md
+  internal/superpowers/plans/2026-05-25-cloud-only-vault-chunk6-delete-hnsw-and-rework-search.md
 
 The plan REFINES the original task brief in two ways (both documented
 in the plan's preamble):
@@ -1075,9 +1075,9 @@ format UnifiedSearchResultRow directly)
 
 ## Connections
 - Branch (no PR yet): jct/cloud-only-vault-pr-b
-- Plan: docs/superpowers/plans/2026-05-25-cloud-only-vault-chunk6-delete-hnsw-and-rework-search.md
+- Plan: internal/superpowers/plans/2026-05-25-cloud-only-vault-chunk6-delete-hnsw-and-rework-search.md
 - Predecessor session: 2026-05-24-cloud-only-vault-chunk-5-landed-sync-cmd-gutted-push-research-publish-helper-deleted-4-e2e-tests-gone-sync-rs-manifest-io-deferred-to-chunk-7
-- Spec: docs/superpowers/specs/2026-05-21-cloud-only-vault-deprecation-design.md
+- Spec: internal/superpowers/specs/2026-05-21-cloud-only-vault-deprecation-design.md
 
 ## Next Steps
 - Chunk 7: doctor + ingest rework (drops actions::{doctor, doctor_fix, ingest}, commands::doctor) — also FINALLY deletes actions/sync.rs, manifest_io.rs, and temper-core::types::{manifest,sync}

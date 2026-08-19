@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (sqlx, axum, temper-services/temper-core), SvelteKit + TypeScript, d3-force, Vitest, cargo-nextest, ts-rs.
 
-**Spec:** `docs/superpowers/specs/2026-07-06-atlas-beat-a-cogmap-knowledge-field-spec.md` (vault `019f39e2`). **North star:** `…2026-07-06-atlas-reshape-projection-class-north-star.md`. **Subsumes** task `019f38b3`.
+**Spec:** `internal/superpowers/specs/2026-07-06-atlas-beat-a-cogmap-knowledge-field-spec.md` (vault `019f39e2`). **North star:** `…2026-07-06-atlas-reshape-projection-class-north-star.md`. **Subsumes** task `019f38b3`.
 
 ## Global Constraints
 

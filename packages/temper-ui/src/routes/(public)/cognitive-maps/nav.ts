@@ -1,6 +1,7 @@
-// Single source of truth for the /cognitive-maps tier structure. Mirrors the
-// `order` / `parent` / `genre` / `title` frontmatter of the markdown source in
-// docs/cognitive-maps/. The +layout derives prev/next from the flattened
+// Single source of truth for the /cognitive-maps tier structure. The former
+// markdown source under docs/cognitive-maps/ was retired; `order` / `parent` /
+// `genre` / `title` now live only here, alongside the per-page +page.svelte
+// routes in this directory. The +layout derives prev/next from the flattened
 // reading order. "Name the thing, don't point" — links carry titles, never
 // ordinals.
 

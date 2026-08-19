@@ -54,7 +54,7 @@ MCP input / HTTP DTO / CLI flags        ← Chunk B / C: gain optional authorshi
 
 ## Load-bearing invariants (travel verbatim — GD-4)
 
-- *"Authorship rides `kb_events.metadata`, NOT the payload — invisible to projections (and thus affinity math) by construction, and survives replay verbatim."* (06-18 plan `docs/superpowers/plans/2026-06-18-invocation-envelope-and-authorship-metadata.md:7`)
+- *"Authorship rides `kb_events.metadata`, NOT the payload — invisible to projections (and thus affinity math) by construction, and survives replay verbatim."* (06-18 plan `internal/superpowers/plans/2026-06-18-invocation-envelope-and-authorship-metadata.md:7`)
 - *"Auth before writes — authorization checks go before any mutations."* (CLAUDE.md Code Quality Rules)
 - *"Full MCP+API+CLI surface parity is ALWAYS the intention — one shared logic layer, MCP-first ok but API+CLI same vertical."* (memory `feedback_full_surface_parity_always`)
 - *"Typed structs over inline JSON; shared types at boundaries live in temper-core with ts-rs derives."* (CLAUDE.md)

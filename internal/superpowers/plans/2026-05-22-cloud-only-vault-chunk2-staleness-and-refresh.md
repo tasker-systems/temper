@@ -8,9 +8,9 @@
 
 **Tech Stack:** Rust, `temper-client` (HTTP client), `cargo-nextest` (tests), `tempfile` (test fixtures). The e2e harness spawns a real Axum server + Postgres via `#[sqlx::test]`.
 
-**Source spec:** `docs/superpowers/specs/2026-05-21-cloud-only-vault-deprecation-design.md` (Chunk 2).
+**Source spec:** `internal/superpowers/specs/2026-05-21-cloud-only-vault-deprecation-design.md` (Chunk 2).
 
-**Predecessor:** Chunk 1 (`docs/superpowers/plans/2026-05-21-cloud-only-vault-chunk1-projection-foundation.md`) — landed. It built `projection.rs` (`ProjectionCursor`, `read_cursor`, `write_cursor`, `prune_context`, `write_resource_file`, `pull_context`, `PullSummary`), the `GET /api/events/cursor` endpoint, `EventClient::latest_for_context`, and repurposed `temper pull`.
+**Predecessor:** Chunk 1 (`internal/superpowers/plans/2026-05-21-cloud-only-vault-chunk1-projection-foundation.md`) — landed. It built `projection.rs` (`ProjectionCursor`, `read_cursor`, `write_cursor`, `prune_context`, `write_resource_file`, `pull_context`, `PullSummary`), the `GET /api/events/cursor` endpoint, `EventClient::latest_for_context`, and repurposed `temper pull`.
 
 ---
 

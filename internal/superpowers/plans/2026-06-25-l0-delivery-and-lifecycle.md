@@ -132,7 +132,7 @@ mod tests {
 
 ```rust
 //! Wire types for L0 cognitive-map content reconciliation (see
-//! docs/superpowers/specs/2026-06-25-l0-delivery-and-lifecycle-design.md). The PUT body is a
+//! internal/superpowers/specs/2026-06-25-l0-delivery-and-lifecycle-design.md). The PUT body is a
 //! PRE-EMBEDDED desired-state manifest: the CLI embeds (compute_body_chunks) before sending, so the
 //! server stays embed-free on the request path.
 use serde::{Deserialize, Serialize};
@@ -544,7 +544,7 @@ The authored kernel content as a committed production artifact (relocated/derive
 
 ## Execution Handoff
 
-Plan complete and saved to `docs/superpowers/plans/2026-06-25-l0-delivery-and-lifecycle.md`. Two execution options:
+Plan complete and saved to `internal/superpowers/plans/2026-06-25-l0-delivery-and-lifecycle.md`. Two execution options:
 
 1. **Subagent-Driven (recommended)** — fresh subagent per task, review between tasks, fast iteration. (Note this repo's hybrid-execution skill: Variant B consolidates review; the temper convention is per-task focused tests + `cargo make check`, full workspace at PR-prep.)
 2. **Inline Execution** — execute tasks in this session with checkpoints for review.

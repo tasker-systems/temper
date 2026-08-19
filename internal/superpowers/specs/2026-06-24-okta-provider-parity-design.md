@@ -3,7 +3,7 @@
 **Date:** 2026-06-24
 **Branch:** `jct/okta-provider-parity`
 **Status:** Approved design, pre-implementation
-**Follows:** `docs/superpowers/specs/2026-06-24-okta-self-hosting-addendum-design.md`
+**Follows:** `internal/superpowers/specs/2026-06-24-okta-self-hosting-addendum-design.md`
 
 ## Context
 

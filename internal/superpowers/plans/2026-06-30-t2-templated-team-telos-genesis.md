@@ -111,7 +111,7 @@ Rust changes in this plan**.
 # ("this team") so the single artifact serves every team without interpolation — the team's identity
 # rides on the map's `--name` at apply time. Tended by the Eve steward (create / assert / facet /
 # fold); regions emerge from `materialize` — the steward never clusters. See the T3 spec:
-# docs/superpowers/specs/2026-06-30-steward-act-model-cogmap-resource-vocabulary-design.md
+# internal/superpowers/specs/2026-06-30-steward-act-model-cogmap-resource-vocabulary-design.md
 #
 # IDENTITY: omit `cogmap_id` / `telos_resource_id` and the CLI mints stable uuidv7s and prints them.
 # Pin them in the SoP (per team) once you want a reproducible, re-runnable genesis — a re-run at the

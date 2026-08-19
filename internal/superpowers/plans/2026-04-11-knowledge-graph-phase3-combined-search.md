@@ -8,7 +8,7 @@
 
 **Tech Stack:** Postgres 18, sqlx 0.8 (runtime queries for pgvector/enum casts), temper-core types, temper-client for e2e tests
 
-**Source spec:** `docs/superpowers/specs/2026-04-11-knowledge-graph-phase3-combined-search.md`
+**Source spec:** `internal/superpowers/specs/2026-04-11-knowledge-graph-phase3-combined-search.md`
 
 **Important codebase patterns:**
 - `unified_search()` SQL function is in `migrations/20260405000001_fts_search_index.sql` — it takes 10 params and returns 11 columns

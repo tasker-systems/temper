@@ -30,8 +30,8 @@
 **Tech Stack:** Rust 2021, serde, serde_yaml, JSON Schema 2020-12.
 
 **Specs:**
-- `docs/superpowers/specs/2026-05-03-schema-driven-managed-meta-design.md` — combines spec Phases 1 + 2 (the spec flagged these as likely consolidation candidates).
-- Upstream backbone: `docs/superpowers/specs/2026-05-01-shared-core-execution-paths-design.md`.
+- `internal/superpowers/specs/2026-05-03-schema-driven-managed-meta-design.md` — combines spec Phases 1 + 2 (the spec flagged these as likely consolidation candidates).
+- Upstream backbone: `internal/superpowers/specs/2026-05-01-shared-core-execution-paths-design.md`.
 
 **Predecessor state:** `crates/temper-core/src/types/managed_meta.rs::ManagedMeta` has `title` and `slug` fields with no `serde(rename)` (lines 91-96). All 7 JSON schemas in `crates/temper-core/schemas/` declare bare `title` (in base) and bare `slug` (in task/goal/research/decision/concept). `LEGACY_FIELDS` in `crates/temper-core/src/frontmatter/fields.rs` already has 14 bare→temper-prefix entries — title and slug are missing. `SYSTEM_MANAGED_FIELDS` has bare `slug` at line 86 (pre-existing inconsistency this plan resolves).
 
@@ -1305,4 +1305,4 @@ Three follow-up plans are needed to complete the spec's 9-phase migration:
 - **Phase 4: CLI write paths + askama templates** — emit canonical keys from `crates/temper-cli/templates/*.md` and `actions/frontmatter::build_managed_meta_for_create`. `[subagent-OK]` once Phase 3 is green.
 - **Phases 5-9** — server-side stripping cleanup, DB migration, read-side cleanup, tier-2 re-enable, vault doctor fix. Phase 5 is blocked on locating the title/slug column-extraction SQL site (spec open question 3); the others depend on Phase 5 + 6 outcomes.
 
-Each gets its own plan document in `docs/superpowers/plans/`, written when its open questions resolve and the predecessor plans have landed.
+Each gets its own plan document in `internal/superpowers/plans/`, written when its open questions resolve and the predecessor plans have landed.

@@ -3,7 +3,7 @@
 **Date:** 2026-06-26
 **Arc:** Search followup — leverage the substrate (graph-nearness + cogmap-region salience)
 **Beat:** 2 of 3 (Surface A). See the goal roadmap; builds directly on Beat 1's stored tsvector
-(`docs/superpowers/specs/2026-06-26-search-substrate-beat1-stored-tsvector-design.md`).
+(`internal/superpowers/specs/2026-06-26-search-substrate-beat1-stored-tsvector-design.md`).
 **Mode:** build · **Effort:** large
 
 ---

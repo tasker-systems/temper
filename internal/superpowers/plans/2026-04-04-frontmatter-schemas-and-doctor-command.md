@@ -8,7 +8,7 @@
 
 **Tech Stack:** `jsonschema` crate for validation, `serde_yaml` + `serde_json` for frontmatter parsing, `sha2` for hash computation, existing `clap` CLI patterns.
 
-**Spec:** `docs/superpowers/specs/2026-04-04-frontmatter-schemas-and-obsidian-alignment-design.md`
+**Spec:** `internal/superpowers/specs/2026-04-04-frontmatter-schemas-and-obsidian-alignment-design.md`
 
 ---
 

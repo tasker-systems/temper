@@ -264,7 +264,7 @@ One large atomic move. Substrate is **not touched**.
 
 ## References
 
-- `docs/superpowers/specs/2026-06-25-ws6-shim-exit-native-shape-design.md` (precondition;
+- `internal/superpowers/specs/2026-06-25-ws6-shim-exit-native-shape-design.md` (precondition;
   decision #3 re-homes ResourceRow here).
 - Memories: `project_shared_kernel_two_domains`, `project_neutral_api_temper_workflow`,
   `project_temper_next_unconditional_dep_ci_exclusion`,

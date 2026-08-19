@@ -19,7 +19,7 @@
 
 **Tech Stack:** Rust (rmcp, sqlx, sha2, serde, schemars), TypeScript (Vercel Workflows, neon serverless postgres, ONNX embeddings), Axum (existing API services)
 
-**Spec:** `docs/superpowers/specs/2026-04-06-mcp-content-creation-flow-design.md`
+**Spec:** `internal/superpowers/specs/2026-04-06-mcp-content-creation-flow-design.md`
 
 ---
 

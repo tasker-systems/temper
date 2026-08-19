@@ -167,7 +167,7 @@ Links the session to a ticket by:
 2. Updating the ticket's frontmatter:
    - `branch` — set to current git branch (from `git rev-parse --abbrev-ref HEAD`)
    - `sessions` — append this session's UUIDv7 to the list
-3. If design/plan docs exist in `docs/superpowers/specs/` or `docs/superpowers/plans/` whose filename contains the ticket slug (prefix match, e.g., `2026-03-24-auth-refactor-design.md` matches ticket slug `2026-03-24-auth-refactor`), adds their relative paths to a `docs` list on the ticket frontmatter
+3. If design/plan docs exist in `internal/superpowers/specs/` or `internal/superpowers/plans/` whose filename contains the ticket slug (prefix match, e.g., `2026-03-24-auth-refactor-design.md` matches ticket slug `2026-03-24-auth-refactor`), adds their relative paths to a `docs` list on the ticket frontmatter
 
 ### `--state <state>`
 

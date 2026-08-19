@@ -1,5 +1,5 @@
 //! Wire types for L0 cognitive-map content reconciliation (see
-//! docs/superpowers/plans/2026-06-25-l0-delivery-and-lifecycle.md). The PUT body is a
+//! internal/superpowers/plans/2026-06-25-l0-delivery-and-lifecycle.md). The PUT body is a
 //! PRE-EMBEDDED desired-state manifest: the CLI embeds (compute_body_chunks) before sending, so the
 //! server stays embed-free on the request path.
 //!

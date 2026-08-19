@@ -6370,7 +6370,7 @@ export interface components {
          * @description One edge a walk reached a node by — **the edge as asserted**, and no quantity.
          *
          *     `[added — 2026-08-14]` with `follow-from`'s provenance-carrying mechanic
-         *     (`20260814000030`), design `docs/superpowers/specs/2026-08-14-follow-from-mechanic-design.md`
+         *     (`20260814000030`), design `internal/superpowers/specs/2026-08-14-follow-from-mechanic-design.md`
          *     §4.
          *
          *     # Why source and target rather than a parent plus a direction

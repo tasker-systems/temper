@@ -10,7 +10,7 @@
 
 **Tech Stack:** Rust workspace (cargo-make, cargo-nextest), sqlx, axum, postgres. Tests use the embed-gated e2e recipe from `CLAUDE.md` for the regression test.
 
-**Spec:** `docs/superpowers/specs/2026-05-08-ownership-bug-warning-design.md`
+**Spec:** `internal/superpowers/specs/2026-05-08-ownership-bug-warning-design.md`
 
 ---
 
@@ -970,7 +970,7 @@ Append to `tests/e2e/tests/pull_command_test.rs` (after the `pull_one_resource_w
 
 ```rust
 /// Round-trip regression for the ownership-bug-warning fix
-/// (docs/superpowers/specs/2026-05-08-ownership-bug-warning-design.md).
+/// (internal/superpowers/specs/2026-05-08-ownership-bug-warning-design.md).
 ///
 /// After a NewlyTracked pull, the file's frontmatter must record the
 /// canonical `@<profile.slug>` owner sigil (not the API's `@me` shorthand)
@@ -1145,7 +1145,7 @@ Expected: everything green.
 
 - [ ] **Step 3: Spec self-review against the implementation**
 
-Re-read `docs/superpowers/specs/2026-05-08-ownership-bug-warning-design.md` and confirm:
+Re-read `internal/superpowers/specs/2026-05-08-ownership-bug-warning-design.md` and confirm:
 
 - All 6 acceptance criteria are met (the seven files no longer warn; genuine mismatches still flagged; new pulls write canonical owner; tests pass; embed-gated e2e green; `cargo make check` green).
 - All explicit non-goals were respected (no vault migration; no profile caching; no audit of unrelated frontmatter writers).
@@ -1154,8 +1154,8 @@ Re-read `docs/superpowers/specs/2026-05-08-ownership-bug-warning-design.md` and 
 
 Invoke `superpowers:requesting-code-review` and brief it with:
 - Branch: `jct/ownership-bug-warning`
-- Spec: `docs/superpowers/specs/2026-05-08-ownership-bug-warning-design.md`
-- Plan: `docs/superpowers/plans/2026-05-08-ownership-bug-warning.md`
+- Spec: `internal/superpowers/specs/2026-05-08-ownership-bug-warning-design.md`
+- Plan: `internal/superpowers/plans/2026-05-08-ownership-bug-warning.md`
 - Focus: correctness of the symmetric defense (write + read), test coverage, signature changes propagated cleanly across all callers.
 
 - [ ] **Step 5: Open the PR (only on user direction)**

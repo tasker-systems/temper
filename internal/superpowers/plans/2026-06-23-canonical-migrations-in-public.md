@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust workspace (sqlx, cargo-make, cargo-nextest), PostgreSQL 18 + pgvector (Docker :5437), Neon (Postgres 17) for temperkb.io.
 
-**Spec:** `docs/superpowers/specs/2026-06-23-canonical-migrations-in-public-design.md`
+**Spec:** `internal/superpowers/specs/2026-06-23-canonical-migrations-in-public-design.md`
 
 ## Global Constraints
 
@@ -545,7 +545,7 @@ git commit --no-verify -m "ws6-flip: rewrite/delete test surface for deleted ser
 - Consumes: green DB + e2e suites (Task 8).
 - Produces: the 8-surface parity gate green over the substrate; synthesis machinery gone.
 
-> This task is the flip plan's Tasks 9/10 (`docs/superpowers/plans/2026-06-22-ws6-endgame-collapse-code.md`), redirected to `public`. Execute it from that plan's task bodies; it is listed here so this plan's green-up is complete. Key beats:
+> This task is the flip plan's Tasks 9/10 (`internal/superpowers/plans/2026-06-22-ws6-endgame-collapse-code.md`), redirected to `public`. Execute it from that plan's task bodies; it is listed here so this plan's green-up is complete. Key beats:
 
 - [ ] **Step 1: Delete synthesis** — `git rm -r crates/temper-next/src/synthesis/`; remove the `Synthesize` subcommand + its CLI wiring; delete `parity.rs` + `parity_reads.rs`; keep `corpus_parity_reads.rs` (the durable read-floor). Remove `synthesis::run` / `seed_and_synthesize` / `seed_prod_shape_fixture` consumers in `tests/common/mod.rs` (now dead). Fix the dangling `temper_next::MIGRATOR`-based synthesis tests.
 

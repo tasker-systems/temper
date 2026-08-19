@@ -1609,8 +1609,8 @@ CLI = CRUD primitives mapping 1:1 to API calls. Skill layer = workflow orchestra
 
 ## Artifacts
 
-- Design spec: `docs/superpowers/specs/2026-03-27-r5-indexing-sync-resource-management-design.md`
-- Implementation plan: `docs/superpowers/plans/2026-03-27-r5-indexing-sync-resource-management.md`
+- Design spec: `internal/superpowers/specs/2026-03-27-r5-indexing-sync-resource-management-design.md`
+- Implementation plan: `internal/superpowers/plans/2026-03-27-r5-indexing-sync-resource-management.md`
 - Schema additions: kb_transfers table, kb_device_sync_state table (in R2 migration)
 - Rust type stubs: 9 new modules in src/cloud/types/ (32 tests)
 

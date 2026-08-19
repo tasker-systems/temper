@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, clap 4 (derive), serde, chrono
 
-**Spec:** `docs/superpowers/specs/2026-03-24-adaptive-workflow-design.md`
+**Spec:** `internal/superpowers/specs/2026-03-24-adaptive-workflow-design.md`
 
 ---
 

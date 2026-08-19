@@ -1,7 +1,7 @@
 //! The read paths answer in `ResourceView`, and a section is served only when it is asked for.
 //!
 //! Three of these are the conjuncts the convergence rests on
-//! (`docs/superpowers/plans/2026-08-06-resource-view-convergence.md`, Task 5): `content` tracks
+//! (`internal/superpowers/plans/2026-08-06-resource-view-convergence.md`, Task 5): `content` tracks
 //! the `body` section, `open_meta` tracks the `open-meta` section, and `managed_meta` tracks
 //! neither because it is always present — which is what makes dropping the hoisted
 //! `stage`/`mode`/`effort`/`seq` columns lossless.

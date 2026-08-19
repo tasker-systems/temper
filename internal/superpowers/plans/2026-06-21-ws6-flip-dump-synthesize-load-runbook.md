@@ -18,7 +18,7 @@
 - **Connection strings are parameters**, never hardcoded to prod: `FLIP_SOURCE_URL` (dump `public` from), `FLIP_TARGET_URL` (load `temper_next` into), `FLIP_LOCAL_URL` (the :5438 container, default `postgresql://temper:temper@localhost:5438/temper_development`).
 - **`temper-next synthesize` already bails (nonzero exit) on §8 body-parity mismatch** (`crates/temper-next/src/synthesis/mod.rs:364`) — scripts trust the exit code; no output parsing.
 
-**Spec:** `docs/superpowers/specs/2026-06-21-ws6-flip-dump-synthesize-load-runbook-design.md`
+**Spec:** `internal/superpowers/specs/2026-06-21-ws6-flip-dump-synthesize-load-runbook-design.md`
 
 ---
 

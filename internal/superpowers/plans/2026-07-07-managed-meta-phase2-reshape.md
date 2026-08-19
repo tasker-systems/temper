@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust workspace (temper-workflow, temper-services, temper-mcp, temper-api, temper-cli, temper-substrate), sqlx/Postgres, cargo-nextest, cargo-make. serde `deny_unknown_fields`, schemars (MCP JsonSchema), utoipa (OpenAPI), clap (CLI).
 
-**Spec:** `docs/superpowers/specs/2026-07-07-managed-open-meta-boundary-reshape-design.md` — read the "Phase 2 — resolved shape (2026-07-07 light brainstorm)" section. Every task cites the spec section it implements.
+**Spec:** `internal/superpowers/specs/2026-07-07-managed-open-meta-boundary-reshape-design.md` — read the "Phase 2 — resolved shape (2026-07-07 light brainstorm)" section. Every task cites the spec section it implements.
 
 **Task:** temper task `019d7e29`. Branch: `jct/managed-meta-phase2-reshape` (already created; spec-amendment commit `ff45b2cd` is on it).
 

@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Spec: `docs/superpowers/specs/2026-07-08-atlas-beat-d-region-resources-drill-spec.md`.
+- Spec: `internal/superpowers/specs/2026-07-08-atlas-beat-d-region-resources-drill-spec.md`.
 - **Branch `jct/atlas-reshape` is HELD** — commit per task locally, **do NOT push or PR**.
 - **Visibility predicate reproduced conjunct-for-conjunct** — both edge endpoints ⊆ `resources_visible_to`, `NOT is_folded`, home anchor `anchor_readable_by_profile`. Every read path MUST have a **deny-direction** e2e test. (`feedback_read_gate_must_match_full_canonical_visibility`, `reference_array_agg_scope_null_fall_open_leak`.)
 - **No silent truncation** — when a bound clamps the node/region set, surface it (log + return a flag), never drop silently.

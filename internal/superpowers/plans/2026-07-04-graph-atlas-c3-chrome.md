@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (Axum, sqlx runtime `query_as`, ts-rs), PostgreSQL (SQL functions, pgvector), SvelteKit 5 (runes, `$app/navigation`/`$app/stores`), Vitest, cargo-nextest, cargo-make.
 
-**Spec:** [`docs/superpowers/specs/2026-07-04-graph-atlas-c3-chrome-design.md`](../specs/2026-07-04-graph-atlas-c3-chrome-design.md).
+**Spec:** [`internal/superpowers/specs/2026-07-04-graph-atlas-c3-chrome-design.md`](../specs/2026-07-04-graph-atlas-c3-chrome-design.md).
 **Branch:** `jct/graph-atlas-c3-chrome` (already created; spec committed on it).
 
 ## Global Constraints

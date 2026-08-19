@@ -10,7 +10,7 @@
 
 **Tech Stack:** Rust, clap (with `ValueEnum` derive), `serde` / `serde_json`, `toon-format` (v3.0 spec), `std::io::IsTerminal`. Tests via `cargo nextest`.
 
-**Spec:** `docs/superpowers/specs/2026-05-26-cli-output-collapse-json-toon-design.md`
+**Spec:** `internal/superpowers/specs/2026-05-26-cli-output-collapse-json-toon-design.md`
 
 ---
 
@@ -331,7 +331,7 @@ Auto-detection now picks Toon (TTY) / Json (non-TTY) — but until each
 command moves to render(), the surviving Pretty/NoTty branches still
 run the old code paths.
 
-Spec: docs/superpowers/specs/2026-05-26-cli-output-collapse-json-toon-design.md
+Spec: internal/superpowers/specs/2026-05-26-cli-output-collapse-json-toon-design.md
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 GIT
@@ -415,7 +415,7 @@ refactor(cli): events command emits json|toon via render()
 Drop format_event and friends; route through format::render(events, fmt).
 JSON: passes Vec<Event> directly. Toon: same data, human-readable.
 
-Spec: docs/superpowers/specs/2026-05-26-cli-output-collapse-json-toon-design.md
+Spec: internal/superpowers/specs/2026-05-26-cli-output-collapse-json-toon-design.md
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 GIT
@@ -527,7 +527,7 @@ Toon mode renders AuthStatus (status) or an AuthAction confirmation
 struct (login/logout). Json keeps current shape; default is auto
 (Toon in TTY, Json in non-TTY).
 
-Spec: docs/superpowers/specs/2026-05-26-cli-output-collapse-json-toon-design.md
+Spec: internal/superpowers/specs/2026-05-26-cli-output-collapse-json-toon-design.md
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 GIT
@@ -607,7 +607,7 @@ feat(cli): --format flag on context list
 Drop aligned-column text rendering; emit Vec<String> via format::render().
 JSON is the bare array; Toon renders the same data in human-readable form.
 
-Spec: docs/superpowers/specs/2026-05-26-cli-output-collapse-json-toon-design.md
+Spec: internal/superpowers/specs/2026-05-26-cli-output-collapse-json-toon-design.md
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 GIT
@@ -720,7 +720,7 @@ projected, server }] } and routes through format::render(). The old
 line-by-line human-readable print is replaced by Toon rendering of the
 same struct.
 
-Spec: docs/superpowers/specs/2026-05-26-cli-output-collapse-json-toon-design.md
+Spec: internal/superpowers/specs/2026-05-26-cli-output-collapse-json-toon-design.md
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 GIT
@@ -795,7 +795,7 @@ Drop actions/search.rs::format_text (numbered text list). JSON and Toon
 now both pass Vec<UnifiedSearchResultRow> directly. Score/origin fields
 are visible in JSON wire output and in Toon's structural rendering.
 
-Spec: docs/superpowers/specs/2026-05-26-cli-output-collapse-json-toon-design.md
+Spec: internal/superpowers/specs/2026-05-26-cli-output-collapse-json-toon-design.md
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 GIT
@@ -877,7 +877,7 @@ Breaking change: scripts piping `temper resource list --format json`
 into jq with the old `temper-*` frontmatter keys must switch to wire
 field names. Accepted per feedback_no_premature_backward_compat.
 
-Spec: docs/superpowers/specs/2026-05-26-cli-output-collapse-json-toon-design.md
+Spec: internal/superpowers/specs/2026-05-26-cli-output-collapse-json-toon-design.md
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 GIT
@@ -984,7 +984,7 @@ Drop the bespoke JSON wrapper { doc_type, slug, title, context, path,
 content }; the new shape is the wire ResourceRow with a content field
 joined in.
 
-Spec: docs/superpowers/specs/2026-05-26-cli-output-collapse-json-toon-design.md
+Spec: internal/superpowers/specs/2026-05-26-cli-output-collapse-json-toon-design.md
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 GIT
@@ -1103,7 +1103,7 @@ Breaking change: scripts depending on { temper-slug, temper-title } or
 similar per-doctype shapes from create output must switch to the
 wire-type field names. Accepted per feedback_no_premature_backward_compat.
 
-Spec: docs/superpowers/specs/2026-05-26-cli-output-collapse-json-toon-design.md
+Spec: internal/superpowers/specs/2026-05-26-cli-output-collapse-json-toon-design.md
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 GIT
@@ -1210,7 +1210,7 @@ format::render(). Init stays interactive in TTY; non-interactive mode
 with --format json emits { vault_path, contexts, auth }. Warmup
 migrates to format::render() from the legacy output() helper.
 
-Spec: docs/superpowers/specs/2026-05-26-cli-output-collapse-json-toon-design.md
+Spec: internal/superpowers/specs/2026-05-26-cli-output-collapse-json-toon-design.md
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 GIT
@@ -1309,7 +1309,7 @@ just { Json, Toon }; the legacy output() helper and the
 columns/table renderers (400 lines of display code) are gone. CLAUDE.md
 updated to reflect json/toon-only.
 
-Spec: docs/superpowers/specs/2026-05-26-cli-output-collapse-json-toon-design.md
+Spec: internal/superpowers/specs/2026-05-26-cli-output-collapse-json-toon-design.md
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 GIT

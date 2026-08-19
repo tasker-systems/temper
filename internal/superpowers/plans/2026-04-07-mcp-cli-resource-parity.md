@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (rmcp, schemars, sqlx, serde), SvelteKit (temper-ui), Markdown (agent-skills)
 
-**Spec:** `docs/superpowers/specs/2026-04-07-mcp-cli-resource-parity-design.md`
+**Spec:** `internal/superpowers/specs/2026-04-07-mcp-cli-resource-parity-design.md`
 
 **Branch:** `jct/mcp-cli-resource-parity`
 

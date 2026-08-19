@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (temper-next crate), PostgreSQL artifact (`schema-artifact/*.sql`, `temper_next` namespace), sqlx, bge-768 embeddings (ONNX, `artifact-tests` feature), serde_yaml.
 
-**Design source (read before implementing):** `docs/superpowers/specs/2026-06-09-temper-next-d3-evolvable-telos-shape-design.md`. Carry these invariants verbatim:
+**Design source (read before implementing):** `internal/superpowers/specs/2026-06-09-temper-next-d3-evolvable-telos-shape-design.md`. Carry these invariants verbatim:
 - *"blocks are addressable but not findable — `block` is a reference/provenance kind only, never a graph-edge target."*
 - *"a `kb_resources` record is the relationship-vertex because it is the atom that is self-sufficient for its content; a content-block is not self-sufficient."*
 - The block level captures **attribution** (provenance), **not** trajectory; fold is soft-delete/visibility, **not** decay.

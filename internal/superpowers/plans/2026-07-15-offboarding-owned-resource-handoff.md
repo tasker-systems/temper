@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- **Spec:** `docs/superpowers/specs/2026-07-15-offboarding-owned-resource-handoff-design.md` — read it; carry its invariants verbatim.
+- **Spec:** `internal/superpowers/specs/2026-07-15-offboarding-owned-resource-handoff-design.md` — read it; carry its invariants verbatim.
 - **No auto-reassign, no pre-check block, no MCP surface, reassign stays UUID-only.** Surfacing only.
 - **Auth before writes** — the residual read is read-only and runs *after* the existing auth+delete; it never reorders the guard.
 - **One shared scope definition** — the residual set the warning reports MUST be the exact set `reassign_team_resources` moves. One query, no second copy (Fundamentals: extract shared predicate sets).

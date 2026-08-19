@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, `serde`/`serde_yaml`, `sqlx` (`query!`/`query_scalar!` macros for non-vector reusable queries; runtime `query()` retained for pgvector `::vector` queries and test targets), `schemars` (gated), bge-768 embeddings.
 
-**Spec:** `docs/superpowers/specs/2026-06-07-scenario-yaml-seed-dsl-design.md` — read it first. Load-bearing invariant (verbatim): *"Same prose → same embeddings → byte-identical regions (by `origin_uri`) → same verdict."* Fingerprint + verdict key on `origin_uri`, not UUID — stable across seed paths.
+**Spec:** `internal/superpowers/specs/2026-06-07-scenario-yaml-seed-dsl-design.md` — read it first. Load-bearing invariant (verbatim): *"Same prose → same embeddings → byte-identical regions (by `origin_uri`) → same verdict."* Fingerprint + verdict key on `origin_uri`, not UUID — stable across seed paths.
 
 **Grounding tags** (per `~/.claude/skills/temper/guidance/implementation-grounding.md`): CONFORM / EXTEND / AMEND per task. Quoted `file:line` excerpts are pre-grounded; verify anything un-quoted before use. ⚠️ marks a plan/reality check the implementer must resolve on disk.
 

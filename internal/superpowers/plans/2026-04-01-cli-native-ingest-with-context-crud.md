@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (Axum, sqlx, serde, rmp-serde, base64, sha2), existing temper workspace crates.
 
-**Spec:** `docs/superpowers/specs/2026-04-01-cli-native-ingest-with-context-crud-design.md`
+**Spec:** `internal/superpowers/specs/2026-04-01-cli-native-ingest-with-context-crud-design.md`
 
 ---
 

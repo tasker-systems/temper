@@ -56,7 +56,7 @@ script would duplicate the existing Rust test module for no added coverage.
 | `crates/temper-api/src/handlers/{contexts,resources,edges,teams,invitations,invocations,profiles,ingest,cognitive_maps,segments}.rs` | Route handlers + their `#[utoipa::path]` docs | Modify: add `operation_id` to 27 attributes |
 | `openapi.json` | The emitted public contract | Regenerate |
 | `tools/cargo-make/main.toml` | Task runner | Add `openapi-validate` task |
-| `docs/superpowers/specs/2026-07-09-temper-rb-gem-design.md` | The spec | Modify: Part 1 gate description |
+| `internal/superpowers/specs/2026-07-09-temper-rb-gem-design.md` | The spec | Modify: Part 1 gate description |
 
 ---
 
@@ -500,7 +500,7 @@ the shape of the contract, and before cutting a client SDK."
 The spec's Part 1 says the gate would extend `openapi-check` and run `openapi-generator validate` in CI. Implementation put the invariants in Rust tests (their natural home, beside `every_path_documents_the_surface_header`) and left the generator as an on-demand task. Record the decision and the reason, so a later reader does not think the plan was abandoned.
 
 **Files:**
-- Modify: `docs/superpowers/specs/2026-07-09-temper-rb-gem-design.md` (the `**Scope of P5:**` numbered list, item 4, and the `## Open threads` section)
+- Modify: `internal/superpowers/specs/2026-07-09-temper-rb-gem-design.md` (the `**Scope of P5:**` numbered list, item 4, and the `## Open threads` section)
 
 **Interfaces:**
 - Consumes: everything from Tasks 1–3.
@@ -536,7 +536,7 @@ Append to `## Open threads`:
 - [ ] **Step 3: Verify no other spec claim is now false**
 
 ```bash
-rg -n "skip-validate-spec|list_0|openapi-check" docs/superpowers/specs/2026-07-09-temper-rb-gem-design.md
+rg -n "skip-validate-spec|list_0|openapi-check" internal/superpowers/specs/2026-07-09-temper-rb-gem-design.md
 ```
 
 Read each hit. Every remaining mention must be describing the **old, broken** state (in "What discovery established", "Defect 1/2", or the Rejected list), not promising future behavior. Fix any that reads as a promise.
@@ -544,7 +544,7 @@ Read each hit. Every remaining mention must be describing the **old, broken** st
 - [ ] **Step 4: Commit**
 
 ```bash
-git add docs/superpowers/specs/2026-07-09-temper-rb-gem-design.md
+git add internal/superpowers/specs/2026-07-09-temper-rb-gem-design.md
 git commit -m "P5: record that the gate landed as Rust tests, not a shell script
 
 The invariants are properties of the spec, and check-openapi-spec.sh already

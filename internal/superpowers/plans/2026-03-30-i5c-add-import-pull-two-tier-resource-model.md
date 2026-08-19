@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (clap, reqwest, kreuzberg, indicatif, sha2), TypeScript (Neon serverless, @kreuzberg/node, onnxruntime-node, jose), Vercel serverless functions
 
-**Spec:** `docs/superpowers/specs/2026-03-30-i5c-add-import-pull-two-tier-resource-model-design.md`
+**Spec:** `internal/superpowers/specs/2026-03-30-i5c-add-import-pull-two-tier-resource-model-design.md`
 
 ---
 

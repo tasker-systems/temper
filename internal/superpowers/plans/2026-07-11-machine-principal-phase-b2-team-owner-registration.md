@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, Axum, sqlx (compile-time-checked macros), PostgreSQL, cargo-nextest, reqwest (e2e).
 
-**Spec:** [`docs/superpowers/specs/2026-07-11-machine-principal-phase-b2-team-owner-registration-design.md`](../specs/2026-07-11-machine-principal-phase-b2-team-owner-registration-design.md)
+**Spec:** [`internal/superpowers/specs/2026-07-11-machine-principal-phase-b2-team-owner-registration-design.md`](../specs/2026-07-11-machine-principal-phase-b2-team-owner-registration-design.md)
 
 **Branch:** `jct/g3-phase-b2-team-owner-registration` (already created; the spec is committed on it)
 

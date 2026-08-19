@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (Axum, sqlx runtime queries, ts-rs), PostgreSQL (sqlx migrations), e2e tests via `#[sqlx::test(migrator = "temper_api::MIGRATOR")]` + real HTTP.
 
-**Spec:** `docs/superpowers/specs/2026-07-03-temper-ui-graph-visualization-atlas-design.md` (read model R1; guideposts §1).
+**Spec:** `internal/superpowers/specs/2026-07-03-temper-ui-graph-visualization-atlas-design.md` (read model R1; guideposts §1).
 **Task:** `019f28a1-9519-7992-96d9-98f446256649` (Chunk A / R1, build/medium). **Goal:** `graph-atlas-visualization`.
 
 ## Global Constraints
@@ -228,7 +228,7 @@ Create `migrations/20260703000002_team_graph_scope_reads.sql`:
 
 ```sql
 -- Graph Atlas — Chunk A / R1: team-graph-scope read functions.
--- Design: docs/superpowers/specs/2026-07-03-temper-ui-graph-visualization-atlas-design.md (read model R1).
+-- Design: internal/superpowers/specs/2026-07-03-temper-ui-graph-visualization-atlas-design.md (read model R1).
 --
 -- Additive over the existing access substrate — reuses team_ancestors / resources_visible_to.
 -- The view opens at a team position in the DAG and needs two navigation primitives the
@@ -362,7 +362,7 @@ Create `crates/temper-core/src/types/graph_scope.rs`:
 
 ```rust
 //! Wire types for the Graph Atlas team-graph-scope read (R1).
-//! See docs/superpowers/specs/2026-07-03-temper-ui-graph-visualization-atlas-design.md.
+//! See internal/superpowers/specs/2026-07-03-temper-ui-graph-visualization-atlas-design.md.
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

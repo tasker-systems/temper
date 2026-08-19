@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (temper-core, temper-cli, clap, dialoguer, validator 0.20, toml, serde), TypeScript (temper-cloud, vitest, Vercel functions), Markdown (mdBook-adjacent docs).
 
-**Spec:** `docs/superpowers/specs/2026-06-16-enterprise-self-host-enablement-design.md`
+**Spec:** `internal/superpowers/specs/2026-06-16-enterprise-self-host-enablement-design.md`
 
 **Scope:** API + MCP + CLI. The `temper-ui` SvelteKit web app and its Auth0 Regular-Web-App flow are **out of scope** and documented as deferred.
 

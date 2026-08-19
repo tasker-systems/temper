@@ -2,7 +2,7 @@
 
 **Status:** implementation spec, ready for plan. Third beat of the Atlas reshape
 (built after A + B; both held on `jct/atlas-reshape`).
-**North star:** `docs/superpowers/specs/2026-07-06-atlas-reshape-projection-class-north-star.md` (vault research `019f39ca`).
+**North star:** `internal/superpowers/specs/2026-07-06-atlas-reshape-projection-class-north-star.md` (vault research `019f39ca`).
 **Builds on:** Beat A field-effect + force layout; **Beat B Home reframe** (build/research
 verb-lens field, `AtlasHome { build, research }`) — both shipped, held on `jct/atlas-reshape`.
 **Goal:** `019f28a1`.

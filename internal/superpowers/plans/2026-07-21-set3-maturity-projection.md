@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-Copied verbatim from spec `019f81e8` (`docs/superpowers/specs/2026-07-20-evidential-standing-substrate-breakdown-and-lead-seams-design.md`) and the repo CLAUDE.md. **Every task implicitly includes these.**
+Copied verbatim from spec `019f81e8` (`internal/superpowers/specs/2026-07-20-evidential-standing-substrate-breakdown-and-lead-seams-design.md`) and the repo CLAUDE.md. **Every task implicitly includes these.**
 
 - **Standing is not truth.** "Standing is not truth, and the system cannot close the gap between them — only make its shape visible." The maturity axis measures *defensibility on present evidence*, never *is-this-claim-true*. (spec, Bedrock preamble.)
 - **Standing IS the vector**, band is a lossy read-time chip: "Any band label … is a **lossy read-time summary** over that shape, always presented *with* the shape, **never instead of it.**" (spec §1.1.) **NEVER store a band/maturity enum on `kb_resources`** (spec §1.3 AMEND).

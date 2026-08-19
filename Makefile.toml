@@ -22,7 +22,7 @@
 # Dev Data:
 #   cargo make seed        Seed local DB with UI preview data
 #
-# See: docs/superpowers/specs/2026-03-28-cargo-make-tooling-and-security-audit-design.md
+# See: internal/superpowers/specs/2026-03-28-cargo-make-tooling-and-security-audit-design.md
 
 extend = "./tools/cargo-make/main.toml"
 

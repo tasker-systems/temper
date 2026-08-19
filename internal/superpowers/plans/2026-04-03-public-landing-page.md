@@ -3,9 +3,9 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
 > **CRITICAL: Read the mockup files before writing any code.**
-> - `docs/superpowers/specs/mockups/2026-04-03-landing-page-full.html` — full page mockup, source of truth for all CSS values
-> - `docs/superpowers/specs/mockups/2026-04-03-landing-page-agent-section.html` — agent section (Option A conversation transcript)
-> - `docs/superpowers/specs/2026-04-03-public-landing-page-design.md` — design spec
+> - `internal/superpowers/specs/mockups/2026-04-03-landing-page-full.html` — full page mockup, source of truth for all CSS values
+> - `internal/superpowers/specs/mockups/2026-04-03-landing-page-agent-section.html` — agent section (Option A conversation transcript)
+> - `internal/superpowers/specs/2026-04-03-public-landing-page-design.md` — design spec
 
 **Goal:** Deliver a polished public landing page for temperkb.io with the "Quiet Instrument" dark visual identity, a docs placeholder page, and validated Vercel deployment.
 
@@ -46,7 +46,7 @@ packages/temper-ui/src/
 - Modify: `packages/temper-ui/src/app.css`
 - Modify: `packages/temper-ui/src/app.html`
 
-**Context:** Read the mockup at `docs/superpowers/specs/mockups/2026-04-03-landing-page-full.html` first. Extract exact CSS values from the `:root` block in the mockup's `<style>` tag. The existing `app.css` has a Tailwind `@theme` block with temper blue scale and chalk/ink colors — keep those (they're needed for the `(app)` authenticated layout), but add the dark palette variables.
+**Context:** Read the mockup at `internal/superpowers/specs/mockups/2026-04-03-landing-page-full.html` first. Extract exact CSS values from the `:root` block in the mockup's `<style>` tag. The existing `app.css` has a Tailwind `@theme` block with temper blue scale and chalk/ink colors — keep those (they're needed for the `(app)` authenticated layout), but add the dark palette variables.
 
 - [ ] **Step 1: Add JetBrains Mono to app.html**
 
@@ -97,7 +97,7 @@ git commit -m "feat(temper-ui): add dark palette CSS custom properties and JetBr
 **Files:**
 - Create: `packages/temper-ui/src/lib/components/landing/Nav.svelte`
 
-**Context:** Read the mockup at `docs/superpowers/specs/mockups/2026-04-03-landing-page-full.html`. Find the `<nav class="nav">` element and its CSS. The nav is transparent at top, gains `background: rgba(10, 10, 15, 0.95)` and `backdrop-filter: blur(12px)` on scroll past 40px. Contains logo left ("temper" in JetBrains Mono, `--blue`), "GitHub" link and "Get Started" CTA right.
+**Context:** Read the mockup at `internal/superpowers/specs/mockups/2026-04-03-landing-page-full.html`. Find the `<nav class="nav">` element and its CSS. The nav is transparent at top, gains `background: rgba(10, 10, 15, 0.95)` and `backdrop-filter: blur(12px)` on scroll past 40px. Contains logo left ("temper" in JetBrains Mono, `--blue`), "GitHub" link and "Get Started" CTA right.
 
 - [ ] **Step 1: Create the Nav component**
 
@@ -204,7 +204,7 @@ git commit -m "feat(temper-ui): add scroll-aware Nav component"
 - Create: `packages/temper-ui/src/lib/components/landing/Section.svelte`
 - Create: `packages/temper-ui/src/lib/components/landing/CliBlock.svelte`
 
-**Context:** Read the mockup at `docs/superpowers/specs/mockups/2026-04-03-landing-page-full.html`. The `Section` component wraps every content section (except hero and footer) with the left-border accent pattern: a 2px blue left border, section label in uppercase monospace, heading with blue italic emphasis. The `CliBlock` component renders a styled terminal block used in the hero and agent sections.
+**Context:** Read the mockup at `internal/superpowers/specs/mockups/2026-04-03-landing-page-full.html`. The `Section` component wraps every content section (except hero and footer) with the left-border accent pattern: a 2px blue left border, section label in uppercase monospace, heading with blue italic emphasis. The `CliBlock` component renders a styled terminal block used in the hero and agent sections.
 
 - [ ] **Step 1: Create the Section component**
 
@@ -364,7 +364,7 @@ git commit -m "feat(temper-ui): add Section and CliBlock reusable landing compon
 **Files:**
 - Create: `packages/temper-ui/src/lib/components/landing/Hero.svelte`
 
-**Context:** Read the mockup at `docs/superpowers/specs/mockups/2026-04-03-landing-page-full.html`. Find the `<section class="hero">` element. The hero is full viewport height, centered, with the headline "Clarify your *intention*", tagline, two CTAs, and a CLI preview block showing `temper search` with results.
+**Context:** Read the mockup at `internal/superpowers/specs/mockups/2026-04-03-landing-page-full.html`. Find the `<section class="hero">` element. The hero is full viewport height, centered, with the headline "Clarify your *intention*", tagline, two CTAs, and a CLI preview block showing `temper search` with results.
 
 - [ ] **Step 1: Create the Hero component**
 
@@ -494,7 +494,7 @@ git commit -m "feat(temper-ui): add Hero component with CLI preview"
 **Files:**
 - Create: `packages/temper-ui/src/lib/components/landing/AgentTranscript.svelte`
 
-**Context:** Read the mockup at `docs/superpowers/specs/mockups/2026-04-03-landing-page-agent-section.html`. Option A (conversation transcript) is the chosen design. This shows a mock coding agent session: user invokes `/temper task start`, agent responds with loaded context in a blockquote-styled summary, user gives next direction. The component is generic — not branded to any specific agent tool.
+**Context:** Read the mockup at `internal/superpowers/specs/mockups/2026-04-03-landing-page-agent-section.html`. Option A (conversation transcript) is the chosen design. This shows a mock coding agent session: user invokes `/temper task start`, agent responds with loaded context in a blockquote-styled summary, user gives next direction. The component is generic — not branded to any specific agent tool.
 
 - [ ] **Step 1: Create the AgentTranscript component**
 
@@ -675,8 +675,8 @@ git commit -m "feat(temper-ui): update root layout with dark theme and Nav compo
 - Modify: `packages/temper-ui/src/routes/+page.svelte`
 
 **Context:** Read both mockup files:
-- `docs/superpowers/specs/mockups/2026-04-03-landing-page-full.html` — full page structure
-- `docs/superpowers/specs/mockups/2026-04-03-landing-page-agent-section.html` — Option A conversation transcript for §4.5
+- `internal/superpowers/specs/mockups/2026-04-03-landing-page-full.html` — full page structure
+- `internal/superpowers/specs/mockups/2026-04-03-landing-page-agent-section.html` — Option A conversation transcript for §4.5
 
 Replace the existing placeholder page with the full landing page. Uses Hero, Section, CliBlock, and AgentTranscript components. Section content stays inline using Section as a wrapper.
 

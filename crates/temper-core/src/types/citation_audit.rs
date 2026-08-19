@@ -1,5 +1,5 @@
 //! Citation-audit wire types (Set 5, spec
-//! `docs/superpowers/specs/2026-07-23-set5-adversary-citation-audit-design.md` §4.1-4.2, §5.2) —
+//! `internal/superpowers/specs/2026-07-23-set5-adversary-citation-audit-design.md` §4.1-4.2, §5.2) —
 //! the request body an auditor sends to record one signed verdict, and the attributed trail read
 //! back off the ledger.
 //!

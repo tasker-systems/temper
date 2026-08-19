@@ -7,7 +7,7 @@
 **Goal:** Publish the composition contract as a route, then as a command. Everything before this
 beat built a door that nothing could knock on.
 
-**Spec:** [`docs/superpowers/specs/2026-08-12-api-query-door-design.md`](../specs/2026-08-12-api-query-door-design.md) §"B — the door" — read it first. **Two of its passages were corrected on 2026-08-13 after A2 shipped**; the corrections are in place, but read the `[corrected — …]` notes rather than the sentences they replaced.
+**Spec:** [`internal/superpowers/specs/2026-08-12-api-query-door-design.md`](../specs/2026-08-12-api-query-door-design.md) §"B — the door" — read it first. **Two of its passages were corrected on 2026-08-13 after A2 shipped**; the corrections are in place, but read the `[corrected — …]` notes rather than the sentences they replaced.
 
 **Tech Stack:** Rust (axum, utoipa, serde, reqwest, clap), cargo-nextest. No migration, no `.sqlx`
 regeneration — B adds no SQL. It regenerates **three** committed artifact trees; see Global
@@ -44,7 +44,7 @@ because a placement nobody ruled hardened into a test name and steered three ses
 | 1 | B is cut into **B1 (API) + B2 (CLI)** | Pete, three-option prompt carrying each touch list | **decided** `[2026-08-13, Pete]` |
 | 2 | `ErrorDetail.details` becomes a `oneOf`; a new `ApiError` arm carries `Vec<PlanRefusal>` | Pete, re-confirmed in prose after being flagged — spec §B | **decided** `[2026-08-13, Pete]` |
 | 3 | `POST /api/query` sits in `gated_routes()` — `require_auth` + `require_system_access` | Spec §B; every content-touching route does, with two whole-project exceptions | **decided**, spec |
-| 4 | `docs/api/query.openapi.yaml` is still **not** edited; **D** owns it | Standing ruling, held by A and A2 | **decided**, standing |
+| 4 | `internal/api/query.openapi.yaml` is still **not** edited; **D** owns it | Standing ruling, held by A and A2 | **decided**, standing |
 | 5 | The handler calls `prepare`, and does **not** assemble the pipeline itself | A2 decision 9 — the order has one home | **derived** from A2 |
 | 6 | The client gains a 400 arm that **preserves the refusal list** | Follows from ⟨3⟩'s *"every refusal, not the first"*, which is otherwise API-only | **derived**, argued at Task B2.1 |
 
@@ -424,7 +424,7 @@ e2e entries rather than rediscovering them.
 - **It does not ship `temper query --check`.** That is PR C, over `validate_shape` — which A2 already
   put into production use, so C ships a flag over an exercised function.
 - **It does not add an MCP tool.** Spec ⟨2⟩ defers it, and not for schema-size reasons.
-- **It does not edit `docs/api/query.openapi.yaml`.** Provisional; D owns it. D's list now runs to
+- **It does not edit `internal/api/query.openapi.yaml`.** Provisional; D owns it. D's list now runs to
   seven entries, the seventh being A2's.
 - **It does not make `follow-from` or `survey` reachable.** They refuse statically as
   `NotSeparablyReachable`, and their fragments take arguments no slot supplies.

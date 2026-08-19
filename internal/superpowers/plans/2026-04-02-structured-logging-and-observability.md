@@ -872,7 +872,7 @@ Split from structured-logging task to keep scope focused. The API and client now
 
 ## Related
 
-- Design spec: docs/superpowers/specs/2026-04-02-structured-logging-and-observability-design.md
+- Design spec: internal/superpowers/specs/2026-04-02-structured-logging-and-observability-design.md
 - Current `CliConfig`: crates/temper-core/src/types/config.rs (lines 38-56)
 - Current CLI arg parsing: crates/temper-cli/src/cli.rs
 - Current tracing init: crates/temper-cli/src/main.rs (lines 11-15)
@@ -916,7 +916,7 @@ Split from structured-logging task. Rust API and client now have full observabil
 
 ## Related
 
-- Design spec: docs/superpowers/specs/2026-04-02-structured-logging-and-observability-design.md
+- Design spec: internal/superpowers/specs/2026-04-02-structured-logging-and-observability-design.md
 - Current TS files: packages/temper-cloud/src/, api/
 TASK_EOF
 ```

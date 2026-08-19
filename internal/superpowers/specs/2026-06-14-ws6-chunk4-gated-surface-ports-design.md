@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-14
 **Workstream:** 6 (migration / convergence), `substrate-kernel-to-cognitive-map`
-**Predecessors:** chunks 1–3 landed (PRs #134, #135 spec-only gate decision, #136 synthesis + parity harness). Adjudication master: `docs/superpowers/specs/2026-06-12-ws6-convergence-delta-adjudication-design.md` (§D deployment, §9 read homes).
+**Predecessors:** chunks 1–3 landed (PRs #134, #135 spec-only gate decision, #136 synthesis + parity harness). Adjudication master: `internal/superpowers/specs/2026-06-12-ws6-convergence-delta-adjudication-design.md` (§D deployment, §9 read homes).
 
 ## Context
 
@@ -75,6 +75,6 @@ Rejected alternatives:
 ## Connections
 
 - Adjudication master: `2026-06-12-ws6-convergence-delta-adjudication-design.md` (§D deployment + the cutover-gate decision; §9 read-home floor; §5 shared-type contract)
-- Chunk 2+3 plan: `docs/superpowers/plans/2026-06-13-ws6-chunk2-3-synthesis-parity.md` (synthesis + the parity-read harness 4b re-points)
+- Chunk 2+3 plan: `internal/superpowers/plans/2026-06-13-ws6-chunk2-3-synthesis-parity.md` (synthesis + the parity-read harness 4b re-points)
 - Backend trait: `crates/temper-core/src/operations/backend.rs` (object-safe, "minimal Phase 1"); `DbBackend`: `crates/temper-api/src/backend/`
 - Goal record: `substrate-kernel-to-cognitive-map` WS6 (update status line when 4a lands; also correct the stale "Branch open, no PR yet" line — chunks 2+3 are merged as PR #136 / `eca9089`)

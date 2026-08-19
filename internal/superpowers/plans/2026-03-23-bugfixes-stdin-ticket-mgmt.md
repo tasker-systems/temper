@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, clap (CLI), serde/serde_json/serde_yaml (serialization), chrono (timestamps), tempfile (tests)
 
-**Spec:** `docs/superpowers/specs/2026-03-23-bugfixes-stdin-ticket-mgmt-design.md`
+**Spec:** `internal/superpowers/specs/2026-03-23-bugfixes-stdin-ticket-mgmt-design.md`
 
 ---
 

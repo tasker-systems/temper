@@ -33,10 +33,10 @@ merits. It fails on evidence:
   (`crates/temper-substrate/tests/bootseed.rs:48-58`). A lens is not a receipt of anything external
   either. The invariant, as stated, is already not what the ledger does.
 - **The design was already specified — twice — and never built.** §3.7 of the access-capability
-  spec (`docs/superpowers/specs/2026-06-30-generalized-access-capability-model-design.md:371`)
+  spec (`internal/superpowers/specs/2026-06-30-generalized-access-capability-model-design.md:371`)
   states the split this spec implements: *"The `granted_by_profile_id`/`granted_at` columns are the
   per-row provenance; the event log is the temporal record."* The emitters spec
-  (`docs/superpowers/specs/2026-07-13-external-systems-as-subscribed-emitters-design.md:467`) calls
+  (`internal/superpowers/specs/2026-07-13-external-systems-as-subscribed-emitters-design.md:467`) calls
   it *"the existing admin-event-sourcing shape."*
 - **The absence has a demonstrated cost**, not a hypothetical one. See §2.
 

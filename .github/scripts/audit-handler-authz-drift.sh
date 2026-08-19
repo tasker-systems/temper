@@ -17,7 +17,7 @@
 # This does NOT forbid handler-side authz outright (the cognitive_maps route legitimately composes a
 # gate in the handler today). It PINS the current set against a reviewed baseline, so a NEW
 # handler-side authz call fails CI until a reviewer answers: should this predicate move into the
-# service? See docs/development/security-audit-playbook.md § 2 and the F-3 finding.
+# service? See internal/development/security-audit-playbook.md § 2 and the F-3 finding.
 #
 # USAGE
 #   .github/scripts/audit-handler-authz-drift.sh          # verify (CI mode)

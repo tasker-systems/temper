@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, sqlx (Postgres, compile-time-checked macros), axum (temper-api middleware), rmcp (temper-mcp), cargo-nextest, e2e crate at `tests/e2e/`.
 
-**Scope:** This plan covers **Stage 1 only** (the seam + parity test) from the spec `docs/superpowers/specs/2026-07-02-shared-auth-orchestration-seam-design.md`. Stages 2 (docs/auth), 3 (HMAC), and 4 (M2M) are tracked as separate temper build tasks and get their own plans.
+**Scope:** This plan covers **Stage 1 only** (the seam + parity test) from the spec `internal/superpowers/specs/2026-07-02-shared-auth-orchestration-seam-design.md`. Stages 2 (docs/auth), 3 (HMAC), and 4 (M2M) are tracked as separate temper build tasks and get their own plans.
 
 ## Global Constraints
 
@@ -725,8 +725,8 @@ Cross-surface e2e parity test proves `is_active` and `system_access` are enforce
 identically on both surfaces — the test the per-surface `is_active` gap (SAML
 Phase 2, IMPORTANT-1) would have failed.
 
-Spec: docs/superpowers/specs/2026-07-02-shared-auth-orchestration-seam-design.md
-Plan: docs/superpowers/plans/2026-07-02-auth-seam-stage1.md
+Spec: internal/superpowers/specs/2026-07-02-shared-auth-orchestration-seam-design.md
+Plan: internal/superpowers/plans/2026-07-02-auth-seam-stage1.md
 Stages 2 (docs/auth), 3 (HMAC), 4 (M2M) tracked separately.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)

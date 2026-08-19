@@ -59,7 +59,7 @@ echo ""
 # --- docs-only: skip everything ---
 run_test "docs-only: all jobs skipped" \
     "README.md
-docs/superpowers/plans/2026-07-03-t7-block-provenance-write-path.md
+internal/superpowers/plans/2026-07-03-t7-block-provenance-write-path.md
 CLAUDE.md" \
     "DOCS_ONLY=true" \
     "RUN_CODE_QUALITY=false" \

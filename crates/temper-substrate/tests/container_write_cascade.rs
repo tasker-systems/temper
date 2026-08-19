@@ -1,6 +1,6 @@
 #![cfg(feature = "artifact-tests")]
 //! Container-write → node-write cascade (decision + spec:
-//! `docs/superpowers/specs/2026-07-06-container-write-cascade-and-authz-hardening-design.md`).
+//! `internal/superpowers/specs/2026-07-06-container-write-cascade-and-authz-hardening-design.md`).
 //!
 //! Pins the predicate-level decision directly: whoever may author a container (cogmap or context)
 //! may modify any node homed in it (unix directory-write ⇒ file-rwx), regardless of the node's own

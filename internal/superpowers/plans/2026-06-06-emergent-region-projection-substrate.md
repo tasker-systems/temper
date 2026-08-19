@@ -8,7 +8,7 @@
 
 **Architecture:** Pure DDL + SQL functions against the destination artifact (`schema-artifact/{01_schema,02_functions,03_seed}.sql`). The readout functions are deterministic SQL aggregates over `kb_cogmap_region_members` + `kb_chunks` (embeddings) + `kb_edges` + `kb_block_provenance`; the region table becomes the memoization of the §1 projection. No Rust in this plan. Tested by `psql` verdict queries against a tiny in-file fixture, matching the artifact's `04_scenarios.sql` idiom.
 
-**Tech Stack:** PostgreSQL 18 + pgvector (cosine via `<=>`, `avg(vector)` aggregate), `psql`. DB: `postgresql://temper:temper@localhost:5437/temper_development`, schema `temper_next` (set via `search_path`). Spec: [`docs/superpowers/specs/2026-06-06-emergent-region-projection-design.md`](../specs/2026-06-06-emergent-region-projection-design.md) (§3, §4, §2c, §6).
+**Tech Stack:** PostgreSQL 18 + pgvector (cosine via `<=>`, `avg(vector)` aggregate), `psql`. DB: `postgresql://temper:temper@localhost:5437/temper_development`, schema `temper_next` (set via `search_path`). Spec: [`internal/superpowers/specs/2026-06-06-emergent-region-projection-design.md`](../specs/2026-06-06-emergent-region-projection-design.md) (§3, §4, §2c, §6).
 
 **Verified baseline (GD-2, executed 2026-06-06):** artifact loads clean (`01→03`); `kb_cogmap_regions` has exactly `{id, cogmap_id, centroid, salience, label, member_count, asserted_by_event_id, last_event_id, is_folded, created}`; `kb_cogmap_lenses` does **not** exist (`to_regclass` → NULL); `kb_properties` CHECK = `('kb_resources','kb_cogmaps')`. No `boundary_kind` exists — §3C is a no-op on disk (nothing to drop; do not introduce it).
 
@@ -643,7 +643,7 @@ git commit -m "feat(artifact): cogmap_shape surfaces lens_id + content_cohesion,
 
 ## Execution Handoff
 
-**Plan 1 complete and saved to `docs/superpowers/plans/2026-06-06-emergent-region-projection-substrate.md`.** It produces working, testable software on its own: the artifact loads clean and every readout returns a verified value over its fixture. Plans 2 (`temper-next` clustering harness) and 3 (enriched seed + S6a–h falsification suite) build on it and will be written as their own artifacts.
+**Plan 1 complete and saved to `internal/superpowers/plans/2026-06-06-emergent-region-projection-substrate.md`.** It produces working, testable software on its own: the artifact loads clean and every readout returns a verified value over its fixture. Plans 2 (`temper-next` clustering harness) and 3 (enriched seed + S6a–h falsification suite) build on it and will be written as their own artifacts.
 
 Two execution options:
 1. **Subagent-Driven (recommended)** — fresh subagent per task, two-stage review between tasks (the grounding discipline is in the header; the controller enforces GD-1/GD-2 on each returned task).

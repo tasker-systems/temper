@@ -3,7 +3,7 @@
 **Status:** design spec (approved visual direction; structural decisions recorded here).
 **Branch:** `jct/atlas-reshape` (HELD — no PR until Beat D closes).
 **Goal:** `graph-atlas-visualization` (`019f28a1`). North star:
-`docs/superpowers/specs/2026-07-06-atlas-reshape-projection-class-north-star.md` (Beat **D**).
+`internal/superpowers/specs/2026-07-06-atlas-reshape-projection-class-north-star.md` (Beat **D**).
 **Subsumes:** north-star decision 7 ("Region → resources is composition"), roadmap Beat D.
 
 ---

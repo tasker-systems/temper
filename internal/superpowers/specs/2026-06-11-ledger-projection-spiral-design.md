@@ -35,7 +35,7 @@ Then wire it into the set:
 
 ## Reference artifact
 
-`docs/superpowers/specs/mockups/2026-06-11-ledger-projection-spiral.html` is the
+`internal/superpowers/specs/mockups/2026-06-11-ledger-projection-spiral.html` is the
 complete, framework-agnostic build — open it in a browser to see it render with
 interaction. It is deliberately zero-dependency (inline hex, script-driven DOM
 mutation). **The geometry math in it is correct and should be carried over

@@ -53,7 +53,7 @@ the cost of the single-field surface and it is accepted, not mitigated — see *
 ### Why the existing seam cannot express it
 
 `ScopedAuthority` is the repo's scoped-authorization layer
-(`docs/superpowers/specs/2026-07-22-scoped-authority-policy-layer-design.md`). Its refusal seam is a
+(`internal/superpowers/specs/2026-07-22-scoped-authority-policy-layer-design.md`). Its refusal seam is a
 **static, argument-free** method (`crates/temper-services/src/authz/mod.rs:104`):
 
 ```rust

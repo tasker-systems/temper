@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, sqlx (compile-time `query!` macros against the `temper_next` namespace — cached per-crate, regenerated with `cargo make prepare-next`), serde_yaml, schemars (gated snapshot), cargo-nextest (the `temper-next-write` group), Postgres 18 + pgvector.
 
-**Spec:** `docs/superpowers/specs/2026-06-11-access-scaffold-scenario-proof-design.md`
+**Spec:** `internal/superpowers/specs/2026-06-11-access-scaffold-scenario-proof-design.md`
 
 ---
 

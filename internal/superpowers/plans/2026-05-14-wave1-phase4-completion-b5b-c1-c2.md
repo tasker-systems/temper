@@ -9,9 +9,9 @@
 **Tech Stack:** Rust workspace (temper-core, temper-cli), sqlx, cargo-make, cargo-nextest. Tests use `serial_test` for filesystem-touching cases.
 
 **Reference docs:**
-- Spec addendum: `docs/superpowers/specs/2026-05-13-wave1-phase4-completion-b5b-addendum.md`
-- Parent spec: `docs/superpowers/specs/2026-05-11-wave1-phase4-vaultbackend-design.md`
-- Parent plan: `docs/superpowers/plans/2026-05-13-wave1-phase4-completion.md`
+- Spec addendum: `internal/superpowers/specs/2026-05-13-wave1-phase4-completion-b5b-addendum.md`
+- Parent spec: `internal/superpowers/specs/2026-05-11-wave1-phase4-vaultbackend-design.md`
+- Parent plan: `internal/superpowers/plans/2026-05-13-wave1-phase4-completion.md`
 
 ---
 

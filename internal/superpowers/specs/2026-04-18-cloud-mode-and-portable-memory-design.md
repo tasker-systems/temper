@@ -7,8 +7,8 @@
 **Branch (design doc + prototype PR):** `jct/temper-cloud-mode-portable-memory`
 
 **Related work:**
-- Builds on the provisional-id system (`docs/superpowers/plans/2026-04-05-provisional-id-system.md`)
-- Builds on unified sync hashing (`docs/superpowers/plans/2026-04-11-sync-cycle-unified-hashing.md`)
+- Builds on the provisional-id system (`internal/superpowers/plans/2026-04-05-provisional-id-system.md`)
+- Builds on unified sync hashing (`internal/superpowers/plans/2026-04-11-sync-cycle-unified-hashing.md`)
 - Parallel track, not blocking: MCP tool parity for new commands
 
 ---
@@ -237,4 +237,4 @@ Per unit:
 
 ## Notes on This Document
 
-This spec is the repo-side record of the design. The parallel vault-side goal resource is created separately via `temper resource create --type goal --context temper` and tracks the same work from the vault surface. Subsequent sessions should treat this doc as the authoritative starting point and add task-level work breakdowns in `docs/superpowers/plans/` as units enter execution.
+This spec is the repo-side record of the design. The parallel vault-side goal resource is created separately via `temper resource create --type goal --context temper` and tracks the same work from the vault surface. Subsequent sessions should treat this doc as the authoritative starting point and add task-level work breakdowns in `internal/superpowers/plans/` as units enter execution.

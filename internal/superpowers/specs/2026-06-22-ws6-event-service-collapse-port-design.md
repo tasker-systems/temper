@@ -148,7 +148,7 @@ A separate spec + tasks, enabled by but out of scope for the collapse:
 
 ## References
 
-- Parent: `docs/superpowers/specs/2026-06-22-ws6-migration-endgame-design.md`
+- Parent: `internal/superpowers/specs/2026-06-22-ws6-migration-endgame-design.md`
   (§"Coincident code changes" — this spec resolves its `event_service` leak-service bullet).
 - Substrate event model: `schema-artifact/01_schema.sql:287-348` (kb_events / kb_entities /
   kb_invocations), `02_functions.sql:748-783` (`resource_create` / `_event_append`).

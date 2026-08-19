@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, sqlx (Postgres), axum, ONNX Runtime (ort), Vercel Functions + Cron, Neon Postgres (pooled endpoint), cargo-make + cargo-nextest.
 
-**Spec:** `docs/superpowers/specs/2026-07-15-embed-dispatch-throughput-scaling-design.md`
+**Spec:** `internal/superpowers/specs/2026-07-15-embed-dispatch-throughput-scaling-design.md`
 
 ## Global Constraints
 
@@ -30,7 +30,7 @@
 
 **Files:**
 - Use: `crates/temper-ingest/bench/` (Docker bed), `crates/temper-ingest/examples/embed_bench.rs`
-- Record result into: `docs/superpowers/specs/2026-07-15-embed-dispatch-throughput-scaling-design.md` (the "measurement prerequisite" section)
+- Record result into: `internal/superpowers/specs/2026-07-15-embed-dispatch-throughput-scaling-design.md` (the "measurement prerequisite" section)
 
 - [ ] **Step 1: Build the bench image (once)**
 
@@ -77,7 +77,7 @@ Note the arm64/x86_64 fidelity caveat from the bench README (the bed is arm64; t
 - [ ] **Step 4: Commit the recorded measurement**
 
 ```bash
-git add docs/superpowers/specs/2026-07-15-embed-dispatch-throughput-scaling-design.md
+git add internal/superpowers/specs/2026-07-15-embed-dispatch-throughput-scaling-design.md
 git commit -m "docs(embed): record measured ms/chunk from throttled bench (task 019f5892)
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
@@ -432,7 +432,7 @@ Implements PR A of the embed-dispatch throughput-scaling spec.
   inside the one-minute cron cadence).
 - Documented `TEMPER_ONNX_INTRA_THREADS=2` deploy knob (pure env, ~1.5–2×).
 
-Spec: docs/superpowers/specs/2026-07-15-embed-dispatch-throughput-scaling-design.md
+Spec: internal/superpowers/specs/2026-07-15-embed-dispatch-throughput-scaling-design.md
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 EOF
@@ -658,7 +658,7 @@ Implements PR B of the embed-dispatch throughput-scaling spec (stacks on PR A).
 - 4 shard cron lines in vercel.json → ~4x throughput on top of loop-drain.
 - N-sizing + shared-config guidance in DEPLOYING.md.
 
-Spec: docs/superpowers/specs/2026-07-15-embed-dispatch-throughput-scaling-design.md
+Spec: internal/superpowers/specs/2026-07-15-embed-dispatch-throughput-scaling-design.md
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 EOF

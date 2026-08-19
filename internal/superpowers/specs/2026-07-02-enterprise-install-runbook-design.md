@@ -228,6 +228,6 @@ The runbook holds the two scripts **separate** (interleaved only by step number 
   `schema-artifact/manifests/*.yaml`
 - CLI surface: `crates/temper-cli/src/cli.rs` (`admin`, `cogmap`, `team`, `context`),
   `crates/temper-cli/src/commands/admin_saml.rs`
-- Prior arcs: `docs/superpowers/specs/2026-07-02-admin-saml-provisioning-and-context-share-design.md`,
-  `docs/superpowers/specs/2026-06-28-org-provisioning-bootstrap-surface-design.md`
+- Prior arcs: `internal/superpowers/specs/2026-07-02-admin-saml-provisioning-and-context-share-design.md`,
+  `internal/superpowers/specs/2026-06-28-org-provisioning-bootstrap-surface-design.md`
 - Deploy invariants: `DEPLOYING.md`

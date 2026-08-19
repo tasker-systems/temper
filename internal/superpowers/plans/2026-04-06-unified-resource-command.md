@@ -10,7 +10,7 @@
 
 **Tech Stack:** Rust (clap, serde, serde_json, askama), jsonschema validation via `crates/temper-core/src/schema.rs`
 
-**Spec:** `docs/superpowers/specs/2026-04-06-unified-resource-command-design.md`
+**Spec:** `internal/superpowers/specs/2026-04-06-unified-resource-command-design.md`
 
 ---
 
@@ -1784,7 +1784,7 @@ add concept/decision doctypes, clean up dead config/code.
 ## Connections
 - Task: 2026-04-06-standardize-doc-creation-commands-across-the-board-and-fix-the-research-save-bug
 - Folded: 2026-04-05-add-temper-task-update-command-for-editing-task-frontmatter-fields
-- Spec: docs/superpowers/specs/2026-04-06-unified-resource-command-design.md
+- Spec: internal/superpowers/specs/2026-04-06-unified-resource-command-design.md
 
 ## Next Steps
 - Update the temper skill's SKILL.md router to use new command names

@@ -17,8 +17,8 @@
 -- renamed-aside legacy schema. It is NOT a from-scratch full schema.
 --
 -- Grounding:
---   docs/superpowers/specs/2026-06-22-ws6-migration-endgame-design.md  (sequencing)
---   docs/superpowers/specs/2026-06-22-ws6-endgame-schema-diff.md       (Flag 1 + correction)
+--   internal/superpowers/specs/2026-06-22-ws6-migration-endgame-design.md  (sequencing)
+--   internal/superpowers/specs/2026-06-22-ws6-endgame-schema-diff.md       (Flag 1 + correction)
 --   migrations/20260330000001_consolidated_schema.sql                  (verbatim infra DDL)
 --   migrations/20260407000001_system_access_gate.sql                   (system_settings, join_requests)
 --

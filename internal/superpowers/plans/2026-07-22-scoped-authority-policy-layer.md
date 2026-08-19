@@ -21,7 +21,7 @@ into a proof; acts read the subject *from the proof*, so there is no second spel
 
 **Tech Stack:** Rust 2021, `#[async_trait]`, sqlx/Postgres, cargo-make + cargo-nextest.
 
-**Spec:** `docs/superpowers/specs/2026-07-22-scoped-authority-policy-layer-design.md` — read §1–§3
+**Spec:** `internal/superpowers/specs/2026-07-22-scoped-authority-policy-layer-design.md` — read §1–§3
 before Task 1. Read §6 before Task 6. Read §2.3–§2.4 before Task 9.
 
 ---

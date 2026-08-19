@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-Copied verbatim from `docs/superpowers/specs/2026-08-01-memories-in-temper-design.md`. Every task's requirements implicitly include these.
+Copied verbatim from `internal/superpowers/specs/2026-08-01-memories-in-temper-design.md`. Every task's requirements implicitly include these.
 
 - **"No `[memory]` section means the feature is off and `emit` is a no-op that says why."**
 - **"`emit` fails loudly on any `memory` resource missing either key, or carrying a value outside its vocabulary."** (`open_meta.status` ∈ {`active`, `superseded`}; `open_meta.verified` an ISO date.) This is the enforcement point that substitutes for write-time validation.

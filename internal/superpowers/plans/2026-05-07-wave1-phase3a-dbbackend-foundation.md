@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust 2024 edition, sqlx with compile-time-checked queries, async-trait, axum (consumer in 3b), tokio, sqlx::test for isolated per-test DB.
 
-**Spec:** `docs/superpowers/specs/2026-05-07-wave1-phase3-dbbackend-design.md`
+**Spec:** `internal/superpowers/specs/2026-05-07-wave1-phase3-dbbackend-design.md`
 **Predecessors (merged in PR #65):** Phase 1 (operations scaffolding) and Phase 2 (shared pure actions).
 
 **Branch convention (this repo):** `jct/wave1-phase3a-dbbackend-foundation`. Create the branch before Task 1 if not already created.
@@ -503,7 +503,7 @@ Write `crates/temper-api/src/backend/mod.rs`:
 //! Each trait method is a thin translator over an existing service function;
 //! events are synthesized post-hoc on success.
 //!
-//! See `docs/superpowers/specs/2026-05-07-wave1-phase3-dbbackend-design.md`.
+//! See `internal/superpowers/specs/2026-05-07-wave1-phase3-dbbackend-design.md`.
 
 mod db_backend;
 mod translators;
@@ -1892,7 +1892,7 @@ shared-execution-paths reframes.
 
 ## Acceptance
 
-A short research note in `docs/superpowers/specs/` documenting the call graph
+A short research note in `internal/superpowers/specs/` documenting the call graph
 and recommending (1) or (2). If (1), follow-up cleanup task created.
 EOF
 ```

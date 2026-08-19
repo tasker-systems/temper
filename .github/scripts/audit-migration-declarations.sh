@@ -11,7 +11,7 @@
 # caller nobody updated. Every write through those wrappers failed for ~40 minutes while reads
 # stayed healthy, so the first notification was a user hitting a write.
 #
-# Spec §1 (docs/superpowers/specs/2026-07-30-schema-binary-pairing-design.md), verbatim:
+# Spec §1 (internal/superpowers/specs/2026-07-30-schema-binary-pairing-design.md), verbatim:
 #   "A migration that says nothing is not thereby safe — the absent statement must be as loud as a
 #    wrong one, which means CI fails on a migration with no declaration at all."
 #

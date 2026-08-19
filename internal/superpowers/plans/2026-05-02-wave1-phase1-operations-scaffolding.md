@@ -9,8 +9,8 @@
 **Tech Stack:** Rust 2021, `async_trait` for trait async dispatch, `serde` for command/event serialization, `thiserror` for error types. Tests use the existing `cargo nextest` harness.
 
 **Specs:**
-- `docs/superpowers/specs/2026-05-01-shared-core-execution-paths-design.md` (#4)
-- `docs/superpowers/specs/2026-05-01-cloud-first-reframe-and-manifest-redefinition-design.md` (#3)
+- `internal/superpowers/specs/2026-05-01-shared-core-execution-paths-design.md` (#4)
+- `internal/superpowers/specs/2026-05-01-cloud-first-reframe-and-manifest-redefinition-design.md` (#3)
 
 **Out of scope for this plan:** Backend implementations (Phases 3–4), shared action migrations (Phase 2), state machines (Phase 6 / spec #3), surface dispatch unification (Phase 5).
 
@@ -97,7 +97,7 @@ Create `crates/temper-core/src/operations/mod.rs` with this content:
 //! shared across all surfaces (CLI-local-vault, CLI-cloud, MCP, API-HTTP)
 //! and both backends (DbBackend in temper-api, VaultBackend in temper-cli).
 //!
-//! See `docs/superpowers/specs/2026-05-01-shared-core-execution-paths-design.md`.
+//! See `internal/superpowers/specs/2026-05-01-shared-core-execution-paths-design.md`.
 
 #[cfg(test)]
 mod smoke {

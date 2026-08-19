@@ -6,7 +6,7 @@
 # input to the code-graph's region selector.
 #
 # See the goal *Trunk-change awareness: a SCIP code graph teams and stewards can watch*
-# (docs/superpowers/specs/2026-07-12-scip-code-graph-integration-spec.md §3). A watching
+# (internal/superpowers/specs/2026-07-12-scip-code-graph-integration-spec.md §3). A watching
 # subscription declares its region in CODEOWNERS-shaped path globs — because that is how orgs
 # already express ownership — and those globs resolve, per index, into a **SCIP symbol set**, which
 # is what we actually store and diff against.

@@ -12,7 +12,7 @@
 
 - **No backward compatibility.** Cloud-native only; the local vault is read-only ripgrep scratch. No shims, no deprecation windows, no dual-read paths.
 - **Full surface parity.** MCP + CLI + API move together; skill docs update in-arc. One shared logic layer.
-- **Design source of truth:** `docs/superpowers/specs/2026-07-07-managed-open-meta-boundary-reshape-design.md`. This plan implements its **Phase 1** only (P1.1 reject, P1.2 discoverability, P1.3 slug docs). Phase 2 (shrinking `ManagedMeta` to Property-only, promoting identity to wire fields) is a **separate** plan — do not start it here.
+- **Design source of truth:** `internal/superpowers/specs/2026-07-07-managed-open-meta-boundary-reshape-design.md`. This plan implements its **Phase 1** only (P1.1 reject, P1.2 discoverability, P1.3 slug docs). Phase 2 (shrinking `ManagedMeta` to Property-only, promoting identity to wire fields) is a **separate** plan — do not start it here.
 - **The invariant (Phase 2's end state, stated so Phase 1 doesn't fight it):** `managed_meta` = exactly the `KeyFate::Property` keys. Phase 1 does **not** remove `temper-title`/`temper-slug` from `ManagedMeta` yet; it only closes the type and documents the precedence.
 - **Verification:** `cargo make check` (fmt + clippy + docs + machete + TS) must pass before every commit. Tests run against real Postgres (Docker on :5437). Rebuild the CLI bin after CLI changes (`cargo build -p temper-cli --bin temper`) — e2e does not rebuild it.
 - **Commit style:** `fix(meta):` / `docs(meta):` / `test:` scoped prefixes.

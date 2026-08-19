@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 r"""Enumerate sqlx query call sites, split by macro-vs-runtime and production-vs-test.
 
-Supports docs/development/sqlx-macro-exception-classification.md, whose counts are
+Supports internal/development/sqlx-macro-exception-classification.md, whose counts are
 otherwise unverifiable assertions. Run it: `python3 scripts/classify-sqlx-calls.py`.
 
 Four things a flat grep gets wrong, each found by getting them wrong first:

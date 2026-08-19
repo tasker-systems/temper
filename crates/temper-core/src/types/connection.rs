@@ -1,5 +1,5 @@
 //! Connection types — temper's authed link to a remote system. See
-//! `docs/superpowers/specs/2026-07-13-external-systems-as-subscribed-emitters-design.md`.
+//! `internal/superpowers/specs/2026-07-13-external-systems-as-subscribed-emitters-design.md`.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

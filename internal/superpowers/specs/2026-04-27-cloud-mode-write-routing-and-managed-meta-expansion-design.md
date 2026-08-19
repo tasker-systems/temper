@@ -7,7 +7,7 @@
 **Branch:** `jct/temper-cloud-mode-portable-memory` (continues the Part 3 PR; same scope)
 
 **Related work:**
-- Continues `docs/superpowers/specs/2026-04-22-cloud-first-routing-and-mode-collapse-design.md`. Read paths and local-mode write tails shipped under that spec across Sessions A + B + C + C.5; cloud-mode write paths and the server-side `ResourceUpdateRequest` expansion were deferred and are the subject of this spec.
+- Continues `internal/superpowers/specs/2026-04-22-cloud-first-routing-and-mode-collapse-design.md`. Read paths and local-mode write tails shipped under that spec across Sessions A + B + C + C.5; cloud-mode write paths and the server-side `ResourceUpdateRequest` expansion were deferred and are the subject of this spec.
 - Predecessor task: `2026-04-22-unit-b-2-part-3-cloud-first-routing-mode-collapse` (closed 2026-04-27 with Scope Closure note).
 - This task: `2026-04-27-unit-b-2-part-3b-cloud-mode-write-routing-managed-meta-expansion`.
 - Sibling task spun out during this design: `2026-04-27-unify-resource-delete-cloud-first-explicit-only-manifest-cleanup` (delete unification, sequenced after Part 3B merge).
@@ -198,7 +198,7 @@ Three guidance surfaces need updating so future agent sessions do not reach for 
 
 ## Stale Plan Cleanup
 
-Delete `docs/superpowers/plans/2026-04-19-unit-b-2-cloud-mode-dispatch.md` — superseded by the 2026-04-22 reframe and now fully obsolete. After deletion, grep for stragglers:
+Delete `internal/superpowers/plans/2026-04-19-unit-b-2-cloud-mode-dispatch.md` — superseded by the 2026-04-22 reframe and now fully obsolete. After deletion, grep for stragglers:
 
 ```
 grep -rn "2026-04-19-unit-b-2-cloud-mode-dispatch" docs/ crates/ tests/ packages/
@@ -219,7 +219,7 @@ Resolve any hits. Likely only back-references in older session notes; those stay
 - Cloud `cat body.md | temper resource update <slug> --stage done` succeeds with both body trio and managed_meta in a single PATCH; `body_hash` and `managed_hash` both update.
 - Cloud `temper sync run` returns the exact redirect message.
 - Local-mode `temper resource create` and `temper resource update` produce bit-for-bit identical wire payloads to pre-refactor (verified by the regression test).
-- `docs/superpowers/plans/2026-04-19-unit-b-2-cloud-mode-dispatch.md` is removed; no references remain in the codebase.
+- `internal/superpowers/plans/2026-04-19-unit-b-2-cloud-mode-dispatch.md` is removed; no references remain in the codebase.
 - `CLAUDE.md`, `reference.md`, `subagent-guidance.md` updated; CLAUDE.md update is its own commit per `feedback_keep_claudemd_current`.
 
 ## Out of Scope

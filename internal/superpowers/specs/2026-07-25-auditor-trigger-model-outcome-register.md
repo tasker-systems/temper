@@ -4,7 +4,7 @@
 >
 > **Tier 1 shipped** (`9d316a79`, migration `20260726000010_auditor_tier1_staleness.sql`), and it
 > shipped from a **narrowed** design that supersedes much of this register:
-> `docs/superpowers/specs/2026-07-25-auditor-tier1-staleness-watermark-design.md` (rev. 2).
+> `internal/superpowers/specs/2026-07-25-auditor-tier1-staleness-watermark-design.md` (rev. 2).
 > Subject task `019f975e-7be9-7ff3-a5bd-ef7ea72ff4a5` is **done**.
 >
 > **This register was specified over a feature that does not exist**, and that is its central
@@ -48,7 +48,7 @@
 > was executing the predicate, not reviewing it.
 
 **Witnesses**: goal `019f9a34-3306-70d1-b07a-f23c99943751` → **C1** (fully), **C1a**/**C1b**, **C3** (partially — this document and its corrections are the evidence C3 judges).
-**Subject**: task `019f975e-7be9-7ff3-a5bd-ef7ea72ff4a5`; spec `docs/superpowers/specs/2026-07-24-auditor-event-driven-trigger-model-design.md` (D1–D8, marked *accepted*).
+**Subject**: task `019f975e-7be9-7ff3-a5bd-ef7ea72ff4a5`; spec `internal/superpowers/specs/2026-07-24-auditor-event-driven-trigger-model-design.md` (D1–D8, marked *accepted*).
 **Subject reassigned to C1 by** decision `019f9a64-b738-75d2-8d0a-b832872b6a64`.
 **Register schema**: research `019f9a32-e1b2-7f43-b4cf-ac9b58447cb9`; refusal face per `019f9a33-90e5-7882-bf63-61898a33e78d`.
 **Findings summary (visual)**: https://claude.ai/code/artifact/e55cd4cb-5796-43ef-82cf-8359b80f8e68 — the corrections, the refusal ladder, and the two-axis exercise status, laid out for review. Keep this link with the register wherever the register is cited.

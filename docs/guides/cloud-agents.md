@@ -22,7 +22,7 @@ Cloud agents do NOT have access to:
 
 ## Environment Variables for Ephemeral Sessions
 
-Cloud and ephemeral sessions can bootstrap temper without running the browser OAuth flow by exporting the following variables. See the design spec at `docs/superpowers/specs/2026-04-18-cloud-mode-and-portable-memory-design.md` for the broader cloud-mode design these env vars belong to.
+Cloud and ephemeral sessions can bootstrap temper without running the browser OAuth flow by exporting the following variables. See the design spec at `internal/superpowers/specs/2026-04-18-cloud-mode-and-portable-memory-design.md` for the broader cloud-mode design these env vars belong to.
 
 | Variable | Purpose | Notes |
 |----------|---------|-------|

@@ -14,7 +14,7 @@
 # matters is worse than one that is absent, because it reads as coverage.
 #
 # The rule "use the macros" already existed as prose in
-# docs/development/code-quality-best-practices.md and was unenforced, which is the same defect class
+# internal/development/code-quality-best-practices.md and was unenforced, which is the same defect class
 # as the outage itself. When it was finally measured, 66 of 112 production runtime call sites had no
 # technical obstacle at all — the exemption was habit, and in four places a COMMENT ASSERTING a
 # reason that did not hold. One of those false claims had propagated by citation into another file.
@@ -99,7 +99,7 @@ ENUMERATOR="scripts/classify-sqlx-calls.py"
 #   Seeded from the CLASSIFIED set, never by transcribing the state of the tree. Transcribing would
 #   have blessed the 66 sites with no reason — a baseline that blesses the thing it was built to
 #   prevent. Reproduce the classification with `python3 scripts/classify-sqlx-calls.py`; the
-#   reasoning is docs/development/sqlx-macro-exception-classification.md.
+#   reasoning is internal/development/sqlx-macro-exception-classification.md.
 read -r -d '' BASELINE <<'EOF' || true
 dynamic-order-by 1 crates/temper-services/src/backend/substrate_read.rs
 dynamic-sql 2 crates/temper-substrate/src/embed.rs

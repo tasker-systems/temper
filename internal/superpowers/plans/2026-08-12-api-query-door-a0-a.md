@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, clap 4 (derive), serde, cargo-nextest, cargo-make.
 
-**Spec:** [`docs/superpowers/specs/2026-08-12-api-query-door-design.md`](../specs/2026-08-12-api-query-door-design.md). Read ⟨3⟩, ⟨4⟩ and ⟨5⟩ before Task 2.
+**Spec:** [`internal/superpowers/specs/2026-08-12-api-query-door-design.md`](../specs/2026-08-12-api-query-door-design.md). Read ⟨3⟩, ⟨4⟩ and ⟨5⟩ before Task 2.
 
 ## Global Constraints
 

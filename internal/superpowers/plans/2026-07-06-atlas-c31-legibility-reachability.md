@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (sqlx macro queries, Postgres functions), Axum (temper-api), SvelteKit + Svelte 5 runes + D3 (temper-ui), ts-rs codegen, cargo-nextest, e2e crate (real Axum + Postgres).
 
-**Spec:** `docs/superpowers/specs/2026-07-06-atlas-c31-legibility-reachability-beat-design.md`
+**Spec:** `internal/superpowers/specs/2026-07-06-atlas-c31-legibility-reachability-beat-design.md`
 
 ## Global Constraints
 

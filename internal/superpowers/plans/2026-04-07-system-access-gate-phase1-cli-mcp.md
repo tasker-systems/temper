@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (axum, clap, reqwest, rmcp), PostgreSQL, temper workspace crates
 
-**Spec:** `docs/superpowers/specs/2026-04-07-system-access-gate-phase1-cli-mcp-design.md`
+**Spec:** `internal/superpowers/specs/2026-04-07-system-access-gate-phase1-cli-mcp-design.md`
 
 ---
 

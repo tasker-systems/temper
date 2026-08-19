@@ -169,7 +169,7 @@ Create `migrations/20260715000020_demote_originator_from_access.sql`. Reproduces
 -- D1 — demote originator_profile_id from access. owner_profile_id is the single access-bearing
 -- profile key; originator_profile_id becomes pure recorded provenance. Additive: CREATE OR
 -- REPLACE only. Behavior-preserving on current data (owner is NOT NULL; owner<>originator
--- diverge in 0 rows). See docs/superpowers/specs/2026-07-15-context-transfer-safety-residual-access-design.md.
+-- diverge in 0 rows). See internal/superpowers/specs/2026-07-15-context-transfer-safety-residual-access-design.md.
 
 CREATE OR REPLACE FUNCTION public.resources_visible_to(p_profile uuid)
  RETURNS TABLE(resource_id uuid)
@@ -613,7 +613,7 @@ transfer legitimately does not address.
 - Interaction with the two-axis access model and container-write cascade.
 
 ## Refs
-- Spec: docs/superpowers/specs/2026-07-15-context-transfer-safety-residual-access-design.md
+- Spec: internal/superpowers/specs/2026-07-15-context-transfer-safety-residual-access-design.md
 - Parent task 019f6399-3c96-7273-97a7-53397682c881
 EOF
 ```

@@ -84,4 +84,4 @@ WS2 access-scoping over `temper_next` — its spec.
 - `crates/temper-next/src/synthesis/mod.rs:141` — fresh-id minting in synthesis.
 - `crates/temper-core/src/operations/resource_ref.rs:16-30` — `ResourceRef::{Uuid,Scoped}`.
 - `crates/temper-core/src/operations/backend.rs:77` — "the edge handle (`Uuid`): correlation_id for `DbBackend`, edge_id for [NextBackend]".
-- Adjudication 5 + §D: `docs/superpowers/specs/2026-06-12-ws6-convergence-delta-adjudication-design.md:253-279,380-439`.
+- Adjudication 5 + §D: `internal/superpowers/specs/2026-06-12-ws6-convergence-delta-adjudication-design.md:253-279,380-439`.

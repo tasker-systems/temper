@@ -1,5 +1,5 @@
 //! Subscription types — a team/context/cogmap subscribes to an aspect of a connection.
-//! See `docs/superpowers/specs/2026-07-13-external-systems-as-subscribed-emitters-design.md`
+//! See `internal/superpowers/specs/2026-07-13-external-systems-as-subscribed-emitters-design.md`
 //! and the S2 chunk A design spec (research `01a017ad-b91d-7431-82cd-6402b9615e95`).
 
 use chrono::{DateTime, Utc};
@@ -85,7 +85,7 @@ pub enum SubscriptionSelector {
         /// `owner/repo` — e.g. `acme/temper`.
         repo: String,
         /// The path globs to match against the changed-file list, e.g.
-        /// `["src/api/**", "docs/superpowers/**"]`. Empty = match any file in the repo
+        /// `["src/api/**", "internal/superpowers/**"]`. Empty = match any file in the repo
         /// (degenerate but legal — the selector still declares enrichment is needed to get
         /// the file list at all).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]

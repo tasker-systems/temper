@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (axum, sqlx, ort v2.0.0-rc.12, tokenizers, ndarray), rmcp for MCP, bge-base-en-v1.5 ONNX (int8 quantized), git-LFS, Vercel Functions via `vercel_runtime` v2.
 
-**Spec reference:** `docs/superpowers/specs/2026-04-09-temper-mcp-unified-rust-ingest-design.md`
+**Spec reference:** `internal/superpowers/specs/2026-04-09-temper-mcp-unified-rust-ingest-design.md`
 
 **Session split:** Tasks 0-21 are session 2 (Rust pipeline + backend). Tasks 22-44 are session 3 (MCP surface, TS retirement, e2e tests, CI, docs). Pause for review between sessions.
 
@@ -3358,7 +3358,7 @@ cargo make check
 grep -rn "content-ingest" . 2>/dev/null | grep -v "\.git" | grep -v "node_modules" | grep -v "target" | grep -v "docs/superpowers"
 ```
 
-Expected: only matches in `docs/superpowers/specs/` and `docs/superpowers/plans/` (historical references).
+Expected: only matches in `internal/superpowers/specs/` and `internal/superpowers/plans/` (historical references).
 
 ```bash
 grep -rn "ContentIngestRequest" . 2>/dev/null | grep -v "\.git" | grep -v "node_modules" | grep -v "target" | grep -v "docs/superpowers"

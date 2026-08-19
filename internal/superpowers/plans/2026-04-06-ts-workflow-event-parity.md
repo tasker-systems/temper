@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (sqlx, uuid v7), PostgreSQL (PL/pgSQL), TypeScript (Neon serverless driver, uuidv7 npm package, Node crypto for SHA-256), Vitest
 
-**Spec:** `docs/superpowers/specs/2026-04-06-ts-workflow-event-parity-design.md`
+**Spec:** `internal/superpowers/specs/2026-04-06-ts-workflow-event-parity-design.md`
 
 ---
 

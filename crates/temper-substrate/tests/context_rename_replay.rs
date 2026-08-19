@@ -3,7 +3,7 @@
 //! `_project_context_renamed` never authorizes, so a rename that was valid when it happened stays
 //! valid when it is re-applied.
 //!
-//! Spec: `docs/superpowers/specs/2026-07-30-context-rename-design.md` §"Shape" —
+//! Spec: `internal/superpowers/specs/2026-07-30-context-rename-design.md` §"Shape" —
 //! *"A pure re-apply that **never authorizes**, so replayed history is not re-adjudicated against
 //! present-day membership."* Migration `20260730000020_context_rename_fns.sql` states the same
 //! split: the RBAC gate is an invariant of `context_rename` (the mutation half), and the projector

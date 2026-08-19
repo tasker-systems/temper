@@ -215,10 +215,10 @@ precedent:
 
 - Realizes the surface half of the `substrate-kernel-to-cognitive-map` goal.
 - Builds on the temper-agents neutral-contract spec
-  (`docs/superpowers/specs/2026-06-18-temper-agents-neutral-contract-crate-design.md`) and
+  (`internal/superpowers/specs/2026-06-18-temper-agents-neutral-contract-crate-design.md`) and
   its *Rejected* scar (surfaces, not a client).
 - Grounded in the WS7 runtime investigation
-  (`docs/research/2026-06-18-vercel-eve-and-claude-managed-agents-investigation.md`).
+  (`internal/research/2026-06-18-vercel-eve-and-claude-managed-agents-investigation.md`).
 - Depends on the WS6 chunk-5 flip (NextBackend live) — the in-progress flip task + sibling
   neon-branch verification.
 - The invocation-envelope first slice makes the "trace" corollary of the temper-agents scar

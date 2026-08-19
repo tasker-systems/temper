@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (sqlx, axum, rmcp, clap), PostgreSQL 18 + pgvector, cargo-make / cargo-nextest.
 
-**Spec:** [docs/superpowers/specs/2026-07-01-deliverable-3b-cogmap-write-tightening-design.md](../specs/2026-07-01-deliverable-3b-cogmap-write-tightening-design.md)
+**Spec:** [internal/superpowers/specs/2026-07-01-deliverable-3b-cogmap-write-tightening-design.md](../specs/2026-07-01-deliverable-3b-cogmap-write-tightening-design.md)
 
 ## Global Constraints
 
@@ -327,7 +327,7 @@ The core tightening. Flip and backfill co-commit atomically in one migration (ba
 
 ```sql
 -- Deliverable 3b — cogmap-write tightening (Q-A). Design:
--- docs/superpowers/specs/2026-07-01-deliverable-3b-cogmap-write-tightening-design.md
+-- internal/superpowers/specs/2026-07-01-deliverable-3b-cogmap-write-tightening-design.md
 --
 -- BEHAVIOR-CHANGING but not big-bang: a single forward CREATE OR REPLACE + a bounded one-time
 -- snapshot. Ordered BACKFILL-FIRST then FLIP, committing atomically, so there is never a committed

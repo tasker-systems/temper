@@ -7,7 +7,7 @@
 >
 > **Two things a later reader needs, neither of which is in the task text below.**
 >
-> 1. **The wire contract is now [`docs/api/query.openapi.yaml`](../../api/query.openapi.yaml).**
+> 1. **The wire contract is now [`internal/api/query.openapi.yaml`](../../api/query.openapi.yaml).**
 >    Task 4 bound the compiler to the twins against the *merged* type shapes, and the contract amends
 >    six of them. Task 5 made `find-exact`'s declaration true against those same shapes.
 >
@@ -44,7 +44,7 @@
 
 **Tech Stack:** PostgreSQL 17/18 + pgvector, sqlx migrations, Rust (temper-core validator, temper-substrate compiler), bash CI tripwire.
 
-**Spec:** `docs/superpowers/specs/2026-08-08-composable-search-fragments-design.md`. Read it. This plan is an index and sequence over it, not a replacement — each task cites the section its implementer must read.
+**Spec:** `internal/superpowers/specs/2026-08-08-composable-search-fragments-design.md`. Read it. This plan is an index and sequence over it, not a replacement — each task cites the section its implementer must read.
 
 ## Global Constraints
 
@@ -251,7 +251,7 @@ git commit -m "Extract the search arms' shared interiority into views, not funct
 **GD-3: CONFORM** — the load-bearing constraint is that Task 1 changed no plan. Spec §2.2.
 
 **Files:**
-- Create: `docs/superpowers/plans/evidence/2026-08-08-task1-plan-identity.md` (recorded output)
+- Create: `internal/superpowers/plans/evidence/2026-08-08-task1-plan-identity.md` (recorded output)
 
 - [ ] **Step 1: Capture the incumbent plans BEFORE the refactor**
 
@@ -281,7 +281,7 @@ If any plan lost an index path, STOP and report BLOCKED. Do not proceed to Task 
 - [ ] **Step 5: Commit the evidence**
 
 ```bash
-git add docs/superpowers/plans/evidence/2026-08-08-task1-plan-identity.md
+git add internal/superpowers/plans/evidence/2026-08-08-task1-plan-identity.md
 git commit -m "Evidence: the interiority extraction is plan-identical on all three arm shapes"
 ```
 
@@ -478,7 +478,7 @@ git commit -m "A declaration describes its mechanic: find-exact's bound kinds ar
 > step checkboxes below were never ticked and are left as-is.
 
 **Files:**
-- Create: `docs/superpowers/plans/evidence/2026-08-08-task6-gate-shape.md`
+- Create: `internal/superpowers/plans/evidence/2026-08-08-task6-gate-shape.md`
 
 - [ ] **Step 1: Read spec §5's final paragraph and §7's fallback**
 
@@ -499,7 +499,7 @@ If the `unnest` form is within noise of the join, proceed to Task 7. If it regre
 - [ ] **Step 5: Commit the evidence either way**
 
 ```bash
-git add docs/superpowers/plans/evidence/2026-08-08-task6-gate-shape.md
+git add internal/superpowers/plans/evidence/2026-08-08-task6-gate-shape.md
 git commit -m "Evidence: whether the ungated core's array path regresses /api/search"
 ```
 

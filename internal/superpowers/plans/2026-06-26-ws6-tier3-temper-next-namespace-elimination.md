@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, sqlx 0.8 (`#[sqlx::test]`, `sqlx::migrate!`), cargo-nextest, cargo-make, PostgreSQL 18 (Docker, port 5437), ONNX Runtime (bge-base-en-v1.5, for embed-dependent tests).
 
-**Spec:** `docs/superpowers/specs/2026-06-26-ws6-tier3-temper-next-namespace-elimination-design.md`
+**Spec:** `internal/superpowers/specs/2026-06-26-ws6-tier3-temper-next-namespace-elimination-design.md`
 
 ## Global Constraints
 
@@ -671,7 +671,7 @@ git commit -m "WS6 Tier3: drop --exclude temper-substrate/temper-agents from E2E
 
 ```bash
 grep -rn "temper_next" . --include=*.rs --include=*.toml --include=*.yml --include=*.sql --include=*.md \
-  | grep -v "/target/" | grep -v "docs/superpowers/plans/" | grep -v "docs/superpowers/specs/"
+  | grep -v "/target/" | grep -v "internal/superpowers/plans/" | grep -v "internal/superpowers/specs/"
 ```
 Expected: no hits (all live references removed; only historical plans/specs retain the name).
 

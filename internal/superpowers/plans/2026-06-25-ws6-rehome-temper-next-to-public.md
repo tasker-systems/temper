@@ -43,7 +43,7 @@ LOCAL='postgresql://temper:temper@localhost:5437/temper_development'
 - `docs/guides/ws6-rehome-to-public-runbook.md` — **Create.** Operator runbook.
 - `docs/guides/ws6-flip-runbook.md` — **Modify.** Superseded banner.
 - `docs/guides/ws6-endgame-collapse-runbook.md` — **Modify.** Superseded banner.
-- `docs/superpowers/specs/2026-06-25-ws6-parity-report.md` — **Create (Task 4).** The `migrations/` ↔ prod schema diff adjudication.
+- `internal/superpowers/specs/2026-06-25-ws6-parity-report.md` — **Create (Task 4).** The `migrations/` ↔ prod schema diff adjudication.
 - `migrations/*` — **Modify only if Task 4 finds genuine drift.**
 
 ---
@@ -384,7 +384,7 @@ neonctl branches delete ws6-rehome-rehearsal-2026-06-25 \
 `migrations/` must reproduce the unified-public schema from scratch. Compare a fresh local migrate against prod's `temper_next` (which is exactly what `public` becomes — `SET SCHEMA` changes the namespace, not the shape).
 
 **Files:**
-- Create: `docs/superpowers/specs/2026-06-25-ws6-parity-report.md`
+- Create: `internal/superpowers/specs/2026-06-25-ws6-parity-report.md`
 - Modify (only if drift is real): `migrations/*`
 
 **Interfaces:**
@@ -421,7 +421,7 @@ Expected: ideally empty. Realistically, a handful of differences — adjudicate 
 
 - [ ] **Step 4: Adjudicate every diff line in the parity report**
 
-Write `docs/superpowers/specs/2026-06-25-ws6-parity-report.md`. For each diff hunk, classify:
+Write `internal/superpowers/specs/2026-06-25-ws6-parity-report.md`. For each diff hunk, classify:
 - **Prod-only operational residue** (e.g. a stray index/trigger created out-of-band) → decide drop-on-prod (add to a noted `ws6-rehome-public.sql` cleanup) or accept-and-document.
 - **`migrations/` bug** (the from-scratch build is missing something prod legitimately needs) → fix `migrations/` so a fresh build matches. The from-scratch truth defines the shape (per spec); prod is matched to it, not vice versa.
 - **Cosmetic** (whitespace, comment, ordering the normalizer missed) → note and ignore.
@@ -439,7 +439,7 @@ Expected: migrations apply cleanly; `cargo make check` green (sqlx offline cache
 - [ ] **Step 6: Commit**
 
 ```bash
-git add docs/superpowers/specs/2026-06-25-ws6-parity-report.md migrations/ crates/ 2>/dev/null
+git add internal/superpowers/specs/2026-06-25-ws6-parity-report.md migrations/ crates/ 2>/dev/null
 git commit -m "WS6 re-home: migrations/ <-> prod parity report + reconciliation"
 ```
 

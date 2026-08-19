@@ -205,7 +205,7 @@ own compile, and **two costs should be planned for rather than discovered**:
 - The allow-list should carry **4 reasons**, not 3: `dynamic-table`, `vector-cast`, `dynamic-sql`,
   and `dynamic-order-by` (or fold the last into `dynamic-sql` — `substrate_read.rs:265` is its only
   member, and it is the case the existing prose rule at
-  `docs/development/code-quality-best-practices.md:165` already names).
+  `internal/development/code-quality-best-practices.md:165` already names).
 - It should be seeded at **46 entries** (36 + 7 + 3), not by transcribing the pre-Arc-A state.
   Seeding from that state would bless 66 sites that have no reason, and a baseline that blesses the
   thing it exists to prevent is worse than no baseline. **46 survives the correction unchanged** —

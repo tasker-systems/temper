@@ -11,7 +11,7 @@
 3. **Task 3 (Phase B)** — `commands/status.rs` rework: report projection staleness (cursor mtime + projected count vs server count) per context.
 4. **Task 4 (Phase C)** — atomic deletion: `SyncResolveRequest` + `ResolutionType` from `types/sync.rs`; `commands/sync_cmd.rs` + `SyncAction` enum + `Commands::Sync` clap variant + the e2e test that exercises the stub.
 5. **Task 5 (Phase D-1)** — `temper-ingest` `hnsw` feature + `tantivy`/`hnsw_rs` deps + cargo-machete-ignore entries dropped.
-6. **Task 6 (Phase D-2)** — guidance-docs sweep: CLAUDE.md family + `.claude/skills/temper/**`. Specs/plans under `docs/superpowers/` left intact as historical record.
+6. **Task 6 (Phase D-2)** — guidance-docs sweep: CLAUDE.md family + `.claude/skills/temper/**`. Specs/plans under `internal/superpowers/` left intact as historical record.
 7. **Task 7 (pub-orphan sweep)** — broader-surface audit per `feedback_sweep_time_audit_surface` after all deletions land.
 8. **Task 8 (final review + PR B)** — 4-tier verification, opus consolidated review, `git merge origin/main`, then `gh pr create`.
 
@@ -34,7 +34,7 @@ Applied **all three** carry-forward feedbacks:
 | Phase A init scope | **Medium**: config + auth + ensure default context server-side | Smallest non-trivial shape that completes init for first-time users; leaves projection pull to an explicit `temper pull` follow-up. |
 | Phase B status scope | **Cursor + projected count vs server count** | More informative than cursor-only without bleeding into the deferred `temper doctor` auth/connectivity surface. |
 | Phase C sync_cmd fate | **Delete entirely** | Unambiguous in cloud-only world; aligns with the breaking-change narrative of PR B. |
-| Phase D docs scope | **Sweep guidance docs only** | `docs/superpowers/specs/*` and `docs/superpowers/plans/*` describe past work — rewriting them is history rewriting. Sweep CLAUDE.md family + skill docs only. |
+| Phase D docs scope | **Sweep guidance docs only** | `internal/superpowers/specs/*` and `internal/superpowers/plans/*` describe past work — rewriting them is history rewriting. Sweep CLAUDE.md family + skill docs only. |
 
 ### Type-symbol audit (orphan types in `types/sync.rs`)
 
@@ -116,8 +116,8 @@ rg -l --hidden 'local vault|local-vault|VaultState|manifest|sync engine|temper s
 | `crates/*/CLAUDE.md`, `crates/*/src/CLAUDE.md`, `crates/*/src/commands/CLAUDE.md` etc. | Most are `claude-mem-context` activity logs (auto-generated). **LEAVE** unless a manual section references local-vault concepts. |
 | `docs/guides/cloud-agents.md` | Cloud-agent task-prep guide; **VERIFY** no contradictory local-vault refs. |
 | `docs/guides/*.md` (other) | Sweep at task-time. |
-| `docs/superpowers/specs/2026-*.md` | **DO NOT TOUCH** — historical record. |
-| `docs/superpowers/plans/2026-*.md` | **DO NOT TOUCH** — historical record. |
+| `internal/superpowers/specs/2026-*.md` | **DO NOT TOUCH** — historical record. |
+| `internal/superpowers/plans/2026-*.md` | **DO NOT TOUCH** — historical record. |
 | `docs/2026-*.md` (top-level docs, e.g. handoff notes) | **DO NOT TOUCH** — historical record. |
 | `README.md` (top-level temper) | Sweep at task-time if it mentions local-vault sync. |
 
@@ -163,7 +163,7 @@ After this chunk lands, **every** deferral accumulated since Chunk 4 is resolved
 - **Cloud-mode session-task linking** (`2026-05-22-cloud-mode-session-task-linking-re-implement-link-session-to-task-for-cloud`) — still pending; separate.
 - **CLI read-side meta affordance** (`2026-05-25-cli-read-side-meta-affordance-for-resources`) — backlog; separate.
 - **Re-shaping `cloud_writes_test.rs` after Test 7 deletion** — only that one test is removed; the rest of the file remains valid.
-- **Spec/plan-file rewriting** under `docs/superpowers/{specs,plans}/2026-*` — user decision: historical record, leave untouched.
+- **Spec/plan-file rewriting** under `internal/superpowers/{specs,plans}/2026-*` — user decision: historical record, leave untouched.
 - **Top-level `docs/2026-*.md` handoff notes** — same rationale, historical record.
 
 ## Branch
@@ -191,7 +191,7 @@ Land the plan file before any code change so subsequent commits reference it. No
 - [ ] **Step 1: Commit the plan file**
 
 ```bash
-git add docs/superpowers/plans/2026-05-25-cloud-only-vault-chunk8-init-status-docs-pr-open.md
+git add internal/superpowers/plans/2026-05-25-cloud-only-vault-chunk8-init-status-docs-pr-open.md
 git commit -m "cloud-only(ch8): record the chunk 8 implementation plan"
 ```
 
@@ -547,7 +547,7 @@ existed only to suppress machete warnings on these now-deleted optionals."
 
 ## Task 6: Phase D-2 — guidance docs sweep
 
-Sweep CLAUDE.md family + `.claude/skills/temper/**` to match the cloud-only world. Specs/plans under `docs/superpowers/` and historical handoff notes under `docs/2026-*.md` are **untouched** (historical record).
+Sweep CLAUDE.md family + `.claude/skills/temper/**` to match the cloud-only world. Specs/plans under `internal/superpowers/` and historical handoff notes under `docs/2026-*.md` are **untouched** (historical record).
 
 **Files to inspect and edit (per plan-gate sweep audit):**
 
@@ -629,7 +629,7 @@ CLAUDE.md family + .claude/skills/temper/** rewritten where they
 described local-vault, sync engine, manifest IO, vault_backend, or the
 removed CLI surfaces (sync/push/graph build/add/doctor).
 
-Specs and plans under docs/superpowers/ and historical handoff notes
+Specs and plans under internal/superpowers/ and historical handoff notes
 under docs/ left untouched — historical record."
 ```
 
@@ -789,7 +789,7 @@ gh pr create --base main --head jct/cloud-only-vault-pr-b \
 ## Summary
 
 PR B of the cloud-only-vault deprecation. Spec:
-\`docs/superpowers/specs/2026-05-21-cloud-only-vault-deprecation-design.md\`.
+\`internal/superpowers/specs/2026-05-21-cloud-only-vault-deprecation-design.md\`.
 
 Chunks 3-8 land together as one atomic breaking change. PR A (#90)
 merged the additive \`projection\` module foundation in advance; this

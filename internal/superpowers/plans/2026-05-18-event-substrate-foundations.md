@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust 2021, `sqlx 0.8` (postgres / runtime-tokio-rustls / chrono / json / uuid / macros / migrate), `uuid 1` (v7), `chrono 0.4`, `serde 1`, `serde_json 1`, `thiserror 2`. Test runner: `cargo nextest`. Migrations applied via `sqlx::migrate!` macro and `#[sqlx::test(migrator = ...)]`.
 
-**Spec:** `docs/superpowers/specs/2026-05-18-event-substrate-foundations-design.md`
+**Spec:** `internal/superpowers/specs/2026-05-18-event-substrate-foundations-design.md`
 
 ---
 
@@ -138,7 +138,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```rust
 //! Event-sourced substrate foundations.
 //!
-//! See `docs/superpowers/specs/2026-05-18-event-substrate-foundations-design.md`.
+//! See `internal/superpowers/specs/2026-05-18-event-substrate-foundations-design.md`.
 
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 ```
@@ -166,7 +166,7 @@ git commit -m "Scaffold temper-events crate"
 
 ```sql
 -- Event substrate v1 schema.
--- See docs/superpowers/specs/2026-05-18-event-substrate-foundations-design.md.
+-- See internal/superpowers/specs/2026-05-18-event-substrate-foundations-design.md.
 
 CREATE SCHEMA event_substrate;
 
@@ -484,7 +484,7 @@ pub enum ReferenceKind {
 ```rust
 //! Event-sourced substrate foundations.
 //!
-//! See `docs/superpowers/specs/2026-05-18-event-substrate-foundations-design.md`.
+//! See `internal/superpowers/specs/2026-05-18-event-substrate-foundations-design.md`.
 
 pub mod errors;
 pub mod types;
@@ -609,7 +609,7 @@ Edit `crates/temper-events/src/lib.rs` — replace the existing contents with:
 ```rust
 //! Event-sourced substrate foundations.
 //!
-//! See `docs/superpowers/specs/2026-05-18-event-substrate-foundations-design.md`.
+//! See `internal/superpowers/specs/2026-05-18-event-substrate-foundations-design.md`.
 
 pub mod entities;
 pub mod errors;
@@ -1136,7 +1136,7 @@ Replace `crates/temper-events/src/lib.rs` with:
 ```rust
 //! Event-sourced substrate foundations.
 //!
-//! See `docs/superpowers/specs/2026-05-18-event-substrate-foundations-design.md`.
+//! See `internal/superpowers/specs/2026-05-18-event-substrate-foundations-design.md`.
 
 pub mod entities;
 pub mod errors;
@@ -1334,7 +1334,7 @@ Replace `crates/temper-events/src/lib.rs` with:
 ```rust
 //! Event-sourced substrate foundations.
 //!
-//! See `docs/superpowers/specs/2026-05-18-event-substrate-foundations-design.md`.
+//! See `internal/superpowers/specs/2026-05-18-event-substrate-foundations-design.md`.
 
 pub mod entities;
 pub mod errors;
@@ -1998,7 +1998,7 @@ Replace `crates/temper-events/src/lib.rs` with:
 ```rust
 //! Event-sourced substrate foundations.
 //!
-//! See `docs/superpowers/specs/2026-05-18-event-substrate-foundations-design.md`.
+//! See `internal/superpowers/specs/2026-05-18-event-substrate-foundations-design.md`.
 
 pub mod entities;
 pub mod errors;
@@ -2537,7 +2537,7 @@ Replace `crates/temper-events/src/lib.rs` with:
 ```rust
 //! Event-sourced substrate foundations.
 //!
-//! See `docs/superpowers/specs/2026-05-18-event-substrate-foundations-design.md`.
+//! See `internal/superpowers/specs/2026-05-18-event-substrate-foundations-design.md`.
 
 pub mod entities;
 pub mod errors;
@@ -2740,8 +2740,8 @@ gh pr create --title "Event substrate foundations (temper-events crate + event_s
 - New `temper-events` crate (no dep on `temper-core`): types, payloads, `append_event`, `project_concept`, `rebuild_concept`, entity/profile ops.
 - 16 integration tests covering the write-and-project-and-replay loop and every documented invariant.
 
-Implements `docs/superpowers/specs/2026-05-18-event-substrate-foundations-design.md`.
-Per `docs/superpowers/plans/2026-05-18-event-substrate-foundations.md`.
+Implements `internal/superpowers/specs/2026-05-18-event-substrate-foundations-design.md`.
+Per `internal/superpowers/plans/2026-05-18-event-substrate-foundations.md`.
 
 ## Test plan
 
@@ -2769,7 +2769,7 @@ EOF
 
 ## Execution
 
-**Plan complete and saved to `docs/superpowers/plans/2026-05-18-event-substrate-foundations.md`.** Two execution options:
+**Plan complete and saved to `internal/superpowers/plans/2026-05-18-event-substrate-foundations.md`.** Two execution options:
 
 1. **Subagent-Driven (recommended)** — I dispatch a fresh subagent per task, review between tasks, fast iteration.
 2. **Inline Execution** — Execute tasks in this session using executing-plans, batch execution with checkpoints.

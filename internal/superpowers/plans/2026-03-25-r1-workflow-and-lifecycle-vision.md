@@ -14,8 +14,8 @@
 
 Read these before starting any task:
 
-- **Design spec:** `docs/superpowers/specs/2026-03-25-r1-workflow-and-lifecycle-vision-design.md` — defines the three-layer structure, scope corrections, and acceptance criteria
-- **Epic design spec:** `docs/superpowers/specs/2026-03-25-temper-cloud-design.md` — the parent design: resource model, dual authority, composable behaviors, deployment model
+- **Design spec:** `internal/superpowers/specs/2026-03-25-r1-workflow-and-lifecycle-vision-design.md` — defines the three-layer structure, scope corrections, and acceptance criteria
+- **Epic design spec:** `internal/superpowers/specs/2026-03-25-temper-cloud-design.md` — the parent design: resource model, dual authority, composable behaviors, deployment model
 - **Current operations map:** The temper CLI has these commands, each of which must appear in the responsibility matrix:
   - `ticket create`, `ticket move`, `ticket done`, `ticket list`, `ticket show`, `ticket start`
   - `session save`, `session list`
@@ -134,7 +134,7 @@ Confirm: file write order, event types, registry update behavior. The walkthroug
 - [ ] **Step 3: Commit progress**
 
 ```bash
-git add docs/superpowers/plans/2026-03-25-r1-workflow-and-lifecycle-vision.md
+git add internal/superpowers/plans/2026-03-25-r1-workflow-and-lifecycle-vision.md
 git commit -m "docs: add R1 implementation plan — Task 1 in progress"
 ```
 
@@ -658,8 +658,8 @@ Questions surfaced during R1 that belong to downstream workstreams:
 ```markdown
 ## Sources
 
-- Temper Cloud Epic Design Spec: `docs/superpowers/specs/2026-03-25-temper-cloud-design.md`
-- R1 Research Design Spec: `docs/superpowers/specs/2026-03-25-r1-workflow-and-lifecycle-vision-design.md`
+- Temper Cloud Epic Design Spec: `internal/superpowers/specs/2026-03-25-temper-cloud-design.md`
+- R1 Research Design Spec: `internal/superpowers/specs/2026-03-25-r1-workflow-and-lifecycle-vision-design.md`
 - Current temper codebase: CLI commands (`src/cli.rs`), vault operations (`src/vault.rs`), indexing pipeline (`src/hnsw.rs`, `src/embedder.rs`, `src/chunker.rs`), event system (`src/discovery.rs`), registry (`src/registry.rs`)
 - kreuzberg v4: https://github.com/kreuzberg-dev/kreuzberg — document-to-markdown conversion pipeline, candidate for ingestion and potentially broader text processing
 ```

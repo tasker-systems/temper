@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- **Spec:** `docs/superpowers/specs/2026-06-18-ws6-surface-completeness-spec-b-readback-routing-design.md`. Companion: Spec A `…2026-06-17-ws6-surface-completeness-spec-a-addressing-collapse-design.md`.
+- **Spec:** `internal/superpowers/specs/2026-06-18-ws6-surface-completeness-spec-b-readback-routing-design.md`. Companion: Spec A `…2026-06-17-ws6-surface-completeness-spec-a-addressing-collapse-design.md`.
 - **§9 invariant floor for parity:** the parity-asserted fields are `origin_uri`, `title`, `is_active`, `context_name`, `doc_type_name`, `owner_handle`, `stage`/`mode`/`effort`/`seq`, `body_hash`. **Non-invariants (never asserted equal across legacy↔next):** re-minted ids (resource/context/profile), §7-dissolved `slug`/`managed_hash`/`open_hash`, synthesis-collapsed `created`/`updated`.
 - **Gating:** all of Part 2's Next behavior is `#[cfg(feature = "next-backend")]` + `BackendSelection::Next`; default builds (no feature) keep the existing `NotImplemented` gate. Zero production behavior change while `kb_backend_selection = legacy`.
 - **next-backend builds require `SQLX_OFFLINE=true`** (temper-next queries target the `temper_next` namespace; live validation against the `public` dev DB fails). Regenerate caches with `cargo make prepare-next` (temper-next readback SQL) / `cargo make prepare-api` (api test SQL) / `cargo make prepare-e2e` (e2e test SQL) after changing the matching SQL.

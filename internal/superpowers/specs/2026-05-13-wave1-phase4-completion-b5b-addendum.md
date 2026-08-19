@@ -3,8 +3,8 @@
 **Date:** 2026-05-13
 **Branch:** `jct/wave1-phase4-completion`
 **Predecessors:**
-- Spec: `docs/superpowers/specs/2026-05-11-wave1-phase4-vaultbackend-design.md`
-- Plan: `docs/superpowers/plans/2026-05-13-wave1-phase4-completion.md`
+- Spec: `internal/superpowers/specs/2026-05-11-wave1-phase4-vaultbackend-design.md`
+- Plan: `internal/superpowers/plans/2026-05-13-wave1-phase4-completion.md`
 - Last session note: `phase-4-completion-phase-b-b1-b5a-landed--per-doctype-dispatch-task-closed`
 
 ## Purpose
@@ -161,8 +161,8 @@ Either descope path defers the remaining work to a fresh session; the parent pla
 
 ## Connections
 
-- Parent spec: `docs/superpowers/specs/2026-05-11-wave1-phase4-vaultbackend-design.md`
-- Parent plan: `docs/superpowers/plans/2026-05-13-wave1-phase4-completion.md`
+- Parent spec: `internal/superpowers/specs/2026-05-11-wave1-phase4-vaultbackend-design.md`
+- Parent plan: `internal/superpowers/plans/2026-05-13-wave1-phase4-completion.md`
 - Predecessor session: `phase-4-completion-phase-b-b1-b5a-landed--per-doctype-dispatch-task-closed`
 - Active task: `2026-05-11-wave-1-phase-4b-extract-commands-resource-rs-local-mode-writes-through-vaultbackend`
 - Related backlog tasks (Phase D PR will close):

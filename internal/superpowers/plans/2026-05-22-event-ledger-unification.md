@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (sqlx 0.8, compile-time-checked macros + runtime queries), PostgreSQL 18 / pgvector, cargo-make, cargo-nextest.
 
-**Spec:** `docs/superpowers/specs/2026-05-21-event-ledger-unification-design.md`
+**Spec:** `internal/superpowers/specs/2026-05-21-event-ledger-unification-design.md`
 
 ---
 
@@ -76,7 +76,7 @@ Create `migrations/20260522000001_event_ledger_unification.sql`:
 -- Event ledger unification — limb 0 of the event-primary reorientation.
 -- Drops the test-only `event_substrate` schema and evolves `kb_events`
 -- into one disciplined, append-only, registry-backed ledger in `public`.
--- Spec: docs/superpowers/specs/2026-05-21-event-ledger-unification-design.md
+-- Spec: internal/superpowers/specs/2026-05-21-event-ledger-unification-design.md
 
 -- ─── 1. Drop the test-only event_substrate schema ───────────────────────────
 -- Never emitted into in production; a clean drop, not a data migration.
@@ -443,7 +443,7 @@ Replace `crates/temper-events/src/lib.rs` with:
 //! Event-sourced ledger: append-only, scoped, registry-backed.
 //!
 //! Limb 0 of the event-primary reorientation. See
-//! `docs/superpowers/specs/2026-05-21-event-ledger-unification-design.md`.
+//! `internal/superpowers/specs/2026-05-21-event-ledger-unification-design.md`.
 
 pub mod errors;
 pub mod ledger;
@@ -948,7 +948,7 @@ insert_event_and_audit keeps its signature — resource-write callers
 are untouched.
 
 Limb 0 of the event-primary reorientation.
-Spec: docs/superpowers/specs/2026-05-21-event-ledger-unification-design.md
+Spec: internal/superpowers/specs/2026-05-21-event-ledger-unification-design.md
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ```
@@ -1165,7 +1165,7 @@ onto the public tables.
 
 Limb 0 of the event-primary reorientation.
 
-Spec: `docs/superpowers/specs/2026-05-21-event-ledger-unification-design.md`
+Spec: `internal/superpowers/specs/2026-05-21-event-ledger-unification-design.md`
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 EOF

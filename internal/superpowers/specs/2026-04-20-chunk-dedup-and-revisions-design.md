@@ -3,8 +3,8 @@
 **Date:** 2026-04-20
 **Status:** Accepted
 **Branch:** `claude/continue-analysis-migrations-Sbctd`
-**Companion plan:** [`docs/superpowers/plans/2026-04-20-chunk-dedup-and-revisions.md`](../plans/2026-04-20-chunk-dedup-and-revisions.md)
-**Related code-review:** [`docs/code-reviews/2026-04-20-graph-performance-audit.md`](../../code-reviews/2026-04-20-graph-performance-audit.md)
+**Companion plan:** [`internal/superpowers/plans/2026-04-20-chunk-dedup-and-revisions.md`](../plans/2026-04-20-chunk-dedup-and-revisions.md)
+**Related code-review:** [`internal/code-reviews/2026-04-20-graph-performance-audit.md`](../../code-reviews/2026-04-20-graph-performance-audit.md)
 
 ## Problem
 

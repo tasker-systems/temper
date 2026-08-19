@@ -8,7 +8,7 @@
 
 **Tech Stack:** PostgreSQL (sqlx migrations), Rust (temper-substrate / temper-core / temper-workflow / temper-services / temper-api / temper-mcp / temper-client / temper-cli), TypeScript (Eve agent, vitest).
 
-**Spec of record:** [`docs/superpowers/specs/2026-07-23-set5-adversary-citation-audit-design.md`](../specs/2026-07-23-set5-adversary-citation-audit-design.md). **Read the spec section each task cites — this plan is an index over it, not a replacement for it.** This plan was rewritten after a three-lens adversarial review; the fixes that review earned are folded into the tasks below and are called out with **[review]**.
+**Spec of record:** [`internal/superpowers/specs/2026-07-23-set5-adversary-citation-audit-design.md`](../specs/2026-07-23-set5-adversary-citation-audit-design.md). **Read the spec section each task cites — this plan is an index over it, not a replacement for it.** This plan was rewritten after a three-lens adversarial review; the fixes that review earned are folded into the tasks below and are called out with **[review]**.
 
 ## Global Constraints
 

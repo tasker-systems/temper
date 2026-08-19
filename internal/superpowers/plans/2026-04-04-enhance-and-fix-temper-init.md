@@ -741,7 +741,7 @@ Fix broken temper init config, consolidate kb_doc_types, auto-provision default 
 - Skill commands are routing-layer concepts, not new CLI commands
 
 ## Connections
-- Design spec: docs/superpowers/specs/2026-04-04-enhance-and-fix-temper-init-design.md
+- Design spec: internal/superpowers/specs/2026-04-04-enhance-and-fix-temper-init-design.md
 - Future: temper doctor (workstream d), frontmatter schemas (workstream e)
 - Future: interactive init flow (workstream g), temper move (workstream i)
 

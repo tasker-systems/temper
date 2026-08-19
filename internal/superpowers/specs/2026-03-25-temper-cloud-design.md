@@ -15,7 +15,7 @@ Transform temper from a local-only CLI into a cloud-native knowledge base system
 
 ### ~~Dual Authority Model~~ → Single Authority (Postgres)
 
-> **R2 Pivot (2026-03-26):** During R2 data model design, the dual-authority model was replaced by Postgres as single source of truth. Documents are recomposable from versioned chunks in Postgres, making git an optional materialization layer rather than a content authority. This simplifies reconciliation (6 drift types → push/pull sync), enables multi-tenancy via scoping, and unblocks Apache AGE knowledge graph integration. See `docs/superpowers/specs/2026-03-26-r2-data-model-and-schema-design.md`.
+> **R2 Pivot (2026-03-26):** During R2 data model design, the dual-authority model was replaced by Postgres as single source of truth. Documents are recomposable from versioned chunks in Postgres, making git an optional materialization layer rather than a content authority. This simplifies reconciliation (6 drift types → push/pull sync), enables multi-tenancy via scoping, and unblocks Apache AGE knowledge graph integration. See `internal/superpowers/specs/2026-03-26-r2-data-model-and-schema-design.md`.
 
 ~~Git and Postgres are both authoritative, for different things:~~
 ~~- **Git**: Document content, prose, version history, collaboration via PRs~~

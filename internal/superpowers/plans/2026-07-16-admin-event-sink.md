@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (temper-substrate, temper-services, temper-api, temper-cli, temper-mcp), PostgreSQL 18 + plpgsql, sqlx, axum, rmcp, clap.
 
-**Spec:** [`docs/superpowers/specs/2026-07-16-admin-event-sink-design.md`](../specs/2026-07-16-admin-event-sink-design.md)
+**Spec:** [`internal/superpowers/specs/2026-07-16-admin-event-sink-design.md`](../specs/2026-07-16-admin-event-sink-design.md)
 
 **Scope:** Spec §9 steps 1–4. Step 5 (the remaining ~18 acts) is a **separate plan**, written once this plan's pattern exists. This plan delivers a queryable ledger and one proven writer pair.
 
@@ -924,7 +924,7 @@ git add crates/temper-services/src/services/admin_ledger_service.rs \
         crates/temper-services/src/services/access_service.rs \
         crates/temper-substrate/src/payloads.rs \
         crates/temper-services/tests/admin_ledger_test.rs \
-        docs/superpowers/plans/2026-07-16-admin-event-sink.md \
+        internal/superpowers/plans/2026-07-16-admin-event-sink.md \
         .sqlx crates/temper-services/.sqlx
 git commit -m "feat(admin-ledger): read surface on kb_events.references
 
@@ -2107,7 +2107,7 @@ The claim becomes true here, and **not before**. The docs are wrong in a way RET
 **Files:**
 - Modify: `docs/cognitive-maps/07-operating-temper.md:95-96`
 - Modify: `docs/cognitive-maps/07b-governance-and-administration.md` (frontmatter, `:17-18`, `:58-59`, `:70`)
-- Modify: `docs/superpowers/specs/2026-07-13-external-systems-as-subscribed-emitters-design.md:467`
+- Modify: `internal/superpowers/specs/2026-07-13-external-systems-as-subscribed-emitters-design.md:467`
 
 - [ ] **Step 1: Fix the mechanism error**
 
@@ -2137,7 +2137,7 @@ The `07b` visualization placeholder — admin events flowing into *"a separate c
 cargo make check
 git add docs/cognitive-maps/07-operating-temper.md \
         docs/cognitive-maps/07b-governance-and-administration.md \
-        docs/superpowers/specs/2026-07-13-external-systems-as-subscribed-emitters-design.md
+        internal/superpowers/specs/2026-07-13-external-systems-as-subscribed-emitters-design.md
 git commit -m "docs: admin-as-events — name the real mechanism, scope the claim
 
 The docs said admin acts carry 'an emitter and a producing anchor'. The anchor

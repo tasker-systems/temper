@@ -150,7 +150,7 @@ bit — but forwarding vendor state is a property this setup does not yet have.
 ## Pointing temper at a backend
 
 Configuration is entirely [spec-standard OTel environment
-variables](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/). No
+variables](https://opentelemetry.io/internal/specs/otel/configuration/sdk-environment-variables/). No
 temper-specific variable, and no vendor name, appears anywhere in our code.
 
 | Variable | Purpose |

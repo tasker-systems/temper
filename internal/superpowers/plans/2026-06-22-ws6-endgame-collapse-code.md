@@ -494,7 +494,7 @@ git add -A && git commit -m "WS6 collapse: deprecate unused /api/events? list qu
 > leak services." Execution proved the **entire** legacy service layer (identity/access/context/
 > sync/edge/resource/meta/search/ingest/doc_type/relationship) still targets the legacy `public`
 > shape and backs live surfaces. The service-layer audit
-> (`docs/superpowers/specs/2026-06-23-ws6-service-layer-collapse-audit.md`) re-scoped the flip into
+> (`internal/superpowers/specs/2026-06-23-ws6-service-layer-collapse-audit.md`) re-scoped the flip into
 > **additive prep chunks A–G** (this phase) **then a shrunken atomic flip** (Task 8). Read the audit's
 > "Disposition map" + "Resolved product decisions" before executing — every disposition (PORT / RETIRE /
 > GRAFT-SATISFIED) and the 5 product decisions are cited there.
@@ -542,7 +542,7 @@ other except**: B/C/D/E all need A's grafted tables/functions present in the art
 The substrate kernel (`schema-artifact/01_schema.sql`) deliberately omits the operational/identity
 tables ("out of scope for this artifact", `01_schema.sql:25-27`). The ported access/profile/context
 services need them present locally so their macros resolve and `prepare-api` passes. The live-cutover
-graft DDL already exists at `docs/superpowers/specs/2026-06-22-ws6-canonical-layer-draft.sql` — this
+graft DDL already exists at `internal/superpowers/specs/2026-06-22-ws6-canonical-layer-draft.sql` — this
 task folds its **DDL half** into the artifact (data carry-over stays runbook-only).
 
 **Files:**

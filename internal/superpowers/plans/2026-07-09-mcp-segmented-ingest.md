@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (axum, rmcp, sqlx, ort/ONNX), PostgreSQL 18 + pgvector, cargo-make, cargo-nextest.
 
-**Spec:** [docs/superpowers/specs/2026-07-09-mcp-segmented-ingest-design.md](../specs/2026-07-09-mcp-segmented-ingest-design.md)
+**Spec:** [internal/superpowers/specs/2026-07-09-mcp-segmented-ingest-design.md](../specs/2026-07-09-mcp-segmented-ingest-design.md)
 
 ## Global Constraints
 
@@ -1674,8 +1674,8 @@ The load-bearing assertion is e2e: a segmented, server-chunked ingest of documen
 same body, chunk breadcrumbs, and `body_hash` as a one-shot create of D. Plus resume-from-server
 (no client manifest) and idempotent replay. Embed-gated; runs in the Embed CI job.
 
-Spec: `docs/superpowers/specs/2026-07-09-mcp-segmented-ingest-design.md`
-Plan: `docs/superpowers/plans/2026-07-09-mcp-segmented-ingest.md`
+Spec: `internal/superpowers/specs/2026-07-09-mcp-segmented-ingest-design.md`
+Plan: `internal/superpowers/plans/2026-07-09-mcp-segmented-ingest.md`
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 EOF

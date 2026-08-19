@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (serde, sqlx, axum, askama), PostgreSQL (JSONB, GIN indexes), JSON Schema
 
-**Spec:** `docs/superpowers/specs/2026-04-04-managed-open-frontmatter-data-model-design.md`
+**Spec:** `internal/superpowers/specs/2026-04-04-managed-open-frontmatter-data-model-design.md`
 
 **Build/test commands:**
 - Quality checks: `cargo make check`

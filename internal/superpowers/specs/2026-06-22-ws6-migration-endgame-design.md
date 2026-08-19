@@ -6,7 +6,7 @@
 > It was instead accomplished by a **re-home**: drop legacy `public`, `ALTER … SET SCHEMA public`
 > the canonical objects, rewrite `_sqlx_migrations`, revert the `search_path` default, drop
 > `temper_next`. Prod is now single-schema `public`. See
-> `docs/superpowers/specs/2026-06-25-ws6-rehome-temper-next-to-public-design.md`,
+> `internal/superpowers/specs/2026-06-25-ws6-rehome-temper-next-to-public-design.md`,
 > `…-parity-report.md`, and `docs/guides/ws6-rehome-to-public-runbook.md` (PR #168). This
 > document is retained for historical context. The OSS **bootstrap-export** follow-on is
 > already satisfied: `migrations/` (the 3 canonical files) is the clean from-scratch set
@@ -434,4 +434,4 @@ reconciled single source of truth from step 4.
 - Findings task `019eefbe` (raw-pool reads serve stale `public`)
 - `crates/temper-api/src/backend/{read_selector,next_backend,selection,db_backend}.rs`
 - Flip runbook: `docs/guides/ws6-flip-runbook.md`
-- Convergence/§9 floor: `docs/superpowers/specs/2026-06-12-ws6-convergence-delta-adjudication-design.md`
+- Convergence/§9 floor: `internal/superpowers/specs/2026-06-12-ws6-convergence-delta-adjudication-design.md`

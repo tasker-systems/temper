@@ -8,7 +8,7 @@ Goal: `019fb35b-c64e-7cd2-a7c0-aa117d1ab1a7`. Grounded in the production outage 
 
 **This document is the design. For what to do when one of these checks goes red, or when a write
 path is failing in production, read
-[docs/development/schema-binary-pairing-playbook.md](../../development/schema-binary-pairing-playbook.md)** —
+[internal/development/schema-binary-pairing-playbook.md](../../development/schema-binary-pairing-playbook.md)** —
 which also records where the built mechanism turned out rougher than this design assumed (correcting
 a shipped misclassification, most of all).
 
@@ -309,7 +309,7 @@ where it matters is worse than one that is absent, because it reads as coverage.
 
 The rule already exists and is unenforced, which is the same defect class as the outage itself:
 
-> `docs/development/code-quality-best-practices.md:165` — *"Runtime `query_as` is acceptable only
+> `internal/development/code-quality-best-practices.md:165` — *"Runtime `query_as` is acceptable only
 > where a `::vector` cast or dynamic column/ORDER BY defeats the macro."*
 
 So: a check fails on any non-macro `sqlx::query*` call in a **production code path** unless that call
@@ -321,7 +321,7 @@ Scoped to production code paths deliberately: the wire contract that can break a
 running binary's. `#[cfg(...test...)]` modules and `tests/` directories are excluded.
 
 Measured, so the ceremony is known rather than feared. **The classification is now done** — see
-[docs/development/sqlx-macro-exception-classification.md](../../development/sqlx-macro-exception-classification.md),
+[internal/development/sqlx-macro-exception-classification.md](../../development/sqlx-macro-exception-classification.md),
 and reproduce any count with `python3 scripts/classify-sqlx-calls.py`.
 
 | | count | `[observed — 2026-07-30]` |

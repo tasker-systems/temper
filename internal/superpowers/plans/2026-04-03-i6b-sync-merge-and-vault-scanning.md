@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, `similar` crate for diffing, `indicatif` + `anstream`/`anstyle` for progress output, existing `temper-ingest` chunking pipeline.
 
-**Spec:** `docs/superpowers/specs/2026-04-03-i6b-sync-merge-and-vault-scanning-design.md`
+**Spec:** `internal/superpowers/specs/2026-04-03-i6b-sync-merge-and-vault-scanning-design.md`
 
 ---
 

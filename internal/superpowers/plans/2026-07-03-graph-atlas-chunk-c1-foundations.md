@@ -149,7 +149,7 @@ Expected: FAIL — cannot find module `./palette`.
  * Warm semicircle = authored/knowledge doc-types (cogmap-homed, rendered filled);
  * cool semicircle = workflow doc-types (context-homed, rendered outline). Home is
  * carried by fill-vs-outline, so hue is free to mean doc-type. See
- * docs/superpowers/specs/2026-07-03-graph-atlas-chunk-c-ui-engine-design.md (D3–D5).
+ * internal/superpowers/specs/2026-07-03-graph-atlas-chunk-c-ui-engine-design.md (D3–D5).
  *
  * This module is the ONLY place Atlas hues are defined. The legacy `--graph-*` /
  * `--color-graph-*` CSS vars and styling.ts NODE_COLORS belong to the old graph

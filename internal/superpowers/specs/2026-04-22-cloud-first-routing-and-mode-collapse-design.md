@@ -7,8 +7,8 @@
 **Branch:** `jct/temper-cloud-mode-portable-memory`
 
 **Related work:**
-- Reshapes Unit B.2 from `docs/superpowers/specs/2026-04-18-cloud-mode-and-portable-memory-design.md`
-- Supersedes Tasks 10–17 of `docs/superpowers/plans/2026-04-19-unit-b-2-cloud-mode-dispatch.md`. Tasks 1–9 stand (Part 1 auth foundation, Part 2 CLI surface, Task 9 guard test already shipped on this branch).
+- Reshapes Unit B.2 from `internal/superpowers/specs/2026-04-18-cloud-mode-and-portable-memory-design.md`
+- Supersedes Tasks 10–17 of `internal/superpowers/plans/2026-04-19-unit-b-2-cloud-mode-dispatch.md`. Tasks 1–9 stand (Part 1 auth foundation, Part 2 CLI surface, Task 9 guard test already shipped on this branch).
 - Builds on Unit A primitives (`push_one_resource` / `pull_one_resource`, manifest-optional)
 
 ---
@@ -142,7 +142,7 @@ Auth foundation + CLI surface shipped in Parts 1 (Tasks 1–4) and 2 (Tasks 5–
 
 ## Migration Notes
 
-- **Plan file** `docs/superpowers/plans/2026-04-19-unit-b-2-cloud-mode-dispatch.md`: Tasks 1–9 stand as shipped/verified. Tasks 10–17 are obsolete; the new plan supersedes them. The original plan file can stay in place as a historical artifact; the new plan will link back.
+- **Plan file** `internal/superpowers/plans/2026-04-19-unit-b-2-cloud-mode-dispatch.md`: Tasks 1–9 stand as shipped/verified. Tasks 10–17 are obsolete; the new plan supersedes them. The original plan file can stay in place as a historical artifact; the new plan will link back.
 - **No new `resource_cloud` module.** All dispatch lives in the existing command modules.
 - **`VaultState::Cloud` enum variant stays.** What changes is how we *use* it — match at divergence sites, not as a dispatch-hierarchy root.
 - **`temper-client` resource surface is sufficient.** Grep-verified: `client.resources().list(&ResourceListParams)` and `client.resources().get_content(id)` etc. exist and cover the needed read paths.

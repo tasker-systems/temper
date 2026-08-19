@@ -148,7 +148,7 @@ Land the plan file before any code change so subsequent commits reference it. No
 - [ ] **Step 1: Commit the plan file**
 
 ```bash
-git add docs/superpowers/plans/2026-05-25-cloud-only-vault-chunk7-doctor-ingest-rework.md
+git add internal/superpowers/plans/2026-05-25-cloud-only-vault-chunk7-doctor-ingest-rework.md
 git commit -m "cloud-only(ch7): record the chunk 7 implementation plan"
 ```
 
@@ -790,8 +790,8 @@ cat /tmp/ch7_task7_external_audit.log
 ```
 
 Expected: zero lines. If anything surfaces, STOP — there's a missed consumer. Common false positives to ignore:
-- `docs/superpowers/specs/...` (markdown design docs)
-- `docs/superpowers/plans/...` (this plan, Chunk 4/5/6 plans)
+- `internal/superpowers/specs/...` (markdown design docs)
+- `internal/superpowers/plans/...` (this plan, Chunk 4/5/6 plans)
 - `docs/2026-03-31-user-workflow-analysis.md` (historical doc)
 
 Filter with `--type rust` is required — the `grep -v` only excludes the deletion-set files.
@@ -1051,8 +1051,8 @@ deleting `actions/sync.rs` + `manifest_io.rs` + `temper-core::types::{manifest,s
 
 - **PR:** Not opened — Chunk 8 follows on the same branch
 - **Branch:** `jct/cloud-only-vault-pr-b`
-- **Spec:** `docs/superpowers/specs/2026-05-21-cloud-only-vault-deprecation-design.md`
-- **Plan:** `docs/superpowers/plans/2026-05-25-cloud-only-vault-chunk7-doctor-ingest-rework.md`
+- **Spec:** `internal/superpowers/specs/2026-05-21-cloud-only-vault-deprecation-design.md`
+- **Plan:** `internal/superpowers/plans/2026-05-25-cloud-only-vault-chunk7-doctor-ingest-rework.md`
 - **Predecessor session:** `2026-05-25-cloud-only-vault-chunk-6-landed-hnsw-graph-build-deleted-search-reworked-to-cloud-only`
 - **Goal:** `path-to-alpha`
 

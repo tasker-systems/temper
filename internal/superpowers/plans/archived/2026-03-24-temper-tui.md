@@ -8,7 +8,7 @@
 
 **Tech Stack:** ratatui, crossterm, tokio (rt, macros, sync), existing candle/HNSW pipeline.
 
-**Spec:** `docs/superpowers/specs/2026-03-24-temper-tui-design.md`
+**Spec:** `internal/superpowers/specs/2026-03-24-temper-tui-design.md`
 
 ---
 
