@@ -604,7 +604,7 @@ module Temper::Generated
     # @param [Hash] opts the optional parameters
     # @option opts [String] :kb_doc_type_id 
     # @option opts [String] :context_ref Context filter: UUID string or &#x60;@owner/slug&#x60; decorated ref. Bare context names are rejected server-side (spec Decision 1).
-    # @option opts [String] :doc_type_name 
+    # @option opts [String] :doc_type_name Doc-type filter: one name, or a comma-separated list of them, in which case the filter is the UNION (a row matching any listed name is kept). Multi-select is the odd one out among the filters here — &#x60;tags&#x60; narrows with each addition because a resource has many tags, while a resource has exactly one doc type, so ANDing two names could only ever match nothing. A single name behaves exactly as it always has.  A CSV string rather than a &#x60;Vec&#x60; for the same reason as &#x60;tags&#x60; and &#x60;cogmap_ids&#x60;: the list endpoint is a GET whose params ride the query string, and serde_urlencoded does not encode sequences. Each piece is trimmed and empties are dropped; a CSV that trims away entirely is no filter at all rather than a filter matching nothing.  Unknown names are **not** rejected — an unrecognized doc type matches no row, as it always has. See &#x60;ResourceFacets::doc_type&#x60; for the histogram that makes the reachable set visible.
     # @option opts [String] :owner 
     # @option opts [String] :q 
     # @option opts [String] :stage 
@@ -629,7 +629,7 @@ module Temper::Generated
     # @param [Hash] opts the optional parameters
     # @option opts [String] :kb_doc_type_id 
     # @option opts [String] :context_ref Context filter: UUID string or &#x60;@owner/slug&#x60; decorated ref. Bare context names are rejected server-side (spec Decision 1).
-    # @option opts [String] :doc_type_name 
+    # @option opts [String] :doc_type_name Doc-type filter: one name, or a comma-separated list of them, in which case the filter is the UNION (a row matching any listed name is kept). Multi-select is the odd one out among the filters here — &#x60;tags&#x60; narrows with each addition because a resource has many tags, while a resource has exactly one doc type, so ANDing two names could only ever match nothing. A single name behaves exactly as it always has.  A CSV string rather than a &#x60;Vec&#x60; for the same reason as &#x60;tags&#x60; and &#x60;cogmap_ids&#x60;: the list endpoint is a GET whose params ride the query string, and serde_urlencoded does not encode sequences. Each piece is trimmed and empties are dropped; a CSV that trims away entirely is no filter at all rather than a filter matching nothing.  Unknown names are **not** rejected — an unrecognized doc type matches no row, as it always has. See &#x60;ResourceFacets::doc_type&#x60; for the histogram that makes the reachable set visible.
     # @option opts [String] :owner 
     # @option opts [String] :q 
     # @option opts [String] :stage 

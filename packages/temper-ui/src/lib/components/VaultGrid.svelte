@@ -2,28 +2,31 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { Grid, WillowDark } from 'wx-svelte-grid';
-	import type { ResourceSortField, ResourceView } from '$lib/types';
+	import type { ResourceView } from '$lib/types';
+	import { orphanSort, type VaultColumn, visibleSortFields } from '$lib/vault-columns';
+	import { activeFilterCount, buildFilterUrl, parseFilters } from '$lib/vault-filters';
+	import { pageState } from '$lib/vault-list';
 	import { resourceHref } from '$lib/vault-url';
 
 	interface Props {
 		rows: ResourceView[];
+		columns: VaultColumn[];
 		total: number;
-		limit?: number;
+		returned: number;
+		truncated: boolean;
+		/**
+		 * The page size the server APPLIED (envelope, not request), or `null` for uncapped.
+		 * Never re-derived from the URL here — see `toVaultList` for the drift that caused.
+		 */
+		limit?: number | null;
+		/** The offset the server APPLIED — already floored at 0. */
 		offset?: number;
 	}
 
-	let { rows, total, limit = 50, offset = 0 }: Props = $props();
+	let { rows, columns, total, returned, truncated, limit = null, offset = 0 }: Props = $props();
 
-	// Sortable fields that the backend supports
-	const SORTABLE: Set<string> = new Set<ResourceSortField>([
-		'updated',
-		'created',
-		'title',
-		'stage',
-		'seq',
-		'context_name',
-		'doc_type_name'
-	]);
+	// Door-facing sort fields the visible columns can actually carry an indicator for.
+	let sortableFields = $derived(visibleSortFields(columns));
 
 	function shortDate(iso: string): string {
 		return new Date(iso)
@@ -31,46 +34,77 @@
 			.toUpperCase();
 	}
 
-	const columns = [
-		{ id: 'title', header: 'Title', flexgrow: 1, sort: true },
-		{ id: 'context_name', header: 'Context', width: 140, sort: true },
-		{ id: 'doc_type_name', header: 'Type', width: 120, sort: true },
-		{ id: 'stage', header: 'Stage', width: 100, sort: true },
-		{ id: 'updated', header: 'Updated', width: 110, sort: true }
-	];
-
-	// Derive current sort state from URL to show the active sort indicator
+	// Derive current sort state from URL to show the active sort indicator. The URL carries the
+	// door-facing sort field (e.g. `stage`), but the grid marks sort by column id (`temper-stage`)
+	// — map back through the same `sortKey ?? id` correspondence `handleSort` writes with, or the
+	// indicator lands on no column and silently disappears.
 	let sortMarks = $derived.by(() => {
-		const key = $page.url.searchParams.get('sort');
+		const sortField = $page.url.searchParams.get('sort');
 		const order = $page.url.searchParams.get('order') as 'asc' | 'desc' | null;
-		if (key && SORTABLE.has(key)) {
-			return { [key]: { order: order ?? 'desc' } };
-		}
-		return {};
+		if (!sortField || !sortableFields.has(sortField)) return {};
+		const column = columns.find((c) => (c.sortKey ?? c.id) === sortField);
+		if (!column) return {};
+		return { [column.id]: { order: order ?? 'desc' } };
 	});
 
 	// Transform rows for display
 	let gridData = $derived(
-		rows.map((r) => ({
-			...r,
-			id: r.id,
-			updated: shortDate(r.updated),
-			_raw_updated: r.updated,
-			// `stage`/`seq` were hoisted columns on the retired `ResourceRow`; on `ResourceView`
-			// they live in the always-present managed tier under their canonical `temper-*` names.
-			stage: r.managed_meta['temper-stage'] ?? '',
-			seq: r.managed_meta['temper-seq'] ?? ''
-		}))
+		rows.map((r) => {
+			// Any column reading a managed key (`temper-*` id) reads it straight off
+			// `managed_meta` under that same key — the always-present managed tier on `ResourceView`.
+			const managed: Record<string, string> = {};
+			for (const column of columns) {
+				if (!column.id.startsWith('temper-')) continue;
+				const raw = (r.managed_meta as unknown as Record<string, unknown>)[column.id];
+				managed[column.id] = raw == null ? '' : String(raw);
+			}
+			return {
+				...r,
+				id: r.id,
+				updated: shortDate(r.updated),
+				_raw_updated: r.updated,
+				...managed
+			};
+		})
 	);
 
 	// Map from grid row ID → original ResourceView for navigation
 	let rowLookup = $derived(new Map(rows.map((r) => [r.id, r])));
 
-	// Pagination
-	let currentPage = $derived(Math.floor(offset / limit) + 1);
-	let totalPages = $derived(Math.ceil(total / limit));
-	let hasPrev = $derived(offset > 0);
-	let hasNext = $derived(offset + limit < total);
+	// Paging chrome, derived from the page the server actually returned. Every number here
+	// comes out of the envelope; none of it is recomputed from the request URL.
+	let paging = $derived(pageState({ total, returned, truncated, limit, offset }));
+
+	// An active sort no visible column can mark — see `orphanSort`. Rendered as its own chip
+	// so the ordering the door is applying is never invisible.
+	let orphaned = $derived(
+		orphanSort(
+			$page.url.searchParams.get('sort'),
+			$page.url.searchParams.get('order'),
+			sortableFields
+		)
+	);
+	let clearSortHref = $derived.by(() => {
+		const url = new URL($page.url);
+		url.searchParams.delete('sort');
+		url.searchParams.delete('order');
+		url.searchParams.delete('offset');
+		return `${url.pathname}${url.search}`;
+	});
+
+	// Filter state, for the empty-state message
+	let filters = $derived(parseFilters($page.url));
+	let filterCount = $derived(activeFilterCount(filters));
+	let clearFiltersHref = $derived(
+		buildFilterUrl($page.url, {
+			docTypes: [],
+			stage: null,
+			status: null,
+			contextRef: null,
+			q: null,
+			tags: []
+		})
+	);
 
 	function handleFocusCell(ev: {
 		row?: string | number;
@@ -84,10 +118,15 @@
 	}
 
 	function handleSort(ev: { key: string | number; order?: 'asc' | 'desc' }) {
-		const key = String(ev.key);
-		if (!SORTABLE.has(key)) return;
+		const columnId = String(ev.key);
+		const column = columns.find((c) => c.id === columnId);
+		// The door-facing sort field, when it differs from the grid column id (e.g. the revealed
+		// stage column: id `temper-stage`, door field `stage`). Sending the id itself would be
+		// rejected as an invalid `ResourceSortField` enum value.
+		const sortField = column?.sortKey ?? columnId;
+		if (!sortableFields.has(sortField)) return;
 		const url = new URL($page.url);
-		url.searchParams.set('sort', key);
+		url.searchParams.set('sort', sortField);
 		url.searchParams.set('order', ev.order === 'asc' ? 'asc' : 'desc');
 		url.searchParams.delete('offset');
 		goto(url.toString(), { replaceState: true });
@@ -107,28 +146,49 @@
 <div class="vault-grid-wrapper">
 	{#if rows.length === 0}
 		<div class="flex flex-col items-center justify-center gap-3 py-16 text-zinc-500">
-			<p class="text-sm">No resources found.</p>
+			{#if filterCount > 0}
+				<p class="text-sm">
+					No resources match the current filter{filterCount > 1 ? 's' : ''}.
+				</p>
+				<a href={clearFiltersHref} class="text-xs underline">Clear filters</a>
+			{:else}
+				<p class="text-sm">No resources found.</p>
+			{/if}
 		</div>
 	{:else}
 		<div class="grid-chrome">
-			<div class="text-xs text-zinc-500 font-mono tracking-wide">
-				{offset + 1}–{Math.min(offset + rows.length, total)} of {total}
+			<div class="flex items-center gap-3">
+				<span class="text-xs text-zinc-500 font-mono tracking-wide">
+					{paging.rangeStart}–{paging.rangeEnd} of {total}
+				</span>
+				{#if orphaned}
+					<span
+						class="inline-flex items-center gap-1.5 rounded border border-zinc-700/50 bg-zinc-800/50 px-2 py-0.5 text-[11px] font-mono text-zinc-400"
+					>
+						sorted by {orphaned.field} {orphaned.order}
+						<a
+							href={clearSortHref}
+							class="text-zinc-500 hover:text-zinc-200"
+							aria-label="Clear sort">×</a
+						>
+					</span>
+				{/if}
 			</div>
-			{#if totalPages > 1}
+			{#if paging.paged}
 				<div class="pagination">
 					<button
 						class="page-btn"
-						disabled={!hasPrev}
-						onclick={() => goToPage(offset - limit)}
+						disabled={!paging.hasPrev}
+						onclick={() => goToPage(paging.prevOffset)}
 						aria-label="Previous page">&larr;</button
 					>
 					<span class="text-xs text-zinc-500 font-mono tabular-nums"
-						>{currentPage}/{totalPages}</span
+						>{paging.currentPage}/{paging.totalPages}</span
 					>
 					<button
 						class="page-btn"
-						disabled={!hasNext}
-						onclick={() => goToPage(offset + limit)}
+						disabled={!paging.hasNext}
+						onclick={() => goToPage(paging.nextOffset)}
 						aria-label="Next page">&rarr;</button
 					>
 				</div>
