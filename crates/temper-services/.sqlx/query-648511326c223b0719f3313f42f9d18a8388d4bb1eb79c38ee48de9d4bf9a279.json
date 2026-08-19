@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*)::bigint FROM kb_events e\n            JOIN kb_connections c ON c.id = $1 AND e.emitter_entity_id = c.emitter_entity_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "648511326c223b0719f3313f42f9d18a8388d4bb1eb79c38ee48de9d4bf9a279"
+}

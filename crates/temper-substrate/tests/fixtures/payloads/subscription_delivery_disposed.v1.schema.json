@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SubscriptionDeliveryDisposed",
+  "description": "`subscription_delivery_disposed` — a steward's judgment on one routed event (S2 chunk C).\n\nThe disposition is an **act**, not a column write. `acted` cites what was authored; `declined`\nrecords that the delivery was judged immaterial, *with* its reasoning and confidence — so a\ndecline is accountable and citable rather than a silent cursor bump. The delivery row's\n`rationale`/`confidence` columns are a queryable projection of this payload, not a second\nsource of truth.\n\n**The accountability carrier is the actor, not the envelope.** `decided_by_profile_id` is\nalways present; `decided_by_invocation_id` is present only when an agent acted for a cogmap,\nbecause `kb_invocations.originating_cogmap_id` is `NOT NULL` and a `kb_contexts` or `kb_teams`\nsubscriber can never originate one. Requiring an envelope here would scope judgment to one of\nthe three subscriber kinds while reading as though it covered all of them — which is exactly\nwhat the design said until the chunk C grounding pass caught it.",
+  "type": "object",
+  "properties": {
+    "confidence": {
+      "description": "The judgment's confidence in `[0,1]`.",
+      "type": "number",
+      "format": "double"
+    },
+    "decided_by_invocation_id": {
+      "description": "Present only when an agent acted for a cogmap; `None` for a human disposition.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "decided_by_profile_id": {
+      "$ref": "#/$defs/ProfileId"
+    },
+    "delivery_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "disposition": {
+      "description": "`acted` | `declined`.",
+      "type": "string"
+    },
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "rationale": {
+      "description": "Why. Required — a disposition without reasoning is the silent cursor bump this event type\nexists to prevent.",
+      "type": "string"
+    },
+    "subscription_id": {
+      "type": "string",
+      "format": "uuid"
+    }
+  },
+  "required": [
+    "delivery_id",
+    "subscription_id",
+    "event_id",
+    "disposition",
+    "rationale",
+    "confidence",
+    "decided_by_profile_id"
+  ],
+  "$defs": {
+    "ProfileId": {
+      "description": "A `kb_profiles.id` value.",
+      "type": "string",
+      "format": "uuid"
+    }
+  }
+}

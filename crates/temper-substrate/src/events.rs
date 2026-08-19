@@ -90,6 +90,18 @@ pub enum EventKind {
     /// A Slack principal unbound from a temper profile. Fires from the SQL chokepoint
     /// `_admin_slack_disconnected`, on both the self-serve and admin arms.
     SlackPrincipalDisconnected,
+    /// A webhook received from a remote system (S2 chunk B). Fires from
+    /// `intake_service::receive_webhook`. PERMISSIVE (NULL `payload_schema`) and therefore absent
+    /// from `TYPED_EVENT_NAMES` — which is exactly why its missing arm went unnoticed: the
+    /// round-trip test iterates the typed names, so a foreign type contributes nothing to it. It
+    /// still needs an arm, because `replay()` resolves EVERY `kb_events` row through
+    /// `from_canonical_name` and errors on a miss. See `FOREIGN_EVENT_NAMES`.
+    WebhookReceived,
+    /// A steward's judgment on one routed delivery (S2 chunk C). Fires from
+    /// `delivery_service::record_disposition`, which appends it in the same transaction as the
+    /// delivery row's update — so a judgment on the ledger and a judgment on the row it judged
+    /// cannot disagree.
+    SubscriptionDeliveryDisposed,
     /// One principal-admission transition (spec 2026-07-20 §10, D4). Fires from the per-act
     /// transition functions in `20260720000030`. One kind for all nine acts — the act rides in
     /// the payload; the type boundary worth drawing is standing-vs-governance (spec §2).
@@ -137,6 +149,8 @@ impl EventKind {
             EventKind::GrantCreated => "grant_created",
             EventKind::GrantRevoked => "grant_revoked",
             EventKind::SlackPrincipalDisconnected => "slack_principal_disconnected",
+            EventKind::WebhookReceived => "webhook_received",
+            EventKind::SubscriptionDeliveryDisposed => "subscription_delivery_disposed",
             EventKind::PrincipalStandingChanged => "principal_standing_changed",
             EventKind::PrincipalGovernanceChanged => "principal_governance_changed",
             EventKind::CitationAudited => "citation_audited",
@@ -179,6 +193,8 @@ impl EventKind {
             "grant_created" => EventKind::GrantCreated,
             "grant_revoked" => EventKind::GrantRevoked,
             "slack_principal_disconnected" => EventKind::SlackPrincipalDisconnected,
+            "webhook_received" => EventKind::WebhookReceived,
+            "subscription_delivery_disposed" => EventKind::SubscriptionDeliveryDisposed,
             "principal_standing_changed" => EventKind::PrincipalStandingChanged,
             "principal_governance_changed" => EventKind::PrincipalGovernanceChanged,
             "citation_audited" => EventKind::CitationAudited,
@@ -1398,6 +1414,24 @@ mod tests {
         "block_folded",
         "block_provenance_corrected",
     ];
+
+    /// A foreign type with no `EventKind` arm breaks `replay()` on any instance that ever received
+    /// one — `replay` resolves every `kb_events` row through `from_canonical_name` and errors on a
+    /// miss. `webhook_received` shipped in that state (S2 chunk B) and nothing noticed, because the
+    /// test below iterates `TYPED_EVENT_NAMES` and a permissive foreign type is deliberately absent
+    /// from it. This closes the hole rather than fixing the one instance of it.
+    #[test]
+    fn every_foreign_event_name_round_trips_through_event_kind() {
+        for name in crate::payloads::FOREIGN_EVENT_NAMES {
+            let kind = EventKind::from_canonical_name(name).unwrap_or_else(|| {
+                panic!(
+                    "no `from_canonical_name` arm for foreign type {name:?} — replay() resolves \
+                     EVERY kb_events row and will hard-fail on it"
+                )
+            });
+            assert_eq!(kind.as_canonical_name(), name);
+        }
+    }
 
     #[test]
     fn every_emittable_typed_event_name_round_trips_through_event_kind() {

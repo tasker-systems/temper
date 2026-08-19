@@ -1,20 +1,25 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT subscriber_table, subscriber_id, selector\n             FROM kb_subscriptions\n            WHERE connection_id = $1 AND revoked_at IS NULL",
+  "query": "SELECT id, subscriber_table, subscriber_id, selector\n             FROM kb_subscriptions\n            WHERE connection_id = $1 AND revoked_at IS NULL",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
         "name": "subscriber_table",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 1,
+        "ordinal": 2,
         "name": "subscriber_id",
         "type_info": "Uuid"
       },
       {
-        "ordinal": 2,
+        "ordinal": 3,
         "name": "selector",
         "type_info": "Jsonb"
       }
@@ -27,8 +32,9 @@
     "nullable": [
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "71f1d6a32920d54535ed096258bdd393bfe5bd15a681004f17956a25c22495c3"
+  "hash": "843411891f98d6e4fefdb7283ca9661e9f926d1ba2f3aa4fad629a73a0b4a734"
 }
