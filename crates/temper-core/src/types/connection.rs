@@ -54,6 +54,15 @@ pub struct Connection {
     pub reach_affirmed_at: Option<DateTime<Utc>>,
     /// The stated rationale — why the coarse reach binding is intentional. `None` = never affirmed.
     pub reach_affirmation: Option<String>,
+    /// What the attach-time mint observed the credential can actually see — the provider's
+    /// `metadata`, provider-shaped. `None` = never minted, or the mint returned no reach
+    /// metadata. Persisted at `attach_credential` so the grant path can compare it against
+    /// the *declared* reach (`reach_granularity`/`reach_covers`): a disagreement within the
+    /// remote domain is the commensurable gap the mint can detect. This is NOT a computed
+    /// `exceeds_temper_reach` bool — remote and temper scope remain incommensurable; only the
+    /// remote-domain observed-vs-declared drift is compared, and only to decide whether
+    /// affirmation is required, never to auto-deny.
+    pub observed_reach: Option<serde_json::Value>,
     pub created: DateTime<Utc>,
     pub revoked_at: Option<DateTime<Utc>>,
     pub revoked_by_profile_id: Option<Uuid>,

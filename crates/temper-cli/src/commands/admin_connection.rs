@@ -144,14 +144,18 @@ pub async fn attach_credential_remote(
 /// Surface what minting once at attach time observed. The observed reach is placed
 /// next to the DECLARED reach so a reviewer sees the gap — there is no computed
 /// `exceeds` bool (the two scopes are incommensurable; B3 records the
-/// acknowledgment). An unverified attach says why, out loud (invariant 6).
+/// acknowledgment). The observed reach is PERSISTED onto the connection row, so the
+/// grant path consults it later: a remote-domain gap (or an unwitnessed
+/// declaration) is what fires the grant gate, not the declaration alone. An
+/// unverified attach says why, out loud (invariant 6).
 fn announce_verification(conn: &Connection, v: &CredentialVerification) {
     if v.verified {
         if let Some(reach) = &v.observed_reach {
             crate::output::hint(format!(
                 "Verified by minting once. The credential's ACTUAL remote reach is {reach}. \
-                 Declared reach is granularity={:?}, covers={:?}. Where the actual reach exceeds \
-                 the declared, that gap is real and must be acknowledged before granting a team.",
+                 Declared reach is granularity={:?}, covers={:?}. The observed reach is recorded \
+                 on the connection; where it is broader than the declaration, granting a team \
+                 requires --affirm-reach.",
                 conn.reach_granularity, conn.reach_covers,
             ));
         }

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, provider, slug, name, owner_team_id, registered_by_profile_id,\n                  profile_id, emitter_entity_id, home_context_id, credential,\n                  webhook_events, tool_manifest, reach_granularity, reach_covers,\n                  reach_affirmed_by, reach_affirmed_at, reach_affirmation,\n                  created, revoked_at, revoked_by_profile_id\n             FROM kb_connections WHERE id = $1",
+  "query": "SELECT id, provider, slug, name, owner_team_id, registered_by_profile_id,\n                  profile_id, emitter_entity_id, home_context_id, credential,\n                  webhook_events, tool_manifest, reach_granularity, reach_covers,\n                  reach_affirmed_by, reach_affirmed_at, reach_affirmation,\n                  observed_reach,\n                  created, revoked_at, revoked_by_profile_id\n             FROM kb_connections c\n            WHERE ($1 OR c.revoked_at IS NULL)\n              AND ( $2\n                    OR ( c.owner_team_id IS NOT NULL\n                         AND EXISTS (\n                             SELECT 1\n                               FROM kb_team_members tm\n                              WHERE tm.team_id = c.owner_team_id\n                                AND tm.profile_id = $3\n                                AND tm.role = 'owner'\n                         ) ) )\n            ORDER BY created DESC",
   "describe": {
     "columns": [
       {
@@ -90,22 +90,29 @@
       },
       {
         "ordinal": 17,
+        "name": "observed_reach",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 18,
         "name": "created",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 18,
+        "ordinal": 19,
         "name": "revoked_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 19,
+        "ordinal": 20,
         "name": "revoked_by_profile_id",
         "type_info": "Uuid"
       }
     ],
     "parameters": {
       "Left": [
+        "Bool",
+        "Bool",
         "Uuid"
       ]
     },
@@ -127,10 +134,11 @@
       true,
       true,
       true,
+      true,
       false,
       true,
       true
     ]
   },
-  "hash": "a5044558d71f05a15685f3a84bb61ef9a7807433b3304f7c61c115777050a0b3"
+  "hash": "5bd9681448729fec97a570a194a8c48a0c0338c179755885f78adf77f5c2d63f"
 }
