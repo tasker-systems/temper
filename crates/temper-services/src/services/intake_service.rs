@@ -77,19 +77,27 @@ pub async fn receive_webhook(
     // category from the registry, generates the event id, and inserts. The producing
     // anchor is the connection's home context (kb_contexts). The references are passed
     // here — never as a second statement.
-    let event_id: Uuid =
-        sqlx::query_scalar("SELECT _event_append($1, $2, 'kb_contexts', $3, $4, $5, $6, $7, $8)")
-            .bind(WEBHOOK_RECEIVED_TYPE)
-            .bind(conn.emitter_entity_id)
-            .bind(conn.home_context_id)
-            .bind(payload)
-            .bind(&references_json)
-            .bind::<Option<Uuid>>(None) // correlation: self-roots inside _event_append
-            .bind(1) // payload_version
-            .bind(serde_json::json!({ "provider_event_type": provider_event_type })) // metadata
-            .fetch_one(pool)
-            .await
-            .map_err(|e| ApiError::Internal(format!("_event_append failed: {e}")))?;
+    //
+    // A `query_scalar!` macro (not runtime `query_scalar`): the statement is fully static,
+    // so this is the compile-time-checked form the sqlx-macro-exceptions tripwire expects.
+    // `_event_append` returns uuid (non-nullable — it always generates an id), but
+    // `query_scalar!` wraps scalars in Option (a query could return no rows), so the
+    // `.expect` is the assertion that the function did return.
+    let event_id: Uuid = sqlx::query_scalar!(
+        "SELECT _event_append($1, $2, 'kb_contexts', $3, $4, $5, $6, $7, $8)",
+        WEBHOOK_RECEIVED_TYPE,
+        conn.emitter_entity_id,
+        conn.home_context_id,
+        payload,
+        &references_json,
+        None::<Uuid> as Option<Uuid>, // correlation: self-roots inside _event_append
+        1i32,                         // payload_version
+        serde_json::json!({ "provider_event_type": provider_event_type }), // metadata
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|e| ApiError::Internal(format!("_event_append failed: {e}")))?
+    .expect("_event_append always returns a uuid");
 
     Ok(event_id)
 }

@@ -1,26 +1,29 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT resource_rehome($1,$2,$3,$4,$5)",
+  "query": "SELECT _event_append($1, $2, 'kb_contexts', $3, $4, $5, $6, $7, $8)",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "resource_rehome",
+        "name": "_event_append",
         "type_info": "Uuid"
       }
     ],
     "parameters": {
       "Left": [
-        "Jsonb",
+        "Text",
+        "Uuid",
         "Uuid",
         "Jsonb",
+        "Jsonb",
         "Uuid",
-        "Uuid"
+        "Int4",
+        "Jsonb"
       ]
     },
     "nullable": [
       null
     ]
   },
-  "hash": "9931294cd8484a04ddf2c1dd488d435bfd66e3ced1e409c83566a413bc545492"
+  "hash": "9a74c42983f38b14801056490a87c48e3dd71ccaa91d11e725c720f680926329"
 }
