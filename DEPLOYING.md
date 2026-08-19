@@ -362,7 +362,7 @@ resources are full-text-searchable but not vector-searchable until the drain cat
 **Observability**: each drain pass returns `{ claimed, completed, failed, chunks_embedded }`.
 A failed embed is retried by the queue's reaper and marked `dead` after max attempts;
 `dead` jobs are the re-drive signal (a `reindex`/sweep follow-up). Operator guidance on
-bulk vs interactive ingest lives in [docs/upload-lifecycle.md](docs/upload-lifecycle.md#choosing-an-ingest-surface-cli-vs-mcp);
+bulk vs interactive ingest lives in [internal/upload-lifecycle.md](internal/upload-lifecycle.md#choosing-an-ingest-surface-cli-vs-mcp);
 the full design is [internal/superpowers/specs/2026-07-07-async-embedding-off-request-path-design.md](internal/superpowers/specs/2026-07-07-async-embedding-off-request-path-design.md).
 
 ## Server-side query-embed cold starts (issue #427)

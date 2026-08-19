@@ -6,7 +6,7 @@ for**, and **whether its sections earn that intention** — then make subjective
 about what's coherent, what wants its own home, and where the copy speaks from *inside* a
 conversation the reader was never part of.
 
-This document is downstream of [`docs/site-ia.md`](./site-ia.md), which sets the standing
+This document is downstream of [`internal/site-ia.md`](./site-ia.md), which sets the standing
 information architecture (the four trunks, three front doors, the `/operating` promotion). The IA
 doc deliberately stops at decisions-and-rationale — *"each page is its own drafting pass."* This
 audit is the per-page drafting-conscience layer the IA doc left open: persona, tone, and
@@ -106,7 +106,7 @@ finding of this audit.** Detailed below.
 
 ## 3. The central finding: `/operating` drifted from its own charter
 
-This is not a case of a missing or wrong charter. `docs/site-ia.md` already states the `/operating`
+This is not a case of a missing or wrong charter. `internal/site-ia.md` already states the `/operating`
 charter precisely, and it is the right one:
 
 > **Audience: the cold enterprise evaluator.** `/operating` is for someone arriving from *outside*

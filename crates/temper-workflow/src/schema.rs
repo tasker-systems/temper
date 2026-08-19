@@ -28,7 +28,7 @@ const BASE_SCHEMA_URI: &str = "https://temperkb.io/schemas/base.schema.json";
 /// (`keywords`/`tags`@C, `descriptor`@D) plus shape-only conventions
 /// (`date`, relationship refs) — while leaving the tier open
 /// (`additionalProperties: true`). The indexed set is versioned by migration;
-/// see `docs/search-open-meta-indexing.md`.
+/// see `internal/search-open-meta-indexing.md`.
 const OPEN_META_SCHEMA: &str = include_str!("../schemas/open_meta.schema.json");
 
 /// Discouraged open_meta keys → the managed field that supersedes each.

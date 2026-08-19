@@ -191,7 +191,7 @@ This table is the load-bearing justification for a sibling architecture rather t
 This is the bridge between "code-graph is different in kind" and "stay faithful to the event ledger
 and no view from nowhere." The substrate already models exactly this shape for everything else:
 truth is an append-only ledger of attributed acts (`kb_events`), and every queryable structure is a
-**projection** rebuildable by replay (`docs/event-sourced-architecture-design.md`; canonical schema
+**projection** rebuildable by replay (`internal/event-sourced-architecture-design.md`; canonical schema
 `migrations/20260624000001_canonical_schema.sql:465-506`). We apply the same shape to code
 intelligence:
 
@@ -380,7 +380,7 @@ replay; payloads carry manifests/hashes, never prose).
 
 New `kb_event_types` rows + payload schemas + `_project_*` functions ship in one additive migration.
 `kb_events` itself is unchanged — this is the same carry-over pattern the design doc describes for
-adding new event names (`docs/event-sourced-architecture-design.md:315-320`).
+adding new event names (`internal/event-sourced-architecture-design.md:315-320`).
 
 ### 4.2 Replay & the drop-rebuild invariant
 
@@ -663,7 +663,7 @@ wave/phase convention and additive-migration discipline):
 grammar §1.2; roles/relationships §1.3.
 
 **Temper substrate (all verified against `migrations/` — the canonical baseline, not the older
-`docs/event-sourced-architecture-design.md` row-shapes):**
+`internal/event-sourced-architecture-design.md` row-shapes):**
 
 - Event ledger: `migrations/20260624000001_canonical_schema.sql:465-506` (append-only trigger
   `:498-506`); strict event-type registration `migrations/20260624000002_canonical_functions.sql:765-787`.

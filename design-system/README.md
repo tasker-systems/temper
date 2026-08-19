@@ -33,7 +33,7 @@ All design decisions trace to real files in the Temper production repository. Pa
 | Source | What we lifted |
 |---|---|
 | `github.com/tasker-systems/temper` → `README.md` | Product framing, tone of voice, command vocabulary |
-| `docs/brand-direction.md` | Color names, persona voice, diagram strategy — this was the canonical brand brief |
+| `internal/brand-direction.md` | Color names, persona voice, diagram strategy — this was the canonical brand brief |
 | `packages/temper-ui/src/app.css` | Every color var, every `.ed-*` editorial class, Tailwind `@theme` scale |
 | `packages/temper-ui/src/app.html` | Font stack (`JetBrains Mono` via Google; Georgia system), meta copy |
 | `packages/temper-ui/src/lib/components/landing/*.svelte` | Hero, Section, CliBlock, AgentTranscript, Nav, Footer, Wordmark |
@@ -86,7 +86,7 @@ Temper's voice is **literate technical** — write as if explaining to a sharp c
 - **Casing:** Sentence case for headings. Product name `temper` is **lowercase** in running copy (the wordmark is always lowercase). "Temper Cloud" and "Temper Blue" take initial caps because they're proper nouns.
 - **Emoji:** never. Not in copy, not in UI, not in diagrams.
 
-### Vocabulary table (from `docs/brand-direction.md`)
+### Vocabulary table (from `internal/brand-direction.md`)
 
 | Prefer | Over |
 |---|---|

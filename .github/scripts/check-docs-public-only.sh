@@ -31,5 +31,19 @@ for d in $FORBIDDEN; do
     fi
 done
 
+# (c) No loose .md at the docs/ root. Every moved-out tree was a DIRECTORY, so the
+# forbidden-name check above cannot see a stray design doc or audit dropped at the top
+# level — and eleven of them sat there when this gate was first written, which is exactly
+# the shape it missed. Public documentation is reached through a door or a section;
+# `index.md` is the one legitimate root page in the target structure.
+while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    case "$(basename "$f")" in
+        index.md) continue ;;
+    esac
+    echo "FAIL: $f is a loose page at the docs/ root — file it under a section, or move it to internal/." >&2
+    failed=1
+done < <(find docs -maxdepth 1 -type f -name '*.md' 2>/dev/null)
+
 [ "$failed" -eq 0 ] && echo "OK: docs/ holds $count files, none in an internal tree."
 exit "$failed"

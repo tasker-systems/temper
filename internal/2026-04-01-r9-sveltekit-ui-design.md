@@ -1561,8 +1561,8 @@ storyteller-site uses bespoke CSS custom properties for a literary aesthetic. te
 | `research/temper/R2 Data Model and Schema Design.md` | Schema that the UI queries |
 | `research/temper/R4 Crate Architecture, Auth & Access Control.md` | Auth model, access control functions |
 | `internal/superpowers/specs/2026-03-30-auth0-integration-design.md` | Auth0 tenant setup, PKCE flow |
-| `docs/2026-03-31-user-workflow-analysis.md` | Auth-to-profile gap analysis |
-| `docs/2026-04-01-i5e-handoff.md` | Config unification, vault layout, current state |
+| `internal/2026-03-31-user-workflow-analysis.md` | Auth-to-profile gap analysis |
+| `internal/2026-04-01-i5e-handoff.md` | Config unification, vault layout, current state |
 | `migrations/20260330000001_consolidated_schema.sql` | Full DDL including teams, transfers, invitations |
 | R7 (proposed) | Vertex-edge graph model |
 | R8 (proposed) | Local search / PageIndex |
