@@ -107,16 +107,6 @@ jobs:
       - name: Check every route is documented (OpenAPI route allowlist)
         run: bash .github/scripts/check-openapi-routes.sh
 
-      # docs/ is synced wholesale to the public documentation site, so the safety property is
-      # structural: everything under docs/ is public, and nothing else lives there. It was got
-      # wrong once and published internal security audits. `cargo make check` runs this too, but
-      # no CI job runs cargo-make, so until this step existed the invariant was enforced only on
-      # whichever laptop happened to run the full local check. `^docs/` is in detect-ci-scope's
-      # RUST_COUPLED for the other half of the same hole: the regression this catches is a tree
-      # of `.md` files, which the extension test would otherwise classify docs-only and skip.
-      - name: Check docs/ holds only public documentation
-        run: bash .github/scripts/check-docs-public-only.sh
-
       # `Makefile.toml` declares `env_files = ["./.env"]`, and cargo-make treats a missing env file
       # as a HARD ERROR — there is no `required = false` (measured: the object form still fails).
       # `.env` is gitignored, so EVERY `cargo make` task fails on a fresh checkout. That has been
@@ -288,6 +278,24 @@ jobs:
 
       - name: Guard test — check-openapi-routes
         run: bash .github/scripts/test-check-openapi-routes.sh
+
+      # THE GATE ITSELF, not only its harness. docs/ is synced wholesale to the public
+      # documentation site, so the safety property is structural: everything under docs/ is
+      # public, and nothing else lives there. It was got wrong once and published internal
+      # security audits. `cargo make check` runs this too, but no CI job runs cargo-make, so
+      # until this step existed the invariant was enforced only on whichever laptop happened to
+      # run the full local check.
+      #
+      # It lives HERE and not in rust-quality because it is pure bash — no toolchain, no
+      # database, one second — and rust-quality is gated on `inputs.run-rust-quality`. Sitting
+      # there, the only way to reach it for a docs-only PR was to force the WHOLE Rust and
+      # TypeScript pipeline on (measured: `^docs/` in RUST_COUPLED flipped a one-line docs edit
+      # from SKIP_ALL into test-rust + test-typescript + rust-quality). guard-tests carries no
+      # such gate, so detect-ci-scope now only has to invoke this workflow — see the docs/ arm
+      # of the SKIP_ALL branch in detect-ci-scope.sh, which sets RUN_CODE_QUALITY=true while
+      # leaving every heavy job off.
+      - name: Check docs/ holds only public documentation
+        run: bash .github/scripts/check-docs-public-only.sh
 
       - name: Guard test — check-docs-public-only
         run: bash .github/scripts/test-check-docs-public-only.sh

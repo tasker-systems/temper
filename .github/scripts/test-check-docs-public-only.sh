@@ -149,22 +149,53 @@ assert_uncommented "the gate runs in code-quality.yml, on a live (uncommented) l
     "bash .github/scripts/check-docs-public-only.sh"
 
 # The regression this gate catches is a tree of *.md files, and detect-ci-scope.sh
-# skips the entire pipeline for a markdown-only change. Wiring without this veto
+# skips the entire pipeline for a markdown-only change. Wiring without reachability
 # leaves the gate present and unreachable on precisely its own failure mode.
 #
-# Asserted BEHAVIOURALLY: ask the real detector what it decides for a docs/ change.
-# A textual check passed when `^docs/` was parked in a dead variable.
+# WHAT IS ASSERTED IS REACHABILITY, not the docs-only verdict. This block used to
+# require DOCS_ONLY=false, because `^docs/` sat in the detector's RUST_COUPLED and
+# bought reachability by conscripting the entire Rust + TypeScript pipeline to reach
+# one second of bash. The gate now runs in code-quality's `guard-tests` job, which
+# carries no `inputs.run-rust-quality` gate, so the sole thing a docs-only change
+# owes is that code-quality is INVOKED — ci.yml gates that job on
+# `needs.detect-scope.outputs.run-code-quality == 'true'`. DOCS_ONLY may now be true
+# for such a change and that is correct; asserting on it would be asserting on the
+# old implementation rather than on the property.
+#
+# Still asserted BEHAVIOURALLY, by running the real detector: a textual check passed
+# when `^docs/` was parked in a dead variable, and the same trap is open here (a
+# DOCS_GATED_ROOTS that no branch reads would grep just fine).
 # Input MUST go through --stdin. Without it the detector falls back to `git diff`
 # against the base ref, i.e. the real branch — which is never docs-only, so the
-# assertion passed no matter what RUST_COUPLED contained. That is the vacuous-pass
+# assertion passed no matter what the detector contained. That is the vacuous-pass
 # this block exists to prevent, and it had it.
-docs_only_verdict="$(echo 'docs/guides/releasing.md' \
+docs_change_verdict="$(echo 'docs/guides/releasing.md' \
     | bash "${REPO_ROOT}/.github/scripts/detect-ci-scope.sh" --stdin 2>/dev/null || true)"
-if echo "$docs_only_verdict" | grep -qE '^DOCS_ONLY=false'; then
-    echo "  PASS: a docs/ change does NOT classify as docs-only (the skip is vetoed)"
+if echo "$docs_change_verdict" | grep -qE '^RUN_CODE_QUALITY=true'; then
+    echo "  PASS: a docs/ change invokes code-quality, so guard-tests reaches this gate"
     PASS=$((PASS + 1))
 else
-    echo "  FAIL: a docs/ change still classifies as docs-only — the gate is unreachable in CI"
+    echo "  FAIL: a docs/ change does not invoke code-quality — the gate is unreachable in CI"
+    echo "        detector said: $(echo "$docs_change_verdict" | grep -E '^(DOCS_ONLY|SKIP_ALL|RUN_CODE_QUALITY)=' | tr '\n' ' ')"
+    FAIL=$((FAIL + 1))
+fi
+
+# The other half of the same coupling: the gate is only cheap to reach because it
+# lives in the UNGATED guard-tests job. If it moves back under `rust-quality` (which
+# `if: inputs.run-rust-quality == 'true'` can switch off), RUN_CODE_QUALITY=true no
+# longer implies the gate runs, and the assertion above becomes a vacuous pass.
+# Checked structurally: the gate's invocation must appear after the `guard-tests:`
+# job header, not before it.
+wf="${REPO_ROOT}/.github/workflows/code-quality.yml"
+guard_line="$(grep -n '^  guard-tests:' "$wf" | head -1 | cut -d: -f1 || true)"
+gate_line="$(grep -n 'bash .github/scripts/check-docs-public-only.sh' "$wf" \
+    | grep -vE ':[[:space:]]*#' | head -1 | cut -d: -f1 || true)"
+if [ -n "$guard_line" ] && [ -n "$gate_line" ] && [ "$gate_line" -gt "$guard_line" ]; then
+    echo "  PASS: the gate runs inside guard-tests, the job no input can switch off"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: the gate is not inside guard-tests (guard-tests at line '${guard_line}',"
+    echo "        gate at line '${gate_line}') — reaching it may now require run-rust-quality"
     FAIL=$((FAIL + 1))
 fi
 

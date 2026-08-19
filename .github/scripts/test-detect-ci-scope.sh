@@ -387,25 +387,63 @@ run_test "agent-skills projection (*.md): defeats docs-only, rust corpus runs" \
     "RUN_RUST_QUALITY=true" \
     "RUN_TEST_RUST=true"
 
-# docs/ is owned by check-docs-public-only.sh in code-quality. The regression that
-# gate exists to catch is a returning internal tree, which is pure markdown — so the
-# extension test would classify it docs-only and skip the very job that would fail.
-# Both directions are pinned: a docs/ page defeats docs-only, and a docs/ page mixed
-# with an inert-root file still cannot launder its way to a rust-inert skip.
-run_test "docs/ page (*.md): defeats docs-only, the docs gate's job runs" \
+# docs/ is owned by check-docs-public-only.sh, which lives in code-quality's
+# guard-tests job. The regression that gate exists to catch is a returning internal
+# tree, which is pure markdown — so the extension test would classify it docs-only
+# and skip the very job that would fail. What a docs/ change therefore owes is
+# REACHABILITY: code-quality must be invoked so guard-tests runs.
+#
+# What it does NOT owe is the Rust corpus. `^docs/` used to sit in RUST_COUPLED,
+# which bought reachability by conscripting the whole pipeline — a one-line docs
+# edit ran test-rust + test-typescript + rust-quality to reach one second of bash.
+# These assertions previously encoded exactly that (RUN_RUST_QUALITY=true, and
+# DOCS_ONLY/SKIP_ALL forced false); they now pin the narrower contract. The
+# RUN_*=false lines are the load-bearing half — without them the widening could
+# come back unnoticed.
+run_test "docs/ page (*.md): stays a skip EXCEPT that code-quality is invoked for the docs gate" \
     "docs/superpowers/plans/2026-08-19-something.md" \
-    "DOCS_ONLY=false" \
-    "SKIP_ALL=false" \
+    "DOCS_ONLY=true" \
+    "SKIP_ALL=true" \
     "RUST_INERT=false" \
     "RUN_CODE_QUALITY=true" \
-    "RUN_RUST_QUALITY=true"
+    "RUN_RUST_QUALITY=false" \
+    "RUN_TEST_RUST=false" \
+    "RUN_TEST_TYPESCRIPT=false" \
+    "RUN_TEST_RUBY=false" \
+    "RUN_TEST_AGENTS_TS=false"
 
-run_test "docs/ page + inert TS: veto survives, docs gate's job still runs" \
+# Mixed with a non-product tree: still nothing load-bearing, so the docs/ arm of the
+# SKIP_ALL branch is the one that must fire — reachability survives the mix.
+run_test "docs/ page + non-product spike tree: code-quality still invoked, nothing else" \
+    "docs/guides/releasing.md
+scripts/wayfind-spike/queries.sql" \
+    "SKIP_ALL=true" \
+    "NON_PRODUCT=true" \
+    "RUN_CODE_QUALITY=true" \
+    "RUN_RUST_QUALITY=false" \
+    "RUN_TEST_RUST=false"
+
+# Mixed with an inert TS file there IS something load-bearing, so the rust-inert arm
+# takes over: code-quality is invoked (reaching the docs gate for free) and TS runs,
+# but the Rust corpus stays off — a docs/ page must not drag it back on.
+run_test "docs/ page + inert TS: rust-inert, docs gate's job still runs" \
     "docs/guides/releasing.md
 packages/temper-cloud/src/logger.ts" \
     "DOCS_ONLY=false" \
-    "RUST_INERT=false" \
-    "RUN_RUST_QUALITY=true"
+    "RUST_INERT=true" \
+    "RUN_CODE_QUALITY=true" \
+    "RUN_RUST_QUALITY=false" \
+    "RUN_TEST_RUST=false" \
+    "RUN_TEST_TYPESCRIPT=true"
+
+# The narrowing must NOT leak: markdown outside docs/ carries no gate, so it keeps
+# the full skip including code-quality. (The first case in this file pins the same
+# thing; restated here beside the docs/ arm so the boundary is visible at a glance.)
+run_test "markdown outside docs/: no gate, so code-quality stays OFF" \
+    "crates/temper-core/README.md" \
+    "DOCS_ONLY=true" \
+    "SKIP_ALL=true" \
+    "RUN_CODE_QUALITY=false"
 
 # A wire contract is asserted from the Rust side too.
 run_test "wire contract: VETO, rust corpus runs" \
