@@ -416,7 +416,7 @@ code question in a dependency we do not own, and it has not been answered here.
 | Root span construction (MCP) | `crates/temper-mcp/src/router.rs` |
 | Act-grain span fields | `temper_services::backend::ACT_SPAN_FIELDS`, declared by `#[act_span]` (`crates/temper-macros`) |
 | Joining a trusted caller's trace (the link) | `crates/temper-telemetry/src/link.rs`; called from each auth gate |
-| What is enforced, and why | [span-field-conventions.md](../development/span-field-conventions.md), gated by `tests/e2e/tests/logging_test.rs` |
+| What is enforced, and why | `internal/development/span-field-conventions.md`, gated by `tests/e2e/tests/logging_test.rs` |
 | MCP negotiation 405 status reset | `clients/temper-telemetry-ts/src/mcp-negotiation.ts`, gated by its sibling test; wired via `initTelemetry({ mcpEndpoint })` |
 | Service Traces Overview dashboard | Grafana `jc7b67n` — not in this repo; the query shapes it depends on are above |
 | The trust decision | `019f95ff-e216-7dd1-b2aa-a49d20b1cd6c` |

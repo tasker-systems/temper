@@ -132,4 +132,4 @@ tool requires Level 2.) See [authorization-seam.md](./authorization-seam.md).
   guide is *how to run one*, [machine-token-contract.md](./machine-token-contract.md) is
   *what the code guarantees about one*.
 - **Design spec** the seam was built from:
-  [../superpowers/specs/2026-07-02-shared-auth-orchestration-seam-design.md](../superpowers/specs/2026-07-02-shared-auth-orchestration-seam-design.md).
+  `internal/superpowers/specs/2026-07-02-shared-auth-orchestration-seam-design.md`.

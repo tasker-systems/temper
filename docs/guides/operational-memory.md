@@ -454,7 +454,7 @@ supported state, not an unfinished one.
 
 This guide is deliberately not the argument for any of the above. For *what was decided and why* —
 the memory contract, why reach is the home context rather than a field, why the index is generated,
-and why the migration is a bounded batch plus a lazy tail — read
-[the design](../superpowers/specs/2026-08-01-memories-in-temper-design.md). The session-facing
+and why the migration is a bounded batch plus a lazy tail — read the design,
+`internal/superpowers/specs/2026-08-01-memories-in-temper-design.md`. The session-facing
 version of the workflow, which is what an agent reads rather than a person, ships in the temper
 skill's `memories.md`.

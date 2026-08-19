@@ -121,6 +121,5 @@ Configure it per instance; the code path does not enforce it.
 The same API also serves public OAuth/SAML endpoints, so it must stay reachable, and private
 networking is Enterprise-tier Vercel — not worth it versus the HMAC signing already in place.
 
-Spec:
-[../superpowers/specs/2026-07-02-shared-auth-orchestration-seam-design.md](../superpowers/specs/2026-07-02-shared-auth-orchestration-seam-design.md)
+Spec: `internal/superpowers/specs/2026-07-02-shared-auth-orchestration-seam-design.md`
 (Stage 3).
