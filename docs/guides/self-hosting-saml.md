@@ -269,7 +269,7 @@ temper init --no-interactive --instance-url https://<instance> --idp temper-as
 This writes an `[[auth.providers]]` block with `provider = "temper-as"`, `client_id = "temper-cli"`,
 `authorize_url = https://<instance>/oauth/authorize`, `token_url = https://<instance>/oauth/token`,
 and `callback_url = https://<instance>/api/auth/cli-callback`. The existing PKCE + loopback login flow
-is issuer-agnostic — no other CLI change is needed. `temper login` then authenticates through SAML.
+is issuer-agnostic — no other CLI change is needed. `temper auth login` then authenticates through SAML.
 
 ## 6. Configure the UI (optional)
 
@@ -366,8 +366,8 @@ claude mcp add --transport http temper https://<instance>/mcp
 
 ## 8. Verify
 
-1. `temper login` → a browser opens to your IdP; after SAML login the CLI receives a token.
-2. `temper whoami` (or any authenticated command) succeeds.
+1. `temper auth login` → a browser opens to your IdP; after SAML login the CLI receives a token.
+2. `temper auth status` (or any authenticated command) succeeds.
 3. A `kb_profiles` row and a `kb_profile_auth_links` row (with `auth_provider = saml:<idp-key>`) are
    created for the user on first login.
 

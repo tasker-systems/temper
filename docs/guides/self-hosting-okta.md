@@ -188,7 +188,7 @@ The only Okta-specific points: set `OIDC_ISSUER` to `https://<okta-domain>/oauth
 
 ## Verify
 
-Use the same verification steps as the [main guide](./self-hosting.md#verify): `/api/health`, `temper login`, and a resource round-trip. `temper login` opens a browser to your Okta authorization server's `/v1/authorize` endpoint and completes the Authorization Code + PKCE flow.
+Use the same verification steps as the [main guide](./self-hosting.md#verify): `/api/health`, `temper auth login`, and a resource round-trip. `temper auth login` opens a browser to your Okta authorization server's `/v1/authorize` endpoint and completes the Authorization Code + PKCE flow.
 
 If login fails with `Token missing email claim and userinfo lookup failed`, either add the access-token `email` claim (above) or ensure the CLI's granted scopes include `email` so the `/userinfo` fallback can return it.
 

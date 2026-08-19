@@ -89,14 +89,14 @@ not a permission flag — it is the temporary operator grant below.
 
 ## Procedure: grant → reconcile → re-lock
 
-Connect to the target database first. For `temperkb.io` (Neon project
-`crimson-fog-23541670`, PostgreSQL 17):
+Connect to the target database first. Any admin connection to your instance's Postgres will do
+— the steps below are plain SQL. On Neon, `neonctl` prints one:
 
 ```bash
 neonctl connection-string main \
-  --project-id crimson-fog-23541670 \
-  --org-id org-wild-snow-32921543 \
-  --role-name neondb_owner
+  --project-id <your-neon-project-id> \
+  --org-id <your-neon-org-id> \
+  --role-name <your-owner-role>
 ```
 
 > **Always snapshot prod before a hand-run DDL/data change.** Create a

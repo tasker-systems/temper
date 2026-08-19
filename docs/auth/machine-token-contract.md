@@ -116,9 +116,8 @@ provider-string compare):
 > - provider tag is **`auth0-m2m`** (the link namespace); the human/machine branch itself is a
 >   typed **`PrincipalKind`** enum, so it is not a stringly-typed match.
 >
-> Confirmed against a live token minted from the `Temper Steward M2M` app on
-> `temperkb.us.auth0.com` (2026-07-02) and pinned as a KAT in
-> `normalize.rs::real_auth0_m2m_token_shape_is_detected`.
+> Confirmed against a live token minted from a real Auth0 M2M app and pinned as a
+> known-answer test.
 
 > **Hardened (2026-07-11): classification is total — there is no default arm.**
 > `classify` returns a **closed sum**, `Principal::{Machine, Human, Refuse}`, rather than the
@@ -259,8 +258,8 @@ temper admin access approve <profile-id-from-the-issue-output>
 
 ### B. Auth0 holds the secret
 
-One-time setup per agent principal, via the Auth0 CLI (`auth0 login` as a tenant user). The
-`temperkb.us.auth0.com` steward app was provisioned this way on 2026-07-02:
+One-time setup per agent principal, via the Auth0 CLI (`auth0 login` as a tenant user).
+Substitute your own tenant domain for `<your-tenant>.auth0.com` throughout:
 
 ```bash
 # 1. Create the M2M application at the IdP (records client_id + client_secret).
@@ -283,7 +282,7 @@ temper admin access approve <profile_id-from-step-3>
 
 # 5. (Verify) mint a token and confirm the claim shape. FORM-ENCODED — Auth0 tolerates JSON,
 #    Temper's own AS does not, so form-encode everywhere and the same client works on both.
-curl -s --request POST --url https://temperkb.us.auth0.com/oauth/token \
+curl -s --request POST --url https://<your-tenant>.auth0.com/oauth/token \
   --header 'content-type: application/x-www-form-urlencoded' \
   --data grant_type=client_credentials \
   --data client_id=<CLIENT_ID> \
@@ -321,17 +320,13 @@ temper admin machine provision --client-id <AUDITOR_CLIENT_ID> --label "citation
 temper admin access approve <profile_id>   # D11: born `denied`; without this every call 403s
 ```
 
-> **Done on temperkb.io, 2026-07-27, and exercised end to end.** Auth0 app
-> `Temper Citation Auditor M2M` (`EcbiQJWxSDbhSMfTPMCOEBQboDa5CMua`), client grant
-> `cgr_O6NxtahD6T1Hbijs` for `https://temperkb.io/api`, machine row
-> `019fa583-1173-7d3c-952d-183ed838a3da`, agent profile
-> `019fa583-1142-7121-bd67-597945e5f45f`, reach `+personal-j-cole-taylor:member` and **zero**
-> rows in `kb_access_grants`. First audit `019fa592-c374-76f1-824a-0976253fd9e8` recorded the
-> same day — the corpus's first, attributed to the auditor and not to its operator.
+> **Exercised end to end.** A citation auditor was stood up this way with a team membership,
+> **zero** rows in `kb_access_grants`, and it recorded its first audit attributed to itself
+> rather than to the operator who provisioned it.
 >
-> The read the auditor needs came from **team membership alone**, exactly as the paragraph
-> below predicts: the two grants on that cogmap are profile-anchored (to the human owner and
-> to the steward), so there was no team-anchored write for the auditor to inherit.
+> The read it needed came from **team membership alone**, exactly as the paragraph below
+> predicts: the grants on that cogmap were profile-anchored (to the human owner and to the
+> steward), so there was no team-anchored write for the auditor to inherit.
 
 **1. It must not share the steward's `client_id`.** One credential is one
 `emitter_entity_id`, so a shared client would leave the ledger unable to tell an audit from

@@ -9,34 +9,56 @@ This guide is for operators standing up their own Temper instance — on their o
 
 ## Topology
 
-One Vercel project hosts two Rust services from a single deployment:
+One Vercel project hosts **three Rust functions and a set of TypeScript functions** from a single
+deployment:
 
 ```text
-                           Vercel
-                    ┌──────────────────────────────────┐
- CLI / MCP client   │                                  │
- ──────────────────▶│  /.well-known/*  ─┐              │
- temper resource    │  /oauth/*         ├─▶ api/mcp    │
- temper login       │  /mcp             │   (MCP srv)  │
-                    │  /mcp/*          ─┘              │
-                    │                                  │
-                    │  /(.*)           ────▶ api/axum  │
-                    │                       (REST API) │
-                    └──────────────────────────────────┘
+                              Vercel (one project)
+                    ┌────────────────────────────────────────┐
+ CLI / MCP client   │  api/mcp.rs        MCP server          │
+ ──────────────────▶│  api/axum.rs       REST API            │
+                    │  api/internal.rs   drains + crons      │
+ Vercel cron (×7)   │  api/oauth/*.ts    OAuth + SAML        │
+ ──────────────────▶│                                        │
+                    └────────────────────────────────────────┘
                                │                │
                                ▼                ▼
                            Neon PG 17       Auth0 tenant
                            (pgvector)       (JWT issuer)
 ```
 
-Both services share the same database and Auth0 tenant. The routing lives in `vercel.json` at the repo root:
+All four share the same database and Auth0 tenant. The routing lives in `vercel.json` at the repo
+root; `handle: filesystem` runs first, then the routes match in order:
 
-- `handle: filesystem` runs first (static files if any).
-- `/mcp`, `/mcp/*`, `/oauth/*`, `/.well-known/*` route to `api/mcp` (the MCP server).
-- `/(.*)` (catch-all) routes to `api/axum` (the REST API).
+| Route | Function | What it is |
+|---|---|---|
+| `/mcp`, `/mcp/(.*)` | `api/mcp.rs` | The MCP server. |
+| `/api/embed/dispatch`, `/api/embed/warm`, `/api/region/dispatch`, `/api/slack/intents/reap` | `api/internal.rs` | Cron-driven work. **Not called by clients** — see below. |
+| `/internal/(.*)` | `api/internal.rs` | Server-to-server, HMAC-gated (the SAML reconcile channel). |
+| `/oauth/token`, `/oauth/jwks`, `/oauth/authorize`, `/oauth/saml/{login,acs,metadata}`, `/.well-known/oauth-authorization-server` | `api/oauth/*.ts` | The authorization server. TypeScript, not Rust. |
+| `/oauth/(.*)`, `/.well-known/(.*)` | `api/mcp.rs` | Whatever the named OAuth routes above did not claim. |
+| `/(.*)` | `api/axum.rs` | The REST API (catch-all). |
 
-`framework` is `null`; there is no framework-level routing. `SQLX_OFFLINE=true` is set in the build environment so the Rust macros compile against the committed `.sqlx/` cache rather than a live database.
+`framework` is `null`; there is no framework-level routing. `SQLX_OFFLINE=true` is set in the build
+environment so the Rust macros compile against the committed `.sqlx/` cache rather than a live
+database.
 
+### The drains are not optional
+
+`api/internal.rs` runs the background work, and **nothing invokes it unless the crons are
+configured**. `vercel.json` declares seven:
+
+| Schedule | Path | What stalls without it |
+|---|---|---|
+| every minute | `/api/embed/dispatch?shard=0..3` (four entries) | Embedding: new and changed resources are never vectorised, so semantic search does not see them. |
+| every 2 minutes | `/api/embed/warm` | Cold-start latency on the embedding path. |
+| every minute | `/api/region/dispatch` | Region materialization: cognitive-map regions never form. |
+| hourly | `/api/slack/intents/reap` | Expired Slack link intents are never swept. |
+
+A deployment that skips them accepts writes and looks healthy while search results and cogmap
+regions silently stop advancing. `api/internal.rs` is given `maxDuration: 300` for this reason —
+the drains are long-running relative to a request. The queries for checking that the drains are
+keeping up are in [Drain operator queries](./drain-operator-queries.md).
 ## Provision Neon
 
 Create a new Neon project. Select **PostgreSQL 17** (Neon's GA version — the local dev Docker image runs 18, but the cloud deployment targets 17).
@@ -226,27 +248,13 @@ The old failures were quiet, and they were quiet in *opposite* directions — on
 
 Every one of those used to surface as a caller's 401 — or, worse, as a *missing* 401 — days later, far from the variable that caused it. Now it surfaces as a loud refusal at startup, with the variable named.
 
-### vercel.json summary
+### The routing contract
 
-The routing contract at the repo root is:
+The authoritative routing, function and cron configuration is `vercel.json` at the repo root. It
+declares three Rust functions (`api/axum.rs`, `api/mcp.rs`, `api/internal.rs`), eighteen routes and
+seven crons; the Topology section above summarises what each one is for.
 
-```json
-{
-  "framework": null,
-  "build": { "env": { "SQLX_OFFLINE": "true" } },
-  "routes": [
-    { "handle": "filesystem" },
-    { "src": "/mcp",          "dest": "/api/mcp" },
-    { "src": "/mcp/(.*)",     "dest": "/api/mcp" },
-    { "src": "/oauth/(.*)",   "dest": "/api/mcp" },
-    { "src": "/.well-known/(.*)", "dest": "/api/mcp" },
-    { "src": "/(.*)",         "dest": "/api/axum" }
-  ]
-}
-```
-
-Do not modify this file unless you are also updating `api/axum.rs` or `api/mcp.rs`.
-
+Do not hand-edit it without also updating the function it routes to.
 ## Configure the CLI
 
 After deploying, users point the `temper` CLI at your instance. The CLI ships unconfigured; `temper init` performs the setup.
@@ -380,10 +388,10 @@ A healthy response is HTTP 200 with a JSON body. A 500 or connection error typic
 ### CLI login
 
 ```sh
-temper login
+temper auth login
 ```
 
-This runs the OAuth 2.0 Authorization Code + PKCE flow: it opens a browser to the provider's `/authorize` endpoint, the provider redirects the authorization code to `/api/auth/cli-callback` (a stateless relay), and that relay forwards the code to a short-lived listener on `localhost`. The CLI then exchanges the code for tokens, prints a confirmation, and caches the token locally. (There is no device-code polling — `temper login` always uses a browser redirect.)
+This runs the OAuth 2.0 Authorization Code + PKCE flow: it opens a browser to the provider's `/authorize` endpoint, the provider redirects the authorization code to `/api/auth/cli-callback` (a stateless relay), and that relay forwards the code to a short-lived listener on `localhost`. The CLI then exchanges the code for tokens, prints a confirmation, and caches the token locally. (There is no device-code polling — `temper auth login` always uses a browser redirect.)
 
 ### End-to-end resource round-trip
 
