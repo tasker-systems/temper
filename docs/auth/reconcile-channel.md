@@ -76,7 +76,7 @@ private networking is Enterprise-tier Vercel. Not worth it versus hardening the 
 ## The federated path through the seam
 
 The handler does two things: resolve the profile, then reconcile its `idp` memberships. The
-resolve half goes through the [authorization seam](./authorization-seam.md)'s **federated
+resolve half goes through the authorization seam's **federated
 entry point**, `resolve_federated_human` — this endpoint was the third site hand-building a
 `PrincipalKind::Human`, and a surface that can construct one can forge one.
 

@@ -1,7 +1,7 @@
 # Cognitive-map & resource authoring authorization
 
 This is the **per-resource** authorization axis: given an authenticated caller, *what
-may they author?* It is distinct from the [authorization seam](authorization-seam.md),
+may they author?* It is distinct from the authorization seam,
 which answers the prior question — *may they use Temper at all?* (authenticate → system
 access). A caller passes the seam first; then every write is gated again, per target,
 by the predicates below.

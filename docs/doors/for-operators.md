@@ -24,7 +24,7 @@ Pick the one that matches your IdP:
 - **[A SAML IdP](../guides/self-hosting-saml.md)** — the generic SAML path.
 
 The trust boundary these configure — how a credential becomes a session, and where that is
-enforced — is described in [Temper auth & security](../auth/README.md).
+enforced — is described in [The Trust Boundary](../concepts/trust-boundary.md).
 
 ## Connecting the rest of your world
 
@@ -36,16 +36,12 @@ enforced — is described in [Temper auth & security](../auth/README.md).
 
 ## Agents that run on your deployment
 
-- **[Cloud agents](../guides/cloud-agents.md)** — the model for agents that run without a human
-  in the loop.
 - **[Deploying an Eve agent to Vercel](../guides/vercel-eve.md)**
 - **[Delivering L0 kernel cogmap content](../guides/l0-content-delivery.md)**
 
 ## Seeing what it is doing
 
 - **[OpenTelemetry setup](../guides/open-telemetry-setup.md)** — getting traces and metrics out.
-- **[Drain operator queries](../guides/drain-operator-queries.md)** — the TraceQL queries worth
-  having to hand when something looks wrong.
 
 ## Every setting
 

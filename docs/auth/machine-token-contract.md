@@ -148,7 +148,7 @@ Once provisioned, an agent profile is an ordinary accountable principal — no a
 special-casing:
 
 - It passes `is_active` and `system_access` on the **same rails** as a human (see the
-  [two-level chain](./authorization-seam.md)).
+  two-level chain in `authorization-seam.md`).
 - It takes **ordinary grants**: team membership for source read, `cogmap grant --write` for
   authoring. Registration (`--team` / `--cogmap`) is just a convenient way to confer those same
   ordinary grants at mint time, bounded by what the minter could confer on a human. It is its
@@ -162,7 +162,7 @@ Stage 4b moved **claim-shape detection** into the seam — the one thing that wo
 two divergent copies. PR #388 then moved **principal construction** in behind it: the human
 email ladder and the `AuthClaims` constructor both live in the seam now, so a surface hands in
 a verified token and gets back an `AuthenticatedProfile` (see
-[authorization-seam.md](./authorization-seam.md)).
+`authorization-seam.md`).
 
 What is *still* per-surface is exactly one thing: the JWKS `decode()`. The `JwksKeyStore` was
 already shared, but the audience legitimately differs per surface, so each surface verifies

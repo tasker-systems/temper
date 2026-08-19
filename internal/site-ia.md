@@ -401,6 +401,7 @@ docs/
 ├── doors/           thin routers — sequence, not content
 ├── concepts/        authored, thin; links UP to temperkb.io for depth
 ├── playbooks/       authored; task-shaped sequences with stated outcomes
+├── sdks/            authored; per-language manuals (neither concepts nor single task sequences)
 └── reference/       GENERATED — never hand-edited
     ├── cli/         from the built binary's --help tree
     └── config/      from TemperConfig via schemars
@@ -421,6 +422,12 @@ it work*. It is durable, it has no numbered steps, and it ends by linking up to 
 for the why. A **playbook** answers *how do I get to X*. It names its outcome in the first
 paragraph, names its prerequisites rather than assuming them, and a reader who follows it
 exactly arrives at the outcome. A page that does both is two pages.
+
+**What `sdks/` is.** A per-language SDK manual — the generated gem, how it tracks the API, and
+the usage patterns specific to that language's idioms. It is neither a durable concept (it
+tracks a generated artifact) nor a single task sequence (it covers the whole surface). It keeps
+the SDK material whole rather than splitting it across concepts and playbooks, because its
+concept and task material interleave too tightly to separate without wrecking it.
 
 ## What a page owes its reader
 

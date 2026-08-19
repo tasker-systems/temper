@@ -13,9 +13,8 @@ and you want a native SP integration rather than an OIDC bridge.
 > end-to-end sequence (deploy → SAML → org → agents) see [enterprise-install.md](./enterprise-install.md).
 
 > **This guide is the operator runbook.** For the *security model* it implements — how
-> tokens are verified, the two-level authorization seam, the reconcile channel's trust
-> model, and profile deactivation as an authn lever — see [../auth/](../auth/README.md),
-> the canonical home for Temper's auth flows.
+> tokens are verified, the authorization boundary, and where it is enforced — see
+> [The Trust Boundary](../concepts/trust-boundary.md).
 
 ## How it works
 
@@ -387,7 +386,7 @@ This never deletes the profile or its history, and it is independent of SAML gro
 
 > `is_active` is enforced by the shared authorization seam (Level 1), so **both** surfaces —
 > `temper-api` and `temper-mcp` — reject a deactivated profile identically. See
-> [../auth/authorization-seam.md](../auth/authorization-seam.md).
+> `authorization-seam.md`.
 
 ## Running it as the applier
 

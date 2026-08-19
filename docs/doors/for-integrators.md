@@ -8,7 +8,7 @@ is not the CLI.
 Every endpoint and schema is generated from the router, so the reference cannot drift from
 what ships. It is published alongside these pages.
 
-Before you call anything, read **[Temper auth & security](../auth/README.md)** — it sets out
+Before you call anything, read **[The Trust Boundary](../concepts/trust-boundary.md)** — it sets out
 the trust boundary the whole API sits behind.
 
 ## Authenticating as a machine

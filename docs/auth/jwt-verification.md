@@ -1,7 +1,7 @@
 # JWT verification
 
-Both surfaces verify a Bearer JWT before anything reaches the [authorization
-seam](./authorization-seam.md). Verification stays **per-surface** — and it is now the *only*
+Both surfaces verify a Bearer JWT before anything reaches the authorization
+seam. Verification stays **per-surface** — and it is now the *only*
 thing that does, because the audience differs legitimately. The shared machinery is the
 `JwksKeyStore`; everything downstream of the decode (classification, the email ladder, claim
 construction, the gates) is the seam's.

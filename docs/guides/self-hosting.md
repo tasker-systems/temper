@@ -58,7 +58,7 @@ configured**. `vercel.json` declares seven:
 A deployment that skips them accepts writes and looks healthy while search results and cogmap
 regions silently stop advancing. `api/internal.rs` is given `maxDuration: 300` for this reason —
 the drains are long-running relative to a request. The queries for checking that the drains are
-keeping up are in [Drain operator queries](./drain-operator-queries.md).
+keeping up are in `drain-operator-queries.md`.
 ## Provision Neon
 
 Create a new Neon project. Select **PostgreSQL 17** (Neon's GA version — the local dev Docker image runs 18, but the cloud deployment targets 17).
