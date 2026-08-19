@@ -14,6 +14,25 @@ on:
         type: string
         default: 'true'
 
+      # The same treatment for the TypeScript half, and for the same reason one
+      # tier down: a docs-only change still invokes this workflow — it has to,
+      # because the docs/ gate lives in the ungated guard-tests job below — and
+      # was therefore paying a `bun install --frozen-lockfile` plus a typecheck
+      # and a biome pass to reach one second of bash.
+      #
+      # Fed from detect-ci-scope's existing `run-test-typescript`, deliberately
+      # rather than a new scope variable. That output is `false` on exactly one
+      # path (SKIP_ALL), and the only way to arrive HERE with it false is the
+      # docs-gated arm of that branch — so the two axes cannot come apart, and a
+      # second variable could only drift from the first.
+      #
+      # Defaults 'true' for the same conservative reason as above: a direct
+      # dispatch, or a caller that passes nothing, runs the full job.
+      run-typescript-quality:
+        required: false
+        type: string
+        default: 'true'
+
 # Least privilege. The org default is `default_workflow_permissions: write`,
 # which grants EVERY scope — including `actions: write` and `contents: write` —
 # to any job that does not say otherwise. This repo now publishes SIGNED
@@ -34,9 +53,11 @@ permissions:
 jobs:
   rust-quality:
     name: Rust Quality
-    # Skipped for a rust-inert change (TS/SDK-only). The guard-tests and
-    # typescript-quality jobs below carry NO such gate — they always run when
-    # this workflow is invoked, because a TS-only change still needs them.
+    # Skipped for a rust-inert change (TS/SDK-only). typescript-quality below
+    # carries its own gate on a DIFFERENT axis, so a TS-only change still runs
+    # it while turning this job off. guard-tests carries no gate at all and
+    # always runs when this workflow is invoked — that is what makes the docs/
+    # gate reachable for a change that switches both heavy jobs off.
     if: inputs.run-rust-quality == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -454,6 +475,9 @@ jobs:
 
   typescript-quality:
     name: TypeScript Quality
+    # Off for a docs-only change, which reaches this workflow solely for the
+    # pure-bash guard-tests job. See the input's declaration above.
+    if: inputs.run-typescript-quality == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 

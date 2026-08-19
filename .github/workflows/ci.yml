@@ -60,16 +60,21 @@ jobs:
   # ==========================================================================
   # Stage 1: Parallel quality + test jobs (skipped on docs-only changes)
   # ==========================================================================
-  # code-quality is INVOKED for every non-docs change (so its TypeScript-quality
-  # and pure-bash guard-test jobs always run), but the heavy rust-quality job
-  # inside it is gated by run-rust-quality — off for a rust-inert change (one
-  # whose every non-doc file is in a Rust-inert tree). See detect-ci-scope.sh.
+  # code-quality is INVOKED for every change that owes it anything at all — which
+  # includes a docs-only change, because the docs/ publish-safety gate lives in
+  # its pure-bash guard-tests job. Both heavy jobs inside it are separately
+  # gated, so being invoked is cheap: rust-quality by run-rust-quality (off for a
+  # rust-inert change, one whose every non-doc file is in a Rust-inert tree), and
+  # typescript-quality by run-typescript-quality, which rides the existing
+  # run-test-typescript output. A docs-only change therefore turns BOTH off and
+  # runs guard-tests alone. See detect-ci-scope.sh.
   code-quality:
     needs: detect-scope
     if: needs.detect-scope.outputs.run-code-quality == 'true'
     uses: ./.github/workflows/code-quality.yml
     with:
       run-rust-quality: ${{ needs.detect-scope.outputs.run-rust-quality }}
+      run-typescript-quality: ${{ needs.detect-scope.outputs.run-test-typescript }}
 
   test-rust:
     needs: detect-scope
