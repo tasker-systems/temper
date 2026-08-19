@@ -46,6 +46,7 @@ pub async fn get(pool: &PgPool, id: Uuid) -> ApiResult<Connection> {
                   profile_id, emitter_entity_id, home_context_id, credential,
                   webhook_events, tool_manifest, reach_granularity, reach_covers,
                   reach_affirmed_by, reach_affirmed_at, reach_affirmation,
+                  observed_reach,
                   created, revoked_at, revoked_by_profile_id
              FROM kb_connections WHERE id = $1"#,
         id,
@@ -81,6 +82,7 @@ pub async fn list(
                   profile_id, emitter_entity_id, home_context_id, credential,
                   webhook_events, tool_manifest, reach_granularity, reach_covers,
                   reach_affirmed_by, reach_affirmed_at, reach_affirmation,
+                  observed_reach,
                   created, revoked_at, revoked_by_profile_id
              FROM kb_connections c
             WHERE ($1 OR c.revoked_at IS NULL)
@@ -266,6 +268,12 @@ async fn authorize_live(pool: &PgPool, caller: ProfileId, id: Uuid) -> ApiResult
 /// absent capability is stated, never silent). The mint response's `metadata` is
 /// surfaced as `observed_reach` next to the connection's *declared* reach, so a
 /// reviewer sees the gap; there is no computed `exceeds` bool (B3 acknowledges).
+///
+/// **The observed reach is persisted** onto `kb_connections.observed_reach` so the
+/// grant path can consult it later — the mint is the witness, and the witness
+/// must outlive the attach response. `grant_reach` reads it back to decide
+/// whether affirmation is required (the gate fires on observed-vs-declared drift
+/// within the remote domain, not on the declaration alone).
 pub async fn attach_credential(
     pool: &PgPool,
     broker: &dyn CredentialBroker,
@@ -291,10 +299,12 @@ pub async fn attach_credential(
 
     sqlx::query!(
         r#"UPDATE kb_connections
-              SET credential = $2
+              SET credential = $2,
+                  observed_reach = $3
             WHERE id = $1 AND revoked_at IS NULL"#,
         id,
         value,
+        verification.observed_reach.as_ref(),
     )
     .execute(pool)
     .await?;
@@ -443,12 +453,29 @@ pub async fn set_tool_manifest(
 /// such a connection to a team is therefore not allowed to proceed silently: `affirm_reach` must
 /// carry the stated reason, or the grant FAILS. Affirming records who/when/why on the connection —
 /// it makes the asymmetry declared and reviewable; it does NOT resolve it or narrow the remote
-/// reach. The four cases:
+/// reach.
 ///
-/// - declares reach, no affirmation → `Conflict`, writes nothing (naming the declared reach and the fix).
-/// - declares reach, affirmation → one transaction: stamp the affirmation, then insert the grant.
+/// **The gate consults the mint's witness, not just the declaration.** A declared reach is a
+/// promise; the `observed_reach` column is what the attach-time mint actually saw. The gate fires
+/// (`affirm_reach` required) when the connection declares reach AND either the credential was never
+/// minted (`observed_reach` is `None` — the declaration is unwitnessed) or the mint's observed
+/// scope is broader than the declared covers (the commensurable, remote-domain gap the mint can
+/// detect — e.g. GitHub's `repository_selection: "all"` against `reach_covers: "acme/temper"`).
+/// Remote-vs-temper scope stays incommensurable and uncomputed; only the remote-domain
+/// observed-vs-declared drift is compared, and only to decide whether affirmation is required —
+/// never to auto-deny. The four cases:
+///
+/// - declares reach, gate fires, no affirmation → `Conflict`, writes nothing (naming the declared
+///   reach, the observed reach, and the fix).
+/// - declares reach, gate fires, affirmation → one transaction: stamp the affirmation, then insert
+///   the grant.
 /// - declares no reach, affirmation → `BadRequest` (the flag is inapplicable — honest over lenient).
 /// - declares no reach, no affirmation → the plain grant.
+/// - declares reach, gate does NOT fire (observed agrees with declared), affirmation → `BadRequest`
+///   (the flag is inapplicable — there is no gap to acknowledge). Honest over lenient, same as the
+///   no-declared-reach case: do not silently accept a spurious affirmation.
+/// - declares reach, gate does NOT fire, no affirmation → the plain grant (the mint witnessed the
+///   declaration; no gap to acknowledge).
 ///
 /// Auth stays FIRST — affirmation never bypasses authorization.
 pub async fn grant_reach(
@@ -466,17 +493,25 @@ pub async fn grant_reach(
     )
     .await?;
 
-    match (connection.declares_reach(), affirm_reach) {
-        // Declared reach, unaffirmed: refuse, naming the declared reach and the fix. Write nothing.
+    // The gate: declared reach alone is the declaration; the mint's observed reach is the witness.
+    // Affirmation is required when the connection declares reach AND the gate fires (observed is
+    // missing, or observed scope is broader than declared). A declared reach whose mint witnessed
+    // no gap grants freely — the declaration was honest.
+    let gate_fires = connection.declares_reach() && reach_gate_fires(&connection);
+
+    match (gate_fires, affirm_reach) {
+        // Declared reach, gate fires, unaffirmed: refuse, naming the declared reach, the observed
+        // reach, and the fix. Write nothing.
         (true, None) => Err(ApiError::Conflict(format!(
             "connection '{}' declares remote reach ({}) that may exceed the team's temper reach; \
-             binding it to a team must be affirmed as intentional — re-run with \
-             --affirm-reach \"<why this is intended>\"",
+             the credential's observed reach is {} — binding it to a team must be affirmed as \
+             intentional — re-run with --affirm-reach \"<why this is intended>\"",
             connection.slug,
             reach_descriptor(&connection),
+            observed_reach_descriptor(&connection),
         ))),
-        // Declared reach, affirmed: stamp the affirmation and insert the grant atomically —
-        // never affirmation-without-grant or grant-without-affirmation.
+        // Declared reach, gate fires, affirmed: stamp the affirmation and insert the grant
+        // atomically — never affirmation-without-grant or grant-without-affirmation.
         (true, Some(rationale)) => {
             let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
                 .await
@@ -505,12 +540,14 @@ pub async fn grant_reach(
             // carries the populated affirmation fields.
             get(pool, connection_id).await
         }
-        // No declared reach, but an affirmation was passed: the flag is inapplicable. Honest over
-        // lenient — do not silently ignore it. Write nothing.
+        // No gate (declares no reach, OR declares reach with no observed gap), but an affirmation
+        // was passed: the flag is inapplicable. Honest over lenient — do not silently ignore it.
+        // Write nothing.
         (false, Some(_)) => Err(ApiError::BadRequest(
-            "this connection declares no reach; --affirm-reach is not applicable".into(),
+            "this connection has no reach gap to acknowledge; --affirm-reach is not applicable"
+                .into(),
         )),
-        // No declared reach, no affirmation: the plain grant.
+        // No gate, no affirmation: the plain grant.
         (false, None) => {
             let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
                 .await
@@ -525,6 +562,53 @@ pub async fn grant_reach(
             .await?;
             Ok(connection)
         }
+    }
+}
+
+/// Does the grant gate fire for this connection? The gate fires when the connection declares reach
+/// AND the mint's witness does not confirm the declaration. Two cases, both commensurable within
+/// the remote domain (never the incommensurable remote-vs-temper axis):
+///
+/// - `observed_reach` is `None` — the credential was never minted, or the mint returned no reach
+///   metadata. The declaration is unwitnessed; affirmation is required.
+/// - The observed scope is broader than the declared covers. Today this catches the one
+///   commensurable signal the mint exposes: GitHub's `repository_selection: "all"` against a
+///   `reach_covers` naming a specific repo or repo-set. Richer per-provider comparison (a
+///   `repositories` list broader than `reach_covers`) is deferred — this is the honest minimum,
+///   not a computed `exceeds` bool.
+///
+/// A declared reach whose mint witnessed `repository_selection: "selected"` (or any shape this
+/// function does not recognize as broader) does NOT fire the gate: the declaration was honest, and
+/// the grant proceeds without affirmation. The mint's `permissions` map is not compared against
+/// `reach_covers` — permissions are about *what* (read/write), `reach_covers` is about *which*
+/// (which repos), and conflating them would be a false comparison.
+fn reach_gate_fires(connection: &Connection) -> bool {
+    let Some(observed) = &connection.observed_reach else {
+        // Unwitnessed declaration: the gate fires. A declared reach that no mint has confirmed is
+        // exactly the case where affirmation is the honest substitute for evidence.
+        return true;
+    };
+    // The commensurable signal: GitHub's `repository_selection`. `"all"` is broader than any
+    // specific `reach_covers`; `"selected"` (or absent) is not. This is provider-aware but not
+    // provider-specific in its *shape* — `repository_selection` is the field the mint returns, and
+    // `"all"` is the value that says "the credential sees everything." Other providers that expose
+    // a comparable "all vs selected" signal could be added here; a provider with no such signal
+    // leaves the observed reach uninterpreted, and the gate does not fire on it alone (the
+    // unwitnessed case above is the catch-all for "we cannot tell").
+    let selection_all = observed
+        .get("repository_selection")
+        .and_then(|v| v.as_str())
+        .map(|s| s == "all")
+        .unwrap_or(false);
+    selection_all
+}
+
+/// The observed-reach descriptor for the affirmation-required message. Human-readable, never
+/// panic-prone: `None` says "never minted" out loud rather than encoding silence as absence.
+fn observed_reach_descriptor(connection: &Connection) -> String {
+    match &connection.observed_reach {
+        Some(reach) => reach.to_string(),
+        None => "never minted (no observed reach on record)".to_string(),
     }
 }
 
@@ -1938,5 +2022,218 @@ mod tests {
             "the last writer's rationale wins"
         );
         assert_eq!(second.reach_affirmed_by, Some(*owner));
+    }
+
+    // -----------------------------------------------------------------------
+    // B3 remainder — the drift check's observed-vs-declared gap wired into the
+    // grant path. The gate previously fired on `declares_reach()` alone (a static
+    // declaration). With `observed_reach` persisted at attach, the gate fires when
+    // the connection declares reach AND the mint's witness does not confirm the
+    // declaration: observed is missing (unwitnessed), or observed scope is broader
+    // than declared (the commensurable, remote-domain gap). Remote-vs-temper scope
+    // stays incommensurable and uncomputed.
+    // -----------------------------------------------------------------------
+
+    /// A broker that mints with `repository_selection: "selected"` — the observed
+    /// reach agrees with a specific `reach_covers` declaration (no remote-domain
+    /// gap). Used by the "gate does NOT fire" tests below.
+    fn narrow_granting_broker() -> crate::broker::FakeBroker {
+        crate::broker::FakeBroker::granting(serde_json::json!({
+            "repository_selection": "selected",
+            "permissions": { "contents": "read", "metadata": "read", "pull_requests": "read" }
+        }))
+    }
+
+    /// The attach persists `observed_reach` onto the connection row — the witness
+    /// must outlive the attach response so the grant path can consult it.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn attach_persists_observed_reach_onto_the_connection_row(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let c = svc::provision(&pool, admin, &req("Acme GitHub", None))
+            .await
+            .expect("provision");
+        assert!(
+            c.observed_reach.is_none(),
+            "born with no observed reach — the credential has not been minted"
+        );
+
+        let out = svc::attach_credential(&pool, &granting_broker(), admin, c.id, &credential())
+            .await
+            .expect("attach");
+
+        // The response carries the observed reach (B4, unchanged)…
+        assert_eq!(
+            out.verification
+                .observed_reach
+                .as_ref()
+                .and_then(|r| r.get("repository_selection"))
+                .and_then(|v| v.as_str()),
+            Some("all"),
+        );
+        // …and it is now PERSISTED on the row, readable by a fresh get.
+        let reloaded = svc::get(&pool, c.id).await.expect("get");
+        assert_eq!(
+            reloaded
+                .observed_reach
+                .as_ref()
+                .and_then(|r| r.get("repository_selection"))
+                .and_then(|v| v.as_str()),
+            Some("all"),
+            "observed_reach must persist on the connection row, not just the response"
+        );
+    }
+
+    /// An unverified attach (no broker configured) persists `observed_reach = NULL`
+    /// — the witness is honestly absent, not silently defaulted. The grant gate
+    /// treats NULL as "unwitnessed" and fires (the declaration is unconfirmed).
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn an_unverified_attach_persists_null_observed_reach(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let c = svc::provision(&pool, admin, &req("Acme GitHub", None))
+            .await
+            .expect("provision");
+
+        let null_broker = crate::broker::NullBroker;
+        let out = svc::attach_credential(&pool, &null_broker, admin, c.id, &credential())
+            .await
+            .expect("an unverified attach still persists the credential");
+        assert!(!out.verification.verified, "no broker ⇒ not verified");
+        assert!(
+            out.verification.observed_reach.is_none(),
+            "no observed reach"
+        );
+
+        let reloaded = svc::get(&pool, c.id).await.expect("get");
+        assert!(
+            reloaded.observed_reach.is_none(),
+            "an unverified attach persists NULL observed_reach, honestly absent"
+        );
+    }
+
+    /// A reach-declaring connection whose mint witnessed `repository_selection:
+    /// "all"` (broader than `reach_covers: "acme/temper"`) STILL requires
+    /// affirmation — the remote-domain gap the mint detected sharpens the gate.
+    /// This is the C8 remainder: excess reach detected by mint, not merely declared.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn observed_reach_broader_than_declared_still_requires_affirmation(pool: PgPool) {
+        let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
+        let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
+            .await
+            .expect("provision");
+        // Attach with the default granting broker (repository_selection: "all").
+        svc::attach_credential(&pool, &granting_broker(), owner, c.id, &credential())
+            .await
+            .expect("attach");
+        let beta = seed_managed_team(&pool, "beta", owner).await;
+
+        let err = svc::grant_reach(&pool, owner, c.id, beta, None)
+            .await
+            .expect_err("observed all-vs-declared-specific gap must be affirmed");
+        assert!(matches!(err, ApiError::Conflict(_)), "got {err:?}");
+        assert!(
+            !reach_grant_exists(&pool, c.id, beta).await,
+            "writes nothing"
+        );
+    }
+
+    /// The gap, affirmed, records the affirmation AND lands the grant — same
+    /// atomic stamp-then-grant as a merely-declared reach.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn affirming_the_observed_gap_records_and_grants(pool: PgPool) {
+        let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
+        let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
+            .await
+            .expect("provision");
+        svc::attach_credential(&pool, &granting_broker(), owner, c.id, &credential())
+            .await
+            .expect("attach (observed all)");
+        let beta = seed_managed_team(&pool, "beta", owner).await;
+
+        let out = svc::grant_reach(
+            &pool,
+            owner,
+            c.id,
+            beta,
+            Some("beta reads the whole org deliberately".into()),
+        )
+        .await
+        .expect("affirmed grant lands");
+
+        assert!(reach_grant_exists(&pool, c.id, beta).await, "grant lands");
+        assert_eq!(
+            out.reach_affirmation.as_deref(),
+            Some("beta reads the whole org deliberately"),
+        );
+        assert!(out.reach_affirmed_at.is_some(), "stamp recorded");
+    }
+
+    /// A reach-declaring connection whose mint witnessed `repository_selection:
+    /// "selected"` (agrees with `reach_covers: "acme/temper"`) grants WITHOUT
+    /// affirmation — the mint witnessed no remote-domain gap, so the declaration
+    /// was honest and there is nothing to acknowledge. This is the gate sharpened:
+    /// `declares_reach()` alone no longer fires it; the observed-vs-declared
+    /// comparison does.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn observed_reach_agreeing_with_declared_grants_without_affirmation(pool: PgPool) {
+        let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
+        let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
+            .await
+            .expect("provision");
+        // Attach with the NARROW broker (repository_selection: "selected").
+        svc::attach_credential(&pool, &narrow_granting_broker(), owner, c.id, &credential())
+            .await
+            .expect("attach (observed selected)");
+
+        let reloaded = svc::get(&pool, c.id).await.expect("get");
+        assert_eq!(
+            reloaded
+                .observed_reach
+                .as_ref()
+                .and_then(|r| r.get("repository_selection"))
+                .and_then(|v| v.as_str()),
+            Some("selected"),
+            "precondition: the narrow broker's observed reach is persisted"
+        );
+
+        let beta = seed_managed_team(&pool, "beta", owner).await;
+        // No affirmation: the grant proceeds because the mint witnessed no gap.
+        svc::grant_reach(&pool, owner, c.id, beta, None)
+            .await
+            .expect("a witnessed, agreeing reach grants without affirmation");
+        assert!(
+            reach_grant_exists(&pool, c.id, beta).await,
+            "the grant lands"
+        );
+
+        let reloaded = svc::get(&pool, c.id).await.expect("get");
+        assert!(
+            reloaded.reach_affirmed_at.is_none(),
+            "no affirmation is recorded when the gate does not fire"
+        );
+    }
+
+    /// Affirming a reach-declaring connection whose mint witnessed NO gap is
+    /// refused — the flag is inapplicable (there is no gap to acknowledge). Honest
+    /// over lenient, same as the no-declared-reach case: do not silently accept a
+    /// spurious affirmation.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn affirming_when_observed_reach_agrees_with_declared_is_refused(pool: PgPool) {
+        let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
+        let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
+            .await
+            .expect("provision");
+        svc::attach_credential(&pool, &narrow_granting_broker(), owner, c.id, &credential())
+            .await
+            .expect("attach (observed selected)");
+        let beta = seed_managed_team(&pool, "beta", owner).await;
+
+        let err = svc::grant_reach(&pool, owner, c.id, beta, Some("but I insist".into()))
+            .await
+            .expect_err("affirming a no-gap reach is inapplicable");
+        assert!(matches!(err, ApiError::BadRequest(_)), "got {err:?}");
+        assert!(
+            !reach_grant_exists(&pool, c.id, beta).await,
+            "writes nothing"
+        );
     }
 }
