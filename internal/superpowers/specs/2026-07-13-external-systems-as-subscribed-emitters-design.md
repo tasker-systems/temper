@@ -224,13 +224,48 @@ kb_subscription_deliveries
    (authored,        (judged immaterial,
     cites the         with reasoning +
     event)            confidence)
+
+  ⚠️ The `steward tick` fork below the dashed line exists ONLY for a kb_cogmaps
+     subscriber. A kb_contexts or kb_teams subscriber has no telos, no steward and
+     no envelope: it terminates at in_scope / undetermined, and that is a complete,
+     legitimate outcome — not a queue nobody drained. (Amended 2026-08-19; see
+     "Two lifecycles share this table" below.)
 ```
 
-**The disposition is a judgment act**, and therefore an authored event under an invocation envelope
-carrying reasoning, confidence, and rationale — exactly what the membrane requires of judgment. A
-steward declining a PR is not a silent cursor bump; it is accountable and citable: *"the platform
-team's steward saw PR #412, judged it immaterial at confidence 0.7, because it touched only test
-fixtures."*
+**The disposition is a judgment act**, and therefore an authored event carrying reasoning,
+confidence, and rationale, attributable to a named actor — exactly what the membrane requires of
+judgment. A steward declining a PR is not a silent cursor bump; it is accountable and citable: *"the
+platform team's steward saw PR #412, judged it immaterial at confidence 0.7, because it touched only
+test fixtures."*
+
+> **Amended 2026-08-19 (chunk C grounding, before any chunk C code).** This paragraph originally read
+> *"an authored event under an invocation envelope."* That named a mechanism, and the mechanism turned
+> out to scope the entire lifecycle to one of the three admissible subscriber kinds:
+> `kb_invocations.originating_cogmap_id` is `NOT NULL` (`canonical_schema.sql:518`, never altered) and
+> `kb_cogmaps.telos_resource_id` is `NOT NULL` (`:246`), so a `kb_contexts` or `kb_teams` subscriber
+> can never originate an envelope. The load-bearing property is **accountable and citable**, not
+> *enveloped*: the envelope is present when an agent acts for a cogmap and absent when a human acts,
+> with the profile carrying attribution instead.
+
+**Two lifecycles share this table, not one.** A cogmap subscriber carries a telos charter and can be
+acted for by a steward, so it runs the full machine to `acted`/`declined`. A context or team
+subscriber has no telos, no steward and no envelope — it subscribed in order to **be aware**, and its
+delivery row is terminal at `in_scope` (or `undetermined`). That undisposed row is a *record of
+awareness*, not an unfinished queue, and reporting it as backlog is forbidden by the goal's
+`No phantom backlog` negative. Any surface that counts "outstanding deliveries" must know which kind
+of subscriber it is counting for.
+
+**And the delivery table is the read surface, not only the queue.** Three read paths exist over
+`kb_events` and a `webhook_received` event is unreachable on all three:
+`event_service::latest_event_id_for_context` is a scalar cursor (*whether*, never *what*);
+`event_service::element_trail` is keyed to a resource or edge and a webhook creates neither, so it is
+structurally unreachable forever; `admin_ledger_service::readable_event_types` is an allowlist whose
+stated default is *"absent from this fn ⇒ admin-only ⇒ fail closed"* and `webhook_received` has no
+arm. **A team cannot today see that a webhook it subscribed to ever arrived — only a system admin
+can.** `list_by_subject` additionally pins `rel` to `subject` on purpose, its own comment refusing to
+let *"every act performed FOR this team"* answer a query that says *"performed ON it"* — so the
+`touches` question a subscriber needs is one this codebase already declined to answer here. The
+delivery row is where it gets answered.
 
 This makes the delivery table a **research corpus** as well as a queue: churn × judgment, which is
 precisely the stability signal the SCIP goal wants and currently has no denominator for.
@@ -255,18 +290,44 @@ merge sha), not a general remote-API surface.
 since my watermark." It gains one branch: *events whose `references` contain a `touches` at me.*
 
 ```sql
+-- ⚠️ SUPERSEDED 2026-08-19 — the `AND e.id > my_watermark` is WRONG for the external leg.
+--    Kept as written because it is what the prose below argues against. See the resolution.
 WHERE (e.producing_anchor_id IN (my team's contexts)          -- internal drift, today
     OR e."references" @> '[{"rel":"touches","target":{"kind":"kb_cogmaps","id":<me>}}]')
   AND e.id > my_watermark
 ```
 
-Same cursor, same sweep, same `kb_workflow_jobs` — **which stays cogmap-shaped and untouched.** An
+Same sweep, same `kb_workflow_jobs` — **which stays cogmap-shaped and untouched.** (Originally "same
+cursor, same sweep"; the cursor half is what the resolution below withdraws.) An
 earlier reading of this design assumed a push fan-out and concluded `kb_workflow_jobs.cogmap_id
 NOT NULL` had to be generalized. It does not. Pull-on-tick deletes that migration from the plan.
 
-(The delivery table supersedes the watermark's role *for external events* — the watermark cannot
-express "declined," the delivery row can. Whether external events should also move the watermark, or
-whether the two cursors coexist, is an open question below.)
+**Resolved 2026-08-19 — they are not two candidates for one job** (open question #1 below). The
+watermark is *an agent's private position in its own context activity*; the delivery row is *a team's
+record of what it declared an interest in and what became of it*. Different personas, neither
+substituting for the other:
+
+- The watermark exists **only on `kb_cogmaps`**, and only for cogmaps joined to the connection's
+  owning team. Two of the three subscriber kinds have no cursor at all and never will.
+- A webhook **cannot trigger a tick.** `steward_drift_sweep` admits on
+  `new_resources >= p_threshold OR boundary_moved`, and `new_resources` counts only
+  `resource_created`. "A webhook is not a resource" and "a webhook is invisible to the trigger" are
+  the same fact, not two — the price of the first is paid entirely in the second.
+- A webhook **is nonetheless swept past.** `max_event_id` is the newest event in the window over
+  *all* types, and a team-owned connection homes on a team-**owned** context
+  (`connection_service.rs:157-176`) which `steward_team_contexts` admits. So a tick fired by an
+  unrelated resource creation advances the cursor past a subscribed webhook — verbatim the failure
+  this section opened by naming, live in merged code today.
+
+**The watermark is not amended.** `new_events` is *"all activity — context color"*, and a webhook in a
+team's own connection-home context genuinely is activity there; excluding it would make the
+internal-drift count lie in order to fix a different persona's problem. The obligation lands here
+instead, and it is one line:
+
+> **The external branch never consults event ordering.** The delivery row's state is the cursor for a
+> subscribed event. The SQL sketch above is **wrong** for the external leg — its
+> `AND e.id > my_watermark` drops any webhook the watermark has already swept past. The two legs
+> share a sweep, not a cursor.
 
 ### Reach — brokering is an admission criterion, not a preference
 
@@ -502,10 +563,14 @@ should not be waved through.
 
 ## Open questions the spikes must settle
 
-1. **Does the watermark survive for external events?** The delivery table can express "declined"; the
-   watermark cannot. Do they coexist, or does the delivery table become the sole cursor for
-   subscribed events? Getting this wrong reintroduces the exact ambiguity the delivery row exists to
-   remove.
+1. ~~**Does the watermark survive for external events?**~~ **ANSWERED 2026-08-19** — from shipped
+   code, in a persona pass before chunk C. They are not two candidates for one job: the watermark is
+   an agent's private position in its own context activity, the delivery row is a team's record of
+   what it declared an interest in. The watermark is **not amended**; the consumption seam carries a
+   one-line obligation instead (*the external branch never consults event ordering*). Full evidence
+   and the obligation are in *Consumption — pull, not push* above, and in the goal register
+   (temper resource `019f5e07-cbfa-7d10-a7ef-9ff93e34d9c6`). Left in place struck through rather than
+   deleted: a spike that reads its open questions should see that this one was settled and how.
 2. **Can an agent acquire an MCP connection per subscription, at runtime?** *(highest risk in the
    goal)* Eve declares connections statically in code. If a new subscription demands an agent
    redeploy, brokering is operationally worse than proxying — **and proxying is forbidden by rule, so
@@ -596,7 +661,10 @@ its own task, not as an S1 acceptance criterion.
 **S2 — Subscriptions, radius matching, and the delivery lifecycle.**
 The subscription table, the selector language, coarse radius at intake, the `references` `touches`
 write path (the first-ever writer of that column), and the
-`pending_scope → in_scope/out_of_scope/undetermined → acted/declined` state machine with its DLQ.
+`pending_scope → in_scope/out_of_scope/undetermined → acted/declined` state machine with its DLQ —
+which chunk C splits into **two lifecycles sharing one table** (a cogmap subscriber judges; a context
+or team subscriber is only made aware, and terminates undisposed). Chunk C also carries the
+**subscriber-facing read**, because chunk B's routing is written and unreadable by the party it names.
 The conceptual core. Prototypable against a stubbed connection, so it can run alongside S1.
 
 **S3 — Intake: land a real webhook.**
@@ -611,8 +679,11 @@ The authed fetch (changed files + `CODEOWNERS` at the merge sha), CODEOWNERS eva
 append-only refinement event, and the `undetermined`/DLQ path. Where invariant 6 is actually tested.
 
 **S5 — The consumption seam.**
-Extending `steward_ingest_delta` with the `references`-GIN branch; the watermark-vs-delivery-cursor
-question; surfacing subscribed events on the steward tick.
+Extending `steward_ingest_delta` with the `references`-GIN branch and surfacing subscribed events on
+the steward tick. The watermark-vs-delivery-cursor question is **already settled** (open question #1)
+— what S5 inherits is the obligation, not the question: **the external branch never consults event
+ordering**; the delivery row's state is the cursor, because the watermark may already have swept past
+the webhook.
 
 **S6 — Distillation under telos.**
 What agents *do*. The EPD-wide-coarse vs team-specific-nuance differentiation. What gets authored,
