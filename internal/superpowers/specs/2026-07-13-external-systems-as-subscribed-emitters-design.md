@@ -270,6 +270,21 @@ delivery row is where it gets answered.
 This makes the delivery table a **research corpus** as well as a queue: churn × judgment, which is
 precisely the stability signal the SCIP goal wants and currently has no denominator for.
 
+**Zero rows is not an answer.** A maintainer looking at a subscription with no deliveries is seeing
+the same output for "working correctly, nothing happened" and "silently broken since the day you set
+it up." Since that is a claim about *absence*, the delivery table cannot answer it alone — a
+declaration that never matched has no row to count. It is answered by crossing three facts that
+already exist, with no write added to the intake path: whether the **source** is live (`kb_events` by
+emitter, indexed by `idx_kb_events_emitter`), whether the **connection** is authed
+(`kb_connections.credential IS NULL` is `needs_credential`), and whether **this declaration** has ever
+matched (its delivery rows). Live source + zero deliveries means the selector is wrong; silent source
+with a credential means the source is quiet; silent source without one means the connection is.
+
+One case is deliberately **not** answered this way. A selector waiting on an event kind the connection
+is not registered to receive can never match, and temper knows that at declaration time with no
+payload required — so it is **refused at create**, citing the comparison it made, rather than
+disclosed forever afterwards. Saying no once beats explaining inertness every time it is read.
+
 ### Enrichment (deferred, authed, append-only)
 
 The fine radius cannot be computed at intake — GitHub's `pull_request` webhook payload
