@@ -10,4 +10,4 @@
 
 ## Cloud Agents
 
-For tasks delegated to cloud-based agent sessions, see [docs/guides/cloud-agents.md](../guides/cloud-agents.md) for the task preparation guide and environment setup.
+For tasks delegated to cloud-based agent sessions, see [docs/guides/cloud-agents.md](../../docs/guides/cloud-agents.md) for the task preparation guide and environment setup.

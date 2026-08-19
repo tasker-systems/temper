@@ -7,7 +7,7 @@
 as `client_credentials` issuer) merged as PR #374, B2 (team-owner registration + reach containment)
 as PR #377. The design below is the record of what was *designed*; where it and the code disagree,
 **the code wins**. For the current operator-facing truth see
-[docs/guides/machine-credentials.md](../../guides/machine-credentials.md).
+[docs/guides/machine-credentials.md](../../../docs/guides/machine-credentials.md).
 
 ---
 

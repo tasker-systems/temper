@@ -10,7 +10,7 @@
 > `authenticate`, `classify`, `Principal`, and `resolve_from_claims` crate-private. A forged
 > `AuthClaims` is now *inert rather than forbidden* — nothing accepts one. The public entry points
 > are `authenticate_token` and `resolve_federated_human`. See
-> [docs/auth/authorization-seam.md](../../auth/authorization-seam.md) for the current API.
+> [docs/auth/authorization-seam.md](../../../docs/auth/authorization-seam.md) for the current API.
 
 > **Settled with Cole (2026-07-02):**
 > - **Scope:** one spec, sequenced build tasks.

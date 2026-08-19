@@ -219,7 +219,7 @@ real `#[act_span]` span and checks it declares every name in `ACT_SPAN_FIELDS`.
 
 - **The exporter has landed; `trace_id` did not become a parent.** Spans go to stdout as JSON and,
   when `OTEL_EXPORTER_OTLP_ENDPOINT` is configured, over OTLP to whatever vendor it names
-  ([../guides/open-telemetry-setup.md](../guides/open-telemetry-setup.md)). Init is one seam —
+  ([../guides/open-telemetry-setup.md](../../docs/guides/open-telemetry-setup.md)). Init is one seam —
   `temper_telemetry::init_server_logging()`, with `init_cli_logging()` as the CLI's deliberately
   different variant — built on `Registry` + layers precisely so the exporter attached as one more
   layer. The CLI exports too, behind its own `TEMPER_CLI_TRACE` switch, and drains on the way out of

@@ -44,7 +44,7 @@ Both runtimes share the same JWT authentication (EdDSA via Auth0 JWKS).[^auth] V
                      └─────────────┘
 ```
 
-![Upload Sequence Diagram](diagrams/upload-sequence.svg)
+![Upload Sequence Diagram](../docs/diagrams/upload-sequence.svg)
 
 ## The Resource-First Upload Flow
 
@@ -121,7 +121,7 @@ The workflow runs as a Vercel durable function with four steps. Each step is ind
 └─────────────────────────────────────────────────────────┘
 ```
 
-![Upload Data Flow](diagrams/upload-data-flow.svg)
+![Upload Data Flow](../docs/diagrams/upload-data-flow.svg)
 
 ## Processing Pipeline Detail
 

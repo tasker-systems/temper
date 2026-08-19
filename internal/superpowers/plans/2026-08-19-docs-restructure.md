@@ -67,7 +67,7 @@ got wrong: internal security audits were published because the tree contained
 them, not because anyone chose to publish them. Moving non-public material out
 of `docs/` means no configuration mistake can expose it.
 
-See [the design spec](./superpowers/specs/2026-08-19-docs-surface-rebuild-design.md).
+See [the design spec](../specs/2026-08-19-docs-surface-rebuild-design.md).
 
 ## Writing plans and specs
 

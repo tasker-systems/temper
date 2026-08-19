@@ -4,7 +4,7 @@
 **4a + 4b**. It is the child of two parent artifacts and does not restate them:
 
 - Parent spec (arc + rationale): [2026-07-02-shared-auth-orchestration-seam-design.md](./2026-07-02-shared-auth-orchestration-seam-design.md) (Stage 4).
-- Canonical claim contract (the wire shape both issuers conform to): [../../auth/machine-token-contract.md](../../auth/machine-token-contract.md).
+- Canonical claim contract (the wire shape both issuers conform to): [../../auth/machine-token-contract.md](../../../docs/auth/machine-token-contract.md).
 
 Those left three decisions open ("lock in Stage 4"). This doc locks them, chooses the seam
 shape, and pins the test plan. **4c (Temper AS-mint `client_credentials`) is out of scope** —
@@ -14,7 +14,7 @@ deferred until a self-hosted instance wants agents.
 > Phase B1 (PR #374). Temper's AS mints `client_credentials` tokens today — `handleToken` in
 > `packages/temper-cloud/src/oauth/endpoints.ts`. Read every "4c is deferred / untouched"
 > statement below as a record of the 2026-07-02 decision, not as current fact. The current
-> operator-facing truth is [docs/guides/machine-credentials.md](../../guides/machine-credentials.md);
+> operator-facing truth is [docs/guides/machine-credentials.md](../../../docs/guides/machine-credentials.md);
 > the wire shape is `tests/contracts/m2m-token-request.json`.
 
 ## Why

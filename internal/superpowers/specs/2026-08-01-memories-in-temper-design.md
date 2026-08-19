@@ -247,7 +247,7 @@ destroy one of two accounts that a human might have wanted to compare.
 > the same subsystem), and automatic merging above a confidence threshold (which the clause forbids).
 > Tracked as *Retire the FTS collision gate — judgement, not lexical overlap, decides what is a
 > near-duplicate*, resource `019fc062-5481-77f0-a0fa-e092d40759d4`. The operator-facing account is
-> [docs/guides/operational-memory.md](../../guides/operational-memory.md).
+> [docs/guides/operational-memory.md](../../../docs/guides/operational-memory.md).
 
 ### Sequencing across machines
 
