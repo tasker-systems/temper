@@ -36,6 +36,7 @@ dependencies = [
   "openapi-ts-drift",
   "ts-rs-drift",
   "skills-drift",
+  "cli-reference-drift",
   "docs-public-only",
   "ts-check"
 ]
@@ -56,6 +57,17 @@ description = "Fail if the committed agent-skills/ projection has drifted from t
 # `temper` "for parity validation". Not true: the PATH binary is rebuilt from the working branch and
 # is current. See the fuller correction in check-skills-drift.sh.
 script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-skills-drift.sh"]
+
+[tasks.cli-reference-drift]
+description = "Fail if docs/reference/cli has drifted from the binary's --help tree"
+# Like ts-rs-drift and skills-drift this NEVER skips: it needs only cargo and python3, and cargo is
+# already required by every other task in this list. It builds the CLI with the SHIPPING feature set
+# rather than --all-features, because the reference must describe what users install.
+#
+# It also runs a cross-check against the clap source, which is NOT the same question as drift.
+# Re-emitting and diffing proves the tree is reproducible; only a second, independent derivation
+# proves it is complete. See .github/scripts/check-cli-reference-drift.sh.
+script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-cli-reference-drift.sh"]
 
 [tasks.docs-public-only]
 description = "Fail if docs/ contains internal material — the publish-safety invariant"

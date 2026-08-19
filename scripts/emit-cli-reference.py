@@ -34,7 +34,7 @@ any diff:
 * **Order.** clap lists subcommands in declaration order, so the walk is stable
   across runs.
 
-The whole 144-node walk costs about 0.6s, so nothing here is sampled or cached.
+The whole 149-node walk costs about 0.6s, so nothing here is sampled or cached.
 
 What it refuses to do
 ---------------------

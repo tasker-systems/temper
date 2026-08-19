@@ -387,7 +387,31 @@ run_test "agent-skills projection (*.md): defeats docs-only, rust corpus runs" \
     "RUN_RUST_QUALITY=true" \
     "RUN_TEST_RUST=true"
 
-# docs/ is owned by check-docs-public-only.sh, which lives in code-quality's
+# docs/reference/ is the committed projection of the BUILT CLI's --help tree, gated
+# by check-cli-reference-drift.sh in rust-quality. Same shape as agent-skills above
+# and one step more treacherous: its files are *.md AND they sit under docs/, so both
+# the extension test and the eye classify them as documentation. Measured before the
+# coupling was added — a lone edit to a generated page gave DOCS_ONLY=true,
+# SKIP_ALL=true, RUN_RUST_QUALITY=false, leaving a hand-edit to generated content with
+# nothing whatsoever to catch it.
+run_test "generated CLI reference (*.md under docs/): defeats docs-only, rust corpus runs" \
+    "docs/reference/cli/config.md" \
+    "DOCS_ONLY=false" \
+    "RUST_INERT=false" \
+    "RUN_RUST_QUALITY=true" \
+    "RUN_TEST_RUST=true"
+
+# The carve-out must stay a CARVE-OUT. This is the counterpart to the case above and
+# the reason the entry is `^docs/reference/` rather than `^docs/`: an ordinary guide
+# keeps the cheap path, because no Rust gate owns it.
+run_test "an ordinary guide is untouched by the reference coupling" \
+    "docs/guides/install.md" \
+    "DOCS_ONLY=true" \
+    "SKIP_ALL=true" \
+    "RUN_CODE_QUALITY=true" \
+    "RUN_RUST_QUALITY=false"
+
+# The REST of docs/ is owned by check-docs-public-only.sh, which lives in code-quality's
 # guard-tests job. The regression that gate exists to catch is a returning internal
 # tree, which is pure markdown — so the extension test would classify it docs-only
 # and skip the very job that would fail. What a docs/ change therefore owes is

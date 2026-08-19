@@ -154,6 +154,14 @@ jobs:
       - name: Check the committed agent-skills projection is up to date (skills drift)
         run: bash .github/scripts/check-skills-drift.sh
 
+      # And once more for `docs/reference/cli`, which is a projection of the BUILT binary's
+      # `--help` tree. It runs here rather than in guard-tests because the emit needs a compiled
+      # temper; its harness is in guard-tests, stubbed, so the harness itself needs no toolchain.
+      # This step also carries the completeness cross-check against the clap source — see the
+      # script's header for why re-emitting alone cannot establish it.
+      - name: Check the committed CLI reference is up to date (cli reference drift)
+        run: bash .github/scripts/check-cli-reference-drift.sh
+
       # Security tripwires (internal/development/security-audit-playbook.md). Pure static enumerators:
       # each pins a security-relevant set (grant write-sites, unauthenticated routes, handler-side
       # authz) against a reviewed baseline and fails when the set grows silently. They prove nothing
@@ -317,6 +325,9 @@ jobs:
       # leaving every heavy job off.
       - name: Check docs/ holds only public documentation
         run: bash .github/scripts/check-docs-public-only.sh
+
+      - name: Guard test — check-cli-reference-drift
+        run: bash .github/scripts/test-check-cli-reference-drift.sh
 
       - name: Guard test — check-docs-public-only
         run: bash .github/scripts/test-check-docs-public-only.sh
