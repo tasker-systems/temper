@@ -36,6 +36,7 @@ dependencies = [
   "openapi-ts-drift",
   "ts-rs-drift",
   "skills-drift",
+  "docs-public-only",
   "ts-check"
 ]
 
@@ -55,6 +56,10 @@ description = "Fail if the committed agent-skills/ projection has drifted from t
 # `temper` "for parity validation". Not true: the PATH binary is rebuilt from the working branch and
 # is current. See the fuller correction in check-skills-drift.sh.
 script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-skills-drift.sh"]
+
+[tasks.docs-public-only]
+description = "Fail if docs/ contains internal material — the publish-safety invariant"
+script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-docs-public-only.sh"]
 
 [tasks.register-coverage-drift]
 description = "Fail if internal/registers/coverage.yaml has drifted from the projection that produces it"
