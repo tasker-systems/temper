@@ -353,7 +353,7 @@ impl TemperMcpService {
     }
 
     #[tool(
-        description = "Create (genesis) a new cognitive map: a cogmap plus its telos charter resource. System-admin only. The map is born with an EMPTY charter — author the charter and deliver it afterwards with `temper cogmap reconcile` (which embeds client-side). Idempotent at a supplied cogmap_id (re-creating is a no-op)."
+        description = "Create (genesis) a new cognitive map: a cogmap plus its telos charter resource. Open to any authenticated profile; the creator is granted read+write+grant on the new map, and a caller-supplied cogmap_id is honored only for a system-admin. The map is born with an EMPTY charter — author the charter and deliver it afterwards with `temper cogmap reconcile` (which embeds client-side). Idempotent at a supplied cogmap_id (re-creating is a no-op)."
     )]
     async fn cogmap_create(
         &self,
@@ -391,7 +391,7 @@ impl TemperMcpService {
     }
 
     #[tool(
-        description = "Manage contexts with an `action` discriminator. Actions: `create` (new context — requires `name`, optional `owner`), `rename` (change display name, re-addresses the context — requires `context` UUID, `name`), `share` (share into a team's read-reach — requires `context` UUID, `team` UUID), `unshare` (remove a team's read-reach — requires `context` UUID, `team` UUID), `transfer` (transfer ownership to a team — requires `context` UUID, `team` UUID). Share/unshare/transfer are system-admin only. Rename re-addresses: the old slug stops resolving."
+        description = "Manage contexts with an `action` discriminator. Actions: `create` (new context — requires `name`, optional `owner`), `rename` (change display name, re-addresses the context — requires `context` UUID, `name`), `share` (share into a team's read-reach — requires `context` UUID, `team` UUID), `unshare` (remove a team's read-reach — requires `context` UUID, `team` UUID), `transfer` (transfer ownership to a team — requires `context` UUID, `team` UUID). Share/unshare/transfer require system-admin, OR that you administer the context AND manage the target team (owner/maintainer). Rename re-addresses: the old slug stops resolving."
     )]
     async fn context_manage(
         &self,

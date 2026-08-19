@@ -5,12 +5,13 @@
 //! unchanged (COALESCE on the server). `access_mode` is retired as a control
 //! (spec §14 / D18): standing now answers per-principal what a global mode
 //! switch used to answer instance-wide, so the settings surface no longer
-//! accepts it. The column survives read-only until Phase 2 drops it.
+//! accepts it. Phase 2 has since dropped the column.
 //!
-//! `PromoteAdminRequest` grants the target profile `owner` on a team. A `None`
-//! `team_id` means "the configured gating team" (resolved server-side so the
-//! gating slug never leaves the server). System-admin ≡ owner of the gating
-//! team, so the default case mints a second system admin.
+//! `PromoteAdminRequest` mints a system admin by writing a principal-governance
+//! grant and, if needed, approved standing. It also grants the target `owner`
+//! on a team; a `None` `team_id` means "the configured gating team" (resolved
+//! server-side so the gating slug never leaves the server). That team row is a
+//! side effect — ownership of it confers nothing on its own.
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -22,7 +23,8 @@ use uuid::Uuid;
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UpdateSettingsRequest {
-    /// Slug of the team whose ownership confers a system admin. `None` leaves it unchanged.
+    /// Gating team slug recorded in instance settings. Ownership of it confers no authorization:
+    /// `is_system_admin` reads the principal-governance grant. `None` leaves it unchanged.
     pub gating_team_slug: Option<String>,
     /// Human-facing instance name.
     pub instance_name: Option<String>,
@@ -51,7 +53,8 @@ impl UpdateSettingsRequest {
 pub struct PromoteAdminRequest {
     /// Profile to promote (grant `owner` on the target team).
     pub profile_id: Uuid,
-    /// Target team; `None` ⇒ the configured gating team (mints a system admin).
+    /// Target team for the side-effect `owner` row; `None` ⇒ the configured gating team. The
+    /// governance grant is what mints the admin, not this membership.
     pub team_id: Option<Uuid>,
 }
 

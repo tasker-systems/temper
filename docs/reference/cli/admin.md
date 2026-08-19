@@ -11,7 +11,7 @@ Usage: temper admin [OPTIONS] <COMMAND>
 
 Commands:
   settings      Show system settings, or update them when any flag is provided
-  promote       Promote a profile to admin (owner on a team; defaults to the gating team)
+  promote       Promote a profile to system admin: grants principal-governance and, if needed, approved standing. Also adds an `owner` row on a team (defaults to the gating team) as a side effect
   demote        Demote a system admin — revoke its governance grant (the manual twin of `promote`)
   access        Admit, revoke, deactivate, or reactivate a principal's system access
   requests      Review pending join requests
@@ -54,7 +54,7 @@ Options:
 ### `temper admin promote`
 
 ```text
-Promote a profile to admin (owner on a team; defaults to the gating team)
+Promote a profile to system admin: grants principal-governance and, if needed, approved standing. Also adds an `owner` row on a team (defaults to the gating team) as a side effect
 
 Usage: temper admin promote [OPTIONS] <PROFILE>
 
@@ -62,7 +62,7 @@ Arguments:
   <PROFILE>  Profile ID (UUID) to promote
 
 Options:
-      --team <TEAM>        Team ref (`+slug`, bare slug, or UUID); defaults to the gating team
+      --team <TEAM>        Team ref for the side-effect `owner` row (`+slug`, bare slug, or UUID); defaults to the gating team. Not what confers admin
       --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
       --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
       --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
@@ -287,7 +287,7 @@ Usage: temper admin saml [OPTIONS] <COMMAND>
 Commands:
   provision  Generate the AS signing key + reconcile secret and emit the env bundle + kb_saml_idp SQL
   map-group  Emit a kb_saml_group_mappings INSERT for `group → (+team, role)` (run AFTER teams exist)
-  verify     Verify a provisioned instance: AS metadata reachable, caller is a system admin (the gating_team_slug silent-403 check), and — with --db — one active kb_saml_idp row
+  verify     Verify a provisioned instance: AS metadata reachable, caller is a system admin (governance grant + approved standing), and — with --db — one active kb_saml_idp row
   help       Print this message or the help of the given subcommand(s)
 
 Options:
@@ -398,7 +398,7 @@ Options:
 #### `temper admin saml verify`
 
 ```text
-Verify a provisioned instance: AS metadata reachable, caller is a system admin (the gating_team_slug silent-403 check), and — with --db — one active kb_saml_idp row
+Verify a provisioned instance: AS metadata reachable, caller is a system admin (governance grant + approved standing), and — with --db — one active kb_saml_idp row
 
 Usage: temper admin saml verify [OPTIONS] --instance-url <INSTANCE_URL>
 
