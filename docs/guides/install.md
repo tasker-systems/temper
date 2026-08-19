@@ -166,7 +166,7 @@ genuinely-built artifact says nothing about whether the commit behind the tag
 is one you'd approve of. That limit is inherent to build provenance rather than
 specific to `temper`, and it is stated in full, with the two other trusts that
 sit outside the signature chain, in
-[What the attestation does and does not prove](releasing.md#what-the-attestation-does-and-does-not-prove).
+[What the attestation does and does not prove](https://github.com/tasker-systems/temper/blob/main/internal/development/releasing.md#what-the-attestation-does-and-does-not-prove).
 
 A failure anywhere in this chain — network, an unusable pinned trust root, or
 a bundle that simply doesn't vouch for this artifact — renders
@@ -222,7 +222,7 @@ picture too.
 It does not, however, prove anything `temper`'s own check doesn't: `gh` is
 verifying the same build-provenance predicate over the same subject, so it
 carries the same boundary — the builder and the tag, never the source. See
-[What the attestation does and does not prove](releasing.md#what-the-attestation-does-and-does-not-prove).
+[What the attestation does and does not prove](https://github.com/tasker-systems/temper/blob/main/internal/development/releasing.md#what-the-attestation-does-and-does-not-prove).
 
 ### Windows: hash-verified only
 

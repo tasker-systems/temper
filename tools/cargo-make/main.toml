@@ -39,6 +39,7 @@ dependencies = [
   "cli-reference-drift",
   "config-reference-drift",
   "docs-public-only",
+  "docs-coverage",
   "ts-check"
 ]
 
@@ -80,6 +81,18 @@ description = "Fail if docs/reference/config has drifted from the TemperConfig t
 # Also carries a completeness cross-check, and here it is load-bearing rather than precautionary:
 # three traversal bugs in the renderer silently omitted 10 of 27 fields, all behind a clean diff.
 script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-config-reference-drift.sh"]
+
+[tasks.docs-coverage]
+description = "Fail if any link in docs/ dangles; report reach, escaping links and publish coverage"
+# Pure Python over the committed tree — no cargo, no database. It is here so a local `check`
+# catches a broken link, and it ALSO runs in code-quality's ungated guard-tests job, because
+# rust-quality is switched off for a docs-only change and that is exactly when a link breaks.
+#
+# `--no-network`: the publish half compares against PRODUCTION (the last publish of `main`), so
+# on a branch it is noise. It never affects the exit code in either direction — reachability of
+# the site is reported UNKNOWN rather than assumed clean. Run the command without the flag for
+# the publish comparison, deliberately, when that question is the one being asked.
+script = ["python3 ${CARGO_MAKE_WORKING_DIRECTORY}/scripts/docs-coverage.py --strict --no-network"]
 
 [tasks.docs-public-only]
 description = "Fail if docs/ contains internal material — the publish-safety invariant"

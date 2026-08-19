@@ -112,7 +112,7 @@ system-admin-by-team-ownership; the invite / join-request flow engages exclusive
 under `access_mode = 'invite_only'`.
 
 > **Snapshot prod before a hand-run data change.** On Neon, create a copy-on-write
-> backup branch first — see [releasing.md](./releasing.md) / [DEPLOYING.md](../../DEPLOYING.md).
+> backup branch first — see [releasing.md](https://github.com/tasker-systems/temper/blob/main/internal/development/releasing.md) / [DEPLOYING.md](../../DEPLOYING.md).
 
 ### 1. Instance settings
 

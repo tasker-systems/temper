@@ -338,6 +338,21 @@ jobs:
       - name: Guard test — check-config-reference-drift
         run: bash .github/scripts/test-check-config-reference-drift.sh
 
+      # THE CHECK ITSELF, not only its harness — same reasoning as the docs/ gate below. It is
+      # pure Python over the committed tree, so it belongs in this ungated job rather than in
+      # rust-quality: a docs-only PR that breaks a link must be caught, and rust-quality is
+      # switched off for exactly those.
+      #
+      # `--no-network` is deliberate. The publish half compares against PRODUCTION, which serves
+      # the last publish of `main`, so on a PR branch every added page legitimately reads as
+      # unpublished. It never affects the exit code either way; skipping it just avoids paying
+      # for a round trip whose answer cannot mean anything here.
+      - name: Check docs reach and link integrity
+        run: python3 scripts/docs-coverage.py --strict --no-network
+
+      - name: Guard test — docs-coverage
+        run: bash .github/scripts/test-docs-coverage.sh
+
       - name: Guard test — check-docs-public-only
         run: bash .github/scripts/test-check-docs-public-only.sh
 

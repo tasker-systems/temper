@@ -22,7 +22,15 @@ freely.
 - **[Building against Temper](./doors/for-integrators.md)** — you're writing code that talks to
   Temper: the HTTP API, machine credentials, and the language SDKs.
 
-## The API reference
+## Reference
 
-Every endpoint and schema is generated from the router itself, so it cannot drift from what
-ships. It is published alongside these pages.
+Generated, not written. Each of these is emitted from the thing it describes and gated in CI,
+so a page that disagrees with the software is a defect rather than a stale document.
+
+- **[CLI reference](./reference/cli/README.md)** — every `temper` command, emitted by walking
+  the built binary's own `--help`.
+- **[Configuration reference](./reference/config/README.md)** — every field of `TemperConfig`,
+  with its type, its real default, and the doc comment from the struct.
+
+Every API endpoint and schema is generated from the router itself for the same reason, and is
+published alongside these pages.
