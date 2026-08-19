@@ -1,19 +1,19 @@
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this
-repository. The shared reference material lives in `docs/agents/` — read the relevant file before
+repository. The shared reference material lives in `internal/agents/` — read the relevant file before
 starting work. The same content is also reachable via [AGENTS.md](AGENTS.md) for other agents.
 
 ## Quick reference
 
 | Topic | Read |
 |-------|------|
-| What Temper is + full architecture (crates, packages, deployment, DB) | [docs/agents/architecture.md](docs/agents/architecture.md) |
-| Build & test commands (cargo make, single tests, embed-gated, TS/UI) | [docs/agents/build-and-test.md](docs/agents/build-and-test.md) |
-| Branch/commit conventions + feature flags | [docs/agents/conventions.md](docs/agents/conventions.md) |
-| Key patterns — the operational invariants you must not break | [docs/agents/key-patterns.md](docs/agents/key-patterns.md) |
-| Code quality rules + SQL query checking | [docs/agents/code-quality.md](docs/agents/code-quality.md) |
-| Environment (Docker Postgres port, DATABASE_URL, pre-commit) + cloud agents | [docs/agents/environment.md](docs/agents/environment.md) |
+| What Temper is + full architecture (crates, packages, deployment, DB) | [internal/agents/architecture.md](internal/agents/architecture.md) |
+| Build & test commands (cargo make, single tests, embed-gated, TS/UI) | [internal/agents/build-and-test.md](internal/agents/build-and-test.md) |
+| Branch/commit conventions + feature flags | [internal/agents/conventions.md](internal/agents/conventions.md) |
+| Key patterns — the operational invariants you must not break | [internal/agents/key-patterns.md](internal/agents/key-patterns.md) |
+| Code quality rules + SQL query checking | [internal/agents/code-quality.md](internal/agents/code-quality.md) |
+| Environment (Docker Postgres port, DATABASE_URL, pre-commit) + cloud agents | [internal/agents/environment.md](internal/agents/environment.md) |
 
 ## The temper workflow
 
