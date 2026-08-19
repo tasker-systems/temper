@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kb_cogmap_regions SET last_event_id=$1 WHERE id = ANY($2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0208d0cd7934aaae529631ff0ee5be78b7d65ec2028021c626eed3ae9f5b3ddb"
+}

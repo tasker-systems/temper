@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT t.name AS \"name!\", e.payload AS \"payload!\"\n                 FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id\n                WHERE e.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "payload!",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "febe0091d9b8cf6de48abab7dc2adf862cf35a55e1f5fc2381c961e6c116cfb2"
+}
