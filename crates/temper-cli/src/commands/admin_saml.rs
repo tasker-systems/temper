@@ -343,8 +343,8 @@ pub fn from_seen(idp_key: &str) -> Result<()> {
 }
 
 /// `temper admin saml verify` — probe a provisioned instance: AS metadata reachable, caller is a
-/// system admin (proves the `gating_team_slug` gate is correctly set up), and — with `--db` —
-/// exactly one active `kb_saml_idp` row.
+/// system admin (proves the caller holds a governance grant and approved standing), and — with
+/// `--db` — exactly one active `kb_saml_idp` row.
 pub async fn verify(
     client: &temper_client::TemperClient,
     instance_url: &str,
@@ -372,13 +372,15 @@ pub async fn verify(
         }
     }
 
-    // 2. Caller is a system admin (the gating_team_slug silent-403 check).
+    // 2. Caller is a system admin (governance grant + approved standing; a silent-403 otherwise).
     match client.admin().get_settings().await {
         Ok(_) => output::success("caller is a system admin (is_system_admin = true)"),
         Err(e) => {
             ok = false;
             output::error(format!(
-                "admin check failed ({e}) — verify gating_team_slug is set AND you own that team"
+                "admin check failed ({e}) — the caller needs an approved principal standing AND \
+a system-admin grant. Promote with `temper admin promote <profile>`; team ownership does not \
+confer either."
             ));
         }
     }

@@ -394,19 +394,19 @@ pub struct CogmapBindInput {
     pub team_id: Uuid,
 }
 
-/// Map a service `ApiError` to an rmcp protocol error. `Forbidden` ⇒ invalid_params (the admin gate);
+/// Map a service `ApiError` to an rmcp protocol error. `Forbidden` ⇒ invalid_params;
 /// everything else ⇒ internal_error.
 fn map_api_error(context: &str, err: ApiError) -> rmcp::ErrorData {
     match err {
         ApiError::Forbidden => {
-            rmcp::ErrorData::invalid_params(format!("{context} requires system-admin"), None)
+            rmcp::ErrorData::invalid_params(format!("not authorized for {context}"), None)
         }
         other => rmcp::ErrorData::internal_error(format!("{context} failed: {other}"), None),
     }
 }
 
 /// Bind a cognitive map to a team. SERVICE-DIRECT (binding is not a Backend command) — calls
-/// `cogmap_service::bind_team` directly, which enforces the `is_system_admin` gate before any write.
+/// `cogmap_service::bind_team` directly, which enforces the two-sided gate before any write.
 pub async fn cogmap_bind(
     svc: &TemperMcpService,
     input: CogmapBindInput,
@@ -434,7 +434,7 @@ pub async fn cogmap_bind(
     )]))
 }
 
-/// Unbind a cognitive map from a team. SERVICE-DIRECT, admin-gated (see [`cogmap_bind`]).
+/// Unbind a cognitive map from a team. SERVICE-DIRECT, two-sided gated (see [`cogmap_bind`]).
 pub async fn cogmap_unbind(
     svc: &TemperMcpService,
     input: CogmapBindInput,

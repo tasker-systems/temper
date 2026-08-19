@@ -214,7 +214,7 @@ Building one from a body of source material is its own discipline: [ingesting a 
 |---------|-------------|
 | `temper context create <name>` | Create a context on the server |
 | `temper context list` | List contexts visible to you on the server |
-| `temper context share <ctx-ref> <team>` | Share a context into a team's read-reach (admin-only; `@me` shorthand not accepted here) |
+| `temper context share <ctx-ref> <team>` | Share a context into a team's read-reach (system-admin, or you administer the context and manage the team; `@me` shorthand not accepted here) |
 | `temper skill generate` | Preview generated Claude Code skill |
 | `temper skill install` | Install skill file |
 
@@ -225,7 +225,7 @@ Building one from a body of source material is its own discipline: [ingesting a 
 | `temper auth login` | Log in via browser OAuth (PKCE flow) |
 | `temper auth status` | Show current auth status |
 | `temper auth export-token` | Export a refreshed access token (for CI) |
-| `temper auth request-access` | Request access on an invite-only instance |
+| `temper auth request-access` | Request approved standing on an instance that has not granted you access |
 | `temper invitations` | List pending team invitations addressed to you |
 | `temper team join <token>` | Accept a team invitation |
 | `temper resource delete <ref>` | Delete a resource from the cloud (soft-delete) |

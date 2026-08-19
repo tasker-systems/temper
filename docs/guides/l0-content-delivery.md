@@ -75,13 +75,13 @@ First delivery reads `"created": 22, … "charter": "created"`.
 (`crates/temper-api/src/services/access_service.rs`). Two things make this
 non-obvious:
 
-1. **`is_system_admin` does NOT read `kb_profiles.system_access`** (despite the
-   name). It returns true only when the profile is an **`owner`** member of the
-   team whose slug equals `kb_system_settings.gating_team_slug`. Having
-   `system_access = 'admin'` does **not** help.
-2. **`gating_team_slug` is `NULL` by canonical-seed default.** With it unset, no
-   one is a system admin, so the L0 write gate denies **everyone** — the kernel
-   is immutable out of the box. A reconcile attempt returns **403 Forbidden**.
+1. **`is_system_admin` reads `kb_principal_governance` and nothing else.** Not
+   team membership, not `gating_team_slug`, not a column on `kb_profiles`. A
+   profile is a system admin exactly when it has a row in that table.
+2. **Nothing has one out of the box.** The canonical seed grants no governance,
+   so the L0 write gate denies **everyone** and the kernel is immutable on a
+   fresh instance. A reconcile attempt returns **403 Forbidden** until the root
+   bootstrap step in [org-bootstrap.md](./org-bootstrap.md) §0 has been run.
 
 This is intentional: the L0 special-case is fail-**closed** so an unconfigured
 instance cannot have its kernel rewritten by any authenticated user. The cure is

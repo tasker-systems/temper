@@ -97,7 +97,7 @@ pub async fn reconcile(
     request_body = CreateCogmapRequest,
     responses(
         (status = 200, description = "Genesis applied (or idempotent no-op)", body = CreateCogmapOutcome),
-        (status = 403, description = "Caller lacks system access (invite-only middleware)"),
+        (status = 403, description = "Caller has no approved principal standing"),
         (status = 409, description = "A concurrent genesis conflicted; retry"),
     )
 )]
@@ -335,7 +335,7 @@ pub async fn analytics(
     request_body = BindTeamRequest,
     responses(
         (status = 200, description = "Team bound (or idempotent no-op)", body = BindTeamOutcome),
-        (status = 403, description = "Caller is not a system admin"),
+        (status = 403, description = "Caller is not a system admin and does not both administer the map and manage the team"),
     )
 )]
 pub async fn bind_team(
@@ -344,7 +344,7 @@ pub async fn bind_team(
     Path(cogmap_id): Path<Uuid>,
     Json(body): Json<BindTeamRequest>,
 ) -> ApiResult<Json<BindTeamOutcome>> {
-    // Auth before writes lives in the service (`is_system_admin`), so the MCP
+    // Auth before writes lives in the service (`TwoSidedAuthority`), so the MCP
     // surface — which calls the service directly — is gated identically.
     let outcome = cogmap_service::bind_team(
         &state.pool,
@@ -367,7 +367,7 @@ pub async fn bind_team(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Team unbound (or no-op)", body = UnbindTeamOutcome),
-        (status = 403, description = "Caller is not a system admin"),
+        (status = 403, description = "Caller is not a system admin and does not both administer the map and manage the team"),
     )
 )]
 pub async fn unbind_team(
