@@ -27,7 +27,7 @@ use temper_core::types::connection::ConnectionCredential;
 mod fake;
 mod vercel_connect;
 
-pub use fake::{FakeBroker, NullBroker};
+pub use fake::{FakeBroker, FakeInbound, NullBroker};
 pub use vercel_connect::{VercelConnectBroker, VercelConnectConfig};
 
 /// Select the broker for a deployment: the Vercel Connect adapter when

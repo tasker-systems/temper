@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kb_connections\n              SET credential = jsonb_build_object('broker', 'test', 'connector', $2::text)\n            WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "aab82392835ecb93b39480c8ddd12ea0109c81cc66f3dacae9d605bcc2a7f612"
+}

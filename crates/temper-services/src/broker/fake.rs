@@ -12,6 +12,8 @@ use super::{
 };
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 /// What a [`FakeBroker`] does when asked to mint.
 #[derive(Debug, Clone)]
@@ -24,29 +26,82 @@ pub enum FakeMint {
     NeedsConsent,
 }
 
+/// What a [`FakeBroker`] does when asked to verify an inbound webhook.
+#[derive(Debug, Clone)]
+pub enum FakeInbound {
+    /// Verification succeeds, attributing the body to this connector identity.
+    Accepts {
+        provider: String,
+        connector_uid: String,
+        connector_id: String,
+    },
+    /// The attestation does not verify.
+    Refuses,
+}
+
 /// A configurable broker for tests. Does no I/O.
+///
+/// **Counts mints.** Goal C3 says receipt produces no egress to the remote, and the broker's
+/// `mint` is the only path by which intake could reach one. A count the transport test can
+/// assert on turns "no egress" from a claim about the code's shape into a witness of what the
+/// request actually did — which is what the clause asks for and reading the service cannot give.
 #[derive(Debug, Clone)]
 pub struct FakeBroker {
     mint: FakeMint,
+    inbound: FakeInbound,
+    mint_calls: Arc<AtomicUsize>,
 }
 
 impl FakeBroker {
+    /// Verifies every inbound webhook, attributing it to the given connector. Mints are rejected:
+    /// a receipt that mints is a C3 violation, and rejecting makes it fail rather than pass
+    /// quietly.
+    pub fn accepting_inbound(provider: &str, connector_uid: &str, connector_id: &str) -> Self {
+        Self {
+            mint: FakeMint::Rejected,
+            inbound: FakeInbound::Accepts {
+                provider: provider.to_string(),
+                connector_uid: connector_uid.to_string(),
+                connector_id: connector_id.to_string(),
+            },
+            mint_calls: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    /// Refuses every inbound attestation.
+    pub fn refusing_inbound() -> Self {
+        Self {
+            mint: FakeMint::Rejected,
+            inbound: FakeInbound::Refuses,
+            mint_calls: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    /// How many times `mint` has been called on this broker. The C3 witness.
+    pub fn mint_calls(&self) -> usize {
+        self.mint_calls.load(Ordering::SeqCst)
+    }
+
     /// Mints successfully, reporting the given reach.
     pub fn granting(reach: serde_json::Value) -> Self {
-        Self {
-            mint: FakeMint::Grants(reach),
-        }
+        Self::with_mint(FakeMint::Grants(reach))
     }
     /// Rejects every mint (an `Unauthorized` credential).
     pub fn rejecting() -> Self {
-        Self {
-            mint: FakeMint::Rejected,
-        }
+        Self::with_mint(FakeMint::Rejected)
     }
     /// Reports the connector needs consent.
     pub fn needs_consent() -> Self {
+        Self::with_mint(FakeMint::NeedsConsent)
+    }
+
+    /// The mint-configured constructors share one body so a new field cannot be added to two of
+    /// the three.
+    fn with_mint(mint: FakeMint) -> Self {
         Self {
-            mint: FakeMint::NeedsConsent,
+            mint,
+            inbound: FakeInbound::Refuses,
+            mint_calls: Arc::new(AtomicUsize::new(0)),
         }
     }
 }
@@ -54,6 +109,7 @@ impl FakeBroker {
 #[async_trait]
 impl CredentialBroker for FakeBroker {
     async fn mint(&self, _req: MintRequest<'_>) -> Result<Minted, BrokerError> {
+        self.mint_calls.fetch_add(1, Ordering::SeqCst);
         match &self.mint {
             FakeMint::Grants(reach) => Ok(Minted {
                 token: BrokerToken::new("fake-token".into()),
@@ -72,14 +128,22 @@ impl CredentialBroker for FakeBroker {
         &self,
         req: InboundRequest<'_>,
     ) -> Result<VerifiedInbound, BrokerError> {
-        // The fake does not authenticate; it echoes a canned trigger so the trait
-        // is fully implemented. Its verify path has no B4 caller (that is S3).
-        Ok(VerifiedInbound {
-            provider: "fake".into(),
-            connector_uid: "fake/connector".into(),
-            connector_id: "scl_fake".into(),
-            payload: req.body.to_vec(),
-        })
+        // The fake does not authenticate; it returns the configured verdict so a caller's
+        // behaviour on both branches is testable without a signing key. The cryptographic
+        // path is witnessed by `vercel_connect`'s own tests against a static JWKS key.
+        match &self.inbound {
+            FakeInbound::Accepts {
+                provider,
+                connector_uid,
+                connector_id,
+            } => Ok(VerifiedInbound {
+                provider: provider.clone(),
+                connector_uid: connector_uid.clone(),
+                connector_id: connector_id.clone(),
+                payload: req.body.to_vec(),
+            }),
+            FakeInbound::Refuses => Err(BrokerError::Verification("fake refusal".into())),
+        }
     }
 }
 

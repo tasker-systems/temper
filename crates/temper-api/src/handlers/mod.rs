@@ -31,3 +31,4 @@ pub mod slack_mint;
 pub mod steward;
 pub mod subscriptions;
 pub mod teams;
+pub mod webhook_intake;

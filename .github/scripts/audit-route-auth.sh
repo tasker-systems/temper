@@ -16,6 +16,27 @@
 #   slack_link_internal_routes    require_slack_link_signature          HMAC (SLACK_LINK_SECRET)
 #   slack_mint_internal_routes    require_slack_mint_signature          HMAC (SLACK_MINT_SECRET)
 #   slack_link_public_routes      (none)                                by-design public: PKCE+state callback
+#   webhook_intake_routes         (none)                                self-gated: broker RS256 attestation
+#
+# On webhook_intake_routes: the caller is Vercel Connect forwarding a third-party system's event.
+# It is not a temper principal, holds no temper token, and never will -- require_auth is not a
+# tightening available here, it is a category error. Its compensating control is inside the
+# handler: CredentialBroker::verify_inbound performs RS256-over-JWKS with set_required_spec_claims,
+# asserts issuer/audience, asserts the anti-decoy client_id ("api-connex"), and reads the connector
+# from the SIGNED trigger claim rather than the unsigned x-trigger-* mirror headers. The anti-decoy
+# assertion is load-bearing and non-obvious: the attestation is claim-for-claim identical to the
+# deployment's OWN ambient x-vercel-oidc-token except for client_id and trigger, and that ambient
+# token rides on every inbound request -- so a verifier that stops at "valid Vercel OIDC token
+# naming our project" accepts the deployment's own identity as a forged webhook.
+#
+# It is a group of its own rather than a route on embed_internal_routes because the controls are
+# different in kind, not merely in key: that group compares a shared secret temper issued, this one
+# verifies a third party's signature against a remote JWKS. The baseline's job is that each entry
+# names the control it actually carries, and one shared group would blur exactly that.
+#
+# NOTE it gets no require_layer_in assertion below, and that is not an omission -- it has no layer
+# to assert. Like embed_internal_routes, its gate is inside the handler, so the baseline diff (c)
+# is the whole of its protection here: a second route added to this group fails until reviewed.
 #
 # On slack_mint_internal_routes specifically: it is a THIRD signature group rather than a route on
 # slack_link_internal_routes because the keys must differ. Link-state answers "is this principal
@@ -59,7 +80,7 @@ APP_BUILDERS='create_app create_internal_app'
 # Groups whose routes are authenticated by construction (a require_auth layer). They grow freely.
 AUTH_COVERED='auth_only_routes|gated_routes'
 # Groups whose routes are NOT behind require_auth — every entry is a reviewed compensating control.
-REVIEW_GROUPS='public_routes|embed_internal_routes|internal_routes|slack_link_internal_routes|slack_mint_internal_routes|slack_link_public_routes'
+REVIEW_GROUPS='public_routes|embed_internal_routes|internal_routes|slack_link_internal_routes|slack_mint_internal_routes|slack_link_public_routes|webhook_intake_routes'
 
 # Reviewed baseline: <group>\t<handler> for every route in a REVIEW group. Each is unauthenticated
 # at the middleware and carries its own control (see the table above). A change here means a new or
@@ -74,6 +95,7 @@ public_routes	handlers::health::health_check
 slack_link_internal_routes	handlers::slack_link::slack_link_state
 slack_mint_internal_routes	handlers::slack_mint::slack_mint
 slack_link_public_routes	handlers::slack_link::callback
+webhook_intake_routes	handlers::webhook_intake::receive
 EOF
 
 # Every (sub-router group, handler) pair declared in routes.rs, keyed on the handler ident (stable
