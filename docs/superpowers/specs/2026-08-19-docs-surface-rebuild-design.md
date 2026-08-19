@@ -49,8 +49,9 @@ in the work order and not an emergency.
 | **Topology** | Apidog owns docs **and** API reference. temperkb.io stays narrative/marketing; `/using-temper` becomes a link out. |
 | **Source of truth** | `docs/` in the repo, synced to Apidog. Docs change through the same review gate as code. |
 | **Audiences** | Individual user / agent operator · deployer / self-hoster · API consumer / integrator. **Contributors are not a public audience.** |
+| **Cognitive maps** | temperkb.io is the source; `docs/cognitive-maps/` retires. |
 | **Register** | Self-contained, with a deliberately thin concepts tier that links up to temperkb.io for depth. |
-| **Process docs** | `docs/superpowers/` moves to a sibling directory now; per-file triage is a later session. |
+| **Process docs** | `docs/superpowers/` moves to `internal/` now; per-file triage is a later session. |
 | **Derivation** | Anything describing the *how* of a tool is generated where it can be, audited where it cannot. |
 
 ### The invariant
@@ -102,13 +103,37 @@ one gate per location and no way to assert the set is complete.
 
 | Current | Destination | Why |
 |---|---|---|
-| `docs/superpowers/` (472) | sibling dir outside `docs/` | process artifacts, never documentation |
-| `docs/development/` (5) | outside `docs/` | contributor audience — not public |
-| `docs/agents/` (6) | outside `docs/` | contributor audience; reachable via `AGENTS.md` |
-| `docs/code-reviews/` (5), `docs/security/` (1), `docs/decisions/` (1), `docs/research/` (3) | outside `docs/` | internal engineering record |
+| `docs/superpowers/` (472) | `internal/superpowers/` | process artifacts, never documentation |
+| `docs/development/` (5) | `internal/` | contributor audience — not public |
+| `docs/agents/` (6) | `internal/` | contributor audience; reachable via `AGENTS.md` |
+| `docs/code-reviews/` (5), `docs/security/` (1), `docs/decisions/` (1), `docs/research/` (3) | `internal/` | internal engineering record |
+| `docs/cognitive-maps/` (12) | **retired** | superseded by temperkb.io — see below |
 | `docs/guides/` (26) | `docs/playbooks/` + `docs/reference/` | split by kind; several are operator playbooks already |
 | `docs/auth/` (6) | `docs/concepts/` + `docs/reference/api/` | contract docs serve integrators |
 | 11 loose root files | triage — most are spent design docs | see Deferred |
+
+### `docs/cognitive-maps/` retires; temperkb.io is the source
+
+`[decided — 2026-08-19, Pete]` The SvelteKit site owns the cognitive-maps documentation. The
+twelve markdown files are removed from the tree; history preserves them, matching how
+`site-ia.md` folded `theory-ia-proposal.md` — absent from default projection, reachable in git.
+
+Every one of the twelve has a live, richer counterpart, verified before deciding to remove them:
+
+| Markdown | Lives now as |
+|---|---|
+| `01`–`06` (movements) | `(public)/cognitive-maps/{what-a-cognitive-map-is, the-substrate-beneath-it, what-lives-in-a-map, how-a-map-grows, how-maps-relate, whats-visible-from-here}` |
+| `07-operating-temper` | `(public)/cognitive-maps/operating-temper` — the bridge `site-ia.md` specced |
+| `07a`–`07d` | `(public)/operating/{deployment, governance-and-administration, observability-and-audit, insights}` |
+| `README` | `(public)/cognitive-maps/the-set` |
+
+The Svelte pages are the *current* versions — `site-ia.md`'s flip was executed against them, not
+against the markdown. Keeping both would mean hand-maintaining the same prose twice, and the
+copy that would rot is the one no reader sees.
+
+**Concepts that the docs surface still needs** (telos, cogmap, substrate, context) are authored
+fresh and thin in `docs/concepts/`, linking up to temperkb.io — they are not a copy of these
+twelve files.
 
 ---
 
@@ -157,19 +182,22 @@ may be new, or deliberately unrouted. Growth in orphans is the signal; a count i
 
 ## Work order
 
-1. **Unpublish** — Apidog project settings, `g07jkdagwt`. Pete's action; the only step currently
-   leaking. Everything below is reversible.
-2. **Move `docs/superpowers/` out** — one mechanical commit. Drops 462 pages from the published
-   set on its own.
-3. **Move contributor material out** — establishes the invariant.
-4. **Enrich `site-ia.md`** — extend it to govern all three surfaces. It currently governs one,
+1. **Unpublish** — Apidog project settings, `g07jkdagwt`. Pete's action; the only step that
+   removes the security audits *now* rather than at merge. Everything below is reversible.
+2. **Move `docs/superpowers/` → `internal/superpowers/`** — one mechanical commit. Drops 462
+   pages from the published set when it merges.
+3. **Move contributor material → `internal/`, retire `docs/cognitive-maps/`** — establishes the
+   invariant.
+4. **Redirect the tooling to `internal/`** — `fundamentals.md`, `CLAUDE.md`/`AGENTS.md`. Must
+   land with or before step 2, or the next session re-creates `docs/superpowers/`.
+5. **Enrich `site-ia.md`** — extend it to govern all three surfaces. It currently governs one,
    and the docs surface has never had a governing document.
-5. **Build `reference/` generation** — CLI and config join the API on the existing rails, each
+6. **Build `reference/` generation** — CLI and config join the API on the existing rails, each
    with its drift gate.
-6. **Author `doors/`, `concepts/`, `playbooks/`** — the prose pass, once the frame holds still.
-7. **Add `docs-coverage`** — once there are doors for it to check.
+7. **Author `doors/`, `concepts/`, `playbooks/`** — the prose pass, once the frame holds still.
+8. **Add `docs-coverage`** — once there are doors for it to check.
 
-Steps 2 and 3 are mechanical and fast. Steps 4 and 6 carry the writing and the judgement.
+Steps 2–4 are mechanical and fast. Steps 5 and 7 carry the writing and the judgement.
 
 ---
 
@@ -194,28 +222,47 @@ Steps 2 and 3 are mechanical and fast. Steps 4 and 6 carry the writing and the j
 - **Triage of the 11 loose root files.** Same pass.
 - **The temperkb.io side of the topology change** — `/using-temper` becoming a link out is a
   temper-ui change, not a `docs/` change.
+- **Whether a committed Apidog config should replace cloud-side ingest settings.** Apidog reads
+  `main` through its GitHub app today and publishes `docs/**` by some cloud-side rule. A config
+  file in the repo would make the publish scope reviewable in PRs — the same argument as the
+  invariant — but whether Apidog supports one for this mode is unresearched. Worth a short spike
+  before step 6; the rebuild does not depend on the answer, because the invariant already makes
+  the tree safe whatever the scope rule says.
 
 ---
 
-## Open questions
+## Resolved during design
 
-Declared, not filed — each needs a decision before the step that depends on it.
+All three questions this document opened were answered `[2026-08-19, Pete]`.
 
-1. **Does `docs/cognitive-maps/*.md` retire?** Twelve files, hand-duplicated as twelve Svelte
-   pages under `packages/temper-ui/src/routes/(public)/cognitive-maps/`. The UI pages are
-   hand-authored Svelte with no build-time pipeline from `docs/` — verified: nothing in the
-   UI's config reads `docs/`. Since temperkb.io now owns the explanatory register, keeping both
-   means maintaining the same prose in two places by hand, indefinitely. **Blocks step 6.**
-2. **How does Apidog ingest?** Unverified. No Apidog configuration exists anywhere in the repo,
-   so publishing is configured cloud-side. Published plan entries match the repo's top-level
-   plan count exactly (234); published spec entries exceed the repo's by two (228 vs 226), which
-   is suggestive of a repo-derived import rather than a live sync — but the slug forms differ
-   between the two sides and a reliable comparison was not achieved. **If no live sync exists,
-   building it is part of step 5** and this spec's "source of truth" decision is an intent, not
-   a description. Resolvable via the Apidog MCP tools once a session can call them.
-3. **Where do the moved directories land?** Step 2 says "a sibling directory"; the name is
-   unchosen. Candidates: `process/`, `work/`, `internal/`. Note this spec is itself written to
-   `docs/superpowers/specs/` and will move with the rest.
+1. **`docs/cognitive-maps/` retires** — temperkb.io is the source. See the section above.
+
+2. **Apidog reads from `main` via its GitHub app.** So the sync is live and repo-derived, and
+   this spec's "source of truth" decision describes the world rather than proposing it. Two
+   consequences follow and neither is obvious:
+
+   - **Nothing on this branch changes the published site until it merges.** The moves are
+     therefore also the unpublish mechanism for the 462 plan/spec pages — merging step 2 drops
+     them without anyone touching Apidog. Step 1 stays first regardless, because it is the only
+     thing that removes the security audits *now* rather than at merge.
+   - **The ingest scope is still unverified.** Something decides that `docs/**` is what gets
+     published, and that configuration is cloud-side; no Apidog file exists in the repo. Whether
+     a committed Apidog config is the better practice is an open build question — see Deferred.
+
+3. **The sibling directory is `internal/`.** `[decided — 2026-08-19, Pete]`
+
+   **This fights the tooling, and the fight has to be won in the skills, not by convention.**
+   Superpowers' `brainstorming` and `writing-plans` skills both hard-code
+   `docs/superpowers/specs/` and `docs/superpowers/plans/`, and this very spec was written there
+   by that default. Left alone, every future session re-creates the directory this rebuild
+   exists to remove, and `docs/` silently refills with process artifacts — defeating the
+   invariant. Redirecting them is a required step, not a tidy-up:
+
+   - `.claude/skills/temper/guidance/fundamentals.md` — states the spec location; currently says
+     `docs/superpowers/specs/`.
+   - `CLAUDE.md` / `AGENTS.md` — must name `internal/` as the home for specs and plans.
+   - The superpowers skills honour a stated user preference over their default, so the
+     preference has to be *stated somewhere they read* rather than assumed.
 
 ---
 
