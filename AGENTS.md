@@ -29,3 +29,9 @@ agent-first: with a non-TTY stdout (how agents invoke it) output defaults to JSO
 This repo ships a temper skill that teaches the workflow. Install it with
 `temper skill install --target opencode` (or `--target claude` for Claude Code). The skill teaches
 session lifecycle, grounding, and outcome registers — read it after install.
+## Where specs and plans go
+
+**Specs: `internal/superpowers/specs/`. Plans: `internal/superpowers/plans/`.**
+
+Not `docs/` — everything in `docs/` is public and synced to the documentation
+site. See `internal/README.md`.

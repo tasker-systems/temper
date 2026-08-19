@@ -30,3 +30,11 @@ agent-first: with a non-TTY stdout (how agents invoke it) output defaults to JSO
 This repo ships a temper skill that teaches the workflow. Install it with
 `temper skill install --target claude`. The skill teaches session lifecycle, grounding, and
 outcome registers — read it after install.
+## Where specs and plans go
+
+**Specs: `internal/superpowers/specs/`. Plans: `internal/superpowers/plans/`.**
+
+Not `docs/`. `docs/` is synced to the public documentation site, and everything
+in it is public — so process artifacts must not be written there. The
+superpowers skills default to `docs/superpowers/...`; this instruction overrides
+that default. See `internal/README.md`.
