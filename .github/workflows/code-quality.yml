@@ -289,6 +289,9 @@ jobs:
       - name: Guard test — check-openapi-routes
         run: bash .github/scripts/test-check-openapi-routes.sh
 
+      - name: Guard test — check-docs-public-only
+        run: bash .github/scripts/test-check-docs-public-only.sh
+
       - name: Guard test — audit-route-auth (per-builder layer wiring)
         run: bash .github/scripts/test-audit-route-auth.sh
 

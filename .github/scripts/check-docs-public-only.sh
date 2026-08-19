@@ -12,7 +12,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-FORBIDDEN='superpowers development agents code-reviews security decisions research specs experiments registers api'
+# `cognitive-maps` is the odd one out and is here deliberately: it did not MOVE, it was
+# RETIRED — temperkb.io is the source now. So its reappearance under docs/ is not a
+# relocation regressing, it is a decision being undone, and it is the one name on this
+# list with no `internal/` counterpart to point a reader at.
+FORBIDDEN='superpowers development agents code-reviews security decisions research specs experiments registers api cognitive-maps'
 
 # (a) The scan must find something. A docs/ that does not exist, or is empty,
 # would satisfy every assertion below while checking nothing.
@@ -45,5 +49,8 @@ while IFS= read -r f; do
     failed=1
 done < <(find docs -maxdepth 1 -type f -name '*.md' 2>/dev/null)
 
-[ "$failed" -eq 0 ] && echo "OK: docs/ holds $count files, none in an internal tree."
+# Say what was CHECKED, not what is hoped. "none in an internal tree" reads as the
+# invariant, and a denylist of names cannot establish the invariant — it establishes
+# the absence of the names on it. One un-added name and this line would still print.
+[ "$failed" -eq 0 ] && echo "OK: docs/ holds $count files; no top-level directory named any of the $(echo $FORBIDDEN | wc -w | tr -d ' ') known-internal trees, and no loose .md at the root except index.md. (Denylist: this detects the known trees returning, not that every page is fit to publish.)"
 exit "$failed"
