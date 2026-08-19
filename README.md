@@ -342,7 +342,7 @@ bin/setup.sh                 # add --with-cli to also install the `temper` binar
 cargo make check && cargo make test-db
 ```
 
-See [docs/guides/development.md](docs/guides/development.md) for the full walk-through,
+See [internal/development/development.md](internal/development/development.md) for the full walk-through,
 daily commands, and troubleshooting.
 
 ## Related Work

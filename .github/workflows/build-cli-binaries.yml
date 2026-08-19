@@ -39,7 +39,7 @@ jobs:
             ort_archive_ext: tgz
             # sha256 of onnxruntime-osx-arm64-<ONNX_RUNTIME_VERSION>.tgz. Bumping
             # ONNX_RUNTIME_VERSION means recomputing all three of these — see
-            # docs/guides/releasing.md#standing-obligation-onnx-runtime-digest-pinning
+            # internal/development/releasing.md#standing-obligation-onnx-runtime-digest-pinning
             ort_sha256: 0af4fa503e8ea285245b47ee42d0a7461b8156a81270857da0c1d4ecf858abde
             lib_name: libonnxruntime.dylib
             lib_dest_dir: lib
@@ -158,7 +158,7 @@ jobs:
           # (attest.rs cites it as this repo's doctrine); this closes the other
           # half. Bumping ONNX_RUNTIME_VERSION means recomputing all three
           # matrix digests — see
-          # docs/guides/releasing.md#standing-obligation-onnx-runtime-digest-pinning
+          # internal/development/releasing.md#standing-obligation-onnx-runtime-digest-pinning
           #
           # sha256sum on Linux and on the Windows runner's Git Bash, shasum on
           # macOS — the same branch as emit-manifest.sh's `sha_of` (:23-29) and

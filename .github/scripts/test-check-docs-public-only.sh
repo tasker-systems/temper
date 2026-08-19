@@ -42,7 +42,7 @@ make_tree() {
     TREE="${WORK}/$1"
     mkdir -p "${TREE}/.github/scripts" "${TREE}/docs/guides"
     cp "$GATE" "${TREE}/.github/scripts/"
-    echo "# a public guide" > "${TREE}/docs/guides/releasing.md"
+    echo "# a public guide" > "${TREE}/docs/guides/install.md"
 }
 
 # run_case NAME EXPECTED_EXIT [EXPECTED_SUBSTRING] — run the gate in $TREE.
@@ -122,7 +122,7 @@ run_case "loose .md alongside a permitted index.md: still FAILS" 1 "brand-direct
 # --- NEGATIVE (a): the empty scan must never report clean ---
 
 make_tree empty
-rm -f "${TREE}/docs/guides/releasing.md"
+rm -f "${TREE}/docs/guides/install.md"
 run_case "docs/ present but empty: FAILS rather than reporting a vacuous clean" 1
 
 # --- WIRING: a gate that runs nowhere passes everywhere ---
@@ -169,7 +169,7 @@ assert_uncommented "the gate runs in code-quality.yml, on a live (uncommented) l
 # against the base ref, i.e. the real branch — which is never docs-only, so the
 # assertion passed no matter what the detector contained. That is the vacuous-pass
 # this block exists to prevent, and it had it.
-docs_change_verdict="$(echo 'docs/guides/releasing.md' \
+docs_change_verdict="$(echo 'docs/guides/install.md' \
     | bash "${REPO_ROOT}/.github/scripts/detect-ci-scope.sh" --stdin 2>/dev/null || true)"
 if echo "$docs_change_verdict" | grep -qE '^RUN_CODE_QUALITY=true'; then
     echo "  PASS: a docs/ change invokes code-quality, so guard-tests reaches this gate"

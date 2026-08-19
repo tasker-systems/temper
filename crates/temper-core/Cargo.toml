@@ -50,6 +50,11 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 [features]
 mcp = ["schemars"]
 scenario-schema = ["schemars"]
+# Emit the JSON Schema of the TemperConfig tree, so the generated config reference in
+# docs/reference/config can carry each field's DOC COMMENT. schemars is the mechanism that
+# turns those comments into a runtime artifact — the alternative is scraping them out of
+# source, which is the thing the generated-reference work exists to avoid.
+config-schema = ["schemars"]
 test-db = []
 # Both forward to temper-principal so `Refusal` — which rides the admission 403 inside
 # `SystemAccessDetails` — is described by whichever generator this boundary turned on. Without the
@@ -57,3 +62,9 @@ test-db = []
 # exact drift these features exist to prevent.
 typescript = ["ts-rs", "temper-principal/typescript"]
 web-api = ["utoipa", "utoipa/chrono", "temper-principal/web-api"]
+
+# Gated so a plain `cargo build --examples` (no features) does not try to compile the
+# JsonSchema derives out from under it. Mirrors how temper-substrate gates its schema suites.
+[[example]]
+name = "config-reference"
+required-features = ["config-schema"]

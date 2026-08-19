@@ -271,12 +271,24 @@ RUST_INERT_ROOTS='^packages/temper-cloud/|^packages/temper-ui/|^packages/agent-w
 #     path-traversal security rule; editing it alone skipped the entire pipeline.
 #   scripts/migration-declaration-corpus.txt — `include_str!`d by temper-migrate
 #     and read by code-quality's awk-side parity check.
+#   docs/reference/** — the committed projection of the BUILT CLI's `--help` tree
+#     (and, next to it, of TemperConfig). All `.md` under `docs/`, so it scoped as
+#     docs-only and turned rust-quality OFF — leaving a hand-edit to a GENERATED
+#     tree with nothing at all to catch it. Verified before the entry was added:
+#     a lone edit to docs/reference/cli/config.md produced DOCS_ONLY=true,
+#     SKIP_ALL=true, RUN_RUST_QUALITY=false.
 #
-# `docs/**` is gate-owned too but is deliberately NOT here, and the distinction is
-# the point of this list: RUST_COUPLED means "a RUST gate owns it", and its veto
-# buys the whole Rust corpus. check-docs-public-only.sh is pure bash and runs in
-# the ungated `guard-tests` job, so reaching it costs one job invocation, not a
-# pipeline. It is handled by DOCS_GATED below.
+# The rest of `docs/**` is gate-owned too but is deliberately NOT here, and the
+# distinction is the point of this list: RUST_COUPLED means "a RUST gate owns it",
+# and its veto buys the whole Rust corpus. check-docs-public-only.sh is pure bash
+# and runs in the ungated `guard-tests` job, so reaching it costs one job
+# invocation, not a pipeline. It is handled by DOCS_GATED below.
+#
+# `docs/reference/` is the one subtree where that reasoning inverts: no amount of
+# bash can tell whether a page matches the binary, because establishing it means
+# BUILDING the binary. So it is the Rust corpus or nothing, and the veto is the
+# honest price. It applies to a subtree nothing but the generator should ever
+# touch, so the ordinary docs PR — a guide, a door — is unaffected.
 #
 # `scripts/install/install.sh` is `include_str!`d too but needs no entry: `.sh`
 # is not a doc extension, so it already forces a full run.
@@ -286,7 +298,7 @@ RUST_INERT_ROOTS='^packages/temper-cloud/|^packages/temper-ui/|^packages/agent-w
 # `assert_every_compiled_in_doc_is_vetoed` in test-detect-ci-scope.sh guards —
 # it derives the set from the source rather than trusting this list to stay
 # complete.
-RUST_COUPLED='^packages/temper-ui/src/lib/types/generated/|^packages/agent-workflows/mention/agent/generated/|^agent-skills/|^openapi\.json$|^tests/contracts/|^crates/temper-cli/skill-content/|^scripts/install/containment-corpus\.txt$|^scripts/migration-declaration-corpus\.txt$'
+RUST_COUPLED='^packages/temper-ui/src/lib/types/generated/|^packages/agent-workflows/mention/agent/generated/|^agent-skills/|^openapi\.json$|^tests/contracts/|^crates/temper-cli/skill-content/|^scripts/install/containment-corpus\.txt$|^scripts/migration-declaration-corpus\.txt$|^docs/reference/'
 
 HAS_RUST_COUPLED=false
 if changes_match "$RUST_COUPLED"; then
@@ -312,7 +324,7 @@ fi
 # is what ci.yml's `if: needs.detect-scope.outputs.run-code-quality == 'true'`
 # reads. Every heavy job stays off. Putting `^docs/` in RUST_COUPLED reached the
 # same gate by conscripting the entire Rust and TypeScript pipeline (measured: a
-# one-line edit to docs/guides/releasing.md turned SKIP_ALL=true into
+# one-line edit to a docs/guides/ page turned SKIP_ALL=true into
 # RUN_TEST_RUST + RUN_TEST_TYPESCRIPT + RUN_RUST_QUALITY), which is a bill sized
 # to the wrong gate rather than a safety property.
 #

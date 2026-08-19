@@ -46,3 +46,8 @@ enforced — is described in [Temper auth & security](../auth/README.md).
 - **[OpenTelemetry setup](../guides/open-telemetry-setup.md)** — getting traces and metrics out.
 - **[Drain operator queries](../guides/drain-operator-queries.md)** — the TraceQL queries worth
   having to hand when something looks wrong.
+
+## Every setting
+
+[The configuration reference](../reference/config/README.md) documents every field of
+`config.toml` — type, default, and what it does — rendered from the config type itself.

@@ -14,6 +14,25 @@ on:
         type: string
         default: 'true'
 
+      # The same treatment for the TypeScript half, and for the same reason one
+      # tier down: a docs-only change still invokes this workflow — it has to,
+      # because the docs/ gate lives in the ungated guard-tests job below — and
+      # was therefore paying a `bun install --frozen-lockfile` plus a typecheck
+      # and a biome pass to reach one second of bash.
+      #
+      # Fed from detect-ci-scope's existing `run-test-typescript`, deliberately
+      # rather than a new scope variable. That output is `false` on exactly one
+      # path (SKIP_ALL), and the only way to arrive HERE with it false is the
+      # docs-gated arm of that branch — so the two axes cannot come apart, and a
+      # second variable could only drift from the first.
+      #
+      # Defaults 'true' for the same conservative reason as above: a direct
+      # dispatch, or a caller that passes nothing, runs the full job.
+      run-typescript-quality:
+        required: false
+        type: string
+        default: 'true'
+
 # Least privilege. The org default is `default_workflow_permissions: write`,
 # which grants EVERY scope — including `actions: write` and `contents: write` —
 # to any job that does not say otherwise. This repo now publishes SIGNED
@@ -34,9 +53,11 @@ permissions:
 jobs:
   rust-quality:
     name: Rust Quality
-    # Skipped for a rust-inert change (TS/SDK-only). The guard-tests and
-    # typescript-quality jobs below carry NO such gate — they always run when
-    # this workflow is invoked, because a TS-only change still needs them.
+    # Skipped for a rust-inert change (TS/SDK-only). typescript-quality below
+    # carries its own gate on a DIFFERENT axis, so a TS-only change still runs
+    # it while turning this job off. guard-tests carries no gate at all and
+    # always runs when this workflow is invoked — that is what makes the docs/
+    # gate reachable for a change that switches both heavy jobs off.
     if: inputs.run-rust-quality == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -132,6 +153,20 @@ jobs:
       # the guard-tests job; it runs here because the emit needs cargo.
       - name: Check the committed agent-skills projection is up to date (skills drift)
         run: bash .github/scripts/check-skills-drift.sh
+
+      # And once more for `docs/reference/cli`, which is a projection of the BUILT binary's
+      # `--help` tree. It runs here rather than in guard-tests because the emit needs a compiled
+      # temper; its harness is in guard-tests, stubbed, so the harness itself needs no toolchain.
+      # This step also carries the completeness cross-check against the clap source — see the
+      # script's header for why re-emitting alone cannot establish it.
+      - name: Check the committed CLI reference is up to date (cli reference drift)
+        run: bash .github/scripts/check-cli-reference-drift.sh
+
+      # And the config half. Same shape, different source: this one projects the TemperConfig
+      # TYPE (via a schemars JSON Schema, so the doc comments come along) rather than the CLI's
+      # rendered help. It carries its own completeness cross-check for the same reason.
+      - name: Check the committed config reference is up to date (config reference drift)
+        run: bash .github/scripts/check-config-reference-drift.sh
 
       # Security tripwires (internal/development/security-audit-playbook.md). Pure static enumerators:
       # each pins a security-relevant set (grant write-sites, unauthenticated routes, handler-side
@@ -297,6 +332,27 @@ jobs:
       - name: Check docs/ holds only public documentation
         run: bash .github/scripts/check-docs-public-only.sh
 
+      - name: Guard test — check-cli-reference-drift
+        run: bash .github/scripts/test-check-cli-reference-drift.sh
+
+      - name: Guard test — check-config-reference-drift
+        run: bash .github/scripts/test-check-config-reference-drift.sh
+
+      # THE CHECK ITSELF, not only its harness — same reasoning as the docs/ gate below. It is
+      # pure Python over the committed tree, so it belongs in this ungated job rather than in
+      # rust-quality: a docs-only PR that breaks a link must be caught, and rust-quality is
+      # switched off for exactly those.
+      #
+      # `--no-network` is deliberate. The publish half compares against PRODUCTION, which serves
+      # the last publish of `main`, so on a PR branch every added page legitimately reads as
+      # unpublished. It never affects the exit code either way; skipping it just avoids paying
+      # for a round trip whose answer cannot mean anything here.
+      - name: Check docs reach and link integrity
+        run: python3 scripts/docs-coverage.py --strict --no-network
+
+      - name: Guard test — docs-coverage
+        run: bash .github/scripts/test-docs-coverage.sh
+
       - name: Guard test — check-docs-public-only
         run: bash .github/scripts/test-check-docs-public-only.sh
 
@@ -454,6 +510,9 @@ jobs:
 
   typescript-quality:
     name: TypeScript Quality
+    # Off for a docs-only change, which reaches this workflow solely for the
+    # pure-bash guard-tests job. See the input's declaration above.
+    if: inputs.run-typescript-quality == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 

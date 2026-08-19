@@ -387,7 +387,31 @@ run_test "agent-skills projection (*.md): defeats docs-only, rust corpus runs" \
     "RUN_RUST_QUALITY=true" \
     "RUN_TEST_RUST=true"
 
-# docs/ is owned by check-docs-public-only.sh, which lives in code-quality's
+# docs/reference/ is the committed projection of the BUILT CLI's --help tree, gated
+# by check-cli-reference-drift.sh in rust-quality. Same shape as agent-skills above
+# and one step more treacherous: its files are *.md AND they sit under docs/, so both
+# the extension test and the eye classify them as documentation. Measured before the
+# coupling was added — a lone edit to a generated page gave DOCS_ONLY=true,
+# SKIP_ALL=true, RUN_RUST_QUALITY=false, leaving a hand-edit to generated content with
+# nothing whatsoever to catch it.
+run_test "generated CLI reference (*.md under docs/): defeats docs-only, rust corpus runs" \
+    "docs/reference/cli/config.md" \
+    "DOCS_ONLY=false" \
+    "RUST_INERT=false" \
+    "RUN_RUST_QUALITY=true" \
+    "RUN_TEST_RUST=true"
+
+# The carve-out must stay a CARVE-OUT. This is the counterpart to the case above and
+# the reason the entry is `^docs/reference/` rather than `^docs/`: an ordinary guide
+# keeps the cheap path, because no Rust gate owns it.
+run_test "an ordinary guide is untouched by the reference coupling" \
+    "docs/guides/install.md" \
+    "DOCS_ONLY=true" \
+    "SKIP_ALL=true" \
+    "RUN_CODE_QUALITY=true" \
+    "RUN_RUST_QUALITY=false"
+
+# The REST of docs/ is owned by check-docs-public-only.sh, which lives in code-quality's
 # guard-tests job. The regression that gate exists to catch is a returning internal
 # tree, which is pure markdown — so the extension test would classify it docs-only
 # and skip the very job that would fail. What a docs/ change therefore owes is
@@ -415,7 +439,7 @@ run_test "docs/ page (*.md): stays a skip EXCEPT that code-quality is invoked fo
 # Mixed with a non-product tree: still nothing load-bearing, so the docs/ arm of the
 # SKIP_ALL branch is the one that must fire — reachability survives the mix.
 run_test "docs/ page + non-product spike tree: code-quality still invoked, nothing else" \
-    "docs/guides/releasing.md
+    "docs/guides/install.md
 scripts/wayfind-spike/queries.sql" \
     "SKIP_ALL=true" \
     "NON_PRODUCT=true" \
@@ -427,7 +451,7 @@ scripts/wayfind-spike/queries.sql" \
 # takes over: code-quality is invoked (reaching the docs gate for free) and TS runs,
 # but the Rust corpus stays off — a docs/ page must not drag it back on.
 run_test "docs/ page + inert TS: rust-inert, docs gate's job still runs" \
-    "docs/guides/releasing.md
+    "docs/guides/install.md
 packages/temper-cloud/src/logger.ts" \
     "DOCS_ONLY=false" \
     "RUST_INERT=true" \
@@ -651,6 +675,142 @@ EOF
 }
 
 assert_every_compiled_in_doc_is_vetoed
+
+# ---------------------------------------------------------------------------
+# A docs-only change must not run `bun install`.
+#
+# code-quality.yml is INVOKED for a docs-only change, deliberately and
+# permanently: the docs/ publish-safety gate lives in its guard-tests job, and
+# invoking the workflow is the cheapest way to reach one second of bash. But
+# "invoked" used to mean the TypeScript Quality job ran too — a
+# `bun install --frozen-lockfile`, a typecheck and a biome pass — which is the
+# same bill-sized-to-the-wrong-gate mistake that putting `^docs/` in
+# RUST_COUPLED made one tier up, just quieter.
+#
+# The property is end-to-end and spans three files, so it is asserted at each
+# link rather than at the ends: the detector must SAY the TypeScript corpus is
+# untouched, ci.yml must CARRY that verdict into the reusable workflow, and the
+# job must READ it. A break in any one link silently restores the bill.
+# ---------------------------------------------------------------------------
+assert_typescript_quality_is_scoped() {
+    local repo_root cq ci
+    repo_root="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+    cq="${repo_root}/.github/workflows/code-quality.yml"
+    ci="${repo_root}/.github/workflows/ci.yml"
+
+    # --- link 1: the detector's verdict, taken BEHAVIOURALLY ---
+    #
+    # `--stdin` is mandatory, not stylistic. Without it the detector falls back to
+    # `git diff` against the base ref — the real branch, which is never docs-only —
+    # so the assertion would pass no matter what the detector contained. That exact
+    # vacuous pass shipped once in this suite's sibling and was found by mutation,
+    # not by reading.
+    local verdict
+    verdict="$(printf '%s\n' 'docs/guides/install.md' \
+        | bash "$DETECT_SCRIPT" --stdin 2>/dev/null || true)"
+    if echo "$verdict" | grep -q '^RUN_CODE_QUALITY=true' \
+       && echo "$verdict" | grep -q '^RUN_TEST_TYPESCRIPT=false'; then
+        echo "  PASS: a docs-only change invokes code-quality with the TS axis off"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: a docs-only change does not produce (code-quality on, TS off)"
+        echo "        detector said: $(echo "$verdict" \
+            | grep -E '^(SKIP_ALL|RUN_CODE_QUALITY|RUN_TEST_TYPESCRIPT)=' | tr '\n' ' ')"
+        FAIL=$((FAIL + 1))
+    fi
+
+    # --- link 2: ci.yml must carry that verdict into the reusable workflow ---
+    #
+    # The OUTPUT NAME is pinned, not just the input name. An input wired to a
+    # constant, to the wrong output, or to a typo'd one would satisfy a check that
+    # only looked for `run-typescript-quality:` — and would be a job that never
+    # switches off (or, worse, never switches on).
+    if grep -qE '^[[:space:]]*run-typescript-quality:[[:space:]]*\$\{\{[[:space:]]*needs\.detect-scope\.outputs\.run-test-typescript[[:space:]]*\}\}[[:space:]]*$' "$ci"; then
+        echo "  PASS: ci.yml feeds run-typescript-quality from run-test-typescript"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: ci.yml does not pass run-typescript-quality from the detector's"
+        echo "        run-test-typescript output — the job cannot be switched off"
+        FAIL=$((FAIL + 1))
+    fi
+
+    # --- link 3: the job must read it, and read it in ITS OWN block ---
+    #
+    # Structural rather than textual, for the reason the docs-gate suite learned:
+    # a matching line somewhere in the file proves nothing about which job owns it.
+    # `if:` under rust-quality would grep identically and gate the wrong thing.
+    local ts_line next_line if_line bun_line
+    ts_line="$(grep -n '^  typescript-quality:' "$cq" | head -1 | cut -d: -f1 || true)"
+    if [ -z "$ts_line" ]; then
+        echo "  FAIL: no typescript-quality job in code-quality.yml — this check is blind"
+        FAIL=$((FAIL + 1))
+        return 0
+    fi
+    # The next job header after it, or EOF if it is the last job.
+    next_line="$(awk -v start="$ts_line" 'NR > start && /^  [a-z][a-z0-9-]*:$/ { print NR; exit }' "$cq")"
+    # `tr -d` is not cosmetic: BSD `wc -l` pads its output ("     498"), and the
+    # numeric comparisons below then compare against a string with spaces in it.
+    [ -n "$next_line" ] || next_line="$(wc -l < "$cq" | tr -d '[:space:]')"
+
+    if_line="$(awk -v a="$ts_line" -v b="$next_line" \
+        "NR > a && NR < b && /^[[:space:]]*if:[[:space:]]*inputs\\.run-typescript-quality == 'true'[[:space:]]*\$/ { print NR; exit }" "$cq")"
+    if [ -n "$if_line" ]; then
+        echo "  PASS: the typescript-quality job is gated on run-typescript-quality"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: typescript-quality (line ${ts_line}) carries no"
+        echo "        \`if: inputs.run-typescript-quality == 'true'\` of its own"
+        FAIL=$((FAIL + 1))
+    fi
+
+    # And the spend this exists to avoid must actually live inside that block. If
+    # `bun install` migrates to another job, gating this one saves nothing while
+    # still reading green — coverage inferred from the gate's existence rather than
+    # from what it covers.
+    # Comment lines excluded deliberately: the input's own declaration explains
+    # itself by naming `bun install`, and matching that would have this check
+    # measure the prose instead of the step. It did, on first run.
+    bun_line="$(grep -nE '^[[:space:]]*(run|-[[:space:]]+run):.*bun install' "$cq" \
+        | head -1 | cut -d: -f1 || true)"
+    if [ -n "$bun_line" ] && [ "$bun_line" -gt "$ts_line" ] && [ "$bun_line" -lt "$next_line" ]; then
+        echo "  PASS: the bun install this gate exists to skip is inside that job"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: \`bun install\` is at line '${bun_line}', outside the"
+        echo "        typescript-quality block (${ts_line}..${next_line}) — gating"
+        echo "        that job no longer skips it"
+        FAIL=$((FAIL + 1))
+    fi
+
+    # --- link 4: guard-tests must stay ungated ---
+    #
+    # The other half of the same coupling. Every saving above is only legitimate
+    # because a docs-only change still REACHES the docs/ gate, and it reaches it
+    # solely by virtue of guard-tests carrying no `if:` at all. The moment that job
+    # grows one, "code-quality was invoked" stops implying "the gate ran", and this
+    # whole section becomes a cheaper way to run nothing.
+    local guard_line guard_next guard_if
+    guard_line="$(grep -n '^  guard-tests:' "$cq" | head -1 | cut -d: -f1 || true)"
+    if [ -z "$guard_line" ]; then
+        echo "  FAIL: no guard-tests job in code-quality.yml — the docs/ gate has no home"
+        FAIL=$((FAIL + 1))
+        return 0
+    fi
+    guard_next="$(awk -v start="$guard_line" 'NR > start && /^  [a-z][a-z0-9-]*:$/ { print NR; exit }' "$cq")"
+    [ -n "$guard_next" ] || guard_next="$(wc -l < "$cq" | tr -d '[:space:]')"
+    guard_if="$(awk -v a="$guard_line" -v b="$guard_next" \
+        'NR > a && NR < b && /^    if:/ { print NR; exit }' "$cq")"
+    if [ -z "$guard_if" ]; then
+        echo "  PASS: guard-tests carries no gate, so an invocation still reaches docs/"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: guard-tests grew a job-level \`if:\` at line ${guard_if} — the docs/"
+        echo "        gate can now be switched off, and every skip above is unsafe"
+        FAIL=$((FAIL + 1))
+    fi
+}
+
+assert_typescript_quality_is_scoped
 
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed (total: $((PASS + FAIL)))"

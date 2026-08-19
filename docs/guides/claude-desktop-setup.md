@@ -66,7 +66,7 @@ gh attestation verify temper-skill-v<version>.zip --repo tasker-systems/temper
 The bundle deliberately carries **no** per-file manifest, unlike the CLI archives. Manifests exist so
 `install.sh` can verify each extracted file before an atomic swap; nothing installs this bundle, so
 there is nothing for one to gate. See
-[the release guide](releasing.md) for the CLI side.
+[the release guide](https://github.com/tasker-systems/temper/blob/main/internal/development/releasing.md) for the CLI side.
 
 ### Skills do not sync between surfaces
 

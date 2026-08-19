@@ -152,5 +152,5 @@ Three constraints the packager enforces because they fail late and unhelpfully o
   the bundle — never into the source tree. `update-version.sh` regenerates nothing, so a
   version-carrying tree would go stale on every `release-prepare` and red the drift gate.
 
-Read [docs/guides/releasing.md](../../../docs/guides/releasing.md#the-agent-skill-bundle) before
+Read [internal/development/releasing.md](../../../internal/development/releasing.md#the-agent-skill-bundle) before
 touching the artifact's NAME: it is what keeps the bundle out of the manifest guard's glob.

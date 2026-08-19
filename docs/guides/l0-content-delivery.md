@@ -101,7 +101,7 @@ neonctl connection-string main \
 
 > **Always snapshot prod before a hand-run DDL/data change.** Create a
 > copy-on-write Neon backup branch first — see
-> [releasing.md](./releasing.md) / [DEPLOYING.md](../../DEPLOYING.md) for the
+> [releasing.md](https://github.com/tasker-systems/temper/blob/main/internal/development/releasing.md) / [DEPLOYING.md](../../DEPLOYING.md) for the
 > `neonctl branches create … --parent main` convention. Restore with
 > `neonctl branches restore main <backup-name>`.
 
@@ -180,4 +180,4 @@ declares its ambient steward wake = never.
 - Design: `internal/superpowers/specs/2026-06-25-cognitive-map-agent-invocation-architecture-design.md`
   (L0 kernel cognitive map), `internal/superpowers/specs/2026-06-28-l0-telos-charter-delivery-design.md`
   (telos charter delivery, PR #199).
-- Neon backup convention: [releasing.md](./releasing.md), [DEPLOYING.md](../../DEPLOYING.md).
+- Neon backup convention: [releasing.md](https://github.com/tasker-systems/temper/blob/main/internal/development/releasing.md), [DEPLOYING.md](../../DEPLOYING.md).
