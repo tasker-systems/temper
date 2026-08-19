@@ -293,3 +293,35 @@ that re-runs the acceptance test, not one that re-reads for style.
   and the ref grammar, and the Claude Code path.
 - `docs-coverage --strict` green and reach back to 100%.
 - No editorial change touches `docs/reference/**`; source-side fixes plus regeneration instead.
+
+---
+
+## Appendix A — verified temperkb.io link targets
+
+`concepts/` is *defined* by linking up to temperkb.io, so every target was checked with a real
+HTTP request rather than assumed. **All 21 resolve `[verified 2026-08-19]`.** Writers should
+link from this list rather than guessing a path; a dead outbound link on the published site is
+the same defect class this rebuild exists to remove.
+
+**Canonical-URL trap, and the one thing to get right:** `https://temperkb.io/docs` returns
+**308 → `/using-temper`**. The rename `site-ia.md` specced *was* executed. Link
+`/using-temper`; never `/docs`.
+
+| target | for |
+|---|---|
+| `/` | the router landing |
+| `/using-temper` | the PKM projection — CLI/sync/MCP framing |
+| `/cognitive-maps` | the concept hub; the "what" |
+| `/cognitive-maps/{what-a-cognitive-map-is, the-substrate-beneath-it, what-lives-in-a-map, how-a-map-grows, how-maps-relate, whats-visible-from-here}` | the six movements — link the specific one, not the hub, when a page needs one idea |
+| `/cognitive-maps/the-set` | the set's own index |
+| `/cognitive-maps/operating-temper` | the bridge into `/operating` |
+| `/operating` | what the architecture fixes vs what a deployment chooses |
+| `/operating/{deployment, governance-and-administration, observability-and-audit, insights}` | the operator-facing four |
+| `/theory` | the "why" hub — reached by ascent, never as a cold entry |
+| `/theory/{deformation, manifold, ontology, open-questions, perspectives, schema, time, translation}` | discovered from the live nav |
+| `/builders`, `/agents` | still live; the PKM-projection reframe |
+
+**Which door links which.** Operator-facing concepts ascend to `/operating/*`; user-facing
+cogmap concepts ascend to `/cognitive-maps/*`; anything reaching for the *why* ascends to
+`/theory/*`. Per `site-ia.md`, `/theory` is a destination arrived at, not a front door — do not
+open a page by sending a reader there cold.
