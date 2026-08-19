@@ -67,6 +67,7 @@ pub struct CloudConfig {
 }
 
 /// Vault path reference in cloud config.
+#[cfg_attr(feature = "config-schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct CloudVaultConfig {
     /// Path to the local vault directory
@@ -75,6 +76,7 @@ pub struct CloudVaultConfig {
 }
 
 /// Sync subscriptions — which contexts are synced.
+#[cfg_attr(feature = "config-schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SyncSubscriptions {
     #[serde(default)]
@@ -82,6 +84,7 @@ pub struct SyncSubscriptions {
 }
 
 /// Sync config — which contexts are synced.
+#[cfg_attr(feature = "config-schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UnifiedSyncConfig {
     #[serde(default)]
@@ -89,6 +92,7 @@ pub struct UnifiedSyncConfig {
 }
 
 /// Skill generation config.
+#[cfg_attr(feature = "config-schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct SkillConfig {
     #[serde(default = "default_skill_output")]
@@ -111,6 +115,7 @@ impl Default for SkillConfig {
 /// Claude Code memory projection. **Absent means the feature is off** — this is
 /// `Option` rather than `#[serde(default)]` precisely so "not configured" and
 /// "configured empty" stay distinguishable.
+#[cfg_attr(feature = "config-schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 #[validate(schema(function = "validate_has_a_context"))]
 pub struct MemoryConfig {
@@ -171,6 +176,7 @@ fn validate_has_a_context(cfg: &MemoryConfig) -> Result<(), validator::Validatio
 }
 
 /// A single auth provider entry. Stored in `[[auth.providers]]` arrays in TOML.
+#[cfg_attr(feature = "config-schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct AuthProvider {
     /// Provider name — referenced by `auth.provider` to pick the active entry.
@@ -199,6 +205,7 @@ fn default_callback_url() -> String {
 }
 
 /// Auth configuration.
+#[cfg_attr(feature = "config-schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct AuthConfig {
     #[serde(default = "default_auth_provider")]
@@ -228,6 +235,7 @@ impl Default for AuthConfig {
 }
 
 /// LLM provider type — used to route to the correct backend.
+#[cfg_attr(feature = "config-schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
@@ -239,6 +247,7 @@ pub enum LlmProviderType {
 }
 
 /// LLM configuration section.
+#[cfg_attr(feature = "config-schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct LlmConfig {
     /// Which LLM backend to use.
@@ -314,6 +323,7 @@ impl LlmConfig {
 /// the CLI (temper-cli); this struct is intentionally free-form (no
 /// `#[validate(...)]` constraints) so the CLI decides what constitutes a
 /// valid value and can fall through to defaults when given garbage input.
+#[cfg_attr(feature = "config-schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Validate)]
 pub struct CliSection {
     /// Default output format: `"json"` | `"toon"`. `None` when unset.
@@ -332,6 +342,7 @@ pub struct CliSection {
 }
 
 /// Cloud API section of the configuration.
+#[cfg_attr(feature = "config-schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct CloudSection {
     /// API base URL (overridden by `TEMPER_API_URL` environment variable).
@@ -369,6 +380,7 @@ fn validate_optional_api_url(value: &str) -> Result<(), validator::ValidationErr
 ///
 /// Single config file replacing the old split model (global config + vault temper.toml).
 /// Imported by temper-cli, temper-client, temper-mcp, and any future crate.
+#[cfg_attr(feature = "config-schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct TemperConfig {
     #[validate(nested)]
