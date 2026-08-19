@@ -20,6 +20,7 @@ pub mod config;
 pub mod conflict;
 pub mod connection;
 pub mod context;
+pub mod delivery;
 pub mod device;
 pub mod diagnostics;
 pub mod element_trail;

@@ -19,9 +19,17 @@
 //! stored with `references = []` and routes nowhere. It is not an error — it is a well-formed
 //! act the system said no to, and it is itself auditable (it is in the ledger).
 //!
-//! This service owns the *matching* and the `references` write. The HTTP transport (S3) is
-//! not in scope — a caller hands this service a connection id, a provider event type, and a
-//! verbatim payload; this service computes the radius and appends the event.
+//! This service owns the *matching*, the `references` write, and (S2 chunk C) the projection of
+//! the matched set into `kb_subscription_deliveries`. The HTTP transport (S3) is not in scope — a
+//! caller hands this service a connection id, a provider event type, and a verbatim payload; this
+//! service computes the radius, appends the event, and projects the delivery rows.
+//!
+//! The delivery rows are a PROJECTION, not a second event (goal C2: one webhook receipt is one
+//! ledger event, always). They are written in Rust inside the same transaction as the append —
+//! the `region_materialized` precedent, which writes its N member rows in the event's own
+//! transaction (`temper-substrate/src/write.rs:196-204`). A payload-first `_project_*` half is
+//! unavailable here: the halves read only the payload (`canonical_schema.sql:473`) and this
+//! payload is the remote's verbatim body, which does not carry the matched set.
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -30,7 +38,7 @@ use temper_core::types::subscription::SubscriptionSelector;
 use temper_substrate::payloads::{AnchorTable, EventRef, RefRel, RefTarget};
 
 use crate::error::{ApiError, ApiResult};
-use crate::services::connection_service;
+use crate::services::{connection_service, delivery_service};
 
 /// The event type name for a received webhook. Registered permissive (NULL
 /// `payload_schema`) by migration `20260819000020` — the payload is the remote's verbatim
@@ -66,12 +74,17 @@ pub async fn receive_webhook(
     // Build the matched references: one `touches` entry per subscription whose selector
     // matches the payload. Computed BEFORE the INSERT — kb_events is append-only, so the
     // references cannot be UPDATEd after.
-    let references = match_subscriptions(&subs, provider_event_type, payload);
+    let matched = match_subscriptions(&subs, provider_event_type, payload);
 
     // Serialize the references to JSONB. An empty array is `[]` — the noise filter: a
     // payload matching zero subscriptions is stored and routes nowhere.
-    let references_json = serde_json::to_value(&references)
+    let references_json = serde_json::to_value(&matched.references)
         .map_err(|e| ApiError::Internal(format!("references serialization failed: {e}")))?;
+
+    // The event and its delivery rows move together. A webhook either lands as one event with
+    // its full fan of deliveries or lands not at all — there is no window in which the routing
+    // exists and the rows that make it readable do not.
+    let mut tx = pool.begin().await?;
 
     // One INSERT via the chokepoint writer. `_event_append` looks up the event type's
     // category from the registry, generates the event id, and inserts. The producing
@@ -94,10 +107,17 @@ pub async fn receive_webhook(
         1i32,                         // payload_version
         serde_json::json!({ "provider_event_type": provider_event_type }), // metadata
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| ApiError::Internal(format!("_event_append failed: {e}")))?
     .expect("_event_append always returns a uuid");
+
+    // Project one delivery row per matched subscription (S2 chunk C). A payload matching zero
+    // subscriptions projects zero rows — the empty radius is the noise filter, and a
+    // routed-nowhere payload is a well-formed act the system said no to, not an error.
+    delivery_service::project(&mut tx, event_id, &matched.subscription_ids).await?;
+
+    tx.commit().await?;
 
     Ok(event_id)
 }
@@ -105,9 +125,20 @@ pub async fn receive_webhook(
 /// One live subscription row for matching, with the deserialized selector. The subscriber's
 /// `subscriber_table` → `AnchorTable` mapping is resolved once here, not per match.
 struct LiveSubscription {
+    /// The subscription's own id. Carried because the delivery row keys on it and `references`
+    /// cannot recover it: two subscriptions of the same subscriber produce two `touches` entries
+    /// with identical targets, so the fan is not invertible back to declarations.
+    id: Uuid,
     subscriber_table: String,
     subscriber_id: Uuid,
     selector: SubscriptionSelector,
+}
+
+/// What the coarse match produced: the `references` fan for the event, and the declarations those
+/// entries came from. The two are parallel but NOT interchangeable — see [`LiveSubscription::id`].
+struct MatchedRadius {
+    references: Vec<EventRef>,
+    subscription_ids: Vec<Uuid>,
 }
 
 /// Fetch all live (non-revoked) subscriptions for a connection, deserializing each selector.
@@ -118,7 +149,7 @@ async fn live_subscriptions_for_connection(
     connection_id: Uuid,
 ) -> ApiResult<Vec<LiveSubscription>> {
     let rows = sqlx::query!(
-        r#"SELECT subscriber_table, subscriber_id, selector
+        r#"SELECT id, subscriber_table, subscriber_id, selector
              FROM kb_subscriptions
             WHERE connection_id = $1 AND revoked_at IS NULL"#,
         connection_id,
@@ -135,6 +166,7 @@ async fn live_subscriptions_for_connection(
             ))
         })?;
         subs.push(LiveSubscription {
+            id: row.id,
             subscriber_table: row.subscriber_table,
             subscriber_id: row.subscriber_id,
             selector,
@@ -150,21 +182,26 @@ fn match_subscriptions(
     subs: &[LiveSubscription],
     provider_event_type: &str,
     payload: &serde_json::Value,
-) -> Vec<EventRef> {
-    let mut refs = Vec::new();
+) -> MatchedRadius {
+    let mut references = Vec::new();
+    let mut subscription_ids = Vec::new();
     for sub in subs {
         if selector_matches(&sub.selector, provider_event_type, payload) {
             let kind = subscriber_table_to_anchor(&sub.subscriber_table);
-            refs.push(EventRef {
+            references.push(EventRef {
                 rel: RefRel::Touches,
                 target: RefTarget {
                     kind,
                     id: sub.subscriber_id,
                 },
             });
+            subscription_ids.push(sub.id);
         }
     }
-    refs
+    MatchedRadius {
+        references,
+        subscription_ids,
+    }
 }
 
 /// Coarse radius matching per selector variant. Payload-only — no fetch, no egress.
@@ -245,202 +282,9 @@ fn subscriber_table_to_anchor(subscriber_table: &str) -> AnchorTable {
 mod tests {
     use super::*;
     use sqlx::PgPool;
-    use temper_core::types::connection::ProvisionConnectionRequest;
-    use temper_core::types::ids::ProfileId;
-    use temper_core::types::subscription::{CreateSubscriptionRequest, SubscriptionSelector};
+    use temper_core::types::subscription::SubscriptionSelector;
 
-    const GITHUB_REPO: &str = "acme/temper";
-
-    /// Seed a system admin and return its profile id. Mirrors subscription_service::seed_admin.
-    async fn seed_admin(pool: &PgPool) -> ProfileId {
-        let id = Uuid::now_v7();
-        let handle = format!("admin-{id}");
-        sqlx::query!(
-            "INSERT INTO kb_profiles (id, handle, display_name) VALUES ($1, $2, $3)",
-            id,
-            &handle,
-            &handle,
-        )
-        .execute(pool)
-        .await
-        .expect("seed admin profile");
-
-        let mut conn = pool.acquire().await.expect("acquire");
-        crate::services::profile_service::provision_profile_entities(&mut conn, id, &handle)
-            .await
-            .expect("provision caller emitters");
-        drop(conn);
-
-        let team: Uuid = sqlx::query_scalar!(
-            "INSERT INTO kb_teams (slug, name) VALUES ('temper-system', 'Temper System') \
-             ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name \
-             RETURNING id",
-        )
-        .fetch_one(pool)
-        .await
-        .expect("gating team");
-
-        sqlx::query!("UPDATE kb_system_settings SET gating_team_slug = 'temper-system'")
-            .execute(pool)
-            .await
-            .expect("configure gating team");
-
-        sqlx::query!(
-            "INSERT INTO kb_team_members (team_id, profile_id, role) \
-             VALUES ($1, $2, 'owner'::team_role) \
-             ON CONFLICT (team_id, profile_id) DO UPDATE SET role = EXCLUDED.role",
-            team,
-            id,
-        )
-        .execute(pool)
-        .await
-        .expect("join gating team as owner");
-
-        crate::test_support::approved_admin(pool, id).await;
-        ProfileId::from(id)
-    }
-
-    async fn seed_team(pool: &PgPool, owner: ProfileId) -> Uuid {
-        let team_id = Uuid::now_v7();
-        let slug = format!("team-{team_id}");
-        sqlx::query!(
-            r#"INSERT INTO kb_teams (id, slug, name) VALUES ($1, $2, $3)"#,
-            team_id,
-            &slug,
-            &slug,
-        )
-        .execute(pool)
-        .await
-        .expect("seed team");
-        sqlx::query!(
-            r#"INSERT INTO kb_team_members (team_id, profile_id, role)
-               VALUES ($1, $2, 'owner'::team_role)"#,
-            team_id,
-            *owner,
-        )
-        .execute(pool)
-        .await
-        .expect("seed team owner");
-        team_id
-    }
-
-    async fn seed_context_owned_by_team(pool: &PgPool, team_id: Uuid) -> Uuid {
-        let context_id = Uuid::now_v7();
-        let slug = format!("ctx-{context_id}");
-        sqlx::query!(
-            r#"INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name)
-               VALUES ($1, 'kb_teams', $2, $3, $4)"#,
-            context_id,
-            team_id,
-            &slug,
-            &slug,
-        )
-        .execute(pool)
-        .await
-        .expect("seed context");
-        sqlx::query!(
-            r#"INSERT INTO kb_team_contexts (context_id, team_id) VALUES ($1, $2)"#,
-            context_id,
-            team_id,
-        )
-        .execute(pool)
-        .await
-        .expect("seed team_contexts");
-        context_id
-    }
-
-    async fn seed_connection(
-        pool: &PgPool,
-        owner_team_id: Option<Uuid>,
-        caller: ProfileId,
-    ) -> Uuid {
-        let req = ProvisionConnectionRequest {
-            provider: "github".into(),
-            name: format!("test-conn-{}", Uuid::now_v7()),
-            owner_team_id,
-            reach_granularity: None,
-            reach_covers: None,
-        };
-        let conn = crate::services::connection_service::provision(pool, caller, &req)
-            .await
-            .expect("seed connection");
-        conn.id
-    }
-
-    async fn grant_reach(pool: &PgPool, caller: ProfileId, connection_id: Uuid, team_id: Uuid) {
-        crate::services::connection_service::grant_reach(
-            pool,
-            caller,
-            connection_id,
-            team_id,
-            None,
-        )
-        .await
-        .expect("grant reach");
-    }
-
-    async fn create_subscription(
-        pool: &PgPool,
-        caller: ProfileId,
-        subscriber_table: &str,
-        subscriber_id: Uuid,
-        authoring_team_id: Uuid,
-        connection_id: Uuid,
-        selector: SubscriptionSelector,
-    ) -> Uuid {
-        let req = CreateSubscriptionRequest {
-            subscriber_table: subscriber_table.into(),
-            subscriber_id,
-            authoring_team_id,
-            connection_id,
-            selector,
-        };
-        let sub = crate::services::subscription_service::create(pool, caller, &req)
-            .await
-            .expect("create subscription");
-        sub.id
-    }
-
-    /// A GitHub pull_request webhook payload for `acme/temper`.
-    fn github_pr_payload(repo: &str) -> serde_json::Value {
-        serde_json::json!({
-            "action": "opened",
-            "repository": { "full_name": repo },
-            "pull_request": { "number": 42 }
-        })
-    }
-
-    /// A Linear issue webhook payload for project `proj-123`.
-    fn linear_issue_payload(project_id: &str) -> serde_json::Value {
-        serde_json::json!({
-            "action": "update",
-            "data": { "project": { "id": project_id } }
-        })
-    }
-
-    /// Read the references column for an event id.
-    async fn event_references(pool: &PgPool, event_id: Uuid) -> serde_json::Value {
-        sqlx::query_scalar!(
-            r#"SELECT "references" FROM kb_events WHERE id = $1"#,
-            event_id,
-        )
-        .fetch_one(pool)
-        .await
-        .expect("read references")
-    }
-
-    /// Count kb_events rows for a connection's emitter.
-    async fn event_count_for_connection(pool: &PgPool, connection_id: Uuid) -> i64 {
-        let count: Option<i64> = sqlx::query_scalar!(
-            r#"SELECT count(*)::bigint FROM kb_events e
-                JOIN kb_connections c ON c.id = $1 AND e.emitter_entity_id = c.emitter_entity_id"#,
-            connection_id,
-        )
-        .fetch_one(pool)
-        .await
-        .expect("count events");
-        count.unwrap_or(0)
-    }
+    use crate::services::subscription_test_support::*;
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn payload_matching_n_subscriptions_produces_one_event_with_n_touches(pool: PgPool) {

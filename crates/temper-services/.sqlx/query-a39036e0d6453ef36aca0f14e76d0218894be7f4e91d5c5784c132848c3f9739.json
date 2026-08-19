@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name)\n           VALUES ($1, 'kb_teams', $2, $3, $4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a39036e0d6453ef36aca0f14e76d0218894be7f4e91d5c5784c132848c3f9739"
+}

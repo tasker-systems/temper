@@ -6,6 +6,7 @@ pub mod cogmap_service;
 pub mod connection_service;
 pub mod context_graph_service;
 pub mod context_service;
+pub mod delivery_service;
 pub mod drain_span;
 pub mod edge_service;
 pub mod embed_service;
@@ -34,5 +35,7 @@ pub mod slack_mint_service;
 pub mod standing_service;
 pub mod steward_service;
 pub mod subscription_service;
+#[cfg(all(test, feature = "test-db"))]
+pub mod subscription_test_support;
 pub mod team_service;
 pub mod workflow_job_service;
