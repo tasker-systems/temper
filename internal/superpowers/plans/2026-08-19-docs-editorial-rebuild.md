@@ -478,3 +478,106 @@ Filed here rather than silently passed over. None is a documentation problem.
 - **`projection.rs:115-119` justifies matching `@me` by slug alone** with a claim
   (`"profile-to-profile context sharing is not supported"`) that `context share` itself refutes.
 - **The installer's exit message dead-ends** at `Run: temper --help`, never naming `temper init`.
+
+---
+
+## Appendix F — the integrator entry, grounded
+
+Established against the router, `openapi.json`, and **live unauthenticated requests to
+production**. This is what `concepts/trust-boundary.md` is written from.
+
+### The two facts no page currently supplies
+
+**The API base.** `cloud.api_url` holds the **origin only** — `https://temperkb.io`. All 82
+documented paths carry an `/api` prefix the client prepends per request, so the base a caller
+concatenates against is **`<origin>/api`**. Verified live: `GET https://temperkb.io/api/health`
+→ **200**, unauthenticated. (`docs/reference/config/README.md` calls `api_url` the "API base
+URL", which is ambiguous between origin and base path. That page is **generated** — sharpen the
+`TemperConfig` doc comment at source and regenerate; do not hand-edit it.)
+
+**The reference is published at `https://docs.temperkb.io/`**, rendered from `openapi.json` into
+the same Apidog site as the prose, under a sidebar folder *"Temper Cloud API"*. Verified by
+fetching the site's own `llms.txt` (200, ~51 KB).
+
+> **Link the site root, not a deep page.** Per-endpoint and per-schema pages exist
+> (`ErrorBody`, `Refusal`, `SystemAccessDetails` each have one) but their ids look
+> import-generated. Whether they survive a re-import of the spec is **UNKNOWN** — if they
+> renumber, any deep link we ship rots silently. Root-link until that is settled.
+
+### Discovery answers the audience — "ask your operator" is NOT the honest instruction
+
+This closes the gap the old docs flagged as *"where integrators get stuck"* and left unresolved.
+`GET <origin>/.well-known/oauth-authorization-server` returns a `resource` field carrying exactly
+`AUTH_AUDIENCE`. Verified live against production:
+
+```json
+{ "issuer": "https://temperkb.us.auth0.com/",
+  "token_endpoint": "https://temperkb.us.auth0.com/oauth/token",
+  "grant_types_supported": ["authorization_code", "refresh_token", "client_credentials"],
+  "resource": "https://temperkb.io/api" }
+```
+
+On a Temper-AS (self-hosted SAML) instance there is **no `resource` field** — correctly, because
+that AS ignores a request-supplied audience entirely, so the caller omits `audience`. Either way
+discovery settles it.
+
+> **⚠️ The trap to name explicitly.** `/.well-known/oauth-**protected-resource**` returns a
+> *different* `resource` — `https://temperkb.io/` — which is the **MCP base URL, not the
+> audience**. An integrator who reaches for RFC 9728 instead of RFC 8414 gets a value that
+> silently fails audience validation. Name the right document.
+
+**Do not tell readers to fetch the spec from a running instance.** `/api-docs/openapi.json` is
+gated on `ENABLE_SWAGGER`, which defaults **false**; verified 404 in production.
+
+### The caller's error table
+
+Body is always `{"error":{"code":…,"message":…,"details"?:…}}`. `code` is a stable string;
+`details` rides only `SYSTEM_ACCESS_REQUIRED` and `PLAN_REFUSED`. The `AuthzError` variant names
+in `auth/authorization-seam.md` **never reach the wire**.
+
+| status | `code` | means | caller does | retry |
+|---|---|---|---|---|
+| 401 | `UNAUTHORIZED` | missing/malformed Bearer | fix the header | no |
+| 401 | `UNAUTHORIZED` | invalid or expired token — signature, issuer, **audience**, `exp` | refresh; re-check audience against discovery | once |
+| 401 | `UNAUTHORIZED` | auth service unavailable (JWKS fetch) | back off | **yes** |
+| 401 | `UNAUTHORIZED` | account deactivated | stop; contact operator | no |
+| 401 | `UNAUTHORIZED` | machine client not registered — message names the exact `provision` command | hand the `client_id` to an operator | no |
+| **403** | **`SYSTEM_ACCESS_REQUIRED`** | authentic, no `approved` standing; `details.refusal.kind` says which | **human:** `request-access`. **machine:** an admin must approve | no |
+| 403 | `FORBIDDEN` | refused, deliberately message-less (no capability disclosure) | obtain the grant out of band | no |
+| 403 | `FORBIDDEN_DETAIL` | refused, message *names* the capability | obtain it | no |
+| 404 | `NOT_FOUND` | absent **or masked** so a probe is not an existence oracle | infer nothing either way | no |
+| 400 | `PLAN_REFUSED` | composition invalid; `details.refusals[]` lists **every** reason | repair all in one round trip | no |
+| 422 | `CONTENT_INTEGRITY` | stored bytes fail the hash; **not resumable** | re-upload from scratch | no |
+| 500 | `INTERNAL_ERROR` | server fault | back off | **yes** |
+
+MCP collapses all of these to JSON-RPC `-32600` with prose — no status, no `code`, no `details`.
+
+### The sharp edge the page exists to prevent
+
+**A machine cannot use the remedy the 403 advertises.** The body's `cli_command` is
+`temper auth request-access`, but machines can never `Request` — `transition.rs:64-65` says so
+outright. The only remedy is an admin running `temper admin access approve <profile_id>`, and
+**the payload does not name it.** State this in the page, because nothing in the product will.
+
+**And it is invisible until it fails.** A registered-but-unapproved machine mints a token (200),
+passes JWT validation, passes the registration gate, passes Level 1 — and is refused only at
+Level 2, on every data call. Nothing warns earlier.
+
+**Spec gap worth naming:** 59 of 102 operations in `openapi.json` document **no 403**, because
+admission is applied by middleware and never annotated per-handler. A caller generating a client
+from the spec will not see it coming.
+
+### Sixth live falsehood, for Appendix D's list
+
+`docs/auth/authorization-seam.md:139` says the 403 payload carries *"(email, display_name,
+**access_mode**, **join-request status**, request URL, CLI command)"*. Neither `access_mode` nor
+`join_request_status` exists on `SystemAccessDetails` any more — the required field is `refusal`,
+a tagged union. The page is bound for `internal/`, but **`trust-boundary.md` is written from it**,
+so the error must not be carried forward.
+
+### MCP is a second surface, not a second API
+
+Different base path (`/mcp`, no `/api`), JSON-RPC transport, **identical auth** — same issuer,
+same single audience, same two gates. But ~26 consolidated tools against 82 REST paths, and the
+SDKs are generated from `openapi.json`, i.e. HTTP-only. **An integrator writing a service targets
+HTTP; MCP is an agent-runtime target.** The doors currently blur these into "the API".
