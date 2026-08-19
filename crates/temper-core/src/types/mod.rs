@@ -58,6 +58,7 @@ pub mod search;
 pub mod slack;
 pub mod standing;
 pub mod steward;
+pub mod subscription;
 pub mod team;
 pub mod upload;
 pub mod vault;

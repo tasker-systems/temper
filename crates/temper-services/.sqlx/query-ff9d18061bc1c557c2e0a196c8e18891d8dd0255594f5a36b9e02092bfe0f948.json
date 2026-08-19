@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_cogmaps (id, name, telos_resource_id)\n               VALUES ($1, $2, $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ff9d18061bc1c557c2e0a196c8e18891d8dd0255594f5a36b9e02092bfe0f948"
+}

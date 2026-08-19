@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS(\n                     SELECT 1 FROM kb_team_cogmaps\n                      WHERE cogmap_id = $1 AND team_id = $2\n                   ) AS \"e!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "e!: bool",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "952ef0a61770353b2771f480d72187658fb5b7e69247416a0bf5dc965097f238"
+}
