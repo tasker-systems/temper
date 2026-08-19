@@ -22,7 +22,7 @@ export interface TestPage {
 	params: Record<string, string>;
 }
 
-const ORIGIN = 'http://localhost';
+export const ORIGIN = 'http://localhost';
 
 let current: TestPage = { url: new URL('/', ORIGIN), params: {} };
 const subscribers = new Set<(value: TestPage) => void>();
@@ -55,9 +55,17 @@ export function setPage(href: string, params: Record<string, string> = {}): void
 	for (const notify of subscribers) notify(current);
 }
 
-/** The URL the page store currently holds — for asserting a component did NOT navigate. */
-export function currentPage(): TestPage {
-	return current;
+/**
+ * The URL of the nth `goto` call, parsed. Every test in the "click that mutates the URL"
+ * category asserts on a navigation target's `searchParams` or `pathname`, so this is that,
+ * once, rather than a `new URL(String(goto.mock.calls[n][0]), …)` rebuilt per file.
+ *
+ * There is deliberately no `currentPage()` counterpart: `goto` is a no-op mock and never
+ * moves the page store, so "did the component navigate" is answered by asserting on `goto`
+ * itself (`expect(goto).not.toHaveBeenCalled()`), never by reading back a URL.
+ */
+export function gotoTarget(call = 0): URL {
+	return new URL(String(goto.mock.calls[call][0]), ORIGIN);
 }
 
 /** Call from `beforeEach`. Mock call history survives module state otherwise. */

@@ -19,7 +19,8 @@ function ctx(slug: string, ownerRef: string, count = 0): ContextRowWithCounts {
 		created: '2026-01-01T00:00:00Z',
 		updated: '2026-01-01T00:00:00Z',
 		// The wire delivers a JSON number; ts-rs declares `bigint`. Same cast
-		// `nav-groups.test.ts` makes, for the same reason.
+		// `nav-groups.test.ts` makes, for the same reason — but narrowed: this fixture is
+		// team-owned unconditionally, because the component never reads the owner columns.
 		resource_count: count as unknown as bigint,
 		slug,
 		owner_ref: ownerRef,
@@ -85,14 +86,18 @@ describe('ContextNavGroup — a collapsed group holding the reader’s place', (
 		expect(getByTitle(MARK)).toBeDefined();
 	});
 
-	it('still reports the group’s resource count while collapsed', () => {
+	it('reports the group’s own total, in the heading, whether shut or open', () => {
 		standInGroup();
 
-		const { getByRole } = mount(true);
-
-		// "How much work is in here" survives the group being shut — otherwise collapsing
-		// costs the reader the only number they had for a group they cannot see into.
-		expect(getByRole('button').textContent).toContain('11');
+		// The count sits unconditionally in the heading — there is no `collapsed` branch on
+		// it — so both mounts are asserted, and the assertion is on the count element rather
+		// than a substring of the whole heading, where "11" would also match a place's count.
+		for (const collapsed of [true, false]) {
+			const { getByRole, unmount } = mount(collapsed);
+			const spans = getByRole('button').querySelectorAll('span');
+			expect(spans[spans.length - 1].textContent?.trim()).toBe('11');
+			unmount();
+		}
 	});
 });
 

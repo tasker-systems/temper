@@ -1,6 +1,7 @@
 import { sveltekit } from '@sveltejs/kit/vite';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
+import { configDefaults } from 'vitest/config';
 
 export default defineConfig({
 	plugins: [tailwindcss(), sveltekit()],
@@ -14,7 +15,9 @@ export default defineConfig({
 				test: {
 					name: 'unit',
 					include: ['src/**/*.test.ts'],
-					exclude: ['src/**/*.component.test.ts'],
+					// Spread, don't replace: `exclude` is a plain default, so a bare list drops
+					// vitest's own — `**/node_modules/**` included.
+					exclude: [...configDefaults.exclude, 'src/**/*.component.test.ts'],
 					environment: 'node',
 					globals: false
 				}

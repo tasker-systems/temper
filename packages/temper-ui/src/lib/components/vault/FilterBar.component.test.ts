@@ -1,7 +1,8 @@
 import { fireEvent, render } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ContextRowWithCounts } from '$lib/types';
 import type { VaultFilters } from '$lib/vault-filters';
-import { goto, resetAppContext, setPage } from '../../../test/app-context';
+import { goto, gotoTarget, resetAppContext, setPage } from '../../../test/app-context';
 import FilterBar from './FilterBar.svelte';
 
 vi.mock('$app/stores', () => import('../../../test/app-context'));
@@ -21,20 +22,15 @@ const NO_FILTERS: VaultFilters = {
 	tags: [],
 };
 
-/** `contexts: []` on purpose — the `contexts === null` arm is a different behaviour. */
-function mount(revealed: string | null, filters: Partial<VaultFilters> = {}) {
+/** `contexts` defaults to `[]` — a read that answered with nothing, not a read that failed. */
+function mount(
+	revealed: string | null,
+	filters: Partial<VaultFilters> = {},
+	contexts: ContextRowWithCounts[] | null = [],
+) {
 	return render(FilterBar, {
-		props: {
-			filters: { ...NO_FILTERS, ...filters },
-			revealed,
-			fixedContext: false,
-			contexts: [],
-		},
+		props: { filters: { ...NO_FILTERS, ...filters }, revealed, fixedContext: false, contexts },
 	});
-}
-
-function gotoTarget(call: number): URL {
-	return new URL(String(goto.mock.calls[call][0]), 'http://localhost');
 }
 
 /**
@@ -45,15 +41,22 @@ function gotoTarget(call: number): URL {
  * navigates through a 300ms `setTimeout`, the selects navigate on the change event itself.
  */
 describe('FilterBar — the control that mutates the URL', () => {
-	it('does not navigate on the keystroke itself', async () => {
+	it('holds the navigation for the whole 300ms, then fires it once', async () => {
 		vi.useFakeTimers();
 		setPage('/vault/all');
 
 		const { getByLabelText } = mount(null);
 		await fireEvent.input(getByLabelText('title contains'), { target: { value: 'ledger' } });
 
-		// The debounce is the whole reason a six-character word is one navigation, not six.
+		// Three assertions, because only the middle one has a lower bound to fail against.
+		// Asserting "not called" on the keystroke alone is vacuous under fake timers — the
+		// clock has not advanced, so a `setTimeout(fn, 0)` has not fired either, and a 0ms
+		// debounce IS the six-navigations-per-word defect this test is named for.
 		expect(goto).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(299);
+		expect(goto).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(1);
+		expect(goto).toHaveBeenCalledTimes(1);
 	});
 
 	it('navigates with the typed value once the 300ms debounce elapses', async () => {
@@ -68,7 +71,7 @@ describe('FilterBar — the control that mutates the URL', () => {
 		await vi.advanceTimersByTimeAsync(300);
 
 		expect(goto).toHaveBeenCalledTimes(1);
-		const target = gotoTarget(0);
+		const target = gotoTarget();
 		expect(target.pathname).toBe('/vault/all');
 		expect(target.searchParams.get('q')).toBe('ledger');
 		// The rest of the URL is what `buildFilterUrl` made of it — carried through, not
@@ -87,7 +90,7 @@ describe('FilterBar — the control that mutates the URL', () => {
 		// of keystrokes, so it is wired straight to `navigate`. Sharing the text field's
 		// debounce would be a different defect from being wired to nothing at all.
 		expect(goto).toHaveBeenCalledTimes(1);
-		expect(gotoTarget(0).searchParams.get('stage')).toBe('done');
+		expect(gotoTarget().searchParams.get('stage')).toBe('done');
 	});
 });
 
@@ -120,5 +123,32 @@ describe('FilterBar — a kind-scoped filter the revealed kind does not have', (
 
 		expect(queryByLabelText('stage')).toBeNull();
 		expect(queryByLabelText('status')).toBeNull();
+	});
+});
+
+/**
+ * The third rendered state, and the one with no pure module behind it at all: `contexts` is
+ * `ContextRowWithCounts[] | null`, and only this component can tell the two apart on screen.
+ * An empty select says "there is nothing to filter by" — a claim about the vault that a fetch
+ * which never answered cannot support — so the failed read renders inert and marked instead.
+ */
+describe('FilterBar — a context read that never answered', () => {
+	it('offers an inert marked select, not an empty one, when the read failed', () => {
+		const { getByLabelText } = mount(null, {}, null);
+		const select = getByLabelText('context') as HTMLSelectElement;
+
+		expect(select.disabled).toBe(true);
+		expect(select.textContent).toContain('contexts unavailable');
+		// The distinguishing assertion: an empty read would offer "All contexts" and nothing
+		// else, which is a select the reader can operate and believe.
+		expect(select.textContent).not.toContain('All contexts');
+	});
+
+	it('offers an operable select with no options to choose when the read answered empty', () => {
+		const { getByLabelText } = mount(null, {}, []);
+		const select = getByLabelText('context') as HTMLSelectElement;
+
+		expect(select.disabled).toBe(false);
+		expect(select.textContent).toContain('All contexts');
 	});
 });

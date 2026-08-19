@@ -1,8 +1,8 @@
 import { render } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ResourceView } from '$lib/types';
 import type { VaultList } from '$lib/vault-list';
 import { invalidateAll, resetAppContext, setPage } from '../../../test/app-context';
+import { MANAGED, makeRow } from '../../../test/fixtures';
 import VaultBrowser from './VaultBrowser.svelte';
 
 vi.mock('$app/stores', () => import('../../../test/app-context'));
@@ -10,46 +10,8 @@ vi.mock('$app/navigation', () => import('../../../test/app-context'));
 
 beforeEach(resetAppContext);
 
-const ID = '019f420c-cf01-7bc1-87c9-09684b0fa69e';
-
 /** One row, only so the success arm has a grid with something in it to render. */
-const ROW: ResourceView = {
-	id: ID,
-	ref: `t-${ID}`,
-	title: 'A task',
-	origin_uri: '',
-	kb_context_id: '00000000-0000-0000-0003-000000000001',
-	context_name: 'Temper',
-	context_slug: 'temper',
-	context_owner_ref: '@j-cole-taylor',
-	context_ref: '@j-cole-taylor/temper',
-	cogmap_id: null,
-	cogmap_name: null,
-	doc_type_name: 'task',
-	owner_handle: 'j-cole-taylor',
-	owner_profile_id: '00000000-0000-0000-0000-000000000001',
-	originator_profile_id: '00000000-0000-0000-0000-000000000001',
-	is_active: true,
-	created: '2026-07-08T00:00:00Z',
-	updated: '2026-07-08T00:00:00Z',
-	body_hash: null,
-	ingest_state: 'complete',
-	body_storage: 'derived',
-	managed_meta: {
-		'temper-stage': 'design',
-		'temper-mode': null,
-		'temper-effort': null,
-		'temper-status': null,
-		'temper-seq': null,
-		'temper-branch': null,
-		'temper-pr': null,
-		'temper-llm-model': null,
-		'temper-llm-run': null,
-		'temper-provenance': null,
-	},
-	open_meta: null,
-	content: null,
-};
+const ROW = makeRow({ title: 'A task', managed_meta: { ...MANAGED, 'temper-stage': 'design' } });
 
 const LIST: VaultList = {
 	rows: [ROW],
