@@ -450,3 +450,68 @@ async fn a_payload_above_githubs_ceiling_is_refused(pool: PgPool) {
     );
     assert_eq!(webhook_event_count(&pool, conn).await, 0);
 }
+
+/// Goal C7: no document, no node, no edge is created because a webhook arrived. **Ever.**
+///
+/// The register recorded this as "vacuously satisfied by absence of the feature" — there was no
+/// intake path to test against, so anything at all satisfied it. The path exists now, so the
+/// vacuous pass has to become a real one: this counts the curated-graph tables across a receipt
+/// that genuinely landed, and a receipt that landed is what makes the zeroes mean something.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_webhook_creates_no_resource_no_node_and_no_edge(pool: PgPool) {
+    let (_team, conn) = seed_world(&pool, Some(pr_selector())).await;
+
+    // Seed real curated material FIRST, so the baseline is non-zero. Compared at (0, 0, 0) the
+    // equality below would hold for a counter pointed at tables nothing ever writes — it would
+    // pass whether or not it could fail, which is the failure mode this whole test exists to
+    // leave behind.
+    common::seed_context_with_goal_and_tasks(&pool, 2).await;
+    let before = curated_graph_counts(&pool).await;
+    assert!(
+        before.0 > 0 && before.1 > 0,
+        "the baseline must be non-zero or the comparison proves nothing: {before:?}"
+    );
+
+    let app = common::setup_test_app_with_state(pool.clone(), |s| s.broker = real_broker()).await;
+    let res = app
+        .client
+        .post(app.url(INTAKE_PATH))
+        .header("authorization", attestation(CONNECTOR_UID))
+        .header("x-github-event", "pull_request")
+        .body(github_pr_payload(GITHUB_REPO).to_string())
+        .send()
+        .await
+        .expect("post webhook");
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+
+    // The receipt LANDED. Without this the zeroes below would hold for a request that did
+    // nothing at all, and the clause would still be vacuous — just more expensively.
+    assert_eq!(webhook_event_count(&pool, conn).await, 1);
+
+    assert_eq!(
+        curated_graph_counts(&pool).await,
+        before,
+        "a webhook becomes one unjudged fact plus a list of who should look at it — never a \
+         document, a node, or an edge (goal C7)"
+    );
+}
+
+/// The curated-graph tables a webhook must never grow.
+///
+/// There is deliberately no `kb_cogmap_nodes` table to count: a cogmap **node is a
+/// `kb_resources` row** with a home in a cogmap, so `kb_resources` + `kb_resource_homes` is what
+/// "no document and no node" actually means here. Counting a table that does not exist would
+/// have been a zero that proved nothing.
+async fn curated_graph_counts(pool: &PgPool) -> (i64, i64, i64) {
+    let one = |sql: &'static str| async move {
+        sqlx::query_scalar::<_, i64>(sql)
+            .fetch_one(pool)
+            .await
+            .expect("count")
+    };
+    (
+        one("SELECT count(*) FROM kb_resources").await,
+        one("SELECT count(*) FROM kb_resource_homes").await,
+        one("SELECT count(*) FROM kb_edges").await,
+    )
+}
