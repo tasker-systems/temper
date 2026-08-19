@@ -200,7 +200,7 @@ How to fix it — tables, API changes, code changes.
 - Root `vercel.json` at repo root routes to the Rust binaries (`/api/axum`, `/api/mcp`)
 
 ### Auth
-- Auth0 at `temperkb.us.auth0.com` is the sole OAuth provider
+- Auth0 (the tenant named by `AUTH_ISSUER`) is the sole OAuth provider
 - Neon Auth references in old `.env` files are stale — ignore them
 - `AUTH_PROVIDER_NAME` should be `auth0`
 - MCP uses a static DCR proxy (returns pre-registered client_id) at `/oauth/register`
