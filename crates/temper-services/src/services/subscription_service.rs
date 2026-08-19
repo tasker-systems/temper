@@ -302,7 +302,7 @@ fn map_duplicate(err: sqlx::Error) -> ApiError {
 // anything that regenerates a committed artifact. CI owns the broad suites.
 // (`cargo nextest run -p temper-services --features test-db subscription_service`)
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-db"))]
 mod tests {
     use super::*;
     use sqlx::PgPool;
