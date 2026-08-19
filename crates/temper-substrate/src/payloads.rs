@@ -1108,8 +1108,41 @@ pub struct PrincipalGovernanceChanged {
     pub reason: Option<String>,
 }
 
-/// The 21 typed event names — the registry-stamping and snapshot surfaces iterate this.
-pub const TYPED_EVENT_NAMES: [&str; 21] = [
+/// `subscription_delivery_disposed` — a steward's judgment on one routed event (S2 chunk C).
+///
+/// The disposition is an **act**, not a column write. `acted` cites what was authored; `declined`
+/// records that the delivery was judged immaterial, *with* its reasoning and confidence — so a
+/// decline is accountable and citable rather than a silent cursor bump. The delivery row's
+/// `rationale`/`confidence` columns are a queryable projection of this payload, not a second
+/// source of truth.
+///
+/// **The accountability carrier is the actor, not the envelope.** `decided_by_profile_id` is
+/// always present; `decided_by_invocation_id` is present only when an agent acted for a cogmap,
+/// because `kb_invocations.originating_cogmap_id` is `NOT NULL` and a `kb_contexts` or `kb_teams`
+/// subscriber can never originate one. Requiring an envelope here would scope judgment to one of
+/// the three subscriber kinds while reading as though it covered all of them — which is exactly
+/// what the design said until the chunk C grounding pass caught it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct SubscriptionDeliveryDisposed {
+    pub delivery_id: Uuid,
+    pub subscription_id: Uuid,
+    pub event_id: Uuid,
+    /// `acted` | `declined`.
+    pub disposition: String,
+    /// Why. Required — a disposition without reasoning is the silent cursor bump this event type
+    /// exists to prevent.
+    pub rationale: String,
+    /// The judgment's confidence in `[0,1]`.
+    pub confidence: f64,
+    pub decided_by_profile_id: ProfileId,
+    /// Present only when an agent acted for a cogmap; `None` for a human disposition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decided_by_invocation_id: Option<Uuid>,
+}
+
+/// The 22 typed event names — the registry-stamping and snapshot surfaces iterate this.
+pub const TYPED_EVENT_NAMES: [&str; 22] = [
     "cogmap_seeded",
     "resource_created",
     "relationship_asserted",
@@ -1131,6 +1164,7 @@ pub const TYPED_EVENT_NAMES: [&str; 21] = [
     "slack_principal_disconnected",
     "principal_standing_changed",
     "principal_governance_changed",
+    "subscription_delivery_disposed",
 ];
 
 /// The event names classified `kb_event_types.category = 'admin'` — the ledger's own vocabulary,
@@ -1225,6 +1259,12 @@ pub async fn verify_ledger_roundtrip(pool: &sqlx::PgPool) -> anyhow::Result<()> 
                 }
                 "principal_governance_changed" => {
                     serde_json::from_value::<PrincipalGovernanceChanged>(r.payload.clone())?;
+                }
+                // The delivery disposition (S2 chunk C). `delivery_service::record_disposition`
+                // emits it, so it gets an arm for the same reason the grant events do: this is
+                // where the typed contract meets a really-emitted payload.
+                "subscription_delivery_disposed" => {
+                    serde_json::from_value::<SubscriptionDeliveryDisposed>(r.payload.clone())?;
                 }
                 // Unlisted types (e.g. taxonomy entries no write path emits yet) are intentionally
                 // not roundtripped here; add an arm when a write path begins emitting one.

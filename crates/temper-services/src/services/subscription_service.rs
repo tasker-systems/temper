@@ -27,10 +27,12 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use temper_core::types::ids::ProfileId;
-use temper_core::types::subscription::{CreateSubscriptionRequest, Subscription};
+use temper_core::types::subscription::{
+    CreateSubscriptionRequest, Subscription, SubscriptionSelector,
+};
 
 use crate::error::{ApiError, ApiResult};
-use crate::services::team_service;
+use crate::services::{connection_service, team_service};
 
 /// The admissible subscriber tables. Kept here, not in the migration's CHECK, so the service
 /// layer can match on them without re-parsing strings. The migration's CHECK is the
@@ -149,6 +151,11 @@ pub async fn create(
     )
     .await?;
 
+    // A declaration that can never match is refused here, not disclosed forever after. See
+    // `refuse_inert_declaration` for what it will and will not conclude.
+    let conn = connection_service::get(pool, req.connection_id).await?;
+    refuse_inert_declaration(&conn, &req.selector)?;
+
     // Serialize the typed selector to JSONB for storage. The `?` bound is needed because
     // sqlx's `Json<T>` bind maps to JSONB but the column is `serde_json::Value`-shaped in the
     // query_as! macro. We store the re-serialized value so the column carries the canonical
@@ -174,6 +181,56 @@ pub async fn create(
     .map_err(map_duplicate)?;
 
     get(pool, id).await
+}
+
+/// Refuse a declaration that cannot ever match.
+///
+/// A selector waiting on an event kind the connection is not registered to receive is inert by
+/// construction, and temper knows it at declaration time with **no payload required**. Refusing is
+/// the honest answer where disclosing-forever-after is not: saying no once beats explaining
+/// inertness every time someone reads the subscription. This is the register's refusal face — a
+/// well-formed act the system said no to — rather than a case of clause C12
+/// (`a-silent-declaration-is-distinguishable-from-a-quiet-source`), which covers declarations that
+/// *could* match and have not.
+///
+/// **It only concludes inertness where it can prove it, and the bar is deliberately high.**
+/// `webhook_events` is temper's *record* of what was registered remotely, and that record can lag
+/// the provider. So:
+///
+/// - An **empty** `webhook_events` proves nothing — it is the not-yet-ledger-capable state, not a
+///   statement that the connection receives nothing forever. A connection may legitimately be
+///   provisioned before its webhook registration lands. Never refuse on it.
+/// - A selector naming **no** event types matches all of them by definition
+///   ([`SubscriptionSelector::GitHubRepository`]'s empty `event_types` = match all), so there is no
+///   intersection to be empty.
+/// - Only when the connection declares what it receives AND the selector declares what it waits
+///   for AND the two are disjoint is inertness proven.
+///
+/// The refusal **cites what it compared**, so a maintainer who knows the registration record is
+/// stale can see exactly why it said no and go fix the record rather than guess.
+fn refuse_inert_declaration(
+    conn: &temper_core::types::connection::Connection,
+    selector: &SubscriptionSelector,
+) -> ApiResult<()> {
+    // Only variants that name event types can be proven inert this way. The other variants match
+    // on repo or project and are indifferent to the event kind, so the connection's registered
+    // set says nothing about whether they can match.
+    let SubscriptionSelector::GitHubRepository { event_types, .. } = selector else {
+        return Ok(());
+    };
+    if conn.webhook_events.is_empty() || event_types.is_empty() {
+        return Ok(());
+    }
+    if event_types
+        .iter()
+        .any(|wanted| conn.webhook_events.iter().any(|got| got == wanted))
+    {
+        return Ok(());
+    }
+    Err(ApiError::BadRequest(format!(
+        "this declaration can never match: the selector waits for {:?}, and connection '{}' is          registered to receive {:?}. Nothing in the first set is in the second, so no payload          would ever reach this subscription. If the connection's registered set is stale, update          it first — this refusal compared the two sets and nothing else.",
+        event_types, conn.slug, conn.webhook_events
+    )))
 }
 
 /// Revoke a subscription. Idempotent in effect but not in record: a second revoke of an

@@ -90,6 +90,11 @@ pub enum EventKind {
     /// A Slack principal unbound from a temper profile. Fires from the SQL chokepoint
     /// `_admin_slack_disconnected`, on both the self-serve and admin arms.
     SlackPrincipalDisconnected,
+    /// A steward's judgment on one routed delivery (S2 chunk C). Fires from
+    /// `delivery_service::record_disposition`, which appends it in the same transaction as the
+    /// delivery row's update — so a judgment on the ledger and a judgment on the row it judged
+    /// cannot disagree.
+    SubscriptionDeliveryDisposed,
     /// One principal-admission transition (spec 2026-07-20 §10, D4). Fires from the per-act
     /// transition functions in `20260720000030`. One kind for all nine acts — the act rides in
     /// the payload; the type boundary worth drawing is standing-vs-governance (spec §2).
@@ -137,6 +142,7 @@ impl EventKind {
             EventKind::GrantCreated => "grant_created",
             EventKind::GrantRevoked => "grant_revoked",
             EventKind::SlackPrincipalDisconnected => "slack_principal_disconnected",
+            EventKind::SubscriptionDeliveryDisposed => "subscription_delivery_disposed",
             EventKind::PrincipalStandingChanged => "principal_standing_changed",
             EventKind::PrincipalGovernanceChanged => "principal_governance_changed",
             EventKind::CitationAudited => "citation_audited",
@@ -179,6 +185,7 @@ impl EventKind {
             "grant_created" => EventKind::GrantCreated,
             "grant_revoked" => EventKind::GrantRevoked,
             "slack_principal_disconnected" => EventKind::SlackPrincipalDisconnected,
+            "subscription_delivery_disposed" => EventKind::SubscriptionDeliveryDisposed,
             "principal_standing_changed" => EventKind::PrincipalStandingChanged,
             "principal_governance_changed" => EventKind::PrincipalGovernanceChanged,
             "citation_audited" => EventKind::CitationAudited,

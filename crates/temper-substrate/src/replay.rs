@@ -217,7 +217,10 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             // Principal-admission acts (spec 2026-07-20): authority acts, not knowledge. Same
             // NULL-anchored, content-free shape as the ledger events above.
             | EventKind::PrincipalStandingChanged
-            | EventKind::PrincipalGovernanceChanged => None,
+            | EventKind::PrincipalGovernanceChanged
+            // A delivery disposition (S2 chunk C) carries reasoning and confidence, not content:
+            // no blocks, no chunks, no sidecar.
+            | EventKind::SubscriptionDeliveryDisposed => None,
         }
         .context("content-bearing payload missing blocks")?;
         let mut side = serde_json::Map::new();
@@ -583,7 +586,15 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // no-op. Standing STATE is replayed from the kb_principal_standing / _events /
             // kb_principal_governance input tables, not rebuilt from these events.
             | EventKind::PrincipalStandingChanged
-            | EventKind::PrincipalGovernanceChanged => {}
+            | EventKind::PrincipalGovernanceChanged
+            // A delivery disposition (S2 chunk C) touches no _project_* cognition half either.
+            // kb_subscription_deliveries is a projection written in Rust inside the acting
+            // transaction — the same standing as the region tables, which replay also excludes as
+            // second-order derived compute (see this module's header). Delivery STATE is not
+            // rebuilt from these events, and deliberately so: the intake projection depends on
+            // kb_subscriptions, which is mutable infra and not itself replayable, so a rebuild
+            // would silently reproject today's declarations onto yesterday's events.
+            | EventKind::SubscriptionDeliveryDisposed => {}
         }
     }
     restore_table(pool, "kb_team_cogmaps", &snap.team_cogmaps).await?;

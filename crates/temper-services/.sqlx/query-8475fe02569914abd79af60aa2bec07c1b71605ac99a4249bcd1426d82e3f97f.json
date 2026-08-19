@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kb_subscription_deliveries\n              SET status = $2, scope_reason = $3, scoped_at = now()\n            WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8475fe02569914abd79af60aa2bec07c1b71605ac99a4249bcd1426d82e3f97f"
+}
