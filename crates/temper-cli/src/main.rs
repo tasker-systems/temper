@@ -1,8 +1,9 @@
 use clap::Parser;
 use temper_cli::cli::{
     AdminAction, AdminConnectionAction, AdminMachineAction, AdminRequestsAction, AdminSamlAction,
-    AdminSlackAction, AuthAction, Cli, CogmapCmd, Commands, ConfigAction, ContextAction,
-    InvocationCmd, MemoryAction, ResourceAction, SkillAction, SlackAction, StewardCmd, TeamAction,
+    AdminSlackAction, AdminSubscriptionAction, AuthAction, Cli, CogmapCmd, Commands, ConfigAction,
+    ContextAction, InvocationCmd, MemoryAction, ResourceAction, SkillAction, SlackAction,
+    StewardCmd, TeamAction,
 };
 use temper_cli::commands;
 use temper_cli::format::OutputFormat;
@@ -1118,6 +1119,66 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                                 client,
                                 &id,
                                 &team,
+                                output_format,
+                            )
+                            .await
+                        })
+                    })
+                }
+            },
+            AdminAction::Subscription { action } => match action {
+                AdminSubscriptionAction::Create {
+                    subscriber_table,
+                    subscriber_id,
+                    authoring_team_id,
+                    connection_id,
+                    selector,
+                } => temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::admin_subscription::create_remote(
+                            client,
+                            &subscriber_table,
+                            &subscriber_id,
+                            &authoring_team_id,
+                            &connection_id,
+                            &selector,
+                            output_format,
+                        )
+                        .await
+                    })
+                }),
+                AdminSubscriptionAction::List {
+                    include_revoked,
+                    connection_id,
+                } => temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::admin_subscription::list_remote(
+                            client,
+                            include_revoked,
+                            connection_id.as_deref(),
+                            output_format,
+                        )
+                        .await
+                    })
+                }),
+                AdminSubscriptionAction::Show { id } => {
+                    temper_cli::actions::runtime::with_client(|client| {
+                        Box::pin(async move {
+                            temper_cli::commands::admin_subscription::show_remote(
+                                client,
+                                &id,
+                                output_format,
+                            )
+                            .await
+                        })
+                    })
+                }
+                AdminSubscriptionAction::Revoke { id } => {
+                    temper_cli::actions::runtime::with_client(|client| {
+                        Box::pin(async move {
+                            temper_cli::commands::admin_subscription::revoke_remote(
+                                client,
+                                &id,
                                 output_format,
                             )
                             .await

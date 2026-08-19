@@ -1,0 +1,79 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, subscriber_table, subscriber_id, authoring_team_id,\n                  connection_id, selector,\n                  created_by_profile_id, created, revoked_at, revoked_by_profile_id\n             FROM kb_subscriptions s\n            WHERE ($1 OR s.revoked_at IS NULL)\n              AND ( $2\n                    OR EXISTS (\n                        SELECT 1 FROM kb_team_members tm\n                         WHERE tm.team_id = s.authoring_team_id\n                           AND tm.profile_id = $3\n                           AND tm.role IN ('owner', 'maintainer')\n                    ) )\n              AND ( $4::uuid IS NULL OR s.connection_id = $4 )\n            ORDER BY s.created DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "subscriber_table",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "subscriber_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "authoring_team_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "connection_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "selector",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 6,
+        "name": "created_by_profile_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 7,
+        "name": "created",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 8,
+        "name": "revoked_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 9,
+        "name": "revoked_by_profile_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bool",
+        "Bool",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "5dae3c5c97f9aef49274419669ed6882a970837c09ad35514e94736178bb1cee"
+}

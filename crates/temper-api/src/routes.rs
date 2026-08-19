@@ -287,6 +287,17 @@ fn gated_routes() -> OpenApiRouter<AppState> {
             "/api/connections/{id}/reach",
             post(handlers::connections::grant_reach).delete(handlers::connections::revoke_reach),
         )
+        // Operator-only subscription management (external systems as subscribed emitters, S2).
+        // Same shape as connections above: plain .route(), out of the OpenAPI contract, gated
+        // inside the service (require_manage_on_team + kb_access_grants reach-grant read).
+        .route(
+            "/api/subscriptions",
+            get(handlers::subscriptions::list).post(handlers::subscriptions::create),
+        )
+        .route(
+            "/api/subscriptions/{id}",
+            get(handlers::subscriptions::get).delete(handlers::subscriptions::revoke),
+        )
 }
 
 /// Internal, server-to-server only — gated by a shared secret, NOT `require_auth`.

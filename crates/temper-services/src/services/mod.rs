@@ -14,6 +14,7 @@ pub mod evidential_standing_service;
 pub mod facet_service;
 pub mod grant_crypto;
 pub mod graph_service;
+pub mod intake_service;
 pub mod invitation_service;
 pub mod lineage_service;
 pub(crate) mod machine_authz;
