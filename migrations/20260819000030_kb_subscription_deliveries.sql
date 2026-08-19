@@ -149,9 +149,17 @@ CREATE INDEX idx_kb_subscription_deliveries_event
 -- not pay for the common ones. This is the index that makes "is anything stuck?" answerable
 -- without an agent asking — the job no steward can infer, because two of the three subscriber
 -- kinds have no steward at all.
+--
+-- `disposition IS NULL` is in the predicate because a JUDGED delivery has left the DLQ. An
+-- undetermined delivery is dispositionable on purpose (invariant 6 surfaces the DLQ to the tick,
+-- and a steward may decline an enrichment failure on its merits); once judged it is resolved, and
+-- a "what is stuck?" sweep that keeps returning it is a queue that can only grow, which is a queue
+-- nobody reads. The status stays `undetermined` — it remains the true statement about what
+-- enrichment concluded, and rewriting it on disposition would destroy the record of why the
+-- judgment was made under uncertainty. So the DISPOSITION, not the status, is what clears it.
 CREATE INDEX idx_kb_subscription_deliveries_undetermined
     ON kb_subscription_deliveries(subscription_id, id DESC)
-    WHERE status = 'undetermined';
+    WHERE status = 'undetermined' AND disposition IS NULL;
 
 COMMENT ON TABLE kb_subscription_deliveries IS
   'One row per (subscription, event) the radius matched. Projected in Rust inside the intake transaction — the region_materialized precedent (write.rs:196-204), not a payload-first _project_* half, because the projection halves read only the payload and chunk B''s payload is the remote''s verbatim body. Two lifecycles share the table: a kb_cogmaps subscriber can be acted for under an invocation envelope and runs to acted/declined; a kb_contexts or kb_teams subscriber has no telos, no steward and no envelope, and is terminal at in_scope/undetermined — awareness, not backlog. Also the read surface for goal clause C11: a webhook_received event is unreachable on all three existing kb_events read paths, so a team cannot otherwise see that a webhook it subscribed to ever arrived.';

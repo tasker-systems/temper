@@ -1167,6 +1167,18 @@ pub const TYPED_EVENT_NAMES: [&str; 22] = [
     "subscription_delivery_disposed",
 ];
 
+/// FOREIGN event names — registered permissive (NULL `payload_schema`) because their body is a
+/// remote system's, whose shape temper does not control and cannot publish. They are deliberately
+/// absent from [`TYPED_EVENT_NAMES`] (no schema to snapshot, nothing for the boot-seed to stamp).
+///
+/// **They still need `EventKind` arms**, and this const exists because that was not obvious enough
+/// on its own: `replay()` resolves EVERY `kb_events` row through `EventKind::from_canonical_name`
+/// and errors on a miss, so a foreign type with no arm breaks replay on any instance that ever
+/// received one — which is what `webhook_received` did between S2 chunk B and chunk C. The typed
+/// round-trip test iterates `TYPED_EVENT_NAMES` and therefore could not see it. The same test now
+/// iterates this list too.
+pub const FOREIGN_EVENT_NAMES: [&str; 1] = ["webhook_received"];
+
 /// The event names classified `kb_event_types.category = 'admin'` — the ledger's own vocabulary,
 /// firewalled out of every cognition read (`element_trail_node`/`_edge`, migration
 /// `20260718000020`). The migration stamps these on an existing registry; this const is what

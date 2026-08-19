@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kb_subscription_deliveries\n              SET disposition = $2,\n                  rationale = $3,\n                  confidence = $4,\n                  decided_at = now(),\n                  decided_by_event_id = $5,\n                  decided_by_invocation_id = $6,\n                  decided_by_profile_id = $7\n            WHERE id = $1 AND disposition IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Float8",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "50de6c28ce4e8b9b0aaf1693f5560b9adac369df058746d081263e78b69a7f68"
+}

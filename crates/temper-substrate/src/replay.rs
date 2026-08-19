@@ -219,8 +219,10 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             | EventKind::PrincipalStandingChanged
             | EventKind::PrincipalGovernanceChanged
             // A delivery disposition (S2 chunk C) carries reasoning and confidence, not content:
-            // no blocks, no chunks, no sidecar.
-            | EventKind::SubscriptionDeliveryDisposed => None,
+            // no blocks, no chunks, no sidecar. A received webhook (S2 chunk B) carries the
+            // remote's verbatim body — foreign content temper did not author and does not chunk.
+            | EventKind::SubscriptionDeliveryDisposed
+            | EventKind::WebhookReceived => None,
         }
         .context("content-bearing payload missing blocks")?;
         let mut side = serde_json::Map::new();
@@ -587,6 +589,14 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // kb_principal_governance input tables, not rebuilt from these events.
             | EventKind::PrincipalStandingChanged
             | EventKind::PrincipalGovernanceChanged
+            // A received webhook (S2 chunk B) touches no _project_* cognition half: intake appends
+            // the event and projects delivery rows in Rust, in the same transaction. Without this
+            // arm `replay()` errored with "no projector for event type webhook_received" against
+            // ANY instance that had ever received a webhook — it resolves every kb_events row
+            // through from_canonical_name. The typed round-trip test could not catch it because
+            // webhook_received is permissive and so absent from TYPED_EVENT_NAMES; FOREIGN_EVENT_NAMES
+            // now closes that hole.
+            | EventKind::WebhookReceived
             // A delivery disposition (S2 chunk C) touches no _project_* cognition half either.
             // kb_subscription_deliveries is a projection written in Rust inside the acting
             // transaction — the same standing as the region tables, which replay also excludes as

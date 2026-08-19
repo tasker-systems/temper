@@ -228,7 +228,10 @@ fn refuse_inert_declaration(
         return Ok(());
     }
     Err(ApiError::BadRequest(format!(
-        "this declaration can never match: the selector waits for {:?}, and connection '{}' is          registered to receive {:?}. Nothing in the first set is in the second, so no payload          would ever reach this subscription. If the connection's registered set is stale, update          it first — this refusal compared the two sets and nothing else.",
+        "this declaration can never match: the selector waits for {:?}, and connection '{}' \
+         is registered to receive {:?}. Nothing in the first set is in the second, so no \
+         payload would ever reach this subscription. If the connection's registered set is \
+         stale, update it first — this refusal compared the two sets and nothing else.",
         event_types, conn.slug, conn.webhook_events
     )))
 }

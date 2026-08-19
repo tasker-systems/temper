@@ -215,7 +215,15 @@ pub async fn list_for_subscription(
 ///
 /// Separate from [`list_for_subscription`] because "is anything stuck?" is a question two of the
 /// three subscriber kinds have no agent to ask on their behalf. Served by the partial index
-/// `idx_kb_subscription_deliveries_undetermined`.
+/// `idx_kb_subscription_deliveries_undetermined`, whose predicate matches this `WHERE` exactly.
+///
+/// **A judged delivery has left the DLQ.** `undetermined` admits judgment
+/// ([`DeliveryStatus::is_surfaced_for_judgment`]), so a steward can decline an enrichment failure
+/// on its merits — and once it has, the delivery is resolved and must stop being reported as
+/// stuck. Invariant 6 wants the DLQ *visible*; it does not want it monotonically increasing, and a
+/// queue that can only grow is one nobody reads. The status stays `undetermined` deliberately: it
+/// remains the true statement about what enrichment concluded, and rewriting it on disposition
+/// would destroy the record of why the judgment was made under uncertainty.
 pub async fn list_undetermined(
     pool: &PgPool,
     caller: ProfileId,
@@ -229,7 +237,9 @@ pub async fn list_undetermined(
                   disposition, decided_by_event_id, decided_by_invocation_id,
                   decided_by_profile_id, decided_at, rationale, confidence, created
              FROM kb_subscription_deliveries
-            WHERE subscription_id = $1 AND status = 'undetermined'
+            WHERE subscription_id = $1
+              AND status = 'undetermined'
+              AND disposition IS NULL
             ORDER BY id DESC"#,
         subscription_id,
     )
@@ -273,12 +283,25 @@ pub async fn declaration_liveness(
 
     let conn = connection_service::get(pool, sub.connection_id).await?;
 
-    // How much has actually reached this connection? Scoped by the connection's emitter entity and
-    // served by `idx_kb_events_emitter ON kb_events(emitter_entity_id, occurred_at DESC)`
-    // (canonical_schema.sql:489) — the index already exists for exactly this shape.
+    // How much has actually reached this connection SINCE THIS DECLARATION EXISTED? Scoped by the
+    // connection's emitter entity and served by
+    // `idx_kb_events_emitter ON kb_events(emitter_entity_id, occurred_at DESC)`
+    // (canonical_schema.sql:489) — the index already exists for exactly this shape, both legs.
+    //
+    // The time bound is load-bearing, not hygiene. The delivery count this is compared against can
+    // only include events from after the subscription was created, so an all-time count compares
+    // two different windows: a team adding a subscription today to a connection with a year of
+    // history would be told `SelectorMatchesNothing` on its very first read — "the overwhelmingly
+    // likely cause is the selector" — when nothing has arrived since the declaration existed and
+    // the selector may be perfectly correct. The clause exists to stop a maintainer misreading
+    // silence; an unwindowed count manufactures the opposite misreading.
     let events_on_connection = sqlx::query_scalar!(
-        r#"SELECT count(*) AS "count!" FROM kb_events WHERE emitter_entity_id = $1"#,
+        r#"SELECT count(*) AS "count!"
+             FROM kb_events
+            WHERE emitter_entity_id = $1
+              AND occurred_at >= $2"#,
         conn.emitter_entity_id,
+        sub.created,
     )
     .fetch_one(pool)
     .await?;
@@ -348,16 +371,30 @@ pub async fn record_scope(
         ));
     }
 
-    sqlx::query!(
+    // `AND disposition IS NULL` is the guard, not the check above. The check reads a snapshot on
+    // the pool; between it and this write a steward can judge the delivery, and the interleaving
+    // is not hypothetical in the one direction the schema does NOT rescue: writing `undetermined`
+    // with a reason satisfies every CHECK, so without this predicate the row would end up
+    // carrying a judgment made against `in_scope` while reading `undetermined` — the scope moved
+    // underneath the reasoning, exactly as this function's docs say must never happen. (Writing
+    // `out_of_scope` would be caught by `disposition_follows_a_resolved_scope`, but as a 500
+    // rather than the answer the caller deserves.)
+    let updated = sqlx::query!(
         r#"UPDATE kb_subscription_deliveries
               SET status = $2, scope_reason = $3, scoped_at = now()
-            WHERE id = $1"#,
+            WHERE id = $1 AND disposition IS NULL"#,
         delivery_id,
         req.status.as_str(),
         req.reason.as_deref(),
     )
     .execute(pool)
     .await?;
+    if updated.rows_affected() != 1 {
+        return Err(ApiError::BadRequest(
+            "this delivery was judged concurrently; re-scoping it would invalidate the              reasoning recorded against the scope that was judged"
+                .into(),
+        ));
+    }
 
     get(pool, delivery_id).await
 }
@@ -421,6 +458,46 @@ pub async fn record_disposition(
         ));
     }
 
+    // An envelope is only meaningful when an agent is acting FOR the cogmap that subscribed, and
+    // the column's whole argument is accountability — an unvalidated citation is neither
+    // accountable nor citable. The FK to `kb_invocations` proves the envelope exists; it does not
+    // prove it is *this* subscriber's. Two things are checked, and both follow directly from why
+    // the column is nullable in the first place:
+    //   1. Only a cogmap subscriber can be acted for under an envelope
+    //      (`kb_invocations.originating_cogmap_id` is NOT NULL), so an envelope offered for a
+    //      context or team subscriber is incoherent rather than merely unverified.
+    //   2. The envelope's originating cogmap must BE the subscriber. Without this a maintainer
+    //      could attribute their judgment to an unrelated team's run, and both the ledger event
+    //      and the row would carry it.
+    if let Some(invocation_id) = req.invocation_id {
+        if sub.subscriber_table != "kb_cogmaps" {
+            return Err(ApiError::BadRequest(format!(
+                "an invocation envelope is only meaningful for a kb_cogmaps subscriber; this                  delivery's subscriber is a {}, which has no telos to act under. Dispose as a                  profile instead — the acting profile carries attribution.",
+                sub.subscriber_table
+            )));
+        }
+        let originating: Option<Uuid> = sqlx::query_scalar!(
+            "SELECT originating_cogmap_id FROM kb_invocations WHERE id = $1",
+            invocation_id,
+        )
+        .fetch_optional(pool)
+        .await?;
+        match originating {
+            None => {
+                return Err(ApiError::BadRequest(
+                    "no such invocation".into(),
+                ))
+            }
+            Some(cogmap) if cogmap != sub.subscriber_id => {
+                return Err(ApiError::BadRequest(
+                    "that invocation originates from a different cogmap than this delivery's                      subscriber; a judgment may only cite the envelope it was actually made under"
+                        .into(),
+                ))
+            }
+            Some(_) => {}
+        }
+    }
+
     // Resolved on the pool, before the transaction opens: the emitter is a read, and a missing one
     // means the actor's own profile is structurally incomplete. Same posture as
     // `slack_disconnect_service` — no system fallback, because the ledger derives authorship FROM
@@ -457,6 +534,37 @@ pub async fn record_disposition(
 
     let mut tx = pool.begin().await?;
 
+    // RE-READ UNDER A ROW LOCK. Every check above ran against a snapshot taken on the pool, and
+    // the window between that read and this write is real: two callers disposing the same
+    // delivery concurrently would both see `disposition = None`, both append a judgment event,
+    // and leave the ledger carrying two judgment acts for one delivery while the row cites only
+    // the second. That is precisely what the "supersede it with a new act rather than overwriting
+    // the record of the first" refusal exists to prevent, so the guard has to hold under
+    // concurrency or it does not hold at all.
+    let locked = sqlx::query!(
+        r#"SELECT status, disposition
+             FROM kb_subscription_deliveries
+            WHERE id = $1
+              FOR UPDATE"#,
+        delivery_id,
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| ApiError::NotFound("delivery not found or not readable".to_string()))?;
+
+    if locked.disposition.is_some() {
+        return Err(ApiError::BadRequest(
+            "this delivery has already been judged; supersede it with a new act rather than              overwriting the record of the first"
+                .into(),
+        ));
+    }
+    if !matches!(locked.status.as_str(), "in_scope" | "undetermined") {
+        return Err(ApiError::BadRequest(format!(
+            "a delivery at '{}' cannot be judged: pending_scope has not been scoped yet, and              out_of_scope was determined not to touch this subscriber",
+            locked.status
+        )));
+    }
+
     let event_id: Uuid = sqlx::query_scalar!(
         "SELECT _event_append($1, $2, 'kb_contexts', $3, $4, $5, $6, $7, $8, $9)",
         DISPOSED_TYPE,
@@ -474,7 +582,7 @@ pub async fn record_disposition(
     .map_err(|e| ApiError::Internal(format!("_event_append failed: {e}")))?
     .expect("_event_append always returns a uuid");
 
-    sqlx::query!(
+    let updated = sqlx::query!(
         r#"UPDATE kb_subscription_deliveries
               SET disposition = $2,
                   rationale = $3,
@@ -483,7 +591,7 @@ pub async fn record_disposition(
                   decided_by_event_id = $5,
                   decided_by_invocation_id = $6,
                   decided_by_profile_id = $7
-            WHERE id = $1"#,
+            WHERE id = $1 AND disposition IS NULL"#,
         delivery_id,
         req.disposition.as_str(),
         req.rationale,
@@ -494,6 +602,16 @@ pub async fn record_disposition(
     )
     .execute(&mut *tx)
     .await?;
+
+    // The row lock above makes this unreachable, and it is here anyway: the predicate and the
+    // lock are two independent guards, and a silent zero-row UPDATE would commit the judgment
+    // event with nothing pointing at it. Rolling back is what keeps the ledger and the row from
+    // disagreeing.
+    if updated.rows_affected() != 1 {
+        return Err(ApiError::BadRequest(
+            "this delivery was judged concurrently; the judgment was not recorded".into(),
+        ));
+    }
 
     tx.commit().await?;
 
@@ -1150,6 +1268,252 @@ mod tests {
         assert!(
             matches!(live, DeclarationLiveness::Revoked { .. }),
             "revocation explains everything downstream of it; got {live:?}"
+        );
+    }
+
+    // ── review findings: the guards must hold, and mean what they say ──────
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_judged_undetermined_delivery_leaves_the_dlq(pool: PgPool) {
+        // `undetermined` admits judgment on purpose, so a steward can decline an enrichment
+        // failure on its merits. Once judged the delivery is RESOLVED, and a "what is stuck?"
+        // sweep that keeps returning it is a queue that can only grow. The status stays
+        // `undetermined` — that is still the true statement about what enrichment concluded.
+        let (admin, _t, _c, conn, sub) = seed_world(&pool).await;
+        let (_e, d) = deliver_one(&pool, conn, sub, admin).await;
+        record_scope(
+            &pool,
+            admin,
+            d.id,
+            &RecordScopeRequest {
+                status: DeliveryStatus::Undetermined,
+                reason: Some("enrichment failed: 502".into()),
+            },
+        )
+        .await
+        .expect("scope");
+        assert_eq!(
+            list_undetermined(&pool, admin, sub)
+                .await
+                .expect("dlq")
+                .len(),
+            1
+        );
+
+        let judged = record_disposition(
+            &pool,
+            admin,
+            d.id,
+            &RecordDispositionRequest {
+                disposition: Disposition::Declined,
+                rationale: "judged immaterial despite the failed enrichment".into(),
+                confidence: 0.4,
+                invocation_id: None,
+            },
+        )
+        .await
+        .expect("an undetermined delivery is dispositionable");
+
+        assert!(
+            list_undetermined(&pool, admin, sub)
+                .await
+                .expect("dlq")
+                .is_empty(),
+            "a judged delivery has left the DLQ"
+        );
+        assert_eq!(
+            judged.status,
+            DeliveryStatus::Undetermined,
+            "the status still records what enrichment concluded"
+        );
+        assert_eq!(
+            judged.scope_reason.as_deref(),
+            Some("enrichment failed: 502")
+        );
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn liveness_does_not_blame_the_selector_for_traffic_that_predates_the_declaration(
+        pool: PgPool,
+    ) {
+        // The delivery count can only include events from after the subscription existed, so an
+        // all-time event count compares two different windows and reports SelectorMatchesNothing
+        // on a brand-new declaration against an established connection. The clause exists to stop
+        // a maintainer misreading silence; that would manufacture the opposite misreading.
+        let admin = seed_admin(&pool).await;
+        let team = seed_team(&pool, admin).await;
+        let ctx = seed_context_owned_by_team(&pool, team).await;
+        let conn = seed_connection(&pool, Some(team), admin).await;
+        grant_reach(&pool, admin, conn, team).await;
+        attach_stub_credential(&pool, conn).await;
+
+        // History on the connection BEFORE any declaration exists.
+        intake_service::receive_webhook(
+            &pool,
+            conn,
+            "pull_request",
+            &github_pr_payload(GITHUB_REPO),
+        )
+        .await
+        .expect("historical webhook");
+
+        let fresh = create_subscription(
+            &pool,
+            admin,
+            "kb_contexts",
+            ctx,
+            team,
+            conn,
+            SubscriptionSelector::GitHubRepository {
+                repo: GITHUB_REPO.into(),
+                event_types: vec![],
+            },
+        )
+        .await;
+
+        assert_eq!(
+            declaration_liveness(&pool, admin, fresh)
+                .await
+                .expect("liveness"),
+            DeclarationLiveness::SourceQuiet,
+            "nothing has arrived SINCE this declaration; its selector is not the problem"
+        );
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_scope_cannot_move_underneath_a_judgment(pool: PgPool) {
+        // The `undetermined` direction is the one the schema does NOT rescue: every CHECK permits
+        // it, so without the `disposition IS NULL` predicate the row would end up carrying a
+        // judgment made against `in_scope` while reading `undetermined`.
+        //
+        // WHAT THIS DOES NOT WITNESS: the sequential path was already guarded by the pre-check, so
+        // this test passes against the pre-fix code too. It is a regression guard, not evidence for
+        // the concurrency fix — the interleaving that fix addresses (read on the pool, judge, then
+        // write) has no deterministic test here, and the `disposition IS NULL` predicate plus the
+        // `FOR UPDATE` in `record_disposition` are verified by construction rather than by
+        // execution. Stated rather than left to be inferred from a green run.
+        let (admin, _t, _c, conn, sub) = seed_world(&pool).await;
+        let (_e, d) = deliver_one(&pool, conn, sub, admin).await;
+        record_scope(
+            &pool,
+            admin,
+            d.id,
+            &RecordScopeRequest {
+                status: DeliveryStatus::InScope,
+                reason: None,
+            },
+        )
+        .await
+        .expect("scope");
+        record_disposition(
+            &pool,
+            admin,
+            d.id,
+            &RecordDispositionRequest {
+                disposition: Disposition::Acted,
+                rationale: "authored against it".into(),
+                confidence: 0.9,
+                invocation_id: None,
+            },
+        )
+        .await
+        .expect("dispose");
+
+        let err = record_scope(
+            &pool,
+            admin,
+            d.id,
+            &RecordScopeRequest {
+                status: DeliveryStatus::Undetermined,
+                reason: Some("late enrichment failure".into()),
+            },
+        )
+        .await
+        .expect_err("re-scoping a judged delivery must be refused");
+        assert!(matches!(err, ApiError::BadRequest(_)), "got {err:?}");
+
+        let after = get(&pool, d.id).await.expect("reload");
+        assert_eq!(
+            after.status,
+            DeliveryStatus::InScope,
+            "the judged scope is intact"
+        );
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn an_envelope_is_refused_for_a_subscriber_that_cannot_act_under_one(pool: PgPool) {
+        // A kb_contexts subscriber has no telos. An envelope offered for it is incoherent, not
+        // merely unverified — and the column's whole argument is that a citation is accountable.
+        let (admin, _t, _c, conn, sub) = seed_world(&pool).await;
+        let (_e, d) = deliver_one(&pool, conn, sub, admin).await;
+        record_scope(
+            &pool,
+            admin,
+            d.id,
+            &RecordScopeRequest {
+                status: DeliveryStatus::InScope,
+                reason: None,
+            },
+        )
+        .await
+        .expect("scope");
+
+        let err = record_disposition(
+            &pool,
+            admin,
+            d.id,
+            &RecordDispositionRequest {
+                disposition: Disposition::Declined,
+                rationale: "borrowed someone else's envelope".into(),
+                confidence: 0.5,
+                invocation_id: Some(Uuid::now_v7()),
+            },
+        )
+        .await
+        .expect_err("a context subscriber cannot cite an invocation envelope");
+        let ApiError::BadRequest(msg) = err else {
+            panic!("expected BadRequest, got {err:?}")
+        };
+        assert!(
+            msg.contains("kb_cogmaps"),
+            "must say which subscriber kind can: {msg}"
+        );
+    }
+
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn the_refusal_message_is_not_mangled_by_source_wrapping(pool: PgPool) {
+        // `cargo fmt` collapses a wrapped string literal without `\` continuations into one line,
+        // baking the source indentation into the message. This message exists to be READ by a
+        // maintainer chasing a stale registration record, so the mangling defeats its purpose.
+        let admin = seed_admin(&pool).await;
+        let team = seed_team(&pool, admin).await;
+        let ctx = seed_context_owned_by_team(&pool, team).await;
+        let conn = seed_connection(&pool, Some(team), admin).await;
+        grant_reach(&pool, admin, conn, team).await;
+        register_webhook_events(&pool, conn, &["push"]).await;
+
+        let err = crate::services::subscription_service::create(
+            &pool,
+            admin,
+            &temper_core::types::subscription::CreateSubscriptionRequest {
+                subscriber_table: "kb_contexts".into(),
+                subscriber_id: ctx,
+                authoring_team_id: team,
+                connection_id: conn,
+                selector: SubscriptionSelector::GitHubRepository {
+                    repo: GITHUB_REPO.into(),
+                    event_types: vec!["pull_request".into()],
+                },
+            },
+        )
+        .await
+        .expect_err("refused");
+        let ApiError::BadRequest(msg) = err else {
+            panic!("expected BadRequest, got {err:?}")
+        };
+        assert!(
+            !msg.contains("  "),
+            "no run of double spaces in a message meant to be read: {msg:?}"
         );
     }
 
