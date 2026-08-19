@@ -4,7 +4,7 @@
 	import { page } from '$app/stores';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import CommandPalette from '$lib/components/CommandPalette.svelte';
-	import { sidebarCollapsed } from '$lib/stores/sidebar.svelte';
+	import { sidebarCollapsed, sidebarGroups } from '$lib/stores/sidebar.svelte';
 
 	let { data, children }: { data: LayoutData; children: Snippet } = $props();
 
@@ -14,6 +14,7 @@
 	// (explicit user toggles persist and win). $effect re-runs when the path changes.
 	$effect(() => {
 		sidebarCollapsed.initFor($page.url.pathname);
+		sidebarGroups.init();
 	});
 
 	function onKeydown(e: KeyboardEvent) {
@@ -28,7 +29,9 @@
 
 <div class="flex h-screen bg-zinc-950 text-zinc-100">
 	<Sidebar
-		contexts={data.contexts ?? []}
+		contexts={data.contexts}
+		teams={data.teams}
+		selfProfileId={data.profile.id}
 		user={data.profile
 			? { display_name: data.profile.display_name, email: data.profile.email ?? '' }
 			: null}
