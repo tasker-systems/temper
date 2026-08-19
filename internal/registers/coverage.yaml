@@ -25,19 +25,19 @@ search_domain:
 - all files (path citations)
 - 'excluded: target, node_modules, .git, .venv, __pycache__, dist, public'
 totals:
-  goals_in_context: 63
-  goals_projected: 30
+  goals_in_context: 64
+  goals_projected: 31
   goals_projected_note: active goals only; non-active goals are not read
   registers_with_no_clauses_read: 12
-  registers_with_clauses_and_a_witness_table: 15
-  registers_with_clauses_but_no_witness_table: 3
+  registers_with_clauses_and_a_witness_table: 16
+  registers_with_clauses_but_no_witness_table: 4
   witness_table_note: 'absence of a witness table is not a defect: a register whose mechanism is unbuilt
     has no witnesses to name, and giving it an empty table would read as ''checked, found nothing'' rather
     than ''nothing to check yet'''
-  clauses: 142
+  clauses: 154
   clauses_withdrawn: 2
   witness_citations: 129
-  witness_citations_unresolved: 10
+  witness_citations_unresolved: 8
 registers:
 - goal_id: 019f25d6-e1a9-7360-8a35-6bdf8ef53940
   goal_title: 'Teams in Temper: usable multi-user collaboration surface'
@@ -197,11 +197,11 @@ registers:
   context: '@j-cole-taylor/temper'
   read:
     clause_form: none
-    witness_table: false
-    unreadable: 'body does not parse as a register: no clause section found'
+    witness_table: true
+    unreadable: no clause declarations parsed
   clauses: []
   advancing:
-    total: 6
+    total: 11
     citing_nothing:
     - 019f5e15-0732-7a12-b734-04220f150043
     - 019f6030-0c37-7540-9149-c8a84c7ab5eb
@@ -209,6 +209,22 @@ registers:
     - 019f6088-1d7b-7043-93ad-af6a4a3324d5
     - 019f6088-e415-7a22-855d-084408f68203
     - 019f629a-7981-7643-9c90-1d865f1850b2
+    - 01a0165f-af4f-7473-83e1-5140825f6a49
+    - 01a0165f-cade-79a3-8073-8f15d0ac80f5
+    - 01a0165f-ecbf-77b1-aec4-85310b6d121c
+    - 01a017ad-dac6-7d73-baad-b5790a789ee5
+    - 01a019f2-85af-76d0-a1a8-7c5c78c11d5d
+  coverage_rows_naming_no_clause:
+  - C1
+  - C10
+  - C2
+  - C3
+  - C4
+  - C5
+  - C6
+  - C7
+  - C8
+  - C9
 - goal_id: 019f6344-01a5-7fc0-9e22-a80585f801fc
   goal_title: '@temper on Slack — act under each user''s real temper identity via explicit per-user account
     linking'
@@ -1223,10 +1239,12 @@ registers:
       found_in: crates/temper-substrate/tests/query_plan_compile.rs
     - name: an_intermediate_stages_trace_reports_the_page_it_ran_and_that_the_page_was_truncated
       kind: function
-      resolves: false
+      resolves: true
+      found_in: crates/temper-services/src/backend/query_read.rs
     - name: a_partial_walk_is_settled_by_the_page_behind_it
       kind: function
-      resolves: false
+      resolves: true
+      found_in: crates/temper-services/tests/query_run_composition_test.rs
     citations_witnesses:
     - 01a00670-e069-7dd2-a213-7b1cf4317d02
   advancing:
@@ -1547,3 +1565,50 @@ registers:
     citing_nothing: []
   coverage_rows_naming_no_clause:
   - every negative-face clause
+- goal_id: 01a01520-3ea7-7893-8669-64039f3ae5ba
+  goal_title: Work is located, followed, asked about, and changed from the web surface — by a reader who
+    operates no agent
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: prose+table
+    witness_table: false
+    unreadable: 'no coverage table declares a witness column, so no witness of this register is machine-readable
+      here. This is the CORRECT state for a register whose mechanism is unbuilt: it has no witnesses to
+      name. Do not read it as a formatting backlog'
+  clauses:
+  - name: work-is-locatable-without-a-question
+    interrogatable: false
+    citations_witnesses:
+    - 01a01522-16e4-7a70-85cc-c69d849427e5
+  - name: membership-is-legible-at-both-levels
+    interrogatable: false
+    citations_witnesses:
+    - 01a01522-16e4-7a70-85cc-c69d849427e5
+  - name: a-relationship-is-followable-in-one-step
+    interrogatable: false
+  - name: the-question-asked-is-the-question-answered
+    interrogatable: false
+  - name: a-question-starts-from-what-is-in-front-of-the-reader
+    interrogatable: false
+  - name: workflow-state-is-changeable-where-it-is-read
+    interrogatable: false
+  - name: a-reader-can-record-what-the-system-has-no-field-for
+    interrogatable: false
+  - name: no-affordance-overstates-what-it-does
+    interrogatable: false
+  - name: no-partial-view-reads-as-complete
+    interrogatable: false
+  - name: no-write-lands-outside-what-was-shown
+    interrogatable: false
+  - name: no-graph-vocabulary-is-required-to-follow-a-relationship
+    interrogatable: false
+  - name: no-write-is-unattributable
+    interrogatable: false
+  advancing:
+    total: 6
+    citing_nothing:
+    - 019f6d08-8b33-7f30-a438-8487261d5f23
+    - 01a0165a-ea15-77a0-b0f4-46443d7770a3
+    - 01a01765-ed1a-7233-93ee-3695086f4826
+    - 01a019dd-f176-77b0-812f-233937584066
+    - 01a019de-673d-7a10-af88-492ad7bd48dd

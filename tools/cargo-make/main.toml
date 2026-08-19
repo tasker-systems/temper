@@ -57,7 +57,7 @@ description = "Fail if the committed agent-skills/ projection has drifted from t
 script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-skills-drift.sh"]
 
 [tasks.register-coverage-drift]
-description = "Fail if docs/registers/coverage.yaml has drifted from the projection that produces it"
+description = "Fail if internal/registers/coverage.yaml has drifted from the projection that produces it"
 # DELIBERATELY NOT a dependency of `check`, and the reason is a standing goal of this repo: CI paying
 # for work nobody asked for. This gate makes ~60 network round trips to the knowledge base and takes
 # about a minute, which is not a cost every local `cargo make check` should carry.

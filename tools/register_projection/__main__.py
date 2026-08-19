@@ -1,7 +1,7 @@
 """Emit the register-coverage projection as YAML.
 
 Usage:
-    uv run --project tools register-projection --repo-root . --out docs/registers/coverage.yaml
+    uv run --project tools register-projection --repo-root . --out internal/registers/coverage.yaml
     uv run --project tools register-projection --check    # exit non-zero if the committed file drifts
 
 ## Determinism is a clause, not a nicety
@@ -28,7 +28,7 @@ from .symbols import build_index
 
 SCHEMA_VERSION = 1
 DEFAULT_CONTEXT = "@me/temper"
-DEFAULT_OUT = "docs/registers/coverage.yaml"
+DEFAULT_OUT = "internal/registers/coverage.yaml"
 
 HEADER = """\
 # Register coverage — GENERATED, do not edit by hand.

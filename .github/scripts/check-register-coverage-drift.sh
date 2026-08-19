@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Fail if `docs/registers/coverage.yaml` drifts from what the projection would produce now.
+# Fail if `internal/registers/coverage.yaml` drifts from what the projection would produce now.
 #
 # ## What this gate is, and how it differs from every sibling in this directory
 #
@@ -35,7 +35,7 @@
 set -uo pipefail
 
 REPO_ROOT="${REGISTER_COVERAGE_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
-ARTIFACT="docs/registers/coverage.yaml"
+ARTIFACT="internal/registers/coverage.yaml"
 
 skip() {
   echo "SKIPPED: register-coverage drift not checked — $1"
