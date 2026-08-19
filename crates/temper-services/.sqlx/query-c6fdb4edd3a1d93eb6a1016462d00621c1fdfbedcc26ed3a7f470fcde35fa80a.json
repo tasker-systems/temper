@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_team_members (team_id, profile_id, role)\n               VALUES ($1, $2, 'maintainer'::team_role)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c6fdb4edd3a1d93eb6a1016462d00621c1fdfbedcc26ed3a7f470fcde35fa80a"
+}
