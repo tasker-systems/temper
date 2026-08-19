@@ -387,6 +387,26 @@ run_test "agent-skills projection (*.md): defeats docs-only, rust corpus runs" \
     "RUN_RUST_QUALITY=true" \
     "RUN_TEST_RUST=true"
 
+# docs/ is owned by check-docs-public-only.sh in code-quality. The regression that
+# gate exists to catch is a returning internal tree, which is pure markdown — so the
+# extension test would classify it docs-only and skip the very job that would fail.
+# Both directions are pinned: a docs/ page defeats docs-only, and a docs/ page mixed
+# with an inert-root file still cannot launder its way to a rust-inert skip.
+run_test "docs/ page (*.md): defeats docs-only, the docs gate's job runs" \
+    "docs/superpowers/plans/2026-08-19-something.md" \
+    "DOCS_ONLY=false" \
+    "SKIP_ALL=false" \
+    "RUST_INERT=false" \
+    "RUN_CODE_QUALITY=true" \
+    "RUN_RUST_QUALITY=true"
+
+run_test "docs/ page + inert TS: veto survives, docs gate's job still runs" \
+    "docs/guides/releasing.md
+packages/temper-cloud/src/logger.ts" \
+    "DOCS_ONLY=false" \
+    "RUST_INERT=false" \
+    "RUN_RUST_QUALITY=true"
+
 # A wire contract is asserted from the Rust side too.
 run_test "wire contract: VETO, rust corpus runs" \
     "tests/contracts/m2m-token-request.json" \

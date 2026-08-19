@@ -263,6 +263,14 @@ RUST_INERT_ROOTS='^packages/temper-cloud/|^packages/temper-ui/|^packages/agent-w
 #     path-traversal security rule; editing it alone skipped the entire pipeline.
 #   scripts/migration-declaration-corpus.txt — `include_str!`d by temper-migrate
 #     and read by code-quality's awk-side parity check.
+#   docs/** — owned by check-docs-public-only.sh in code-quality: docs/ is synced
+#     wholesale to the public documentation site, and the gate asserts that nothing
+#     but public documentation lives there. The regression it exists to catch is a
+#     returning internal tree — `docs/superpowers/*.md`, `docs/security/*.md` — which
+#     is markdown by extension and therefore exactly what the docs-only rule would
+#     wave through. A doc file does not have to be COMPILED IN to be gate-owned; it
+#     is enough that a Rust job asserts something about it. Without this entry the
+#     one change class the gate exists for is the one class it never sees.
 #
 # `scripts/install/install.sh` is `include_str!`d too but needs no entry: `.sh`
 # is not a doc extension, so it already forces a full run.
@@ -272,7 +280,7 @@ RUST_INERT_ROOTS='^packages/temper-cloud/|^packages/temper-ui/|^packages/agent-w
 # `assert_every_compiled_in_doc_is_vetoed` in test-detect-ci-scope.sh guards —
 # it derives the set from the source rather than trusting this list to stay
 # complete.
-RUST_COUPLED='^packages/temper-ui/src/lib/types/generated/|^packages/agent-workflows/mention/agent/generated/|^agent-skills/|^openapi\.json$|^tests/contracts/|^crates/temper-cli/skill-content/|^scripts/install/containment-corpus\.txt$|^scripts/migration-declaration-corpus\.txt$'
+RUST_COUPLED='^packages/temper-ui/src/lib/types/generated/|^packages/agent-workflows/mention/agent/generated/|^agent-skills/|^openapi\.json$|^tests/contracts/|^crates/temper-cli/skill-content/|^scripts/install/containment-corpus\.txt$|^scripts/migration-declaration-corpus\.txt$|^docs/'
 
 HAS_RUST_COUPLED=false
 if changes_match "$RUST_COUPLED"; then
