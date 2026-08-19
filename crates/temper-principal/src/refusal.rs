@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 /// Why a principal was refused, typed.
 ///
 /// This replaces the stringly-typed enriched 403, which carried `access_mode: String` and whose
-/// tests asserted a sentinel `"join_request"` that was never a real mode
-/// (`temper-services/src/error.rs:299,377` — verified: the live domain is `open`/`invite_only`).
+/// tests asserted a sentinel `"join_request"` that was never a real mode (the domain *was*
+/// `open`/`invite_only`; that column was retired and admission is now per-principal standing).
 ///
 /// Spec §12: "Every illegal cell asserts a *reason*, not just a refusal. The point of refusing at
 /// the act is that the actor learns why; a test that only checks 'not admitted' would pass on a

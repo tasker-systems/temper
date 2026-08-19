@@ -4596,8 +4596,8 @@ export interface components {
          * @description Why a principal was refused, typed.
          *
          *     This replaces the stringly-typed enriched 403, which carried `access_mode: String` and whose
-         *     tests asserted a sentinel `"join_request"` that was never a real mode
-         *     (`temper-services/src/error.rs:299,377` — verified: the live domain is `open`/`invite_only`).
+         *     tests asserted a sentinel `"join_request"` that was never a real mode (the domain *was*
+         *     `open`/`invite_only`; that column was retired and admission is now per-principal standing).
          *
          *     Spec §12: "Every illegal cell asserts a *reason*, not just a refusal. The point of refusing at
          *     the act is that the actor learns why; a test that only checks 'not admitted' would pass on a
@@ -6960,7 +6960,7 @@ export interface operations {
                     "application/json": components["schemas"]["CreateCogmapOutcome"];
                 };
             };
-            /** @description Caller lacks system access (invite-only middleware) */
+            /** @description Caller has no approved principal standing */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7374,7 +7374,7 @@ export interface operations {
                     "application/json": components["schemas"]["BindTeamOutcome"];
                 };
             };
-            /** @description Caller is not a system admin */
+            /** @description Caller is not a system admin and does not both administer the map and manage the team */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -7409,7 +7409,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnbindTeamOutcome"];
                 };
             };
-            /** @description Caller is not a system admin */
+            /** @description Caller is not a system admin and does not both administer the map and manage the team */
             403: {
                 headers: {
                     [name: string]: unknown;

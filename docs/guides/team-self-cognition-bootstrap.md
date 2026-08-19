@@ -37,11 +37,11 @@ not pre-populated with authored landmark content). No new CLI command is needed:
 
 ## Prerequisites
 
-- **A usable instance.** At least one system admin exists (see [org-bootstrap.md](./org-bootstrap.md)
-  §0–1 if this is a fresh install) — `cogmap create` / `cogmap bind` are admin-gated (interim gate
-  is `is_system_admin`, the same seam org-identity maps use; see
-  [`reference_l0_content_delivery_admin_gate`](./l0-content-delivery.md) for how that gate is
-  granted).
+- **A usable instance**, and the rights for the two gated steps. `cogmap create` is open to any
+  authenticated profile — the creator is granted read+write+grant on the map they make. `cogmap
+  bind` needs system-admin **or** that you manage the target team (owner/maintainer) *and*
+  administer the map. `cogmap reconcile` is admin-only. See
+  [org-bootstrap.md](./org-bootstrap.md) §0–1 if this is a fresh install.
 - **An `embed`-capable `temper` binary.** `cogmap create` embeds the charter client-side (ONNX). A
   non-`embed` build returns a clear `requires the 'embed' feature` error rather than running.
 - **Authentication.** You must be logged in (`temper auth login`, or `TEMPER_TOKEN` exported) as a
@@ -163,9 +163,9 @@ plan, `internal/superpowers/plans/2026-06-30-t2-templated-team-telos-genesis.md`
 
 ## Deferred seams
 
-- **Cogmap-write gate vs. team roles.** Like org-identity maps, the interim gate for `cogmap create`
-  / `bind` is `is_system_admin` — eventually maintainers of the team itself should be able to write
-  their own team's self-cognition map without needing system-admin.
+- **Cogmap-write gate vs. team roles.** Partly closed: `bind` now takes a team owner/maintainer who
+  administers the map, not only a system admin. `reconcile` is still admin-only, so a team cannot
+  yet drive its own self-cognition map's content end to end without one.
 - **An applier script.** `docs/guides/org-bootstrap.md` has `scripts/bootstrap/system-bootstrap.sh`;
   a `scripts/bootstrap/team-self-cognition.sh` echo-then-apply script for this sequence is deferred
   to the steward's deploy step (T6), not authored in this pass.

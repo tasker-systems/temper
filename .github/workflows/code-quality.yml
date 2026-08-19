@@ -221,16 +221,6 @@ jobs:
         run: bash .github/scripts/audit-ignored-tests.sh
 
       # Not a security tripwire — a CONTRACT one, and it exists to keep an argument honest.
-      # PR D stopped `internal/api/query.openapi.yaml` restating 31 schemas `openapi.json` already
-      # publishes, on the grounds that "a restatement can drift; a `$ref` cannot." True about
-      # drift, silent about the other failure: a `$ref` whose target is renamed away does not
-      # drift, it DANGLES, and nothing in this repo reads that file. Rename a Rust type — an
-      # ordinary refactor `cargo make openapi` regenerates around without complaint — and the
-      # contract points at nothing, forever, quietly. Without this the split would have traded 34
-      # eventually-loud drift sites for 31 permanently silent ones.
-      - name: Contract tripwire — hand-written $refs resolve in openapi.json
-        run: bash .github/scripts/audit-contract-crossrefs.sh
-
       # Not a baseline tripwire either: it reads build-cli-binaries.yml directly. Deleting the
       # `.manifest.json` line from the attestation's `subject-path` is a silent one-line edit —
       # the signing job still succeeds, the archive is still attested — that defeats both

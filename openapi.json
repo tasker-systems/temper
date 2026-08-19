@@ -752,7 +752,7 @@
             }
           },
           "403": {
-            "description": "Caller lacks system access (invite-only middleware)"
+            "description": "Caller has no approved principal standing"
           },
           "409": {
             "description": "A concurrent genesis conflicted; retry"
@@ -1483,7 +1483,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin"
+            "description": "Caller is not a system admin and does not both administer the map and manage the team"
           }
         },
         "security": [
@@ -1548,7 +1548,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin"
+            "description": "Caller is not a system admin and does not both administer the map and manage the team"
           }
         },
         "security": [
@@ -11970,7 +11970,7 @@
             }
           }
         ],
-        "description": "Why a principal was refused, typed.\n\nThis replaces the stringly-typed enriched 403, which carried `access_mode: String` and whose\ntests asserted a sentinel `\"join_request\"` that was never a real mode\n(`temper-services/src/error.rs:299,377` — verified: the live domain is `open`/`invite_only`).\n\nSpec §12: \"Every illegal cell asserts a *reason*, not just a refusal. The point of refusing at\nthe act is that the actor learns why; a test that only checks 'not admitted' would pass on a\nsilent denial.\""
+        "description": "Why a principal was refused, typed.\n\nThis replaces the stringly-typed enriched 403, which carried `access_mode: String` and whose\ntests asserted a sentinel `\"join_request\"` that was never a real mode (the domain *was*\n`open`/`invite_only`; that column was retired and admission is now per-principal standing).\n\nSpec §12: \"Every illegal cell asserts a *reason*, not just a refusal. The point of refusing at\nthe act is that the actor learns why; a test that only checks 'not admitted' would pass on a\nsilent denial.\""
       },
       "RefusalReason": {
         "oneOf": [

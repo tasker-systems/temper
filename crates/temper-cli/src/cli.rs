@@ -1169,7 +1169,9 @@ pub enum TeamAction {
 pub enum AdminAction {
     /// Show system settings, or update them when any flag is provided
     Settings {
-        /// Gating team slug (the team whose ownership confers a system admin)
+        /// Gating team slug recorded in instance settings. Ownership of this team does NOT
+        /// by itself confer system-admin: `is_system_admin` reads the principal-governance
+        /// grant and nothing else
         #[arg(long = "gating-team")]
         gating_team_slug: Option<String>,
         /// Human-facing instance name
@@ -1182,11 +1184,13 @@ pub enum AdminAction {
         #[arg(long = "terms-uri")]
         terms_resource_uri: Option<String>,
     },
-    /// Promote a profile to admin (owner on a team; defaults to the gating team)
+    /// Promote a profile to system admin: grants principal-governance and, if needed, approved
+    /// standing. Also adds an `owner` row on a team (defaults to the gating team) as a side effect
     Promote {
         /// Profile ID (UUID) to promote
         profile: String,
-        /// Team ref (`+slug`, bare slug, or UUID); defaults to the gating team
+        /// Team ref for the side-effect `owner` row (`+slug`, bare slug, or UUID); defaults to
+        /// the gating team. Not what confers admin
         #[arg(long)]
         team: Option<String>,
     },
@@ -1574,7 +1578,7 @@ pub enum AdminSamlAction {
         apply: bool,
     },
     /// Verify a provisioned instance: AS metadata reachable, caller is a system admin
-    /// (the gating_team_slug silent-403 check), and — with --db — one active kb_saml_idp row.
+    /// (governance grant + approved standing), and — with --db — one active kb_saml_idp row.
     Verify {
         /// Instance base URL to probe (e.g. <https://temper.acme.com>).
         #[arg(long)]

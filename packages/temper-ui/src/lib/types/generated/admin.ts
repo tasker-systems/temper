@@ -9,7 +9,8 @@ export type PromoteAdminRequest = {
  */
 profile_id: string, 
 /**
- * Target team; `None` ⇒ the configured gating team (mints a system admin).
+ * Target team for the side-effect `owner` row; `None` ⇒ the configured gating team. The
+ * governance grant is what mints the admin, not this membership.
  */
 team_id: string | null, };
 
@@ -18,7 +19,8 @@ team_id: string | null, };
  */
 export type UpdateSettingsRequest = { 
 /**
- * Slug of the team whose ownership confers a system admin. `None` leaves it unchanged.
+ * Gating team slug recorded in instance settings. Ownership of it confers no authorization:
+ * `is_system_admin` reads the principal-governance grant. `None` leaves it unchanged.
  */
 gating_team_slug: string | null, 
 /**
