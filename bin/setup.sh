@@ -19,7 +19,7 @@
 # Platform: macOS-first (Homebrew). On Linux it prints the dependency pointers and exits without
 # installing — wire up your package manager from that list (the cargo + docker steps are identical).
 #
-# Full walk-through + troubleshooting: docs/guides/development.md
+# Full walk-through + troubleshooting: internal/development/development.md
 set -euo pipefail
 
 WITH_CLI=0

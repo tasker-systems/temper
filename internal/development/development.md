@@ -3,7 +3,7 @@
 This guide takes a fresh checkout to a working dev/admin environment: able to run
 `cargo make check` and `cargo make test-db`. It is for **contributors and operators
 working from source** — end-users who only want the `temper` binary should use the
-[one-liner installer](install.md) instead.
+[one-liner installer](../../docs/guides/install.md) instead.
 
 ## Quick start
 
@@ -42,7 +42,7 @@ installing — the cargo + docker steps are identical; only the system-package s
 
 `libpq` is keg-only on Homebrew, so its `psql` may not land on your PATH. The dev
 database runs in Docker, so `psql` is only needed for the [org-bootstrap SQL root
-step](org-bootstrap.md), `cargo make seed`, and manual DB inspection. If `setup.sh`
+step](../../docs/guides/org-bootstrap.md), `cargo make seed`, and manual DB inspection. If `setup.sh`
 reports `psql` isn't linked, add the printed export to your shell profile.
 
 ## Daily commands
@@ -82,7 +82,7 @@ Some operator tasks need tools `setup.sh` does not auto-install:
 
 - **`neonctl`** (npm: `npm i -g neonctl`) — Neon cloud branch/backup management for
   prod operations. See [releasing.md](releasing.md) and the Neon backup convention.
-- **Provisioning an org** on a running instance — [org-bootstrap.md](org-bootstrap.md)
+- **Provisioning an org** on a running instance — [org-bootstrap.md](../../docs/guides/org-bootstrap.md)
   (the `bin/setup.sh` dev environment is a prerequisite for running its applier locally).
 
 ## Troubleshooting

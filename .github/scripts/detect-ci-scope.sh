@@ -312,7 +312,7 @@ fi
 # is what ci.yml's `if: needs.detect-scope.outputs.run-code-quality == 'true'`
 # reads. Every heavy job stays off. Putting `^docs/` in RUST_COUPLED reached the
 # same gate by conscripting the entire Rust and TypeScript pipeline (measured: a
-# one-line edit to docs/guides/releasing.md turned SKIP_ALL=true into
+# one-line edit to a docs/guides/ page turned SKIP_ALL=true into
 # RUN_TEST_RUST + RUN_TEST_TYPESCRIPT + RUN_RUST_QUALITY), which is a bill sized
 # to the wrong gate rather than a safety property.
 #

@@ -47,7 +47,7 @@ fn main() {
     //
     // Without it, a `cargo install --path crates/temper-cli` binary lands in ~/.cargo/bin with no
     // adjacent `models/` dir and therefore cannot embed at all — which breaks the repo's own
-    // reinstall ritual (`bin/setup.sh --with-cli`, docs/guides/development.md) and is the ONLY
+    // reinstall ritual (`bin/setup.sh --with-cli`, internal/development/development.md) and is the ONLY
     // supported install on Intel macOS and non-x86_64 Linux, where `install.sh` refuses to run.
     //
     // Safe by construction: it is only ever *tried*, it is guarded by `is_file()`, and whatever it

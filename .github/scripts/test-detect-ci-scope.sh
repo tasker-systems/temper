@@ -415,7 +415,7 @@ run_test "docs/ page (*.md): stays a skip EXCEPT that code-quality is invoked fo
 # Mixed with a non-product tree: still nothing load-bearing, so the docs/ arm of the
 # SKIP_ALL branch is the one that must fire — reachability survives the mix.
 run_test "docs/ page + non-product spike tree: code-quality still invoked, nothing else" \
-    "docs/guides/releasing.md
+    "docs/guides/install.md
 scripts/wayfind-spike/queries.sql" \
     "SKIP_ALL=true" \
     "NON_PRODUCT=true" \
@@ -427,7 +427,7 @@ scripts/wayfind-spike/queries.sql" \
 # takes over: code-quality is invoked (reaching the docs gate for free) and TS runs,
 # but the Rust corpus stays off — a docs/ page must not drag it back on.
 run_test "docs/ page + inert TS: rust-inert, docs gate's job still runs" \
-    "docs/guides/releasing.md
+    "docs/guides/install.md
 packages/temper-cloud/src/logger.ts" \
     "DOCS_ONLY=false" \
     "RUST_INERT=true" \
