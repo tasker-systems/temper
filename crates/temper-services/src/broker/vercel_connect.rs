@@ -70,12 +70,26 @@ impl std::fmt::Debug for VercelConnectBroker {
 
 impl VercelConnectBroker {
     pub fn new(config: VercelConnectConfig) -> Self {
+        Self::with_jwks(
+            JwksKeyStore::new(format!(
+                "https://oidc.vercel.com/{}/.well-known/jwks",
+                config.team_slug
+            )),
+            config,
+        )
+    }
+
+    /// The real adapter with a caller-supplied key store — the constructor a test uses to run the
+    /// **actual** RS256 + claim gate against a static key instead of the live Vercel JWKS.
+    ///
+    /// Shipped rather than `#[cfg(test)]`, following [`JwksKeyStore::with_static_key`] itself: the
+    /// transport suite must exercise `verify_inbound` for real, and a second production-shaped
+    /// verifier written for tests would be the thing under test drifting from the thing deployed.
+    /// The issuer and audience still derive from `config.team_slug`, so a test signs an
+    /// attestation the deployed code would accept, not one a test-only relaxation lets through.
+    pub fn with_jwks(jwks: JwksKeyStore, config: VercelConnectConfig) -> Self {
         let expected_iss = format!("https://oidc.vercel.com/{}", config.team_slug);
         let expected_aud = format!("https://vercel.com/{}", config.team_slug);
-        let jwks = JwksKeyStore::new(format!(
-            "https://oidc.vercel.com/{}/.well-known/jwks",
-            config.team_slug
-        ));
         Self {
             http: reqwest::Client::new(),
             config,

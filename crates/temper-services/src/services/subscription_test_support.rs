@@ -6,8 +6,11 @@
 //! leg — which it did once already between chunks A and B — so this is one definition, used by
 //! both.
 //!
-//! Test-only and DB-gated: compiled solely under `cfg(all(test, feature = "test-db"))`, so a
-//! no-DB `cargo make test` neither builds nor links it.
+//! Test-only and DB-gated: compiled solely under `cfg(feature = "test-db")`, so a no-DB
+//! `cargo make test` neither builds nor links it. The gate is on the feature alone rather than
+//! `all(test, ...)` because S3's transport suite lives in temper-api and needs the same world —
+//! and a second copy of a six-step seed drifts the moment the authz gate gains a leg, which is
+//! the exact reason this module was extracted in the first place.
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -16,10 +19,10 @@ use temper_core::types::connection::ProvisionConnectionRequest;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::subscription::{CreateSubscriptionRequest, SubscriptionSelector};
 
-pub(crate) const GITHUB_REPO: &str = "acme/temper";
+pub const GITHUB_REPO: &str = "acme/temper";
 
 /// Seed a system admin and return its profile id. Mirrors subscription_service::seed_admin.
-pub(crate) async fn seed_admin(pool: &PgPool) -> ProfileId {
+pub async fn seed_admin(pool: &PgPool) -> ProfileId {
     let id = Uuid::now_v7();
     let handle = format!("admin-{id}");
     sqlx::query!(
@@ -67,7 +70,7 @@ pub(crate) async fn seed_admin(pool: &PgPool) -> ProfileId {
     ProfileId::from(id)
 }
 
-pub(crate) async fn seed_team(pool: &PgPool, owner: ProfileId) -> Uuid {
+pub async fn seed_team(pool: &PgPool, owner: ProfileId) -> Uuid {
     let team_id = Uuid::now_v7();
     let slug = format!("team-{team_id}");
     sqlx::query!(
@@ -91,7 +94,7 @@ pub(crate) async fn seed_team(pool: &PgPool, owner: ProfileId) -> Uuid {
     team_id
 }
 
-pub(crate) async fn seed_context_owned_by_team(pool: &PgPool, team_id: Uuid) -> Uuid {
+pub async fn seed_context_owned_by_team(pool: &PgPool, team_id: Uuid) -> Uuid {
     let context_id = Uuid::now_v7();
     let slug = format!("ctx-{context_id}");
     sqlx::query!(
@@ -116,7 +119,7 @@ pub(crate) async fn seed_context_owned_by_team(pool: &PgPool, team_id: Uuid) -> 
     context_id
 }
 
-pub(crate) async fn seed_connection(
+pub async fn seed_connection(
     pool: &PgPool,
     owner_team_id: Option<Uuid>,
     caller: ProfileId,
@@ -134,18 +137,13 @@ pub(crate) async fn seed_connection(
     conn.id
 }
 
-pub(crate) async fn grant_reach(
-    pool: &PgPool,
-    caller: ProfileId,
-    connection_id: Uuid,
-    team_id: Uuid,
-) {
+pub async fn grant_reach(pool: &PgPool, caller: ProfileId, connection_id: Uuid, team_id: Uuid) {
     crate::services::connection_service::grant_reach(pool, caller, connection_id, team_id, None)
         .await
         .expect("grant reach");
 }
 
-pub(crate) async fn create_subscription(
+pub async fn create_subscription(
     pool: &PgPool,
     caller: ProfileId,
     subscriber_table: &str,
@@ -168,7 +166,7 @@ pub(crate) async fn create_subscription(
 }
 
 /// A GitHub pull_request webhook payload for `acme/temper`.
-pub(crate) fn github_pr_payload(repo: &str) -> serde_json::Value {
+pub fn github_pr_payload(repo: &str) -> serde_json::Value {
     serde_json::json!({
         "action": "opened",
         "repository": { "full_name": repo },
@@ -177,7 +175,7 @@ pub(crate) fn github_pr_payload(repo: &str) -> serde_json::Value {
 }
 
 /// A Linear issue webhook payload for project `proj-123`.
-pub(crate) fn linear_issue_payload(project_id: &str) -> serde_json::Value {
+pub fn linear_issue_payload(project_id: &str) -> serde_json::Value {
     serde_json::json!({
         "action": "update",
         "data": { "project": { "id": project_id } }
@@ -185,7 +183,7 @@ pub(crate) fn linear_issue_payload(project_id: &str) -> serde_json::Value {
 }
 
 /// Read the references column for an event id.
-pub(crate) async fn event_references(pool: &PgPool, event_id: Uuid) -> serde_json::Value {
+pub async fn event_references(pool: &PgPool, event_id: Uuid) -> serde_json::Value {
     sqlx::query_scalar!(
         r#"SELECT "references" FROM kb_events WHERE id = $1"#,
         event_id,
@@ -196,7 +194,7 @@ pub(crate) async fn event_references(pool: &PgPool, event_id: Uuid) -> serde_jso
 }
 
 /// Count kb_events rows for a connection's emitter.
-pub(crate) async fn event_count_for_connection(pool: &PgPool, connection_id: Uuid) -> i64 {
+pub async fn event_count_for_connection(pool: &PgPool, connection_id: Uuid) -> i64 {
     let count: Option<i64> = sqlx::query_scalar!(
         r#"SELECT count(*)::bigint FROM kb_events e
             JOIN kb_connections c ON c.id = $1 AND e.emitter_entity_id = c.emitter_entity_id"#,
@@ -208,7 +206,7 @@ pub(crate) async fn event_count_for_connection(pool: &PgPool, connection_id: Uui
     count.unwrap_or(0)
 }
 /// A profile that manages nothing — the "stranger" in an authz refusal test.
-pub(crate) async fn seed_plain_profile(pool: &PgPool) -> ProfileId {
+pub async fn seed_plain_profile(pool: &PgPool) -> ProfileId {
     let id = Uuid::now_v7();
     let handle = format!("stranger-{id}");
     sqlx::query!(
@@ -226,7 +224,7 @@ pub(crate) async fn seed_plain_profile(pool: &PgPool) -> ProfileId {
 /// Register the remote event kinds a connection receives — the ledger-capable tier. Written
 /// directly rather than through `connection_service`, because these tests care about the column's
 /// VALUE, not about the path that sets it.
-pub(crate) async fn register_webhook_events(pool: &PgPool, connection_id: Uuid, events: &[&str]) {
+pub async fn register_webhook_events(pool: &PgPool, connection_id: Uuid, events: &[&str]) {
     let owned: Vec<String> = events.iter().map(|s| s.to_string()).collect();
     sqlx::query!(
         "UPDATE kb_connections SET webhook_events = $2 WHERE id = $1",
@@ -241,14 +239,22 @@ pub(crate) async fn register_webhook_events(pool: &PgPool, connection_id: Uuid, 
 /// Give a connection a credential, moving it off the `needs_credential` birth state. Written
 /// directly: these tests care that `credential IS NOT NULL`, not about the broker seam that
 /// normally sets it.
-pub(crate) async fn attach_stub_credential(pool: &PgPool, connection_id: Uuid) {
+pub async fn attach_stub_credential(pool: &PgPool, connection_id: Uuid) {
+    attach_credential_with_connector(pool, connection_id, "stub").await;
+}
+
+/// [`attach_stub_credential`] with a caller-chosen connector uid — the value
+/// `connection_service::resolve_inbound` keys on, so a transport test can make a verified
+/// attestation resolve (or deliberately fail to resolve) to a known connection.
+pub async fn attach_credential_with_connector(pool: &PgPool, connection_id: Uuid, connector: &str) {
     sqlx::query!(
         r#"UPDATE kb_connections
-              SET credential = '{"broker":"test","connector":"stub"}'::jsonb
+              SET credential = jsonb_build_object('broker', 'test', 'connector', $2::text)
             WHERE id = $1"#,
         connection_id,
+        connector,
     )
     .execute(pool)
     .await
-    .expect("attach stub credential");
+    .expect("attach credential");
 }

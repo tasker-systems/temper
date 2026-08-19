@@ -56,6 +56,63 @@ pub async fn get(pool: &PgPool, id: Uuid) -> ApiResult<Connection> {
     .ok_or_else(|| ApiError::NotFound("connection not found or not readable".to_string()))
 }
 
+/// Resolve a **verified inbound attestation** to the connection that receives it.
+///
+/// `CredentialBroker::verify_inbound` stops at the signed `trigger` claim on purpose — its doc:
+/// *"resolving it to a `kb_connections` row is the caller's job (the broker stays DB-free, hence
+/// swappable)"*. This is that job. Both arguments come from the **signed** claim, never from the
+/// unsigned `x-trigger-*` mirror headers.
+///
+/// Keys on `credential->>'connector'`, which holds the connector **uid** — the same value
+/// `connect_token_url` percent-encodes for the mint hop. Both partial-index predicates are
+/// repeated here deliberately: without them the planner cannot use `idx_kb_connections_connector`
+/// (witnessed — the query plans as a `Seq Scan` even with `enable_seqscan=off`), and each is also
+/// load-bearing on its own. A NULL credential is the `needs_credential` birth state and can
+/// receive nothing; a revoked connection must not receive at all.
+///
+/// **No match returns [`ApiError::Unauthorized`], not `NotFound`, and its message names nothing.**
+/// The caller renders it byte-identically to a failed attestation, so a probe cannot learn whether
+/// a connector is provisioned here by comparing responses.
+///
+/// **Two matches are a FAILURE, not a choice.** `credential->>'connector'` is not unique and two
+/// teams may legitimately register the same org-wide connector, so ambiguity is reachable — and
+/// temper genuinely cannot know which connection the payload was for. Picking one would route a
+/// real event to the wrong subscribers and read, downstream, exactly like a correct routing.
+pub async fn resolve_inbound(
+    pool: &PgPool,
+    provider: &str,
+    connector_uid: &str,
+) -> ApiResult<Connection> {
+    let rows = sqlx::query_as!(
+        Connection,
+        r#"SELECT id, provider, slug, name, owner_team_id, registered_by_profile_id,
+                  profile_id, emitter_entity_id, home_context_id, credential,
+                  webhook_events, tool_manifest, reach_granularity, reach_covers,
+                  reach_affirmed_by, reach_affirmed_at, reach_affirmation,
+                  observed_reach,
+                  created, revoked_at, revoked_by_profile_id
+             FROM kb_connections
+            WHERE credential->>'connector' = $1
+              AND provider = $2
+              AND credential IS NOT NULL
+              AND revoked_at IS NULL"#,
+        connector_uid,
+        provider,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    match rows.len() {
+        1 => Ok(rows.into_iter().next().expect("length checked")),
+        0 => Err(ApiError::Unauthorized(
+            "inbound attestation not accepted".to_string(),
+        )),
+        n => Err(ApiError::Internal(format!(
+            "inbound connector resolves to {n} connections; temper cannot know which one this              payload was for. Exactly one live, credentialed connection must carry this connector."
+        ))),
+    }
+}
+
 /// [`get`], gated on the *existing row's* owning team.
 pub async fn get_for_caller(pool: &PgPool, caller: ProfileId, id: Uuid) -> ApiResult<Connection> {
     let connection = get(pool, id).await?;

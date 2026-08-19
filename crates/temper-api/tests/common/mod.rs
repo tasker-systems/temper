@@ -348,6 +348,62 @@ pub async fn setup_test_app(pool: PgPool) -> TestApp {
     }
 }
 
+/// Like [`setup_test_app`] but lets the caller replace pieces of the built `AppState` before the
+/// router is constructed — the seam a transport test needs to install a broker.
+///
+/// Distinct from [`setup_test_app_with_config`]: `vercel_connect` config selects the *real* Vercel
+/// adapter pointed at the *live* JWKS, which no test may reach. What a test needs is the same
+/// adapter with a static key, or a fake — both of which are values, not config.
+pub async fn setup_test_app_with_state(
+    pool: PgPool,
+    configure: impl FnOnce(&mut AppState),
+) -> TestApp {
+    fixtures::clean_and_seed(&pool).await;
+
+    let decoding_key = jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("test_rsa.pub"))
+        .expect("Failed to load test RSA public key");
+    let jwks_store = JwksKeyStore::with_static_key(decoding_key, Algorithm::RS256);
+
+    let config = ApiConfig {
+        database_url: "unused".to_string(),
+        auth: AuthConfig {
+            issuer: "test-issuer".to_string(),
+            jwks_url: "unused".to_string(),
+            audience: TEST_AUDIENCE.to_string(),
+            mode: AuthMode::ExternalIdp,
+        },
+        auth_provider_name: "test-provider".to_string(),
+        cors_origins: vec![],
+        port: 0,
+        enable_swagger: false,
+        internal_reconcile_secret: None,
+        embed_dispatch_secret: None,
+        vercel_connect: None,
+        slack_link: None,
+        slack_mint_secret: None,
+    };
+
+    let mut state = AppState::new(pool.clone(), jwks_store, config);
+    configure(&mut state);
+    let app = create_app(state);
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("Failed to bind test listener");
+    let addr = listener.local_addr().expect("Failed to get local addr");
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("Test server failed");
+    });
+
+    TestApp {
+        addr,
+        pool,
+        client: reqwest::Client::new(),
+    }
+}
+
 /// Like [`setup_test_app`] but lets the caller mutate the `ApiConfig` before the app is built
 /// (e.g. to set `internal_reconcile_secret` / `auth_provider_name` for a specific test).
 pub async fn setup_test_app_with_config(

@@ -643,7 +643,7 @@ fn subscriber_table_to_anchor(subscriber_table: &str) -> ApiResult<AnchorTable> 
 #[cfg(all(test, feature = "test-db"))]
 mod tests {
     use super::*;
-    use crate::services::intake_service;
+    use crate::services::intake_service::{self, ProviderEvent};
     use crate::services::subscription_test_support::*;
     use sqlx::PgPool;
     use temper_core::types::subscription::SubscriptionSelector;
@@ -682,7 +682,7 @@ mod tests {
         let event_id = intake_service::receive_webhook(
             pool,
             conn,
-            "pull_request",
+            ProviderEvent::from_header("pull_request"),
             &github_pr_payload(GITHUB_REPO),
         )
         .await
@@ -727,7 +727,7 @@ mod tests {
         intake_service::receive_webhook(
             &pool,
             conn,
-            "pull_request",
+            ProviderEvent::from_header("pull_request"),
             &github_pr_payload(GITHUB_REPO),
         )
         .await
@@ -759,7 +759,7 @@ mod tests {
         intake_service::receive_webhook(
             &pool,
             conn,
-            "pull_request",
+            ProviderEvent::from_header("pull_request"),
             &github_pr_payload("someone-else/unrelated"),
         )
         .await
@@ -1144,7 +1144,7 @@ mod tests {
             intake_service::receive_webhook(
                 &pool,
                 conn,
-                "pull_request",
+                ProviderEvent::from_header("pull_request"),
                 &github_pr_payload(GITHUB_REPO),
             )
             .await
@@ -1238,7 +1238,7 @@ mod tests {
         intake_service::receive_webhook(
             &pool,
             conn,
-            "pull_request",
+            ProviderEvent::from_header("pull_request"),
             &github_pr_payload(GITHUB_REPO),
         )
         .await
@@ -1351,7 +1351,7 @@ mod tests {
         intake_service::receive_webhook(
             &pool,
             conn,
-            "pull_request",
+            ProviderEvent::from_header("pull_request"),
             &github_pr_payload(GITHUB_REPO),
         )
         .await
