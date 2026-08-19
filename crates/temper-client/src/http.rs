@@ -191,7 +191,7 @@ impl HttpClient {
             .as_ref()
             .ok_or(ClientError::NotAuthenticated)?;
         let auth = store.load()?.ok_or(ClientError::NotAuthenticated)?;
-        if auth.expires_at <= chrono::Utc::now() {
+        if auth.is_expired() {
             return Err(ClientError::TokenExpired);
         }
         Ok(auth.access_token.expose_secret().to_string())
