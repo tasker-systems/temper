@@ -56,6 +56,6 @@ Even if the endpoint were reached by an attacker, the damage is bounded:
 - **The auth-identity contract this channel serves:**
   [Auth identity](./auth-identity.md).
 - **Standing up SAML SSO (the operator playbook):**
-  [Self-hosting with SAML](../guides/self-hosting-saml.md).
+  [Self-hosting with SAML](../playbooks/self-host-with-saml.md).
 - **What the architecture fixes vs. what a deployment chooses:**
   [temperkb.io/operating/governance-and-administration](https://temperkb.io/operating/governance-and-administration).

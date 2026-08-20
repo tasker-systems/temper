@@ -12,7 +12,7 @@ a structure you can traverse as *what recurs → why it breaks → what's settle
 
 If you are starting from a pile of source documents, get them into a context first: ingestion
 is a separate, mechanical act that should be boring. See
-[Ingesting a corpus into a context](../guides/corpus-ingestion.md). If you already have a
+[Ingesting a corpus into a context](./ingest-a-corpus.md). If you already have a
 context full of citable material, read on.
 
 ## Prerequisites

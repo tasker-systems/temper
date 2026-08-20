@@ -8,18 +8,20 @@ If you are standing the deployment up yourself, start at
 
 ## Start here
 
-1. **[Install Temper](../guides/install.md)** — the CLI, the binary, and what the archive
-   actually contains.
-2. **[Use it from Claude Desktop](../guides/claude-desktop-setup.md)** — wiring Temper in as an
-   MCP server, so an agent can read and write the knowledge base directly.
-
-That is enough to run `temper warmup`, save a session, and search across everything you have
-written.
+1. **[Install Temper](../playbooks/install-temper.md)** — the CLI and what the archive contains.
+2. **[Authenticate](../playbooks/authenticate.md)** — sign in and get approved. This is a
+   prerequisite for every command below; a brand-new signup is born *denied* and an admin must
+   approve before any data call works.
+3. **[Connect Claude Code](../playbooks/connect-claude-code.md)** — install the Temper skill
+   so Claude Code can drive the CLI. Or **[Connect Claude Desktop](../playbooks/connect-claude-desktop.md)**
+   — wire Temper in as an MCP server, if you use claude.ai or Claude Desktop instead.
 
 ## Working with a team
 
-- **[Working with teams](../guides/teams.md)** — creating one, inviting people, roles, and what
-  membership actually grants.
+- **[Running a team](../playbooks/run-a-team.md)** — creating one, inviting people, roles, and
+  what membership actually grants.
+- **[Teams and roles](../concepts/teams-and-roles.md)** — what a team is, the role ladder, and
+  why membership grants read but not write.
 
 ## Cognitive maps
 
@@ -27,15 +29,18 @@ A cognitive map is a telos-seeded region of the substrate where people and agent
 understanding. The conceptual walkthrough is at
 [temperkb.io/cognitive-maps](https://temperkb.io/cognitive-maps); these are the hands-on pages.
 
-- **[Building a cognitive map from a large corpus](../guides/building-a-cognitive-map.md)**
-- **[Ingesting a corpus into a context](../guides/corpus-ingestion.md)** — getting a body of
-  existing material in.
-- **[Bootstrapping a team's self-cognition map](../guides/team-self-cognition-bootstrap.md)**
+- **[Building a cognitive map](../playbooks/build-a-cognitive-map.md)**
+- **[Ingesting a corpus](../playbooks/ingest-a-corpus.md)** — getting a body of existing
+  material into a context.
+- **[Contexts and refs](../concepts/contexts-and-refs.md)** — what a context is and how to
+  address one. This is the first thing that trips up new users.
 
 ## Keeping context across sessions
 
-- **[Operational memory](../guides/operational-memory.md)** — how durable memories are captured
-  and recalled, and what makes one worth keeping.
+- **[Adopting operational memory](../playbooks/adopt-operational-memory.md)** — how durable
+  memories are captured and recalled, and what makes one worth keeping.
+- **[Operational memory](../concepts/operational-memory.md)** — the concept: what it is, the
+  CLI memory model, and shared memory across a team.
 
 ## Every command
 

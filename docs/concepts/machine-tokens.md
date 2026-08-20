@@ -69,7 +69,7 @@ before that step fails, which is what makes it easy to omit.
 - **The trust boundary machine tokens cross:**
   [The Trust Boundary](./trust-boundary.md).
 - **How to provision and use machine credentials (playbook):**
-  [Machine credentials](../guides/machine-credentials.md).
+  [Machine credentials](../playbooks/standing-up-a-machine-credential.md).
 - **How JWT verification works:**
   [Token verification](./token-verification.md).
 - **What the architecture fixes vs. what a deployment chooses:**

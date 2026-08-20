@@ -70,8 +70,8 @@ operator set.
 - **The trust boundary these variables configure:**
   [The Trust Boundary](./trust-boundary.md).
 - **Standing up a deployment (external IdP):**
-  [Self-hosting Temper](../guides/self-hosting.md).
+  [Self-hosting Temper](../playbooks/self-host-temper.md).
 - **SAML SSO (Temper AS mode):**
-  [Self-hosting with SAML](../guides/self-hosting-saml.md).
+  [Self-hosting with SAML](../playbooks/self-host-with-saml.md).
 - **What the architecture fixes vs. what a deployment chooses:**
   [temperkb.io/operating/deployment](https://temperkb.io/operating/deployment).

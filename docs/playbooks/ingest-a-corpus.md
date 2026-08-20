@@ -190,7 +190,7 @@ and an understanding of what it is. That is not yet a map, and it may never need
 Reach for a cognitive map when you want a *purpose-shaped distillation*: an understanding
 whose shape a telos (a purpose statement) decides. Two teloi over the same corpus yield
 two different maps, and that is the feature. See
-[Building a cognitive map](../guides/building-a-cognitive-map.md), and
+[Building a cognitive map](./build-a-cognitive-map.md), and
 [how a map grows](https://temperkb.io/cognitive-maps/how-a-map-grows) for the arc that
 follows this one.
 

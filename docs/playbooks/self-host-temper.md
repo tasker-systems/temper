@@ -135,7 +135,7 @@ never apply schema changes by other means.
 Migrations provision the **schema**. Some content is delivered separately as an
 operator step — notably the L0 kernel cogmap's landmarks + telos charter, which
 is admin-gated and fail-closed. See
-[l0-content-delivery](../guides/l0-content-delivery.md) if you need a populated
+[l0-content-delivery](./deliver-l0-content.md) if you need a populated
 L0 map on your instance.
 
 ### Neon × Vercel integration

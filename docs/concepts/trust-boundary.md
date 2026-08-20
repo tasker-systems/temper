@@ -140,7 +140,7 @@ are generated from the OpenAPI spec, i.e. HTTP-only.
 ## Further reading
 
 - **What a machine credential is and how to stand one up:**
-  [Machine credentials](../guides/machine-credentials.md) (playbook).
+  [Machine credentials](../playbooks/standing-up-a-machine-credential.md) (playbook).
 - **The auth-identity contract operators configure:**
   [Auth identity](./auth-identity.md).
 - **What the architecture fixes vs. what a deployment chooses:**
