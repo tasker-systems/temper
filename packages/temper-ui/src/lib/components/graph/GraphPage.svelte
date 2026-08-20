@@ -114,7 +114,12 @@
 			</div>
 
 			{#if data.readout}
-				<WhyThese readout={data.readout} question={data.question} />
+				<WhyThese
+					readout={data.readout}
+					question={data.question}
+					owner={data.owner}
+					places={data.placesAsked}
+				/>
 			{/if}
 		</div>
 

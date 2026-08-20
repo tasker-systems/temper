@@ -18,8 +18,15 @@
 		describeWithheld,
 		listGroupings,
 	} from '$lib/graph/readout';
+	import type { NamedPlace } from '$lib/graph/entry';
+	import { graphAnalysisHref } from '$lib/vault-url';
 
-	let { readout, question }: { readout: Readout; question: string | null } = $props();
+	let {
+		readout,
+		question,
+		owner,
+		places,
+	}: { readout: Readout; question: string | null; owner: string; places: NamedPlace[] } = $props();
 
 	const lead = $derived(describeReadout(readout));
 	const listed = $derived(listGroupings(readout));
@@ -47,6 +54,20 @@
 		{/if}
 	{/if}
 
+	{#if places.length > 0}
+		<!-- The receiver, reached. Beat B took the per-region measurements off the canvas; a place
+		     they are merely stored in is not what `displaced-structure-remains-reachable` asks for,
+		     so every place this answer drew on links to its own measurements. One link per place
+		     rather than one per grouping, because a grouping's id is resolved from a flat set and
+		     carries no anchor — deliberately, so the readout needs no per-kind branch. -->
+		<p class="measured" data-testid="measured-links">
+			How these were measured:
+			{#each places as p, i (`${p.kind}:${p.ref}`)}<a
+					href={graphAnalysisHref(owner, { kind: p.kind, ref: p.ref })}>{p.title}</a
+				>{i < places.length - 1 ? ' · ' : ''}{/each}
+		</p>
+	{/if}
+
 	<details class="accounting">
 		<summary>What each step was handed</summary>
 		<ul>
@@ -62,6 +83,15 @@
 </aside>
 
 <style>
+	.measured {
+		margin: 0;
+		font-size: 11px;
+		line-height: 1.7;
+		color: #8b94a5;
+	}
+	.measured a {
+		color: #8fb6e8;
+	}
 	.why {
 		display: flex;
 		flex-direction: column;
