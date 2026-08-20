@@ -90,7 +90,7 @@ would be a lie, and a client that *required* one could not consume a `tmpr_` cre
 > on (self-hosted instances; the same AS that backs SAML). A temper-minted token is signed by the AS
 > key and carries `iss = AS_ISSUER`. An instance has **exactly one issuer**, so on an Auth0-fronted
 > instance a temper-minted token would not validate at all — register those machines with
-> `provision` and let Auth0 mint. See [../auth/jwt-verification.md](../auth/jwt-verification.md).
+> `provision` and let Auth0 mint. See [Token verification](../concepts/token-verification.md).
 
 ### The token request — form-encoded, not JSON
 
@@ -304,8 +304,8 @@ temper admin machine show <machine-id>
 - [Auth identity: the variables that must agree](self-hosting.md#auth-identity-the-variables-that-must-agree) — the env-var contract each mint path implies, and why `issue` requires an instance whose `AS_AUDIENCE` *is* its `AUTH_AUDIENCE`.
 - [Self-hosting with SAML](self-hosting-saml.md) — the proxied-human auth path, and the instance mode
   (`AS_ISSUER`) that a temper-issued credential requires.
-- [JWT verification](../auth/jwt-verification.md) — how a token is validated, and the one-issuer-per-instance invariant.
-- [The machine-token contract](../auth/machine-token-contract.md) — the claim shape both issuers produce.
+- [Token verification](../concepts/token-verification.md) — how a token is validated, and the one-issuer-per-instance invariant.
+- [Machine tokens](../concepts/machine-tokens.md) — the claim shape both issuers produce.
 - **The cross-language wire contract:** `tests/contracts/m2m-token-request.json` — pin any new client
   against it. Pinned today by `temper-rb` (`spec/temper/credentials_spec.rb`), `temper-ts`
   (`tests/contract.test.ts`), and the AS itself

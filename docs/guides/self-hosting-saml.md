@@ -227,7 +227,7 @@ These gate the internal reconcile call the AS makes to `temper-api` before minti
 provisioning occurs (authentication still works).
 
 > Why a shared secret rather than an origin/IP allow-list, and the endpoint's bounded blast
-> radius, are explained in [../auth/reconcile-channel.md](../auth/reconcile-channel.md).
+> radius, are explained in [The SAML reconcile channel](../concepts/saml-reconcile-channel.md).
 
 | Variable | Where | Purpose |
 | --- | --- | --- |

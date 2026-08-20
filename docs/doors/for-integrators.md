@@ -17,13 +17,13 @@ A machine principal is not a user with a long-lived token; it is its own kind of
 registered ahead of time.
 
 1. **[Machine credentials](../guides/machine-credentials.md)** — issuing and using them.
-2. **[The issuer / resource-server boundary](../auth/machine-token-contract.md)** — the
-   machine-token contract, and what a token does and does not carry.
+2. **[Machine tokens](../concepts/machine-tokens.md)** — the token claim shape, who mints vs.
+   who validates, and what a token does and does not carry.
 
 ## What a caller is allowed to do
 
-- **[Cognitive-map & resource authoring authorization](../auth/cognitive-map-authoring.md)** —
-  the rules that decide whether a write is permitted.
+- **[Authoring authorization](../concepts/authoring-authorization.md)** — the rules that
+  decide whether a write is permitted.
 
 ## Language SDKs
 

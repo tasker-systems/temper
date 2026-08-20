@@ -169,7 +169,7 @@ Why each one, because none is arbitrary:
 - **Reach.** A **writable** `--cogmap` grant classifies the auditor as `AuditAuthority::Author` for
   every finding in that map via `can_modify_resource`, and **404s every audit it attempts** — with
   nothing failing at deploy time and nothing in the logs naming the cause. `:ro`, or nothing. See
-  `docs/auth/machine-token-contract.md` §C.
+  `machine-token-contract.md` §C.
 
 > **Connect is not an option for the auditor, structurally.** A Vercel Connect connector is
 > *deployment*-scoped, and both agents share one deployment — so a Connect token would authenticate
@@ -512,7 +512,7 @@ Four readings that look like failures but are not:
 - `packages/agent-workflows/steward/agent/schedules/steward.ts` — the fan-out dispatcher.
 - `clients/temper-ts/src/credentials.ts` — the shared `ClientCredentials` mint, correct against
   **both** issuers. Read it before hand-rolling one.
-- `docs/auth/machine-token-contract.md` §C — the auditor's credential + reach constraints, and why a
+- `machine-token-contract.md` §C — the auditor's credential + reach constraints, and why a
   writable cogmap grant 404s every audit.
 - `packages/agent-workflows/steward/agent/schedules/auditor.ts` — the auditor dispatcher, its
   gate list to read **before** restoring it.
