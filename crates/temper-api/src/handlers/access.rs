@@ -238,9 +238,11 @@ pub async fn update_settings(
         .map(Json)
 }
 
-/// POST /api/access/admin/promote — grant a profile `owner` on a team (admin only).
+/// POST /api/access/admin/promote — promote a profile to system admin (admin only).
 ///
-/// `team_id` omitted ⇒ the configured gating team (mints a second system admin).
+/// Grants `kb_principal_governance` + `approved` standing (the real admin-ness
+/// under D11). `team_id` omitted ⇒ the configured gating team for the retained
+/// side-effect `owner` row.
 pub async fn promote_admin(
     State(state): State<AppState>,
     auth: AuthUser,

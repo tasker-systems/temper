@@ -1,7 +1,7 @@
 //! Middleware that enforces system-level access.
 //!
-//! Applied to the gated router — all routes that require the caller to be
-//! an approved member of the gating team. Routes in the auth-only router
+//! Applied to the gated router — all routes that require the caller to have
+//! approved standing (`kb_principal_standing`). Routes in the auth-only router
 //! (profile, access endpoints) bypass this middleware entirely via the
 //! router split in routes.rs.
 
@@ -22,7 +22,7 @@ use temper_services::state::AppState;
 ///
 /// Reads `AuthenticatedProfile` from request extensions (set by `require_auth`)
 /// and calls `has_system_access`. Returns `SystemAccessRequired` if the profile
-/// is not an approved member of the gating team.
+/// does not have approved standing (`kb_principal_standing`).
 pub async fn require_system_access(
     State(state): State<AppState>,
     request: Request<Body>,

@@ -7,7 +7,7 @@ siblings — not a browser-facing endpoint, not a JWT path.
 
 Source: `crates/temper-api/src/middleware/internal_auth.rs` (the HMAC gate),
 `crates/temper-api/src/handlers/internal_saml.rs` (the handler). Operator setup:
-[../guides/self-hosting-saml.md](../guides/self-hosting-saml.md#3-map-idp-groups-to-temper-teamsroles-phase-2).
+[../../docs/playbooks/self-host-with-saml.md](../../docs/playbooks/self-host-with-saml.md#map-idp-groups-to-temper-teams-and-roles).
 
 ## Trust model: an HMAC signature over the body
 

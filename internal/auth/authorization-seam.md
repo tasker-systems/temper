@@ -69,8 +69,8 @@ principal" true by construction rather than by convention.
   sight, and is **lookup-or-reject** for a machine — see the
   [machine-token contract](./machine-token-contract.md)) then the `is_active` gate. It
   yields an `AuthenticatedProfile`, read through `.profile()` / `.claims()`.
-- `require_system_access` runs `access_service::has_system_access` (approved member of the
-  gating team). It yields `SystemAuthorized(AuthenticatedProfile)`.
+- `require_system_access` runs `access_service::has_system_access` (a profile with approved
+  standing). It yields `SystemAuthorized(AuthenticatedProfile)`.
 
 **Typestate, not a marker bool.** `require_system_access` only accepts an
 `AuthenticatedProfile`, and that type is *only* produced by `authenticate`. So the type
@@ -121,7 +121,7 @@ pub enum AuthzError {
                                       //   unregistered/revoked machine client, …)
     AccessCheck(ApiError),            // has_system_access check itself failed (DB error)
     Deactivated { profile_id },       // is_active == false
-    SystemAccessDenied { profile_id },// not an approved member of the gating team
+    SystemAccessDenied { profile_id },// lacks approved standing
 }
 ```
 
@@ -138,7 +138,7 @@ human, so no write was attempted.
 | `Refused` | `401 Unauthorized` — `"Invalid or expired token"` (the reason is logged with the `sub`, never put on the wire) | `INVALID_REQUEST`, terminal ("do not retry") |
 | `EmailResolution(e)` | the inner `ApiError` (a `401`) | `INVALID_REQUEST`, terminal — a retry resolves nothing; the fix is a token carrying an email claim |
 | `Deactivated` | `401 Unauthorized` — `"account is deactivated"` | `INVALID_REQUEST`, terminal |
-| `SystemAccessDenied` | `ApiError::SystemAccessRequired { details }` — carries `SystemAccessDetails` (email, display_name, access_mode, join-request status, request URL, CLI command) | `INVALID_REQUEST` with the request-access guidance text |
+| `SystemAccessDenied` | `ApiError::SystemAccessRequired { details }` — carries `SystemAccessDetails` (email, display_name, refusal, request URL, CLI command) | `INVALID_REQUEST` with the request-access guidance text |
 | `ProfileResolution(ApiError::Unauthorized)` | the inner `ApiError` (a `401`) | `INVALID_REQUEST`, **terminal** — this is usually the machine-registration gate denying an unregistered or revoked `client_id`, a permanent denial a Sidekiq-style client must not retry |
 | `ProfileResolution(e)` / `AccessCheck(e)` (any other) | the inner `ApiError` | `internal_error` (retryable — a genuine infra fault) |
 

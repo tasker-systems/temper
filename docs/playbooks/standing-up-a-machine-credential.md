@@ -159,7 +159,7 @@ Registration is authorized by **team ownership**:
 
 > `is_system_admin` **OR** owner of the team that will own the machine.
 
-A system admin — the owner of the gating team — can mint any machine. A **team
+A system admin — a profile with a governance grant — can mint any machine. A **team
 owner** can mint a machine owned by *their own* team, without an operator in
 the loop. That is the point of the model: a team runs its own agents.
 

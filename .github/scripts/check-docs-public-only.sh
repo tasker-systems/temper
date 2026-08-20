@@ -26,31 +26,39 @@ if [ "$count" -eq 0 ]; then
     exit 1
 fi
 
-# (b) No forbidden directory may exist under docs/.
+# (b) No forbidden directory may exist under docs/ — at ANY depth.
+# The original check was `docs/$d` (top-level only), so a nested
+# `docs/playbooks/development/` would slip through. `find -type d` closes that.
 failed=0
 for d in $FORBIDDEN; do
-    if [ -e "docs/$d" ]; then
-        echo "FAIL: docs/$d exists — internal material belongs in internal/." >&2
+    while IFS= read -r hit; do
+        [ -z "$hit" ] && continue
+        echo "FAIL: ${hit} exists — internal material belongs in internal/." >&2
         failed=1
-    fi
+    done < <(find docs -type d -name "$d" 2>/dev/null)
 done
 
-# (c) No loose .md at the docs/ root. Every moved-out tree was a DIRECTORY, so the
-# forbidden-name check above cannot see a stray design doc or audit dropped at the top
-# level — and eleven of them sat there when this gate was first written, which is exactly
-# the shape it missed. Public documentation is reached through a door or a section;
-# `index.md` is the one legitimate root page in the target structure.
+# (c) No loose documentation at the docs/ root. Every moved-out tree was a
+# DIRECTORY, so the forbidden-name check above cannot see a stray design doc
+# or audit dropped at the top level. The original check was `*.md` only, so a
+# `.txt`, `.json`, or `.sh` escaped. Now checks ALL root files; `index.md` is
+# the one legitimate root page, and image/asset extensions are allowed (the
+# site needs brand-mark.svg etc. at the root).
+ASSET_RE='\.(svg|png|jpe?g|gif|ico|webp|css|js)$'
 while IFS= read -r f; do
     [ -z "$f" ] && continue
     case "$(basename "$f")" in
         index.md) continue ;;
     esac
-    echo "FAIL: $f is a loose page at the docs/ root — file it under a section, or move it to internal/." >&2
+    if echo "$f" | grep -qE "$ASSET_RE"; then
+        continue
+    fi
+    echo "FAIL: $f is a loose file at the docs/ root — file it under a section, or move it to internal/." >&2
     failed=1
-done < <(find docs -maxdepth 1 -type f -name '*.md' 2>/dev/null)
+done < <(find docs -maxdepth 1 -type f 2>/dev/null)
 
 # Say what was CHECKED, not what is hoped. "none in an internal tree" reads as the
 # invariant, and a denylist of names cannot establish the invariant — it establishes
 # the absence of the names on it. One un-added name and this line would still print.
-[ "$failed" -eq 0 ] && echo "OK: docs/ holds $count files; no top-level directory named any of the $(echo $FORBIDDEN | wc -w | tr -d ' ') known-internal trees, and no loose .md at the root except index.md. (Denylist: this detects the known trees returning, not that every page is fit to publish.)"
+[ "$failed" -eq 0 ] && echo "OK: docs/ holds $count files; no directory named any of the $(echo $FORBIDDEN | wc -w | tr -d ' ') known-internal trees at any depth, and no loose documentation at the root except index.md and assets. (Denylist: this detects the known trees returning, not that every page is fit to publish.)"
 exit "$failed"

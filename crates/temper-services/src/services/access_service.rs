@@ -49,7 +49,7 @@ pub async fn has_system_access(pool: &PgPool, profile_id: ProfileId) -> ApiResul
     Ok(result.unwrap_or(false))
 }
 
-/// Check if a profile is a system admin (owner of the gating team).
+/// Check if a profile is a system admin (holds a `kb_principal_governance` grant).
 pub async fn is_system_admin(pool: &PgPool, profile_id: ProfileId) -> ApiResult<bool> {
     let result = sqlx::query_scalar!("SELECT is_system_admin($1)", *profile_id,)
         .fetch_one(pool)
@@ -522,9 +522,9 @@ pub async fn admin_get_settings(pool: &PgPool, _admin: &SystemAdmin) -> ApiResul
 /// Phase 2 drops it, so this function never touches it.
 ///
 /// One guard survives, decoupled from the retired mode: if a `gating_team_slug`
-/// is being set, the team must exist. That slug's ownership confers a system
-/// admin (`is_system_admin` reads governance keyed on it), so pointing it at a
-/// nonexistent team would silently break admin resolution. This is *not* the old
+/// is being set, the team must exist. The gating team is the conventional
+/// home for the side-effect `owner` row `promote_admin` writes, so pointing the
+/// slug at a nonexistent team would orphan that row. This is *not* the old
 /// lockout guard — under Task 7's repoint `has_system_access` reads standing, so
 /// a null slug can no longer lock anyone out of the instance.
 pub async fn update_system_settings(
@@ -574,10 +574,11 @@ pub async fn update_system_settings(
 
 /// Admin-only: grant `profile_id` the `owner` role on a team (idempotent).
 ///
-/// `team_id == None` resolves to the configured gating team — system-admin ≡
-/// owner of the gating team, so this mints a second system admin. Decoupled
-/// from `kb_profiles.system_access` (the auth gate reads gating-team ownership,
-/// not the enum). Auth is the `&SystemAdmin` proof (admin-authz enclosure, spec §3); the promoting
+/// `team_id == None` resolves to the configured gating team — the side-effect
+/// `owner` row is retained for backwards compatibility, but since D11
+/// `is_system_admin` reads `kb_principal_governance` (not gating-team ownership),
+/// the actual admin-ness comes from the governance grant + `approved` standing
+/// this function writes. Auth is the `&SystemAdmin` proof (admin-authz enclosure, spec §3); the promoting
 /// admin (`admin.actor()`) is recorded as the actor on the governance grant and standing transition.
 pub async fn promote_admin(
     pool: &PgPool,

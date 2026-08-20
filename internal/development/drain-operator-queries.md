@@ -5,7 +5,7 @@ region materialization and embedding.
 
 Companion to the drain instrumentation design
 (`internal/superpowers/specs/2026-08-03-drain-instrumentation-design.md`)
-and [OpenTelemetry setup](open-telemetry-setup.md). Datasource: the Tempo datasource
+and [OpenTelemetry setup](../../docs/playbooks/send-traces-to-an-otlp-backend.md). Datasource: the Tempo datasource
 (`grafanacloud-traces`).
 
 ---

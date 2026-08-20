@@ -1350,7 +1350,7 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn system_admin_can_transfer_any_context(pool: PgPool) {
-        // The seeded admin is a system admin (owner of the gating team). Transfer a context
+        // The seeded admin is a system admin (holds a governance grant). Transfer a context
         // it owns to a fresh non-gating team it also owns.
         let (admin, _member, _gating, context_id) = seed_admin_team_context(&pool).await;
         let acme = mk_team(&pool, "acme").await;
@@ -1445,7 +1445,7 @@ mod tests {
         );
     }
 
-    /// The system-admin bypass also holds at the SQL layer: the seeded admin (gating-team owner)
+    /// The system-admin bypass also holds at the SQL layer: the seeded admin (governance grant)
     /// may reassign a context it administers directly through the function.
     #[sqlx::test(migrations = "../../migrations")]
     async fn sql_guard_allows_system_admin_directly(pool: PgPool) {

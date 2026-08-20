@@ -6,8 +6,8 @@
 //! Axum server on a random port backed by a per-test isolated DB), which is
 //! the same pattern used by `resources_test.rs` and `auth_test.rs`.
 //!
-//! The system is seeded with `access_mode = 'open'` so all authenticated
-//! profiles pass the system-access gate without explicit team membership.
+//! The system is seeded with approved standing so all authenticated
+//! profiles pass the system-access gate.
 
 mod common;
 

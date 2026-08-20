@@ -68,7 +68,7 @@ function" holds *per level*.
 | Level | Function | Gate it adds | Runs on |
 |-------|----------|--------------|---------|
 | 1 — **Authenticated** | `authenticate_token` (public) → `authenticate` (`pub(crate)`) | classify + email ladder + resolve profile + `is_active` | every authed route/tool, both surfaces |
-| 2 — **System-authorized** | `require_system_access` | `has_system_access` (gating-team membership) | the *gated* tier of both surfaces |
+| 2 — **System-authorized** | `require_system_access` | `has_system_access` (approved standing (`kb_principal_standing`)) | the *gated* tier of both surfaces |
 
 Level 2 is a **typestate** chain: `require_system_access` only accepts an
 `AuthenticatedProfile` (produced solely by `authenticate`, which is reachable only through
@@ -125,10 +125,10 @@ tool requires Level 2.) See [authorization-seam.md](./authorization-seam.md).
 ## Related, elsewhere
 
 - **Operator setup** for SAML SSO (env, keys, IdP row, group mappings):
-  [../guides/self-hosting-saml.md](../guides/self-hosting-saml.md). That guide is the
+  [../../docs/playbooks/self-host-with-saml.md](../../docs/playbooks/self-host-with-saml.md). That guide is the
   runbook; *this* area is the security model it implements.
 - **Operator/integrator guide** for machine principals (mint, reach, rotate, revoke):
-  [../guides/machine-credentials.md](../guides/machine-credentials.md). Same split: that
+  [../../docs/playbooks/standing-up-a-machine-credential.md](../../docs/playbooks/standing-up-a-machine-credential.md). Same split: that
   guide is *how to run one*, [machine-token-contract.md](./machine-token-contract.md) is
   *what the code guarantees about one*.
 - **Design spec** the seam was built from:

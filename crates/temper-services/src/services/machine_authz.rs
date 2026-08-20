@@ -184,8 +184,11 @@ pub(crate) async fn authorize_registration<'a>(
         //
         // The ceiling is `member` because that is where *governance* starts: `can_manage` is
         // `Owner | Maintainer`, so anything higher lets an unattended credential manage team
-        // membership, bind cogmaps, and reassign contexts, and on the gating team `owner` mints
-        // a self-replicating `is_system_admin` principal. `apply_reach`'s raw
+        // membership, bind cogmaps, and reassign contexts. Under D11 gating-team
+        // `owner` no longer mints an `is_system_admin` principal (governance grant
+        // is separate), but the role ceiling is still enforced because a governing
+        // role on any team is too much authority for an unattended credential.
+        // `apply_reach`'s raw
         // `ON CONFLICT DO UPDATE SET role` is not a shortcut around a governed human path — it
         // is the ONLY path to these roles for a machine (no ownership-transfer operation exists:
         // task 019f77a2-4860-7300-a04e-df0d750dc4c7), so this is the only place to stop it.
@@ -482,7 +485,8 @@ mod tests {
 
     /// Spec D4a — the escalation. A gating-team MAINTAINER clears `can_manage` on the
     /// gating team but is NOT a system admin. Without the ceiling they could mint a
-    /// machine at role=owner on the gating team — an `is_system_admin` principal.
+    /// machine at role=owner on the gating team — a governing role that under
+    /// the pre-D11 model would have been an `is_system_admin` principal.
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn cannot_mint_a_governing_role_on_the_gating_team(pool: PgPool) {
         let gating = configure_gating_team(&pool).await;
@@ -535,7 +539,8 @@ mod tests {
 
     /// Spec D4b — the admin arm. A system admin skips containment entirely (D3), but the role
     /// ceiling is not containment: no caller may mint a machine that governs a team, and on the
-    /// gating team, one that *is* an `is_system_admin` principal registering further machines
+    /// gating team, one with a governing role that under the pre-D11 model would
+    /// have been an `is_system_admin` principal registering further machines
     /// unattended.
     ///
     /// The mirror of `cannot_mint_a_governing_role_on_the_gating_team`, one arm over. The admin

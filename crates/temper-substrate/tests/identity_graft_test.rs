@@ -45,7 +45,7 @@ async fn identity_graft_resolves(pool: sqlx::PgPool) {
         .expect("has_system_access runs");
     assert!(has, "an approved principal has system access (D11)");
 
-    // is_system_admin resolves (false here — no gating team / owner membership seeded).
+    // is_system_admin resolves (false here — no governance grant seeded).
     let _is_admin: bool = sqlx::query_scalar("SELECT is_system_admin($1)")
         .bind(profile)
         .fetch_one(&pool)
