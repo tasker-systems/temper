@@ -19,7 +19,7 @@ module Temper::Generated
     def initialize(api_client = ApiClient.default)
       @api_client = api_client
     end
-    # GET /api/graph/home — the you→teams→cogmaps membership home.
+    # Read your teams and cognitive maps
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [AtlasHome]
@@ -28,7 +28,7 @@ module Temper::Generated
       data
     end
 
-    # GET /api/graph/home — the you→teams→cogmaps membership home.
+    # Read your teams and cognitive maps
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<(AtlasHome, Integer, Hash)>] AtlasHome data, response status code and response headers
@@ -81,7 +81,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # POST /api/cogmaps/{id}/graph/slice — R4 cogmap-scoped neighborhood slice.
+    # Slice a neighborhood within a cognitive map
     # @param id [String] Cogmap id to scope the slice to
     # @param slice_request [SliceRequest] 
     # @param [Hash] opts the optional parameters
@@ -92,7 +92,7 @@ module Temper::Generated
       data
     end
 
-    # POST /api/cogmaps/{id}/graph/slice — R4 cogmap-scoped neighborhood slice.
+    # Slice a neighborhood within a cognitive map
     # @param id [String] Cogmap id to scope the slice to
     # @param slice_request [SliceRequest] 
     # @param [Hash] opts the optional parameters
@@ -160,7 +160,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # GET /api/graph/cogmaps/{id}/panorama — enter-a-cogmap Tier-0 interior.
+    # Read a cognitive map's interior
     # @param id [String] Cogmap id
     # @param [Hash] opts the optional parameters
     # @option opts [String] :lens_id Optional lens override; defaults to the cogmap&#39;s primary lens.
@@ -171,7 +171,7 @@ module Temper::Generated
       data
     end
 
-    # GET /api/graph/cogmaps/{id}/panorama — enter-a-cogmap Tier-0 interior.
+    # Read a cognitive map&#39;s interior
     # @param id [String] Cogmap id
     # @param [Hash] opts the optional parameters
     # @option opts [String] :lens_id Optional lens override; defaults to the cogmap&#39;s primary lens.
@@ -231,7 +231,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # GET /api/graph/contexts/composition — Beat E Tier-1: the force-graph composition of a container's (or a residual bucket's) members.
+    # Read a container's composition
     # @param context_ref [String] Context ref (decorated or bare UUID) — the drill&#39;s home context.
     # @param [Hash] opts the optional parameters
     # @option opts [String] :container Container resource id to drill.
@@ -246,7 +246,7 @@ module Temper::Generated
       data
     end
 
-    # GET /api/graph/contexts/composition — Beat E Tier-1: the force-graph composition of a container&#39;s (or a residual bucket&#39;s) members.
+    # Read a container&#39;s composition
     # @param context_ref [String] Context ref (decorated or bare UUID) — the drill&#39;s home context.
     # @param [Hash] opts the optional parameters
     # @option opts [String] :container Container resource id to drill.
@@ -315,7 +315,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # GET /api/graph/contexts/panorama — Beat E Tier-0: goal-container territories + residual tray.
+    # Read goal-container territories and residuals
     # @param context_ref [String] Context ref in decorated form (&#x60;@me/&lt;slug&gt;&#x60;, &#x60;@&lt;handle&gt;/&lt;slug&gt;&#x60;, &#x60;+&lt;team-slug&gt;/&lt;slug&gt;&#x60;) or a bare UUID.
     # @param [Hash] opts the optional parameters
     # @option opts [String] :group_by Property key the residual tray groups by. Defaults to &#x60;doc_type&#x60; (spec D2 — a parameter, not a constant).
@@ -328,7 +328,7 @@ module Temper::Generated
       data
     end
 
-    # GET /api/graph/contexts/panorama — Beat E Tier-0: goal-container territories + residual tray.
+    # Read goal-container territories and residuals
     # @param context_ref [String] Context ref in decorated form (&#x60;@me/&lt;slug&gt;&#x60;, &#x60;@&lt;handle&gt;/&lt;slug&gt;&#x60;, &#x60;+&lt;team-slug&gt;/&lt;slug&gt;&#x60;) or a bare UUID.
     # @param [Hash] opts the optional parameters
     # @option opts [String] :group_by Property key the residual tray groups by. Defaults to &#x60;doc_type&#x60; (spec D2 — a parameter, not a constant).
@@ -393,7 +393,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # GET /api/graph/regions/composition — Beat D region→resources composition drill.
+    # Read the resources composing a region
     # @param ids [String] Comma-separated region ids — one region, or a shift-selected union.
     # @param [Hash] opts the optional parameters
     # @option opts [Integer] :depth Composition depth; defaults to 1, clamped to 3 by the service.
@@ -404,7 +404,7 @@ module Temper::Generated
       data
     end
 
-    # GET /api/graph/regions/composition — Beat D region→resources composition drill.
+    # Read the resources composing a region
     # @param ids [String] Comma-separated region ids — one region, or a shift-selected union.
     # @param [Hash] opts the optional parameters
     # @option opts [Integer] :depth Composition depth; defaults to 1, clamped to 3 by the service.

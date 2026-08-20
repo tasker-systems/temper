@@ -19,7 +19,7 @@ module Temper::Generated
     def initialize(api_client = ApiClient.default)
       @api_client = api_client
     end
-    # POST /api/access/requests — submit a join request for the gating team.
+    # Request to join the gating team
     # @param create_request_body [CreateRequestBody] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -29,7 +29,7 @@ module Temper::Generated
       data
     end
 
-    # POST /api/access/requests — submit a join request for the gating team.
+    # Request to join the gating team
     # @param create_request_body [CreateRequestBody] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -92,8 +92,8 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # POST /api/access/reviews — a revoked principal asks an admin to reconsider (spec D15).
-    # On the auth-only router, NOT the gated one: a revoked principal cannot pass the system-access gate, and being able to ask for reconsideration is the whole point. The review is an inbox signal only — it never feeds the admission decision.
+    # Ask an admin to reconsider a revocation
+    # A revoked principal can call this without passing the system-access gate — being able to ask for reconsideration is the point.  The review is an inbox signal for administrators. It never feeds the admission decision by itself.
     # @param create_review_body [CreateReviewBody] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -103,8 +103,8 @@ module Temper::Generated
       nil
     end
 
-    # POST /api/access/reviews — a revoked principal asks an admin to reconsider (spec D15).
-    # On the auth-only router, NOT the gated one: a revoked principal cannot pass the system-access gate, and being able to ask for reconsideration is the whole point. The review is an inbox signal only — it never feeds the admission decision.
+    # Ask an admin to reconsider a revocation
+    # A revoked principal can call this without passing the system-access gate — being able to ask for reconsideration is the point.  The review is an inbox signal for administrators. It never feeds the admission decision by itself.
     # @param create_review_body [CreateReviewBody] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -167,7 +167,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # GET /api/access/requests/me — check own join request status.
+    # Check your join request status
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [JoinRequest]
@@ -176,7 +176,7 @@ module Temper::Generated
       data
     end
 
-    # GET /api/access/requests/me — check own join request status.
+    # Check your join request status
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<(JoinRequest, Integer, Hash)>] JoinRequest data, response status code and response headers
@@ -229,7 +229,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # GET /api/access/settings — read public system settings.
+    # Read public system settings
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [PublicSystemSettings]
@@ -238,7 +238,7 @@ module Temper::Generated
       data
     end
 
-    # GET /api/access/settings — read public system settings.
+    # Read public system settings
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<(PublicSystemSettings, Integer, Hash)>] PublicSystemSettings data, response status code and response headers
@@ -291,7 +291,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # DELETE /api/access/requests/me — withdraw a pending join request.
+    # Withdraw your pending join request
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [nil]
@@ -300,7 +300,7 @@ module Temper::Generated
       nil
     end
 
-    # DELETE /api/access/requests/me — withdraw a pending join request.
+    # Withdraw your pending join request
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<(nil, Integer, Hash)>] nil, response status code and response headers

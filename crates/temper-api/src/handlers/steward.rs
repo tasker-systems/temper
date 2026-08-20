@@ -32,6 +32,7 @@ pub struct DeltaQuery {
     pub threshold: Option<i64>,
 }
 
+/// Read a map's ingest delta
 #[utoipa::path(
     get,
     path = "/api/steward/{cogmap}/delta",
@@ -62,6 +63,7 @@ pub async fn delta(
     Ok(Json(delta))
 }
 
+/// Advance a map's steward watermark
 #[utoipa::path(
     post,
     path = "/api/steward/{cogmap}/watermark",
@@ -100,6 +102,7 @@ pub async fn advance(
     Ok(Json(out.value))
 }
 
+/// Survey steward drift across maps
 #[utoipa::path(
     get,
     path = "/api/steward/sweep",
@@ -122,6 +125,7 @@ pub async fn sweep(
     Ok(Json(rows))
 }
 
+/// List steward candidates
 #[utoipa::path(
     get,
     path = "/api/steward/candidates",
@@ -138,6 +142,7 @@ pub async fn candidates(
     Ok(Json(ids))
 }
 
+/// Claim steward jobs for a worker
 #[utoipa::path(
     post,
     path = "/api/steward/dispatch",

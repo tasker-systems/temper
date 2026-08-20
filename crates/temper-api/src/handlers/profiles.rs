@@ -17,6 +17,7 @@ pub struct ProfileWithEntitlements {
     pub entitlements: Entitlements,
 }
 
+/// Read your profile
 #[utoipa::path(
     get,
     operation_id = "get_profile",
@@ -43,6 +44,7 @@ pub async fn get(
     }))
 }
 
+/// Update your profile
 #[utoipa::path(
     patch,
     operation_id = "update_profile",
@@ -74,6 +76,7 @@ pub async fn update(
     .map(Json)
 }
 
+/// List your linked identity providers
 #[utoipa::path(
     get,
     path = "/api/profile/auth-links",

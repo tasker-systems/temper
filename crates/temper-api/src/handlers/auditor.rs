@@ -86,6 +86,7 @@ fn validate_cap(cap: Option<i64>) -> ApiResult<()> {
     }
 }
 
+/// Survey audit coverage across findings
 #[utoipa::path(
     get,
     path = "/api/auditor/sweep",
@@ -113,6 +114,7 @@ pub async fn sweep(
     Ok(Json(rows))
 }
 
+/// Claim a batch of auditor jobs
 #[utoipa::path(
     post,
     path = "/api/auditor/dispatch",
@@ -183,6 +185,7 @@ pub async fn dispatch(
     }))
 }
 
+/// Complete a claimed auditor job
 #[utoipa::path(
     post,
     path = "/api/auditor/{cogmap}/complete",

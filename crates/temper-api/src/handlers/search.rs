@@ -25,14 +25,16 @@ use temper_services::state::AppState;
         (status = 401, description = "Unauthorized", body = ErrorBody),
     )
 )]
-/// `POST /api/search`.
+// The `x-temper-search-diagnostics` response header is GONE. It carried `SearchDiagnostics`
+// beside a body that was a bare `Vec<UnifiedSearchResultRow>`, and existed for exactly that
+// reason; the body is an object now, so diagnostics live in it, per-arm, beside the hits they
+// describe. That also retires the header's percent-encoding scar — non-ASCII hint text was
+// arriving at clients as `%E2%80%94` because the serverless adapter encoded header bytes.
+// Hints stay ASCII anyway, guarded by `every_emitted_hint_is_ascii`, since nothing is gained
+// by relaxing it.
+/// Search resources by text or embedding
 ///
-/// The `x-temper-search-diagnostics` response header is GONE. It carried `SearchDiagnostics` beside
-/// a body that was a bare `Vec<UnifiedSearchResultRow>`, and existed for exactly that reason; the
-/// body is an object now, so diagnostics live in it, per-arm, beside the hits they describe. That
-/// also retires the header's percent-encoding scar — non-ASCII hint text was arriving at clients as
-/// `%E2%80%94` because the serverless adapter encoded header bytes. Hints stay ASCII anyway, guarded
-/// by `every_emitted_hint_is_ascii`, since nothing is gained by relaxing it.
+/// Answers in two arms: exact (full-text) and wide (vector). Each arm carries its own diagnostics in the response body, beside the hits they describe.
 pub async fn search(
     State(state): State<AppState>,
     auth: AuthUser,

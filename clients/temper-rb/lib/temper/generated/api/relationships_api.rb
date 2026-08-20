@@ -19,6 +19,7 @@ module Temper::Generated
     def initialize(api_client = ApiClient.default)
       @api_client = api_client
     end
+    # Assert a relationship between resources
     # @param assert_relationship_request [AssertRelationshipRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -28,6 +29,7 @@ module Temper::Generated
       data
     end
 
+    # Assert a relationship between resources
     # @param assert_relationship_request [AssertRelationshipRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -90,6 +92,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Fold a relationship
     # @param edge_handle [String] Relationship edge handle
     # @param fold_relationship_request [FoldRelationshipRequest] 
     # @param [Hash] opts the optional parameters
@@ -100,6 +103,7 @@ module Temper::Generated
       data
     end
 
+    # Fold a relationship
     # @param edge_handle [String] Relationship edge handle
     # @param fold_relationship_request [FoldRelationshipRequest] 
     # @param [Hash] opts the optional parameters
@@ -167,6 +171,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Change a relationship's type
     # @param edge_handle [String] Relationship edge handle
     # @param retype_relationship_request [RetypeRelationshipRequest] 
     # @param [Hash] opts the optional parameters
@@ -177,6 +182,7 @@ module Temper::Generated
       data
     end
 
+    # Change a relationship&#39;s type
     # @param edge_handle [String] Relationship edge handle
     # @param retype_relationship_request [RetypeRelationshipRequest] 
     # @param [Hash] opts the optional parameters
@@ -244,6 +250,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Change a relationship's weight
     # @param edge_handle [String] Relationship edge handle
     # @param reweight_relationship_request [ReweightRelationshipRequest] 
     # @param [Hash] opts the optional parameters
@@ -254,6 +261,7 @@ module Temper::Generated
       data
     end
 
+    # Change a relationship&#39;s weight
     # @param edge_handle [String] Relationship edge handle
     # @param reweight_relationship_request [ReweightRelationshipRequest] 
     # @param [Hash] opts the optional parameters

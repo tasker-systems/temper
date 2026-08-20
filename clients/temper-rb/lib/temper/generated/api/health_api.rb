@@ -19,6 +19,7 @@ module Temper::Generated
     def initialize(api_client = ApiClient.default)
       @api_client = api_client
     end
+    # Check service health
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [HealthResponse]
@@ -27,6 +28,7 @@ module Temper::Generated
       data
     end
 
+    # Check service health
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<(HealthResponse, Integer, Hash)>] HealthResponse data, response status code and response headers

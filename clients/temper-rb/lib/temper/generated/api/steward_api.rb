@@ -19,6 +19,7 @@ module Temper::Generated
     def initialize(api_client = ApiClient.default)
       @api_client = api_client
     end
+    # Advance a map's steward watermark
     # @param cogmap [String] Team-self-cognition cogmap id
     # @param advance_watermark_request [AdvanceWatermarkRequest] 
     # @param [Hash] opts the optional parameters
@@ -29,6 +30,7 @@ module Temper::Generated
       data
     end
 
+    # Advance a map&#39;s steward watermark
     # @param cogmap [String] Team-self-cognition cogmap id
     # @param advance_watermark_request [AdvanceWatermarkRequest] 
     # @param [Hash] opts the optional parameters
@@ -96,6 +98,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # List steward candidates
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<String>]
@@ -104,6 +107,7 @@ module Temper::Generated
       data
     end
 
+    # List steward candidates
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<(Array<String>, Integer, Hash)>] Array<String> data, response status code and response headers
@@ -156,6 +160,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Read a map's ingest delta
     # @param cogmap [String] Team-self-cognition cogmap id
     # @param [Hash] opts the optional parameters
     # @option opts [Integer] :threshold Ingest threshold to gate on (default applies when omitted)
@@ -166,6 +171,7 @@ module Temper::Generated
       data
     end
 
+    # Read a map&#39;s ingest delta
     # @param cogmap [String] Team-self-cognition cogmap id
     # @param [Hash] opts the optional parameters
     # @option opts [Integer] :threshold Ingest threshold to gate on (default applies when omitted)
@@ -225,6 +231,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Claim steward jobs for a worker
     # @param dispatch_tick_request [DispatchTickRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -234,6 +241,7 @@ module Temper::Generated
       data
     end
 
+    # Claim steward jobs for a worker
     # @param dispatch_tick_request [DispatchTickRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -296,6 +304,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Survey steward drift across maps
     # @param [Hash] opts the optional parameters
     # @option opts [Integer] :threshold Ingest threshold (default applies when omitted)
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -305,6 +314,7 @@ module Temper::Generated
       data
     end
 
+    # Survey steward drift across maps
     # @param [Hash] opts the optional parameters
     # @option opts [Integer] :threshold Ingest threshold (default applies when omitted)
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.

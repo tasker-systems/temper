@@ -8,6 +8,7 @@ use temper_services::error::{ApiResult, ErrorBody};
 use temper_services::services::evidential_standing_service;
 use temper_services::state::AppState;
 
+/// Read a resource's evidential standing
 #[utoipa::path(
     get,
     operation_id = "resource_evidence",

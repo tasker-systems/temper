@@ -19,7 +19,7 @@ use temper_services::services::context_service::resolve_context_ref;
 use temper_services::services::graph_service;
 use temper_services::state::AppState;
 
-/// POST /api/cogmaps/{id}/graph/slice — R4 cogmap-scoped neighborhood slice.
+/// Slice a neighborhood within a cognitive map
 #[utoipa::path(
     post,
     path = "/api/cogmaps/{id}/graph/slice",
@@ -56,7 +56,7 @@ pub struct CogmapPanoramaQuery {
     pub lens_id: Option<Uuid>,
 }
 
-/// GET /api/graph/cogmaps/{id}/panorama — enter-a-cogmap Tier-0 interior.
+/// Read a cognitive map's interior
 #[utoipa::path(
     get,
     path = "/api/graph/cogmaps/{id}/panorama",
@@ -93,7 +93,7 @@ pub struct RegionCompositionQuery {
     pub depth: Option<i32>,
 }
 
-/// GET /api/graph/regions/composition — Beat D region→resources composition drill.
+/// Read the resources composing a region
 #[utoipa::path(
     get,
     path = "/api/graph/regions/composition",
@@ -128,7 +128,7 @@ pub async fn region_composition(
     .map(Json)
 }
 
-/// GET /api/graph/home — the you→teams→cogmaps membership home.
+/// Read your teams and cognitive maps
 #[utoipa::path(
     get,
     path = "/api/graph/home",
@@ -228,7 +228,7 @@ pub struct ContextPanoramaQuery {
     pub depth: Option<i32>,
 }
 
-/// GET /api/graph/contexts/panorama — Beat E Tier-0: goal-container territories + residual tray.
+/// Read goal-container territories and residuals
 #[utoipa::path(
     get,
     path = "/api/graph/contexts/panorama",
@@ -291,8 +291,7 @@ pub struct ContextCompositionQuery {
     pub container_depth: Option<i32>,
 }
 
-/// GET /api/graph/contexts/composition — Beat E Tier-1: the force-graph composition of a
-/// container's (or a residual bucket's) members.
+/// Read a container's composition
 #[utoipa::path(
     get,
     path = "/api/graph/contexts/composition",

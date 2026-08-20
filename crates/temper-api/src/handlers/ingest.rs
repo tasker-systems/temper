@@ -39,6 +39,7 @@ impl IntoResponse for IngestCreateResponse {
     }
 }
 
+/// Begin a segmented ingest
 #[utoipa::path(
     post,
     operation_id = "create_ingest",
@@ -159,6 +160,7 @@ pub async fn create(
     Ok(IngestCreateResponse::Segmented(out.value))
 }
 
+/// Update an in-progress ingest
 #[utoipa::path(
     put,
     operation_id = "update_ingest",

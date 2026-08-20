@@ -19,6 +19,7 @@ module Temper::Generated
     def initialize(api_client = ApiClient.default)
       @api_client = api_client
     end
+    # Claim a batch of auditor jobs
     # @param auditor_dispatch_tick_request [AuditorDispatchTickRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -28,6 +29,7 @@ module Temper::Generated
       data
     end
 
+    # Claim a batch of auditor jobs
     # @param auditor_dispatch_tick_request [AuditorDispatchTickRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -90,6 +92,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Survey audit coverage across findings
     # @param [Hash] opts the optional parameters
     # @option opts [Integer] :cap Max findings to return (default applies when omitted)
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -99,6 +102,7 @@ module Temper::Generated
       data
     end
 
+    # Survey audit coverage across findings
     # @param [Hash] opts the optional parameters
     # @option opts [Integer] :cap Max findings to return (default applies when omitted)
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -153,6 +157,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Complete a claimed auditor job
     # @param cogmap [String] The cognitive map whose active citation-audit job is done
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -162,6 +167,7 @@ module Temper::Generated
       data
     end
 
+    # Complete a claimed auditor job
     # @param cogmap [String] The cognitive map whose active citation-audit job is done
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.

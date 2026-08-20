@@ -38,20 +38,23 @@ use temper_services::state::AppState;
         (status = 403, description = "System access required", body = ErrorBody),
     )
 )]
-/// `POST /api/query`.
+// The door onto the composition contract: a caller sends a plan, the server answers it or
+// refuses it. Everything before this route built a door that nothing could knock on.
+//
+// The pipeline is not assembled here. `query_read::prepare` owns the order — shape-gate, then
+// embed, then validate — and is the only constructor of a `ValidatedComposition`, so this
+// handler cannot run an unvalidated plan even by mistake. Spelling the order out here would
+// make this the second place that knows it, and the day the MCP tool and the CLI arrive, the
+// third and fourth.
+//
+// The refusal branch is the only thing that differs from `super::search::search`, whose shape
+// this otherwise copies: `search_select` takes params and answers, while `prepare` may refuse
+// first.
+/// Run a composition of situated acts
 ///
-/// The door onto the composition contract: a caller sends a plan, the server answers it or refuses
-/// it. Everything before this route built a door that nothing could knock on.
+/// Send a declared composition — a plan of situated acts, piped — and receive its result or a refusal.
 ///
-/// **The pipeline is not assembled here.** [`query_read::prepare`] owns the order — shape-gate,
-/// then embed, then validate — and is the only constructor of a `ValidatedComposition`, so this
-/// handler cannot run an unvalidated plan even by mistake. Spelling the order out here would make
-/// this the second place that knows it, and the day the MCP tool and the CLI arrive, the third and
-/// fourth.
-///
-/// **The refusal branch is the only thing that differs from [`super::search::search`]**, whose
-/// shape this otherwise copies: `search_select` takes params and answers, while `prepare` may
-/// refuse first.
+/// The plan is shape-gated, embedded and validated before any act runs, so an invalid plan is refused whole rather than partially executed.
 pub async fn query(
     State(state): State<AppState>,
     auth: AuthUser,

@@ -4,6 +4,7 @@ use temper_core::types::api::HealthResponse;
 
 use temper_services::error::ApiResult;
 
+/// Check service health
 #[utoipa::path(
     get,
     path = "/api/health",

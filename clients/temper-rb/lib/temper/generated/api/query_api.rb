@@ -19,8 +19,8 @@ module Temper::Generated
     def initialize(api_client = ApiClient.default)
       @api_client = api_client
     end
-    # `POST /api/query`.
-    # The door onto the composition contract: a caller sends a plan, the server answers it or refuses it. Everything before this route built a door that nothing could knock on.  **The pipeline is not assembled here.** [`query_read::prepare`] owns the order — shape-gate, then embed, then validate — and is the only constructor of a `ValidatedComposition`, so this handler cannot run an unvalidated plan even by mistake. Spelling the order out here would make this the second place that knows it, and the day the MCP tool and the CLI arrive, the third and fourth.  **The refusal branch is the only thing that differs from [`super::search::search`]**, whose shape this otherwise copies: `search_select` takes params and answers, while `prepare` may refuse first.
+    # Run a composition of situated acts
+    # Send a declared composition — a plan of situated acts, piped — and receive its result or a refusal.  The plan is shape-gated, embedded and validated before any act runs, so an invalid plan is refused whole rather than partially executed.
     # @param composition [Composition] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -30,8 +30,8 @@ module Temper::Generated
       data
     end
 
-    # &#x60;POST /api/query&#x60;.
-    # The door onto the composition contract: a caller sends a plan, the server answers it or refuses it. Everything before this route built a door that nothing could knock on.  **The pipeline is not assembled here.** [&#x60;query_read::prepare&#x60;] owns the order — shape-gate, then embed, then validate — and is the only constructor of a &#x60;ValidatedComposition&#x60;, so this handler cannot run an unvalidated plan even by mistake. Spelling the order out here would make this the second place that knows it, and the day the MCP tool and the CLI arrive, the third and fourth.  **The refusal branch is the only thing that differs from [&#x60;super::search::search&#x60;]**, whose shape this otherwise copies: &#x60;search_select&#x60; takes params and answers, while &#x60;prepare&#x60; may refuse first.
+    # Run a composition of situated acts
+    # Send a declared composition — a plan of situated acts, piped — and receive its result or a refusal.  The plan is shape-gated, embedded and validated before any act runs, so an invalid plan is refused whole rather than partially executed.
     # @param composition [Composition] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.

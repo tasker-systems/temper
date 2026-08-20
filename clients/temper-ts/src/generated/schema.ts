@@ -16,7 +16,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /api/access/requests — submit a join request for the gating team. */
+        /** Request to join the gating team */
         post: operations["create_request"];
         delete?: never;
         options?: never;
@@ -34,11 +34,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /api/access/requests/me — check own join request status. */
+        /** Check your join request status */
         get: operations["get_own_request"];
         put?: never;
         post?: never;
-        /** DELETE /api/access/requests/me — withdraw a pending join request. */
+        /** Withdraw your pending join request */
         delete: operations["withdraw_request"];
         options?: never;
         head?: never;
@@ -58,10 +58,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * POST /api/access/reviews — a revoked principal asks an admin to reconsider (spec D15).
-         * @description On the auth-only router, NOT the gated one: a revoked principal cannot pass the system-access
-         *     gate, and being able to ask for reconsideration is the whole point. The review is an inbox
-         *     signal only — it never feeds the admission decision.
+         * Ask an admin to reconsider a revocation
+         * @description A revoked principal can call this without passing the system-access gate — being able to ask for reconsideration is the point.
+         *
+         *     The review is an inbox signal for administrators. It never feeds the admission decision by itself.
          */
         post: operations["create_review_request"];
         delete?: never;
@@ -80,7 +80,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /api/access/settings — read public system settings. */
+        /** Read public system settings */
         get: operations["get_settings"];
         put?: never;
         post?: never;
@@ -102,7 +102,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Disconnect any principal. Operator path — offboarding and stuck users. */
+        /** Disconnect any principal's Slack link */
         post: operations["admin_disconnect"];
         delete?: never;
         options?: never;
@@ -122,6 +122,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** Claim a batch of auditor jobs */
         post: operations["auditor_dispatch"];
         delete?: never;
         options?: never;
@@ -139,6 +140,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** Survey audit coverage across findings */
         get: operations["auditor_sweep"];
         put?: never;
         post?: never;
@@ -160,6 +162,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** Complete a claimed auditor job */
         post: operations["complete_auditor_job"];
         delete?: never;
         options?: never;
@@ -181,16 +184,10 @@ export interface paths {
         put?: never;
         post?: never;
         /**
-         * Disconnect EVERY Slack principal bound to the caller's own profile.
-         * @description Plural on purpose. `kb_profile_auth_links` has `UNIQUE(auth_provider, auth_provider_user_id)`
-         *     and nothing keyed on `(profile_id, auth_provider)`, so a human in two Slack workspaces holds
-         *     two rows — legitimately, because the already-linked refusal keys on the *principal*. Cutting
-         *     only one and answering "disconnected" would leave the other grant live and still minting
-         *     act-as-the-human tokens, which is the opposite of what the user asked for.
+         * Disconnect all your own Slack links
+         * @description Disconnects every Slack principal bound to your profile, not just one. Someone who has linked Slack in two workspaces holds two links; cutting only one would leave the other live and still able to act as them.
          *
-         *     The 401 arm is the disabled-link branch. There is no 503: `ApiError` has no such variant, and
-         *     documenting one the code cannot return is worse than documenting nothing — it is baked into
-         *     `openapi.json`, the Ruby gem and `schema.ts`.
+         *     Answers 401 when the link is already disabled.
          */
         delete: operations["disconnect_me"];
         options?: never;
@@ -210,7 +207,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /api/cogmaps/{id}/graph/slice — R4 cogmap-scoped neighborhood slice. */
+        /** Slice a neighborhood within a cognitive map */
         post: operations["cogmap_neighborhood_slice"];
         delete?: never;
         options?: never;
@@ -228,8 +225,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** List cognitive maps you can see */
         get: operations["list_cognitive_maps"];
         put?: never;
+        /** Create a cognitive map and its telos charter */
         post: operations["genesis"];
         delete?: never;
         options?: never;
@@ -247,7 +246,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** Get one cognitive map */
         get: operations["get_cognitive_map"];
+        /** Reconcile a cognitive map's contents */
         put: operations["reconcile"];
         post?: never;
         delete?: never;
@@ -266,6 +267,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** Read cognitive-map analytics */
         get: operations["analytics"];
         put?: never;
         post?: never;
@@ -287,7 +289,9 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** Grant access to a cognitive map */
         post: operations["grant_cogmap_access"];
+        /** Revoke access to a cognitive map */
         delete: operations["revoke_cogmap_access"];
         options?: never;
         head?: never;
@@ -306,6 +310,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** Materialize a cognitive map's regions */
         post: operations["materialize"];
         delete?: never;
         options?: never;
@@ -323,6 +328,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** Read formation drift since last materialize */
         get: operations["materialize_delta"];
         put?: never;
         post?: never;
@@ -342,6 +348,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** Read per-region metrics for a map */
         get: operations["region_metrics"];
         put?: never;
         post?: never;
@@ -361,6 +368,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** Read a cognitive map's shape */
         get: operations["shape"];
         put?: never;
         post?: never;
@@ -382,6 +390,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** Bind a team to a cognitive map */
         post: operations["bind_team"];
         delete?: never;
         options?: never;
@@ -402,6 +411,7 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
+        /** Unbind a team from a cognitive map */
         delete: operations["unbind_team"];
         options?: never;
         head?: never;
@@ -418,8 +428,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** List contexts you can see */
         get: operations["list_contexts"];
         put?: never;
+        /** Create a context */
         post: operations["create_context"];
         delete?: never;
         options?: never;
@@ -437,6 +449,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** Get one context */
         get: operations["get_context"];
         put?: never;
         post?: never;
@@ -458,6 +471,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** Materialize a context's regions */
         post: operations["context_materialize"];
         delete?: never;
         options?: never;
@@ -477,6 +491,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** Reassign a context to another owner */
         post: operations["reassign"];
         delete?: never;
         options?: never;
@@ -494,6 +509,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** Read per-region metrics for a context */
         get: operations["context_region_metrics"];
         put?: never;
         post?: never;
@@ -515,6 +531,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** Rename a context */
         post: operations["rename"];
         delete?: never;
         options?: never;
@@ -532,6 +549,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** Read a context's shape */
         get: operations["context_shape"];
         put?: never;
         post?: never;
@@ -553,6 +571,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** Share a context with a team */
         post: operations["share_team"];
         delete?: never;
         options?: never;
@@ -573,6 +592,7 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
+        /** Stop sharing a context with a team */
         delete: operations["unshare_team"];
         options?: never;
         head?: never;
@@ -589,6 +609,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** Read the event cursor for a context */
         get: operations["cursor"];
         put?: never;
         post?: never;
@@ -610,6 +631,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** Set a facet on a resource */
         post: operations["set_facet"];
         delete?: never;
         options?: never;
@@ -627,7 +649,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /api/graph/cogmaps/{id}/panorama — enter-a-cogmap Tier-0 interior. */
+        /** Read a cognitive map's interior */
         get: operations["cogmap_panorama"];
         put?: never;
         post?: never;
@@ -647,10 +669,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * GET /api/graph/contexts/composition — Beat E Tier-1: the force-graph composition of a
-         *     container's (or a residual bucket's) members.
-         */
+        /** Read a container's composition */
         get: operations["context_composition"];
         put?: never;
         post?: never;
@@ -670,7 +689,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /api/graph/contexts/panorama — Beat E Tier-0: goal-container territories + residual tray. */
+        /** Read goal-container territories and residuals */
         get: operations["context_panorama"];
         put?: never;
         post?: never;
@@ -690,7 +709,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /api/graph/elements/{kind}/{id}/trail — R5 element event-trail. kind ∈ {node, edge}. */
+        /** Read a node or edge's event trail */
         get: operations["element_trail"];
         put?: never;
         post?: never;
@@ -710,7 +729,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /api/graph/home — the you→teams→cogmaps membership home. */
+        /** Read your teams and cognitive maps */
         get: operations["atlas_home"];
         put?: never;
         post?: never;
@@ -730,7 +749,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /api/graph/regions/composition — Beat D region→resources composition drill. */
+        /** Read the resources composing a region */
         get: operations["region_composition"];
         put?: never;
         post?: never;
@@ -750,6 +769,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** Check service health */
         get: operations["health_check"];
         put?: never;
         post?: never;
@@ -771,6 +791,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** Begin a segmented ingest */
         post: operations["create_ingest"];
         delete?: never;
         options?: never;
@@ -789,6 +810,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
+        /** Update an in-progress ingest */
         put: operations["update_ingest"];
         post?: never;
         delete?: never;
@@ -809,6 +831,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** Accept a team invitation */
         post: operations["accept"];
         delete?: never;
         options?: never;
@@ -828,6 +851,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** Decline a team invitation */
         post: operations["decline"];
         delete?: never;
         options?: never;
@@ -845,6 +869,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** List invitations addressed to you */
         get: operations["list_mine"];
         put?: never;
         post?: never;
@@ -864,8 +889,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** List agent invocations */
         get: operations["list_invocations"];
         put?: never;
+        /** Open an invocation */
         post: operations["open"];
         delete?: never;
         options?: never;
@@ -883,6 +910,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** Get one invocation */
         get: operations["show"];
         put?: never;
         post?: never;
@@ -904,6 +932,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** Close an invocation */
         post: operations["close"];
         delete?: never;
         options?: never;
@@ -921,12 +950,14 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** Read your profile */
         get: operations["get_profile"];
         put?: never;
         post?: never;
         delete?: never;
         options?: never;
         head?: never;
+        /** Update your profile */
         patch: operations["update_profile"];
         trace?: never;
     };
@@ -940,6 +971,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** List your linked identity providers */
         get: operations["list_auth_links"];
         put?: never;
         post?: never;
@@ -962,19 +994,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * `POST /api/query`.
-         * @description The door onto the composition contract: a caller sends a plan, the server answers it or refuses
-         *     it. Everything before this route built a door that nothing could knock on.
+         * Run a composition of situated acts
+         * @description Send a declared composition — a plan of situated acts, piped — and receive its result or a refusal.
          *
-         *     **The pipeline is not assembled here.** [`query_read::prepare`] owns the order — shape-gate,
-         *     then embed, then validate — and is the only constructor of a `ValidatedComposition`, so this
-         *     handler cannot run an unvalidated plan even by mistake. Spelling the order out here would make
-         *     this the second place that knows it, and the day the MCP tool and the CLI arrive, the third and
-         *     fourth.
-         *
-         *     **The refusal branch is the only thing that differs from [`super::search::search`]**, whose
-         *     shape this otherwise copies: `search_select` takes params and answers, while `prepare` may
-         *     refuse first.
+         *     The plan is shape-gated, embedded and validated before any act runs, so an invalid plan is refused whole rather than partially executed.
          */
         post: operations["query"];
         delete?: never;
@@ -995,6 +1018,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** Assert a relationship between resources */
         post: operations["assert"];
         delete?: never;
         options?: never;
@@ -1013,31 +1037,16 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Read the live facets of one edge.
-         * @description Read-side gate is `edges_visible_to` — see `edge_service::list_edge_facets`. Reads stay
-         *     service-direct on both surfaces by design (the trait projections are lossy), so this does not
-         *     route through the backend.
+         * Read the live facets of one edge
+         * @description One entry per assert, each with its weight and its author. Readable only if you can read the edge.
          */
         get: operations["list_edge_facets"];
         put?: never;
         /**
-         * Set a facet whose owner is an **edge** rather than a resource.
-         * @description A separate route rather than a mode of `POST /api/facets`, for two reasons that are both about
-         *     the owner not being a payload choice: the edge is addressed in the path (matching every other
-         *     edge write — `/api/relationships/{edge_handle}/retype|reweight|fold`), and the authorization
-         *     gate is a different question. `DbBackend::set_facet` dispatches on the typed owner to
-         *     `check_edge_mutable`, which is the same gate that governs re-typing or folding the same edge.
+         * Set a facet on a relationship
+         * @description Sets a facet whose owner is an edge rather than a resource. The edge is addressed in the path, matching the other edge writes (`retype`, `reweight`, `fold`).
          *
-         *     **Both statuses are reachable, and they mean different things.** `404` for an edge that does not
-         *     exist, is folded, or whose **target** the caller cannot read — that last arm is `NotFound` rather
-         *     than `Forbidden` on purpose, so the write never confirms the existence of a resource the caller
-         *     has no standing to see. `403` for an edge the caller can legitimately see but may not author
-         *     into: it fails source-write or container-write on the edge's home.
-         *
-         *     An earlier version of this comment claimed the endpoint returns "404 rather than 403" outright,
-         *     twelve lines above an OpenAPI block declaring `403`. The annotation was right and the prose was
-         *     wrong; `check_edge_mutable` renders `Forbidden` for clauses 1 and 2 and `NotFound` for the row
-         *     lookup and clause 3.
+         *     Answers 404 when the edge does not exist, is folded, or has a target you cannot read. That last case answers 404 rather than 403 on purpose, so a refusal never confirms the existence of something you are not allowed to see.
          */
         post: operations["set_edge_facet"];
         delete?: never;
@@ -1058,6 +1067,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** Fold a relationship */
         post: operations["fold"];
         delete?: never;
         options?: never;
@@ -1077,6 +1087,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** Change a relationship's type */
         post: operations["retype"];
         delete?: never;
         options?: never;
@@ -1096,6 +1107,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** Change a relationship's weight */
         post: operations["reweight"];
         delete?: never;
         options?: never;
@@ -1114,16 +1126,12 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * `GET /api/resources` — **one response type, unconditionally.**
-         * @description This endpoint used to answer in `oneOf<ResourceListResponse, ResourceMetaListResponse>`,
-         *     selected by `?meta_only=true`: two envelopes over two row types, so a generated client had a
-         *     union to discriminate and an agent had two shapes to learn. `?sections=` replaces it — the
-         *     caller varies which *parts* of `ResourceView` are filled, never which type comes back. The
-         *     `ListResourcesResponse` enum, its `untagged` serde impl and its hand-written `IntoResponse` are
-         *     gone with it; `ResourceListResponse` is a plain `Json` return like every other read here.
+         * List resources you can see
+         * @description Answers with one response type, unconditionally. Use `sections` to vary which parts of each resource are filled — the type you receive never changes.
          */
         get: operations["list_resources"];
         put?: never;
+        /** Create a resource */
         post: operations["create_resource"];
         delete?: never;
         options?: never;
@@ -1141,12 +1149,15 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** Get one resource */
         get: operations["get_resource"];
         put?: never;
         post?: never;
+        /** Soft-delete a resource */
         delete: operations["delete_resource"];
         options?: never;
         head?: never;
+        /** Update a resource */
         patch: operations["update_resource"];
         trace?: never;
     };
@@ -1160,8 +1171,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** List the blocks landed so far */
         get: operations["list_blocks"];
         put?: never;
+        /** Append a block to an in-progress ingest */
         post: operations["append_block"];
         delete?: never;
         options?: never;
@@ -1180,37 +1193,20 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List the finding at `{id}`'s citation-audit trail — one row per audit, each naming its auditor.
-         * @description The `GET` sibling of [`record`] on the same path, and the read that makes an audit
-         *     ATTRIBUTABLE. `GET /api/resources/{id}/evidence` returns aggregates only
-         *     (`citation_magnitude` / `audit_coverage` / `citation_quality` / `band`), so a finding pushed to
-         *     `disputed` by one auditor and one pushed there by three are indistinguishable on that surface:
-         *     the verdict is visible, the voter is not. This read is opt-in rather than more fields on
-         *     `StandingShape` because the shape is fixed-width and recomputed live on every call, while a
-         *     trail grows with every audit ever emitted.
+         * List a finding's citation-audit trail
+         * @description One row per audit, each naming its auditor.
          *
-         *     **404 when the finding is not readable (or does not exist); `200 []` only when it IS readable and
-         *     genuinely carries no audits.** That is deliberately not the collection default — the `/provenance`
-         *     sibling answers `200 []` for an unreadable resource. Why this one refuses instead is a leak-safety
-         *     argument about the pair of endpoints, not about this handler: it lives in
-         *     `temper_services::services::citation_audit_service`'s module doc, beside where `/evidence`'s
-         *     equivalent lives in `evidential_standing_service`.
+         *     `GET /api/resources/{id}/evidence` answers with aggregates only, so a finding disputed by one auditor and a finding disputed by three are indistinguishable there. This read names the voters.
+         *
+         *     Answers 404 when the finding is unreadable or absent. An empty array means the finding is readable and genuinely carries no audits.
          */
         get: operations["list_citation_audits"];
         put?: never;
         /**
-         * Record an auditor's signed defensibility verdict on one `(block, source)` citation of the
-         *     finding at `{id}`. CONFORM to `handlers::edges::assert` (the sibling authored-write handler):
-         *     thin — build the command, dispatch it, map the error. No persistence here.
-         * @description `id` is a routing address only. The real authorization subject is the block's owning finding,
-         *     resolved server-side from `req.block_id`
-         *     (`temper-services/src/authz/audit_gate.rs:65-77`). `citation_audit_service::record_citation_audit`
-         *     derives that finding and refuses with 404 if it disagrees with `id`, so a caller cannot address
-         *     one finding in the path while writing an audit onto a block of another.
+         * Record a citation-audit verdict
+         * @description `id` is a routing address. The authorization subject is the finding that owns the block named in the request body, resolved server-side.
          *
-         *     `CitationAuditRequest` carries no act/authorship fields (unlike `AssertRelationshipRequest`'s
-         *     flattened `ActInput`) — that shape was fixed in Task 7/3 and is not this task's to change — so
-         *     the command's `act` is always the empty default here.
+         *     If that finding disagrees with `id` the write is refused with 404, so you cannot address one finding in the path while recording an audit against a block of another.
          */
         post: operations["record_citation_audit"];
         delete?: never;
@@ -1229,6 +1225,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** Read a resource's reconstituted content */
         get: operations["get_content"];
         put?: never;
         post?: never;
@@ -1248,6 +1245,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** List a resource's relationships */
         get: operations["list_resource_edges"];
         put?: never;
         post?: never;
@@ -1267,6 +1265,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** Read a resource's evidential standing */
         get: operations["resource_evidence"];
         put?: never;
         post?: never;
@@ -1287,21 +1286,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Read the live facets of one resource — the confirming read for a write that steers region
-         *     formation and Atlas grouping.
-         * @description Read-side gate is `resources_visible_to`, asked via `readback::is_resource_visible` — see
-         *     `facet_service::list_resource_facets` for why it is asked separately and first. Reads stay
-         *     service-direct on both surfaces by design, so this does not route through the backend.
+         * Read the live facets of one resource
+         * @description One entry per assert, each with its weight and its author. This is the confirming read for a facet write, which steers region formation and graph grouping.
          *
-         *     **`200` with an empty list is not the same answer as `404`, and that is deliberate.** Empty means
-         *     *readable, nothing asserted*; `404` means *unreadable or absent*, indistinguishably. The empty
-         *     list is only reachable after the readability gate has passed, so it is not an existence oracle —
-         *     the same argument `GET /api/resources/{id}/citation-audits` makes, and the same denial dialect.
-         *
-         *     **Path is `/api/resources/{id}/facets`, not a mode of `/api/facets`.** The write posts to
-         *     `/api/facets` with the resource in the body because a facet-set is an act on a payload; a read
-         *     addresses a resource, so the resource belongs in the path alongside its siblings
-         *     (`/citation-audits`, `/evidence`).
+         *     200 with an empty list and 404 are different answers: empty means readable with nothing asserted; 404 means unreadable or absent, indistinguishably. The empty list is only reachable once the readability gate has passed, so it is not an existence oracle.
          */
         get: operations["list_resource_facets"];
         put?: never;
@@ -1324,6 +1312,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** Finalize a segmented ingest */
         post: operations["finalize_resource"];
         delete?: never;
         options?: never;
@@ -1343,7 +1332,9 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** Grant access to a resource */
         post: operations["grant_resource_access"];
+        /** Revoke access to a resource */
         delete: operations["revoke_resource_access"];
         options?: never;
         head?: never;
@@ -1360,6 +1351,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** Trace a resource's derivation lineage */
         get: operations["resource_lineage"];
         put?: never;
         post?: never;
@@ -1379,7 +1371,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** Read a resource's frontmatter */
         get: operations["get_meta"];
+        /** Replace a resource's frontmatter */
         put: operations["update_meta"];
         post?: never;
         delete?: never;
@@ -1398,8 +1392,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** Read a resource's block provenance */
         get: operations["provenance"];
         put?: never;
+        /** Attach provenance sources to a resource */
         post: operations["annotate_resource"];
         delete?: never;
         options?: never;
@@ -1419,6 +1415,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** Reassign a resource to another owner */
         post: operations["reassign_resource"];
         delete?: never;
         options?: never;
@@ -1439,13 +1436,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * `POST /api/search`.
-         * @description The `x-temper-search-diagnostics` response header is GONE. It carried `SearchDiagnostics` beside
-         *     a body that was a bare `Vec<UnifiedSearchResultRow>`, and existed for exactly that reason; the
-         *     body is an object now, so diagnostics live in it, per-arm, beside the hits they describe. That
-         *     also retires the header's percent-encoding scar — non-ASCII hint text was arriving at clients as
-         *     `%E2%80%94` because the serverless adapter encoded header bytes. Hints stay ASCII anyway, guarded
-         *     by `every_emitted_hint_is_ascii`, since nothing is gained by relaxing it.
+         * Search resources by text or embedding
+         * @description Answers in two arms: exact (full-text) and wide (vector). Each arm carries its own diagnostics in the response body, beside the hits they describe.
          */
         post: operations["search"];
         delete?: never;
@@ -1464,6 +1456,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** List steward candidates */
         get: operations["candidates"];
         put?: never;
         post?: never;
@@ -1485,6 +1478,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** Claim steward jobs for a worker */
         post: operations["dispatch"];
         delete?: never;
         options?: never;
@@ -1502,6 +1496,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** Survey steward drift across maps */
         get: operations["sweep"];
         put?: never;
         post?: never;
@@ -1521,6 +1516,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** Read a map's ingest delta */
         get: operations["delta"];
         put?: never;
         post?: never;
@@ -1542,6 +1538,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** Advance a map's steward watermark */
         post: operations["advance"];
         delete?: never;
         options?: never;
@@ -1559,8 +1556,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** List teams you belong to */
         get: operations["list_teams"];
         put?: never;
+        /** Create a team */
         post: operations["create_team"];
         delete?: never;
         options?: never;
@@ -1578,12 +1577,15 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** Get one team */
         get: operations["detail"];
         put?: never;
         post?: never;
+        /** Delete a team */
         delete: operations["delete_team"];
         options?: never;
         head?: never;
+        /** Update a team */
         patch: operations["update_team"];
         trace?: never;
     };
@@ -1597,6 +1599,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** List a team's open invitations */
         get: operations["list_team_invitations"];
         put?: never;
         post?: never;
@@ -1619,6 +1622,7 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
+        /** Revoke a team invitation */
         delete: operations["revoke_team_invitation"];
         options?: never;
         head?: never;
@@ -1637,6 +1641,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** Invite someone to a team */
         post: operations["create_team_invitation"];
         delete?: never;
         options?: never;
@@ -1656,6 +1661,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** Add a member to a team */
         post: operations["add_member"];
         delete?: never;
         options?: never;
@@ -1676,9 +1682,11 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
+        /** Remove a member from a team */
         delete: operations["remove_member"];
         options?: never;
         head?: never;
+        /** Change a member's role */
         patch: operations["change_role"];
         trace?: never;
     };
@@ -1694,6 +1702,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** Bulk reassign a team's resources */
         post: operations["reassign_team"];
         delete?: never;
         options?: never;

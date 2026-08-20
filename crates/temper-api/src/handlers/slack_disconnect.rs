@@ -38,17 +38,20 @@ fn entry_for(principal: String, outcome: DisconnectOutcome) -> SlackDisconnected
     }
 }
 
-/// Disconnect EVERY Slack principal bound to the caller's own profile.
+// Plural on purpose. `kb_profile_auth_links` has `UNIQUE(auth_provider, auth_provider_user_id)`
+// and nothing keyed on `(profile_id, auth_provider)`, so a human in two Slack workspaces holds
+// two rows — legitimately, because the already-linked refusal keys on the *principal*. Cutting
+// only one and answering "disconnected" would leave the other grant live and still minting
+// act-as-the-human tokens, which is the opposite of what the user asked for.
+//
+// The 401 arm is the disabled-link branch. There is no 503: `ApiError` has no such variant, and
+// documenting one the code cannot return is worse than documenting nothing — it is baked into
+// `openapi.json`, the Ruby gem and `schema.ts`.
+/// Disconnect all your own Slack links
 ///
-/// Plural on purpose. `kb_profile_auth_links` has `UNIQUE(auth_provider, auth_provider_user_id)`
-/// and nothing keyed on `(profile_id, auth_provider)`, so a human in two Slack workspaces holds
-/// two rows — legitimately, because the already-linked refusal keys on the *principal*. Cutting
-/// only one and answering "disconnected" would leave the other grant live and still minting
-/// act-as-the-human tokens, which is the opposite of what the user asked for.
+/// Disconnects every Slack principal bound to your profile, not just one. Someone who has linked Slack in two workspaces holds two links; cutting only one would leave the other live and still able to act as them.
 ///
-/// The 401 arm is the disabled-link branch. There is no 503: `ApiError` has no such variant, and
-/// documenting one the code cannot return is worse than documenting nothing — it is baked into
-/// `openapi.json`, the Ruby gem and `schema.ts`.
+/// Answers 401 when the link is already disabled.
 #[utoipa::path(
     delete,
     path = "/api/auth/slack/link/me",
@@ -111,7 +114,7 @@ pub async fn disconnect_me(
     Ok(Json(SlackDisconnectResponse { disconnected }))
 }
 
-/// Disconnect any principal. Operator path — offboarding and stuck users.
+/// Disconnect any principal's Slack link
 #[utoipa::path(
     post,
     path = "/api/admin/slack/links/disconnect",

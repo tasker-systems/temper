@@ -1,0 +1,8 @@
+{
+  "_comment": "Operations with known summary defects. Only growth fails the gate. Regenerate with: openapi-summary-lint.py <spec> --update-baseline",
+  "sources": [
+    "openapi.json"
+  ],
+  "operations_scanned": 102,
+  "known_defects": []
+}

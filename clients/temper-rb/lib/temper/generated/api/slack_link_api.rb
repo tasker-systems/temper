@@ -19,7 +19,7 @@ module Temper::Generated
     def initialize(api_client = ApiClient.default)
       @api_client = api_client
     end
-    # Disconnect any principal. Operator path — offboarding and stuck users.
+    # Disconnect any principal's Slack link
     # @param slack_disconnect_request [SlackDisconnectRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -29,7 +29,7 @@ module Temper::Generated
       data
     end
 
-    # Disconnect any principal. Operator path — offboarding and stuck users.
+    # Disconnect any principal&#39;s Slack link
     # @param slack_disconnect_request [SlackDisconnectRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -92,8 +92,8 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # Disconnect EVERY Slack principal bound to the caller's own profile.
-    # Plural on purpose. `kb_profile_auth_links` has `UNIQUE(auth_provider, auth_provider_user_id)` and nothing keyed on `(profile_id, auth_provider)`, so a human in two Slack workspaces holds two rows — legitimately, because the already-linked refusal keys on the *principal*. Cutting only one and answering \"disconnected\" would leave the other grant live and still minting act-as-the-human tokens, which is the opposite of what the user asked for.  The 401 arm is the disabled-link branch. There is no 503: `ApiError` has no such variant, and documenting one the code cannot return is worse than documenting nothing — it is baked into `openapi.json`, the Ruby gem and `schema.ts`.
+    # Disconnect all your own Slack links
+    # Disconnects every Slack principal bound to your profile, not just one. Someone who has linked Slack in two workspaces holds two links; cutting only one would leave the other live and still able to act as them.  Answers 401 when the link is already disabled.
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [SlackDisconnectResponse]
@@ -102,8 +102,8 @@ module Temper::Generated
       data
     end
 
-    # Disconnect EVERY Slack principal bound to the caller&#39;s own profile.
-    # Plural on purpose. &#x60;kb_profile_auth_links&#x60; has &#x60;UNIQUE(auth_provider, auth_provider_user_id)&#x60; and nothing keyed on &#x60;(profile_id, auth_provider)&#x60;, so a human in two Slack workspaces holds two rows — legitimately, because the already-linked refusal keys on the *principal*. Cutting only one and answering \&quot;disconnected\&quot; would leave the other grant live and still minting act-as-the-human tokens, which is the opposite of what the user asked for.  The 401 arm is the disabled-link branch. There is no 503: &#x60;ApiError&#x60; has no such variant, and documenting one the code cannot return is worse than documenting nothing — it is baked into &#x60;openapi.json&#x60;, the Ruby gem and &#x60;schema.ts&#x60;.
+    # Disconnect all your own Slack links
+    # Disconnects every Slack principal bound to your profile, not just one. Someone who has linked Slack in two workspaces holds two links; cutting only one would leave the other live and still able to act as them.  Answers 401 when the link is already disabled.
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<(SlackDisconnectResponse, Integer, Hash)>] SlackDisconnectResponse data, response status code and response headers

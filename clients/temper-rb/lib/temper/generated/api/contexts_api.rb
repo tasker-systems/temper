@@ -19,6 +19,7 @@ module Temper::Generated
     def initialize(api_client = ApiClient.default)
       @api_client = api_client
     end
+    # Materialize a context's regions
     # @param id [String] Context ID
     # @param materialize_request [MaterializeRequest] 
     # @param [Hash] opts the optional parameters
@@ -29,6 +30,7 @@ module Temper::Generated
       data
     end
 
+    # Materialize a context&#39;s regions
     # @param id [String] Context ID
     # @param materialize_request [MaterializeRequest] 
     # @param [Hash] opts the optional parameters
@@ -96,6 +98,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Read per-region metrics for a context
     # @param id [String] Context ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :lens Optional lens filter; omit for all lenses
@@ -106,6 +109,7 @@ module Temper::Generated
       data
     end
 
+    # Read per-region metrics for a context
     # @param id [String] Context ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :lens Optional lens filter; omit for all lenses
@@ -165,6 +169,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Read a context's shape
     # @param id [String] Context ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :lens Optional lens filter; omit for all lenses
@@ -175,6 +180,7 @@ module Temper::Generated
       data
     end
 
+    # Read a context&#39;s shape
     # @param id [String] Context ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :lens Optional lens filter; omit for all lenses
@@ -234,6 +240,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Create a context
     # @param context_create_request [ContextCreateRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -243,6 +250,7 @@ module Temper::Generated
       data
     end
 
+    # Create a context
     # @param context_create_request [ContextCreateRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -305,6 +313,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Get one context
     # @param id [String] Context ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -314,6 +323,7 @@ module Temper::Generated
       data
     end
 
+    # Get one context
     # @param id [String] Context ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -371,6 +381,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # List contexts you can see
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<ContextRowWithCounts>]
@@ -379,6 +390,7 @@ module Temper::Generated
       data
     end
 
+    # List contexts you can see
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<(Array<ContextRowWithCounts>, Integer, Hash)>] Array<ContextRowWithCounts> data, response status code and response headers
@@ -431,6 +443,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Reassign a context to another owner
     # @param id [String] Context ID
     # @param reassign_context_request [ReassignContextRequest] 
     # @param [Hash] opts the optional parameters
@@ -441,6 +454,7 @@ module Temper::Generated
       data
     end
 
+    # Reassign a context to another owner
     # @param id [String] Context ID
     # @param reassign_context_request [ReassignContextRequest] 
     # @param [Hash] opts the optional parameters
@@ -508,6 +522,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Rename a context
     # @param id [String] Context ID
     # @param rename_context_request [RenameContextRequest] 
     # @param [Hash] opts the optional parameters
@@ -518,6 +533,7 @@ module Temper::Generated
       data
     end
 
+    # Rename a context
     # @param id [String] Context ID
     # @param rename_context_request [RenameContextRequest] 
     # @param [Hash] opts the optional parameters
@@ -585,6 +601,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Share a context with a team
     # @param id [String] Context ID
     # @param share_context_request [ShareContextRequest] 
     # @param [Hash] opts the optional parameters
@@ -595,6 +612,7 @@ module Temper::Generated
       data
     end
 
+    # Share a context with a team
     # @param id [String] Context ID
     # @param share_context_request [ShareContextRequest] 
     # @param [Hash] opts the optional parameters
@@ -662,6 +680,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Stop sharing a context with a team
     # @param id [String] Context ID
     # @param team_id [String] Team ID to unshare
     # @param [Hash] opts the optional parameters
@@ -672,6 +691,7 @@ module Temper::Generated
       data
     end
 
+    # Stop sharing a context with a team
     # @param id [String] Context ID
     # @param team_id [String] Team ID to unshare
     # @param [Hash] opts the optional parameters

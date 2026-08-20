@@ -31,6 +31,7 @@ dependencies = [
   "rust-machete",
   "openapi-check",
   "openapi-routes-check",
+  "openapi-summary-lint",
   "tripwires",
   "openapi-rb-drift",
   "openapi-ts-drift",
@@ -577,6 +578,13 @@ script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-openapi-sp
 [tasks.openapi-routes-check]
 description = "Verify every plain .route(...) mount is on the operator-only allowlist"
 script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-openapi-routes.sh"]
+
+[tasks.openapi-summary-lint]
+description = "Lint OpenAPI operation summaries against the public-prose rule (/// is public, // is not)"
+# Growth-only by default: fixed defects surface as BASELINE STALE and never fail.
+# Re-baselining is an explicit act (`--update-baseline`); switch to `--strict` once
+# the baseline empties. Refusal paths (missing file, unparseable JSON) exit 2.
+script = ["python3 ${CARGO_MAKE_WORKING_DIRECTORY}/scripts/openapi-summary-lint.py ${CARGO_MAKE_WORKING_DIRECTORY}/openapi.json"]
 
 [tasks.openapi-validate]
 description = "Validate the committed openapi.json with openapi-generator (requires Docker)"

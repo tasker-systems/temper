@@ -39,6 +39,7 @@ pub struct ShapeQuery {
     pub lens: Option<Uuid>,
 }
 
+/// Reconcile a cognitive map's contents
 #[utoipa::path(
     put,
     path = "/api/cognitive-maps/{id}",
@@ -89,6 +90,7 @@ pub async fn reconcile(
     Ok(Json(out.value))
 }
 
+/// Create a cognitive map and its telos charter
 #[utoipa::path(
     post,
     path = "/api/cognitive-maps",
@@ -124,6 +126,7 @@ pub async fn genesis(
     Ok(Json(out.value))
 }
 
+/// List cognitive maps you can see
 #[utoipa::path(
     get,
     operation_id = "list_cognitive_maps",
@@ -146,6 +149,7 @@ pub async fn list(
         .map(Json)
 }
 
+/// Get one cognitive map
 #[utoipa::path(
     get,
     operation_id = "get_cognitive_map",
@@ -169,6 +173,7 @@ pub async fn show(
         .map(Json)
 }
 
+/// Read a cognitive map's shape
 #[utoipa::path(
     get,
     path = "/api/cognitive-maps/{id}/shape",
@@ -205,6 +210,7 @@ pub struct MaterializeDeltaQuery {
     pub threshold: Option<i64>,
 }
 
+/// Read formation drift since last materialize
 #[utoipa::path(
     get,
     path = "/api/cognitive-maps/{id}/materialize-delta",
@@ -235,6 +241,7 @@ pub async fn materialize_delta(
     Ok(Json(delta))
 }
 
+/// Materialize a cognitive map's regions
 #[utoipa::path(
     post,
     path = "/api/cognitive-maps/{id}/materialize",
@@ -269,6 +276,7 @@ pub async fn materialize(
     Ok(Json(out.value))
 }
 
+/// Read per-region metrics for a map
 #[utoipa::path(
     get,
     path = "/api/cognitive-maps/{id}/region-metrics",
@@ -299,6 +307,7 @@ pub async fn region_metrics(
     .map(Json)
 }
 
+/// Read cognitive-map analytics
 #[utoipa::path(
     get,
     path = "/api/cognitive-maps/{id}/analytics",
@@ -326,6 +335,7 @@ pub async fn analytics(
     .ok_or_else(|| ApiError::NotFound("cognitive map not found or not readable".to_string()))
 }
 
+/// Bind a team to a cognitive map
 #[utoipa::path(
     post,
     path = "/api/cognitive-maps/{id}/teams",
@@ -356,6 +366,7 @@ pub async fn bind_team(
     Ok(Json(outcome))
 }
 
+/// Unbind a team from a cognitive map
 #[utoipa::path(
     delete,
     path = "/api/cognitive-maps/{id}/teams/{team_id}",
@@ -385,6 +396,7 @@ pub async fn unbind_team(
     Ok(Json(outcome))
 }
 
+/// Grant access to a cognitive map
 #[utoipa::path(
     post,
     operation_id = "grant_cogmap_access",
@@ -422,6 +434,7 @@ pub async fn grant(
     Ok(Json(outcome))
 }
 
+/// Revoke access to a cognitive map
 #[utoipa::path(
     delete,
     operation_id = "revoke_cogmap_access",

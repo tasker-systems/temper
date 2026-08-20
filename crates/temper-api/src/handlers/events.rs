@@ -10,6 +10,7 @@ use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::services::event_service;
 use temper_services::state::AppState;
 
+/// Read the event cursor for a context
 #[utoipa::path(
     get,
     path = "/api/events/{kb_context_id}/cursor",
@@ -37,7 +38,7 @@ pub async fn cursor(
     Ok(Json(EventCursorResponse { latest_event_id }))
 }
 
-/// GET /api/graph/elements/{kind}/{id}/trail — R5 element event-trail. kind ∈ {node, edge}.
+/// Read a node or edge's event trail
 #[utoipa::path(
     get,
     path = "/api/graph/elements/{kind}/{id}/trail",
