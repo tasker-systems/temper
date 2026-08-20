@@ -1493,3 +1493,55 @@ async fn a_capability_change_still_writes_an_event_carrying_previous(pool: PgPoo
         "the fresh grant carries no `previous`"
     );
 }
+
+/// **The `kb_events` anchor variant widened this read surface, and it must fail CLOSED.**
+///
+/// `AnchorTable` gained `Events` so `references`' `derived_from` has a representable target
+/// (event-to-event lineage; `correlation_id` is act-grain and groups without pointing). That
+/// widening was NOT confined to the write path: `admin_ledger_service::parse_anchor_table` decodes
+/// via the enum's own serde renames, so `kb_events:<uuid>` became an accepted admin-ledger subject
+/// spec on the CLI and MCP surfaces **with no code change and no test**.
+///
+/// It denies, and the mechanism is `can()`'s `ELSE false` — `profile_can_grant` is handed
+/// `"kb_events"`, which matches no arm, so `readable_event_types` returns an empty set and
+/// `list_by_subject` turns that into 404 under the deny-split invariant.
+///
+/// **The first half is what stops the second from being vacuous.** Without asserting the spec
+/// PARSES, this test would pass just as green on the day `kb_events` was rejected outright at the
+/// parser — witnessing nothing about the gate. The order matters: prove the surface is reachable,
+/// then prove it refuses.
+///
+/// **What this does NOT claim.** A *system admin* is not denied — `readable_event_types` returns
+/// the whole catalogue for them, so they get `Ok([])`: an honest empty list, because no admin event
+/// carries an event subject. Measured, by bite-probing this test with `admin_profile` and watching
+/// `expect_err` panic on `[]`. The property here is that the GATE fails closed for a caller it must
+/// judge, not that the kind is universally unreadable.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_kb_events_subject_parses_and_then_denies(pool: PgPool) {
+    let f = admin_fixture(&pool).await;
+    let event_id = Uuid::now_v7();
+
+    // Half one: the surface really did widen. `Events` is decodable from the wire spelling.
+    let parsed = admin_ledger_service::parse_subject_spec(&format!("kb_events:{event_id}"))
+        .expect("the Events variant makes kb_events:<uuid> a parseable subject spec");
+    assert_eq!(
+        parsed,
+        RefTarget {
+            kind: AnchorTable::Events,
+            id: event_id,
+        },
+        "the spec must decode to the Events variant, not merely to something"
+    );
+
+    // Half two: and it is refused. `owner_profile` is deliberately the STRONGEST non-admin in the
+    // fixture — it satisfies `can(…,'grant',…)` on its own resource — so a 404 here is the
+    // `kb_events` kind being unreachable, not this caller being powerless in general.
+    let err = admin_ledger_service::list_by_subject(&pool, f.owner_profile, parsed, 50, 0)
+        .await
+        .expect_err("a non-admin must be denied a ledger keyed on an event subject");
+
+    assert!(
+        matches!(err, ApiError::NotFound(_)),
+        "the widened subject surface must fail CLOSED with 404 (the deny-split invariant); got {err:?}"
+    );
+}

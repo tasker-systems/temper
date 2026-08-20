@@ -27,7 +27,7 @@ against live production (2026-07-13) and the migration set, not against issue te
 |---|---|
 | `kb_events.emitter_entity_id → kb_entities` | **An emitter is an entity, not a profile.** Entities are `<handle>@<surface>`, each backed by a profile. "A third-party system is an entity that emits events" is already the schema's shape. Prod: 10 entities (2 profiles × 4 surfaces + `system`, `migration`). |
 | `kb_event_types.payload_schema` | Nullable, and the column comment says why: *"NULL = unregistered/permissive — **foreign/webhook types may stay NULL**."* The permissive path for a foreign body is reserved and unused. |
-| `kb_events.references` | `[{rel, target:{kind,id}}]`, rel vocabulary `supersedes \| derived_from \| **touches**`. GIN-indexed (`jsonb_path_ops`). **Written by nothing: 0 of 11,952 prod events.** The Rust types (`RefRel`, `EventReference`) were since deleted as dead scaffolding; the column and index survive. |
+| `kb_events.references` | `[{rel, target:{kind,id}}]`, GIN-indexed (`jsonb_path_ops`). **Was written by nothing: 0 of 11,952 prod events** when this was drafted; `touches` has had a writer since S2 chunk B (PR #721) and `subject`/`principal` since the admin ledger. *(Corrected 2026-08-19: an earlier draft said the Rust types "were since deleted as dead scaffolding" — they were **not**. `RefRel` and `EventRef` survive at `crates/temper-substrate/src/payloads.rs`, mirrored as `LedgerRefRel`/`LedgerRefKind` in `crates/temper-core/src/types/admin.rs`. The rel vocabulary is **five**, not the three this row used to list: `supersedes \| derived_from \| touches \| subject \| principal`.)* |
 | `kb_remote_sources` | `(uri, uri_normalized UNIQUE, first_seen)` — hands a remote URL a UUID. `provenance_source_kind` already carries a `'remote'` variant. A remote PR can be **cited without being fetched**. |
 | `kb_machine_clients` | The machine-principal allowlist. Prod: **1 row** (the steward). |
 | `kb_access_grants` | `(subject, principal, can_read/write/delete/grant)`. `subject_table CHECK IN ('kb_resources','kb_contexts','kb_cogmaps')`. |
@@ -312,8 +312,20 @@ hit our CODEOWNERS paths" means fetching. And `kb_events` is append-only, so a r
 overwrite the coarse one.
 
 It therefore arrives as a **second event** that `derived_from` the first and `touches` the finer set
-— which activates all three of the reserved `references` rels (`touches`, `derived_from`,
-`supersedes`) that the column was designed for and never used.
+— which activates **two** of the `references` rels (`touches`, `derived_from`).
+
+> **Corrected 2026-08-19.** This sentence previously read *"activates all three of the reserved
+> `references` rels (`touches`, `derived_from`, `supersedes`)"*, and it was wrong three ways. It
+> **described two acts and claimed three**. Nothing here supersedes anything — the paragraph above
+> says `kb_events` is append-only and a refined radius cannot overwrite the coarse one, and
+> append-only refinement is the *opposite* of supersession. And the vocabulary is no longer three:
+> `RefRel` carries **five** variants, `Subject` and `Principal` having been added by the
+> admin-ledger extension (spec 2026-07-16 §5).
+>
+> `supersedes` is now **retired rather than activated** — reserved, unclaimed, and headstoned in
+> `RefRel`'s own doc comment. `derived_from` is activated, and `AnchorTable` gained a `kb_events`
+> variant to give it a representable target. Reasoning, the full match-site enumeration, and what
+> the widening cost: temper decision `01a01c7e-cbf0-7460-a6cb-c447734105de`.
 
 Enrichment is temper's **own** narrow need — two endpoints (list PR files, read `CODEOWNERS` at the
 merge sha), not a general remote-API surface.

@@ -49,6 +49,24 @@ pub enum AnchorTable {
     Connections,
     #[serde(rename = "kb_machine_clients")]
     MachineClients,
+    // An **event**, and the only variant that is never an *anchor*.
+    //
+    // It exists for one thing: `references`' `derived_from`, which is event-to-event lineage and
+    // has no other representable target (`correlation_id` groups a multi-event act — it is the
+    // wrong grain and cannot point in a direction). Nothing anchors ON an event, so this variant
+    // must never reach `AnchorRef`; that is why there is no `AnchorRef::event` constructor beside
+    // `resource`/`cogmap`/`context`/`edge`, and why `EventRef::derived_from` builds its
+    // `RefTarget` directly.
+    //
+    // DELIBERATELY `//` AND NOT `///`. A doc comment on a variant makes schemars split it out of
+    // the flat string enum into its own `oneOf` branch carrying this prose — which would change
+    // the SHAPE of nine published payload schemas (the boot-seed stamps them into
+    // `kb_event_types.payload_schema`), not just their value list, and stamp this paragraph into
+    // prod's registry for nine event types that can never carry the variant. Measured, not
+    // assumed: the regen emitted exactly that `oneOf` before this was changed back. Keep any
+    // rationale for a variant of this enum as a plain comment.
+    #[serde(rename = "kb_events")]
+    Events,
 }
 
 impl AnchorTable {
@@ -74,6 +92,7 @@ impl AnchorTable {
             AnchorTable::Profiles => "kb_profiles",
             AnchorTable::Connections => "kb_connections",
             AnchorTable::MachineClients => "kb_machine_clients",
+            AnchorTable::Events => "kb_events",
         }
     }
 }
@@ -100,8 +119,24 @@ pub struct AnchorRef {
 /// it exhaustive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RefRel {
+    /// **RESERVED AND UNCLAIMED — retired 2026-08-19, not activated.** Written by nothing, and
+    /// deliberately so. Enrichment does NOT supersede: the external-emitters design's own model is
+    /// *append-only refinement* (`kb_events` is append-only, so a refined radius cannot overwrite
+    /// the coarse one), which is the opposite of supersession. An earlier sentence in that design
+    /// claimed enrichment "activates all three" rels while describing only two; this variant was
+    /// that sentence's third.
+    ///
+    /// Kept rather than deleted because a stored `"supersedes"` string that no longer decodes
+    /// makes `admin_ledger_service::to_wire_page` fail the WHOLE page — one bad row would deny an
+    /// entire audit read. Deleting it is cheap today (no row carries it) and buys nothing.
+    ///
+    /// **"Unused" here does not mean "available."** A future claimant must re-open the decision in
+    /// `019f51e3-726b-75e3-ab55-0b80524073f2` ("`references` is either populated and consumed, or
+    /// gone") rather than reading this silence as an invitation.
     #[serde(rename = "supersedes")]
     Supersedes,
+    /// Event-to-event lineage. `correlation_id` cannot carry this: it is act-grain ("groups a
+    /// multi-event act"), and it groups without pointing — lineage is directed.
     #[serde(rename = "derived_from")]
     DerivedFrom,
     #[serde(rename = "touches")]
@@ -157,6 +192,22 @@ impl EventRef {
         EventRef {
             rel: RefRel::Principal,
             target: target.into(),
+        }
+    }
+
+    /// Which event this one was derived from — the lineage link S4's enrichment needs.
+    ///
+    /// Takes an `EventId` rather than `impl Into<RefTarget>` on purpose: `derived_from`'s target is
+    /// an event and nothing else, and the narrow signature is what makes that unforgeable at the
+    /// call site. It also builds the `RefTarget` directly rather than going through `AnchorRef` —
+    /// an event is never an *anchor*, so there is no `AnchorRef::event` for it to route through.
+    pub fn derived_from(event: EventId) -> Self {
+        EventRef {
+            rel: RefRel::DerivedFrom,
+            target: RefTarget {
+                kind: AnchorTable::Events,
+                id: event.uuid(),
+            },
         }
     }
 }
@@ -1442,6 +1493,28 @@ mod tests {
         assert_eq!(back, refs, "references must round-trip");
     }
 
+    /// `derived_from` ships ahead of its caller — S4's enrichment is what will emit it — so this is
+    /// what keeps the constructor from being merely *present* rather than *witnessed*. It pins the
+    /// exact bytes the GIN index must find: `kind` spells the DDL table name, and the rel is
+    /// `derived_from`, not one of the four rels that already have writers.
+    #[test]
+    fn derived_from_points_at_an_event_in_the_documented_shape() {
+        let prior = EventId::from(Uuid::parse_str("019f6055-6aea-7aa2-a133-61552dd3d7e4").unwrap());
+        let refs = vec![EventRef::derived_from(prior)];
+
+        let json = serde_json::to_value(&refs).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!([
+                {"rel": "derived_from", "target": {"kind": "kb_events", "id": prior.uuid()}},
+            ]),
+            "derived_from must spell the event target the way the GIN index will be queried for it"
+        );
+
+        let back: Vec<EventRef> = serde_json::from_value(json).unwrap();
+        assert_eq!(back, refs, "derived_from must round-trip");
+    }
+
     #[test]
     fn machine_clients_anchor_serializes_as_the_ddl_spells_it() {
         let j = serde_json::to_value(AnchorTable::MachineClients).unwrap();
@@ -1466,6 +1539,7 @@ mod tests {
             AnchorTable::Profiles,
             AnchorTable::Connections,
             AnchorTable::MachineClients,
+            AnchorTable::Events,
         ] {
             assert_eq!(
                 serde_json::to_value(t).unwrap(),
