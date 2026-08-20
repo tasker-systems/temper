@@ -1,6 +1,11 @@
 import type { SeedAxis } from '$lib/graph/bound';
 import type { Anchor } from '$lib/graph/composition';
-import type { CogmapRegionRow, CogmapRow } from '$lib/types/generated/cognitive_maps';
+import type {
+	CogmapAnalyticsRow,
+	CogmapRegionMetricsRow,
+	CogmapRegionRow,
+	CogmapRow,
+} from '$lib/types/generated/cognitive_maps';
 import type { ContextRowWithCounts } from '$lib/types/generated/context';
 import type { Composition, QueryResponse } from '$lib/types/generated/query';
 import type { ContentResponse, ResourceListResponse } from '$lib/types/generated/resource';
@@ -185,3 +190,66 @@ export const readAnchorSources = (token: string): Promise<[ContextRowWithCounts[
 		apiGet<ContextRowWithCounts[]>('/api/contexts', token),
 		apiGet<CogmapRow[]>('/api/cognitive-maps', token),
 	]);
+
+/** The metrics door for an anchor — the analytics-tier sibling of {@link anchorShapePath}. */
+const anchorMetricsPath = (anchor: Anchor): string =>
+	anchor.kind === 'cogmap'
+		? `/api/cognitive-maps/${anchor.id}/region-metrics`
+		: `/api/contexts/${anchor.id}/region-metrics`;
+
+/**
+ * Everything the analysis door reads about one place. Four reads, none of them new.
+ *
+ * **The two per-region reads are the same pairing as `shape`** —
+ * `/api/contexts/{id}/region-metrics` and `/api/cognitive-maps/{id}/region-metrics` are two doors
+ * onto one `anchor_region_metrics_select(principal, HomeAnchor, lens)`
+ * (`handlers/contexts.rs:282`, `handlers/cognitive_maps.rs:294`), both returning
+ * `Vec<CogmapRegionMetricsRow>`. So the receiver needs no per-kind branch for the half that
+ * carries what Beat B displaced.
+ *
+ * **No `lens` is passed**, for the same definitional reason `readAnchorRegions` passes none: the
+ * lens is a clustering-time parameter, and naming one at read time would look up a different set
+ * of regions than the place actually published.
+ *
+ * Three different failure postures, and the differences are the point:
+ *
+ * - **`shape` throws.** It is the row set; without it there is no page, and an empty list is
+ *   already the honest answer for a place the caller cannot read (the API refuses to be an
+ *   existence oracle).
+ * - **`metrics` degrades to `null`.** That is *unknown*, not *absent* — captioning 501 groupings
+ *   "not computed" on a read that never answered would be a claim about the substrate made on
+ *   evidence the surface does not have.
+ * - **`analytics` 404s to `null`.** A 404 here is a deny, and the task's own acceptance says it
+ *   renders "not available" and never an error. Contexts are not asked at all: there is no context
+ *   analytics read (D6 is unshipped), and inventing a peer field is exactly what the task forbids.
+ */
+export async function readAnchorAnalysis(
+	token: string,
+	anchor: Anchor,
+): Promise<{
+	shape: CogmapRegionRow[];
+	metrics: CogmapRegionMetricsRow[] | null;
+	analytics: CogmapAnalyticsRow | null;
+	telos: ResourceView | null;
+}> {
+	const [shape, metrics, analytics] = await Promise.all([
+		apiGet<CogmapRegionRow[]>(anchorShapePath(anchor), token),
+		apiGet<CogmapRegionMetricsRow[]>(anchorMetricsPath(anchor), token).catch(() => null),
+		anchor.kind === 'cogmap'
+			? apiGet<CogmapAnalyticsRow>(`/api/cognitive-maps/${anchor.id}/analytics`, token).catch(
+					() => null,
+				)
+			: Promise.resolve(null),
+	]);
+
+	// The charter's title, so the link says what it points at rather than showing a uuid. The
+	// column is NOT NULL, so this is a read that should succeed — and a failure still leaves a
+	// linkable id, which is why it degrades rather than throws.
+	const telos = analytics
+		? await apiGet<ResourceView>(`/api/resources/${analytics.telos_resource_id}`, token).catch(
+				() => null,
+			)
+		: null;
+
+	return { shape, metrics, analytics, telos };
+}

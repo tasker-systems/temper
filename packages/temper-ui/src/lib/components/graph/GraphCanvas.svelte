@@ -12,7 +12,14 @@
 	 * Shape still carries home and hue still carries doc-type, exactly as they do on every other
 	 * screen in the app — so the arm is a fourth channel on one mark, never a second mark.
 	 *
-	 * @see internal/superpowers/specs/2026-08-20-graph-successor-surface-design.md §3
+	 * `[ruled — 2026-08-20, Pete]` **The unconnected field.** Measured post-Beat-0.5, 80 of the
+	 * flagship answer's 155 nodes have degree zero. They used to settle through the same force pass
+	 * as everything else and read as a scatter of identical discs. They are now drawn in a declared
+	 * band beneath the connected core, captioned in the reader's own words. Every one of them is
+	 * still drawn, still hoverable, still the same `.node-chip` mark — the field is a *place on the
+	 * canvas*, not a new kind of thing, and `presentation.ts` carries why.
+	 *
+	 * @see internal/superpowers/specs/2026-08-20-graph-successor-surface-design.md §3, §7
 	 */
 	import { onDestroy, onMount } from 'svelte';
 	import { type Camera, attachCamera } from '$lib/graph/atlas/camera';
@@ -20,7 +27,13 @@
 	import { forceNeighborhood } from '$lib/graph/atlas/layout/forceNeighborhood';
 	import { CANVAS_BG, paletteStyleVars } from '$lib/graph/atlas/palette';
 	import type { GraphModel } from '$lib/graph/model';
-	import { nodeMeta, nodeRadius } from '$lib/graph/presentation';
+	import {
+		describeUnconnected,
+		nodeMeta,
+		nodeRadius,
+		packField,
+		partitionByConnection,
+	} from '$lib/graph/presentation';
 	import Edge from '$lib/components/graph/atlas/marks/Edge.svelte';
 	import NodeChip from '$lib/components/graph/atlas/marks/NodeChip.svelte';
 
@@ -37,26 +50,84 @@
 	const H = 620;
 	const MIN_ZOOM = 0.3;
 	const MAX_ZOOM = 4;
+	/** Height the field claims when there is anything to put in it, caption included. */
+	const FIELD_H = 132;
+	const FIELD_PAD = 24;
+	const CAPTION_H = 30;
+
+	const parts = $derived(partitionByConnection(model.nodes));
+	// The core keeps the whole canvas when nothing is unconnected, so a fully-connected answer is
+	// laid out exactly as it was before the field existed.
+	const coreH = $derived(parts.unconnected.length > 0 ? H - FIELD_H : H);
 
 	// The reader's own material holds the core; what a walk reached rings it. Keyed on the ARM
 	// rather than on `home`, because on this surface both homes are ordinary — a reader whose
 	// corpus is entirely context-homed would otherwise find all of it flung to the outer ring.
 	const armById = $derived(new Map(model.nodes.map((n) => [n.id, n.arm])));
 	const graph = $derived(
-		forceNeighborhood(model, [], {
+		forceNeighborhood({ nodes: parts.connected, edges: model.edges }, [], {
 			width: W,
-			height: H,
+			height: coreH,
 			coreOf: (n) => armById.get(n.id) !== 'walk',
 		}),
 	);
 
+	const field = $derived(
+		packField(
+			// The order the answer returned them in. Placing these is a legibility act and must not
+			// become a ranking — §2.3 ruled unranked-everything is the design.
+			parts.unconnected.map((n) => n.id),
+			{
+				x: FIELD_PAD,
+				y: coreH + CAPTION_H,
+				width: W - 2 * FIELD_PAD,
+				height: FIELD_H - CAPTION_H - 8,
+			},
+		),
+	);
+
+	const caption = $derived(
+		describeUnconnected(parts.unconnected.length, model.nodes.length, field.undrawn),
+	);
+
 	const nodeById = $derived(new Map(model.nodes.map((n) => [n.id, n])));
+
+	/**
+	 * Every mark on the canvas, from both placements, in one list.
+	 *
+	 * One list rather than two loops is the point: the field is a set of coordinates, not a second
+	 * kind of mark, and everything downstream — captions, the selected-node fallback, the DOM class
+	 * the vocabulary test counts — cannot tell the two apart because there is nothing to tell.
+	 */
+	const marks = $derived([
+		...graph.nodes.map((n) => ({
+			id: n.id,
+			x: n.x,
+			y: n.y,
+			degree: n.degree,
+			title: n.title,
+			docType: n.docType,
+			home: n.home,
+		})),
+		...field.placed.map((p) => {
+			const n = nodeById.get(p.id)!;
+			return {
+				id: p.id,
+				x: p.x,
+				y: p.y,
+				degree: 0,
+				title: n.title,
+				docType: n.doc_type,
+				home: n.home,
+			};
+		}),
+	]);
 
 	// G2 — captions are placed so none lands on another caption or on another node's mark.
 	// Every node is still drawn and still hoverable; what is bounded is the always-on label.
 	const labels = $derived(
 		placeLabels(
-			graph.nodes.map(
+			marks.map(
 				(n): LabelCandidate => ({
 					id: n.id,
 					x: n.x,
@@ -69,6 +140,12 @@
 		),
 	);
 	const labelled = $derived(new Set(labels.map((l) => l.id)));
+
+	const ariaLabel = $derived(
+		caption
+			? `Your resources and the edges between them. ${caption}`
+			: 'Your resources and the edges between them',
+	);
 
 	let hoveredEdge = $state<number | null>(null);
 	let svgEl: SVGSVGElement | undefined = $state();
@@ -84,7 +161,7 @@
 </script>
 
 <div class="graph-canvas" style={paletteStyleVars()}>
-	<svg bind:this={svgEl} viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Your resources and the edges between them">
+	<svg bind:this={svgEl} viewBox={`0 0 ${W} ${H}`} role="img" aria-label={ariaLabel}>
 		<rect x="0" y="0" width={W} height={H} fill={CANVAS_BG} />
 		<defs>
 			<marker id="arrow-end" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -117,7 +194,28 @@
 					</g>
 				{/each}
 
-				{#each graph.nodes as n (n.id)}
+				{#if caption}
+					<!-- Chrome, not a mark: a rule and a sentence. Deliberately NOT wrapped in a
+					     classed <g> — the canvas's mark vocabulary is two, and saying what a
+					     region of the canvas is must not spend a third entry in it. -->
+					<line
+						x1={FIELD_PAD}
+						y1={coreH + 10}
+						x2={W - FIELD_PAD}
+						y2={coreH + 10}
+						stroke="#333a49"
+						stroke-width="1"
+					/>
+					<text
+						data-testid="unconnected-caption"
+						x={FIELD_PAD}
+						y={coreH + 26}
+						font-size="11"
+						fill="#8b94a5">{caption}</text
+					>
+				{/if}
+
+				{#each marks as n (n.id)}
 					{@const node = nodeById.get(n.id)}
 					{#if node}
 						<NodeChip
@@ -154,8 +252,9 @@
 
 				{#if selected && labelled.has(selected) === false}
 					<!-- A selected node the collision pass could not caption still gets one: the
-					     reader has explicitly asked which this is. -->
-					{@const s = graph.nodes.find((n) => n.id === selected)}
+					     reader has explicitly asked which this is. This reaches into the field too,
+					     which is exactly why the two placements share one list. -->
+					{@const s = marks.find((n) => n.id === selected)}
 					{#if s}
 						<text
 							x={s.x}

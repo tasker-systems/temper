@@ -1,7 +1,7 @@
 import { error } from '@sveltejs/kit';
 import { declareBounds } from '$lib/graph/bound';
 import { buildGraphPlan } from '$lib/graph/composition';
-import { questionFor, readableAnchors, resolveAnchors } from '$lib/graph/entry';
+import { describeAnchor, questionFor, readableAnchors, resolveAnchors } from '$lib/graph/entry';
 import { buildGraph, excerptOf } from '$lib/graph/model';
 import { buildReadout, disclosedRegionIds } from '$lib/graph/readout';
 import type { GraphRefusal, GraphViewData } from '$lib/graph/view';
@@ -50,6 +50,7 @@ export const load: PageServerLoad = async ({ locals, params, url }): Promise<Gra
 		model: { nodes: [], edges: [], viaEntries: 0 },
 		bound: null,
 		readout: null,
+		placesAsked: [],
 		selected: null,
 		selectedExcerpt: null,
 		selectedTrail: null,
@@ -144,6 +145,7 @@ export const load: PageServerLoad = async ({ locals, params, url }): Promise<Gra
 		model,
 		bound: declareBounds(response, plan, seedRows?.axis ?? null),
 		readout: buildReadout(response, regions),
+		placesAsked: plan.anchorsAsked.map((a) => describeAnchor(a, cogmaps)),
 		selected: selectedNode?.id ?? null,
 		selectedExcerpt,
 		selectedTrail,

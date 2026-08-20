@@ -644,9 +644,113 @@ finding behind [/dev/vault render harness](./019f6d08-8b33-7f30-a438-8487261d5f2
 - ~~**Anchor-set bounding policy.**~~ **CLOSED `[decided — 2026-08-20, Pete]`, in Beat A and against
   a measurement — see §3's *The anchor-set ceiling*.** Ceiling **24**, ordered `resource_count` DESC
   then `ref` ASC.
-- **Whether §2.3 is legible at real context sizes.** Unranked-everything is the design; its failure
-  mode is a measurement, and the response is a decision, not a pre-emptive ranking.
+- ~~**Whether §2.3 is legible at real context sizes.**~~ **CLOSED `[decided — 2026-08-20, Pete]`, in
+  Beat C and against a measurement — see §8.** The measurement arrived for §2.1 rather than §2.3:
+  **80 of 155 nodes at degree zero**, post-Beat-0.5, on the deployed substrate. The response is a
+  **declared field**, not a ranking — the degree-zero nodes are drawn in their own band beneath the
+  connected core and captioned in the reader's words. Every node is still drawn, the mark vocabulary
+  is still two, and no order was invented.
 - **Rate-shaped axes remain open**, exactly as the register says. Derived structure settles
   asynchronously with respect to the reader's own writes. This spec reduces the exposure — no region
   id in a URL — and does not close the axis.
 - **The legend's fate**, per §4.2.
+
+---
+
+## 8. `[built — 2026-08-20]` Beat C — the receiver, and the legibility ruling it carried
+
+Beat C shipped the analysis door and the unconnected field. Two rulings were taken before any code
+was written, both Pete's, and both changed what got built.
+
+### 8.1 Where the receiver lives `[ruled — 2026-08-20, Pete]`
+
+**A new route, `/graph/[owner]/analysis?in=<one anchor>`, linked from the *why-these* panel.**
+
+§4.2's architecture is that derived structure lives in exactly one panel, and that claim is
+load-bearing enough that `WhyThese.svelte` says a reader can confirm it by looking. A second section
+inside that panel would have kept the claim literally true while putting a 501-row analytic table
+into a navigation sidebar. A separate route does not falsify the claim — it scopes it: *on the
+graph page*, derived structure is in one panel; the analysis door is not the graph page, and its
+first line says so.
+
+**One anchor at a time, and that is a measurement rather than a simplification.** Measured against
+the deployed substrate:
+
+```
+                     cogmap (406 regions)    context @me/temper (501)
+centrality           0 → 2342.2              0 → 276
+reference_standing   0 → 96                  0 → 9
+internal_tension     0 → 4.7                 0 → 0      ← identically zero, all 501
+content_cohesion     0.879 → 1.000           0.872 → 1.000
+telos_alignment      0.593 → 1.000           0.679 → 0.984
+salience             median 0.95, max 497.65 median 0.55, max 69.54
+member_count         61% are singletons      23% are singletons
+```
+
+The same quantity spans an order of magnitude more on one place than the other, so one ranked list
+across two places is arithmetic on incommensurable quantities — and the order it produced would look
+exactly as authoritative as a real one. Places the reader also named are **linked**, never merged.
+
+### 8.2 How the numbers are presented `[ruled — 2026-08-20, Pete]`
+
+**Raw figures at the substrate's own precision, beside the span this place measures. Never a
+percentage, bar, meter, ratio or 0–100 scale**, asserted by a test that walks every metric cell.
+
+The pull to normalise is strongest exactly here, and a figure that merely *looked* calibrated would
+settle an open ruling silently. Two consequences the table above forces:
+
+- **A constant quantity is said once, not tabulated.** `internal_tension` is identically `0` across
+  all 501 groupings of `@me/temper`. It gets no column and one sentence — *"Every grouping here
+  measures 0."* An ordering over 501 identical zeroes is an order made of noise, which is what the
+  two rejected presentation options would have produced.
+- **`null` is a dash and never a zero.** Measured: 4 of 406 groupings have no cohesion, 13 of 501 on
+  the context. And a metrics read that *did not answer* is **unknown**, not absent — captioning 501
+  groupings *"not computed"* on evidence the surface does not have is the same error as calling a
+  grouping re-derived on an incomplete lookup.
+
+Each machine name leads with plain words and carries a one-line gloss, so
+`no-internal-vocabulary-is-load-bearing` holds without hiding the substrate's own field names.
+
+### 8.3 Two findings from grounding
+
+- **`regulation` is empty on every readable map.** All four, measured. One third of Beat C's
+  original payload has nothing to show anywhere in the live system, so the empty state is the
+  routine case rather than an edge case and reads as a fact about the map, not a failed lookup.
+- **The context arm stays out, declared.** D6 is still unshipped and a context has no charter and no
+  regulation set *even in principle* — so the page says what a context is rather than reporting a
+  failed lookup, and no peer field is fabricated.
+
+### 8.4 The unconnected field `[decided — 2026-08-20, Pete]` — §7's ruling, answered
+
+**Every degree-zero node is drawn, in a declared band beneath the connected core, captioned in the
+reader's own words:** *"80 of these 155 are not connected to anything else in this answer."*
+
+Three things it deliberately is not:
+
+- **Not a new mark.** `GraphPage.component.test.ts` asserts the canvas's mark classes are exactly
+  `['edge', 'node-chip']`, and that test is currently what covers
+  `navigation-never-silently-changes-kind`. The field is a *place on the canvas*; the divider and
+  caption are chrome, deliberately not wrapped in a classed `<g>`.
+- **Not a ranking.** Placement preserves the order the answer returned. §2.3 ruled unranked-
+  everything is the design and that its failure mode is a measurement rather than a licence to rank.
+- **Not a bound.** Nothing is withheld. If the band genuinely cannot hold them at the tightest
+  spacing, the caption states the remainder — `legibility-is-never-bought-with-silent-omission` is
+  exactly the clause a quiet truncation would break.
+
+### 8.5 What the committed fixture cannot witness
+
+`graph-successor-flagship.json`'s trim rule keeps every survey hit a `via` entry references, which
+keeps the **connected** hits by construction and only four arbitrary unconnected ones per stage. So
+the fixture reads **10 of 52** nodes at degree zero where the live response reads **80 of 155**. The
+ruling was made on the wire; the fixture can witness that the field exists and is captioned truly,
+and nothing about the population. This is recorded in the fixture's own
+`_trimmed.degree_zero_NOT_witnessable`, and is the same species as the 101-edge collapse that block
+already names: **a trim that preserves one property destroys another.**
+
+### 8.6 What Beat C did not do
+
+- **The loader has never met a server.** Every read path was verified `200` against the deployed API
+  with a real token, and the components are tested against those exact untrimmed payloads — but
+  `+page.server.ts` itself is exercised by nothing, because session auth is a browser cookie flow.
+  The same gap that hid three defects in Beat A, narrowed but not closed.
+- **§2.3 still has no wire capture**, unchanged from Beat B.

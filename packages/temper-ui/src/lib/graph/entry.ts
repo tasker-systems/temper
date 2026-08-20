@@ -121,3 +121,30 @@ export function questionFor(
 		borrowedFrom: { id: map.id, name: map.name, telosResourceId: map.telos_resource_id },
 	};
 }
+
+/** A place, as a surface names it to a reader. */
+export interface NamedPlace {
+	kind: 'context' | 'cogmap';
+	/** The same string the URL grammar carries, so a link is built without a second resolution. */
+	ref: string;
+	title: string;
+}
+
+/**
+ * Name a place in words a reader recognises.
+ *
+ * A context's `ref` is already `@owner/slug` and is what the reader calls it. **A cogmap's `ref` is
+ * its uuid** — the grammar `GraphAnchorRef` publishes — so showing the ref would put a uuid on
+ * screen where a name belongs. The name is already in hand on the list row that produced the
+ * anchor, so this costs no read.
+ *
+ * A map that is not on the list falls back to its ref rather than inventing a name: an anchor the
+ * reader can address but whose row is not here is a state worth showing honestly, not papering over.
+ */
+export function describeAnchor(anchor: Anchor, cogmaps: CogmapRow[]): NamedPlace {
+	if (anchor.kind === 'context') {
+		return { kind: 'context', ref: anchor.ref, title: anchor.ref };
+	}
+	const map = cogmaps.find((m) => m.id === anchor.id);
+	return { kind: 'cogmap', ref: anchor.ref, title: map?.name ?? anchor.ref };
+}

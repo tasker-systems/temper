@@ -222,13 +222,34 @@ describe('no internal vocabulary is load-bearing', () => {
 	});
 });
 
-describe('derived structure is confined to the readout — the type-level half', () => {
+describe('derived structure is confined to the two modules that declare it — the type-level half', () => {
 	const dir = join(import.meta.dirname, '.');
 	const modules = readdirSync(dir).filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'));
 
+	/**
+	 * The two modules allowed to hold derived structure, and why they are two rather than one.
+	 *
+	 * `[widened — 2026-08-20, Beat C]` This sweep used to name `readout.ts` alone, and the widening
+	 * is deliberate rather than an exemption granted to make a build pass. The clause is
+	 * `no-derived-thing-poses-as-authored` — derived structure must never be *presentable as the
+	 * reader's own material* — and it has never been "derived structure lives in one file".
+	 *
+	 * - `readout.ts` is derived structure on the **navigational** surface, where the reader's own
+	 *   work is drawn. It is bounded hard: sentences only, and no score may be printed at all.
+	 * - `analysis.ts` is derived structure on the **analysis** surface, which exists precisely to
+	 *   receive what Beat B took off the canvas, and whose first line says what it is. That is the
+	 *   `displaced-structure-remains-reachable` clause: displaced structure must remain *"available
+	 *   somewhere that declares itself as analysis rather than as the reader's material."*
+	 *
+	 * A third entry here should be argued for in the same terms or refused. And the property that
+	 * actually protects the canvas is asserted separately below — allowing a second holder is only
+	 * safe because nothing the canvas draws can reach either of them.
+	 */
+	const DECLARE_DERIVED = ['readout.ts', 'analysis.ts'];
+
 	test('there is more than one module here, so this sweep is not vacuous', () => {
-		expect(modules.length).toBeGreaterThan(1);
-		expect(modules).toContain('readout.ts');
+		expect(modules.length).toBeGreaterThan(DECLARE_DERIVED.length);
+		for (const m of DECLARE_DERIVED) expect(modules).toContain(m);
 	});
 
 	test.each([
@@ -237,13 +258,35 @@ describe('derived structure is confined to the readout — the type-level half',
 		'disclosed_regions',
 		'region_score',
 		'region_id',
-	])('only the readout names %s', (symbol) => {
+	])('only the two declaring modules name %s', (symbol) => {
 		for (const file of modules) {
-			if (file === 'readout.ts') continue;
+			if (DECLARE_DERIVED.includes(file)) continue;
 			const source = readFileSync(join(dir, file), 'utf8');
 			// Comments may discuss the constraint; code may not reach for the thing.
 			const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 			expect(code, `${file} reaches for ${symbol}`).not.toContain(symbol);
+		}
+	});
+
+	test('nothing the CANVAS draws can reach either of them', () => {
+		// This is the assertion the one-module rule was really buying, made directly. A second
+		// holder of derived structure is only safe while the modules that produce marks cannot
+		// import one — so if `model.ts`, `presentation.ts` or the canvas itself ever does, this
+		// fails regardless of how many files are on the allow-list above.
+		const drawing = [
+			join(dir, 'model.ts'),
+			join(dir, 'presentation.ts'),
+			join(dir, '..', 'components', 'graph', 'GraphCanvas.svelte'),
+		];
+
+		for (const file of drawing) {
+			const code = readFileSync(file, 'utf8');
+			for (const m of DECLARE_DERIVED) {
+				const mod = m.replace('.ts', '');
+				expect(code, `${file} imports ${mod}`).not.toMatch(
+					new RegExp(`from\\s+['"][^'"]*\\b${mod}['"]`),
+				);
+			}
 		}
 	});
 });

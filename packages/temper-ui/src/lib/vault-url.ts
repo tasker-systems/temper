@@ -89,8 +89,12 @@ export function isContextGraphLocation(
  * This used to return `null` for a cogmap-homed resource (context_* are null),
  * which stranded 533 of 2330 active resources: VaultGrid listed them and
  * no-opped on click. It cannot return null now.
+ *
+ * It takes only the `id` because only the id is used. A caller holding a resource id and no row —
+ * the analysis door's charter and regulation links — should not have to fake a `ResourceView` to
+ * build the one link this repo has a single source for.
  */
-export function resourceHref(row: ResourceView): string {
+export function resourceHref(row: Pick<ResourceView, 'id'>): string {
 	return `/vault/r/${row.id}`;
 }
 
@@ -271,4 +275,23 @@ export function withGraphSeed(url: URL, seed: string): string {
 	next.searchParams.delete('from');
 	next.searchParams.append('from', seed);
 	return `${next.pathname}${next.search}`;
+}
+
+/**
+ * The analysis door for one place — the machine's measurements of it, declared as such.
+ *
+ * **Exactly one anchor, and that is the design rather than a simplification.** Measured on the
+ * deployed substrate `[2026-08-20]`, the same quantity spans wildly different ranges per place:
+ * `centrality` maxes at 2342.2 on the self-cognition map and 276 on `@me/temper`, `salience` at
+ * 497.65 against 69.54. One ranked list over two places would be arithmetic on incommensurable
+ * quantities, and the resulting order would look exactly as authoritative as a real one.
+ *
+ * It reuses `in=`'s grammar rather than inventing a second, so a place is addressed identically on
+ * both doors and {@link parseGraphAddress} reads this URL too.
+ */
+export function graphAnalysisHref(ownerRef: string, anchor: GraphAnchorRef | null): string {
+	if (!anchor) return `/graph/${ownerRef}/analysis`;
+	const params = new URLSearchParams();
+	params.set('in', `${anchor.kind === 'cogmap' ? 'map' : 'ctx'}:${anchor.ref}`);
+	return `/graph/${ownerRef}/analysis?${params.toString()}`;
 }

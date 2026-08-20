@@ -46,6 +46,14 @@ const view = (over: Partial<GraphViewData> = {}): GraphViewData => ({
 	model: buildGraph({ response: fixture.response, plan, seeds: [] }),
 	bound: declareBounds(fixture.response, plan, null),
 	readout: buildReadout(fixture.response, { rows: fixture.shape_rows, complete: true }),
+	placesAsked: [
+		{ kind: 'context', ref: '@me/temper', title: '@me/temper' },
+		{
+			kind: 'cogmap',
+			ref: '019f2391-e001-7933-b88a-28fb92e56ac1',
+			title: 'Temper — self-cognition',
+		},
+	],
 	selected: null,
 	selectedExcerpt: null,
 	selectedTrail: null,
@@ -207,5 +215,91 @@ describe('the rail opens on a node — and only on a node', () => {
 		render(GraphPage, { data: view({ selected: 'not-in-this-answer' }) });
 
 		expect(screen.queryByTestId('node-rail')).toBeNull();
+	});
+});
+
+describe('the unconnected field is declared rather than scattered', () => {
+	it('the fixture has an unconnected population — but NOT the real one, and says which', () => {
+		// **This file cannot witness the ratio the ruling was made on.** The capture's trim rule
+		// keeps every survey hit a via entry references, which keeps the CONNECTED hits by
+		// construction and only 4 arbitrary unconnected ones per stage. So this reads 10 of 52
+		// (19%) where the live response reads 80 of 155 (51%) — recorded in the fixture's own
+		// `_trimmed.degree_zero_NOT_witnessable`. Same species as the 101-edge collapse that block
+		// already names: a trim preserving one property destroyed another.
+		//
+		// What IS witnessable here is that the field exists, is populated, and is captioned truly.
+		// The population itself is asserted against the wire, not against this file.
+		const model = view().model;
+		const zero = model.nodes.filter((n) => n.degree === 0);
+
+		expect(zero.length).toBeGreaterThan(0);
+		expect(zero.length).toBeLessThan(model.nodes.length);
+	});
+
+	it('says how many are unconnected, in the reader’s own words', () => {
+		render(GraphPage, { data: view() });
+		const model = view().model;
+		const zero = model.nodes.filter((n) => n.degree === 0).length;
+
+		const caption = screen.getByTestId('unconnected-caption').textContent ?? '';
+		expect(caption).toBe(
+			`${zero} of these ${model.nodes.length} are not connected to anything else in this answer.`,
+		);
+		// no-internal-vocabulary-is-load-bearing reaches the canvas chrome too.
+		for (const word of ['degree', 'orphan', 'node']) {
+			expect(caption.toLowerCase()).not.toContain(word);
+		}
+	});
+
+	it('still draws every one of them — the field is a place, not a bound', () => {
+		const { container } = render(GraphPage, { data: view() });
+		const model = view().model;
+
+		expect(container.querySelectorAll('.node-chip')).toHaveLength(model.nodes.length);
+	});
+
+	it('adds no mark class — the field costs nothing from a vocabulary of two', () => {
+		// The guard above already asserts this for the page as a whole; this one names WHY it is
+		// re-asserted here, so a future field that reaches for a third mark fails on purpose.
+		const { container } = render(GraphPage, { data: view() });
+		const markClasses = new Set(
+			[...container.querySelectorAll('svg g[class]')]
+				.map((g) => g.getAttribute('class')?.split(' ')[0])
+				.filter((c): c is string => !!c && c !== 'labels'),
+		);
+
+		expect([...markClasses].sort()).toEqual(['edge', 'node-chip']);
+	});
+
+	it('a fully connected answer gets no caption and no field at all', () => {
+		const data = view();
+		const connected = {
+			...data,
+			model: { ...data.model, nodes: data.model.nodes.filter((n) => n.degree > 0) },
+		};
+
+		render(GraphPage, { data: connected });
+		expect(screen.queryByTestId('unconnected-caption')).toBeNull();
+	});
+});
+
+describe('the receiver is reachable from the readout, not merely built', () => {
+	it('every place the answer drew on links to its own measurements', () => {
+		// `displaced-structure-remains-reachable` says displaced structure *remains available*, and
+		// available means the reader can get there without being told a URL. A receiver nothing
+		// links to would satisfy the clause's letter and none of its point.
+		const { container } = render(GraphPage, { data: view() });
+		const links = [...container.querySelectorAll('[data-testid="measured-links"] a')];
+
+		expect(links).toHaveLength(2);
+		expect(links[0].getAttribute('href')).toBe('/graph/@me/analysis?in=ctx%3A%40me%2Ftemper');
+		expect(links[1].getAttribute('href')).toBe(
+			'/graph/@me/analysis?in=map%3A019f2391-e001-7933-b88a-28fb92e56ac1',
+		);
+	});
+
+	it('an answer drawn from no place offers no link rather than an empty row', () => {
+		render(GraphPage, { data: view({ placesAsked: [] }) });
+		expect(screen.queryByTestId('measured-links')).toBeNull();
 	});
 });
