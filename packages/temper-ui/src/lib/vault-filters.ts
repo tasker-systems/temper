@@ -1,10 +1,12 @@
 // vault-filters.ts
 /**
- * The vault grid's filter state lives entirely in the URL, mirroring the Atlas pattern
- * at `graph/atlas/nav.ts:158-181`: a private `withParams(base, mutate)` helper returns
- * `${pathname}${search}`, multi-value params round-trip as CSV, and an empty/null value
- * is deleted rather than written as `''`. `nav.ts` keeps its `withParams` private and is
- * Atlas-scoped, so it is duplicated here rather than imported.
+ * The vault grid's filter state lives entirely in the URL: a private `withParams(base,
+ * mutate)` helper returns `${pathname}${search}`, multi-value params round-trip as CSV, and
+ * an empty/null value is deleted rather than written as `''`.
+ *
+ * This shape was originally mirrored from the Atlas's `nav.ts`, which Beat D deleted with the
+ * rest of the tier model `[2026-08-20]`. The pattern is now stated here rather than borrowed;
+ * `vault-url.ts` holds the same convention for the graph surface's four params.
  *
  * **Empty means absent, for every filter — at BOTH ends.** A param whose value is empty
  * or only whitespace (`?stage=`, `?q=%20`, `?doc_type_name=,,`) parses as though the param

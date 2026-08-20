@@ -163,7 +163,8 @@ describe('a quantity that does not vary is said once instead of tabulated', () =
 
 describe('the displaced payload is here, whole', () => {
 	it('member count, salience and coherence all reach the reader', () => {
-		// RegionHoverCard.svelte:17-19 rendered exactly these three on the navigational canvas.
+		// RegionHoverCard.svelte:17-19 — at 87ccd211, the last commit before Beat D deleted the
+		// file — rendered exactly these three on the navigational canvas.
 		const { container } = render(AnalysisPage, { data: cogmapView() });
 		const headers = [...container.querySelectorAll('thead th')].map((h) => h.textContent);
 
