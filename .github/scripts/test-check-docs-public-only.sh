@@ -104,13 +104,19 @@ else
         *" cognitive-maps "*) echo "  PASS: cognitive-maps is on the denylist (retired, so its return is a regression)"; PASS=$((PASS + 1)) ;;
         *) echo "  FAIL: cognitive-maps is absent from FORBIDDEN — a retired tree could return green"; FAIL=$((FAIL + 1)) ;;
     esac
+
+    # Nested forbidden directory — the original `docs/$d` check missed this.
+    make_tree "nested-forbidden"
+    mkdir -p "${TREE}/docs/playbooks/development"
+    echo "# internal material" > "${TREE}/docs/playbooks/development/secret.md"
+    run_case "docs/playbooks/development/ nested: FAILS" 1 "docs/playbooks/development"
 fi
 
 # --- NEGATIVE (c): a loose page at the docs/ root ---
 
 make_tree loose-md
 echo "# an internal audit" > "${TREE}/docs/2026-03-31-code-review-audit.md"
-run_case "loose .md at the docs/ root: FAILS" 1 "loose page at the docs/ root"
+run_case "loose .md at the docs/ root: FAILS" 1 "loose file at the docs/ root"
 
 # The forbidden-name check reads DIRECTORIES, so a loose page is a genuinely separate
 # failure mode — eleven of them sat at the root while (b) reported clean.
@@ -118,6 +124,20 @@ make_tree loose-md-beside-index
 echo "# landing" > "${TREE}/docs/index.md"
 echo "# brand strategy" > "${TREE}/docs/brand-direction.md"
 run_case "loose .md alongside a permitted index.md: still FAILS" 1 "brand-direction.md"
+
+# Non-.md loose files at the root — the original `*.md` check missed these.
+make_tree loose-txt
+echo "internal notes" > "${TREE}/docs/notes.txt"
+run_case "loose .txt at the docs/ root: FAILS" 1 "notes.txt"
+
+make_tree loose-json
+echo '{"internal": true}' > "${TREE}/docs/config.json"
+run_case "loose .json at the docs/ root: FAILS" 1 "config.json"
+
+# Asset files at the root are legitimate — the site needs them.
+make_tree asset-svg
+echo "<svg/>" > "${TREE}/docs/brand-mark.svg"
+run_case "loose .svg at the docs/ root: permitted (asset)" 0 "OK:"
 
 # --- NEGATIVE (a): the empty scan must never report clean ---
 

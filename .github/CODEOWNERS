@@ -79,5 +79,8 @@
 /docs/                              @jcoletaylor
 *.md                                @jcoletaylor
 
+# ── Internal: contributor docs, specs, plans, audits ──────────────────────────────────────────────
+/internal/                          @jcoletaylor
+
 # ── Tests that span the stack ─────────────────────────────────────────────────────────────────────
 /tests/e2e/                         @jcoletaylor
