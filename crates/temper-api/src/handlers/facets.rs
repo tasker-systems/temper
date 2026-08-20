@@ -16,6 +16,7 @@ use temper_workflow::operations::{Backend, SetFacet};
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
+/// Set a facet on a resource
 #[utoipa::path(
     post,
     path = "/api/facets",
@@ -51,24 +52,28 @@ pub async fn set_facet(
     }))
 }
 
-/// Set a facet whose owner is an **edge** rather than a resource.
+// A separate route rather than a mode of `POST /api/facets`, for two reasons that are both
+// about the owner not being a payload choice: the edge is addressed in the path (matching every
+// other edge write — `/api/relationships/{edge_handle}/retype|reweight|fold`), and the
+// authorization gate is a different question. `DbBackend::set_facet` dispatches on the typed
+// owner to `check_edge_mutable`, which is the same gate that governs re-typing or folding the
+// same edge.
+//
+// Both statuses are reachable, and they mean different things. 404 for an edge that does not
+// exist, is folded, or whose target the caller cannot read — that last arm is `NotFound` rather
+// than `Forbidden` on purpose, so the write never confirms the existence of a resource the
+// caller has no standing to see. 403 for an edge the caller can legitimately see but may not
+// author into: it fails source-write or container-write on the edge's home.
+//
+// An earlier version of this comment claimed the endpoint returns "404 rather than 403"
+// outright, twelve lines above an OpenAPI block declaring `403`. The annotation was right and
+// the prose was wrong; `check_edge_mutable` renders `Forbidden` for clauses 1 and 2 and
+// `NotFound` for the row lookup and clause 3.
+/// Set a facet on a relationship
 ///
-/// A separate route rather than a mode of `POST /api/facets`, for two reasons that are both about
-/// the owner not being a payload choice: the edge is addressed in the path (matching every other
-/// edge write — `/api/relationships/{edge_handle}/retype|reweight|fold`), and the authorization
-/// gate is a different question. `DbBackend::set_facet` dispatches on the typed owner to
-/// `check_edge_mutable`, which is the same gate that governs re-typing or folding the same edge.
+/// Sets a facet whose owner is an edge rather than a resource. The edge is addressed in the path, matching the other edge writes (`retype`, `reweight`, `fold`).
 ///
-/// **Both statuses are reachable, and they mean different things.** `404` for an edge that does not
-/// exist, is folded, or whose **target** the caller cannot read — that last arm is `NotFound` rather
-/// than `Forbidden` on purpose, so the write never confirms the existence of a resource the caller
-/// has no standing to see. `403` for an edge the caller can legitimately see but may not author
-/// into: it fails source-write or container-write on the edge's home.
-///
-/// An earlier version of this comment claimed the endpoint returns "404 rather than 403" outright,
-/// twelve lines above an OpenAPI block declaring `403`. The annotation was right and the prose was
-/// wrong; `check_edge_mutable` renders `Forbidden` for clauses 1 and 2 and `NotFound` for the row
-/// lookup and clause 3.
+/// Answers 404 when the edge does not exist, is folded, or has a target you cannot read. That last case answers 404 rather than 403 on purpose, so a refusal never confirms the existence of something you are not allowed to see.
 #[utoipa::path(
     post,
     path = "/api/relationships/{edge_handle}/facets",
@@ -106,11 +111,12 @@ pub async fn set_edge_facet(
     }))
 }
 
-/// Read the live facets of one edge.
+// Read-side gate is `edges_visible_to` — see `edge_service::list_edge_facets`. Reads stay
+// service-direct on both surfaces by design (the trait projections are lossy), so this does not
+// route through the backend.
+/// Read the live facets of one edge
 ///
-/// Read-side gate is `edges_visible_to` — see `edge_service::list_edge_facets`. Reads stay
-/// service-direct on both surfaces by design (the trait projections are lossy), so this does not
-/// route through the backend.
+/// One entry per assert, each with its weight and its author. Readable only if you can read the edge.
 #[utoipa::path(
     get,
     path = "/api/relationships/{edge_handle}/facets",
@@ -140,22 +146,22 @@ pub async fn list_edge_facets(
     }))
 }
 
-/// Read the live facets of one resource — the confirming read for a write that steers region
-/// formation and Atlas grouping.
+// Read-side gate is `resources_visible_to`, asked via `readback::is_resource_visible` — see
+// `facet_service::list_resource_facets` for why it is asked separately and first. Reads stay
+// service-direct on both surfaces by design, so this does not route through the backend.
+//
+// The same argument `GET /api/resources/{id}/citation-audits` makes, and the same denial
+// dialect.
+//
+// Path is `/api/resources/{id}/facets`, not a mode of `/api/facets`. The write posts to
+// `/api/facets` with the resource in the body because a facet-set is an act on a payload; a
+// read addresses a resource, so the resource belongs in the path alongside its siblings
+// (`/citation-audits`, `/evidence`).
+/// Read the live facets of one resource
 ///
-/// Read-side gate is `resources_visible_to`, asked via `readback::is_resource_visible` — see
-/// `facet_service::list_resource_facets` for why it is asked separately and first. Reads stay
-/// service-direct on both surfaces by design, so this does not route through the backend.
+/// One entry per assert, each with its weight and its author. This is the confirming read for a facet write, which steers region formation and graph grouping.
 ///
-/// **`200` with an empty list is not the same answer as `404`, and that is deliberate.** Empty means
-/// *readable, nothing asserted*; `404` means *unreadable or absent*, indistinguishably. The empty
-/// list is only reachable after the readability gate has passed, so it is not an existence oracle —
-/// the same argument `GET /api/resources/{id}/citation-audits` makes, and the same denial dialect.
-///
-/// **Path is `/api/resources/{id}/facets`, not a mode of `/api/facets`.** The write posts to
-/// `/api/facets` with the resource in the body because a facet-set is an act on a payload; a read
-/// addresses a resource, so the resource belongs in the path alongside its siblings
-/// (`/citation-audits`, `/evidence`).
+/// 200 with an empty list and 404 are different answers: empty means readable with nothing asserted; 404 means unreadable or absent, indistinguishably. The empty list is only reachable once the readability gate has passed, so it is not an existence oracle.
 #[utoipa::path(
     get,
     operation_id = "list_resource_facets",

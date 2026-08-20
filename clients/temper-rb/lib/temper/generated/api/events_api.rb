@@ -19,6 +19,7 @@ module Temper::Generated
     def initialize(api_client = ApiClient.default)
       @api_client = api_client
     end
+    # Read the event cursor for a context
     # @param kb_context_id [String] The context whose latest event id is requested
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -28,6 +29,7 @@ module Temper::Generated
       data
     end
 
+    # Read the event cursor for a context
     # @param kb_context_id [String] The context whose latest event id is requested
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -85,7 +87,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # GET /api/graph/elements/{kind}/{id}/trail — R5 element event-trail. kind ∈ {node, edge}.
+    # Read a node or edge's event trail
     # @param kind [String] node | edge
     # @param id [String] resource id (node) or edge id
     # @param [Hash] opts the optional parameters
@@ -96,7 +98,7 @@ module Temper::Generated
       data
     end
 
-    # GET /api/graph/elements/{kind}/{id}/trail — R5 element event-trail. kind ∈ {node, edge}.
+    # Read a node or edge&#39;s event trail
     # @param kind [String] node | edge
     # @param id [String] resource id (node) or edge id
     # @param [Hash] opts the optional parameters

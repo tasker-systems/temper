@@ -36,6 +36,7 @@ pub struct ListQuery {
     pub status: Option<String>,
 }
 
+/// Open an invocation
 #[utoipa::path(
     post,
     path = "/api/invocations",
@@ -68,6 +69,7 @@ pub async fn open(
     }))
 }
 
+/// Close an invocation
 #[utoipa::path(
     post,
     path = "/api/invocations/{id}/close",
@@ -104,6 +106,7 @@ pub async fn close(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Get one invocation
 #[utoipa::path(
     get,
     path = "/api/invocations/{id}",
@@ -131,6 +134,7 @@ pub async fn show(
     Ok(Json(view))
 }
 
+/// List agent invocations
 #[utoipa::path(
     get,
     operation_id = "list_invocations",

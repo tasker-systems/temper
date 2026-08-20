@@ -14,10 +14,11 @@ use temper_services::error::ApiResult;
 use temper_services::services::reassign_service;
 use temper_services::state::AppState;
 
+/// Reassign a resource to another owner
 #[utoipa::path(
     post,
     path = "/api/resources/{id}/reassign",
-    tag = "Reassign",
+    tag = "Resources",
     params(("id" = Uuid, Path, description = "Resource ID")),
     security(("bearer_auth" = [])),
     request_body = ReassignResourceRequest,
@@ -46,10 +47,11 @@ pub async fn reassign_resource(
     }))
 }
 
+/// Bulk reassign a team's resources
 #[utoipa::path(
     post,
     path = "/api/teams/{id}/reassign",
-    tag = "Reassign",
+    tag = "Teams",
     params(("id" = Uuid, Path, description = "Team ID")),
     security(("bearer_auth" = [])),
     request_body = BulkReassignRequest,

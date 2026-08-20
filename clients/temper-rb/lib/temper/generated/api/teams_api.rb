@@ -19,6 +19,7 @@ module Temper::Generated
     def initialize(api_client = ApiClient.default)
       @api_client = api_client
     end
+    # Add a member to a team
     # @param id [String] Team ID
     # @param add_member_request [AddMemberRequest] 
     # @param [Hash] opts the optional parameters
@@ -29,6 +30,7 @@ module Temper::Generated
       data
     end
 
+    # Add a member to a team
     # @param id [String] Team ID
     # @param add_member_request [AddMemberRequest] 
     # @param [Hash] opts the optional parameters
@@ -96,6 +98,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Change a member's role
     # @param id [String] Team ID
     # @param profile_id [String] Member profile ID
     # @param change_role_request [ChangeRoleRequest] 
@@ -107,6 +110,7 @@ module Temper::Generated
       data
     end
 
+    # Change a member&#39;s role
     # @param id [String] Team ID
     # @param profile_id [String] Member profile ID
     # @param change_role_request [ChangeRoleRequest] 
@@ -179,6 +183,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Create a team
     # @param team_create_request [TeamCreateRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -188,6 +193,7 @@ module Temper::Generated
       data
     end
 
+    # Create a team
     # @param team_create_request [TeamCreateRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -250,6 +256,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Delete a team
     # @param id [String] Team ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -259,6 +266,7 @@ module Temper::Generated
       nil
     end
 
+    # Delete a team
     # @param id [String] Team ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -314,6 +322,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Get one team
     # @param id [String] Team ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -323,6 +332,7 @@ module Temper::Generated
       data
     end
 
+    # Get one team
     # @param id [String] Team ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -380,6 +390,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # List teams you belong to
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<TeamRow>]
@@ -388,6 +399,7 @@ module Temper::Generated
       data
     end
 
+    # List teams you belong to
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<(Array<TeamRow>, Integer, Hash)>] Array<TeamRow> data, response status code and response headers
@@ -440,6 +452,86 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Bulk reassign a team's resources
+    # @param id [String] Team ID
+    # @param bulk_reassign_request [BulkReassignRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [BulkReassignAck]
+    def reassign_team(id, bulk_reassign_request, opts = {})
+      data, _status_code, _headers = reassign_team_with_http_info(id, bulk_reassign_request, opts)
+      data
+    end
+
+    # Bulk reassign a team&#39;s resources
+    # @param id [String] Team ID
+    # @param bulk_reassign_request [BulkReassignRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(BulkReassignAck, Integer, Hash)>] BulkReassignAck data, response status code and response headers
+    def reassign_team_with_http_info(id, bulk_reassign_request, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: TeamsApi.reassign_team ...'
+      end
+      # verify the required parameter 'id' is set
+      if @api_client.config.client_side_validation && id.nil?
+        fail ArgumentError, "Missing the required parameter 'id' when calling TeamsApi.reassign_team"
+      end
+      # verify the required parameter 'bulk_reassign_request' is set
+      if @api_client.config.client_side_validation && bulk_reassign_request.nil?
+        fail ArgumentError, "Missing the required parameter 'bulk_reassign_request' when calling TeamsApi.reassign_team"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/teams/{id}/reassign'.sub('{id}', CGI.escape(id.to_s))
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      # HTTP header 'Content-Type'
+      content_type = @api_client.select_header_content_type(['application/json'])
+      if !content_type.nil?
+          header_params['Content-Type'] = content_type
+      end
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body] || @api_client.object_to_http_body(bulk_reassign_request)
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'BulkReassignAck'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"TeamsApi.reassign_team",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:POST, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: TeamsApi#reassign_team\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
+    # Remove a member from a team
     # @param id [String] Team ID
     # @param profile_id [String] Member profile ID
     # @param [Hash] opts the optional parameters
@@ -450,6 +542,7 @@ module Temper::Generated
       data
     end
 
+    # Remove a member from a team
     # @param id [String] Team ID
     # @param profile_id [String] Member profile ID
     # @param [Hash] opts the optional parameters
@@ -512,6 +605,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Update a team
     # @param id [String] Team ID
     # @param team_update_request [TeamUpdateRequest] 
     # @param [Hash] opts the optional parameters
@@ -522,6 +616,7 @@ module Temper::Generated
       data
     end
 
+    # Update a team
     # @param id [String] Team ID
     # @param team_update_request [TeamUpdateRequest] 
     # @param [Hash] opts the optional parameters

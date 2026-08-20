@@ -19,6 +19,7 @@ module Temper::Generated
     def initialize(api_client = ApiClient.default)
       @api_client = api_client
     end
+    # Accept a team invitation
     # @param invitation_token_request [InvitationTokenRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -28,6 +29,7 @@ module Temper::Generated
       data
     end
 
+    # Accept a team invitation
     # @param invitation_token_request [InvitationTokenRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -90,6 +92,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Invite someone to a team
     # @param id [String] Team ID
     # @param create_invitation_request [CreateInvitationRequest] 
     # @param [Hash] opts the optional parameters
@@ -100,6 +103,7 @@ module Temper::Generated
       data
     end
 
+    # Invite someone to a team
     # @param id [String] Team ID
     # @param create_invitation_request [CreateInvitationRequest] 
     # @param [Hash] opts the optional parameters
@@ -167,6 +171,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Decline a team invitation
     # @param invitation_token_request [InvitationTokenRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -176,6 +181,7 @@ module Temper::Generated
       nil
     end
 
+    # Decline a team invitation
     # @param invitation_token_request [InvitationTokenRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -236,6 +242,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # List invitations addressed to you
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<InviteeInvitation>]
@@ -244,6 +251,7 @@ module Temper::Generated
       data
     end
 
+    # List invitations addressed to you
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<(Array<InviteeInvitation>, Integer, Hash)>] Array<InviteeInvitation> data, response status code and response headers
@@ -296,6 +304,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # List a team's open invitations
     # @param id [String] Team ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -305,6 +314,7 @@ module Temper::Generated
       data
     end
 
+    # List a team&#39;s open invitations
     # @param id [String] Team ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -362,6 +372,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Revoke a team invitation
     # @param id [String] Team ID
     # @param invitation_id [String] Invitation ID (from the team invitations list)
     # @param [Hash] opts the optional parameters
@@ -372,6 +383,7 @@ module Temper::Generated
       nil
     end
 
+    # Revoke a team invitation
     # @param id [String] Team ID
     # @param invitation_id [String] Invitation ID (from the team invitations list)
     # @param [Hash] opts the optional parameters

@@ -12,19 +12,22 @@ use temper_services::services::citation_audit_service;
 use temper_services::state::AppState;
 use temper_workflow::operations::RecordCitationAudit;
 
-/// Record an auditor's signed defensibility verdict on one `(block, source)` citation of the
-/// finding at `{id}`. CONFORM to `handlers::edges::assert` (the sibling authored-write handler):
-/// thin — build the command, dispatch it, map the error. No persistence here.
+// CONFORM to `handlers::edges::assert` (the sibling authored-write handler): thin — build the
+// command, dispatch it, map the error. No persistence here.
+//
+// The real authorization subject is the block's owning finding, resolved server-side from
+// `req.block_id` (`temper-services/src/authz/audit_gate.rs:65-77`).
+// `citation_audit_service::record_citation_audit` derives that finding and refuses with 404 if
+// it disagrees with `id`.
+//
+// `CitationAuditRequest` carries no act/authorship fields (unlike
+// `AssertRelationshipRequest`'s flattened `ActInput`) — that shape was fixed in Task 7/3 and
+// is not this task's to change — so the command's `act` is always the empty default here.
+/// Record a citation-audit verdict
 ///
-/// `id` is a routing address only. The real authorization subject is the block's owning finding,
-/// resolved server-side from `req.block_id`
-/// (`temper-services/src/authz/audit_gate.rs:65-77`). `citation_audit_service::record_citation_audit`
-/// derives that finding and refuses with 404 if it disagrees with `id`, so a caller cannot address
-/// one finding in the path while writing an audit onto a block of another.
+/// `id` is a routing address. The authorization subject is the finding that owns the block named in the request body, resolved server-side.
 ///
-/// `CitationAuditRequest` carries no act/authorship fields (unlike `AssertRelationshipRequest`'s
-/// flattened `ActInput`) — that shape was fixed in Task 7/3 and is not this task's to change — so
-/// the command's `act` is always the empty default here.
+/// If that finding disagrees with `id` the write is refused with 404, so you cannot address one finding in the path while recording an audit against a block of another.
 #[utoipa::path(
     post,
     operation_id = "record_citation_audit",
@@ -69,22 +72,23 @@ pub async fn record(
     Ok(Json(audit_id))
 }
 
-/// List the finding at `{id}`'s citation-audit trail — one row per audit, each naming its auditor.
+// The `GET` sibling of [`record`] on the same path, and the read that makes an audit
+// ATTRIBUTABLE. This read is opt-in rather than more fields on `StandingShape` because the
+// shape is fixed-width and recomputed live on every call, while a trail grows with every audit
+// ever emitted.
+//
+// 404-when-unreadable is deliberately not the collection default — the `/provenance` sibling
+// answers `200 []` for an unreadable resource. Why this one refuses instead is a leak-safety
+// argument about the pair of endpoints, not about this handler: it lives in
+// `temper_services::services::citation_audit_service`'s module doc, beside where `/evidence`'s
+// equivalent lives in `evidential_standing_service`.
+/// List a finding's citation-audit trail
 ///
-/// The `GET` sibling of [`record`] on the same path, and the read that makes an audit
-/// ATTRIBUTABLE. `GET /api/resources/{id}/evidence` returns aggregates only
-/// (`citation_magnitude` / `audit_coverage` / `citation_quality` / `band`), so a finding pushed to
-/// `disputed` by one auditor and one pushed there by three are indistinguishable on that surface:
-/// the verdict is visible, the voter is not. This read is opt-in rather than more fields on
-/// `StandingShape` because the shape is fixed-width and recomputed live on every call, while a
-/// trail grows with every audit ever emitted.
+/// One row per audit, each naming its auditor.
 ///
-/// **404 when the finding is not readable (or does not exist); `200 []` only when it IS readable and
-/// genuinely carries no audits.** That is deliberately not the collection default — the `/provenance`
-/// sibling answers `200 []` for an unreadable resource. Why this one refuses instead is a leak-safety
-/// argument about the pair of endpoints, not about this handler: it lives in
-/// `temper_services::services::citation_audit_service`'s module doc, beside where `/evidence`'s
-/// equivalent lives in `evidential_standing_service`.
+/// `GET /api/resources/{id}/evidence` answers with aggregates only, so a finding disputed by one auditor and a finding disputed by three are indistinguishable there. This read names the voters.
+///
+/// Answers 404 when the finding is unreadable or absent. An empty array means the finding is readable and genuinely carries no audits.
 #[utoipa::path(
     get,
     operation_id = "list_citation_audits",

@@ -13,7 +13,6 @@ lib/temper/generated/api/invocations_api.rb
 lib/temper/generated/api/meta_api.rb
 lib/temper/generated/api/profile_api.rb
 lib/temper/generated/api/query_api.rb
-lib/temper/generated/api/reassign_api.rb
 lib/temper/generated/api/relationships_api.rb
 lib/temper/generated/api/resources_api.rb
 lib/temper/generated/api/search_api.rb

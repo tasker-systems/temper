@@ -18,6 +18,7 @@ use temper_services::error::ApiResult;
 use temper_services::services::team_service;
 use temper_services::state::AppState;
 
+/// List teams you belong to
 #[utoipa::path(
     get,
     operation_id = "list_teams",
@@ -34,6 +35,7 @@ pub async fn list(State(state): State<AppState>, auth: AuthUser) -> ApiResult<Js
         .map(Json)
 }
 
+/// Create a team
 #[utoipa::path(
     post,
     operation_id = "create_team",
@@ -57,6 +59,7 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(row)))
 }
 
+/// Add a member to a team
 #[utoipa::path(
     post,
     path = "/api/teams/{id}/members",
@@ -86,6 +89,7 @@ pub async fn add_member(
     Ok((StatusCode::CREATED, Json(row)))
 }
 
+/// Get one team
 #[utoipa::path(
     get,
     path = "/api/teams/{id}",
@@ -107,6 +111,7 @@ pub async fn detail(
         .map(Json)
 }
 
+/// Update a team
 #[utoipa::path(
     patch,
     operation_id = "update_team",
@@ -137,6 +142,7 @@ pub async fn update(
     .map(Json)
 }
 
+/// Delete a team
 #[utoipa::path(
     delete,
     operation_id = "delete_team",
@@ -160,6 +166,7 @@ pub async fn delete(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Remove a member from a team
 #[utoipa::path(
     delete,
     path = "/api/teams/{id}/members/{profile_id}",
@@ -191,6 +198,7 @@ pub async fn remove_member(
     Ok(Json(outcome))
 }
 
+/// Change a member's role
 #[utoipa::path(
     patch,
     path = "/api/teams/{id}/members/{profile_id}",

@@ -26,14 +26,15 @@ use temper_workflow::operations::{Backend, CreateResource, DeleteResource};
 use temper_workflow::types::managed_meta::ManagedMeta;
 use temper_workflow::types::resource::{ContentResponse, DeleteResponse};
 
-/// `GET /api/resources` — **one response type, unconditionally.**
+// This endpoint used to answer in `oneOf<ResourceListResponse, ResourceMetaListResponse>`,
+// selected by `?meta_only=true`: two envelopes over two row types, so a generated client had a
+// union to discriminate and an agent had two shapes to learn. `?sections=` replaces it — the
+// caller varies which *parts* of `ResourceView` are filled, never which type comes back. The
+// `ListResourcesResponse` enum, its `untagged` serde impl and its hand-written `IntoResponse`
+// are gone with it; `ResourceListResponse` is a plain `Json` return like every other read here.
+/// List resources you can see
 ///
-/// This endpoint used to answer in `oneOf<ResourceListResponse, ResourceMetaListResponse>`,
-/// selected by `?meta_only=true`: two envelopes over two row types, so a generated client had a
-/// union to discriminate and an agent had two shapes to learn. `?sections=` replaces it — the
-/// caller varies which *parts* of `ResourceView` are filled, never which type comes back. The
-/// `ListResourcesResponse` enum, its `untagged` serde impl and its hand-written `IntoResponse` are
-/// gone with it; `ResourceListResponse` is a plain `Json` return like every other read here.
+/// Answers with one response type, unconditionally. Use `sections` to vary which parts of each resource are filled — the type you receive never changes.
 #[utoipa::path(
     get,
     operation_id = "list_resources",
@@ -63,6 +64,7 @@ pub async fn list(
     Ok(Json(response))
 }
 
+/// Get one resource
 #[utoipa::path(
     get,
     operation_id = "get_resource",
@@ -97,6 +99,7 @@ pub async fn get(
     Ok(Json(out.value))
 }
 
+/// Read a resource's reconstituted content
 #[utoipa::path(
     get,
     path = "/api/resources/{id}/content",
@@ -123,6 +126,7 @@ pub async fn get_content(
     .map(Json)
 }
 
+/// Read a resource's block provenance
 #[utoipa::path(
     get,
     path = "/api/resources/{id}/provenance",
@@ -149,6 +153,7 @@ pub async fn provenance(
     .map(Json)
 }
 
+/// Attach provenance sources to a resource
 #[utoipa::path(
     post,
     operation_id = "annotate_resource",
@@ -190,6 +195,7 @@ pub async fn annotate(
     Ok(Json(out.value))
 }
 
+/// Create a resource
 #[utoipa::path(
     post,
     operation_id = "create_resource",
@@ -253,6 +259,7 @@ pub async fn create(
     Ok(Json(out.value))
 }
 
+/// Update a resource
 #[utoipa::path(
     patch,
     operation_id = "update_resource",
@@ -352,6 +359,7 @@ pub async fn update(
     Ok(Json(out.value))
 }
 
+/// Soft-delete a resource
 #[utoipa::path(
     delete,
     operation_id = "delete_resource",
@@ -390,6 +398,7 @@ pub async fn delete(
     Ok(Json(DeleteResponse { deleted: true }))
 }
 
+/// Grant access to a resource
 #[utoipa::path(
     post,
     operation_id = "grant_resource_access",
@@ -429,6 +438,7 @@ pub async fn grant(
     Ok(Json(outcome))
 }
 
+/// Revoke access to a resource
 #[utoipa::path(
     delete,
     operation_id = "revoke_resource_access",

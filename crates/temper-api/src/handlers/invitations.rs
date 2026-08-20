@@ -26,6 +26,7 @@ use temper_services::error::ApiResult;
 use temper_services::services::invitation_service;
 use temper_services::state::AppState;
 
+/// Invite someone to a team
 #[utoipa::path(
     post,
     operation_id = "create_team_invitation",
@@ -61,6 +62,7 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(inv)))
 }
 
+/// Revoke a team invitation
 #[utoipa::path(
     delete,
     operation_id = "revoke_team_invitation",
@@ -93,6 +95,7 @@ pub async fn revoke(
     .map(|()| StatusCode::NO_CONTENT)
 }
 
+/// List a team's open invitations
 #[utoipa::path(
     get,
     operation_id = "list_team_invitations",
@@ -115,6 +118,7 @@ pub async fn list(
         .map(Json)
 }
 
+/// List invitations addressed to you
 #[utoipa::path(
     get,
     path = "/api/invitations/mine",
@@ -133,6 +137,7 @@ pub async fn list_mine(
         .map(Json)
 }
 
+/// Accept a team invitation
 #[utoipa::path(
     post,
     path = "/api/invitations/accept",
@@ -160,6 +165,7 @@ pub async fn accept(
     .map(Json)
 }
 
+/// Decline a team invitation
 #[utoipa::path(
     post,
     path = "/api/invitations/decline",

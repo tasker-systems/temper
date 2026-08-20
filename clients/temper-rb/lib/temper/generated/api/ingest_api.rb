@@ -19,6 +19,7 @@ module Temper::Generated
     def initialize(api_client = ApiClient.default)
       @api_client = api_client
     end
+    # Append a block to an in-progress ingest
     # @param id [String] Resource ID
     # @param append_block_payload [AppendBlockPayload] 
     # @param [Hash] opts the optional parameters
@@ -29,6 +30,7 @@ module Temper::Generated
       data
     end
 
+    # Append a block to an in-progress ingest
     # @param id [String] Resource ID
     # @param append_block_payload [AppendBlockPayload] 
     # @param [Hash] opts the optional parameters
@@ -96,6 +98,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Begin a segmented ingest
     # @param ingest_payload [IngestPayload] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -105,6 +108,7 @@ module Temper::Generated
       data
     end
 
+    # Begin a segmented ingest
     # @param ingest_payload [IngestPayload] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -167,6 +171,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Finalize a segmented ingest
     # @param id [String] Resource ID
     # @param finalize_payload [FinalizePayload] 
     # @param [Hash] opts the optional parameters
@@ -177,6 +182,7 @@ module Temper::Generated
       nil
     end
 
+    # Finalize a segmented ingest
     # @param id [String] Resource ID
     # @param finalize_payload [FinalizePayload] 
     # @param [Hash] opts the optional parameters
@@ -242,6 +248,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # List the blocks landed so far
     # @param id [String] Resource ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -251,6 +258,7 @@ module Temper::Generated
       data
     end
 
+    # List the blocks landed so far
     # @param id [String] Resource ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -308,6 +316,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Update an in-progress ingest
     # @param id [String] Resource ID
     # @param ingest_payload [IngestPayload] 
     # @param [Hash] opts the optional parameters
@@ -318,6 +327,7 @@ module Temper::Generated
       data
     end
 
+    # Update an in-progress ingest
     # @param id [String] Resource ID
     # @param ingest_payload [IngestPayload] 
     # @param [Hash] opts the optional parameters

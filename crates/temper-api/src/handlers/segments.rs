@@ -24,6 +24,7 @@ use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::ingest::{AppendBlockPayload, BlocksResponse, FinalizePayload};
 use temper_workflow::operations::Backend;
 
+/// Append a block to an in-progress ingest
 #[utoipa::path(
     post,
     operation_id = "append_block",
@@ -53,6 +54,7 @@ pub async fn append_block_handler(
     Ok(Json(out.value))
 }
 
+/// Finalize a segmented ingest
 #[utoipa::path(
     post,
     operation_id = "finalize_resource",
@@ -82,6 +84,7 @@ pub async fn finalize_handler(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// List the blocks landed so far
 #[utoipa::path(
     get,
     operation_id = "list_blocks",

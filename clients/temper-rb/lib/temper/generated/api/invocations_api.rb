@@ -19,6 +19,7 @@ module Temper::Generated
     def initialize(api_client = ApiClient.default)
       @api_client = api_client
     end
+    # Close an invocation
     # @param id [String] Invocation ID
     # @param close_invocation_request [CloseInvocationRequest] 
     # @param [Hash] opts the optional parameters
@@ -29,6 +30,7 @@ module Temper::Generated
       nil
     end
 
+    # Close an invocation
     # @param id [String] Invocation ID
     # @param close_invocation_request [CloseInvocationRequest] 
     # @param [Hash] opts the optional parameters
@@ -94,6 +96,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # List agent invocations
     # @param [Hash] opts the optional parameters
     # @option opts [String] :cogmap Filter by originating cogmap
     # @option opts [String] :status Filter by lifecycle status
@@ -104,6 +107,7 @@ module Temper::Generated
       data
     end
 
+    # List agent invocations
     # @param [Hash] opts the optional parameters
     # @option opts [String] :cogmap Filter by originating cogmap
     # @option opts [String] :status Filter by lifecycle status
@@ -160,6 +164,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Open an invocation
     # @param open_invocation_request [OpenInvocationRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -169,6 +174,7 @@ module Temper::Generated
       data
     end
 
+    # Open an invocation
     # @param open_invocation_request [OpenInvocationRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -231,6 +237,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Get one invocation
     # @param id [String] Invocation ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -240,6 +247,7 @@ module Temper::Generated
       data
     end
 
+    # Get one invocation
     # @param id [String] Invocation ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.

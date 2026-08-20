@@ -13,6 +13,7 @@ use temper_core::types::resource_view::ResourceView;
 use temper_workflow::operations::{Backend, UpdateResource};
 use temper_workflow::types::managed_meta::MetaUpdatePayload;
 
+/// Read a resource's frontmatter
 #[utoipa::path(
     get,
     path = "/api/resources/{id}/meta",
@@ -39,6 +40,7 @@ pub async fn get_meta(
     .map(Json)
 }
 
+/// Replace a resource's frontmatter
 #[utoipa::path(
     put,
     path = "/api/resources/{id}/meta",

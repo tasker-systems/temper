@@ -19,6 +19,7 @@ module Temper::Generated
     def initialize(api_client = ApiClient.default)
       @api_client = api_client
     end
+    # Attach provenance sources to a resource
     # @param id [String] Resource ID
     # @param resource_annotate_request [ResourceAnnotateRequest] 
     # @param [Hash] opts the optional parameters
@@ -29,6 +30,7 @@ module Temper::Generated
       data
     end
 
+    # Attach provenance sources to a resource
     # @param id [String] Resource ID
     # @param resource_annotate_request [ResourceAnnotateRequest] 
     # @param [Hash] opts the optional parameters
@@ -96,6 +98,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Create a resource
     # @param resource_create_request [ResourceCreateRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -105,6 +108,7 @@ module Temper::Generated
       data
     end
 
+    # Create a resource
     # @param resource_create_request [ResourceCreateRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -167,6 +171,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Soft-delete a resource
     # @param id [String] Resource ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :invocation_id The invocation this act is correlated under (&#x60;kb_events.invocation_id&#x60;). Optional — a correlation aid, never a substitute for authn/authz.
@@ -183,6 +188,7 @@ module Temper::Generated
       data
     end
 
+    # Soft-delete a resource
     # @param id [String] Resource ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :invocation_id The invocation this act is correlated under (&#x60;kb_events.invocation_id&#x60;). Optional — a correlation aid, never a substitute for authn/authz.
@@ -254,6 +260,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Read a resource's reconstituted content
     # @param id [String] Resource ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -263,6 +270,7 @@ module Temper::Generated
       data
     end
 
+    # Read a resource&#39;s reconstituted content
     # @param id [String] Resource ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -320,6 +328,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Get one resource
     # @param id [String] Resource ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -329,6 +338,7 @@ module Temper::Generated
       data
     end
 
+    # Get one resource
     # @param id [String] Resource ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -386,6 +396,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Grant access to a resource
     # @param id [String] Resource ID
     # @param resource_grant_body [ResourceGrantBody] 
     # @param [Hash] opts the optional parameters
@@ -396,6 +407,7 @@ module Temper::Generated
       data
     end
 
+    # Grant access to a resource
     # @param id [String] Resource ID
     # @param resource_grant_body [ResourceGrantBody] 
     # @param [Hash] opts the optional parameters
@@ -463,8 +475,8 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # List the finding at `{id}`'s citation-audit trail — one row per audit, each naming its auditor.
-    # The `GET` sibling of [`record`] on the same path, and the read that makes an audit ATTRIBUTABLE. `GET /api/resources/{id}/evidence` returns aggregates only (`citation_magnitude` / `audit_coverage` / `citation_quality` / `band`), so a finding pushed to `disputed` by one auditor and one pushed there by three are indistinguishable on that surface: the verdict is visible, the voter is not. This read is opt-in rather than more fields on `StandingShape` because the shape is fixed-width and recomputed live on every call, while a trail grows with every audit ever emitted.  **404 when the finding is not readable (or does not exist); `200 []` only when it IS readable and genuinely carries no audits.** That is deliberately not the collection default — the `/provenance` sibling answers `200 []` for an unreadable resource. Why this one refuses instead is a leak-safety argument about the pair of endpoints, not about this handler: it lives in `temper_services::services::citation_audit_service`'s module doc, beside where `/evidence`'s equivalent lives in `evidential_standing_service`.
+    # List a finding's citation-audit trail
+    # One row per audit, each naming its auditor.  `GET /api/resources/{id}/evidence` answers with aggregates only, so a finding disputed by one auditor and a finding disputed by three are indistinguishable there. This read names the voters.  Answers 404 when the finding is unreadable or absent. An empty array means the finding is readable and genuinely carries no audits.
     # @param id [String] Resource ID (the finding whose audit trail is read)
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -474,8 +486,8 @@ module Temper::Generated
       data
     end
 
-    # List the finding at &#x60;{id}&#x60;&#39;s citation-audit trail — one row per audit, each naming its auditor.
-    # The &#x60;GET&#x60; sibling of [&#x60;record&#x60;] on the same path, and the read that makes an audit ATTRIBUTABLE. &#x60;GET /api/resources/{id}/evidence&#x60; returns aggregates only (&#x60;citation_magnitude&#x60; / &#x60;audit_coverage&#x60; / &#x60;citation_quality&#x60; / &#x60;band&#x60;), so a finding pushed to &#x60;disputed&#x60; by one auditor and one pushed there by three are indistinguishable on that surface: the verdict is visible, the voter is not. This read is opt-in rather than more fields on &#x60;StandingShape&#x60; because the shape is fixed-width and recomputed live on every call, while a trail grows with every audit ever emitted.  **404 when the finding is not readable (or does not exist); &#x60;200 []&#x60; only when it IS readable and genuinely carries no audits.** That is deliberately not the collection default — the &#x60;/provenance&#x60; sibling answers &#x60;200 []&#x60; for an unreadable resource. Why this one refuses instead is a leak-safety argument about the pair of endpoints, not about this handler: it lives in &#x60;temper_services::services::citation_audit_service&#x60;&#39;s module doc, beside where &#x60;/evidence&#x60;&#39;s equivalent lives in &#x60;evidential_standing_service&#x60;.
+    # List a finding&#39;s citation-audit trail
+    # One row per audit, each naming its auditor.  &#x60;GET /api/resources/{id}/evidence&#x60; answers with aggregates only, so a finding disputed by one auditor and a finding disputed by three are indistinguishable there. This read names the voters.  Answers 404 when the finding is unreadable or absent. An empty array means the finding is readable and genuinely carries no audits.
     # @param id [String] Resource ID (the finding whose audit trail is read)
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -533,6 +545,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # List a resource's relationships
     # @param id [String] Resource ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -542,6 +555,7 @@ module Temper::Generated
       data
     end
 
+    # List a resource&#39;s relationships
     # @param id [String] Resource ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -599,8 +613,8 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # `GET /api/resources` — **one response type, unconditionally.**
-    # This endpoint used to answer in `oneOf<ResourceListResponse, ResourceMetaListResponse>`, selected by `?meta_only=true`: two envelopes over two row types, so a generated client had a union to discriminate and an agent had two shapes to learn. `?sections=` replaces it — the caller varies which *parts* of `ResourceView` are filled, never which type comes back. The `ListResourcesResponse` enum, its `untagged` serde impl and its hand-written `IntoResponse` are gone with it; `ResourceListResponse` is a plain `Json` return like every other read here.
+    # List resources you can see
+    # Answers with one response type, unconditionally. Use `sections` to vary which parts of each resource are filled — the type you receive never changes.
     # @param [Hash] opts the optional parameters
     # @option opts [String] :kb_doc_type_id 
     # @option opts [String] :context_ref Context filter: UUID string or &#x60;@owner/slug&#x60; decorated ref. Bare context names are rejected server-side (spec Decision 1).
@@ -624,8 +638,8 @@ module Temper::Generated
       data
     end
 
-    # &#x60;GET /api/resources&#x60; — **one response type, unconditionally.**
-    # This endpoint used to answer in &#x60;oneOf&lt;ResourceListResponse, ResourceMetaListResponse&gt;&#x60;, selected by &#x60;?meta_only&#x3D;true&#x60;: two envelopes over two row types, so a generated client had a union to discriminate and an agent had two shapes to learn. &#x60;?sections&#x3D;&#x60; replaces it — the caller varies which *parts* of &#x60;ResourceView&#x60; are filled, never which type comes back. The &#x60;ListResourcesResponse&#x60; enum, its &#x60;untagged&#x60; serde impl and its hand-written &#x60;IntoResponse&#x60; are gone with it; &#x60;ResourceListResponse&#x60; is a plain &#x60;Json&#x60; return like every other read here.
+    # List resources you can see
+    # Answers with one response type, unconditionally. Use &#x60;sections&#x60; to vary which parts of each resource are filled — the type you receive never changes.
     # @param [Hash] opts the optional parameters
     # @option opts [String] :kb_doc_type_id 
     # @option opts [String] :context_ref Context filter: UUID string or &#x60;@owner/slug&#x60; decorated ref. Bare context names are rejected server-side (spec Decision 1).
@@ -708,6 +722,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Read a resource's block provenance
     # @param id [String] Resource ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -717,6 +732,7 @@ module Temper::Generated
       data
     end
 
+    # Read a resource&#39;s block provenance
     # @param id [String] Resource ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -774,8 +790,87 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # Record an auditor's signed defensibility verdict on one `(block, source)` citation of the finding at `{id}`. CONFORM to `handlers::edges::assert` (the sibling authored-write handler): thin — build the command, dispatch it, map the error. No persistence here.
-    # `id` is a routing address only. The real authorization subject is the block's owning finding, resolved server-side from `req.block_id` (`temper-services/src/authz/audit_gate.rs:65-77`). `citation_audit_service::record_citation_audit` derives that finding and refuses with 404 if it disagrees with `id`, so a caller cannot address one finding in the path while writing an audit onto a block of another.  `CitationAuditRequest` carries no act/authorship fields (unlike `AssertRelationshipRequest`'s flattened `ActInput`) — that shape was fixed in Task 7/3 and is not this task's to change — so the command's `act` is always the empty default here.
+    # Reassign a resource to another owner
+    # @param id [String] Resource ID
+    # @param reassign_resource_request [ReassignResourceRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [ReassignAck]
+    def reassign_resource(id, reassign_resource_request, opts = {})
+      data, _status_code, _headers = reassign_resource_with_http_info(id, reassign_resource_request, opts)
+      data
+    end
+
+    # Reassign a resource to another owner
+    # @param id [String] Resource ID
+    # @param reassign_resource_request [ReassignResourceRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(ReassignAck, Integer, Hash)>] ReassignAck data, response status code and response headers
+    def reassign_resource_with_http_info(id, reassign_resource_request, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: ResourcesApi.reassign_resource ...'
+      end
+      # verify the required parameter 'id' is set
+      if @api_client.config.client_side_validation && id.nil?
+        fail ArgumentError, "Missing the required parameter 'id' when calling ResourcesApi.reassign_resource"
+      end
+      # verify the required parameter 'reassign_resource_request' is set
+      if @api_client.config.client_side_validation && reassign_resource_request.nil?
+        fail ArgumentError, "Missing the required parameter 'reassign_resource_request' when calling ResourcesApi.reassign_resource"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/resources/{id}/reassign'.sub('{id}', CGI.escape(id.to_s))
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      # HTTP header 'Content-Type'
+      content_type = @api_client.select_header_content_type(['application/json'])
+      if !content_type.nil?
+          header_params['Content-Type'] = content_type
+      end
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body] || @api_client.object_to_http_body(reassign_resource_request)
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'ReassignAck'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"ResourcesApi.reassign_resource",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:POST, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: ResourcesApi#reassign_resource\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
+    # Record a citation-audit verdict
+    # `id` is a routing address. The authorization subject is the finding that owns the block named in the request body, resolved server-side.  If that finding disagrees with `id` the write is refused with 404, so you cannot address one finding in the path while recording an audit against a block of another.
     # @param id [String] Resource ID (the finding being audited)
     # @param citation_audit_request [CitationAuditRequest] 
     # @param [Hash] opts the optional parameters
@@ -786,8 +881,8 @@ module Temper::Generated
       data
     end
 
-    # Record an auditor&#39;s signed defensibility verdict on one &#x60;(block, source)&#x60; citation of the finding at &#x60;{id}&#x60;. CONFORM to &#x60;handlers::edges::assert&#x60; (the sibling authored-write handler): thin — build the command, dispatch it, map the error. No persistence here.
-    # &#x60;id&#x60; is a routing address only. The real authorization subject is the block&#39;s owning finding, resolved server-side from &#x60;req.block_id&#x60; (&#x60;temper-services/src/authz/audit_gate.rs:65-77&#x60;). &#x60;citation_audit_service::record_citation_audit&#x60; derives that finding and refuses with 404 if it disagrees with &#x60;id&#x60;, so a caller cannot address one finding in the path while writing an audit onto a block of another.  &#x60;CitationAuditRequest&#x60; carries no act/authorship fields (unlike &#x60;AssertRelationshipRequest&#x60;&#39;s flattened &#x60;ActInput&#x60;) — that shape was fixed in Task 7/3 and is not this task&#39;s to change — so the command&#39;s &#x60;act&#x60; is always the empty default here.
+    # Record a citation-audit verdict
+    # &#x60;id&#x60; is a routing address. The authorization subject is the finding that owns the block named in the request body, resolved server-side.  If that finding disagrees with &#x60;id&#x60; the write is refused with 404, so you cannot address one finding in the path while recording an audit against a block of another.
     # @param id [String] Resource ID (the finding being audited)
     # @param citation_audit_request [CitationAuditRequest] 
     # @param [Hash] opts the optional parameters
@@ -855,6 +950,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Read a resource's evidential standing
     # @param id [String] Resource ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -864,6 +960,7 @@ module Temper::Generated
       data
     end
 
+    # Read a resource&#39;s evidential standing
     # @param id [String] Resource ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -921,6 +1018,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Trace a resource's derivation lineage
     # @param id [String] Resource ID
     # @param [Hash] opts the optional parameters
     # @option opts [Integer] :depth Max hop distance to walk from the seed (default 16, clamped to 1..&#x3D;64).
@@ -931,6 +1029,7 @@ module Temper::Generated
       data
     end
 
+    # Trace a resource&#39;s derivation lineage
     # @param id [String] Resource ID
     # @param [Hash] opts the optional parameters
     # @option opts [Integer] :depth Max hop distance to walk from the seed (default 16, clamped to 1..&#x3D;64).
@@ -990,6 +1089,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Revoke access to a resource
     # @param id [String] Resource ID
     # @param resource_revoke_body [ResourceRevokeBody] 
     # @param [Hash] opts the optional parameters
@@ -1000,6 +1100,7 @@ module Temper::Generated
       data
     end
 
+    # Revoke access to a resource
     # @param id [String] Resource ID
     # @param resource_revoke_body [ResourceRevokeBody] 
     # @param [Hash] opts the optional parameters
@@ -1067,6 +1168,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Update a resource
     # @param id [String] Resource ID
     # @param resource_update_request [ResourceUpdateRequest] 
     # @param [Hash] opts the optional parameters
@@ -1077,6 +1179,7 @@ module Temper::Generated
       data
     end
 
+    # Update a resource
     # @param id [String] Resource ID
     # @param resource_update_request [ResourceUpdateRequest] 
     # @param [Hash] opts the optional parameters

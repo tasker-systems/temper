@@ -44,7 +44,7 @@ pub struct ReviewRequestBody {
 // Public endpoints (auth_only router)
 // ---------------------------------------------------------------------------
 
-/// POST /api/access/requests — submit a join request for the gating team.
+/// Request to join the gating team
 #[utoipa::path(
     post,
     path = "/api/access/requests",
@@ -74,7 +74,7 @@ pub async fn create_request(
     Ok((StatusCode::CREATED, Json(request)))
 }
 
-/// GET /api/access/requests/me — check own join request status.
+/// Check your join request status
 #[utoipa::path(
     get,
     path = "/api/access/requests/me",
@@ -94,7 +94,7 @@ pub async fn get_own_request(
     Ok(Json(request))
 }
 
-/// DELETE /api/access/requests/me — withdraw a pending join request.
+/// Withdraw your pending join request
 #[utoipa::path(
     delete,
     path = "/api/access/requests/me",
@@ -114,11 +114,14 @@ pub async fn withdraw_request(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// POST /api/access/reviews — a revoked principal asks an admin to reconsider (spec D15).
+// Spec D15. On the auth-only router, NOT the gated one: a revoked principal cannot pass the
+// system-access gate, and being able to ask for reconsideration is the whole point. The review
+// is an inbox signal only — it never feeds the admission decision.
+/// Ask an admin to reconsider a revocation
 ///
-/// On the auth-only router, NOT the gated one: a revoked principal cannot pass the system-access
-/// gate, and being able to ask for reconsideration is the whole point. The review is an inbox
-/// signal only — it never feeds the admission decision.
+/// A revoked principal can call this without passing the system-access gate — being able to ask for reconsideration is the point.
+///
+/// The review is an inbox signal for administrators. It never feeds the admission decision by itself.
 #[utoipa::path(
     post,
     path = "/api/access/reviews",
@@ -147,7 +150,7 @@ pub async fn create_review_request(
     Ok(StatusCode::CREATED)
 }
 
-/// GET /api/access/settings — read public system settings.
+/// Read public system settings
 #[utoipa::path(
     get,
     path = "/api/access/settings",

@@ -19,6 +19,7 @@ module Temper::Generated
     def initialize(api_client = ApiClient.default)
       @api_client = api_client
     end
+    # Read cognitive-map analytics
     # @param id [String] Cognitive map ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -28,6 +29,7 @@ module Temper::Generated
       data
     end
 
+    # Read cognitive-map analytics
     # @param id [String] Cognitive map ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -85,6 +87,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Bind a team to a cognitive map
     # @param id [String] Cognitive map ID
     # @param bind_team_request [BindTeamRequest] 
     # @param [Hash] opts the optional parameters
@@ -95,6 +98,7 @@ module Temper::Generated
       data
     end
 
+    # Bind a team to a cognitive map
     # @param id [String] Cognitive map ID
     # @param bind_team_request [BindTeamRequest] 
     # @param [Hash] opts the optional parameters
@@ -162,6 +166,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Create a cognitive map and its telos charter
     # @param create_cogmap_request [CreateCogmapRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -171,6 +176,7 @@ module Temper::Generated
       data
     end
 
+    # Create a cognitive map and its telos charter
     # @param create_cogmap_request [CreateCogmapRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -233,6 +239,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Get one cognitive map
     # @param id [String] Cognitive map ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -242,6 +249,7 @@ module Temper::Generated
       data
     end
 
+    # Get one cognitive map
     # @param id [String] Cognitive map ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -299,6 +307,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Grant access to a cognitive map
     # @param id [String] Cognitive map ID
     # @param cogmap_grant_body [CogmapGrantBody] 
     # @param [Hash] opts the optional parameters
@@ -309,6 +318,7 @@ module Temper::Generated
       data
     end
 
+    # Grant access to a cognitive map
     # @param id [String] Cognitive map ID
     # @param cogmap_grant_body [CogmapGrantBody] 
     # @param [Hash] opts the optional parameters
@@ -376,6 +386,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # List cognitive maps you can see
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<CogmapRow>]
@@ -384,6 +395,7 @@ module Temper::Generated
       data
     end
 
+    # List cognitive maps you can see
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<(Array<CogmapRow>, Integer, Hash)>] Array<CogmapRow> data, response status code and response headers
@@ -436,6 +448,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Materialize a cognitive map's regions
     # @param id [String] Cognitive map ID
     # @param materialize_request [MaterializeRequest] 
     # @param [Hash] opts the optional parameters
@@ -446,6 +459,7 @@ module Temper::Generated
       data
     end
 
+    # Materialize a cognitive map&#39;s regions
     # @param id [String] Cognitive map ID
     # @param materialize_request [MaterializeRequest] 
     # @param [Hash] opts the optional parameters
@@ -513,6 +527,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Read formation drift since last materialize
     # @param id [String] Cognitive map ID
     # @param [Hash] opts the optional parameters
     # @option opts [Integer] :threshold Materialize threshold to gate on (default applies when omitted)
@@ -523,6 +538,7 @@ module Temper::Generated
       data
     end
 
+    # Read formation drift since last materialize
     # @param id [String] Cognitive map ID
     # @param [Hash] opts the optional parameters
     # @option opts [Integer] :threshold Materialize threshold to gate on (default applies when omitted)
@@ -582,6 +598,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Reconcile a cognitive map's contents
     # @param id [String] Cognitive map ID
     # @param reconcile_cogmap_request [ReconcileCogmapRequest] 
     # @param [Hash] opts the optional parameters
@@ -599,6 +616,7 @@ module Temper::Generated
       data
     end
 
+    # Reconcile a cognitive map&#39;s contents
     # @param id [String] Cognitive map ID
     # @param reconcile_cogmap_request [ReconcileCogmapRequest] 
     # @param [Hash] opts the optional parameters
@@ -680,6 +698,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Read per-region metrics for a map
     # @param id [String] Cognitive map ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :lens Optional lens filter; omit for all lenses
@@ -690,6 +709,7 @@ module Temper::Generated
       data
     end
 
+    # Read per-region metrics for a map
     # @param id [String] Cognitive map ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :lens Optional lens filter; omit for all lenses
@@ -749,6 +769,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Revoke access to a cognitive map
     # @param id [String] Cognitive map ID
     # @param cogmap_revoke_body [CogmapRevokeBody] 
     # @param [Hash] opts the optional parameters
@@ -759,6 +780,7 @@ module Temper::Generated
       data
     end
 
+    # Revoke access to a cognitive map
     # @param id [String] Cognitive map ID
     # @param cogmap_revoke_body [CogmapRevokeBody] 
     # @param [Hash] opts the optional parameters
@@ -826,6 +848,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Read a cognitive map's shape
     # @param id [String] Cognitive map ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :lens Optional lens filter; omit for all lenses
@@ -836,6 +859,7 @@ module Temper::Generated
       data
     end
 
+    # Read a cognitive map&#39;s shape
     # @param id [String] Cognitive map ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :lens Optional lens filter; omit for all lenses
@@ -895,6 +919,7 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Unbind a team from a cognitive map
     # @param id [String] Cognitive map ID
     # @param team_id [String] Team ID to unbind
     # @param [Hash] opts the optional parameters
@@ -905,6 +930,7 @@ module Temper::Generated
       data
     end
 
+    # Unbind a team from a cognitive map
     # @param id [String] Cognitive map ID
     # @param team_id [String] Team ID to unbind
     # @param [Hash] opts the optional parameters

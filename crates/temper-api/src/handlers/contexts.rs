@@ -20,6 +20,7 @@ use temper_services::services::context_service::{
 use temper_services::state::AppState;
 use temper_workflow::operations::{Backend, MaterializeOnThreshold};
 
+/// List contexts you can see
 #[utoipa::path(
     get,
     operation_id = "list_contexts",
@@ -39,6 +40,7 @@ pub async fn list(
         .map(Json)
 }
 
+/// Create a context
 #[utoipa::path(
     post,
     operation_id = "create_context",
@@ -63,6 +65,7 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(row)))
 }
 
+/// Get one context
 #[utoipa::path(
     get,
     operation_id = "get_context",
@@ -89,6 +92,7 @@ pub async fn get(
     .map(Json)
 }
 
+/// Share a context with a team
 #[utoipa::path(
     post,
     path = "/api/contexts/{id}/teams",
@@ -117,6 +121,7 @@ pub async fn share_team(
     Ok(Json(outcome))
 }
 
+/// Stop sharing a context with a team
 #[utoipa::path(
     delete,
     path = "/api/contexts/{id}/teams/{team_id}",
@@ -146,6 +151,7 @@ pub async fn unshare_team(
     Ok(Json(outcome))
 }
 
+/// Reassign a context to another owner
 #[utoipa::path(
     post,
     path = "/api/contexts/{id}/reassign",
@@ -176,6 +182,7 @@ pub async fn reassign(
     Ok(Json(outcome))
 }
 
+/// Rename a context
 #[utoipa::path(
     post,
     path = "/api/contexts/{id}/rename",
@@ -224,6 +231,7 @@ pub struct ContextShapeQuery {
     pub lens: Option<Uuid>,
 }
 
+/// Read a context's shape
 #[utoipa::path(
     get,
     operation_id = "context_shape",
@@ -255,6 +263,7 @@ pub async fn shape(
     .map(Json)
 }
 
+/// Read per-region metrics for a context
 #[utoipa::path(
     get,
     operation_id = "context_region_metrics",
@@ -286,6 +295,7 @@ pub async fn region_metrics(
     .map(Json)
 }
 
+/// Materialize a context's regions
 #[utoipa::path(
     post,
     operation_id = "context_materialize",

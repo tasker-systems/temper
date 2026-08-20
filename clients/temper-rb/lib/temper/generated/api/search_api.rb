@@ -19,8 +19,8 @@ module Temper::Generated
     def initialize(api_client = ApiClient.default)
       @api_client = api_client
     end
-    # `POST /api/search`.
-    # The `x-temper-search-diagnostics` response header is GONE. It carried `SearchDiagnostics` beside a body that was a bare `Vec<UnifiedSearchResultRow>`, and existed for exactly that reason; the body is an object now, so diagnostics live in it, per-arm, beside the hits they describe. That also retires the header's percent-encoding scar — non-ASCII hint text was arriving at clients as `%E2%80%94` because the serverless adapter encoded header bytes. Hints stay ASCII anyway, guarded by `every_emitted_hint_is_ascii`, since nothing is gained by relaxing it.
+    # Search resources by text or embedding
+    # Answers in two arms: exact (full-text) and wide (vector). Each arm carries its own diagnostics in the response body, beside the hits they describe.
     # @param search_params [SearchParams] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -30,8 +30,8 @@ module Temper::Generated
       data
     end
 
-    # &#x60;POST /api/search&#x60;.
-    # The &#x60;x-temper-search-diagnostics&#x60; response header is GONE. It carried &#x60;SearchDiagnostics&#x60; beside a body that was a bare &#x60;Vec&lt;UnifiedSearchResultRow&gt;&#x60;, and existed for exactly that reason; the body is an object now, so diagnostics live in it, per-arm, beside the hits they describe. That also retires the header&#39;s percent-encoding scar — non-ASCII hint text was arriving at clients as &#x60;%E2%80%94&#x60; because the serverless adapter encoded header bytes. Hints stay ASCII anyway, guarded by &#x60;every_emitted_hint_is_ascii&#x60;, since nothing is gained by relaxing it.
+    # Search resources by text or embedding
+    # Answers in two arms: exact (full-text) and wide (vector). Each arm carries its own diagnostics in the response body, beside the hits they describe.
     # @param search_params [SearchParams] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.

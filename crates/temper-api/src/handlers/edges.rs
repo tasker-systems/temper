@@ -21,6 +21,7 @@ use temper_workflow::types::graph::GraphEdgeRow;
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
+/// List a resource's relationships
 #[utoipa::path(
     get,
     operation_id = "list_resource_edges",
@@ -51,6 +52,7 @@ pub struct LineageQuery {
     pub depth: Option<i32>,
 }
 
+/// Trace a resource's derivation lineage
 #[utoipa::path(
     get,
     operation_id = "resource_lineage",
@@ -76,6 +78,7 @@ pub async fn lineage(
         .map(Json)
 }
 
+/// Assert a relationship between resources
 #[utoipa::path(
     post,
     path = "/api/relationships",
@@ -117,6 +120,7 @@ pub async fn assert(
     }))
 }
 
+/// Change a relationship's type
 #[utoipa::path(
     post,
     path = "/api/relationships/{edge_handle}/retype",
@@ -157,6 +161,7 @@ pub async fn retype(
     }))
 }
 
+/// Change a relationship's weight
 #[utoipa::path(
     post,
     path = "/api/relationships/{edge_handle}/reweight",
@@ -196,6 +201,7 @@ pub async fn reweight(
     }))
 }
 
+/// Fold a relationship
 #[utoipa::path(
     post,
     path = "/api/relationships/{edge_handle}/fold",
