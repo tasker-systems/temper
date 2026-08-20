@@ -7,7 +7,7 @@ platform matrix. The client core is generated from the API's `openapi.json` and
 committed, so building and testing this gem needs neither Docker nor a JVM.
 
 > **The integration how-to lives in the repo:**
-> [docs/guides/temper-rb.md](https://github.com/tasker-systems/temper/blob/main/docs/guides/temper-rb.md).
+> [docs/sdks/temper-rb.md](https://github.com/tasker-systems/temper/blob/main/docs/sdks/temper-rb.md).
 > It covers the two callers, both machine-credential mint paths, the token
 > lifecycle, attribution across the enqueue boundary, the error taxonomy, and
 > going live. This README is the quickstart.

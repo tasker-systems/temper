@@ -8,7 +8,7 @@
 #
 #   * README.md                -- ships in the gem (`spec.files`), so it is what a
 #                                 Rubyist sees on rubygems.org. The quickstart.
-#   * docs/guides/temper-rb.md -- the long-form how-to, in the repo's guides area
+#   * docs/sdks/temper-rb.md   -- the long-form how-to, in the repo's SDKs area
 #                                 alongside every other integrator doc. The README
 #                                 links out to it, and this gate holds that link.
 #
@@ -23,7 +23,7 @@
 # a lie green, which is exactly what this one did.
 RSpec.describe 'README' do
   let(:readme) { File.read(File.expand_path('../README.md', __dir__)) }
-  let(:guide) { File.read(File.expand_path('../../../docs/guides/temper-rb.md', __dir__)) }
+  let(:guide) { File.read(File.expand_path('../../../docs/sdks/temper-rb.md', __dir__)) }
   let(:docs) { [readme, guide] }
 
   # The README ships; the guide does not. So the README must stand on its own AND
@@ -31,7 +31,7 @@ RSpec.describe 'README' do
   # link is dead on rubygems.org.
   describe 'the README, which is what rubygems.org renders' do
     it 'links to the guide with a url that survives leaving the repo' do
-      expect(readme).to include('https://github.com/tasker-systems/temper/blob/main/docs/guides/temper-rb.md')
+      expect(readme).to include('https://github.com/tasker-systems/temper/blob/main/docs/sdks/temper-rb.md')
     end
 
     it 'names both credential classes' do
