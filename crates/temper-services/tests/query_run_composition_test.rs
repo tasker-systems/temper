@@ -1041,7 +1041,7 @@ async fn the_region_column_round_trips_and_a_non_survey_act_discloses_nothing(po
     .await;
 
     let v = one_find("salience", vec![], vec![]);
-    let r = run_composition(&pool, owner.into(), &v)
+    let r = run_composition(&pool, owner, &v)
         .await
         .expect("the widened stage contract must still be valid SQL");
 
