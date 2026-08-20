@@ -22,8 +22,18 @@ central rule — **magenta means derived, and it never appears as a mark** — s
 
 ## 0. The finding that makes this cheap
 
-The successor needs **no backend change at all.** Every mechanic it requires shipped between
+The successor needs **almost no backend change.** Every mechanic it requires shipped between
 2026-08-14 and 2026-08-17, and the UI has never called any of it.
+
+> **`[corrected — 2026-08-20]` One backend change turned out to be required, and it is a
+> pre-existing defect rather than a cost of this surface.** This section originally claimed *"no
+> backend change at all."* Grounding found that `survey` declares `discloses: vec![Disclosure::Region]`
+> and **nothing delivers it** — no consumer outside `registry.rs`, no `region_id` anywhere in
+> `query_read.rs`, and no region carrier on `StageTrace`. So the *why-these* readout of §3 cannot
+> name a grouping. Filed as
+> [survey declares a region disclosure that no code delivers](./01a01f21-c2ab-78b0-ada5-e8190d9c0814)
+> and sequenced as **Beat 0**, ahead of everything here. The data is already returned by
+> `__temper_ungated_survey` and dropped in the Rust assembly, so it is a carrier, not a computation.
 
 - `/api/query` accepts a `Composition` and answers a `QueryResponse` —
   `crates/temper-api/src/routes.rs:166` routes `handlers::query::query`.
@@ -360,6 +370,7 @@ marks that displace into it are deleted, so no clause is uncovered at any point.
 
 | Beat | Contents | Why here |
 |---|---|---|
+| **0** | Make `survey`'s region disclosure real — [01a01f21-c2ab-78b0-ada5-e8190d9c0814](./01a01f21-c2ab-78b0-ada5-e8190d9c0814) | The only backend work in the arc, and a pre-existing contract defect. Beat A's readout cannot name a grouping until it lands |
 | **A** | The composition builder + the bound declaration, as pure modules with tests. No rendering. | Every witness in §6 that is machine-decidable lands here, against no UI |
 | **B** | `/graph/[owner]` rebuilt on Beat A: the four params, the three entries, node/edge canvas on the surviving layout modules, the *why-these* readout | The successor, shipped |
 | **C** | **The receiver** — [Atlas analytics readout](./019f0e9a-f0ce-7de2-a848-0d3e4cd3add4), cogmap arm: telos, staleness, regulation against the existing endpoint, declaring itself as analysis | Must precede D |
