@@ -80,7 +80,7 @@ pub enum AuthzError {
     /// The resolved profile's principal standing is `Deactivated` — the Level-1 kill-switch,
     /// sourced from `kb_principal_standing` since Phase 2 dropped `kb_profiles.is_active`.
     Deactivated { profile_id: uuid::Uuid },
-    /// The profile is not an approved member of the gating team.
+    /// The profile lacks approved standing (`kb_principal_standing`).
     /// Carries the id so a surface can build its own denial payload.
     SystemAccessDenied { profile_id: uuid::Uuid },
 }

@@ -184,7 +184,7 @@ impossible, not just out of order.
 | 6 | Apply the `kb_saml_idp` row (`saml-setup.sh --apply-db`, or `psql` the `--sql-out` file by hand) | `saml-setup.sh` (`--apply-db`) | [Self-hosting with SAML](./self-host-with-saml.md) |
 | 7 | First admin signs in via SAML → JIT `kb_profiles` row | manual | [Self-hosting with SAML](./self-host-with-saml.md) |
 | 8 | SQL root step: gating team + first admin; VERIFY `has_system_access(<uuid>)` AND `is_system_admin(<uuid>)` both true | `system-bootstrap.sh --run-root` | [Bootstrap an Org](./bootstrap-an-org.md) |
-| 9 | `temper admin settings` (instance name, gating team, mode) | `system-bootstrap.sh` | [Bootstrap an Org](./bootstrap-an-org.md) |
+| 9 | `temper admin settings` (instance name, gating team) | `system-bootstrap.sh` | [Bootstrap an Org](./bootstrap-an-org.md) |
 | 10 | `temper team create everyone --auto-join-role watcher` | `system-bootstrap.sh` | [Bootstrap an Org](./bootstrap-an-org.md) |
 | 11 | `temper admin saml map-group` (after teams exist) | `saml-setup.sh` (emit / `--apply-db`) | [Self-hosting with SAML](./self-host-with-saml.md) |
 | 12 | `temper admin saml verify` | `saml-setup.sh` | [Self-hosting with SAML](./self-host-with-saml.md) |

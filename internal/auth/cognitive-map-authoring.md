@@ -105,7 +105,7 @@ grants, bounded to what its minter could confer on a human, so **machine RBAC
 falls out of the same predicates as human RBAC** — there is no machine-specific
 authorization path to keep in sync. What team membership still does *not* buy an agent, any
 more than it buys a human, is cogmap write. See
-[../guides/machine-credentials.md](../guides/machine-credentials.md) and the
+[../../docs/playbooks/standing-up-a-machine-credential.md](../../docs/playbooks/standing-up-a-machine-credential.md) and the
 [machine-token contract](machine-token-contract.md).
 
 When a human drives an agent (e.g. an AI assistant over the human's authenticated MCP

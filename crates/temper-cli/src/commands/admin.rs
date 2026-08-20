@@ -50,7 +50,8 @@ pub async fn demote_remote(client: &temper_client::TemperClient, profile: &str) 
     Ok(())
 }
 
-/// Promote a profile to owner on a team (defaults to the gating team).
+/// Promote a profile to system admin (grants governance + approved standing;
+/// the side-effect `owner` row defaults to the gating team).
 pub async fn promote_remote(
     client: &temper_client::TemperClient,
     profile: &str,

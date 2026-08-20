@@ -4,9 +4,9 @@
 //! **Authorization lives in the services, not here** (Phase B2) — the same shape
 //! `team_service` and `access_service` already use. It is `is_system_admin OR owner of the
 //! machine's owning team`, and it is load-bearing rather than defense-in-depth: production
-//! runs `access_mode = 'open'`, under which `has_system_access` is true for every profile, so
-//! `require_system_access` on the gated router admits everyone. The service-side check is the
-//! only thing protecting these endpoints (Phase A D12).
+//! Since D11, `has_system_access` reads `kb_principal_standing` (approved), so
+//! `require_system_access` on the gated router denies unapproved profiles. The
+//! service-side check is still the only real authorization (Phase A D12).
 
 use axum::extract::{Path, Query, State};
 use axum::Json;

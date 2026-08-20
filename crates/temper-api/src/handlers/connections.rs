@@ -5,8 +5,9 @@
 //! **Authorization lives in the service, not here** — `connection_service` calls
 //! `machine_authz::authorize` (a system admin, or the OWNER of the connection's owning team;
 //! teamless fails closed). As with machine clients, that check is load-bearing rather than
-//! defense-in-depth: production runs `access_mode = 'open'`, under which `has_system_access` is
-//! true for every profile, so `require_system_access` on the gated router admits everyone.
+//! defense-in-depth: since D11, `has_system_access` reads `kb_principal_standing`
+//! (approved), so `require_system_access` on the gated router denies unapproved
+//! profiles — but the service-side check is still the real authorization.
 
 use axum::extract::{Path, Query, State};
 use axum::Json;

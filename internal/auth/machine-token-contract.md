@@ -14,7 +14,7 @@ artifact for M2M (machine-to-machine) agent principals — the auth-seam plan's 
 > byte-for-byte by the Temper AS.
 >
 > Operator-facing companion (mint / reach / rotate / revoke):
-> [../guides/machine-credentials.md](../guides/machine-credentials.md). Implementation
+> [../../docs/playbooks/standing-up-a-machine-credential.md](../../docs/playbooks/standing-up-a-machine-credential.md). Implementation
 > designs: Stage 4
 > (spec: `internal/superpowers/specs/2026-07-02-auth-seam-stage-4-m2m-implementation-design.md`),
 > registration Phase A
@@ -232,7 +232,7 @@ sum removed the routing drift (#384) and the shared ladder removed the construct
 ## Operator runbook: standing up an M2M agent
 
 Two shapes, **two** Temper-side steps — register, then admit. The operator-facing guide is
-[../guides/machine-credentials.md](../guides/machine-credentials.md); this is the
+[../../docs/playbooks/standing-up-a-machine-credential.md](../../docs/playbooks/standing-up-a-machine-credential.md); this is the
 contributor's view of what each command makes true.
 
 **Either way, `temper admin machine …` is not optional.** Since G3 Phase A there is **no

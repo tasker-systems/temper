@@ -2,7 +2,7 @@
 //!
 //! `#[sqlx::test]` gives every test an isolated database with `migrations/`
 //! already applied — including the canonical system seed (the `handle='system'`
-//! actor, `kb_system_settings(access_mode='open')`, the event-type registry,
+//! actor, `kb_system_settings` with the canonical seed, the event-type registry,
 //! and the global lenses). So there is no shared state to scrub: `clean_and_seed`
 //! is a no-op kept only so existing call sites compile.
 //!

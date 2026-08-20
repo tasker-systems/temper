@@ -209,7 +209,8 @@ async fn admin_fixture(pool: &PgPool) -> AdminFixture {
     let team_slug = format!("gating-{nonce}");
     let team_id = team(pool, &team_slug).await;
 
-    // The gating team is what MAKES an admin. Empty by default ⇒ nobody is admin.
+    // The gating team slug is set so promote_admin's side-effect owner row lands here.
+    // Empty by default ⇒ the slug is null. Admin-ness itself comes from the governance grant.
     sqlx::query("UPDATE kb_system_settings SET gating_team_slug = $1 WHERE id = 1")
         .bind(&team_slug)
         .execute(pool)
@@ -218,7 +219,7 @@ async fn admin_fixture(pool: &PgPool) -> AdminFixture {
 
     let (admin_profile, admin_emitter) =
         profile_with_emitters(pool, &format!("admin-{nonce}")).await;
-    // `owner`, not `member`: is_system_admin requires role = 'owner'.
+    // `owner` row on the gating team (retained side effect; is_system_admin reads governance).
     sqlx::query(
         "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'owner'::team_role)",
     )
@@ -272,7 +273,7 @@ async fn admin_fixture(pool: &PgPool) -> AdminFixture {
         access_service::is_system_admin(pool, admin_profile)
             .await
             .unwrap(),
-        "fixture admin_profile MUST be a real system admin (owner of the gating team)"
+        "fixture admin_profile MUST be a real system admin (holds a governance grant)"
     );
     assert!(
         !access_service::is_system_admin(pool, outsider_profile)
@@ -649,7 +650,7 @@ async fn losing_system_access_takes_your_own_history_with_it(pool: PgPool) {
     let admin_still_reads =
         admin_ledger_service::list_by_actor(&pool, f.admin_profile, f.owner_profile, 50, 0)
             .await
-            .expect("the gating team's owner keeps system access under invite_only");
+            .expect("the admin keeps system access via its own approved standing");
     assert_eq!(admin_still_reads.len(), 1);
 }
 

@@ -267,8 +267,9 @@ pub async fn disconnect_slack_principal(
 /// question is *"are you a system admin?"*. Do NOT widen it to `machine_authz`
 /// or a team-owner arm — it is an operator act on someone else's identity.
 ///
-/// Note the router is NOT the gate: under `access_mode='open'` the gated router
-/// admits everyone, so the proof is the only thing standing between a non-admin
+/// Note the router is NOT the gate: since D11 `has_system_access` reads
+/// `kb_principal_standing` (approved), so the gated router denies unapproved
+/// profiles — but the proof is still the only thing standing between a non-admin
 /// and unbinding someone else's account.
 ///
 /// The operator is named by the proof and by nothing else — there is no `actor`

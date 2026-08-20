@@ -17,7 +17,7 @@ An instance validates tokens from exactly **one** issuer, configured by env:
   `JwksKeyStore` fetches the RSA public key from Auth0's JWKS.
 - **Temper Authorization Server** (native SAML self-hosting). The AS mints **EdDSA**
   (Ed25519) tokens; `JwksKeyStore` fetches the OKP key from the AS's `/oauth/jwks`.
-  See [../guides/self-hosting-saml.md](../guides/self-hosting-saml.md) for how the AS is
+  See [../../docs/playbooks/self-host-with-saml.md](../../docs/playbooks/self-host-with-saml.md) for how the AS is
   stood up.
 
 Both issuers mint **human and machine** tokens, with the same signing key per issuer — a
@@ -122,7 +122,7 @@ how they came to be violated silently.
 - **AS↔API shared values must agree.** `AS_AUDIENCE == AUTH_AUDIENCE`, `AS_ISSUER == AUTH_ISSUER`,
   and `JWKS_URL == $AS_ISSUER/oauth/jwks` (trailing slashes normalized before comparison).
   `temper admin saml provision` keeps them consistent by construction. Details in
-  [../guides/self-hosting-saml.md](../guides/self-hosting-saml.md).
+  [../../docs/playbooks/self-host-with-saml.md](../../docs/playbooks/self-host-with-saml.md).
 - **An instance has exactly ONE audience.** temper-mcp no longer carries its own — the
   `mcp_audience` field is gone, and both surfaces read `AuthConfig::audience`. `MCP_AUDIENCE`
   survives as an env var, but purely as an assertion: if set, it **must equal** `AUTH_AUDIENCE`, or

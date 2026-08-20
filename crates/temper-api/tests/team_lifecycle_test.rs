@@ -21,8 +21,8 @@ use temper_services::services::team_service;
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
-/// Configure the gating team slug to `temper-system` (the L0 root team). Both
-/// `is_system_admin`'s owner check resolves through this slug.
+/// Configure the gating team slug to `temper-system` (the L0 root team).
+/// The gating team is the conventional home for promote_admin's side-effect owner row.
 async fn set_gating_team(pool: &PgPool) {
     sqlx::query("UPDATE kb_system_settings SET gating_team_slug = 'temper-system' WHERE id = 1")
         .execute(pool)

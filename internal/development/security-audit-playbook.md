@@ -26,10 +26,11 @@ encodes the method used in the 2026-07-18 audit
   `temper-services`. A check that lives in one surface's handler but not the shared service is
   a hole for the other surface. **Every authZ predicate must live in the shared service (or its
   SQL), reachable identically from both surfaces.**
-- **The router gate is vacuous in prod.** `has_system_access` returns `true` under
-  `access_mode='open'` (production's setting), so `require_system_access` admits everyone. The
-  **per-endpoint service checks are the only real authorization.** Never conclude "the gated
-  router protects it."
+- **The router gate is real but not sufficient.** Since D11, `has_system_access` reads
+  `kb_principal_standing` (approved), so `require_system_access` denies unapproved profiles —
+  it is no longer vacuous in prod. But the **per-endpoint service checks are still the real
+  authorization** (the gate is necessary but not sufficient). Never conclude "the gated router
+  protects it" on its own.
 - **Fail-closed is the bar.** Every secret gate must reject when its secret is unset/empty.
 
 ## 1. AuthN — front-door pass

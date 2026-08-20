@@ -93,12 +93,14 @@ and machine grants with no derivable client id — both former fall-open paths.
 ## 2. AuthZ 2a — admin / machine / connection actions
 
 **No self-elevation.** The two predicates, traced to SQL:
-- `is_system_admin(profile)` = `owner` role on the configured gating team
-  (canonical_functions.sql:1409-1425). **When `gating_team_slug IS NULL` (seed default) it is
-  `false` for everyone** — fail-closed. There is **no first-admin self-serve HTTP path**; the
-  first admin is minted by an operator against the DB. `has_system_access` returns `true`
-  under `access_mode='open'` (prod), which is precisely why the per-endpoint service checks are
-  **load-bearing, not defense-in-depth**.
+- `is_system_admin(profile)` reads the `kb_principal_governance` grant
+  (canonical_functions.sql). **When no governance grant exists (seed default) it is `false` for
+  everyone** — fail-closed. There is **no first-admin self-serve HTTP path**; the first admin is
+  minted by an operator against the DB. `has_system_access` reads `kb_principal_standing`
+  (approved standing), so the router gate now **denies unapproved profiles**. The per-endpoint
+  service checks remain the real authorization — the gate is **necessary-but-not-sufficient**,
+  not vacuous: it excludes unapproved callers, but the per-endpoint RBAC determines what an
+  approved caller may actually do.
 - `machine_authz::authorize` = `is_system_admin` OR `Owner` of the machine's team; teamless
   fails closed.
 
