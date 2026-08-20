@@ -18,6 +18,9 @@ module Temper::Generated
   class StageResult < ApiModelBase
     attr_accessor :act
 
+    # Which regions a `survey` stage matched, and at what score. Empty for every other act.  **The pair rule**: [`super::trace::StageTrace::disclosed_regions`] carries the same value, from one `disclosed_regions_for` definition rather than two. That field's doc carries the argument and the history; this one exists because a caller reading only `returned` must not have to reach into `trace` for a disclosure about a stage whose rows they already hold.
+    attr_accessor :disclosed_regions
+
     attr_accessor :disposition
 
     # Complete / partial / indeterminate. NOT a total — see `Extent`.
@@ -72,6 +75,7 @@ module Temper::Generated
     def self.attribute_map
       {
         :'act' => :'act',
+        :'disclosed_regions' => :'disclosed_regions',
         :'disposition' => :'disposition',
         :'extent' => :'extent',
         :'input_ids' => :'input_ids',
@@ -99,6 +103,7 @@ module Temper::Generated
     def self.openapi_types
       {
         :'act' => :'ActName',
+        :'disclosed_regions' => :'Array<RegionDisclosure>',
         :'disposition' => :'StageDisposition',
         :'extent' => :'Extent',
         :'input_ids' => :'Integer',
@@ -141,6 +146,12 @@ module Temper::Generated
         self.act = attributes[:'act']
       else
         self.act = nil
+      end
+
+      if attributes.key?(:'disclosed_regions')
+        if (value = attributes[:'disclosed_regions']).is_a?(Array)
+          self.disclosed_regions = value
+        end
       end
 
       if attributes.key?(:'disposition')
@@ -343,6 +354,7 @@ module Temper::Generated
       return true if self.equal?(o)
       self.class == o.class &&
           act == o.act &&
+          disclosed_regions == o.disclosed_regions &&
           disposition == o.disposition &&
           extent == o.extent &&
           input_ids == o.input_ids &&
@@ -364,7 +376,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [act, disposition, extent, input_ids, input_unusable, narrowed_by, orders_by, produced, refusal, terms_applied, total].hash
+      [act, disclosed_regions, disposition, extent, input_ids, input_unusable, narrowed_by, orders_by, produced, refusal, terms_applied, total].hash
     end
 
     # Builds the object from hash

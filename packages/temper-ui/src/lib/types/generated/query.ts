@@ -326,6 +326,8 @@ stages: Array<StageNode>, };
 
 /**
  * The whole composition's disclosure: an ordered per-stage record array.
+ *
+ * `Eq` dropped with [`StageTrace`]'s, and for its reason — see the note there.
  */
 export type CompositionTrace = { stages: Array<StageTrace>, };
 
@@ -728,6 +730,46 @@ trace: CompositionTrace, };
 export type RefusalReason = "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | string;
 
 /**
+ * One region a `survey` stage matched, and the score it matched at.
+ *
+ * **Trace disclosure, never a row.** `survey` produces RESOURCES — the ⟨3⟩ redesign
+ * (`20260816000020_survey_act.sql`) moved regions out of the output precisely so a caller could not
+ * draw them as though the reader had authored them. This says which groupings answered, for a
+ * caller that wants to explain *why these*, and it deliberately carries **no per-resource
+ * mapping**: that would put a region back on the row shape the redesign just cleared it from.
+ *
+ * Contrast [`RegionHit`], which is a region as a RESULT — a row a caller asked for and may rank.
+ * This is a region as an EXPLANATION of resource rows, and the two must not be conflated: one is
+ * the answer, the other is a note about how the answer was reached.
+ *
+ * # `region_score` is raw, and is NOT in `[0,1]`
+ *
+ * It is `0.4·sal_norm + 0.6·query_cos + 0.05·prior`, measured spanning `[-0.57, 1.05]` — so it goes
+ * negative at one end and past 1 at the other. Whether the `sal_norm` term belongs in it at all is
+ * an **OPEN ruling** `[2026-08-14, Pete]`.
+ *
+ * Transporting it unchanged is what keeps that ruling open. A carrier that normalized it into
+ * `[0,1]` would silently settle a question it is not entitled to settle, and would do it invisibly,
+ * since the normalized number would look exactly like a well-behaved score. Do not clamp, rescale,
+ * or attach a [`super::act::QuantityScale`] claim this quantity does not have.
+ */
+export type RegionDisclosure = { 
+/**
+ * The region's id, as stored.
+ *
+ * **Not durable, and the instability is the caller's to handle.** `assert_region`
+ * (`temper-substrate/src/write.rs:673`) reuses this row when a region's member set is unchanged
+ * and **mints a new id otherwise**, soft-folding the displaced row. So an id disclosed here may
+ * name nothing by the time a caller acts on it — which a caller must render as *re-derived*,
+ * never as an error and never as the reader's mistake.
+ */
+region_id: string, 
+/**
+ * The blend this region matched at. See the type's own note: raw, unbounded, open ruling.
+ */
+region_score: number, };
+
+/**
  * One region of a cognitive map. Produced by `survey`.
  */
 export type RegionHit = { 
@@ -1110,6 +1152,15 @@ total: bigint | null,
  */
 terms_applied: { [key in BoundTerm]?: bigint }, narrowed_by: Array<NarrowedBy>, 
 /**
+ * Which regions a `survey` stage matched, and at what score. Empty for every other act.
+ *
+ * **The pair rule**: [`super::trace::StageTrace::disclosed_regions`] carries the same value,
+ * from one `disclosed_regions_for` definition rather than two. That field's doc carries the
+ * argument and the history; this one exists because a caller reading only `returned` must not
+ * have to reach into `trace` for a disclosure about a stage whose rows they already hold.
+ */
+disclosed_regions: Array<RegionDisclosure>, 
+/**
  * How many ids this stage was handed. Zero for a stage with no input.
  */
 input_ids: bigint, 
@@ -1131,6 +1182,10 @@ input_unusable: bigint, };
 
 /**
  * One stage's mandatory disclosure. Exists whether or not the stage produced a result.
+ *
+ * **`Eq` was dropped when `disclosed_regions` arrived** `[2026-08-20]`. `region_score` is an `f64`
+ * carried raw and deliberately un-normalized, so this type is `PartialEq` and cannot be `Eq`.
+ * Nothing used it as a set or map key. [`super::envelope::StageResult`] never derived either.
  */
 export type StageTrace = { stage: StageName, act: ActName, disposition: StageDisposition, 
 /**
@@ -1234,7 +1289,23 @@ extent: Extent,
  * — *"reporting the request back would make `terms_applied` an echo rather than a
  * disclosure"* — so what rides here is what ran, never what was asked for.
  */
-terms_applied: { [key in BoundTerm]?: bigint }, narrowed_by: Array<NarrowedBy>, };
+terms_applied: { [key in BoundTerm]?: bigint }, narrowed_by: Array<NarrowedBy>, 
+/**
+ * Which regions a `survey` stage matched, and at what score. Empty for every other act.
+ *
+ * **This is what `discloses: [Disclosure::Region]` MEANS**, and until 2026-08-20 it meant
+ * nothing: the declaration existed in the registry with no consumer anywhere, no `region_id`
+ * in the assembler, and no field here — so a caller was told which regions matched by nothing
+ * at all. A declaration describes the DEPLOYED system; this field is what makes that true for
+ * `survey`.
+ *
+ * **The pair rule**: [`super::envelope::StageResult::disclosed_regions`] carries the same
+ * value, for the same reason as [`Self::extent`], [`Self::terms_applied`] and the input
+ * numbers — the trace covers every stage and the results only the returned ones, so
+ * disagreeing copies would leave a reader unable to tell which was right. One definition
+ * (`disclosed_regions_for`), read twice.
+ */
+disclosed_regions: Array<RegionDisclosure>, };
 
 /**
  * What a composition WOULD return, derived from the act declarations without running anything.

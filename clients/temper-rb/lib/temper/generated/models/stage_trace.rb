@@ -14,9 +14,12 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # One stage's mandatory disclosure. Exists whether or not the stage produced a result.
+  # One stage's mandatory disclosure. Exists whether or not the stage produced a result.  **`Eq` was dropped when `disclosed_regions` arrived** `[2026-08-20]`. `region_score` is an `f64` carried raw and deliberately un-normalized, so this type is `PartialEq` and cannot be `Eq`. Nothing used it as a set or map key. [`super::envelope::StageResult`] never derived either.
   class StageTrace < ApiModelBase
     attr_accessor :act
+
+    # Which regions a `survey` stage matched, and at what score. Empty for every other act.  **This is what `discloses: [Disclosure::Region]` MEANS**, and until 2026-08-20 it meant nothing: the declaration existed in the registry with no consumer anywhere, no `region_id` in the assembler, and no field here — so a caller was told which regions matched by nothing at all. A declaration describes the DEPLOYED system; this field is what makes that true for `survey`.  **The pair rule**: [`super::envelope::StageResult::disclosed_regions`] carries the same value, for the same reason as [`Self::extent`], [`Self::terms_applied`] and the input numbers — the trace covers every stage and the results only the returned ones, so disagreeing copies would leave a reader unable to tell which was right. One definition (`disclosed_regions_for`), read twice.
+    attr_accessor :disclosed_regions
 
     attr_accessor :disposition
 
@@ -72,6 +75,7 @@ module Temper::Generated
     def self.attribute_map
       {
         :'act' => :'act',
+        :'disclosed_regions' => :'disclosed_regions',
         :'disposition' => :'disposition',
         :'extent' => :'extent',
         :'input_ids' => :'input_ids',
@@ -99,6 +103,7 @@ module Temper::Generated
     def self.openapi_types
       {
         :'act' => :'ActName',
+        :'disclosed_regions' => :'Array<RegionDisclosure>',
         :'disposition' => :'StageDisposition',
         :'extent' => :'Extent',
         :'input_ids' => :'Integer',
@@ -139,6 +144,12 @@ module Temper::Generated
         self.act = attributes[:'act']
       else
         self.act = nil
+      end
+
+      if attributes.key?(:'disclosed_regions')
+        if (value = attributes[:'disclosed_regions']).is_a?(Array)
+          self.disclosed_regions = value
+        end
       end
 
       if attributes.key?(:'disposition')
@@ -371,6 +382,7 @@ module Temper::Generated
       return true if self.equal?(o)
       self.class == o.class &&
           act == o.act &&
+          disclosed_regions == o.disclosed_regions &&
           disposition == o.disposition &&
           extent == o.extent &&
           input_ids == o.input_ids &&
@@ -392,7 +404,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [act, disposition, extent, input_ids, input_unusable, inputs, narrowed_by, produced_ids, refusal, stage, terms_applied].hash
+      [act, disclosed_regions, disposition, extent, input_ids, input_unusable, inputs, narrowed_by, produced_ids, refusal, stage, terms_applied].hash
     end
 
     # Builds the object from hash

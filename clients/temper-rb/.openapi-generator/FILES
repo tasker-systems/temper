@@ -209,6 +209,7 @@ lib/temper/generated/models/reconcile_telos_block.rb
 lib/temper/generated/models/reconcile_tombstone.rb
 lib/temper/generated/models/refusal.rb
 lib/temper/generated/models/refusal_reason.rb
+lib/temper/generated/models/region_disclosure.rb
 lib/temper/generated/models/region_hit.rb
 lib/temper/generated/models/relationship_ack.rb
 lib/temper/generated/models/remove_member_outcome.rb

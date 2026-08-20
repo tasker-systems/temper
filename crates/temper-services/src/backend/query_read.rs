@@ -584,6 +584,9 @@ fn stage_result(
         narrowed_by: narrowed_by(node, rows),
         input_ids: n.input_ids,
         input_unusable: n.input_unusable,
+        // Empty is the honest value here and not a placeholder: no act discloses a region until
+        // the compiler projects one (Task 2) and `HitRow` carries it (Task 3).
+        disclosed_regions: vec![],
     }
 }
 
@@ -623,6 +626,9 @@ fn stage_trace(node: &StageNode, rows: &QueryRows) -> Option<StageTrace> {
         extent: n.extent,
         terms_applied: n.terms_applied,
         narrowed_by: narrowed_by(node, rows),
+        // See the note at the `StageResult` site: empty is the truthful value until the column
+        // exists to carry.
+        disclosed_regions: vec![],
     })
 }
 
