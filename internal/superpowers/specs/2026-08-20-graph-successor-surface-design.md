@@ -1,0 +1,453 @@
+# The graph successor surface — one route, one kind, three declared bounds
+
+Design for the successor to the Atlas, under goal
+[The graph surface shows the reader's own material — derived structure organizes it and is never
+mistaken for it](./019fbaac-96e2-7620-ace2-667a0f8ff000), whose grounding and design direction come
+from decision
+[Atlas pivot — derived structure organizes the view; it is never the subject](./019fbaa8-9eec-7aa0-a4e1-c6b933a60bf5).
+
+The register states outcomes and names no mechanism. **This document is all mechanism**, which is
+what a spec is for. Where it makes a claim about what exists today, the claim carries a `file:line`
+citation or quoted output; where it goes beyond what exists, it says so.
+
+---
+
+## 0. The finding that makes this cheap
+
+The successor needs **no backend change at all.** Every mechanic it requires shipped between
+2026-08-14 and 2026-08-17, and the UI has never called any of it.
+
+- `/api/query` accepts a `Composition` and answers a `QueryResponse` —
+  `crates/temper-api/src/routes.rs:166` routes `handlers::query::query`.
+- `/api` is proxied wholesale to the upstream API host — `PROXIED_ROOTS = ['/mcp', '/oauth',
+  '/.well-known', '/api']`, `packages/temper-ui/src/lib/server/proxy.ts:28`. `apiPost` exists at
+  `packages/temper-ui/src/lib/server/api.ts:49`. So a SvelteKit server load can POST a composition
+  with **zero new plumbing**.
+- The whole contract is already generated into the UI —
+  `packages/temper-ui/src/lib/types/generated/query.ts`, 1365 lines, `Composition`, `QueryResponse`,
+  `StageTrace`, `Extent`, `ViaEntry`, `RegionHit`.
+- And nothing in `packages/temper-ui/` calls `/api/query` or `/api/search`. The UI's graph reads are
+  nine bespoke `/api/graph/*` endpoints in
+  `packages/temper-ui/src/lib/server/graph-reads.ts:20-117`.
+
+The Atlas was built before the composition contract existed. The successor is a client of it.
+
+### The three mechanics, quoted
+
+**`survey`** — `crates/temper-core/src/types/query/registry.rs`:
+
+```rust
+accepts_bounds:      vec![IdKind::Cogmap, IdKind::Context],
+accepts_bound_terms: vec![BoundTerm::Regions],
+bound_ceilings:      BTreeMap::from([(BoundTerm::Regions, 20)]),
+produces:            Some(IdKind::Resource),
+discloses:           vec![Disclosure::Region],
+```
+
+and `migrations/20260816000020_survey_act.sql`: *"survey produces RESOURCES, not regions; regions
+become trace disclosure."* This is the pivot **enforced in the read**. A surface built on this act
+cannot violate `no-derived-thing-poses-as-authored` by accident, because the act does not hand it a
+region to draw.
+
+**`follow-from`** — `registry.rs:392` carries `bound_ceilings: {Limit: 50}`, and its disclosure is
+the whole graph:
+
+> `via: Array<ViaEntry>` — *"How a walk reached this resource — one entry per edge it was reached
+> by."* Each entry: `seed_id`, `source_id`, `target_id`, `edge_kind`, `label`, `polarity`.
+> (`packages/temper-ui/src/lib/types/generated/query.ts:808ff`, `1295ff`)
+
+Uncapped by design, and the reason is measured rather than assumed: *"`[measured on prod —
+2026-08-14]` at the deliberate worst case (25 highest-degree seeds, depth 3) the whole walk holds
+9,434 entries with 124 on one node, while the page that ships carries 125 in total and at most 9 on
+any row."*
+
+**`find-resources-with`** — `registry.rs:266-278`:
+
+```rust
+accepts_bounds:  vec![IdKind::Context, IdKind::Cogmap],
+accepts_filters: vec![FilterField::Resource],
+bound_ceilings:  BTreeMap::new(),          // no ceiling at all
+produces:        Some(IdKind::Resource),
+```
+
+It takes no intention and orders nothing, so — per its own doc-comment — *"a stage running it cannot
+appear in `returns`… rows with no ordering quantity have nothing to score them, and the assembler
+would drop every one while reporting `disposition: answered`."* **It can only be piped.** That
+constraint shapes §2.
+
+### The cost finding that makes N-anchor fan-out viable
+
+`crates/temper-services/src/backend/query_read.rs:162-168`:
+
+```rust
+fn texts_to_embed(c: &Composition) -> BTreeSet<String> { … }
+```
+
+> *"**Distinct query TEXT, not per stage** — … Two stages naming the same string must not pay ONNX
+> twice; and they must not be able to receive two *different* vectors for one question."*
+
+So **N survey stages sharing one question cost one embedding**, not N. Combined with unbounded union
+arity (`validate/shape.rs:153-175` refuses only `inputs.len() < 2`, and caps *only* ordered ops —
+`difference` — at two) and no stage-count limit anywhere in the validator, a fan-out across every
+readable anchor is expressible today at one inference.
+
+---
+
+## 1. Route shape
+
+**One route: `/graph/[owner]`. Everything else is query params.**
+
+The reason is structural, not aesthetic. The anchor set is **0..N** — the unaddressed door binds
+many, a named place binds one — and they are *the same screen with a different bound count*. A path
+segment carries exactly one anchor, so `/graph/[owner]/[context]` would force two route shapes for
+one screen, and would make entry depend on how the reader organized their work. That is the clause
+`entry-does-not-presume-organization`.
+
+| Param | Composition part | Absent means |
+|---|---|---|
+| `q` | the `Intention.query` on every survey stage | see §2 — depends on what `in` names |
+| `in` | the bound `IdSet`s: `ctx:@owner/<slug>` / `map:<uuid>`, repeatable | every readable anchor, bounded and declared |
+| `from` | `follow-from` seeds — resource uuids | the walk seeds from the upstream stage |
+| `sel` | the detail rail selection | nothing selected |
+
+**The invariant this buys: the URL is a projection of the composition.** No state on screen that the
+URL does not describe; no param that does not name a part of the plan. A reader can copy a URL and
+get the same answer, and the surface cannot hold a hidden mode.
+
+**`in` carries a whole ref, not a bare slug.** `/graph/[owner]` names the reader whose graph this is,
+but the anchors they may read are not all theirs — a team context is `+team-slug/<slug>` and is
+routinely in reach. Scoping `ctx:` against the route's `[owner]` would make team contexts
+inexpressible at the very door whose purpose is spanning every readable anchor, which is the clause
+`cross-kind-relationship-is-reachable` broken by a URL convention. So the grammar is
+`ctx:@owner/<slug>` / `ctx:+team/<slug>` / `map:<uuid>` — a cogmap needs no owner, being addressed by
+uuid. Resolution belongs in `vault-url.ts` beside the builders, one parser, one authority.
+
+`packages/temper-ui/src/lib/vault-url.ts` stays the single URL authority. `contextGraphHref`
+(`vault-url.ts:23`) is rewritten there and every caller follows. `/vault/[owner]/[context]/graph` is
+already a 308 shim onto `contextGraphHref`
+(`packages/temper-ui/src/routes/(app)/vault/[owner]/[context]/graph/+page.server.ts:10`) and keeps
+working unchanged.
+
+**This section is what unblocks task
+[Atlas nav: in-page table⇄graph toggle](./019f4a25-75ab-7650-b602-eb68594de2fc)**, whose
+`[re-triaged — 2026-08-17]` note holds it *"deliberately sequenced after the successor surface's
+route shape is decided… not blocked on the successor being built — only on its doors being named."*
+The doors are named here. `sel` keeps the established ephemeral-selection posture
+(`replaceState`, documented at `AtlasPage.svelte:13`); `q`, `in` and `from` push history, which is
+what B1 asked for.
+
+### Stale addresses, and how much of the problem dissolves
+
+The register's refusal face requires that *"a reference to derived structure that no longer exists
+is declined **as a stale address**, and the reader is landed somewhere real."* Its
+`[amended — 2026-08-17]` note escalated this: `survey` **discloses `region_id` to the caller**, and
+region identity is not durable — `assert_region`
+(`crates/temper-substrate/src/write.rs:673`) reuses the row when the member set is unchanged and
+**mints a new id otherwise**.
+
+Under this route shape, **no region id enters any URL**:
+
+- `in` carries anchors — `kb_contexts` / `kb_cogmaps` rows, durable.
+- `from` carries resource uuids — `kb_resources` rows, durable.
+
+A `from` seed that no longer resolves is a **deleted resource**: an honest 404 about the reader's own
+material, not a stale address for derived structure. This deletes today's
+`compositionOrPanorama` / `contextCompositionOrPanorama` catch-and-redirect pair
+(`graph/[owner]/+page.server.ts:44`, `:73`), which exist precisely because region ids are in
+URLs today.
+
+**What remains, stated rather than waved away:** a `region_id` disclosed in the trace and rendered in
+the *why-these* readout (§3) can name a region re-minted between the read and a click on it. That is
+the one surface the refusal-face clause still governs, and it is a panel affordance, not a route.
+Requirement: a readout region reference that no longer resolves renders as *"this grouping has been
+re-derived"* — never as an error, and never as the reader's mistake.
+
+---
+
+## 2. The three entries
+
+All three produce the same kind of screen. They differ only in how the seed set is obtained.
+
+### 2.1 Unaddressed, with a question — `?q=X`
+
+```
+s₁ … sₙ :  survey(bound = anchorᵢ, intention = X)      ceiling: regions ≤ 20, default 3
+u       :  union(s₁ … sₙ)
+w       :  follow-from(seeds = u)                       ceiling: limit ≤ 50
+returns :  s₁ … sₙ  and  w
+```
+
+The surveys and the walk are **returned as separate keys**, which is not a convenience — it is the
+contract's own protection. `QueryResponse.returned` is *"a map rather than a list, and that is the
+structural half of `no-cross-act-ranking`. Arms are keyed separately and there is no merged ordered
+list anywhere for two acts' rows to fall into"* (`query.ts:696ff`). The surveys are scored by
+`region_score`, the walk by `graph_score`; the scales are different and one of them is `Unbounded`.
+**The surface must not merge them into one ranked list**, and must not present either number as a
+score to the reader — see §5's open ruling.
+
+This entry is `cross-kind-relationship-is-reachable` **by construction**: one answer spanning context
+anchors and cogmap anchors, with no container-kind axis anywhere in it.
+
+Both stage families are legitimately returnable: `survey` produces `Resource` and orders by
+`region_score`; `follow-from` produces `Resource` and orders by `graph_score`. Combinators can never
+be returned (`query.ts:1135ff`, `produced_ids`: *"a combinator can never be a returned stage at
+all"*), which is why `u` is a pipe and not an output.
+
+### 2.2 A named cogmap, no question — `?in=map:<uuid>`
+
+The cogmap's telos is a **declared resource**: `kb_cogmaps.telos_resource_id`
+(`migrations/20260624000002_canonical_functions.sql:689`), surfaced by
+`GET /api/cognitive-maps/{id}/analytics` (`crates/temper-api/src/routes.rs:142`) and flagged
+`is_telos` by `cogmap_show` (`migrations/20260724000040_cogmap_foundations_read_gate.sql:18`).
+
+So: read the telos resource's prose, use it as `X`, then run §2.1 with N = 1. The surface **says**
+what it did — *"surveying under this map's charter"* — with a link to the charter resource. Surveying
+a telos-governed distillation under its own telos is the map answering the question it exists to ask.
+
+### 2.3 A named context, no question — `?in=ctx:@owner/<slug>`
+
+```
+m :  find-resources-with(bound = context)     no ceiling; pipe only
+w :  follow-from(seeds = m)                    ceiling: limit ≤ 50
+returns : w
+```
+
+A context has **no declared telos** — only a `telos_centroid` vector.
+`migrations/20260712000060_context_telos.sql:3`: *"A cogmap orients by a DECLARED charter
+(`kb_cogmaps.telos_resource_id`). A context has no…"* The centroid is a `vector(768)`, is not a DTO
+field, and round-tripping 768 floats through a browser to reconstruct a question nobody asked would
+be mechanism pretending to be meaning.
+
+**So a context with no question shows everything.** That is the honest answer for a container of the
+reader's own work, and it needs no intention at all. `find-resources-with` carries no ceiling
+whatsoever, so the seed set genuinely is every visible resource in the context.
+
+`follow-from` walks *"at least one hop"* (`registry.rs`, `orders_by.means`), so the seeds themselves
+are **not** in `w`. The context's own rows come from the list read the table half already makes
+(`ResourceListParams` already accepts `context_ref` —
+`crates/temper-workflow/src/types/resource.rs:64`), and `ViaEntry.seed_id` names which seed each
+reached node descends from, so the client can draw seeds and neighbours as one graph.
+
+**This is deliberately unranked**, and the legibility burden lands entirely on §3's declaration. If
+it proves illegible at real context sizes, that is a measurement to act on, not a reason to
+pre-emptively add ranking — a decision recorded here so it is not silently reversed.
+
+### 2.4 A named place with a question
+
+`?in=…&q=X` — §2.1 with N = 1. Both anchor kinds behave identically here.
+
+---
+
+## 3. What is drawn, and how the surface declares its kind
+
+**There is exactly one mark vocabulary, everywhere, at every depth.**
+
+- **Nodes** are `ResourceHit.resource` — a `ResourceView`, *"the same projection `list`/`show`/
+  `create`/`update`/`annotate` and both search arms answer in"* (`query.ts:800ff`).
+- **Edges** are `ViaEntry` — real `kb_edges` rows, as stored.
+
+Nothing else is ever a mark. This is how `navigation-never-silently-changes-kind` is satisfied:
+**not by careful labelling but because there is no second kind to change into.** The surface cannot
+violate the clause without someone adding a mark type, which is a visible, reviewable act.
+
+### The *why-these* readout
+
+Derived structure appears in exactly one place: a panel, fed from `QueryResponse.trace`, that reads
+as **machine reasoning about the answer** and never as a thing in the graph. It carries which regions
+matched and their `region_score` (survey's `Disclosure::Region`, arriving as `RegionHit`), the
+per-stage `terms_applied`, `input_ids` / `input_unusable` / `produced_ids`, and `narrowed_by`.
+
+`no-derived-thing-poses-as-authored` becomes a testable structural property: **no `RegionHit` ever
+reaches the canvas.** Regions reach the readout and nothing else.
+
+The readout is also the answer to `no-internal-vocabulary-is-load-bearing`: it must be readable
+without the words *region*, *salience*, *wayfind* or *survey*. It says *"these came from N groupings
+of your work"*, not *"3 regions by region_score."*
+
+### The bound declaration — always on screen, plain, never dismissible
+
+**Three axes, and only two have machinery.**
+
+| Axis | Ceiling | Reported by |
+|---|---|---|
+| **Anchor set** — how many of your places were asked | none; the client chooses | **nothing** — see below |
+| **Regions per anchor** | `default 3, max 20` (`registry.rs:499`) | `terms_applied[regions]` |
+| **Walk size** | **`Limit: 50`** (`registry.rs:392`) | `Extent` + `terms_applied[limit]` |
+
+The walk ceiling is the one that matters most and the register never named it: **the walk contributes
+at most 50 nodes**, against a corpus of thousands.
+
+**But 50 is not the screen's total, and it would be an error to design as though it were.** In §2.1
+the surveys are returned too, and `survey` declares only `BoundTerm::Regions` — **no `Limit`**. It
+returns every visible member of the matched regions, so its row count is bounded in *regions* and
+unbounded in *rows*. The screen therefore holds (all members of up to N × `regions_n` regions) + (≤50
+walked nodes). In §2.3 there is no survey stage at all and the walk's 50 is the whole cap, with the
+context's own rows arriving from the list read, which carries its own pagination.
+
+This is why `legible-at-the-sizes-the-corpus-actually-reaches` is *helped* by the ceilings but not
+handed to us by them — the unbounded arm is real — and exactly why
+`legibility-is-never-bought-with-silent-omission` carries the weight rather than the ceilings
+carrying it.
+
+Two of the three report themselves honestly and the surface's only job is to **stop discarding
+them**. `terms_applied` is *"the APPLIED value of every admitted term: the page this stage actually
+RAN with, clamped to the act's published ceiling and defaulted where the caller named nothing"*, and
+`temper-services` pins the other half — *"reporting the request back would make `terms_applied` an
+echo rather than a disclosure"* (`query.ts:1135ff`). `Extent` is `complete | partial |
+indeterminate{reason}`, carried *"for every stage, not only the returned ones"* (`query.ts:463`
+and per-stage on `StageTrace`).
+
+**The third axis is the surface's own debt.** Anchor-set truncation happens in the client *before the
+composition exists*, so no `Extent` can ride on it. The surface must declare it itself, from its own
+records.
+
+**Presentation.** A persistent, non-dismissible line — chrome, not a warning:
+
+```
+50 of 314 reachable · 3 of 47 groupings · 6 of 6 places
+```
+
+Present whether the view is complete or partial, so *complete* is something the reader is **told**
+rather than something they infer from silence. This is the strongest available reading of
+`legibility-is-never-bought-with-silent-omission`, and it is deliberately not the cheaper "show a
+marker when something was dropped" — under that design the absence of a marker becomes the signal,
+and a bug that suppresses it is invisible.
+
+---
+
+## 4. What is replaced, and in what order
+
+Replace `/graph` **in place**. One arc, and the receiver for displaced structure ships **before** the
+marks that displace into it are deleted, so no clause is uncovered at any point.
+
+### 4.1 Sequence
+
+| Beat | Contents | Why here |
+|---|---|---|
+| **A** | The composition builder + the bound declaration, as pure modules with tests. No rendering. | Every witness in §6 that is machine-decidable lands here, against no UI |
+| **B** | `/graph/[owner]` rebuilt on Beat A: the four params, the three entries, node/edge canvas on the surviving layout modules, the *why-these* readout | The successor, shipped |
+| **C** | **The receiver** — [Atlas analytics readout](./019f0e9a-f0ce-7de2-a848-0d3e4cd3add4), cogmap arm: telos, staleness, regulation against the existing endpoint, declaring itself as analysis | Must precede D |
+| **D** | Delete the evicted modules; retire the tier model; point `contextGraphHref` at the new shape | Nothing is displaced into nowhere |
+
+Task [019f0e9a](./019f0e9a-f0ce-7de2-a848-0d3e4cd3add4) folds in as Beat C. Its
+`[contradicted — 2026-08-16]` amendment already withdrew the lens-alternative criterion and gated its
+context arm on D6, which is absent — **the context arm stays out of this arc**, declared rather than
+attempted.
+
+### 4.2 Module disposition
+
+**Survives, several strengthened** — `camera.ts`; `layout/forceNeighborhood.ts` (**exactly what the
+successor draws**); `labels.ts`, plus the collision handling **G2** asked for, which becomes central
+once every screen is nodes; `neighbors.ts`, `trail.ts`, `payloadRows.ts`, `eventSummary.ts`,
+`relativeTime.ts`, `TrailRail.svelte` (plus **N1** body/excerpt and **N2** richer hover, both folded
+forward from [Graph Atlas C3.1](./019f2fbe-f4ac-7e83-955e-c4dc885856f3) by the pivot);
+`marks/Edge.svelte`, `marks/NodeChip.svelte`, `marks/NodeHoverCard.svelte`,
+`marks/OrphanNodeMark.svelte`; `CompositionA11yList.svelte`; `palette.ts`, `homeTint.ts`.
+
+**Deleted in Beat D** — `territory.ts`; `layout/forceTerritories.ts`, `layout/packTerritories.ts`,
+`layout/cogmapTerritories.ts`, `layout/hull.ts`, `layout/bridges.ts`, `layout/homeLayout.ts`;
+`residualTray.ts`; `marks/TerritoryCircle.svelte`, `marks/BridgeRibbon.svelte`,
+`marks/RegionHoverCard.svelte`; `TierHome.svelte`, `TierPanorama.svelte`, `HomeA11yList.svelte`,
+`ResidualTray.svelte`; and the tier model wholesale — `nav.ts`, `viewData.ts`, `marks.ts`,
+`scopeChips.ts`, `legend.ts` / `AtlasLegend.svelte` (the edge-grammar legend survives only if the
+edge vocabulary still needs one; decide in Beat B against the built canvas, not here).
+
+`crumbModel.ts` / `AtlasCrumb.svelte` survive as files and are **rewritten**: there are no tiers to
+ascend, only the params of §1.
+
+**Out of scope, named so it is not mistaken for oversight**: the nine `/api/graph/*` endpoints lose
+their only caller in Beat D. Deleting them is Rust and a separate PR; this arc is deliberately
+frontend-only.
+
+### 4.3 The one live bug, and where it goes
+
+[Graph Atlas C3.1](./019f2fbe-f4ac-7e83-955e-c4dc885856f3)'s surviving remainder is
+`AtlasCanvas.svelte:53-54` — verified still present:
+
+```
+cogmapId && tier === 2
+  ? 'Node neighborhoods are not available in cogmap view yet — return to the map to explore its regions.'
+```
+
+It fires exactly when a cogmap node genuinely has no neighbours, telling the reader a feature is
+missing when the true answer is *"there are none"* — the live instance of
+`no-reader-is-left-to-blame-themselves` on a surface people use today.
+
+**It is not folded into this arc.** It is a one-line fix on the shipped surface, it is independent of
+everything here, and Beat D deletes the file it lives in — which means holding it until Beat D leaves
+the lie in production for the length of the arc for no gain. Ship it separately and immediately.
+
+---
+
+## 5. Constraints inherited, not resolved here
+
+Both are open rulings the register already carries. Building on `survey` does not settle either, and
+this spec must not read as though it had.
+
+**The blend is an open ruling.** `survey` orders by `region_score` = `0.4·sal_norm + 0.6·query_cos +
+0.05·prior`, spanning `[-0.57, 1.05]` — it can be negative and it exceeds 1. Whether the `sal_norm`
+term violates the query goal's *the-question-decides-within-an-act* is **OPEN by ruling
+`[2026-08-14, Pete]`**. Consequence for this surface: **never present `region_score` to the reader as
+a score.** The readout may say these groupings matched and in what order; it may not print the
+number or imply a calibrated scale.
+
+**Query-time lens selection is a declared hole, by ruling.** `survey` passes `p_lens = NULL`
+*definitionally* — *"the lens is a clustering-time parameter; NULL reads the baked salience"* — and
+`migrations/20260816000020_survey_act.sql` records *"The lens selector at query time is a declared
+hole: re-lensing regions under a different telos at read time is a future capability with no use case
+today."* This surface offers **no lens control**. Task 019f0e9a's original lens-alternative criterion
+is already withdrawn on that ruling.
+
+**Boundary against goal `019fb559-7191-75a3-99d4-879090c60e94`** (closed completed 2026-08-05): it
+owns whether wayfind's *ranking* is fair and its *self-report* honest. This surface must not re-claim
+those clauses. It inherits one remainder — round-robin admits one region per map per round, so reach
+is bounded by `regions_n`, and §3's declaration is where that bound becomes visible.
+
+---
+
+## 6. Witnesses
+
+The register requires witnesses authored **inside** the build, each failing against the state its
+clause claims to change. Most are unit tests over pure functions, which is a deliberate consequence
+of Beat A existing: the composition builder and the bound declaration are pure, so they are testable
+without a browser.
+
+| Clause | Witness | Beat |
+|---|---|---|
+| `surface-declares-its-kind` | **Judged — not machine-decidable.** Perspective and two exemplars are named in the register: a reader who does not know how Temper derives anything, shown the successor, asked *"what am I looking at"* and *"why does clicking this navigate into a graph"*. A reader session, not a test | B |
+| `navigation-never-silently-changes-kind` | The mark vocabulary is exactly `{node, edge}`; the test fails the moment a third is added | B |
+| `entry-does-not-presume-organization` | The builder produces a valid composition for 0 anchors, 1 anchor, 40 anchors, and for an anchor with zero regions | A |
+| `legible-at-the-sizes-the-corpus-actually-reaches` | Layout holds at the walk ceiling (50 nodes) with worst-case `via` density — 9 edges on one node, from the prod measurement | B |
+| `cross-kind-relationship-is-reachable` | A union spanning a context anchor and a cogmap anchor returns one answer with both represented | A |
+| `displaced-structure-remains-reachable` | The analytics place exists, declares itself as analysis, and is reachable — **and Beat D does not merge before it does** | C |
+| `no-derived-thing-poses-as-authored` | No `RegionHit` reaches the canvas; regions reach only the readout | A + B |
+| `no-reader-is-left-to-blame-themselves` | A stale readout region reference renders as *"re-derived"*, not as an error | B |
+| `legibility-is-never-bought-with-silent-omission` | Three tests, one per axis: each asserts the declaration renders the **applied** value from `terms_applied` / `Extent`, never the requested one | A |
+| `no-internal-vocabulary-is-load-bearing` | The readout's rendered strings contain none of *region*, *salience*, *wayfind*, *survey* | A |
+| `the-unstructured-reader-is-never-worse-off` | A reader with many resources and **zero** regions still gets a graph — §2.3's path needs no region at all | A |
+
+That last row is worth stating plainly, because it is the actor the predecessor failed. A context
+entry runs `find-resources-with → follow-from` and **touches no region**, so a reader whose corpus
+has never clustered gets the same surface as one whose corpus has.
+
+### Fixtures and the harness
+
+`/dev/atlas`'s fixture corpus was refreshed against the measured substrate by
+[019fbac4](./019fbac4-50c1-75a0-8528-f64030453bfc) (done). The successor needs its own fixtures — a
+captured `QueryResponse` per entry, including a partial one and a zero-region one — because the vault
+surface is undevelopable locally (1 local resource against 2,330 in prod), which is the standing
+finding behind [/dev/vault render harness](./019f6d08-8b33-7f30-a438-8487261d5f23).
+
+---
+
+## 7. Open, and deliberately not closed here
+
+- **Anchor-set bounding policy.** §3 requires the count be declared; it does not decide the ceiling,
+  or the order anchors are chosen in when there are more than the ceiling. Decide in Beat A against a
+  measured anchor count, not by guess here. Whatever is chosen, the declaration is non-negotiable.
+- **Whether §2.3 is legible at real context sizes.** Unranked-everything is the design; its failure
+  mode is a measurement, and the response is a decision, not a pre-emptive ranking.
+- **Rate-shaped axes remain open**, exactly as the register says. Derived structure settles
+  asynchronously with respect to the reader's own writes. This spec reduces the exposure — no region
+  id in a URL — and does not close the axis.
+- **The legend's fate**, per §4.2.
