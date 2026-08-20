@@ -735,8 +735,9 @@ export type RefusalReason = "unsupported_bound_kind" | "anchor_takes_one_id" | "
  * **Trace disclosure, never a row.** `survey` produces RESOURCES — the ⟨3⟩ redesign
  * (`20260816000020_survey_act.sql`) moved regions out of the output precisely so a caller could not
  * draw them as though the reader had authored them. This says which groupings answered, for a
- * caller that wants to explain *why these*, and it deliberately carries **no per-resource
- * mapping**: that would put a region back on the row shape the redesign just cleared it from.
+ * caller that wants to explain *why these*, and it carries **no per-resource mapping** — which
+ * follows from that same redesign rather than being a fresh choice here: a per-resource mapping
+ * would put a region back on the row shape the redesign just cleared it from.
  *
  * Contrast [`RegionHit`], which is a region as a RESULT — a row a caller asked for and may rank.
  * This is a region as an EXPLANATION of resource rows, and the two must not be conflated: one is
@@ -1146,9 +1147,10 @@ total: bigint | null,
  * `regions_effective` pattern the audit calls "a model of an honest knob" — which existed
  * for exactly one term and was never extended to `limit` or `depth`.
  *
- * There is no separate "you were clamped" flag, deliberately: ceilings are published per act,
- * so the applied value is the whole story. Clamping to a ceiling nobody published would be
- * the bug. This covers only terms the act ADMITS — one it does not is refused outright.
+ * There is no separate "you were clamped" flag, deliberately `[decided — 2026-08-03, Pete]`:
+ * ceilings are published per act, so the applied value is the whole story. Clamping to a
+ * ceiling nobody published would be the bug. This covers only terms the act ADMITS — one it
+ * does not is refused outright.
  */
 terms_applied: { [key in BoundTerm]?: bigint }, narrowed_by: Array<NarrowedBy>, 
 /**
@@ -1184,7 +1186,8 @@ input_unusable: bigint, };
  * One stage's mandatory disclosure. Exists whether or not the stage produced a result.
  *
  * **`Eq` was dropped when `disclosed_regions` arrived** `[2026-08-20]`. `region_score` is an `f64`
- * carried raw and deliberately un-normalized, so this type is `PartialEq` and cannot be `Eq`.
+ * carried raw and un-normalized — see [`super::hits::RegionDisclosure`] for why — so this type is
+ * `PartialEq` and cannot be `Eq`.
  * Nothing used it as a set or map key. [`super::envelope::StageResult`] never derived either.
  */
 export type StageTrace = { stage: StageName, act: ActName, disposition: StageDisposition, 

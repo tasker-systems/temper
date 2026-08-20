@@ -14,7 +14,7 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # One stage's mandatory disclosure. Exists whether or not the stage produced a result.  **`Eq` was dropped when `disclosed_regions` arrived** `[2026-08-20]`. `region_score` is an `f64` carried raw and deliberately un-normalized, so this type is `PartialEq` and cannot be `Eq`. Nothing used it as a set or map key. [`super::envelope::StageResult`] never derived either.
+  # One stage's mandatory disclosure. Exists whether or not the stage produced a result.  **`Eq` was dropped when `disclosed_regions` arrived** `[2026-08-20]`. `region_score` is an `f64` carried raw and un-normalized — see [`super::hits::RegionDisclosure`] for why — so this type is `PartialEq` and cannot be `Eq`. Nothing used it as a set or map key. [`super::envelope::StageResult`] never derived either.
   class StageTrace < ApiModelBase
     attr_accessor :act
 

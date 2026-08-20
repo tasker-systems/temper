@@ -236,9 +236,10 @@ pub struct StageResult {
     /// `regions_effective` pattern the audit calls "a model of an honest knob" — which existed
     /// for exactly one term and was never extended to `limit` or `depth`.
     ///
-    /// There is no separate "you were clamped" flag, deliberately: ceilings are published per act,
-    /// so the applied value is the whole story. Clamping to a ceiling nobody published would be
-    /// the bug. This covers only terms the act ADMITS — one it does not is refused outright.
+    /// There is no separate "you were clamped" flag, deliberately `[decided — 2026-08-03, Pete]`:
+    /// ceilings are published per act, so the applied value is the whole story. Clamping to a
+    /// ceiling nobody published would be the bug. This covers only terms the act ADMITS — one it
+    /// does not is refused outright.
     pub terms_applied: BTreeMap<BoundTerm, i64>,
     pub narrowed_by: Vec<NarrowedBy>,
     /// Which regions a `survey` stage matched, and at what score. Empty for every other act.

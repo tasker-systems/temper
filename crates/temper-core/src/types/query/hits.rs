@@ -312,8 +312,9 @@ pub struct RegionHit {
 /// **Trace disclosure, never a row.** `survey` produces RESOURCES — the ⟨3⟩ redesign
 /// (`20260816000020_survey_act.sql`) moved regions out of the output precisely so a caller could not
 /// draw them as though the reader had authored them. This says which groupings answered, for a
-/// caller that wants to explain *why these*, and it deliberately carries **no per-resource
-/// mapping**: that would put a region back on the row shape the redesign just cleared it from.
+/// caller that wants to explain *why these*, and it carries **no per-resource mapping** — which
+/// follows from that same redesign rather than being a fresh choice here: a per-resource mapping
+/// would put a region back on the row shape the redesign just cleared it from.
 ///
 /// Contrast [`RegionHit`], which is a region as a RESULT — a row a caller asked for and may rank.
 /// This is a region as an EXPLANATION of resource rows, and the two must not be conflated: one is

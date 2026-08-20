@@ -73,7 +73,8 @@ pub struct StageInputTrace {
 /// One stage's mandatory disclosure. Exists whether or not the stage produced a result.
 ///
 /// **`Eq` was dropped when `disclosed_regions` arrived** `[2026-08-20]`. `region_score` is an `f64`
-/// carried raw and deliberately un-normalized, so this type is `PartialEq` and cannot be `Eq`.
+/// carried raw and un-normalized — see [`super::hits::RegionDisclosure`] for why — so this type is
+/// `PartialEq` and cannot be `Eq`.
 /// Nothing used it as a set or map key. [`super::envelope::StageResult`] never derived either.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
