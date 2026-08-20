@@ -150,7 +150,7 @@
       "type": "object"
     },
     "CompositionTrace": {
-      "description": "The whole composition's disclosure: an ordered per-stage record array.",
+      "description": "The whole composition's disclosure: an ordered per-stage record array.\n\n`Eq` dropped with [`StageTrace`]'s, and for its reason — see the note there.",
       "properties": {
         "stages": {
           "items": {
@@ -595,6 +595,26 @@
       ],
       "description": "Why an act refused. A typed variant so every door renders the same value; how a door\nTRANSPORTS it (HTTP status, MCP error code) stays a door concern.\n\nOPEN vocabulary, deliberately — design §6.1 settled openness for the `act` discriminator and\nfor `disposition` but never ruled on refusals, and v0 first shipped this closed by default.\nCorrected by decision `019fcd13-4e65-7213-ac6f-20c3c8ccfce1`: the growth this contract wants\nincludes new ways to decline, so a closed enum would make every future reason a breaking\nchange. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,\nmatched exhaustively."
     },
+    "RegionDisclosure": {
+      "description": "One region a `survey` stage matched, and the score it matched at.\n\n**Trace disclosure, never a row.** `survey` produces RESOURCES — the ⟨3⟩ redesign\n(`20260816000020_survey_act.sql`) moved regions out of the output precisely so a caller could not\ndraw them as though the reader had authored them. This says which groupings answered, for a\ncaller that wants to explain *why these*, and it carries **no per-resource mapping** — which\nfollows from that same redesign rather than being a fresh choice here: a per-resource mapping\nwould put a region back on the row shape the redesign just cleared it from.\n\nContrast [`RegionHit`], which is a region as a RESULT — a row a caller asked for and may rank.\nThis is a region as an EXPLANATION of resource rows, and the two must not be conflated: one is\nthe answer, the other is a note about how the answer was reached.\n\n# `region_score` is raw, and is NOT in `[0,1]`\n\nIt is `0.4·sal_norm + 0.6·query_cos + 0.05·prior`, measured spanning `[-0.57, 1.05]` — so it goes\nnegative at one end and past 1 at the other. Whether the `sal_norm` term belongs in it at all is\nan **OPEN ruling** `[2026-08-14, Pete]`.\n\nTransporting it unchanged is what keeps that ruling open. A carrier that normalized it into\n`[0,1]` would silently settle a question it is not entitled to settle, and would do it invisibly,\nsince the normalized number would look exactly like a well-behaved score. Do not clamp, rescale,\nor attach a [`super::act::QuantityScale`] claim this quantity does not have.",
+      "properties": {
+        "region_id": {
+          "description": "The region's id, as stored.\n\n**Not durable, and the instability is the caller's to handle.** `assert_region`\n(`temper-substrate/src/write.rs:673`) reuses this row when a region's member set is unchanged\nand **mints a new id otherwise**, soft-folding the displaced row. So an id disclosed here may\nname nothing by the time a caller acts on it — which a caller must render as *re-derived*,\nnever as an error and never as the reader's mistake.",
+          "format": "uuid",
+          "type": "string"
+        },
+        "region_score": {
+          "description": "The blend this region matched at. See the type's own note: raw, unbounded, open ruling.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "region_id",
+        "region_score"
+      ],
+      "type": "object"
+    },
     "RegionHit": {
       "description": "One region of a cognitive map. Produced by `survey`.",
       "properties": {
@@ -964,6 +984,14 @@
         "act": {
           "$ref": "#/$defs/ActName"
         },
+        "disclosed_regions": {
+          "default": [],
+          "description": "Which regions a `survey` stage matched, and at what score. Empty for every other act.\n\n**The pair rule**: [`super::trace::StageTrace::disclosed_regions`] carries the same value,\nfrom one `disclosed_regions_for` definition rather than two. That field's doc carries the\nargument and the history; this one exists because a caller reading only `returned` must not\nhave to reach into `trace` for a disclosure about a stage whose rows they already hold.",
+          "items": {
+            "$ref": "#/$defs/RegionDisclosure"
+          },
+          "type": "array"
+        },
         "disposition": {
           "$ref": "#/$defs/StageDisposition"
         },
@@ -1018,7 +1046,7 @@
             "format": "int64",
             "type": "integer"
           },
-          "description": "The APPLIED value of every admitted term, beside what was asked. Generalizes the\n`regions_effective` pattern the audit calls \"a model of an honest knob\" — which existed\nfor exactly one term and was never extended to `limit` or `depth`.\n\nThere is no separate \"you were clamped\" flag, deliberately: ceilings are published per act,\nso the applied value is the whole story. Clamping to a ceiling nobody published would be\nthe bug. This covers only terms the act ADMITS — one it does not is refused outright.",
+          "description": "The APPLIED value of every admitted term, beside what was asked. Generalizes the\n`regions_effective` pattern the audit calls \"a model of an honest knob\" — which existed\nfor exactly one term and was never extended to `limit` or `depth`.\n\nThere is no separate \"you were clamped\" flag, deliberately `[decided — 2026-08-03, Pete]`:\nceilings are published per act, so the applied value is the whole story. Clamping to a\nceiling nobody published would be the bug. This covers only terms the act ADMITS — one it\ndoes not is refused outright.",
           "type": "object"
         },
         "total": {
@@ -1043,10 +1071,18 @@
       "type": "object"
     },
     "StageTrace": {
-      "description": "One stage's mandatory disclosure. Exists whether or not the stage produced a result.",
+      "description": "One stage's mandatory disclosure. Exists whether or not the stage produced a result.\n\n**`Eq` was dropped when `disclosed_regions` arrived** `[2026-08-20]`. `region_score` is an `f64`\ncarried raw and un-normalized — see [`super::hits::RegionDisclosure`] for why — so this type is\n`PartialEq` and cannot be `Eq`.\nNothing used it as a set or map key. [`super::envelope::StageResult`] never derived either.",
       "properties": {
         "act": {
           "$ref": "#/$defs/ActName"
+        },
+        "disclosed_regions": {
+          "default": [],
+          "description": "Which regions a `survey` stage matched, and at what score. Empty for every other act.\n\n**This is what `discloses: [Disclosure::Region]` MEANS**, and until 2026-08-20 it meant\nnothing: the declaration existed in the registry with no consumer anywhere, no `region_id`\nin the assembler, and no field here — so a caller was told which regions matched by nothing\nat all. A declaration describes the DEPLOYED system; this field is what makes that true for\n`survey`.\n\n**The pair rule**: [`super::envelope::StageResult::disclosed_regions`] carries the same\nvalue, for the same reason as [`Self::extent`], [`Self::terms_applied`] and the input\nnumbers — the trace covers every stage and the results only the returned ones, so\ndisagreeing copies would leave a reader unable to tell which was right. One definition\n(`disclosed_regions_for`), read twice.",
+          "items": {
+            "$ref": "#/$defs/RegionDisclosure"
+          },
+          "type": "array"
         },
         "disposition": {
           "$ref": "#/$defs/StageDisposition"

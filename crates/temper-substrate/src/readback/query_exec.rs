@@ -47,6 +47,14 @@ pub struct HitRow {
     /// shipped. A doc that describes a stricter contract than the code is worse than none: it is
     /// read as a guarantee.
     pub via: Option<serde_json::Value>,
+    /// The region a `survey` row came from — the raw `region` column, `None` for every act that is
+    /// not a survey.
+    ///
+    /// **A bare `Uuid` rather than a typed newtype**, for the reason stated one field up: this
+    /// crate has no dependency on `temper-core`'s wire types and must not grow one to carry a
+    /// column through. `HitRow::id` is already a bare `Uuid`; there is no region newtype in the
+    /// codebase to reach for anyway.
+    pub region: Option<Uuid>,
 }
 
 /// One stage's disclosure numbers, for EVERY stage — including the ones whose rows nobody asked
@@ -161,6 +169,7 @@ pub async fn execute(pool: &PgPool, compiled: &CompiledQuery) -> Result<QueryRow
                 kind: row.try_get("kind")?,
                 quantity: row.try_get("quantity")?,
                 via: row.try_get("via")?,
+                region: row.try_get("region")?,
             });
         } else {
             out.tallies.push(TallyRow {
@@ -188,6 +197,7 @@ mod tests {
             id: Uuid::from_u128(id),
             kind: "resource".to_string(),
             via: None,
+            region: None,
             quantity: q,
         }
     }

@@ -306,3 +306,44 @@ pub struct RegionHit {
     pub region: CogmapRegionRow,
     pub scoring: Scoring,
 }
+
+/// One region a `survey` stage matched, and the score it matched at.
+///
+/// **Trace disclosure, never a row.** `survey` produces RESOURCES — the ⟨3⟩ redesign
+/// (`20260816000020_survey_act.sql`) moved regions out of the output precisely so a caller could not
+/// draw them as though the reader had authored them. This says which groupings answered, for a
+/// caller that wants to explain *why these*, and it carries **no per-resource mapping** — which
+/// follows from that same redesign rather than being a fresh choice here: a per-resource mapping
+/// would put a region back on the row shape the redesign just cleared it from.
+///
+/// Contrast [`RegionHit`], which is a region as a RESULT — a row a caller asked for and may rank.
+/// This is a region as an EXPLANATION of resource rows, and the two must not be conflated: one is
+/// the answer, the other is a note about how the answer was reached.
+///
+/// # `region_score` is raw, and is NOT in `[0,1]`
+///
+/// It is `0.4·sal_norm + 0.6·query_cos + 0.05·prior`, measured spanning `[-0.57, 1.05]` — so it goes
+/// negative at one end and past 1 at the other. Whether the `sal_norm` term belongs in it at all is
+/// an **OPEN ruling** `[2026-08-14, Pete]`.
+///
+/// Transporting it unchanged is what keeps that ruling open. A carrier that normalized it into
+/// `[0,1]` would silently settle a question it is not entitled to settle, and would do it invisibly,
+/// since the normalized number would look exactly like a well-behaved score. Do not clamp, rescale,
+/// or attach a [`super::act::QuantityScale`] claim this quantity does not have.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct RegionDisclosure {
+    /// The region's id, as stored.
+    ///
+    /// **Not durable, and the instability is the caller's to handle.** `assert_region`
+    /// (`temper-substrate/src/write.rs:673`) reuses this row when a region's member set is unchanged
+    /// and **mints a new id otherwise**, soft-folding the displaced row. So an id disclosed here may
+    /// name nothing by the time a caller acts on it — which a caller must render as *re-derived*,
+    /// never as an error and never as the reader's mistake.
+    pub region_id: uuid::Uuid,
+    /// The blend this region matched at. See the type's own note: raw, unbounded, open ruling.
+    pub region_score: f64,
+}

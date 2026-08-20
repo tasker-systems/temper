@@ -345,7 +345,7 @@ fn refused_body(act: &str) -> String {
     format!(
         "  -- act: {act} REFUSED (no rows, and an EMPTY set for anything bounded by it)\n  \
          SELECT NULL::uuid AS id, NULL::text AS kind, NULL::double precision AS quantity, \
-         NULL::jsonb AS via WHERE false"
+         NULL::jsonb AS via, NULL::uuid AS region WHERE false"
     )
 }
 
@@ -491,7 +491,7 @@ fn emit_act_body(
             Ok(emitted(format!(
                 "  -- act: {act} -> {EMIT_FIND_EXACT}\n  \
                  SELECT resource_id AS id, 'resource'::text AS kind, \
-                 fts_norm::double precision AS quantity, NULL::jsonb AS via\n    \
+                 fts_norm::double precision AS quantity, NULL::jsonb AS via, NULL::uuid AS region\n    \
                  FROM {call}"
             )))
         }
@@ -524,7 +524,7 @@ fn emit_act_body(
             Ok(emitted(format!(
                 "  -- act: {act} -> {EMIT_FIND_RESOURCES_WITH}\n  \
                  SELECT resource_id AS id, 'resource'::text AS kind, \
-                 NULL::double precision AS quantity, NULL::jsonb AS via\n    \
+                 NULL::double precision AS quantity, NULL::jsonb AS via, NULL::uuid AS region\n    \
                  FROM {call}"
             )))
         }
@@ -570,7 +570,7 @@ fn emit_act_body(
             Ok(emitted(format!(
                 "  -- act: {act} -> {EMIT_FIND_WIDE}\n  \
                  SELECT resource_id AS id, 'resource'::text AS kind, \
-                 vec_norm::double precision AS quantity, NULL::jsonb AS via\n    \
+                 vec_norm::double precision AS quantity, NULL::jsonb AS via, NULL::uuid AS region\n    \
                  FROM {call}"
             )))
         }
@@ -612,7 +612,7 @@ fn emit_act_body(
             Ok(emitted(format!(
                 "  -- act: {act} -> {EMIT_FOLLOW_FROM}\n  \
                  SELECT resource_id AS id, 'resource'::text AS kind, \
-                 graph_score::double precision AS quantity, via\n    \
+                 graph_score::double precision AS quantity, via, NULL::uuid AS region\n    \
                  FROM {call}"
             )))
         }
@@ -654,7 +654,8 @@ fn emit_act_body(
             Ok(emitted(format!(
                 "  -- act: {act} -> {EMIT_SURVEY}\n  \
                  SELECT resource_id AS id, 'resource'::text AS kind, \
-                 region_score::double precision AS quantity, NULL::jsonb AS via\n    \
+                 region_score::double precision AS quantity, NULL::jsonb AS via, \
+                 region_id::uuid AS region\n    \
                  FROM {call}"
             )))
         }
@@ -684,7 +685,8 @@ fn emit_act_body(
         // not covered.
         _ => Ok(emitted(format!(
             "  -- act: {act} (placeholder body; this builder emits no fragment for it yet)\n  \
-             SELECT id, kind, quantity, NULL::jsonb AS via FROM {PLACEHOLDER_FN}({})",
+             SELECT id, kind, quantity, NULL::jsonb AS via, NULL::uuid AS region \
+             FROM {PLACEHOLDER_FN}({})",
             narrowing.any_set_expr(),
         ))),
     }
@@ -1522,7 +1524,7 @@ fn final_select(v: &ValidatedComposition, tallies: &[StageTally]) -> String {
             let s = r.stage.as_str();
             format!(
                 "SELECT 'hit'::text AS row_class, '{s}'::text AS stage, id, kind, quantity, via, \
-                 NULL::bigint AS produced, NULL::bigint AS unusable FROM \"{s}\""
+                 region, NULL::bigint AS produced, NULL::bigint AS unusable FROM \"{s}\""
             )
         })
         .collect();
@@ -1532,6 +1534,7 @@ fn final_select(v: &ValidatedComposition, tallies: &[StageTally]) -> String {
         format!(
             "SELECT 'tally'::text AS row_class, '{s}'::text AS stage, NULL::uuid AS id, \
              NULL::text AS kind, NULL::double precision AS quantity, NULL::jsonb AS via, \
+             NULL::uuid AS region, \
              (SELECT count(*) FROM \"{s}\")::bigint AS produced, {unusable} AS unusable"
         )
     }));
@@ -1542,6 +1545,7 @@ fn final_select(v: &ValidatedComposition, tallies: &[StageTally]) -> String {
         // zero-arm UNION is not valid SQL.
         return "SELECT NULL::text AS row_class, NULL::text AS stage, NULL::uuid AS id, \
                 NULL::text AS kind, NULL::double precision AS quantity, NULL::jsonb AS via, \
+                NULL::uuid AS region, \
                 NULL::bigint AS produced, NULL::bigint AS unusable WHERE false"
             .to_string();
     }

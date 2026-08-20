@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use super::act::ActName;
 use super::disposition::{ActRefusal, StageDisposition};
 use super::envelope::NarrowedBy;
+use super::hits::RegionDisclosure;
 use super::scalars::{BoundTerm, Extent};
 use super::stage::{StageName, StageRelation};
 
@@ -70,7 +71,12 @@ pub struct StageInputTrace {
 }
 
 /// One stage's mandatory disclosure. Exists whether or not the stage produced a result.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// **`Eq` was dropped when `disclosed_regions` arrived** `[2026-08-20]`. `region_score` is an `f64`
+/// carried raw and un-normalized — see [`super::hits::RegionDisclosure`] for why — so this type is
+/// `PartialEq` and cannot be `Eq`.
+/// Nothing used it as a set or map key. [`super::envelope::StageResult`] never derived either.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
@@ -242,10 +248,27 @@ pub struct StageTrace {
     /// disclosure"* — so what rides here is what ran, never what was asked for.
     pub terms_applied: BTreeMap<BoundTerm, i64>,
     pub narrowed_by: Vec<NarrowedBy>,
+    /// Which regions a `survey` stage matched, and at what score. Empty for every other act.
+    ///
+    /// **This is what `discloses: [Disclosure::Region]` MEANS**, and until 2026-08-20 it meant
+    /// nothing: the declaration existed in the registry with no consumer anywhere, no `region_id`
+    /// in the assembler, and no field here — so a caller was told which regions matched by nothing
+    /// at all. A declaration describes the DEPLOYED system; this field is what makes that true for
+    /// `survey`.
+    ///
+    /// **The pair rule**: [`super::envelope::StageResult::disclosed_regions`] carries the same
+    /// value, for the same reason as [`Self::extent`], [`Self::terms_applied`] and the input
+    /// numbers — the trace covers every stage and the results only the returned ones, so
+    /// disagreeing copies would leave a reader unable to tell which was right. One definition
+    /// (`disclosed_regions_for`), read twice.
+    #[serde(default)]
+    pub disclosed_regions: Vec<RegionDisclosure>,
 }
 
 /// The whole composition's disclosure: an ordered per-stage record array.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Eq` dropped with [`StageTrace`]'s, and for its reason — see the note there.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
@@ -281,7 +304,40 @@ mod tests {
             extent: Extent::Complete,
             terms_applied: BTreeMap::new(),
             narrowed_by: vec![],
+            disclosed_regions: vec![],
         }
+    }
+
+    #[test]
+    fn a_disclosed_region_carries_its_score_raw_and_unclamped() {
+        // `region_score` spans [-0.57, 1.05]. A carrier that clamped into [0,1] would silently
+        // settle the OPEN blend ruling [2026-08-14] it is not entitled to settle — and would do it
+        // invisibly, because a clamped number looks exactly like a well-behaved score. Both ends
+        // are probed: one outside the interval in each direction.
+        for score in [-0.57_f64, 1.05_f64] {
+            let d = RegionDisclosure {
+                region_id: uuid::Uuid::nil(),
+                region_score: score,
+            };
+            let j = serde_json::to_value(&d).unwrap();
+            assert_eq!(
+                j["region_score"].as_f64().unwrap(),
+                score,
+                "serialization must not reshape the blend"
+            );
+            let back: RegionDisclosure = serde_json::from_value(j).unwrap();
+            assert_eq!(back.region_score, score);
+            assert_eq!(back.region_id, uuid::Uuid::nil());
+        }
+    }
+
+    #[test]
+    fn a_trace_discloses_no_regions_until_a_survey_puts_some_there() {
+        // Empty rather than absent: `[]` and a missing key would both mean "no regions", and a
+        // third spelling of one fact is what `ResourceHit::via` records refusing.
+        assert!(trace("s", ActName::FollowFrom, StageDisposition::Answered)
+            .disclosed_regions
+            .is_empty());
     }
 
     #[test]

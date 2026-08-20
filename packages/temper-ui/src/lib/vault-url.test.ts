@@ -3,9 +3,11 @@ import { ROW_ID as ID, makeRow, withoutKey } from '../test/fixtures';
 import {
 	contextGraphHref,
 	contextHref,
+	graphHref,
 	isCogmapHomed,
 	isContextGraphLocation,
 	isContextLocation,
+	parseGraphAddress,
 	resourceHref,
 	searchHref,
 } from './vault-url';
@@ -179,5 +181,127 @@ describe('isContextGraphLocation', () => {
 		expect(
 			isContextGraphLocation({ owner: '@me' }, at('/graph/@me?context=writing'), '@me', 'temper'),
 		).toBe(false);
+	});
+});
+
+describe('the graph surface address', () => {
+	const at = (path: string) => new URL(path, 'https://temperkb.io');
+
+	describe('parseGraphAddress', () => {
+		it('reads a question, anchors, seeds and a selection', () => {
+			const a = parseGraphAddress(
+				at('/graph/@me?q=what+now&in=ctx:@me/temper&from=aaaa-1&sel=bbbb-2'),
+			);
+
+			expect(a.question).toBe('what now');
+			expect(a.anchors).toEqual([{ kind: 'context', ref: '@me/temper' }]);
+			expect(a.seeds).toEqual(['aaaa-1']);
+			expect(a.selection).toBe('bbbb-2');
+		});
+
+		it('is empty, not malformed, at the unaddressed door', () => {
+			const a = parseGraphAddress(at('/graph/@me'));
+
+			expect(a).toEqual({ question: null, anchors: [], seeds: [], selection: null });
+		});
+
+		it('carries a WHOLE ref, so a team context is expressible at all', () => {
+			const a = parseGraphAddress(at('/graph/@me?in=ctx:+acme/ops'));
+
+			expect(a.anchors).toEqual([{ kind: 'context', ref: '+acme/ops' }]);
+		});
+
+		it('reads a cogmap anchor, which needs no owner', () => {
+			const a = parseGraphAddress(at('/graph/@me?in=map:019f2391-e001-7933-b88a-28fb92e56ac1'));
+
+			expect(a.anchors).toEqual([{ kind: 'cogmap', ref: '019f2391-e001-7933-b88a-28fb92e56ac1' }]);
+		});
+
+		it('spans both anchor kinds in one address', () => {
+			const a = parseGraphAddress(at('/graph/@me?in=ctx:@me/temper&in=map:abc-1&in=ctx:+t/ops'));
+
+			expect(a.anchors).toEqual([
+				{ kind: 'context', ref: '@me/temper' },
+				{ kind: 'cogmap', ref: 'abc-1' },
+				{ kind: 'context', ref: '+t/ops' },
+			]);
+		});
+
+		it('drops an anchor with no kind prefix — a bare slug is not the grammar', () => {
+			const a = parseGraphAddress(at('/graph/@me?in=temper&in=ctx:@me/temper'));
+
+			expect(a.anchors).toEqual([{ kind: 'context', ref: '@me/temper' }]);
+		});
+
+		it('drops an unknown kind prefix rather than guessing at it', () => {
+			expect(parseGraphAddress(at('/graph/@me?in=region:abc')).anchors).toEqual([]);
+		});
+
+		it('drops a kind prefix carrying no ref', () => {
+			expect(parseGraphAddress(at('/graph/@me?in=ctx:')).anchors).toEqual([]);
+		});
+
+		it('treats a blank question as absent, so ?q= is not a search for nothing', () => {
+			expect(parseGraphAddress(at('/graph/@me?q=+++')).question).toBeNull();
+		});
+
+		it('reads every from seed, in order', () => {
+			expect(parseGraphAddress(at('/graph/@me?from=a&from=b&from=c')).seeds).toEqual([
+				'a',
+				'b',
+				'c',
+			]);
+		});
+	});
+
+	describe('graphHref', () => {
+		it('is bare at the unaddressed door', () => {
+			expect(graphHref('@me', {})).toBe('/graph/@me');
+		});
+
+		it('keeps the owner sigil unencoded, as every other builder here does', () => {
+			expect(graphHref('+acme', {})).toBe('/graph/+acme');
+		});
+
+		it('emits each part under its own param', () => {
+			const href = graphHref('@me', {
+				question: 'what now',
+				anchors: [
+					{ kind: 'context', ref: '@me/temper' },
+					{ kind: 'cogmap', ref: 'abc-1' },
+				],
+				seeds: ['s1'],
+				selection: 'r1',
+			});
+
+			expect(href).toBe(
+				'/graph/@me?q=what+now&in=ctx%3A%40me%2Ftemper&in=map%3Aabc-1&from=s1&sel=r1',
+			);
+		});
+
+		it('round-trips every part through the parser', () => {
+			const address = {
+				question: 'a question with spaces & an ampersand',
+				anchors: [
+					{ kind: 'context' as const, ref: '+acme/ops' },
+					{ kind: 'cogmap' as const, ref: '019f2391-e001-7933-b88a-28fb92e56ac1' },
+				],
+				seeds: ['aaaa-1', 'bbbb-2'],
+				selection: 'cccc-3',
+			};
+
+			expect(parseGraphAddress(at(graphHref('@me', address)))).toEqual(address);
+		});
+
+		it('round-trips a context slug carrying characters a URL would eat', () => {
+			const address = {
+				question: null,
+				anchors: [{ kind: 'context' as const, ref: '@me/a b&c' }],
+				seeds: [],
+				selection: null,
+			};
+
+			expect(parseGraphAddress(at(graphHref('@me', address)))).toEqual(address);
+		});
 	});
 });

@@ -16,7 +16,7 @@
 //! twice. (`input_contributed` was a second derived number until ratification ⟨6⟩/9d removed the
 //! field — see the tombstone on `StageResult`.)
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -27,8 +27,8 @@ use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::query::{
     applied_terms, declaration, emitted_fragment_for, validate, validate_shape, ActName,
     ActRefusal, CombineNode, Composition, Extent, NarrowedBy, PlanRefusal, QueryResponse,
-    ResourceHit, ReturnSpec, Scoring, StageDisposition, StageInput, StageNode, StageOutput,
-    StageResult, StageTrace, ValidatedComposition, ViaEntry,
+    RegionDisclosure, ResourceHit, ReturnSpec, Scoring, StageDisposition, StageInput, StageNode,
+    StageOutput, StageResult, StageTrace, ValidatedComposition, ViaEntry,
 };
 use temper_core::types::query::{BoundTerm, CompositionTrace, InputSource, StageInputTrace};
 use temper_core::types::resource_view::{ResourceSection, ResourceView};
@@ -584,6 +584,7 @@ fn stage_result(
         narrowed_by: narrowed_by(node, rows),
         input_ids: n.input_ids,
         input_unusable: n.input_unusable,
+        disclosed_regions: disclosed_regions_for(node.name().as_str(), rows),
     }
 }
 
@@ -606,6 +607,45 @@ fn produced_for(act: &ActName, hits: Vec<ResourceHit>) -> StageOutput {
     }
 }
 
+/// The regions a stage matched, one entry per REGION rather than per row.
+///
+/// **One definition, two readers.** `stage_trace` and the `StageResult` construction both call
+/// this, so the pair rule holds by construction rather than by discipline — the same shape
+/// `applied_terms` uses, and for the reason it states: *"Computed twice, they would eventually
+/// differ, and the difference would be a response claiming a page size that did not run."* The
+/// function is pure; that purity is the property to preserve if it is ever edited.
+///
+/// **Why distinct `(region, quantity)` pairs are the matched set exactly.** A survey row projects
+/// `region_score AS quantity` (`query_plan.rs`, the `EMIT_SURVEY` arm), so every resource in one
+/// region carries that region's score. Collapsing on region id therefore recovers the region set
+/// and its scores with no second query and no snapshot skew against the rows beside it.
+///
+/// Ordered by score descending, matching the act's `orders_by`; `region_id` breaks ties so two
+/// identical runs cannot disagree about order. A trace that reorders between runs is not something
+/// a reader can diff.
+fn disclosed_regions_for(stage: &str, rows: &QueryRows) -> Vec<RegionDisclosure> {
+    let mut seen: BTreeMap<Uuid, f64> = BTreeMap::new();
+    for h in rows.hits.iter().filter(|h| h.stage == stage) {
+        if let (Some(region_id), Some(score)) = (h.region, h.quantity) {
+            seen.entry(region_id).or_insert(score);
+        }
+    }
+    let mut out: Vec<RegionDisclosure> = seen
+        .into_iter()
+        .map(|(region_id, region_score)| RegionDisclosure {
+            region_id,
+            region_score,
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        b.region_score
+            .partial_cmp(&a.region_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.region_id.cmp(&b.region_id))
+    });
+    out
+}
+
 fn stage_trace(node: &StageNode, rows: &QueryRows) -> Option<StageTrace> {
     let n = stage_numbers(node, rows);
     Some(StageTrace {
@@ -623,6 +663,7 @@ fn stage_trace(node: &StageNode, rows: &QueryRows) -> Option<StageTrace> {
         extent: n.extent,
         terms_applied: n.terms_applied,
         narrowed_by: narrowed_by(node, rows),
+        disclosed_regions: disclosed_regions_for(node.name().as_str(), rows),
     })
 }
 
@@ -1188,6 +1229,17 @@ mod tests {
             kind: "resource".to_string(),
             quantity: Some(q),
             via: None,
+            region: None,
+        }
+    }
+
+    /// A `survey` row: the region it came from, carrying that region's `region_score` as its
+    /// quantity — which is what the fragment projects, and why distinct `(region, quantity)` pairs
+    /// are the matched region set rather than an approximation of it.
+    fn hit_in_region(stage: &str, id: Uuid, region: Uuid, q: f64) -> HitRow {
+        HitRow {
+            region: Some(region),
+            ..hit(stage, id, q)
         }
     }
 
@@ -2101,5 +2153,118 @@ mod tests {
             "survey is served by the survey core and must want a vector — its within-region rank \
              is by query_cos, which needs the query embedded"
         );
+    }
+    /// **The disclosure `survey` declares, aggregated from the rows that carry it.**
+    ///
+    /// One entry per REGION, not per resource: a survey row projects `region_score AS quantity`, so
+    /// every resource in one region carries that region's score, and distinct `(region, quantity)`
+    /// pairs are the matched set exactly rather than approximately.
+    #[test]
+    fn a_survey_stage_discloses_each_matched_region_once_ordered_by_score() {
+        // **The best-scoring region deliberately has the HIGHEST id.** The dedup runs through a
+        // `BTreeMap` keyed on region id, so a fixture whose id order already agrees with its score
+        // order witnesses nothing about the sort — bite-probed: the first version of this test
+        // passed with `sort_by` deleted. Here the two orders disagree, so the sort is load-bearing.
+        let (best, worst) = (Uuid::from_u128(9), Uuid::from_u128(2));
+        let rows = QueryRows {
+            hits: vec![
+                hit_in_region("s1", Uuid::from_u128(11), worst, 0.44),
+                hit_in_region("s1", Uuid::from_u128(12), best, 0.91),
+                hit_in_region("s1", Uuid::from_u128(13), best, 0.91),
+            ],
+            tallies: vec![tally("s1", 3, 0)],
+            refusals: vec![],
+        };
+        let d = disclosed_regions_for("s1", &rows);
+        assert_eq!(d.len(), 2, "one entry per region, not per resource");
+        assert_eq!(d[0].region_id, best, "ordered by score, best first");
+        assert_eq!(d[0].region_score, 0.91);
+        assert_eq!(d[1].region_id, worst);
+    }
+
+    /// Ties break on id so two identical runs cannot disagree about order — a trace that reorders
+    /// between runs is not something a reader can diff.
+    ///
+    /// **What this does and does not witness, stated so it is not over-read.** It passes with
+    /// `sort_by` deleted, because the dedup's `BTreeMap` already yields ids in order and the sort's
+    /// `then_with` is therefore redundant for the tie case. What it guards is the PROPERTY, not
+    /// that one mechanism: swap the `BTreeMap` for a `HashMap` and this is the test that fails.
+    #[test]
+    fn regions_tied_on_score_are_ordered_by_id_so_the_trace_is_stable() {
+        let (lo, hi) = (Uuid::from_u128(3), Uuid::from_u128(7));
+        let rows = QueryRows {
+            hits: vec![
+                hit_in_region("s1", Uuid::from_u128(11), hi, 0.5),
+                hit_in_region("s1", Uuid::from_u128(12), lo, 0.5),
+            ],
+            tallies: vec![tally("s1", 2, 0)],
+            refusals: vec![],
+        };
+        let d = disclosed_regions_for("s1", &rows);
+        assert_eq!(
+            d.iter().map(|r| r.region_id).collect::<Vec<_>>(),
+            vec![lo, hi]
+        );
+    }
+
+    /// Empty for every act that is not a survey — the column is `NULL` in their arms.
+    #[test]
+    fn a_walk_stage_discloses_no_regions() {
+        let rows = QueryRows {
+            hits: vec![hit("w", Uuid::from_u128(10), 0.7)],
+            tallies: vec![tally("w", 1, 0)],
+            refusals: vec![],
+        };
+        assert!(disclosed_regions_for("w", &rows).is_empty());
+    }
+
+    /// **A negative score must survive the carrier.**
+    ///
+    /// `region_score` spans `[-0.57, 1.05]`. Clamping into `[0,1]` would silently settle the OPEN
+    /// blend ruling `[2026-08-14]` — invisibly, because a clamped number looks exactly like a
+    /// well-behaved score.
+    #[test]
+    fn a_negative_region_score_survives_the_aggregation() {
+        let rows = QueryRows {
+            hits: vec![hit_in_region(
+                "s1",
+                Uuid::from_u128(10),
+                Uuid::from_u128(1),
+                -0.57,
+            )],
+            tallies: vec![tally("s1", 1, 0)],
+            refusals: vec![],
+        };
+        assert_eq!(disclosed_regions_for("s1", &rows)[0].region_score, -0.57);
+    }
+
+    /// **The pair rule, asserted rather than assumed.**
+    ///
+    /// The trace covers every stage and the results only the returned ones, so two copies of one
+    /// fact are free to drift. They cannot here because both read one `disclosed_regions_for`
+    /// definition — and this test is what keeps that true when someone edits one call site.
+    #[test]
+    fn the_trace_and_the_result_carry_the_same_disclosed_regions() {
+        let v = plan(vec![act_node("s1", ActName::Survey, None)], vec!["s1"]);
+        let id = Uuid::from_u128(10);
+        let rows = QueryRows {
+            hits: vec![hit_in_region("s1", id, Uuid::from_u128(1), 0.9)],
+            tallies: vec![tally("s1", 1, 0)],
+            refusals: vec![],
+        };
+        let hydrated = Hydrated {
+            views: HashMap::from([(id, view(id))]),
+            open_meta: HashMap::new(),
+        };
+        let r = assemble(&v, &rows, &hydrated);
+        let trace = r
+            .trace
+            .stages
+            .iter()
+            .find(|s| s.stage == name("s1"))
+            .expect("every stage has a trace entry");
+        let result = &r.returned[&name("s1")];
+        assert_eq!(result.disclosed_regions, trace.disclosed_regions);
+        assert_eq!(result.disclosed_regions.len(), 1);
     }
 }

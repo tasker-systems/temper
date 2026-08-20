@@ -14,14 +14,19 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # The whole composition's disclosure: an ordered per-stage record array.  `Eq` dropped with [`StageTrace`]'s, and for its reason — see the note there.
-  class CompositionTrace < ApiModelBase
-    attr_accessor :stages
+  # One region a `survey` stage matched, and the score it matched at.  **Trace disclosure, never a row.** `survey` produces RESOURCES — the ⟨3⟩ redesign (`20260816000020_survey_act.sql`) moved regions out of the output precisely so a caller could not draw them as though the reader had authored them. This says which groupings answered, for a caller that wants to explain *why these*, and it carries **no per-resource mapping** — which follows from that same redesign rather than being a fresh choice here: a per-resource mapping would put a region back on the row shape the redesign just cleared it from.  Contrast [`RegionHit`], which is a region as a RESULT — a row a caller asked for and may rank. This is a region as an EXPLANATION of resource rows, and the two must not be conflated: one is the answer, the other is a note about how the answer was reached.  # `region_score` is raw, and is NOT in `[0,1]`  It is `0.4·sal_norm + 0.6·query_cos + 0.05·prior`, measured spanning `[-0.57, 1.05]` — so it goes negative at one end and past 1 at the other. Whether the `sal_norm` term belongs in it at all is an **OPEN ruling** `[2026-08-14, Pete]`.  Transporting it unchanged is what keeps that ruling open. A carrier that normalized it into `[0,1]` would silently settle a question it is not entitled to settle, and would do it invisibly, since the normalized number would look exactly like a well-behaved score. Do not clamp, rescale, or attach a [`super::act::QuantityScale`] claim this quantity does not have.
+  class RegionDisclosure < ApiModelBase
+    # The region's id, as stored.  **Not durable, and the instability is the caller's to handle.** `assert_region` (`temper-substrate/src/write.rs:673`) reuses this row when a region's member set is unchanged and **mints a new id otherwise**, soft-folding the displaced row. So an id disclosed here may name nothing by the time a caller acts on it — which a caller must render as *re-derived*, never as an error and never as the reader's mistake.
+    attr_accessor :region_id
+
+    # The blend this region matched at. See the type's own note: raw, unbounded, open ruling.
+    attr_accessor :region_score
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
-        :'stages' => :'stages'
+        :'region_id' => :'region_id',
+        :'region_score' => :'region_score'
       }
     end
 
@@ -38,7 +43,8 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
-        :'stages' => :'Array<StageTrace>'
+        :'region_id' => :'String',
+        :'region_score' => :'Float'
       }
     end
 
@@ -52,24 +58,28 @@ module Temper::Generated
     # @param [Hash] attributes Model attributes in the form of hash
     def initialize(attributes = {})
       if (!attributes.is_a?(Hash))
-        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::CompositionTrace` initialize method"
+        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::RegionDisclosure` initialize method"
       end
 
       # check to see if the attribute exists and convert string to symbol for hash key
       acceptable_attribute_map = self.class.acceptable_attribute_map
       attributes = attributes.each_with_object({}) { |(k, v), h|
         if (!acceptable_attribute_map.key?(k.to_sym))
-          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::CompositionTrace`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
+          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::RegionDisclosure`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
         end
         h[k.to_sym] = v
       }
 
-      if attributes.key?(:'stages')
-        if (value = attributes[:'stages']).is_a?(Array)
-          self.stages = value
-        end
+      if attributes.key?(:'region_id')
+        self.region_id = attributes[:'region_id']
       else
-        self.stages = nil
+        self.region_id = nil
+      end
+
+      if attributes.key?(:'region_score')
+        self.region_score = attributes[:'region_score']
+      else
+        self.region_score = nil
       end
     end
 
@@ -78,8 +88,12 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
-      if @stages.nil?
-        invalid_properties.push('invalid value for "stages", stages cannot be nil.')
+      if @region_id.nil?
+        invalid_properties.push('invalid value for "region_id", region_id cannot be nil.')
+      end
+
+      if @region_score.nil?
+        invalid_properties.push('invalid value for "region_score", region_score cannot be nil.')
       end
 
       invalid_properties
@@ -89,18 +103,29 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
-      return false if @stages.nil?
+      return false if @region_id.nil?
+      return false if @region_score.nil?
       true
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] stages Value to be assigned
-    def stages=(stages)
-      if stages.nil?
-        fail ArgumentError, 'stages cannot be nil'
+    # @param [Object] region_id Value to be assigned
+    def region_id=(region_id)
+      if region_id.nil?
+        fail ArgumentError, 'region_id cannot be nil'
       end
 
-      @stages = stages
+      @region_id = region_id
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] region_score Value to be assigned
+    def region_score=(region_score)
+      if region_score.nil?
+        fail ArgumentError, 'region_score cannot be nil'
+      end
+
+      @region_score = region_score
     end
 
     # Checks equality by comparing each attribute.
@@ -108,7 +133,8 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
-          stages == o.stages
+          region_id == o.region_id &&
+          region_score == o.region_score
     end
 
     # @see the `==` method
@@ -120,7 +146,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [stages].hash
+      [region_id, region_score].hash
     end
 
     # Builds the object from hash

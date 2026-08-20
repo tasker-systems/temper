@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 
 use super::act::ActName;
 use super::filter::{EdgeFilter, PropertyPredicate, ResourceFilter};
+use super::hits::RegionDisclosure;
 use super::scalars::{BoundTerm, Extent};
 use super::stage::{StageInput, StageName, StageOutput};
 
@@ -235,11 +236,20 @@ pub struct StageResult {
     /// `regions_effective` pattern the audit calls "a model of an honest knob" — which existed
     /// for exactly one term and was never extended to `limit` or `depth`.
     ///
-    /// There is no separate "you were clamped" flag, deliberately: ceilings are published per act,
-    /// so the applied value is the whole story. Clamping to a ceiling nobody published would be
-    /// the bug. This covers only terms the act ADMITS — one it does not is refused outright.
+    /// There is no separate "you were clamped" flag, deliberately `[decided — 2026-08-03, Pete]`:
+    /// ceilings are published per act, so the applied value is the whole story. Clamping to a
+    /// ceiling nobody published would be the bug. This covers only terms the act ADMITS — one it
+    /// does not is refused outright.
     pub terms_applied: BTreeMap<BoundTerm, i64>,
     pub narrowed_by: Vec<NarrowedBy>,
+    /// Which regions a `survey` stage matched, and at what score. Empty for every other act.
+    ///
+    /// **The pair rule**: [`super::trace::StageTrace::disclosed_regions`] carries the same value,
+    /// from one `disclosed_regions_for` definition rather than two. That field's doc carries the
+    /// argument and the history; this one exists because a caller reading only `returned` must not
+    /// have to reach into `trace` for a disclosure about a stage whose rows they already hold.
+    #[serde(default)]
+    pub disclosed_regions: Vec<RegionDisclosure>,
     /// How many ids this stage was handed. Zero for a stage with no input.
     pub input_ids: i64,
     // `input_contributed` used to sit here. Removed by ratification ⟨6⟩/9d `[2026-08-09, Pete]` —
@@ -405,6 +415,7 @@ mod tests {
             narrowed_by,
             input_ids,
             input_unusable: 0,
+            disclosed_regions: vec![],
         }
     }
 
