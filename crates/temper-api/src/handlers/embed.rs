@@ -85,7 +85,7 @@ pub(crate) fn require_dispatch_secret(
 // GET (not POST): Vercel Cron invokes its target with a GET carrying the `CRON_SECRET` as a bearer.
 // The route also accepts POST for manual ops. The pass is effectively idempotent — a re-run just
 // claims whatever is still pending — so a GET trigger is safe here.
-/// Claim steward jobs for a worker
+/// Claim embed jobs for a dispatch pass
 #[utoipa::path(
     get,
     path = "/api/embed/dispatch",

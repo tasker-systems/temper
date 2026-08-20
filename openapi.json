@@ -88,7 +88,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Access"
       }
     },
     "/api/access/requests/me": {
@@ -146,7 +147,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Access"
       },
       "delete": {
         "tags": [
@@ -183,7 +185,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Access"
       }
     },
     "/api/access/reviews": {
@@ -248,7 +251,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Access"
       }
     },
     "/api/access/settings": {
@@ -299,7 +303,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Access"
       }
     },
     "/api/admin/slack/links/disconnect": {
@@ -380,7 +385,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Slack Link"
       }
     },
     "/api/auditor/dispatch": {
@@ -437,7 +443,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Auditor"
       }
     },
     "/api/auditor/sweep": {
@@ -496,7 +503,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Auditor"
       }
     },
     "/api/auditor/{cogmap}/complete": {
@@ -552,7 +560,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Auditor"
       }
     },
     "/api/auth/slack/link/me": {
@@ -604,7 +613,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Slack Link"
       }
     },
     "/api/cogmaps/{id}/graph/slice": {
@@ -673,7 +683,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Graph"
       }
     },
     "/api/cognitive-maps": {
@@ -727,7 +738,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Cognitive Maps"
       },
       "post": {
         "tags": [
@@ -767,7 +779,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Cognitive Maps"
       }
     },
     "/api/cognitive-maps/{id}": {
@@ -823,7 +836,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Cognitive Maps"
       },
       "put": {
         "tags": [
@@ -971,7 +985,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Cognitive Maps"
       }
     },
     "/api/cognitive-maps/{id}/analytics": {
@@ -1037,7 +1052,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Cognitive Maps"
       }
     },
     "/api/cognitive-maps/{id}/grants": {
@@ -1103,7 +1119,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Cognitive Maps"
       },
       "delete": {
         "tags": [
@@ -1152,7 +1169,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Cognitive Maps"
       }
     },
     "/api/cognitive-maps/{id}/materialize": {
@@ -1221,7 +1239,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Cognitive Maps"
       }
     },
     "/api/cognitive-maps/{id}/materialize-delta": {
@@ -1287,7 +1306,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Cognitive Maps"
       }
     },
     "/api/cognitive-maps/{id}/region-metrics": {
@@ -1363,7 +1383,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Cognitive Maps"
       }
     },
     "/api/cognitive-maps/{id}/shape": {
@@ -1439,7 +1460,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Cognitive Maps"
       }
     },
     "/api/cognitive-maps/{id}/teams": {
@@ -1505,7 +1527,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Cognitive Maps"
       }
     },
     "/api/cognitive-maps/{id}/teams/{team_id}": {
@@ -1571,7 +1594,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Cognitive Maps"
       }
     },
     "/api/contexts": {
@@ -1615,7 +1639,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Contexts"
       },
       "post": {
         "tags": [
@@ -1652,7 +1677,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Contexts"
       }
     },
     "/api/contexts/{id}": {
@@ -1708,7 +1734,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Contexts"
       }
     },
     "/api/contexts/{id}/materialize": {
@@ -1777,7 +1804,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Contexts"
       }
     },
     "/api/contexts/{id}/reassign": {
@@ -1849,7 +1877,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Contexts"
       }
     },
     "/api/contexts/{id}/region-metrics": {
@@ -1925,7 +1954,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Contexts"
       }
     },
     "/api/contexts/{id}/rename": {
@@ -2000,7 +2030,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Contexts"
       }
     },
     "/api/contexts/{id}/shape": {
@@ -2076,7 +2107,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Contexts"
       }
     },
     "/api/contexts/{id}/teams": {
@@ -2142,7 +2174,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Contexts"
       }
     },
     "/api/contexts/{id}/teams/{team_id}": {
@@ -2208,7 +2241,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Contexts"
       }
     },
     "/api/events/{kb_context_id}/cursor": {
@@ -2271,7 +2305,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Events"
       }
     },
     "/api/facets": {
@@ -2362,7 +2397,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Facets"
       }
     },
     "/api/graph/cogmaps/{id}/panorama": {
@@ -2431,7 +2467,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Graph"
       }
     },
     "/api/graph/contexts/composition": {
@@ -2576,7 +2613,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Graph"
       }
     },
     "/api/graph/contexts/panorama": {
@@ -2695,7 +2733,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Graph"
       }
     },
     "/api/graph/elements/{kind}/{id}/trail": {
@@ -2760,7 +2799,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Events"
       }
     },
     "/api/graph/home": {
@@ -2801,7 +2841,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Graph"
       }
     },
     "/api/graph/regions/composition": {
@@ -2872,7 +2913,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Graph"
       }
     },
     "/api/health": {
@@ -2908,7 +2950,8 @@
               }
             }
           }
-        }
+        },
+        "x-apidog-folder": "Reference/API Reference/Health"
       }
     },
     "/api/ingest": {
@@ -2965,7 +3008,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Ingest"
       }
     },
     "/api/ingest/{id}": {
@@ -3034,7 +3078,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Ingest"
       }
     },
     "/api/invitations/accept": {
@@ -3094,7 +3139,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Invitations"
       }
     },
     "/api/invitations/decline": {
@@ -3144,7 +3190,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Invitations"
       }
     },
     "/api/invitations/mine": {
@@ -3188,7 +3235,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Invitations"
       }
     },
     "/api/invocations": {
@@ -3253,7 +3301,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Invocations"
       },
       "post": {
         "tags": [
@@ -3290,7 +3339,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Invocations"
       }
     },
     "/api/invocations/{id}": {
@@ -3346,7 +3396,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Invocations"
       }
     },
     "/api/invocations/{id}/close": {
@@ -3408,7 +3459,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Invocations"
       }
     },
     "/api/profile": {
@@ -3459,7 +3511,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Profile"
       },
       "patch": {
         "tags": [
@@ -3503,7 +3556,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Profile"
       }
     },
     "/api/profile/auth-links": {
@@ -3557,7 +3611,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Profile"
       }
     },
     "/api/query": {
@@ -3639,7 +3694,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Query"
       }
     },
     "/api/relationships": {
@@ -3730,7 +3786,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Relationships"
       }
     },
     "/api/relationships/{edge_handle}/facets": {
@@ -3804,7 +3861,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Facets"
       },
       "post": {
         "tags": [
@@ -3891,7 +3949,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Facets"
       }
     },
     "/api/relationships/{edge_handle}/fold": {
@@ -3994,7 +4053,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Relationships"
       }
     },
     "/api/relationships/{edge_handle}/retype": {
@@ -4097,7 +4157,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Relationships"
       }
     },
     "/api/relationships/{edge_handle}/reweight": {
@@ -4200,7 +4261,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Relationships"
       }
     },
     "/api/resources": {
@@ -4448,7 +4510,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Resources"
       },
       "post": {
         "tags": [
@@ -4522,7 +4585,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Resources"
       }
     },
     "/api/resources/{id}": {
@@ -4595,7 +4659,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Resources"
       },
       "delete": {
         "tags": [
@@ -4757,7 +4822,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Resources"
       },
       "patch": {
         "tags": [
@@ -4843,7 +4909,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Resources"
       }
     },
     "/api/resources/{id}/blocks": {
@@ -4899,7 +4966,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Ingest"
       },
       "post": {
         "tags": [
@@ -4951,7 +5019,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Ingest"
       }
     },
     "/api/resources/{id}/citation-audits": {
@@ -5028,7 +5097,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Resources"
       },
       "post": {
         "tags": [
@@ -5106,7 +5176,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Resources"
       }
     },
     "/api/resources/{id}/content": {
@@ -5179,7 +5250,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Resources"
       }
     },
     "/api/resources/{id}/edges": {
@@ -5255,7 +5327,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Resources"
       }
     },
     "/api/resources/{id}/evidence": {
@@ -5328,7 +5401,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Resources"
       }
     },
     "/api/resources/{id}/facets": {
@@ -5402,7 +5476,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Facets"
       }
     },
     "/api/resources/{id}/finalize": {
@@ -5464,7 +5539,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Ingest"
       }
     },
     "/api/resources/{id}/grants": {
@@ -5547,7 +5623,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Resources"
       },
       "delete": {
         "tags": [
@@ -5613,7 +5690,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Resources"
       }
     },
     "/api/resources/{id}/lineage": {
@@ -5699,7 +5777,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Resources"
       }
     },
     "/api/resources/{id}/meta": {
@@ -5772,7 +5851,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Meta"
       },
       "put": {
         "tags": [
@@ -5848,7 +5928,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Meta"
       }
     },
     "/api/resources/{id}/provenance": {
@@ -5924,7 +6005,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Resources"
       },
       "post": {
         "tags": [
@@ -6010,7 +6092,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Resources"
       }
     },
     "/api/resources/{id}/reassign": {
@@ -6079,7 +6162,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Resources"
       }
     },
     "/api/search": {
@@ -6151,7 +6235,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Search"
       }
     },
     "/api/steward/candidates": {
@@ -6196,7 +6281,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Steward"
       }
     },
     "/api/steward/dispatch": {
@@ -6220,7 +6306,7 @@
           "Steward"
         ],
         "summary": "Claim steward jobs for a worker",
-        "operationId": "dispatch",
+        "operationId": "steward_dispatch",
         "requestBody": {
           "content": {
             "application/json": {
@@ -6247,7 +6333,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Steward"
       }
     },
     "/api/steward/sweep": {
@@ -6271,7 +6358,7 @@
           "Steward"
         ],
         "summary": "Survey steward drift across maps",
-        "operationId": "sweep",
+        "operationId": "steward_sweep",
         "parameters": [
           {
             "name": "threshold",
@@ -6303,7 +6390,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Steward"
       }
     },
     "/api/steward/{cogmap}/delta": {
@@ -6369,7 +6457,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Steward"
       }
     },
     "/api/steward/{cogmap}/watermark": {
@@ -6438,7 +6527,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Steward"
       }
     },
     "/api/teams": {
@@ -6482,7 +6572,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Teams"
       },
       "post": {
         "tags": [
@@ -6522,7 +6613,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Teams"
       }
     },
     "/api/teams/{id}": {
@@ -6578,7 +6670,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Teams"
       },
       "delete": {
         "tags": [
@@ -6616,7 +6709,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Teams"
       },
       "patch": {
         "tags": [
@@ -6668,7 +6762,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Teams"
       }
     },
     "/api/teams/{id}/invitations": {
@@ -6727,7 +6822,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Invitations"
       }
     },
     "/api/teams/{id}/invitations/{invitation_id}": {
@@ -6792,7 +6888,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Invitations"
       }
     },
     "/api/teams/{id}/invite": {
@@ -6864,7 +6961,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Invitations"
       }
     },
     "/api/teams/{id}/members": {
@@ -6933,7 +7031,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Teams"
       }
     },
     "/api/teams/{id}/members/{profile_id}": {
@@ -7005,7 +7104,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Teams"
       },
       "patch": {
         "tags": [
@@ -7073,7 +7173,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Teams"
       }
     },
     "/api/teams/{id}/reassign": {
@@ -7139,7 +7240,8 @@
           {
             "bearer_auth": []
           }
-        ]
+        ],
+        "x-apidog-folder": "Reference/API Reference/Teams"
       }
     }
   },

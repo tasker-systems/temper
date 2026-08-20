@@ -1,3 +1,4 @@
+use utoipa::openapi::extensions::Extensions;
 use utoipa::openapi::path::{Parameter, ParameterBuilder, ParameterIn};
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::openapi::{ObjectBuilder, Required, Type};
@@ -350,6 +351,40 @@ impl Modify for SurfaceHeaderAddon {
     }
 }
 
+/// Emits `x-apidog-folder` on every operation so Apidog nests API endpoints under
+/// `Reference/API Reference/<tag>` instead of flattening them to top-level folders named
+/// after the tag. Apidog falls back to `tags[0]` when this field is absent; this addon
+/// makes the nesting structural and drift-gated rather than a publish-side setting that
+/// must be hand-maintained.
+///
+/// Applied in `routes::openapi_spec()` after the routers merge, for the same reason as
+/// [`SurfaceHeaderAddon`]: the paths map is empty until then.
+pub(crate) struct ApidogFolderAddon;
+
+impl Modify for ApidogFolderAddon {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        for item in openapi.paths.paths.values_mut() {
+            for op in [
+                item.get.as_mut(),
+                item.post.as_mut(),
+                item.put.as_mut(),
+                item.delete.as_mut(),
+                item.patch.as_mut(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                let Some(tag) = op.tags.as_ref().and_then(|t| t.first()) else {
+                    continue;
+                };
+                let folder = format!("Reference/API Reference/{tag}");
+                let ext = op.extensions.get_or_insert_with(Extensions::default);
+                ext.insert("x-apidog-folder".to_string(), serde_json::json!(folder));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -457,6 +492,39 @@ mod tests {
         assert!(json.contains("\"name\": \"Health\""));
         assert!(json.contains("\"name\": \"Relationships\""));
         assert!(json.contains("\"name\": \"Facets\""));
+    }
+
+    /// Every documented operation carries `x-apidog-folder` so Apidog nests endpoints
+    /// under `Reference/API Reference/<tag>` instead of flattening to top-level folders.
+    #[test]
+    fn every_operation_has_apidog_folder() {
+        let spec = crate::routes::openapi_spec();
+        assert!(!spec.paths.paths.is_empty(), "spec has no paths to check");
+
+        for (path, item) in spec.paths.paths.iter() {
+            for (method, op) in [
+                ("GET", &item.get),
+                ("POST", &item.post),
+                ("PUT", &item.put),
+                ("DELETE", &item.delete),
+                ("PATCH", &item.patch),
+            ] {
+                let Some(op) = op else { continue };
+                let ext = op
+                    .extensions
+                    .as_ref()
+                    .unwrap_or_else(|| panic!("{method} {path} has no extensions"));
+                let folder = ext
+                    .get("x-apidog-folder")
+                    .unwrap_or_else(|| panic!("{method} {path} missing x-apidog-folder"));
+                assert!(
+                    folder
+                        .as_str()
+                        .is_some_and(|f| f.starts_with("Reference/API Reference/")),
+                    "{method} {path} has unexpected x-apidog-folder: {folder:?}",
+                );
+            }
+        }
     }
 
     /// Every documented path carries the client-identity header, so a generated client can
