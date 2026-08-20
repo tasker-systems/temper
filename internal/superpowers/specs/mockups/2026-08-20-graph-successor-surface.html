@@ -264,15 +264,16 @@ ol.beats p { margin:.25rem 0 0; font-size:.92rem; color:var(--ink-2); }
   <table>
     <thead><tr><th>Axis</th><th>Ceiling in the code</th><th>Who reports it</th><th>Status</th></tr></thead>
     <tbody>
-      <tr><td>Walk size</td><td class="num">limit 50</td><td class="mono">Extent · terms_applied</td><td>Honest already</td></tr>
-      <tr><td>Groupings per place</td><td class="num">3 default, 20 max</td><td class="mono">terms_applied</td><td>Honest already</td></tr>
-      <tr><td>Places asked</td><td class="num">none — we choose</td><td class="flag-none">nothing</td><td>The surface's own debt</td></tr>
+      <tr><td>Walk size</td><td class="num">limit 50</td><td class="mono">Extent</td><td>Complete, or more exist — never a count</td></tr>
+      <tr><td>Groupings per place</td><td class="num">3 default, 20 max</td><td class="mono">terms_applied</td><td>What ran. No denominator</td></tr>
+      <tr><td>Places asked</td><td class="num">none — we choose</td><td class="flag-none">nothing</td><td>The only true <em>x of y</em> on the line</td></tr>
     </tbody>
   </table>
   </div>
   <div class="measure" style="margin-top:1.4rem">
-    <p>Two of the three already report themselves truthfully, and the only job is to stop discarding what comes back. <code>terms_applied</code> carries the page a stage <em>actually ran with</em> — clamped, defaulted — because reporting the request back would make it an echo rather than a disclosure.</p>
-    <p>The third has no machinery at all. Choosing which of your places to ask happens before the plan exists, so nothing downstream can account for it. The surface has to declare that one itself, from its own records — which is why it is on the line above whether or not anything was dropped.</p>
+    <p>Notice what the line does <em>not</em> say. Only one of the three has a real <em>x of y</em>, and it is the one nothing downstream measures — how many of your places were asked, which the surface knows because it chose them. The other two have no denominator anywhere.</p>
+    <p>That is not an omission to fix later. Asked how many results a walk really had, the substrate answers <em>absent rather than guessed from the page size</em> — it returns a page, not a count, and declines to imply otherwise. A surface that printed “50 of 314” would be inventing the number its own foundation refused to invent. So the walk says <em>more exist</em>, or it says <em>complete</em>, and those are the only two honest things it can say.</p>
+    <p>The same restraint governs the ranking. Groupings come back with a blended score that runs slightly negative at one end and past 1.0 at the other, and whether that blend is even the right question is still an open ruling. So the panel puts them in order and never prints the number.</p>
   </div>
 </section>
 
@@ -338,7 +339,7 @@ Chart data: titles, doc types and edge kinds are real resources and real edge ki
       ["Coverage and what it omits","7 resources"],
       ["The graph surface and its pivot","6 resources"]
     ],
-    bound:{walk:[50,214],reg:[3,490],places:[7,7]},
+    bound:{shown:50,ext:'more exist',reg:3,places:[7,7]},
     nodes:[
       N("A read declares its bounds — and expressive filters are what make bounds usable","goal","s"),
       N("A register's coverage is projectable, and the projection never reads cleaner than the evidence","goal","s"),
@@ -378,7 +379,7 @@ Chart data: titles, doc types and edge kinds are real resources and real edge ki
       ["Bounds and their disclosure","4 resources"],
       ["Provenance that survives a rewrite","3 resources"]
     ],
-    bound:{walk:[31,31],reg:[4,4],places:[1,1]},
+    bound:{shown:31,ext:'complete',reg:4,places:[1,1]},
     nodes:[
       N("A surface that misdeclares its kind harms the reader who trusts it","concept","s"),
       N("Coverage is never inferred from absence","concept","s"),
@@ -436,7 +437,7 @@ Chart data: titles, doc types and edge kinds are real resources and real edge ki
   const E2 = {
     lead:"No question was asked and this is a container of your own work, so everything in it is the answer. Nothing was grouped, ranked or scored.",
     groups:null,
-    bound:{walk:[50,1106],reg:null,places:[1,1]},
+    bound:{shown:50,ext:'more exist',reg:null,places:[1,1]},
     nodes:[...E0.nodes.slice(0,16), ...T.map(([t,ty])=>N(t,ty,"w"))].map(n=>({...n,arm:"w"})),
     edges:(()=>{
       const e=[], n=46, k=["derived_from","advances","parent_of","leads_to","near","contains"];
@@ -584,10 +585,10 @@ Chart data: titles, doc types and edge kinds are real resources and real edge ki
     const b=e.bound;
     document.getElementById("bound").innerHTML =
       `<span class="lbl">Showing</span>`+
-      `<span><b>${b.walk[0]}</b> of ${b.walk[1].toLocaleString()} reachable</span>`+
-      (b.reg? `<span><b>${b.reg[0]}</b> of ${b.reg[1].toLocaleString()} groupings</span>`
-            : `<span class="na">no groupings used</span>`)+
-      `<span><b>${b.places[0]}</b> of ${b.places[1]} places asked</span>`;
+      `<span><b>${b.shown}</b> \u00b7 ${b.ext==='complete'?'complete':'<b>more exist</b>'}</span>`+
+      (b.reg!=null? `<span><b>${b.reg}</b> groupings asked</span>`
+            : `<span class="na">groupings — not applicable</span>`)+
+      `<span><b>${b.places[0]}</b> of ${b.places[1]} place${b.places[1]==1?'':'s'} asked</span>`;
     document.getElementById("ro-lead").textContent=e.lead;
     document.getElementById("ro-body").innerHTML = e.groups
       ? e.groups.map(([t,d])=>`<div class="grouping"><b>${t}</b><span class="n">${d}</span></div>`).join("")

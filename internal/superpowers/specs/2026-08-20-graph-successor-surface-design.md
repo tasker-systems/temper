@@ -278,9 +278,9 @@ of your work"*, not *"3 regions by region_score."*
 
 | Axis | Ceiling | Reported by |
 |---|---|---|
-| **Anchor set** — how many of your places were asked | none; the client chooses | **nothing** — see below |
-| **Regions per anchor** | `default 3, max 20` (`registry.rs:499`) | `terms_applied[regions]` |
-| **Walk size** | **`Limit: 50`** (`registry.rs:392`) | `Extent` + `terms_applied[limit]` |
+| **Anchor set** — how many of your places were asked | none; the client chooses | **nothing** — the client's own record, and the only axis with a true denominator |
+| **Regions per anchor** | `default 3, max 20` (`registry.rs:499`) | `terms_applied[regions]` — what ran, no denominator |
+| **Walk size** | **`Limit: 50`** (`registry.rs:392`) | `Extent` — *complete* or *more exist*, never a count |
 
 The walk ceiling is the one that matters most and the register never named it: **the walk contributes
 at most 50 nodes**, against a corpus of thousands.
@@ -309,10 +309,35 @@ and per-stage on `StageTrace`).
 composition exists*, so no `Extent` can ride on it. The surface must declare it itself, from its own
 records.
 
+**There is no denominator for two of the three axes, and the surface must not invent one**
+`[corrected — 2026-08-20]`. This section first said the line reads `50 of 314 reachable · 3 of 47
+groupings`. It cannot. `StageResult.total` is set to `None` **unconditionally** —
+`crates/temper-services/src/backend/query_read.rs:582`, with the reasoning attached:
+
+> *"Carried only by acts that can produce one WITHOUT a second query, and none can: the fragments
+> return a page, not a count. **Absent rather than guessed from the page size.**"*
+
+And `Extent` is a saturation test rather than a count — `query_read.rs:709`:
+`Some(limit) if produced >= *limit => Extent::Partial`.
+
+| Axis | Numerator | Denominator |
+|---|---|---|
+| Walk size | rows returned | **none.** `Extent` says *more exist*; nothing says how many |
+| Groupings per anchor | `terms_applied[regions]` — what ran | **none** from the composition |
+| Places asked | anchors asked — the client enumerated them | **yes**, genuinely known |
+
+The clause never required a denominator. It requires that a partial view not be indistinguishable
+from a complete one, and `Extent` draws exactly that line truthfully. **The surface refusing to
+manufacture precision is the same discipline as the substrate refusing to** — the same instinct that
+forbids presenting `region_score` as a score in §5. Chasing the missing denominators with extra count
+reads was considered and refused `[decided — 2026-08-20, Pete]`: it would cost a read per axis per
+view and require building the number the substrate deliberately declined to build.
+
 **Presentation.** A persistent, non-dismissible line — chrome, not a warning:
 
 ```
-50 of 314 reachable · 3 of 47 groupings · 6 of 6 places
+Showing 50 · more exist · 3 groupings asked · 7 of 7 places
+Showing 31 · complete   · 4 groupings asked · 1 of 1 place
 ```
 
 Present whether the view is complete or partial, so *complete* is something the reader is **told**
@@ -320,6 +345,9 @@ rather than something they infer from silence. This is the strongest available r
 `legibility-is-never-bought-with-silent-omission`, and it is deliberately not the cheaper "show a
 marker when something was dropped" — under that design the absence of a marker becomes the signal,
 and a bug that suppresses it is invisible.
+
+**A context entry runs no survey**, so its groupings axis is *not applicable* rather than zero. It
+says so; a missing axis and an exhausted one must never render alike.
 
 ---
 
