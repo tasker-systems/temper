@@ -288,9 +288,9 @@ of your work"*, not *"3 regions by region_score."*
 
 | Axis | Ceiling | Reported by |
 |---|---|---|
-| **Anchor set** — how many of your places were asked | none; the client chooses | **nothing** — the client's own record, and the only axis with a true denominator |
-| **Regions per anchor** | `default 3, max 20` (`registry.rs:499`) | `terms_applied[regions]` — what ran, no denominator |
-| **Walk size** | **`Limit: 50`** (`registry.rs:392`) | `Extent` — *complete* or *more exist*, never a count |
+| **Anchor set** — how many of your places were asked | **24**, client-side `[decided — 2026-08-20]` | **nothing** — the client's own record, and the only axis with a true denominator |
+| **Regions per anchor** | `default 3, max 20` (`registry.rs:499`) | `terms_applied[regions]` — **only if the client NAMES the term**; see below |
+| **Walk size** | **`Limit: 50`** (`registry.rs:392`) | `Extent` — *complete* or *more exist*, never a count. **`survey` never reports either** |
 
 The walk ceiling is the one that matters most and the register never named it: **the walk contributes
 at most 50 nodes**, against a corpus of thousands.
@@ -343,12 +343,81 @@ forbids presenting `region_score` as a score in §5. Chasing the missing denomin
 reads was considered and refused `[decided — 2026-08-20, Pete]`: it would cost a read per axis per
 view and require building the number the substrate deliberately declined to build.
 
-**Presentation.** A persistent, non-dismissible line — chrome, not a warning:
+### The anchor-set ceiling `[decided — 2026-08-20, Pete, in Beat A]`
+
+**Ceiling 24. Order: `resource_count` DESC, ties by `ref` ASC.**
+
+Decided against a measurement, as §7 required. The heaviest real reader of the system — 2,330
+resources — holds **12 anchors**: 8 contexts and 4 cogmaps.
 
 ```
-Showing 50 · more exist · 3 groupings asked · 7 of 7 places
-Showing 31 · complete   · 4 groupings asked · 1 of 1 place
+contexts (8)                              cogmaps (4)
+2066 @j-cole-taylor/temper                 817 temper-self-cognition        (406 regions)
+ 355 @j-cole-taylor/tasker                  38 storyteller-system-design     (32 regions)
+ 191 @j-cole-taylor/storyteller             23 system-default                 (0 regions)
+ 145 @j-cole-taylor/working-agreements      14 cognitive-maps-for-storyteller (12 regions)
+  59 @j-cole-taylor/learning-maths
+   8 @j-cole-taylor/knowledge
+   1 @j-cole-taylor/general
+   0 +temper-system/github-readonly
 ```
+
+24 is 2× the measurement, so **truncation does not fire for any real reader today** — the ordering
+rule is a safety net rather than routine behaviour, which is deliberate: a ceiling that fires
+routinely would make a reader's ordinary act (creating a context) silently change what the
+unaddressed door asks.
+
+**Why `resource_count`, and why the alternatives are unavailable rather than merely worse.** Only
+three fields span both anchor kinds — `resource_count`, `name`, `ref`. A recency ordering is
+**inexpressible**: `CogmapSummary` carries no timestamp at all (`id, name, owner_ref, ref,
+region_count, resource_count, team_ids, telos_resource_id, charter_statement`) while a context
+carries `created`/`updated`, and ordering contexts by recency and cogmaps by something else would be
+the kind-dependent behaviour `cross-kind-relationship-is-reachable` exists to forbid. Ordering by
+`id` — UUIDv7, so its leading bits are a timestamp — is **wrong for a reason worth recording**, since
+it looks like a free recency: `@me/general` is `00000000-…-0003-000000000006` and `system-default` is
+`00000000-…-0005-000000000001`, seeded sentinels rather than v7, so they sort to one extreme
+regardless of age. `ref` ASC drops `@j-cole-taylor/temper` (2,066 resources) before
+`+temper-system/github-readonly` (0), because `+` precedes `@` in ASCII.
+
+So `resource_count` DESC is the least-lossy of what is actually available: it drops the emptiest
+anchors first, and an anchor with zero resources — which exists today — is dropped before any anchor
+with material. `ref` ASC breaks ties so the choice is deterministic and a URL is reproducible.
+
+### Two findings that change what the line can say `[found in Beat A grounding — 2026-08-20]`
+
+**1. `terms_applied[regions]` is ABSENT unless the client names the term.** `applied_terms` defaults
+**only** `Limit`, and only from a published ceiling — `registry.rs:689`: *"`Regions` deliberately does
+not: `wayfind_region_scores` has its own funnel default (3) beneath a ceiling of 20, and defaulting
+to the ceiling here would widen every unbounded survey sevenfold while claiming to describe the
+deployed system."* Its own test pins it (`registry.rs:1678-1682`):
+
+```rust
+assert_eq!(applied_terms(&BTreeMap::new(), &survey).get(&BoundTerm::Regions), None);
+```
+
+A survey that names nothing therefore **runs at 3 and reports nothing**, and this axis would have no
+source at all. **So the builder names `regions` explicitly on every survey stage.** The disclosure is
+only real if the plan asks for it — which makes this axis, uniquely, one the *client* has to earn.
+
+**2. `survey` reports `Extent::Indeterminate` unconditionally** — before any row counting, on the way
+in (`query_read.rs:737-743`): *"a region funnel produces its candidate set rather than selecting from
+one, so there is no remainder to report."* It is also the arm with no `Limit`. So in §2.1 **only the
+walk can ever say complete or partial**, and a line that aggregated the arms could never say
+*complete* for the flagship entry no matter what the corpus did.
+
+**Presentation.** A persistent, non-dismissible line — chrome, not a warning. **The arms are declared
+separately and never aggregated** `[decided — 2026-08-20, Pete]`, so no arm's truthfulness is diluted
+by another's: the survey arm carries a count and makes no remainder claim, the walk carries its
+`Extent`.
+
+```
+Showing 31 from your places · 50 followed on · more exist · 3 groupings asked · 7 of 7 places
+Showing 12 from your places · 50 followed on · more exist · 3 groupings asked · 24 of 40 places
+Showing 50 followed on · more exist · groupings not applicable · 1 of 1 place
+```
+
+The third is a §2.3 context entry: no survey arm at all, so the *from your places* figure is absent
+rather than zero and the groupings axis says **not applicable**.
 
 Present whether the view is complete or partial, so *complete* is something the reader is **told**
 rather than something they infer from silence. This is the strongest available reading of
@@ -500,9 +569,9 @@ finding behind [/dev/vault render harness](./019f6d08-8b33-7f30-a438-8487261d5f2
 
 ## 7. Open, and deliberately not closed here
 
-- **Anchor-set bounding policy.** §3 requires the count be declared; it does not decide the ceiling,
-  or the order anchors are chosen in when there are more than the ceiling. Decide in Beat A against a
-  measured anchor count, not by guess here. Whatever is chosen, the declaration is non-negotiable.
+- ~~**Anchor-set bounding policy.**~~ **CLOSED `[decided — 2026-08-20, Pete]`, in Beat A and against
+  a measurement — see §3's *The anchor-set ceiling*.** Ceiling **24**, ordered `resource_count` DESC
+  then `ref` ASC.
 - **Whether §2.3 is legible at real context sizes.** Unranked-everything is the design; its failure
   mode is a measurement, and the response is a decision, not a pre-emptive ranking.
 - **Rate-shaped axes remain open**, exactly as the register says. Derived structure settles
