@@ -13,18 +13,41 @@ import {
 	forceSimulation,
 	type SimulationNodeDatum,
 } from 'd3-force';
-import type {
-	AtlasEdge,
-	AtlasNode,
-	AtlasSubgraph,
-	NodeHome,
-} from '$lib/types/generated/graph_atlas';
+import type { NodeHome } from '$lib/types/generated/graph_atlas';
+
+/**
+ * What the simulation reads off a node — nothing about where it came from.
+ *
+ * `[widened — 2026-08-20]` from `AtlasNode` so the successor surface's nodes (which are
+ * `ResourceHit.resource` projections) settle through the same physics. §4.2 calls this module
+ * *"exactly what the successor draws"*; this is what makes that literally true rather than
+ * aspirational. `AtlasNode` satisfies it unchanged.
+ */
+export interface LayoutNode {
+	id: string;
+	title: string;
+	doc_type: string | null;
+	home: NodeHome;
+	degree: number;
+	excerpt: string | null;
+}
+
+/** What the simulation reads off an edge: which two nodes it joins. Everything else is the mark's. */
+export interface LayoutEdge {
+	source: string;
+	target: string;
+}
+
+export interface LayoutGraph<E extends LayoutEdge = LayoutEdge> {
+	nodes: LayoutNode[];
+	edges: E[];
+}
 
 export interface ForceNode extends SimulationNodeDatum {
 	id: string;
 	title: string;
 	docType: string | null;
-	home: AtlasNode['home'];
+	home: NodeHome;
 	degree: number;
 	isSeed: boolean;
 	/** Server-derived first-paragraph preview (see `AtlasNode.excerpt`); null when absent. */
@@ -33,15 +56,15 @@ export interface ForceNode extends SimulationNodeDatum {
 	y: number;
 }
 
-export interface ForceEdge {
-	edge: AtlasEdge;
+export interface ForceEdge<E extends LayoutEdge = LayoutEdge> {
+	edge: E;
 	source: ForceNode;
 	target: ForceNode;
 }
 
-export interface ForceGraph {
+export interface ForceGraph<E extends LayoutEdge = LayoutEdge> {
 	nodes: ForceNode[];
-	edges: ForceEdge[];
+	edges: ForceEdge<E>[];
 }
 
 const TICKS = 300;
@@ -59,13 +82,24 @@ export interface ForceOptions {
 	 * resource, in every view.
 	 */
 	coreHome?: NodeHome;
+	/**
+	 * Which nodes hold the radial core, when `home` is not the axis that matters.
+	 *
+	 * `[added — 2026-08-20]` for the successor surface, where **both** homes are ordinary and the
+	 * meaningful axis is the ARM: the reader's own material in the places they named settles at
+	 * the core, and what a walk reached settles around it. Keying that on `home` would scatter a
+	 * reader's own context rows to the outer ring on the very screen built to show them.
+	 *
+	 * Omitted, this falls back to `home === coreHome`, so the Atlas's two views are unchanged.
+	 */
+	coreOf?: (node: ForceNode) => boolean;
 }
 
-export function forceNeighborhood(
-	subgraph: AtlasSubgraph,
+export function forceNeighborhood<E extends LayoutEdge>(
+	subgraph: LayoutGraph<E>,
 	seeds: string[],
 	size: ForceOptions,
-): ForceGraph {
+): ForceGraph<E> {
 	const seedSet = new Set(seeds);
 	const nodeCount = subgraph.nodes.length;
 	const nodes: ForceNode[] = subgraph.nodes.map((n, i) => ({
@@ -87,7 +121,7 @@ export function forceNeighborhood(
 			const target = byId.get(edge.target);
 			return source && target ? { edge, source, target } : null;
 		})
-		.filter((l): l is ForceEdge => l !== null);
+		.filter((l): l is ForceEdge<E> => l !== null);
 
 	// Beat D: spatial reinforcement of the two axes — cogmap facets (ideas) settle
 	// toward the center, context-resources (the builder axis / documents) drift to
@@ -95,8 +129,9 @@ export function forceNeighborhood(
 	const minDim = Math.min(size.width, size.height);
 	const rInner = minDim * 0.06;
 	const rOuter = minDim * 0.44;
-	// Which home holds the core. Default 'cogmap' preserves Beat D's region-drill layout.
-	const core = size.coreHome ?? 'cogmap';
+	// Which nodes hold the core. Default `home === 'cogmap'` preserves Beat D's region-drill layout.
+	const coreHome = size.coreHome ?? 'cogmap';
+	const isCore = size.coreOf ?? ((n: ForceNode) => n.home === coreHome);
 
 	const sim = forceSimulation(nodes)
 		.force(
@@ -112,7 +147,7 @@ export function forceNeighborhood(
 		.force(
 			'radial',
 			forceRadial<ForceNode>(
-				(n) => (n.home === core ? rInner : rOuter),
+				(n) => (isCore(n) ? rInner : rOuter),
 				size.width / 2,
 				size.height / 2,
 			).strength(0.6),

@@ -221,3 +221,54 @@ export function graphHref(ownerRef: string, address: Partial<GraphAddress>): str
 	const query = params.toString();
 	return query ? `/graph/${ownerRef}?${query}` : `/graph/${ownerRef}`;
 }
+
+/**
+ * The same graph URL with a different selection.
+ *
+ * **`sel` carries a bare resource uuid, with no kind prefix** — deliberately unlike the
+ * predecessor's `node:`/`edge:` grammar. The successor's marks are nodes and edges, and an edge is
+ * a `ViaEntry`, which carries `seed_id`, `source_id`, `target_id`, `edge_kind`, `label` and
+ * `polarity` and **no id at all**. So an edge has no durable address to put in a URL, only one kind
+ * is selectable, and a prefix would name a distinction that does not exist.
+ *
+ * This rewrites the URL in place rather than rebuilding it from an address, so `q`, `in` and `from`
+ * travel untouched — a selection must never silently change what was asked.
+ */
+export function withGraphSelection(url: URL, selection: string | null): string {
+	const next = new URL(url);
+	if (selection) next.searchParams.set('sel', selection);
+	else next.searchParams.delete('sel');
+	return `${next.pathname}${next.search}`;
+}
+
+/**
+ * The same graph URL asking a different question, with the selection dropped.
+ *
+ * The selection goes because it names a node in the previous answer: keeping it would open a rail
+ * onto something the new answer may not contain, which is a panel describing a resource that is
+ * not on screen.
+ */
+export function withGraphQuestion(url: URL, question: string | null): string {
+	const next = new URL(url);
+	const q = question?.trim();
+	if (q) next.searchParams.set('q', q);
+	else next.searchParams.delete('q');
+	next.searchParams.delete('sel');
+	return `${next.pathname}${next.search}`;
+}
+
+/**
+ * The same graph URL walking from one named seed, with the question and selection dropped.
+ *
+ * `from` *replaces* the upstream stage as what the walk grows from — the reader has named where to
+ * walk from, and the pipe is no longer the answer to that. Carrying a stale `q` alongside would
+ * leave a question on screen that no longer decides anything about the answer.
+ */
+export function withGraphSeed(url: URL, seed: string): string {
+	const next = new URL(url);
+	next.searchParams.delete('q');
+	next.searchParams.delete('sel');
+	next.searchParams.delete('from');
+	next.searchParams.append('from', seed);
+	return `${next.pathname}${next.search}`;
+}

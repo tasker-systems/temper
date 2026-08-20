@@ -1,13 +1,17 @@
 <script lang="ts">
-	import type { AtlasEdge } from '$lib/types/generated/graph_atlas';
-	import { edgeStyle } from '$lib/graph/atlas/palette';
+	import { type EdgeMark, edgeStyle } from '$lib/graph/atlas/palette';
 
 	interface Props {
 		x1: number;
 		y1: number;
 		x2: number;
 		y2: number;
-		edge: AtlasEdge;
+		/**
+		 * Structural, not `AtlasEdge` `[widened — 2026-08-20]`. The successor surface's edges are
+		 * `ViaEntry` rows and carry no stored weight; both shapes satisfy `EdgeMark`, so one mark
+		 * serves both without an adapter inventing the field the walk does not report.
+		 */
+		edge: EdgeMark;
 		label?: boolean;
 		onSelect?: () => void;
 	}

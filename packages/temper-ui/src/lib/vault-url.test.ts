@@ -10,6 +10,9 @@ import {
 	parseGraphAddress,
 	resourceHref,
 	searchHref,
+	withGraphQuestion,
+	withGraphSeed,
+	withGraphSelection,
 } from './vault-url';
 
 describe('contextHref', () => {
@@ -341,5 +344,67 @@ describe('the graph surface address', () => {
 
 			expect(parseGraphAddress(at(graphHref('@me', address)))).toEqual(address);
 		});
+	});
+});
+
+describe('the graph URL mutators change one part and leave the rest alone', () => {
+	const at = (search: string) => new URL(`https://x.test/graph/@me${search}`);
+
+	it('selects a bare resource uuid — there is no kind prefix to give', () => {
+		// The vocabulary has one selectable kind. An edge is a `ViaEntry` and carries no id at
+		// all, so a `node:` prefix would name a distinction that does not exist.
+		expect(withGraphSelection(at('?q=x'), 'abc')).toBe('/graph/@me?q=x&sel=abc');
+	});
+
+	it('clearing the selection leaves the question and the places untouched', () => {
+		const url = at('?q=x&in=ctx%3A%40me%2Ftemper&from=r1&sel=abc');
+
+		expect(withGraphSelection(url, null)).toBe('/graph/@me?q=x&in=ctx%3A%40me%2Ftemper&from=r1');
+	});
+
+	it('a selection never changes what was asked', () => {
+		const url = at('?q=how&in=map%3A019f&from=r1');
+		const next = new URL(`https://x.test${withGraphSelection(url, 'n1')}`);
+
+		expect(next.searchParams.get('q')).toBe('how');
+		expect(next.searchParams.getAll('in')).toEqual(['map:019f']);
+		expect(next.searchParams.getAll('from')).toEqual(['r1']);
+	});
+
+	it('asking a new question drops the selection, which named a node in the old answer', () => {
+		expect(withGraphQuestion(at('?in=ctx%3A%40me%2Ftemper&sel=abc'), 'why')).toBe(
+			'/graph/@me?in=ctx%3A%40me%2Ftemper&q=why',
+		);
+	});
+
+	it('clearing the question keeps the places — the door is still addressed', () => {
+		expect(withGraphQuestion(at('?q=x&in=ctx%3A%40me%2Ftemper'), null)).toBe(
+			'/graph/@me?in=ctx%3A%40me%2Ftemper',
+		);
+	});
+
+	it('a blank question is the same as no question, not a question that is empty', () => {
+		expect(withGraphQuestion(at('?q=x'), '   ')).toBe('/graph/@me');
+	});
+
+	it('walking from a seed replaces the question, which no longer decides the answer', () => {
+		// `from` REPLACES the upstream stage as what the walk grows from, so a stale `q` would
+		// leave a question on screen that decides nothing about what is drawn.
+		expect(withGraphSeed(at('?q=x&in=ctx%3A%40me%2Ftemper&sel=abc'), 'r9')).toBe(
+			'/graph/@me?in=ctx%3A%40me%2Ftemper&from=r9',
+		);
+	});
+
+	it('walking from a seed replaces any previous seed rather than accumulating', () => {
+		expect(withGraphSeed(at('?from=r1&from=r2'), 'r9')).toBe('/graph/@me?from=r9');
+	});
+
+	it('every mutator round-trips through the parser it is the inverse of', () => {
+		const url = new URL(`https://x.test${withGraphSeed(at('?in=ctx%3A%2Bteam%2Fops'), 'r9')}`);
+		const address = parseGraphAddress(url);
+
+		expect(address.anchors).toEqual([{ kind: 'context', ref: '+team/ops' }]);
+		expect(address.seeds).toEqual(['r9']);
+		expect(address.question).toBeNull();
 	});
 });

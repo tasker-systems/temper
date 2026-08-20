@@ -11,7 +11,8 @@
  * `--color-graph-*` CSS vars and styling.ts NODE_COLORS belong to the old graph
  * stack and are removed in Chunk D.
  */
-import type { AtlasEdge, NodeHome } from '$lib/types/generated/graph_atlas';
+import type { EdgeKind, Polarity } from '$lib/types/generated/graph';
+import type { NodeHome } from '$lib/types/generated/graph_atlas';
 import type { TerritoryKind } from '$lib/types/generated/graph_territory';
 
 export type AtlasDocType =
@@ -160,7 +161,7 @@ export interface EdgeStyle {
 	markerEnd: boolean;
 }
 
-const KIND_DASH: Record<AtlasEdge['edge_kind'], string | null> = {
+const KIND_DASH: Record<EdgeKind, string | null> = {
 	contains: null,
 	leads_to: '7 4',
 	express: '1 4',
@@ -172,10 +173,36 @@ const KIND_DASH: Record<AtlasEdge['edge_kind'], string | null> = {
  * never drift from the dash mapping — the legend's "EDGE KIND" section and any
  * other UI enumerating kinds should source the list from here, not hand-roll it.
  */
-export const EDGE_KINDS = Object.keys(KIND_DASH) as AtlasEdge['edge_kind'][];
+export const EDGE_KINDS = Object.keys(KIND_DASH) as EdgeKind[];
 
-/** Map an Atlas edge to its SVG style per the encoding grammar (spec C2-D6). */
-export function edgeStyle(edge: AtlasEdge): EdgeStyle {
+/**
+ * The fields the edge grammar actually reads — structural, so both edge carriers feed it.
+ *
+ * `[widened — 2026-08-20]` for the successor surface, whose edges are `ViaEntry` rather than
+ * `AtlasEdge`. The two agree on kind, polarity and label and disagree on exactly one field, so
+ * this names the union rather than forcing an adapter that would have to invent the missing one.
+ * `AtlasEdge` satisfies it as it stands.
+ */
+export interface EdgeMark {
+	edge_kind: EdgeKind;
+	polarity: Polarity;
+	label: string | null;
+	/**
+	 * The stored `kb_edges.weight`, when the read carried one.
+	 *
+	 * **`null`/absent is stated rather than defaulted to 1**, because a 1 is a real weight and
+	 * would render as a genuine, uniformly-thin edge — indistinguishable from a corpus whose
+	 * every edge happened to be weak. `ViaEntry` carries no weight at all, so the successor's
+	 * edges take {@link UNWEIGHTED_WIDTH} and say nothing about strength.
+	 */
+	weight?: number | null;
+}
+
+/** Stroke for an edge whose source carries no weight. Deliberately not `1` — see {@link EdgeMark}. */
+export const UNWEIGHTED_WIDTH = 1.4;
+
+/** Map an edge to its SVG style per the encoding grammar (spec C2-D6). */
+export function edgeStyle(edge: EdgeMark): EdgeStyle {
 	const color =
 		edge.label === 'derived_from'
 			? EDGE_COLORS.derived
@@ -183,7 +210,7 @@ export function edgeStyle(edge: AtlasEdge): EdgeStyle {
 				? EDGE_COLORS.contradicts
 				: EDGE_COLORS.structural;
 	const dash = edge.label === 'derived_from' ? '7 4' : KIND_DASH[edge.edge_kind];
-	const width = Math.max(1, Math.min(5, edge.weight));
+	const width = edge.weight == null ? UNWEIGHTED_WIDTH : Math.max(1, Math.min(5, edge.weight));
 	const symmetric = edge.edge_kind === 'near';
 	return {
 		color,

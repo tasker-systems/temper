@@ -1,22 +1,44 @@
 // neighbors.ts
-import type { AtlasEdge, AtlasNode } from '$lib/types/generated/graph_atlas';
+import type { AtlasNode } from '$lib/types/generated/graph_atlas';
 
-export interface AtlasNeighbor {
+export interface Neighbor<N> {
 	dir: '→' | '←';
 	label: string;
-	other: AtlasNode;
+	other: N;
 }
 
-/** Atlas-native neighbors of `focusId` from a loaded slice. Unlike the old
- *  peek.ts builder, this is typed on AtlasNode/AtlasEdge, coalesces the nullable
- *  edge label to its edge_kind, and sorts by (label, title) — no aggregator sort. */
-export function atlasNeighbors(
+/** The Atlas's own instantiation, kept so existing call sites and tests read unchanged. */
+export type AtlasNeighbor = Neighbor<AtlasNode>;
+
+/** The fields a neighbour listing reads off a node — nothing about where the node came from. */
+interface NeighborNode {
+	id: string;
+	title: string;
+}
+
+/** The fields it reads off an edge. A null label coalesces to the kind, as it always has. */
+interface NeighborEdge {
+	source: string;
+	target: string;
+	label: string | null;
+	edge_kind: string;
+}
+
+/**
+ * Neighbours of `focusId` in a loaded graph — coalescing the nullable edge label to its
+ * `edge_kind` and sorting by (label, title), with no aggregator sort.
+ *
+ * `[widened — 2026-08-20]` from `AtlasNode`/`AtlasEdge` to the fields it actually reads, so the
+ * successor surface's rail lists neighbours from the graph already on screen rather than issuing a
+ * second read for a relationship the canvas is drawing.
+ */
+export function atlasNeighbors<N extends NeighborNode, E extends NeighborEdge>(
 	focusId: string,
-	nodes: AtlasNode[],
-	edges: AtlasEdge[],
-): AtlasNeighbor[] {
+	nodes: N[],
+	edges: E[],
+): Neighbor<N>[] {
 	const byId = new Map(nodes.map((n) => [n.id, n] as const));
-	const out: AtlasNeighbor[] = [];
+	const out: Neighbor<N>[] = [];
 	for (const e of edges) {
 		const label = e.label ?? e.edge_kind;
 		if (e.source === focusId) {

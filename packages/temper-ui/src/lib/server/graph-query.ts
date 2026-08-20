@@ -1,7 +1,9 @@
 import type { SeedAxis } from '$lib/graph/bound';
 import type { Anchor } from '$lib/graph/composition';
+import type { CogmapRegionRow, CogmapRow } from '$lib/types/generated/cognitive_maps';
+import type { ContextRowWithCounts } from '$lib/types/generated/context';
 import type { Composition, QueryResponse } from '$lib/types/generated/query';
-import type { ResourceListResponse } from '$lib/types/generated/resource';
+import type { ContentResponse, ResourceListResponse } from '$lib/types/generated/resource';
 import type { ResourceView } from '$lib/types/generated/resource_view';
 import { apiGet, apiPost } from './api';
 
@@ -96,3 +98,90 @@ export async function readSeedRows(
  */
 export const readSeedResources = (token: string, ids: string[]): Promise<ResourceView[]> =>
 	Promise.all(ids.map((id) => apiGet<ResourceView>(`/api/resources/${id}`, token)));
+
+/**
+ * One anchor's regions, for naming the groupings the readout discloses.
+ *
+ * **Both anchor kinds answer the same read**, and that is not a coincidence to be tidied away:
+ * `/api/contexts/{id}/shape` and `/api/cognitive-maps/{id}/shape` are two doors onto one
+ * `anchor_shape_select(principal, HomeAnchor, lens)` and both return `Vec<CogmapRegionRow>`. So
+ * `cross-kind-relationship-is-reachable` holds a layer below the composition too, and the readout
+ * needs no per-kind branch to name what it drew on. **Contexts genuinely have regions** — measured,
+ * `@me/temper` holds 499 — so resolving only cogmaps would render every context-anchored grouping
+ * as *re-derived*, which is precisely the false alarm the clause forbids.
+ *
+ * **No `lens` is passed, and that is definitional rather than a default.** `survey` calls
+ * `wayfind_region_scores` with `p_lens = NULL` — *"the lens is a clustering-time parameter; NULL
+ * reads the baked salience"* — so naming one here would look up a different set of regions than
+ * the ones the answer actually drew on, and disagree with the trace by construction.
+ *
+ * **The cost, stated rather than glossed:** one read per ASKED anchor — not per disclosing one —
+ * and each returns that anchor's WHOLE shape, because no door offers a subset by id. Measured on
+ * the heaviest real reader: 12 parallel reads returning 983 rows in total, and the caller skips
+ * the whole thing when nothing was disclosed. Narrowing to just the anchors that disclosed would
+ * mean pairing survey stages to anchors by list index, which holds today only by construction; the
+ * saving did not look worth a correctness trap that nothing would catch when it broke. That is the
+ * price of naming a grouping at all — the alternative is a readout that can only count.
+ */
+const anchorShapePath = (anchor: Anchor): string =>
+	anchor.kind === 'cogmap'
+		? `/api/cognitive-maps/${anchor.id}/shape`
+		: `/api/contexts/${anchor.id}/shape`;
+
+/**
+ * Resolve the anchors' regions, reporting whether the gathering was COMPLETE.
+ *
+ * A read that does not answer must not turn every unfound id into a claim that the grouping is
+ * gone, so a rejection degrades the whole lookup to incomplete rather than propagating as a page
+ * error. One anchor being unreadable is not a reason to refuse the reader their graph, and it is
+ * not evidence that anything was re-derived either.
+ */
+export async function readAnchorRegions(
+	token: string,
+	anchors: Anchor[],
+): Promise<{ rows: CogmapRegionRow[]; complete: boolean }> {
+	const reads = await Promise.allSettled(
+		anchors.map((a) => apiGet<CogmapRegionRow[]>(anchorShapePath(a), token)),
+	);
+
+	return {
+		rows: reads.flatMap((r) => (r.status === 'fulfilled' ? r.value : [])),
+		complete: reads.every((r) => r.status === 'fulfilled'),
+	};
+}
+
+/**
+ * The selected resource's body — one read, for one node, on demand.
+ *
+ * `GET /api/resources/{id}` takes **no** section parameter (it has no `Query` extractor at all),
+ * so a body cannot ride on the row; `/{id}/content` is the door. That is why N1's excerpt is a
+ * targeted read rather than a projection widened across the canvas: `list` deliberately refuses
+ * `body` because *"a page of reconstructed bodies is unbounded"*, and this surface would be asking
+ * for up to two hundred of them.
+ *
+ * Returns `null` rather than throwing: a rail that cannot show an excerpt still shows the
+ * resource, and a body read failing is not a reason to fail the page.
+ */
+export const readResourceBody = (token: string, id: string): Promise<string | null> =>
+	apiGet<ContentResponse>(`/api/resources/${id}/content`, token)
+		.then((r) => r.markdown)
+		.catch(() => null);
+
+/**
+ * Every anchor the reader can read — the input to `readableAnchors`.
+ *
+ * Both reads are **self-scoped**, which is what makes an absent place indistinguishable from a
+ * nonexistent one at this door: `/api/contexts` goes through `context_visible_to` and
+ * `/api/cognitive-maps` through `cogmap_visible_maps`, each returning exactly what the caller may
+ * see and an empty list on deny.
+ *
+ * A failure **throws** rather than degrading to `[]`, and that is the opposite of the app shell's
+ * choice for the same read — deliberately. There, an empty list degrades a filter bar. Here it
+ * would silently become *"you have no places"*, and the unaddressed door would then draw nothing
+ * while the bound line truthfully reported `0 of 0 places`: a well-formed, plausible, wrong answer.
+ */
+export const readAnchorSources = (token: string): Promise<[ContextRowWithCounts[], CogmapRow[]]> =>
+	Promise.all([
+		apiGet<ContextRowWithCounts[]>('/api/contexts', token),
+		apiGet<CogmapRow[]>('/api/cognitive-maps', token),
+	]);

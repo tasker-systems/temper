@@ -19,6 +19,8 @@
 		edges?: number;
 		/** Server-derived excerpt snippet for the hover card (N2); null when absent. */
 		excerpt?: string | null;
+		/** Node metadata rows for the hover card (N2) — where it lives, its stage, when it moved. */
+		meta?: { label: string; value: string }[];
 		onEnter?: () => void;
 	}
 	let {
@@ -33,6 +35,7 @@
 		dim = false,
 		edges = 0,
 		excerpt = null,
+		meta = [],
 		onEnter
 	}: Props = $props();
 
@@ -83,6 +86,6 @@
 	{/if}
 	<circle class="focus-ring" cx={x} cy={y} r={r + 4} stroke-width="2" />
 	{#if hovered}
-		<NodeHoverCard {x} {y} {r} {title} {docType} {edges} {excerpt} />
+		<NodeHoverCard {x} {y} {r} {title} {docType} {edges} {excerpt} {meta} />
 	{/if}
 </g>
