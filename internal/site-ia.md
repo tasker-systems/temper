@@ -1,13 +1,81 @@
-# temperkb.io — Public Site Information Architecture
+# Public surfaces — Information Architecture
 
-This is the standing information architecture for the public `temperkb.io` site. It
-records *what the public surface is, why it is shaped that way, and what work the flip
-requires* — the decisions-and-rationale, not the page copy. Page copy is downstream of
-this document; each page is its own drafting pass.
+This is the standing information architecture for everything Temper publishes. It records
+*what each public surface is, why it is shaped that way, and what work each one still
+requires* — the decisions-and-rationale, not the page copy. Page copy is downstream of this
+document; each page is its own drafting pass.
 
-**Status:** current. This document governs the public-site IA going forward.
+**Status:** current. This document governs all three public surfaces going forward.
+
+**Scope, widened `[2026-08-19]`.** This document governed `temperkb.io` alone until the docs
+surface rebuild, which needed a governing document and had never had one. It now governs
+three. Part I below is the shared frame — the surfaces, the rule that separates them, and the
+audiences they serve. Surfaces 1–3 govern one surface each. Surface 1 is the original body of
+this document, unchanged in substance; where it says "the public site" it means `temperkb.io`.
 
 ---
+
+## The three surfaces, and the rule that separates them
+
+Temper publishes three things. They are produced by different means, they answer different
+questions, and the commonest failure is a page drifting into the surface next door. That is
+not a style problem but a maintenance one: the copy that drifts is the copy nobody sees
+corrected, because the surface it drifted into already has an owner for that material.
+
+| Surface | Source | Answers | Register |
+|---|---|---|---|
+| **`temperkb.io`** | SvelteKit app in `packages/temper-ui` | **Why** — what the substrate is for, what a cognitive map is, what is fixed by the architecture versus what a deployment chooses | Argued. Persuades, grounds, situates. |
+| **`docs/`** | markdown in this repo, published from `main` | **How** — install it, run it, integrate with it | Operational. Followed, not read. |
+| **the API reference** | generated from `openapi.json` | **What exactly** — every endpoint, every schema | Machine-derived. Never authored. |
+
+**The rule: why lives up, how lives across, exact lives below.**
+
+- A `docs/` page that finds itself explaining *why the thing exists* should **link up** to
+  `temperkb.io` and keep one sentence. `docs/` is the operational half; the conceptual half is
+  one click away and is maintained by people writing prose rather than runbooks.
+- A `temperkb.io` page that finds itself giving a command sequence should **link across** to
+  `docs/`. The argued surface is the wrong home for a step that changes with a release.
+- Neither ever restates an endpoint, a flag, a config field, or a schema. Those are
+  **generated**, gated, and below both. A hand-written copy of generated content is a lie with
+  a delay fuse.
+
+The rule is directional, not a wall. A `docs/` page may absolutely carry the one paragraph of
+concept a reader needs in order to act — what it must not become is the place that concept is
+maintained.
+
+---
+
+## The audiences
+
+Three, and only three. They were established for the docs surface and they hold across all of
+it.
+
+- **Individual user** — wants Temper working for them and their agents.
+- **Deployer / self-hoster** — is standing up a deployment.
+- **API consumer / integrator** — is writing code that talks to Temper.
+
+**Contributors are not a public audience.** Material addressed to someone changing Temper's
+own code lives in `internal/`, reachable through `CLAUDE.md` / `AGENTS.md`. This is not a tone
+preference. A page opening *"if you are changing anything on an auth path…"* answers a
+question no public reader asked, and it displaces the page they came for — and it reads as an
+invitation into a codebase they have no plans to open.
+
+Two consequences that are easy to get wrong:
+
+- **Audience is declared, not implied.** Every authored public page says near the top who it
+  is for. A reader landing from search needs to know within a sentence whether to keep going.
+- **Audience is a navigation dial, never a hierarchy.** A page serves whichever audiences need
+  it; the doors route, they do not own. This is the same three-dials discipline Surface 1 has
+  held since this document governed one surface — navigation surface, URL hierarchy and
+  entry-point status are independent.
+
+---
+
+# Surface 1 — `temperkb.io`
+
+Everything from here to *Surface 2* governs the SvelteKit site. It is the original body of
+this document.
+
 
 ## Scar: what this supersedes
 
@@ -213,7 +281,7 @@ POC; the POC is evidence for it.
 
 ---
 
-## What changes, by surface
+## What changes on temperkb.io, by page group
 
 ### Correct already — connect, don't rewrite
 
@@ -262,7 +330,7 @@ POC; the POC is evidence for it.
 
 ---
 
-## Work map (dependency-ordered)
+## Work map — temperkb.io (dependency-ordered)
 
 The umbrella task tracks these phases. Items 1–3 are unambiguous and fast; 4–7 carry the real
 writing and the judgment calls. The two **seam-sensitive** items must not be batched with the
@@ -292,6 +360,166 @@ they are where a careless change degrades something already good.
 
 ---
 
+# Surface 2 — `docs/`, the operational tree
+
+**Status:** the structure is built; the prose is not. Everything from here to *Surface 3*
+governs the docs tree.
+
+## What `docs/` is
+
+The operational half of the public surface: how to install Temper, how to run a deployment,
+how to write code against it. Published to the Apidog-hosted docs site from `main` through
+Apidog's GitHub app — so the repository *is* the CMS, and a merge is a publish. Nothing on a
+branch changes the published site; everything on `main` does.
+
+## The invariant
+
+> **Everything under `docs/` is public. There is no unpublished corner of it.**
+
+This is a property of the tree rather than a configuration that has to be right. The
+alternative — an allowlist naming what publishes — was considered during the rebuild and
+rejected: an allowlist is a file someone can get wrong, and getting it wrong publishes
+security audits. The invariant cannot be got wrong by editing a config file.
+
+Its cost is real and accepted. Anything unfit for a stranger's eyes **moves** to `internal/`
+rather than being suppressed in place. `internal/` is the sibling holding process artifacts,
+the engineering record, and contributor guidance; it is reached through `CLAUDE.md` /
+`AGENTS.md`, never from `docs/`.
+
+The invariant is enforced by a CI gate with its own guard test, including a denylist of
+directory names whose reappearance under `docs/` is a regression rather than a relocation.
+
+## The tree is kind-shaped; navigation is audience-shaped
+
+The same three-dials discipline as Surface 1, applied one level down. The directory says what
+kind of page this is; the doors say who should read it and in what order. They are separate
+dials and neither is derivable from the other.
+
+```
+docs/
+├── index.md         the three doors
+├── doors/           thin routers — sequence, not content
+├── concepts/        authored, thin; links UP to temperkb.io for depth
+├── playbooks/       authored; task-shaped sequences with stated outcomes
+├── sdks/            authored; per-language manuals (neither concepts nor single task sequences)
+└── reference/       GENERATED — never hand-edited
+    ├── cli/         from the built binary's --help tree
+    └── config/      from TemperConfig via schemars
+```
+
+**Why doors are pages and not directories.** A door carries reading *order* — the sequence a
+persona should walk. Encoding that as hierarchy bakes one reader's path into the URL of
+material that serves three, and forces `reference/cli` to be duplicated or arbitrarily
+assigned to one persona. A reader can arrive anywhere; cross-reference by concept, never by
+ordinal.
+
+**Why `reference/` is one subtree.** It is the only arrangement in which the entire generated
+surface has a single drift boundary. Scattering generation across audience directories means
+one gate per location and no way to assert the set is complete.
+
+**What separates a concept from a playbook.** A **concept** answers *what is this and how does
+it work*. It is durable, it has no numbered steps, and it ends by linking up to `temperkb.io`
+for the why. A **playbook** answers *how do I get to X*. It names its outcome in the first
+paragraph, names its prerequisites rather than assuming them, and a reader who follows it
+exactly arrives at the outcome. A page that does both is two pages.
+
+**What `sdks/` is.** A per-language SDK manual — the generated gem, how it tracks the API, and
+the usage patterns specific to that language's idioms. It is neither a durable concept (it
+tracks a generated artifact) nor a single task sequence (it covers the whole surface). It keeps
+the SDK material whole rather than splitting it across concepts and playbooks, because its
+concept and task material interleave too tightly to separate without wrecking it.
+
+## What a page owes its reader
+
+The docs rebuild established these because the surviving prose violated all of them — it was
+written for our own consumption, by people with the repository checked out, before the
+audiences existed. The pages were not wrong; they were addressed to someone else.
+
+- **Say who it is for, near the top.** One of the three audiences, named.
+- **Name prerequisites; never assume them.** If the reader needs a deployment, a credential,
+  or a completed earlier step, say so and link it. "Assumed context" is the defect class, and
+  it survives every copy-edit because the prose reads fine to someone who already has it.
+- **A reader who knows nothing beyond this page and what it links to reaches the stated
+  outcome.** This is the test. It is not satisfied by accuracy.
+- **No repository paths.** `../../scripts/bootstrap/saml-setup.sh` means nothing to a reader
+  who will never clone this repository.
+- **Vocabulary is defined or linked on first use.** Telos, cogmap, substrate, context,
+  projection, seam, register — every one of these is ours, and `temperkb.io` owns the long
+  answer.
+
+## Generated content is fixed at its source
+
+`reference/cli` and `reference/config` are committed projections. Each carries a drift gate
+*and* an independent completeness cross-check — because **an artifact compared against itself
+measures reproducibility, never correctness**. A generator that drops a page drops it from
+both sides of a re-emit-and-diff, and the gate stays green forever. So each gate carries a
+second, independent derivation: a parse of the clap command tree for the CLI, a flat walk of
+the JSON schema for the config.
+
+**An editorial pass does not apply to `docs/reference/`.** A wrong sentence there is fixed in
+the Rust doc comment or the `--help` text and regenerated. Hand-editing it is reverted by the
+gate, correctly.
+
+`^docs/reference/` sits in `RUST_COUPLED` in CI scope detection, so a change there summons the
+full Rust corpus. That is deliberate: scoped as docs-only, the gates were unreachable on
+exactly the change they exist to catch.
+
+## What establishes that the tree is sound — and what cannot
+
+`python3 scripts/docs-coverage.py [--strict]` reports reach (which door routes to each page),
+dangling links, links escaping `docs/`, generated-tree integrity, and publish coverage read
+from the site's `llms.txt`. Dangling links are the only `--strict` failure, because they are
+the only category that is a plain fact rather than a judgement.
+
+**Navigation is reported UNKNOWN, and structurally so.** Apidog reconciles pages but leaves
+emptied folder nodes behind and orders the sidebar itself. Neither is observable from the
+repository: empty folders contribute no lines to `llms.txt`, and Apidog's public API has no
+endpoint for navigation nodes or ordering — its whole surface is four operations, established
+by executed probes against a real-route/non-route discriminator rather than by reading
+documentation. Pruning and ordering are **manual UI actions**, done after a merge republishes.
+
+> **A green `docs-coverage` run does not mean the site navigates correctly.** It means the
+> tree is internally sound. The two claims are unrelated, and only one of them is checkable
+> from here.
+
+## Links out of `docs/` are dead links
+
+Apidog publishes `docs/**` and nothing else. A link to `../../DEPLOYING.md` or
+`../../packages/agent-workflows/mention/README.md` resolves on disk and reaches nothing on the
+published site.
+
+**Do not repath such links into `internal/`.** That makes them resolve in the repository and
+still 404 on the site — it fixes the symptom the tooling reports and not the one the reader
+hits. Either inline what the reader actually needs, or convert the link to a plain-text
+backticked citation naming the document with no href. Provenance survives; no dead link on
+either surface.
+
+---
+
+# Surface 3 — the API reference
+
+Generated from the router itself — `openapi.json` is emitted from the Axum routes and their
+utoipa annotations, and the docs host renders it into the reference a caller reads.
+
+**It is not a directory in this repository.** `docs/reference/api/` does not exist and is not
+planned; an earlier design routed material there before this was settled. The only generated
+trees committed under `docs/` are `cli/` and `config/`.
+
+Two consequences that decide where contract prose goes:
+
+- **No authored page restates an endpoint or a schema.** If a reader needs a request shape,
+  the reference is the answer and a link is the whole treatment.
+- **Contract prose belongs in `docs/concepts/`.** The things a generated reference cannot
+  express — what the trust boundary is, what a machine principal is and why it is not a user
+  holding a long-lived token, what decides whether a write is permitted — are concepts. They
+  are the integrator door's real content.
+
+The register this settles: an integrator arriving cold needs **the boundary**, not the
+endpoints. The endpoints are already complete and already generated. The boundary is the part
+a person has to write, and it is the part that has never been written for them.
+
+---
+
 ## Provenance
 
 - **Conceptual ground:** `working-context-semantic-model.md`, `attention-manifesto.md`,
@@ -304,8 +532,18 @@ they are where a careless change degrades something already good.
   `internal/superpowers/plans/2026-06-18-invocation-envelope-and-authorship-metadata.md` and
   `internal/superpowers/plans/2026-06-18-temper-agents-neutral-contract-crate.md`; the Eve/CMA
   comparison research under `internal/research/`.
-- **Operator runbook (the deployment floor):** `docs/guides/self-hosting.md`.
+- **Operator runbook (the deployment floor):** the self-hosting playbook under `docs/`.
 - **Superseded:** `docs/theory-ia-proposal.md` (removed; see the scar above).
+
+Grounding for Surfaces 2 and 3, added with the scope widening:
+
+- **The docs surface design:** `internal/superpowers/specs/2026-08-19-docs-surface-rebuild-design.md` —
+  the kind-shaped tree, the invariant, the doors-are-pages argument, and the decision to
+  retire `docs/cognitive-maps/` in favour of `temperkb.io`.
+- **The derivation layer:** `scripts/docs-coverage.py`, `scripts/emit-cli-reference.py`,
+  `scripts/emit-config-reference.py`, and the drift gates in `.github/scripts/check-*-drift.sh`.
+- **Discipline model:** `scripts/register-coverage.py` — detects-does-not-decide; never infers
+  coverage from absence.
 
 ---
 
@@ -319,3 +557,8 @@ they are where a careless change degrades something already good.
   type, layout); the new frame inhabits it without redesign.
 - Does **not** relitigate `/theory` or `/cognitive-maps` content. The flip is about *situating
   and connecting* them, not rewriting them.
+- Does **not** enumerate the pages of `docs/`. Which page exists, and what each one says, is
+  the drafting pass — this document governs the kinds, the audiences, and the separation rule.
+- Does **not** own the generated trees. What `reference/cli` and `reference/config` contain is
+  decided by the code they are emitted from; this document only rules that they are never
+  hand-edited.
