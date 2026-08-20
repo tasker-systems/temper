@@ -356,3 +356,43 @@ describe('what only a real request could see', () => {
 		});
 	});
 });
+
+describe('a named place that no longer resolves', () => {
+	test('the denominator is what the reader named, not what resolved', () => {
+		// Two anchors named in the URL; one is gone or unreadable, so one Anchor reaches the builder.
+		const outcome = buildGraphPlan({
+			anchors: [ctx(0, 10)],
+			question: 'q',
+			seeds: null,
+			available: 2,
+		});
+
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) return;
+		expect(outcome.plan.anchorsAsked).toHaveLength(1);
+		expect(outcome.plan.anchorsAvailable).toBe(2);
+	});
+
+	test('without the override the denominator is still the anchors handed in', () => {
+		const outcome = buildGraphPlan({
+			anchors: [ctx(0, 10), ctx(1, 5)],
+			question: 'q',
+			seeds: null,
+		});
+
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) return;
+		expect(outcome.plan.anchorsAvailable).toBe(2);
+	});
+
+	test('the override never changes which anchors are asked', () => {
+		const anchors = Array.from({ length: 30 }, (_, i) => ctx(i, 100 - i));
+		const withOverride = buildGraphPlan({ anchors, question: 'q', seeds: null, available: 99 });
+		const without = buildGraphPlan({ anchors, question: 'q', seeds: null });
+
+		expect(withOverride.ok && without.ok).toBe(true);
+		if (!withOverride.ok || !without.ok) return;
+		expect(withOverride.plan.anchorsAsked).toEqual(without.plan.anchorsAsked);
+		expect(withOverride.plan.composition).toEqual(without.plan.composition);
+	});
+});

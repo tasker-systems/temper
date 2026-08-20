@@ -50,13 +50,18 @@ const questionPlan = (available = 2) => {
 	return outcome.plan;
 };
 
-const contextPlan = () => {
-	const outcome = buildGraphPlan({ anchors: [anchor(0, 10)], question: null, seeds: null });
+const contextPlan = (asked = 1, available = asked) => {
+	const outcome = buildGraphPlan({
+		anchors: Array.from({ length: asked }, (_, i) => anchor(i, 100 - i)),
+		question: null,
+		seeds: null,
+		available,
+	});
 	if (!outcome.ok) throw new Error('expected a plan');
 	return outcome.plan;
 };
 
-describe('the places axis — the only one with a true denominator', () => {
+describe('the places axis — the one the client enumerates itself', () => {
 	test('declares what was asked against what was available', () => {
 		const plan = questionPlan(40);
 		const d = declareBounds(response({}), plan);
@@ -124,6 +129,7 @@ describe('the groupings axis', () => {
 		// thing it names.
 		const base = {
 			places: { asked: 1, available: 1 },
+			inYourPlaces: null,
 			fromYourPlaces: null,
 			followedOn: { rows: 3, extent: { extent: 'complete' } as Extent },
 		};
@@ -164,7 +170,7 @@ describe('the two returned arms are declared separately', () => {
 		expect(line).toContain('31 from your places');
 		// The walk's claim must not be attached to the arm that cannot make one.
 		expect(line).toBe(
-			'Showing 31 from your places · 50 followed on · more exist · 3 groupings asked · 2 of 2 places',
+			'Showing 31 from your places · 50 followed on · more exist · 3 groupings per place · 2 of 2 places',
 		);
 	});
 
@@ -284,5 +290,56 @@ describe('no internal vocabulary is load-bearing', () => {
 		});
 
 		expect(renderBoundLine(declareBounds(r, plan))).not.toContain('funnel');
+	});
+});
+
+/**
+ * The seed arm — the only axis on this screen with a true denominator.
+ *
+ * A no-question entry's own rows do not come from the composition at all: `follow-from` walks at
+ * least one hop, so the seeds are not in the walked arm. They come from the list read, which
+ * reports `total` — *"every row the filters admit, before `limit`/`offset`"*.
+ */
+describe('the seed arm', () => {
+	const seeds = { shown: 200, total: 2066, truncated: true };
+
+	test('states its denominator, because unlike every other arm it has one', () => {
+		const d = declareBounds(response({}), contextPlan(), seeds);
+
+		expect(d.inYourPlaces).toEqual(seeds);
+		expect(renderBoundLine(d)).toContain('200 of 2066 in this place');
+	});
+
+	test('names one place and many places differently', () => {
+		const one = declareBounds(response({}), contextPlan(), seeds);
+		expect(renderBoundLine(one)).toContain('in this place');
+
+		const many = declareBounds(response({}), contextPlan(4, 4), seeds);
+		expect(renderBoundLine(many)).toContain('across your places');
+	});
+
+	test('a complete arm and a truncated one do not render alike', () => {
+		const complete = renderBoundLine(
+			declareBounds(response({}), contextPlan(), { shown: 12, total: 12, truncated: false }),
+		);
+		const partial = renderBoundLine(
+			declareBounds(response({}), contextPlan(), { shown: 12, total: 900, truncated: true }),
+		);
+
+		expect(complete).not.toBe(partial);
+		expect(complete).toContain('12 of 12');
+		expect(partial).toContain('12 of 900');
+	});
+
+	test('an entry with no seed arm says nothing about one — absence, not zero', () => {
+		const line = renderBoundLine(declareBounds(response({}), contextPlan(), null));
+
+		expect(line).not.toContain('of 0');
+		expect(line).not.toContain('in this place');
+		expect(line).not.toContain('across your places');
+	});
+
+	test('the arm is omitted by DEFAULT, so a caller that has none cannot accidentally claim one', () => {
+		expect(declareBounds(response({}), contextPlan()).inYourPlaces).toBeNull();
 	});
 });

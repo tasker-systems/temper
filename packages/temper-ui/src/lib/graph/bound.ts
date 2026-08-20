@@ -4,15 +4,19 @@ import type { GraphPlan } from './composition';
 /**
  * The bound declaration — always on screen, plain, never dismissible.
  *
- * Three axes, and only two have machinery behind them. The surface's whole job on two of them is to
- * **stop discarding what the response already discloses**; on the third it must declare from its own
- * record, because no `Extent` can ride on a truncation that happened before the composition existed.
+ * **Four axes, and they know four different amounts about themselves.** Two come from the
+ * composition, where the surface's whole job is to **stop discarding what the response already
+ * discloses**. One — the places asked — the surface must declare from its own record, because no
+ * `Extent` can ride on a truncation that happened before the composition existed. And the fourth,
+ * the seed arm, comes from a list read that reports a real `total`, which is why it is the only one
+ * that states a denominator.
  *
  * **No denominator is invented for any axis that lacks one.** `StageResult.total` is `None`
  * unconditionally (`temper-services/src/backend/query_read.rs:582`) — *"the fragments return a page,
  * not a count. Absent rather than guessed from the page size."* The clause this serves never required
  * a denominator; it requires that a partial view not be indistinguishable from a complete one, and
- * `Extent` draws exactly that line truthfully.
+ * `Extent` draws exactly that line truthfully. Where a source genuinely HAS a denominator, refusing
+ * to state it would be the same failure in the other direction.
  *
  * @see internal/superpowers/specs/2026-08-20-graph-successor-surface-design.md §3
  */
@@ -26,10 +30,31 @@ import type { GraphPlan } from './composition';
  */
 export type GroupingsAxis = { applicable: false } | { applicable: true; applied: number | null };
 
+/**
+ * The seed arm of a no-question entry — the reader's own material in the places they named.
+ *
+ * `follow-from` walks *"at least one hop"*, so the seeds are **not** in the walked arm; they come
+ * from the list read the table half already makes. That read is the only source on this screen with
+ * a **true denominator**: `ResourceListResponse.total` is *"the FILTERED match count — every row the
+ * filters admit, before `limit`/`offset`"*, and `truncated` is *"`offset + returned < total`"*,
+ * deliberately not `total > returned`.
+ *
+ * So this axis alone can say how much it is **not** showing without inventing anything — which is
+ * why it is declared rather than left to the reader to infer, and why the arm is bounded by a page
+ * rather than read to exhaustion.
+ */
+export interface SeedAxis {
+	shown: number;
+	total: number;
+	truncated: boolean;
+}
+
 export interface BoundDeclaration {
-	/** The only axis with a true denominator — the client enumerated both halves itself. */
+	/** The only axis the client enumerated both halves of itself. */
 	places: { asked: number; available: number };
 	groupings: GroupingsAxis;
+	/** The list-read arm. `null` when the entry has no seed rows of its own — a question entry. */
+	inYourPlaces: SeedAxis | null;
 	/**
 	 * Rows from the arm bounded in groupings and UNBOUNDED in rows. `null` when the entry has no
 	 * such arm at all, which is absence rather than zero and renders as absence.
@@ -62,12 +87,17 @@ const appliedGroupings = (response: QueryResponse, stages: string[]): number | n
 	return null;
 };
 
-export function declareBounds(response: QueryResponse, plan: GraphPlan): BoundDeclaration {
+export function declareBounds(
+	response: QueryResponse,
+	plan: GraphPlan,
+	seeds: SeedAxis | null = null,
+): BoundDeclaration {
 	const hasFunnelArm = plan.surveyStages.length > 0;
 	const walk = response.returned?.[plan.walkStage];
 
 	return {
 		places: { asked: plan.anchorsAsked.length, available: plan.anchorsAvailable },
+		inYourPlaces: seeds,
 		groupings: hasFunnelArm
 			? { applicable: true, applied: appliedGroupings(response, plan.surveyStages) }
 			: { applicable: false },
@@ -97,9 +127,18 @@ const extentPhrase = (extent: Extent): string => {
 	}
 };
 
+/**
+ * **"per place", not "asked"** `[decided — 2026-08-20, Pete]`.
+ *
+ * This axis and the readout's count are different aggregations of one word. `terms_applied[regions]`
+ * is the funnel width **one** survey ran at; the readout counts the distinct groupings the whole
+ * answer drew on, across every anchor. Measured against production they read `3` and `15` — both
+ * true, 5× apart, and side by side on one screen under the same noun. Saying *per place* is what
+ * lets a reader reconcile them instead of concluding they have misunderstood something.
+ */
 const groupingsPhrase = (axis: GroupingsAxis): string => {
 	if (!axis.applicable) return 'groupings not applicable';
-	return axis.applied === null ? 'groupings not reported' : `${axis.applied} groupings asked`;
+	return axis.applied === null ? 'groupings not reported' : `${axis.applied} groupings per place`;
 };
 
 /**
@@ -115,6 +154,13 @@ const groupingsPhrase = (axis: GroupingsAxis): string => {
 export function renderBoundLine(d: BoundDeclaration): string {
 	const parts: string[] = [];
 
+	if (d.inYourPlaces) {
+		// The one arm that knows its own denominator, so it is the one arm that states one. Its
+		// `truncated` is not rendered separately: `shown of total` already says it, and a second
+		// phrase saying the same thing is how two halves of one fact start disagreeing.
+		const where = d.places.asked === 1 ? 'in this place' : 'across your places';
+		parts.push(`${d.inYourPlaces.shown} of ${d.inYourPlaces.total} ${where}`);
+	}
 	if (d.fromYourPlaces !== null) parts.push(`${d.fromYourPlaces} from your places`);
 	if (d.followedOn) {
 		parts.push(`${d.followedOn.rows} followed on`, extentPhrase(d.followedOn.extent));

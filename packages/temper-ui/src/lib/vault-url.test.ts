@@ -24,12 +24,24 @@ describe('contextHref', () => {
 });
 
 describe('contextGraphHref', () => {
-	it('points at the Atlas context door', () => {
-		expect(contextGraphHref('@me', 'temper')).toBe('/graph/@me?context=temper');
+	it('addresses the context as an `in` anchor, not a `?context=` scope', () => {
+		expect(contextGraphHref('@me', 'temper')).toBe('/graph/@me?in=ctx%3A%40me%2Ftemper');
 	});
 
-	it('keeps the owner sigil but encodes the slug scope', () => {
-		expect(contextGraphHref('+acme-team', 'ops team')).toBe('/graph/+acme-team?context=ops%20team');
+	it('keeps the route owner sigil, and carries the anchor ref whole', () => {
+		// The route's `[owner]` is the reader whose graph this is; the ANCHOR carries its own
+		// owner, which is what makes a team context expressible at a personal door at all.
+		expect(contextGraphHref('+acme-team', 'ops team')).toBe(
+			'/graph/+acme-team?in=ctx%3A%2Bacme-team%2Fops+team',
+		);
+	});
+
+	it('round-trips through the parser, so the two spellings cannot drift', () => {
+		const url = new URL(contextGraphHref('+acme-team', 'ops team'), 'https://temperkb.io');
+
+		expect(parseGraphAddress(url).anchors).toEqual([
+			{ kind: 'context', ref: '+acme-team/ops team' },
+		]);
 	});
 });
 
@@ -111,14 +123,35 @@ describe('isContextLocation', () => {
 		).toBe(true);
 	});
 
-	it('matches the Atlas door, where the context is the ?context= scope', () => {
+	it('matches the graph door, where the context is an `in` anchor', () => {
 		expect(
-			isContextLocation({ owner: '@me' }, at('/graph/@me?context=temper'), '@me', 'temper'),
+			isContextLocation({ owner: '@me' }, at(contextGraphHref('@me', 'temper')), '@me', 'temper'),
 		).toBe(true);
 	});
 
+	it('matches a TEAM context at a personal door, because the anchor carries its own owner', () => {
+		// The route `[owner]` is deliberately not consulted on this door. `/graph/@me` asking about
+		// `+acme-team/ops` is the cross-owner reach the anchor grammar exists to provide, and
+		// checking the route owner would mark the place inactive on the screen showing it.
+		expect(
+			isContextLocation(
+				{ owner: '@me' },
+				at(`/graph/@me?in=ctx%3A%2Bacme-team%2Fops`),
+				'+acme-team',
+				'ops',
+			),
+		).toBe(true);
+	});
+
+	it('matches one anchor among several', () => {
+		const many = at('/graph/@me?in=ctx%3A%40me%2Ftemper&in=map%3Aabc&in=ctx%3A%40me%2Fwriting');
+
+		expect(isContextLocation({ owner: '@me' }, many, '@me', 'writing')).toBe(true);
+		expect(isContextLocation({ owner: '@me' }, many, '@me', 'absent')).toBe(false);
+	});
+
 	it('does not match a different owner or a different context', () => {
-		const door = at('/graph/@me?context=temper');
+		const door = at(contextGraphHref('@me', 'temper'));
 		expect(isContextLocation({ owner: '@me' }, door, '+acme-team', 'temper')).toBe(false);
 		expect(isContextLocation({ owner: '@me' }, door, '@me', 'writing')).toBe(false);
 	});
@@ -132,7 +165,7 @@ describe('isContextLocation', () => {
 		expect(
 			isContextLocation(
 				{ owner: '@me', context: 'temper' },
-				at('/vault/@me/temper?context=writing'),
+				at('/vault/@me/temper?in=ctx%3A%40me%2Fwriting'),
 				'@me',
 				'writing',
 			),
@@ -160,9 +193,14 @@ describe('isContextLocation', () => {
 });
 
 describe('isContextGraphLocation', () => {
-	it('is true on the Atlas door for that context', () => {
+	it('is true on the graph door for that context', () => {
 		expect(
-			isContextGraphLocation({ owner: '@me' }, at('/graph/@me?context=temper'), '@me', 'temper'),
+			isContextGraphLocation(
+				{ owner: '@me' },
+				at(contextGraphHref('@me', 'temper')),
+				'@me',
+				'temper',
+			),
 		).toBe(true);
 	});
 
