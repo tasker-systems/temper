@@ -1943,3 +1943,60 @@ fn a_refused_arm_of_a_union_or_intersect_does_not_refuse_the_combinator() {
         );
     }
 }
+
+// ─── Beat 0: the region a survey matched crosses into the stage contract ────────────────────────
+
+const EMIT_SURVEY_CORE: &str = "__temper_ungated_survey";
+
+/// **The disclosure `survey` declares and, until 2026-08-20, never made.**
+///
+/// `discloses: [Disclosure::Region]` sat in the registry with no consumer anywhere: the core
+/// returns `region_id` and this projection dropped it, so a caller was told which regions matched
+/// by nothing at all. The column is the carrier that makes the declaration describe the deployed
+/// system.
+#[test]
+fn a_survey_arm_projects_the_region_it_matched() {
+    let v = build(vec![survey_stage("s")], vec!["s"]);
+    let c = compile(&v, test_profile()).expect("compiles");
+    assert!(
+        c.sql.contains(EMIT_SURVEY_CORE),
+        "fixture must actually reach the survey fragment: {}",
+        c.sql
+    );
+    assert!(
+        c.sql.contains("region_id::uuid AS region"),
+        "survey must project the region each row came from: {}",
+        c.sql
+    );
+}
+
+/// **The failure mode no test above this one can catch.**
+///
+/// The hit arms, the tally arms and the zero-arm fallback are ONE result set. A column present in
+/// some arms and absent from others is not a narrower disclosure — it is a `UNION` type error that
+/// surfaces only when Postgres runs the statement, and every emitter test is compile-time. `via`
+/// crossed into this contract the same way on 2026-08-14 and needed the same guard.
+///
+/// Asserted per ARM rather than by counting occurrences in the whole statement: the per-act CTE
+/// bodies name the column too, so a naive count over the text passes while an arm is still missing
+/// it. Found by writing exactly that test first.
+#[test]
+fn every_arm_of_the_union_carries_the_region_column() {
+    // Two stages so the statement holds a returned hit arm AND a non-returned stage's tally.
+    let v = plan_two_stages("hits", "near");
+    let c = compile(&v, test_profile()).expect("compiles");
+
+    let returned = hit_arm(&c.sql, "near").expect("the returned stage ships a hit arm");
+    assert!(
+        returned.contains(", region,"),
+        "the hit arm must carry the region column: {returned}"
+    );
+    for stage in ["hits", "near"] {
+        let tally = tally_arm(&c.sql, stage);
+        assert!(
+            tally.contains("NULL::uuid AS region"),
+            "the `{stage}` tally must carry the region column — a tally says how many, never \
+             which, so it nulls the column rather than omitting it: {tally}"
+        );
+    }
+}
