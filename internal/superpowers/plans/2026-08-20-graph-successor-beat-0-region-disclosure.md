@@ -541,16 +541,24 @@ git commit -m "chore(generated): update schema snapshots for the region disclosu
 
 ---
 
-### Task 6: Prove it end to end against a database
+### Task 6: Prove it end to end against a database  ⚠️ `partially done`
 
 **Files:**
 - Create or modify: an integration test in `crates/temper-services` (or `temper-api`) under `#[cfg(all(test, feature = "test-db"))]`
 
 **⚠️ `#[sqlx::test]` modules must be gated `cfg(all(test, feature = "test-db"))`** — an ungated module breaks a no-DB `cargo make test`. Verify with a no-DB run before claiming done.
 
+> **`[executed — 2026-08-20]` Split into a proved half and a named remainder.**
+>
+> **Proved.** All 9 DB tests in `crates/temper-services/tests/query_run_composition_test.rs` pass against real Postgres, including a new `the_region_column_round_trips_and_a_non_survey_act_discloses_nothing`. That kills the runtime risk this task exists for: the widened `UNION` **types correctly**, and the column round-trips SQL → `HitRow` → assembler, arriving as an honest empty rather than an error or a missing field. The pair rule is asserted across a real round trip, not only over a hand-built `QueryRows`.
+>
+> **NOT proved, and it is the half this task was named for: that `survey` actually populates it.** That needs a context with materialized regions AND embedded chunks — `survey`'s lateral join drops any resource with no current chunk — which is the **embed-gated tier**: `context_region_smoke.rs` loads a 22-resource seed and runs ONNX via `write::materialize`. Per this repo's own guidance that tier is CI's job, and writing a test here that cannot be run locally would ship an unverified green, which is the failure this whole plan keeps catching. **A named remainder, not a covered case.**
+>
+> `DATABASE_URL=postgresql://temper:temper@localhost:5437/temper_development` — note that setting any *other* value flips sqlx from its offline cache to live verification and produces 444 compile errors that look nothing like a connection problem.
+
 **Why this task exists at all:** Tasks 1–4 each assert against fixtures. None of them proves the SQL column survives the round trip — the exact seam where a projection widening silently fails, because a `UNION` arm mismatch is a runtime error and every unit test above is compile-time.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```rust
 #[sqlx::test(migrations = "../../migrations")]
@@ -573,7 +581,7 @@ async fn a_survey_composition_discloses_the_regions_it_matched(pool: PgPool) {
 
 Seed whatever fixture the neighbouring DB tests use; find them with `grep -rn "sqlx::test" crates/temper-services/src | head`.
 
-- [ ] **Step 2: Run against the local database**
+- [x] **Step 2: Run against the local database**
 
 ```bash
 cargo nextest run -p temper-services --features test-db a_survey_composition_discloses
@@ -581,7 +589,7 @@ cargo nextest run -p temper-services --features test-db a_survey_composition_dis
 
 Docker Postgres is on port 5437; `DATABASE_URL` per `internal/agents/environment.md`.
 
-- [ ] **Step 3: Confirm the no-DB build is unaffected**
+- [x] **Step 3: Confirm the no-DB build is unaffected**
 
 ```bash
 cargo make test
@@ -589,7 +597,7 @@ cargo make test
 
 Expected: PASS with the DB-gated module skipped. **If this fails to compile, the `cfg` gate is wrong** — that is the failure this step exists to catch.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add crates/temper-services/

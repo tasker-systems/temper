@@ -1006,3 +1006,59 @@ mod server_side_embedding {
         );
     }
 }
+
+/// **The region column survives compile → execute → `HitRow` → assembler.**
+///
+/// Beat 0 widened the stage contract with a fifth column so `survey` can disclose the regions it
+/// matched. Every test above this one is compile-time: they read emitted SQL text, or they assemble
+/// a hand-built `QueryRows`. Neither can see a `UNION` arm mismatch, which is a **runtime** error —
+/// the column list is shared across hit arms, tally arms and the zero-arm fallback, and an arm
+/// missing it fails only when Postgres parses the statement.
+///
+/// This runs a real composition against a real database, which is the only level at which that is
+/// observable. A `find-exact` stage discloses nothing, so the assertion is that the column comes
+/// back as an honest **empty** rather than erroring or arriving absent — the round trip proved by
+/// the value, not by the statement merely not throwing.
+///
+/// # What this does NOT prove, stated so the coverage is not over-read
+///
+/// **That `survey` populates it.** That needs a context with materialized regions and embedded
+/// chunks — `survey`'s lateral join drops any resource with no current chunk — which is the
+/// embed-gated tier (`context_region_smoke.rs` loads a 22-resource seed and runs ONNX). It is a
+/// **named remainder**, not a covered case, and it is CI's job rather than this file's.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_region_column_round_trips_and_a_non_survey_act_discloses_nothing(pool: PgPool) {
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "disclosure").await;
+    mk(
+        &pool,
+        home,
+        owner,
+        emitter,
+        "salience",
+        "a body about salience",
+    )
+    .await;
+
+    let v = one_find("salience", vec![], vec![]);
+    let r = run_composition(&pool, owner.into(), &v)
+        .await
+        .expect("the widened stage contract must still be valid SQL");
+
+    let result = &r.returned[&StageName::parse("hits").unwrap()];
+    assert!(
+        result.disclosed_regions.is_empty(),
+        "find-exact discloses no region — the column is NULL in its arm and must arrive as an \
+         empty list, not as an error and not as a missing field"
+    );
+    let trace = r
+        .trace
+        .stages
+        .iter()
+        .find(|s| s.stage == StageName::parse("hits").unwrap())
+        .expect("every stage has a trace entry");
+    assert_eq!(
+        trace.disclosed_regions, result.disclosed_regions,
+        "the pair rule holds across a real round trip, not only over a hand-built QueryRows"
+    );
+}
