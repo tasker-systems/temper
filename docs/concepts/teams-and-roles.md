@@ -1,7 +1,6 @@
 # Teams and Roles
 
-**For anyone using Temper with more than one person** — users joining a team, operators
-setting one up, and integrators whose code targets team-owned resources.
+**For users, operators, and integrators.** Anyone using Temper with more than one person.
 
 ## What a team is
 

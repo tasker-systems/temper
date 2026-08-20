@@ -20,6 +20,9 @@ Temper instance, ready to run `temper warmup` and work with your knowledge base.
 
 ### 1. Initialize the CLI
 
+If you followed [Install Temper](./install-temper.md), you may have already done this step.
+If `temper auth status` works, skip to step 2.
+
 ```bash
 temper init
 ```

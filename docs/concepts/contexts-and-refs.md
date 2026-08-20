@@ -1,6 +1,6 @@
 # Contexts and Refs
 
-**For anyone using Temper** — users, operators, and integrators. If you will run more than one
+**For users, operators, and integrators.** If you will run more than one
 command, you need to know how Temper addresses things.
 
 ## What a context is
@@ -38,15 +38,15 @@ they are not the same thing.
 
 ## The four traps
 
-**1. `@me` is rejected by `context share` and `context unshare`.** These are the only two
+**1. `@me` is rejected by [`context share`](../reference/cli/context.md) and `context unshare`.** These are the only two
 commands that reject it, and the rejection is client-side. There is no `temper profile`
-command — to find your handle, run `temper context list` and read the `owner_ref` column.
+command — to find your handle, run [`temper context list`](../reference/cli/context.md) and read the `owner_ref` column.
 
 **2. A malformed ref reports "not found", not a grammar error.** The share/unshare commands
 hand-roll their argument parsing rather than using the shared context-ref parser, so a syntax
 error looks like a permissions problem. If share fails unexpectedly, check the ref form first.
 
-**3. `context create` is not idempotent.** Re-running it with the same name auto-suffixes:
+**3. [`context create`](../reference/cli/context.md) is not idempotent.** Re-running it with the same name auto-suffixes:
 `my-project` becomes `my-project-2`. A re-run silently forks the context rather than returning
 the existing one. Scripts that assume idempotency will create duplicates.
 

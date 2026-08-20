@@ -1,8 +1,6 @@
 # Operational Memory
 
-**For anyone using Temper** — users building a personal memory, and operators bringing a team
-onto shared memory. If you want working knowledge from agent sessions to persist across
-conversations and reach the people who need it, this is the concept.
+**For users and operators.** If you want working knowledge from agent sessions to persist across
 
 ## What operational memory is
 

@@ -1,6 +1,6 @@
 # Integrating Ruby with temper-rb
 
-How to call Temper from a Rails application: which credential a Puma request uses, which one a
+**For integrators.** How to call Temper from a Rails application: which credential a Puma request uses, which one a
 Sidekiq job uses, why the two write under different names, and what happens between minting a
 machine credential and your first successful write.
 
