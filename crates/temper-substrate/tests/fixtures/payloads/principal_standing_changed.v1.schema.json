@@ -59,7 +59,8 @@
         "kb_teams",
         "kb_profiles",
         "kb_connections",
-        "kb_machine_clients"
+        "kb_machine_clients",
+        "kb_events"
       ]
     },
     "ProfileId": {

@@ -216,6 +216,11 @@ pub enum LedgerRefKind {
     Connections,
     #[serde(rename = "kb_machine_clients")]
     MachineClients,
+    /// An event — `derived_from`'s target. Mirrored here because both sides decode the SAME
+    /// column: an admin event carrying a `kb_events` target that this enum could not decode would
+    /// make `to_wire_page` fail the WHOLE page, not the one reference.
+    #[serde(rename = "kb_events")]
+    Events,
 }
 
 /// One typed pointer out of a ledger event. Mirrors `temper_substrate::payloads::RefTarget`.

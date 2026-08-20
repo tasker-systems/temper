@@ -61,6 +61,7 @@ fn mirror_kind(k: AnchorTable) -> LedgerRefKind {
         AnchorTable::Profiles => LedgerRefKind::Profiles,
         AnchorTable::Connections => LedgerRefKind::Connections,
         AnchorTable::MachineClients => LedgerRefKind::MachineClients,
+        AnchorTable::Events => LedgerRefKind::Events,
     }
 }
 
@@ -82,6 +83,7 @@ const ALL_KINDS: &[AnchorTable] = &[
     AnchorTable::Profiles,
     AnchorTable::Connections,
     AnchorTable::MachineClients,
+    AnchorTable::Events,
 ];
 
 #[test]
