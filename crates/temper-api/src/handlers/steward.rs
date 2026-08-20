@@ -107,6 +107,10 @@ pub async fn advance(
     get,
     path = "/api/steward/sweep",
     tag = "Steward",
+    // Explicit, because utoipa otherwise derives the operationId from the fn name and this
+    // module's `sweep`/`dispatch` collide with `handlers::auditor`'s identically-named fns. A
+    // duplicate operationId is not cosmetic: it collides in the generated Ruby gem and TS client.
+    operation_id = "steward_sweep",
     params(("threshold" = Option<i64>, Query, description = "Ingest threshold (default applies when omitted)")),
     security(("bearer_auth" = [])),
     responses((status = 200, description = "Drifted team-joined cogmaps, most-drifted-first", body = Vec<DriftSweepRow>))
@@ -147,6 +151,9 @@ pub async fn candidates(
     post,
     path = "/api/steward/dispatch",
     tag = "Steward",
+    // Explicit, for the same reason as sweep above: the bare fn name collides with
+    // `handlers::auditor`'s `dispatch` in the generated Ruby gem and TS client.
+    operation_id = "steward_dispatch",
     security(("bearer_auth" = [])),
     request_body = DispatchTickRequest,
     responses((status = 200, description = "Jobs claimed for fan-out", body = DispatchTickResponse))

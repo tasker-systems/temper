@@ -236,8 +236,8 @@ module Temper::Generated
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [DispatchTickResponse]
-    def dispatch(dispatch_tick_request, opts = {})
-      data, _status_code, _headers = dispatch_with_http_info(dispatch_tick_request, opts)
+    def steward_dispatch(dispatch_tick_request, opts = {})
+      data, _status_code, _headers = steward_dispatch_with_http_info(dispatch_tick_request, opts)
       data
     end
 
@@ -246,13 +246,13 @@ module Temper::Generated
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<(DispatchTickResponse, Integer, Hash)>] DispatchTickResponse data, response status code and response headers
-    def dispatch_with_http_info(dispatch_tick_request, opts = {})
+    def steward_dispatch_with_http_info(dispatch_tick_request, opts = {})
       if @api_client.config.debugging
-        @api_client.config.logger.debug 'Calling API: StewardApi.dispatch ...'
+        @api_client.config.logger.debug 'Calling API: StewardApi.steward_dispatch ...'
       end
       # verify the required parameter 'dispatch_tick_request' is set
       if @api_client.config.client_side_validation && dispatch_tick_request.nil?
-        fail ArgumentError, "Missing the required parameter 'dispatch_tick_request' when calling StewardApi.dispatch"
+        fail ArgumentError, "Missing the required parameter 'dispatch_tick_request' when calling StewardApi.steward_dispatch"
       end
       allowable_values = ["cli", "sdk"]
       if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
@@ -288,7 +288,7 @@ module Temper::Generated
       auth_names = opts[:debug_auth_names] || ['bearer_auth']
 
       new_options = opts.merge(
-        :operation => :"StewardApi.dispatch",
+        :operation => :"StewardApi.steward_dispatch",
         :header_params => header_params,
         :query_params => query_params,
         :form_params => form_params,
@@ -299,7 +299,7 @@ module Temper::Generated
 
       data, status_code, headers = @api_client.call_api(:POST, local_var_path, new_options)
       if @api_client.config.debugging
-        @api_client.config.logger.debug "API called: StewardApi#dispatch\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+        @api_client.config.logger.debug "API called: StewardApi#steward_dispatch\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
       end
       return data, status_code, headers
     end
@@ -309,8 +309,8 @@ module Temper::Generated
     # @option opts [Integer] :threshold Ingest threshold (default applies when omitted)
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<DriftSweepRow>]
-    def sweep(opts = {})
-      data, _status_code, _headers = sweep_with_http_info(opts)
+    def steward_sweep(opts = {})
+      data, _status_code, _headers = steward_sweep_with_http_info(opts)
       data
     end
 
@@ -319,9 +319,9 @@ module Temper::Generated
     # @option opts [Integer] :threshold Ingest threshold (default applies when omitted)
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<(Array<DriftSweepRow>, Integer, Hash)>] Array<DriftSweepRow> data, response status code and response headers
-    def sweep_with_http_info(opts = {})
+    def steward_sweep_with_http_info(opts = {})
       if @api_client.config.debugging
-        @api_client.config.logger.debug 'Calling API: StewardApi.sweep ...'
+        @api_client.config.logger.debug 'Calling API: StewardApi.steward_sweep ...'
       end
       allowable_values = ["cli", "sdk"]
       if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
@@ -353,7 +353,7 @@ module Temper::Generated
       auth_names = opts[:debug_auth_names] || ['bearer_auth']
 
       new_options = opts.merge(
-        :operation => :"StewardApi.sweep",
+        :operation => :"StewardApi.steward_sweep",
         :header_params => header_params,
         :query_params => query_params,
         :form_params => form_params,
@@ -364,7 +364,7 @@ module Temper::Generated
 
       data, status_code, headers = @api_client.call_api(:GET, local_var_path, new_options)
       if @api_client.config.debugging
-        @api_client.config.logger.debug "API called: StewardApi#sweep\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+        @api_client.config.logger.debug "API called: StewardApi#steward_sweep\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
       end
       return data, status_code, headers
     end

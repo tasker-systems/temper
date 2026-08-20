@@ -1479,7 +1479,7 @@ export interface paths {
         get?: never;
         put?: never;
         /** Claim steward jobs for a worker */
-        post: operations["dispatch"];
+        post: operations["steward_dispatch"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1497,7 +1497,7 @@ export interface paths {
             cookie?: never;
         };
         /** Survey steward drift across maps */
-        get: operations["sweep"];
+        get: operations["steward_sweep"];
         put?: never;
         post?: never;
         delete?: never;
@@ -10305,7 +10305,7 @@ export interface operations {
             };
         };
     };
-    dispatch: {
+    steward_dispatch: {
         parameters: {
             query?: never;
             header?: {
@@ -10332,7 +10332,7 @@ export interface operations {
             };
         };
     };
-    sweep: {
+    steward_sweep: {
         parameters: {
             query?: {
                 /** @description Ingest threshold (default applies when omitted) */
