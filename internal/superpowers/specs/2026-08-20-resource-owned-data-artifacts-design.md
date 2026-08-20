@@ -180,33 +180,56 @@ months ago blocks the whole kind). Rejected: prospective-only binding (a kind st
 mixed with no path to consistency). Rejected: validate-on-read with no stored claim (moves cost to
 every read, and two readers can disagree if the schema changed between them).
 
-### Replay: a third category
+### Replay: an incumbent pattern, not a new category
 
-`replay.rs` today has exactly two categories:
+**This section supersedes an earlier draft that claimed data artifacts needed a third replay
+category. That claim was wrong** — it was authored from a partial read of `replay.rs`, and checking
+the live code found the pattern already there. Recorded rather than silently edited.
+
+`replay.rs` has three arms today, not two:
 
 1. **Byte-reconstructible from the ledger** — everything in `PROJECTION_DUMPS`, diffed
    byte-identically after replay into a fresh namespace.
-2. **Re-materializable from inputs** — region tables, excluded from the diff because they are
-   second-order derived compute; *"their proof is re-materialization — the membership fingerprint
-   must equal the one recorded in the `region_materialized` payload."*
+2. **Re-materializable from inputs** — region tables, *"their proof is re-materialization — the
+   membership fingerprint must equal the one recorded in the `region_materialized` payload."*
+3. **Projected in Rust inside the acting transaction, never rebuilt** — `kb_subscription_deliveries`
+   and webhook intake, which get no-op arms with a stated warrant: a rebuild *"would silently
+   reproject today's declarations onto yesterday's events."*
 
-Data artifacts are neither. They are primary data, not recomputable, and their content is **not
-carried in the event payload**.
+Data artifacts need none of these, because the **metadata/content split already solves it**.
 
-This is a deliberate widening of the replay model, stated as one rather than smuggled in as an
-exclusion line. The reasoning: **replay's purpose for the event ledger is provenance.** Resources
-are the replayable-difference core artifact. Data artifacts are event-sourced for *governance and
-consistency* — the ledger proves which artifact was written, by whom, under what act, and in what
-order — and a **content hash** in the payload proves the retrieved bytes are the committed bytes.
-The bytes themselves sit outside the byte-diff guarantee.
+`kb_block_content` is the model, and should be followed rather than paraphrased:
 
-Consequence: the ledger stays light regardless of artifact size, and there is no size ceiling
-forced by replay fidelity.
+```sql
+CREATE TABLE kb_block_content (
+    block_revision_id uuid PRIMARY KEY REFERENCES kb_block_revisions(id) ON DELETE CASCADE,
+    content      text NOT NULL,
+    content_hash text NOT NULL   -- bare sha256 hex of content's raw bytes (Rust `sha256_hex` twin)
+);
+```
 
-**Precedent, and its limit.** The hash-based proof is shaped like the region-table escape, but the
-justification differs and the spec should not claim otherwise: regions are excluded because they
-can be *recomputed*; artifacts are excluded because they are *content-addressed*. Same mechanism,
-different warrant.
+It sits **in** `PROJECTION_DUMPS` and is byte-diffed (surrogate key masked, ordered by
+`content_hash, content`), and replay obtains the bytes not by reconstructing them from an event
+payload but by **re-supplying them as a sidecar input** — `replay.rs:265`, *"Re-supply the
+`__blocks` sidecar (verbatim block bytes, PR 3) from kb_block_content."*
+
+So for artifacts:
+
+- The **metadata row** — which resource owns it, its family, selection intent, precedence,
+  timestamps, governing event ids, and the **content hash** — is entirely payload-derivable, goes
+  into `PROJECTION_DUMPS`, and diffs byte-identically like any other projection. Identity is
+  payload-carried (`identity-as-input`, as `property_set` already does with `property_id`), so ids
+  reproduce across replay.
+- The **content bytes** live in a companion table shaped like `kb_block_content`, ride the sidecar,
+  and are proved by hash.
+
+The event payload therefore carries the hash and not the body — which is what replay's purpose
+demands. Replay for the ledger is **provenance**: resources are the replayable-difference core, and
+artifacts are event-sourced for governance and consistency. Nothing about this requires a new
+category, and the design should not claim one.
+
+Consequence unchanged: the ledger stays light regardless of artifact size, and replay fidelity
+imposes no size ceiling.
 
 ## Invariants — the negative face
 
