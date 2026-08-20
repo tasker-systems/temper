@@ -1,5 +1,6 @@
 import { activeTraceparent } from 'temper-telemetry-ts';
 import { env } from '$env/dynamic/private';
+import { jsonBody } from './json-body';
 
 // Read at runtime (not build-inlined) so the upstream API origin is configured
 // purely through env, consistent with the reverse proxy in `proxy.ts`. Both read
@@ -53,7 +54,7 @@ export async function apiPost<T>(path: string, accessToken: string, body: unknow
 			Authorization: `Bearer ${accessToken}`,
 			'Content-Type': 'application/json',
 		}),
-		body: JSON.stringify(body),
+		body: jsonBody(body),
 	});
 	if (!res.ok) {
 		const errBody = await res.json().catch(() => ({}));
@@ -73,7 +74,7 @@ export async function apiPatch<T>(path: string, accessToken: string, body: unkno
 			Authorization: `Bearer ${accessToken}`,
 			'Content-Type': 'application/json',
 		}),
-		body: JSON.stringify(body),
+		body: jsonBody(body),
 	});
 	if (!res.ok) {
 		const errBody = await res.json().catch(() => ({}));

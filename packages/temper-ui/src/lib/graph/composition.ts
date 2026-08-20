@@ -177,6 +177,7 @@ export function buildGraphPlan({ anchors, question, seeds }: PlanInput): PlanOut
 				act({
 					name,
 					act: 'survey',
+					intention: question,
 					inputs: [anchorBound(anchor)],
 					terms: { regions: BigInt(REGIONS_PER_ANCHOR) },
 				}),
