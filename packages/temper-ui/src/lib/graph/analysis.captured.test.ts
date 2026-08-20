@@ -142,7 +142,8 @@ describe('the map-level readout, as it actually comes back', () => {
 
 describe('the displaced payload arrives whole', () => {
 	test('member count, salience and coherence are all readable for a real grouping', () => {
-		// RegionHoverCard.svelte:17-19 rendered exactly these three. Beat B took them off the
+		// RegionHoverCard.svelte:17-19 — at 87ccd211, the last commit before Beat D deleted the
+		// file — rendered exactly these three. Beat B took them off the
 		// navigational canvas; this asserts they are reachable here, on real rows rather than a
 		// fixture that could not disagree.
 		const withAll = map.regions.filter(

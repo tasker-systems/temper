@@ -6,7 +6,7 @@
 	import EventHistory from '$lib/components/vault/EventHistory.svelte';
 	import EdgeList from '$lib/components/vault/EdgeList.svelte';
 	import { mergeProperties } from '$lib/properties';
-	import { docTypeHue } from '$lib/graph/atlas/palette';
+	import { docTypeHue } from '$lib/graph/palette';
 
 	let { data }: { data: PageData } = $props();
 

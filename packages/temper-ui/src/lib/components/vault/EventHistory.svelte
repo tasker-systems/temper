@@ -1,9 +1,9 @@
 <script lang="ts">
 	import type { EventTrail } from '$lib/types/generated/element_trail';
-	import { trailModel } from '$lib/graph/atlas/trail';
-	import { summarizeEvent } from '$lib/graph/atlas/eventSummary';
-	import { flattenPayload } from '$lib/graph/atlas/payloadRows';
-	import { relativeTime } from '$lib/graph/atlas/relativeTime';
+	import { trailModel } from '$lib/graph/trail';
+	import { summarizeEvent } from '$lib/graph/eventSummary';
+	import { flattenPayload } from '$lib/graph/payloadRows';
+	import { relativeTime } from '$lib/graph/relativeTime';
 
 	let { trail }: { trail: EventTrail | null } = $props();
 

@@ -22,10 +22,10 @@
 	 * @see internal/superpowers/specs/2026-08-20-graph-successor-surface-design.md §3, §7
 	 */
 	import { onDestroy, onMount } from 'svelte';
-	import { type Camera, attachCamera } from '$lib/graph/atlas/camera';
-	import { type LabelCandidate, placeLabels } from '$lib/graph/atlas/labels';
-	import { forceNeighborhood } from '$lib/graph/atlas/layout/forceNeighborhood';
-	import { CANVAS_BG, paletteStyleVars } from '$lib/graph/atlas/palette';
+	import { type Camera, attachCamera } from '$lib/graph/camera';
+	import { type LabelCandidate, placeLabels } from '$lib/graph/labels';
+	import { forceNeighborhood } from '$lib/graph/layout/forceNeighborhood';
+	import { CANVAS_BG, paletteStyleVars } from '$lib/graph/palette';
 	import type { GraphModel } from '$lib/graph/model';
 	import {
 		describeUnconnected,
@@ -34,8 +34,8 @@
 		packField,
 		partitionByConnection,
 	} from '$lib/graph/presentation';
-	import Edge from '$lib/components/graph/atlas/marks/Edge.svelte';
-	import NodeChip from '$lib/components/graph/atlas/marks/NodeChip.svelte';
+	import Edge from '$lib/components/graph/marks/Edge.svelte';
+	import NodeChip from '$lib/components/graph/marks/NodeChip.svelte';
 
 	interface Props {
 		model: GraphModel;

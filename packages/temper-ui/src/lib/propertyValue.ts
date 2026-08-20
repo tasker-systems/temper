@@ -4,7 +4,7 @@
  * summary and expands on demand. Depth is opt-in, so the property set always
  * reads as the resource's key set.
  *
- * Deliberately NOT `flattenPayload` (lib/graph/atlas/payloadRows.ts): that
+ * Deliberately NOT `flattenPayload` (lib/graph/payloadRows.ts): that
  * flattens `facet` into sibling dot-path rows sitting at the same visual level
  * as `date` and `tags`, which stops the set reading as a key set. See spec D5.
  */

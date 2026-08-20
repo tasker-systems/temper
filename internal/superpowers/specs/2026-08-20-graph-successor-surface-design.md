@@ -547,6 +547,72 @@ ascend, only the params of §1.
 their only caller in Beat D. Deleting them is Rust and a separate PR; this arc is deliberately
 frontend-only.
 
+#### What the two lists above got wrong, and what Beat D actually deleted `[amended — 2026-08-20, in Beat D]`
+
+**The survivor list above is stale, and the way it went stale is the finding.** It was written
+before Beat B existed and it predicts which *files* the successor would reuse. Beat B did not reuse
+them: it wrote `NodeRail.svelte`, `GraphA11yList.svelte`, `BoundLine.svelte` and `WhyThese.svelte`
+fresh, and reused the **pure modules underneath** instead. So four entries listed as survivors —
+`TrailRail.svelte`, `CompositionA11yList.svelte`, `marks/OrphanNodeMark.svelte` and `homeTint.ts` —
+had no importer left the moment B merged, and Beat D deleted them. **Nothing was lost with them**:
+N1/N2 landed in `NodeRail.svelte` (its `excerpt` prop, its trail and its neighbour list), and the
+functions the four components called (`trailModel`, `summarizeEvent`, `atlasNeighbors`,
+`relativeTime`, `docTypeHue`) all survive and are all still called.
+
+Read the general lesson rather than the four names: **a disposition list written per-file predicts
+reuse it cannot know, and a component is the wrong grain to predict at.** The modules the list got
+right are the pure ones.
+
+Two entries in the deletion list were wrong in the other direction:
+
+- **`marks.ts` survives.** It is the one mark vocabulary Beat B shipped — `nodeMarkShape` is called
+  from `NodeChip.svelte`. Only its a11y half (`groupByAxis`) went, because the successor's a11y
+  mirror groups by **arm** (how a node reached the answer) rather than by axis.
+- **`legend.ts` / `AtlasLegend.svelte` are deleted outright, edge grammar included** — see below.
+
+**The legend's fate `[ruled — 2026-08-20, Pete, in Beat B; confirmed against the code in Beat D]`.**
+The deferral above asks whether the *edge-grammar* half survives. It does not. Beat B retired the
+legend wholesale on the ground that every channel is decodable in place, in the reader's own words,
+and that covers the edge channels specifically: hovering an edge renders its label
+(`GraphCanvas.svelte` passes `label={hoveredEdge === i}` to `Edge.svelte`), which is what the dash
+and the colour both key off. And the legend had begun to **lie**: it built `weight 1/3/5` swatches
+off `edgeStyle`, while every successor edge is a `ViaEntry` with no weight and takes a single
+`UNWEIGHTED_WIDTH`. A legend row for a distinction the surface does not make is worse than no
+legend. §7's open bullet closes here.
+
+**The crumb is deleted, not rewritten `[ruled — 2026-08-20, Pete]`.** The line above says
+`crumbModel.ts` / `AtlasCrumb.svelte` survive and are rewritten on the params. Beat B shipped the
+surface with no crumb at all and answered orientation with the bound declaration and the *why-these*
+readout instead. Rewriting them in Beat D would mean **building a new UI element inside a deletion
+beat**, on the authority of a line written before the surface existed. The ruling is that B's answer
+supersedes the prediction; both files are gone.
+
+**The surviving modules moved out of `atlas/` `[decided — 2026-08-20, Pete]`.** `lib/graph/atlas/*`
+→ `lib/graph/*`, `lib/graph/atlas/layout/` → `lib/graph/layout/`, and
+`lib/components/graph/atlas/marks/` → `lib/components/graph/marks/`. A directory named for a deleted
+surface is a standing false statement about what the code is. **One consequence worth knowing about
+rather than discovering:** `readout.test.ts`'s derived-structure sweep is a non-recursive
+`readdirSync` over `lib/graph/`, so the move took its denominator from 8 modules to 17 without a
+line of the test changing. That is a strengthening, and it is recorded in the test itself, because a
+green result there says nothing about how much it swept.
+
+**`/dev/atlas` is deleted `[ruled — 2026-08-20, Pete]`** — the route, its 1 MB committed fixture
+bundle, `fixtures.test.ts`, the README, and both `scripts/*atlas*.mjs`. The harness rendered
+`AtlasPage`, which no longer exists, so it had no subject. **This gives something up**: the harness
+existed because Vercel previews cannot carry Auth0, so authenticated UI is otherwise only observable
+in prod post-merge. §6 already says the successor needs its own fixtures; that harness is now a
+**named remainder on the goal**, not a thing this beat quietly absorbed.
+
+**And the frontend half of the nine endpoints went with them.** The out-of-scope note above says the
+`/api/graph/*` endpoints *"lose their only caller in Beat D."* That caller was TypeScript —
+`graph-reads.ts`'s `readAtlasHome`, `readCogmapPanorama`, `readRegionComposition`,
+`readCogmapNeighborhood`, `readContextPanorama`, `readContextComposition` and their path builders —
+and it is deleted here, which is what makes the sentence true. The **Rust endpoints survive with
+zero callers**, as does the generated TypeScript for their response types (`graph_home.ts`,
+`graph_territory.ts`, `graph_context.ts`, now imported by nothing), because deleting either would be
+the separate PR this arc declines. The remainder is restated at the top of `graph-reads.ts` so it is
+visible from the code as well as from here.
+
 ### 4.3 The one live bug, and where it goes
 
 [Graph Atlas C3.1](./019f2fbe-f4ac-7e83-955e-c4dc885856f3)'s surviving remainder is
@@ -569,6 +635,14 @@ reached only by a cogmap node with zero neighbours.
 **The cost is real and is accepted, not waved away:** until Beat D merges, a reader who drills a
 neighbourless cogmap node is told a feature does not exist when the answer is *"there are none."* The
 clause it violates stays violated for that window.
+
+**`[closed — 2026-08-20, in Beat D]` The window is shut.** `AtlasCanvas.svelte` is deleted, and the
+string with it. Worth being precise about what that does and does not establish: the lie is gone
+because **its whole surface is gone**, so no reader reaches that path any more. Nothing now asserts
+the *correct* behaviour on a neighbourless node, because the successor has no code that distinguishes
+that case — its canvas draws unconnected nodes in a declared band and captions them (§7). The clause
+is satisfied by removal, not by a fix, and no witness was authored for it because there is nothing
+left to witness.
 
 **Consequence for the task.** [Graph Atlas C3.1](./019f2fbe-f4ac-7e83-955e-c4dc885856f3) was
 re-scoped by its `[verification sweep — 2026-08-17]` down to exactly this one bug, with everything
@@ -653,7 +727,10 @@ finding behind [/dev/vault render harness](./019f6d08-8b33-7f30-a438-8487261d5f2
 - **Rate-shaped axes remain open**, exactly as the register says. Derived structure settles
   asynchronously with respect to the reader's own writes. This spec reduces the exposure — no region
   id in a URL — and does not close the axis.
-- **The legend's fate**, per §4.2.
+- ~~**The legend's fate**, per §4.2.~~ **CLOSED `[ruled — 2026-08-20, Pete, in Beat B; confirmed
+  against the built canvas in Beat D]`.** Retired wholesale, edge grammar included — every channel
+  is decoded in place, and the weight row had already become a statement the surface does not make.
+  See §4.2.
 
 ---
 
@@ -754,3 +831,36 @@ already names: **a trim that preserves one property destroys another.**
   `+page.server.ts` itself is exercised by nothing, because session auth is a browser cookie flow.
   The same gap that hid three defects in Beat A, narrowed but not closed.
 - **§2.3 still has no wire capture**, unchanged from Beat B.
+
+---
+
+## 9. `[built — 2026-08-20]` Beat D — the deletion, and the three predictions it had to overrule
+
+The arc's last beat. Beat C merged first (`87ccd211`), verified rather than assumed, so
+`displaced-structure-remains-reachable` had its receiver before the marks that displace into it were
+removed. What Beat D removed, and the three places §4.2 had to be corrected against the code, are
+recorded in **§4.2, *What the two lists above got wrong***; §7's legend bullet and §4.3's live-bug
+window both close there.
+
+### 9.1 The shape of the change
+
+29 modules and components deleted (49 files with their tests, the `/dev/atlas` harness, its 1 MB
+fixture bundle and its two scripts); 10 surviving modules and 3 marks moved out of `atlas/`;
+`graph-reads.ts` cut to the four readers that still have callers. Afterwards **every file under `lib/graph/` and `lib/components/graph/` is reachable from a
+route** — checked by walking imports from the route entry points rather than by reading the list
+above, which is how the four stale survivors were found in the first place.
+
+`svelte-check` clean over 844 files, 566 tests green, the production build succeeds, and
+`cargo make check` passes. `biome check` reports no errors; its 34 `noNonNullAssertion` warnings are
+pre-existing and none of them is in a file this beat created.
+
+### 9.2 What Beat D did not do
+
+- **The nine `/api/graph/*` endpoints still stand, now with zero callers**, along with the generated
+  TypeScript for their response types. Rust, and a separate PR — see §4.2.
+- **No successor render harness.** `/dev/atlas` is gone and nothing replaced it, so authenticated
+  graph UI is again observable only in prod post-merge. §6 names the fixtures such a harness needs.
+- **`surface-declares-its-kind` still has no reader session** — the goal's headline clause, and the
+  only one no test can settle. It now carries three questions: what a reader thinks they are looking
+  at, why clicking navigates into a graph, and the ring.
+- **§2.3 has still never met a server**, unchanged since Beat B.

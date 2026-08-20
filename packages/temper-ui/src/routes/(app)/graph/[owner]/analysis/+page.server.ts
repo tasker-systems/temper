@@ -10,7 +10,8 @@ import type { PageServerLoad } from './$types';
  *
  * **This is the receiver Beat C exists to build.** The successor canvas draws the reader's own
  * resources and the edges between them and nothing else; the per-region metrics
- * `RegionHoverCard.svelte:17-19` used to render on the navigational surface — member count,
+ * `RegionHoverCard.svelte:17-19` (at `87ccd211`, the last commit before Beat D deleted it)
+ * used to render on the navigational surface — member count,
  * salience, coherence — land here, alongside the map-level picture that has had no reader in the UI
  * since it was built. `displaced-structure-remains-reachable` asks that displaced structure remain
  * *"available somewhere that declares itself as analysis rather than as the reader's material"*,

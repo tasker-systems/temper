@@ -1,6 +1,6 @@
 import type { ResourceView } from '$lib/types/generated/resource_view';
-import { relativeTime } from './atlas/relativeTime';
 import type { GraphNode, NodeArm } from './model';
+import { relativeTime } from './relativeTime';
 
 /**
  * How a node describes itself in the panels beside the canvas.
