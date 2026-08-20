@@ -1,0 +1,653 @@
+<title>Chart of the Successor Surface</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..112,400..700&family=Newsreader:ital,opsz,wght@0,6..72,300..500;1,6..72,300..400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+:root {
+  --ground:#E9EDEC; --paper:#F6F8F7; --panel:#EEF2F1;
+  --ink:#14232B; --ink-2:#4E6069; --ink-3:#82949C;
+  --rule:#C6D0CE; --rule-soft:#DAE2E0;
+  --land:#DFD5BC; --land-edge:#B9AC8B;
+  --sounding:#1C6A76; --sounding-soft:#CFE2E4;
+  --derived:#B2288A; --derived-soft:#F2DCEB; --derived-edge:#DCA8CA;
+  --warn:#9A5B12;
+  --measure:34rem;
+  --f-disp:"Archivo","Helvetica Neue",Arial,sans-serif;
+  --f-body:"Newsreader",Georgia,"Times New Roman",serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground:#0D1920; --paper:#132430; --panel:#162A36;
+    --ink:#DCE7E9; --ink-2:#9AACB3; --ink-3:#697C85;
+    --rule:#243A45; --rule-soft:#1B2E39;
+    --land:#4A422F; --land-edge:#6E6244;
+    --sounding:#5CC2CE; --sounding-soft:#173B44;
+    --derived:#EC63BC; --derived-soft:#3A1830; --derived-edge:#7C3564;
+    --warn:#D9A05B;
+  }
+}
+:root[data-theme="dark"] {
+  --ground:#0D1920; --paper:#132430; --panel:#162A36;
+  --ink:#DCE7E9; --ink-2:#9AACB3; --ink-3:#697C85;
+  --rule:#243A45; --rule-soft:#1B2E39;
+  --land:#4A422F; --land-edge:#6E6244;
+  --sounding:#5CC2CE; --sounding-soft:#173B44;
+  --derived:#EC63BC; --derived-soft:#3A1830; --derived-edge:#7C3564;
+  --warn:#D9A05B;
+}
+
+* { box-sizing:border-box; }
+body {
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:var(--f-body); font-size:17px; line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap { max-width:78rem; margin:0 auto; padding:0 1.5rem 6rem; }
+.measure { max-width:var(--measure); }
+
+h1,h2,h3 { font-family:var(--f-disp); font-variation-settings:"wdth" 88; text-wrap:balance; margin:0; }
+h1 { font-size:clamp(2rem,4.4vw,3.1rem); font-weight:700; line-height:1.02; letter-spacing:-.015em; }
+h2 { font-size:clamp(1.3rem,2.4vw,1.75rem); font-weight:600; line-height:1.12; letter-spacing:-.01em; }
+h3 { font-size:1.02rem; font-weight:600; font-variation-settings:"wdth" 82; }
+p { margin:0 0 1rem; }
+a { color:var(--sounding); text-underline-offset:2px; }
+code, .mono { font-family:var(--f-mono); font-size:.86em; }
+:focus-visible { outline:2px solid var(--sounding); outline-offset:3px; border-radius:2px; }
+
+.eyebrow {
+  font-family:var(--f-mono); font-size:.68rem; font-weight:500;
+  letter-spacing:.16em; text-transform:uppercase; color:var(--ink-3);
+}
+
+/* ── titleblock ─────────────────────────────────────── */
+.titleblock {
+  border-bottom:1.5px solid var(--ink);
+  padding:3.2rem 0 1.1rem; margin-bottom:2.4rem;
+  display:grid; gap:1.4rem;
+}
+.titleblock .meta {
+  display:flex; flex-wrap:wrap; gap:.5rem 2.2rem;
+  font-family:var(--f-mono); font-size:.72rem; color:var(--ink-2);
+  border-top:1px solid var(--rule); padding-top:.8rem;
+}
+.titleblock .meta b { color:var(--ink); font-weight:500; }
+.lede { font-size:1.12rem; color:var(--ink-2); max-width:44rem; }
+.lede em { color:var(--ink); font-style:italic; }
+
+/* ── the instrument ─────────────────────────────────── */
+.instrument {
+  background:var(--paper); border:1px solid var(--rule);
+  display:grid; grid-template-columns:minmax(0,1fr) 20rem;
+}
+@media (max-width:860px){ .instrument { grid-template-columns:1fr; } }
+
+.tabs {
+  grid-column:1/-1; display:flex; flex-wrap:wrap;
+  border-bottom:1px solid var(--rule); background:var(--panel);
+}
+.tab {
+  appearance:none; border:0; background:none; cursor:pointer;
+  font-family:var(--f-mono); font-size:.74rem; letter-spacing:.04em;
+  color:var(--ink-2); padding:.85rem 1.15rem; line-height:1.35;
+  border-right:1px solid var(--rule); border-bottom:2px solid transparent;
+  text-align:left;
+}
+.tab:hover { color:var(--ink); background:var(--paper); }
+.tab[aria-selected="true"] { color:var(--ink); background:var(--paper); border-bottom-color:var(--sounding); }
+.tab .k { display:block; font-size:.64rem; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-3); }
+
+.stage { position:relative; min-width:0; }
+canvas { display:block; width:100%; height:460px; }
+.hovercard {
+  position:absolute; pointer-events:none; opacity:0; transition:opacity .12s;
+  background:var(--paper); border:1px solid var(--ink); padding:.55rem .7rem;
+  max-width:19rem; font-family:var(--f-mono); font-size:.72rem; line-height:1.45;
+  box-shadow:0 6px 20px rgba(0,0,0,.18); z-index:5;
+}
+.hovercard .t { font-family:var(--f-body); font-size:.86rem; line-height:1.3; color:var(--ink); margin-bottom:.3rem; }
+.hovercard .d { color:var(--ink-2); }
+
+/* the bound line — chrome, never a warning */
+.bound {
+  grid-column:1/-1; border-top:1px solid var(--rule);
+  background:var(--panel); padding:.7rem 1rem;
+  display:flex; flex-wrap:wrap; align-items:baseline; gap:.4rem 1.6rem;
+  font-family:var(--f-mono); font-size:.76rem; font-variant-numeric:tabular-nums;
+  color:var(--ink-2);
+}
+.bound .lbl { font-size:.63rem; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-3); }
+.bound b { color:var(--ink); font-weight:600; }
+.bound .na { color:var(--ink-3); font-style:normal; }
+
+/* readout — the only magenta on the page */
+.readout {
+  border-left:1px solid var(--rule); background:var(--derived-soft);
+  padding:1rem; min-width:0; display:grid; align-content:start; gap:.8rem;
+}
+@media (max-width:860px){ .readout { border-left:0; border-top:1px solid var(--rule); } }
+.readout .hd {
+  font-family:var(--f-mono); font-size:.63rem; letter-spacing:.14em;
+  text-transform:uppercase; color:var(--derived); font-weight:600;
+  display:flex; align-items:center; gap:.5rem;
+}
+.readout .hd::before {
+  content:""; width:14px; height:14px; flex:none;
+  border:1.5px dashed var(--derived); border-radius:50%;
+}
+.readout p { font-size:.86rem; line-height:1.5; color:var(--ink-2); margin:0; }
+.grouping {
+  border-top:1px dashed var(--derived-edge); padding-top:.55rem;
+  font-family:var(--f-mono); font-size:.74rem; color:var(--ink-2); line-height:1.45;
+}
+.grouping b { display:block; font-family:var(--f-body); font-size:.92rem;
+  font-weight:500; color:var(--ink); line-height:1.3; margin-bottom:.15rem; }
+.grouping .n { color:var(--derived); }
+
+/* ── legend ─────────────────────────────────────────── */
+.legend {
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(11rem,1fr));
+  gap:.1rem; margin-top:1.5rem; border:1px solid var(--rule); background:var(--rule);
+}
+.legend div { background:var(--paper); padding:.7rem .85rem; display:flex; gap:.6rem; align-items:center; }
+.legend span { font-family:var(--f-mono); font-size:.72rem; color:var(--ink-2); }
+.legend svg { flex:none; }
+
+/* ── sections ───────────────────────────────────────── */
+section { margin-top:4.5rem; }
+.sec-head { border-top:1.5px solid var(--ink); padding-top:.7rem; margin-bottom:1.6rem; }
+.sec-head .eyebrow { display:block; margin-bottom:.45rem; }
+
+table { border-collapse:collapse; width:100%; font-size:.9rem; }
+.scroll { overflow-x:auto; border:1px solid var(--rule); background:var(--paper); }
+th, td { text-align:left; padding:.7rem .9rem; border-bottom:1px solid var(--rule-soft); vertical-align:top; }
+th { font-family:var(--f-mono); font-size:.65rem; letter-spacing:.13em; text-transform:uppercase;
+     color:var(--ink-3); font-weight:500; border-bottom:1px solid var(--rule); white-space:nowrap; }
+td:first-child { font-family:var(--f-disp); font-variation-settings:"wdth" 84; font-weight:600; white-space:nowrap; }
+tr:last-child td { border-bottom:0; }
+.num { font-family:var(--f-mono); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.flag-none { color:var(--warn); font-family:var(--f-mono); font-size:.8rem; }
+
+.cols { display:grid; grid-template-columns:repeat(auto-fit,minmax(17rem,1fr)); gap:1.5rem; }
+.card { background:var(--paper); border:1px solid var(--rule); padding:1rem 1.1rem; }
+.card h3 { margin-bottom:.5rem; }
+.card ul { margin:0; padding-left:1.05rem; font-family:var(--f-mono); font-size:.74rem;
+           line-height:1.75; color:var(--ink-2); }
+.card.dies { border-left:3px solid var(--derived); }
+.card.lives { border-left:3px solid var(--sounding); }
+
+ol.beats { list-style:none; counter-reset:b; margin:0; padding:0;
+           border:1px solid var(--rule); background:var(--paper); }
+ol.beats li { counter-increment:b; display:grid; grid-template-columns:3.2rem 1fr;
+              gap:1rem; padding:1rem 1.1rem; border-bottom:1px solid var(--rule-soft); }
+ol.beats li:last-child { border-bottom:0; }
+ol.beats li::before {
+  content:counter(b,upper-alpha); font-family:var(--f-disp); font-variation-settings:"wdth" 78;
+  font-size:1.7rem; font-weight:700; line-height:1; color:var(--rule);
+}
+ol.beats b { font-family:var(--f-disp); font-variation-settings:"wdth" 86; font-weight:600; }
+ol.beats p { margin:.25rem 0 0; font-size:.92rem; color:var(--ink-2); }
+
+.note {
+  margin-top:3rem; border-top:1px solid var(--rule); padding-top:1rem;
+  font-family:var(--f-mono); font-size:.72rem; line-height:1.7; color:var(--ink-3);
+  max-width:46rem;
+}
+.pull {
+  font-family:var(--f-disp); font-variation-settings:"wdth" 86; font-weight:600;
+  font-size:clamp(1.1rem,2vw,1.35rem); line-height:1.3; color:var(--ink);
+  border-left:3px solid var(--derived); padding-left:1rem; margin:1.6rem 0;
+  max-width:38rem;
+}
+@media (prefers-reduced-motion:reduce){ * { transition:none !important; } }
+</style>
+
+<div class="wrap">
+
+<header class="titleblock">
+  <div>
+    <span class="eyebrow">Goal 019fbaac · successor to the Atlas</span>
+    <h1>Your work is the terrain.<br>The grouping is the graticule.</h1>
+  </div>
+  <p class="lede">A chart draws surveyed coastline in ink and prints its derived overlays in magenta, so no one mistakes an advisory boundary for a shoreline. This surface takes the same rule literally: <em>magenta is never a mark.</em> Everything drawn below is a resource you wrote and an edge that exists in the database. The machine's own reasoning is quarantined in one panel, on the right.</p>
+  <div class="meta">
+    <span><b>Act</b> read only</span>
+    <span><b>Route</b> <code>/graph/[owner]</code></span>
+    <span><b>Backend change</b> none</span>
+    <span><b>Marks</b> node, edge</span>
+  </div>
+</header>
+
+<div class="instrument">
+  <div class="tabs" role="tablist" aria-label="Entry">
+    <button class="tab" role="tab" aria-selected="true" data-e="0"><span class="k">No place, a question</span>“what keeps a surface honest about what it left out?”</button>
+    <button class="tab" role="tab" aria-selected="false" data-e="1"><span class="k">A map, no question</span>surveyed under its own charter</button>
+    <button class="tab" role="tab" aria-selected="false" data-e="2"><span class="k">A context, no question</span>everything in <code>@me/temper</code></button>
+  </div>
+
+  <div class="stage">
+    <canvas id="cv" aria-label="Graph of resources and the edges between them"></canvas>
+    <div class="hovercard" id="hc" role="status"></div>
+  </div>
+
+  <aside class="readout" id="ro">
+    <div class="hd">Why these</div>
+    <p id="ro-lead"></p>
+    <div id="ro-body"></div>
+  </aside>
+
+  <div class="bound" id="bound"></div>
+</div>
+
+<div class="legend" id="legend"></div>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">The rule the palette enforces</span>
+    <h2>One kind of thing on screen, at every depth</h2>
+  </div>
+  <div class="measure">
+    <p>The predecessor drew machine-derived clusters as circles, then drilled from those circles into real resources and real edges. Two ontologies, one visual grammar, and a drill gesture promising “same thing, closer.” Two readers detected the discontinuity and had nowhere to put it but themselves — <em>“what am I looking at”</em>, and <em>“why when I click this circle does it navigate into a graph, were we not in a graph before?”</em></p>
+    <p class="pull">There is no second kind to change into. A node is a resource; an edge is a row in <code>kb_edges</code>. Violating that requires adding a mark type, which is a visible act someone has to review.</p>
+    <p>Groupings still decide what appears — they are how the question gets answered at all. They simply never get drawn. The right-hand panel is the only place they exist, it is written without the words <em>region</em>, <em>salience</em> or <em>survey</em>, and it is magenta so you can confirm at a glance that none of it leaked onto the chart.</p>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">Always on screen · never dismissible</span>
+    <h2>Three ways this view is incomplete, not one</h2>
+  </div>
+  <div class="measure">
+    <p>The bound line under the chart is chrome, not a warning. It shows whether the view is complete or partial, so <em>complete</em> is something you are told rather than something you infer from an absence of alarms.</p>
+  </div>
+  <div class="scroll" style="margin-top:1.4rem">
+  <table>
+    <thead><tr><th>Axis</th><th>Ceiling in the code</th><th>Who reports it</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td>Walk size</td><td class="num">limit 50</td><td class="mono">Extent · terms_applied</td><td>Honest already</td></tr>
+      <tr><td>Groupings per place</td><td class="num">3 default, 20 max</td><td class="mono">terms_applied</td><td>Honest already</td></tr>
+      <tr><td>Places asked</td><td class="num">none — we choose</td><td class="flag-none">nothing</td><td>The surface's own debt</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="measure" style="margin-top:1.4rem">
+    <p>Two of the three already report themselves truthfully, and the only job is to stop discarding what comes back. <code>terms_applied</code> carries the page a stage <em>actually ran with</em> — clamped, defaulted — because reporting the request back would make it an echo rather than a disclosure.</p>
+    <p>The third has no machinery at all. Choosing which of your places to ask happens before the plan exists, so nothing downstream can account for it. The surface has to declare that one itself, from its own records — which is why it is on the line above whether or not anything was dropped.</p>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">Replace in place</span>
+    <h2>What the rebuild keeps</h2>
+  </div>
+  <div class="cols">
+    <div class="card lives">
+      <h3>Survives, several strengthened</h3>
+      <ul>
+        <li>forceNeighborhood — <em>this is what the successor draws</em></li>
+        <li>camera · labels (+ collision)</li>
+        <li>Edge · NodeChip · NodeHoverCard · OrphanNodeMark</li>
+        <li>TrailRail (+ excerpt, richer hover)</li>
+        <li>neighbors · trail · payloadRows · eventSummary</li>
+        <li>CompositionA11yList · palette · homeTint</li>
+      </ul>
+    </div>
+    <div class="card dies">
+      <h3>Deleted — draws an evicted mark</h3>
+      <ul>
+        <li>TerritoryCircle · BridgeRibbon · RegionHoverCard</li>
+        <li>forceTerritories · packTerritories · cogmapTerritories</li>
+        <li>hull · bridges · homeLayout · territory</li>
+        <li>TierHome · TierPanorama · HomeA11yList</li>
+        <li>ResidualTray · residualTray</li>
+        <li>the tier model: nav · viewData · marks · scopeChips</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">Sequence · the receiver lands before the eviction</span>
+    <h2>Four beats</h2>
+  </div>
+  <ol class="beats">
+    <li><div><b>The plan builder and the bound line</b><p>Pure modules, fully tested, no rendering. Every machine-checkable promise in the goal is proven here, against no UI at all.</p></div></li>
+    <li><div><b>The surface</b><p>Four URL parameters, three entries, one mark vocabulary, the why-these panel. Built on the layout code that survives.</p></div></li>
+    <li><div><b>Somewhere for the analysis to live</b><p>Charter, staleness and the regulating concepts get a place that says outright it is analysis. Thirteen months of measurements with no reader.</p></div></li>
+    <li><div><b>Delete the old marks</b><p>Last, so nothing is ever displaced into nowhere.</p></div></li>
+  </ol>
+</section>
+
+<p class="note">
+Chart data: titles, doc types and edge kinds are real resources and real edge kinds from <code>@me/temper</code>; layout is a force simulation, so positions carry no meaning. Counts on the bound line are drawn from measurements recorded in the goal and the pivot decision — 2,330 resources in prod, 490 groupings in this profile's visible set, 462 resources in no grouping at all, 207 <code>derived_from</code> edges of which 100% cross a container boundary. The cognitive map on the second tab is illustrative: its shape is real, its name is not.
+</p>
+
+</div>
+
+<script>
+(() => {
+  const N=(title,ty,arm)=>({title,ty,arm});
+
+  // ── real titles from @me/temper ─────────────────────────────
+  const E0 = {
+    lead:"Seven of your places were asked. Three groupings of your work answered; what they contain is drawn, then followed one step out.",
+    groups:[
+      ["A read declares its bounds","9 resources · strongest match"],
+      ["Coverage and what it omits","7 resources"],
+      ["The graph surface and its pivot","6 resources"]
+    ],
+    bound:{walk:[50,214],reg:[3,490],places:[7,7]},
+    nodes:[
+      N("A read declares its bounds — and expressive filters are what make bounds usable","goal","s"),
+      N("A register's coverage is projectable, and the projection never reads cleaner than the evidence","goal","s"),
+      N("The graph surface shows the reader's own material","goal","s"),
+      N("Every question to Temper is answered by a situated act","goal","s"),
+      N("No flag silently does nothing — the filter surface tells the truth","goal","s"),
+      N("Unbounded collection reads: pagination and a truthful truncation signal","task","s"),
+      N("What a door offers, and who may use it, is read — not discovered","goal","s"),
+      N("Atlas pivot — derived structure organizes the view; it is never the subject","decision","w"),
+      N("The pipe was inexpressible — a composition becomes a named DAG","session","w"),
+      N("Atlas analytics readout — telos, staleness, regulation","task","w"),
+      N("Atlas nav: in-page table⇄graph toggle","task","w"),
+      N("Graph Atlas C3.1 — wayfinding, legibility & node-content","task","w"),
+      N("The atlas half was already consolidated","session","w"),
+      N("Work is located, followed, asked about, and changed from the web surface","goal","w"),
+      N("The working surface can narrow, and the nav can be read","task","w"),
+      N("Refresh the /dev/atlas fixture corpus against the measured substrate","task","w"),
+      N("api-query-door design","research","w"),
+      N("follow-from mechanic design","research","w"),
+      N("An index-rooted pull preserves the graph's shape on disk","goal","w"),
+      N("Rooted graph-pull enabling task — grounding, ordering fork","session","w"),
+      N("/dev/vault render harness + local fixture data","task","w"),
+      N("composable search fragments design","research","w")
+    ],
+    edges:[[0,5,"parent_of"],[1,7,"derived_from"],[2,7,"derived_from"],[2,9,"parent_of"],[2,10,"parent_of"],
+      [2,11,"parent_of"],[2,15,"parent_of"],[12,2,"advances"],[12,13,"derived_from"],[13,14,"parent_of"],
+      [13,20,"parent_of"],[3,16,"derived_from"],[3,17,"derived_from"],[3,21,"derived_from"],[8,3,"advances"],
+      [18,19,"advances"],[4,6,"near"],[6,16,"leads_to"],[0,21,"leads_to"],[7,2,"leads_to"],
+      [5,1,"near"],[9,2,"advances"],[11,2,"advances"],[19,18,"derived_from"],[17,3,"leads_to"]]
+  };
+
+  const E1 = {
+    lead:"No question was asked, so the map was surveyed under the charter it declares. One place, four groupings, and what they hold is drawn.",
+    groups:[
+      ["Honesty of a read","5 resources · strongest match"],
+      ["What a surface owes its reader","4 resources"],
+      ["Bounds and their disclosure","4 resources"],
+      ["Provenance that survives a rewrite","3 resources"]
+    ],
+    bound:{walk:[31,31],reg:[4,4],places:[1,1]},
+    nodes:[
+      N("A surface that misdeclares its kind harms the reader who trusts it","concept","s"),
+      N("Coverage is never inferred from absence","concept","s"),
+      N("A green signal is not the property you wanted","concept","s"),
+      N("A witness must fail against the state its clause claims to change","concept","s"),
+      N("The discipline detects; it does not decide","concept","s"),
+      N("Name the denominator","concept","s"),
+      N("Enables is not witnesses","concept","s"),
+      N("A declared hole is not a filed task","concept","s"),
+      N("Prose is a defect surface","goal","w"),
+      N("A register's coverage is projectable","goal","w"),
+      N("Atlas pivot — derived structure organizes the view","decision","w"),
+      N("The graph surface shows the reader's own material","goal","w"),
+      N("A read declares its bounds","goal","w"),
+      N("Every question to Temper is answered by a situated act","goal","w")
+    ],
+    edges:[[0,11,"express"],[0,10,"express"],[1,9,"express"],[1,7,"near"],[2,5,"near"],[2,6,"near"],
+      [3,9,"express"],[4,9,"contains"],[5,12,"express"],[6,3,"near"],[7,1,"near"],[8,0,"derived_from"],
+      [9,1,"derived_from"],[10,0,"derived_from"],[11,0,"derived_from"],[12,5,"derived_from"],
+      [13,2,"derived_from"],[0,8,"leads_to"],[4,7,"near"],[3,2,"near"]]
+  };
+
+  const T=[
+    ["Docs editorial rebuild — all six beats executed","session"],
+    ["D11 contributor comments sweep + dead references","session"],
+    ["Shipped the AnchorTable widening","session"],
+    ["Landed 102 clean OpenAPI summaries","session"],
+    ["The registry and the repo disagree","goal"],
+    ["CI pays for work nobody asked for","goal"],
+    ["OpenTelemetry across the deployable surface","goal"],
+    ["The schema and the binary never silently disagree","goal"],
+    ["An asserted facet is readable","goal"],
+    ["Unified visibility semantics for contexts and maps","goal"],
+    ["temper auth status tells three lies","task"],
+    ["Fire one real GitHub webhook","task"],
+    ["Atlas Beat E shipped — PR #332","session"],
+    ["Atlas interstitial WS1+WS2 — merged","session"],
+    ["Graph Atlas C2 MERGED (#258)","session"],
+    ["Graph-search e2e coverage + edge fix","session"],
+    ["Dropped graph_subgraph_nodes + team-zone trio","session"],
+    ["Native Graph nav entry for the vault sidebar","session"],
+    ["Cross-map wayfind reaches every visible map","goal"],
+    ["A write completes without waiting on projection","goal"],
+    ["External systems as subscribed emitters","goal"],
+    ["A cold agent joins ongoing work by reading it","goal"],
+    ["Cognitive-map build method: guides, habits, truth","goal"],
+    ["Operational memory travels with the work","goal"],
+    ["Atlas Interstitial — resource-view bridge","research"],
+    ["query-builder compositional design","research"],
+    ["property conventions and predicate container","research"],
+    ["working-surface narrowing design","research"],
+    ["Rationale: search_graph_expand visibility","session"],
+    ["Atlas Beat D polish — prod-verified","session"]
+  ];
+  const E2 = {
+    lead:"No question was asked and this is a container of your own work, so everything in it is the answer. Nothing was grouped, ranked or scored.",
+    groups:null,
+    bound:{walk:[50,1106],reg:null,places:[1,1]},
+    nodes:[...E0.nodes.slice(0,16), ...T.map(([t,ty])=>N(t,ty,"w"))].map(n=>({...n,arm:"w"})),
+    edges:(()=>{
+      const e=[], n=46, k=["derived_from","advances","parent_of","leads_to","near","contains"];
+      let s=99;const r=()=>(s=(s*1103515245+12345)&0x7fffffff)/0x7fffffff;
+      for(let i=1;i<n;i++){ e.push([Math.floor(r()*i),i,k[Math.floor(r()*k.length)]]); }
+      for(let i=0;i<20;i++){ const a=Math.floor(r()*n),b=Math.floor(r()*n); if(a!==b) e.push([a,b,k[Math.floor(r()*k.length)]]); }
+      return e;
+    })()
+  };
+
+  const ENTRIES=[E0,E1,E2];
+
+  // ── marks ────────────────────────────────────────────────
+  const TY={
+    goal:{r:8.5,ring:true,label:"goal"},
+    task:{r:6.5,sq:true,label:"task"},
+    session:{r:6,di:true,label:"session"},
+    decision:{r:7,tri:true,label:"decision"},
+    research:{r:6,hex:true,label:"note"},
+    concept:{r:7,ring:false,label:"concept"}
+  };
+  const EK={
+    derived_from:{dash:[5,3]}, advances:{dash:null}, parent_of:{dash:null,w:1.9},
+    leads_to:{dash:[1,3]}, near:{dash:[1,4]}, contains:{dash:null,w:1.6}, express:{dash:[6,2]}
+  };
+
+  const cv=document.getElementById("cv"), ctx=cv.getContext("2d");
+  const hc=document.getElementById("hc");
+  let cur=0, nodes=[], links=[], hoverIdx=-1, raf=0;
+  const css=v=>getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+  function build(e){
+    let s=7;const r=()=>(s=(s*1103515245+12345)&0x7fffffff)/0x7fffffff;
+    const W=cv.width/DPR, H=cv.height/DPR;
+    nodes=e.nodes.map((n,i)=>({...n,i,x:W/2+(r()-.5)*W*.7,y:H/2+(r()-.5)*H*.7,vx:0,vy:0}));
+    links=e.edges.filter(([a,b])=>a<nodes.length&&b<nodes.length).map(([a,b,k])=>({a,b,k}));
+    const deg=nodes.map(()=>0); links.forEach(l=>{deg[l.a]++;deg[l.b]++;});
+    nodes.forEach((n,i)=>n.deg=deg[i]);
+  }
+  function tick(alpha){
+    const W=cv.width/DPR, H=cv.height/DPR;
+    for(let i=0;i<nodes.length;i++){
+      const a=nodes[i];
+      for(let j=i+1;j<nodes.length;j++){
+        const b=nodes[j]; let dx=b.x-a.x, dy=b.y-a.y; let d2=dx*dx+dy*dy||.01;
+        if(d2>60000) continue;
+        const f=900/d2; const d=Math.sqrt(d2);
+        const fx=dx/d*f, fy=dy/d*f;
+        a.vx-=fx; a.vy-=fy; b.vx+=fx; b.vy+=fy;
+      }
+      a.vx+=(W/2-a.x)*0.0016; a.vy+=(H/2-a.y)*0.0016;
+    }
+    links.forEach(l=>{
+      const a=nodes[l.a], b=nodes[l.b];
+      let dx=b.x-a.x, dy=b.y-a.y, d=Math.hypot(dx,dy)||.01;
+      const f=(d-78)*0.012;
+      const fx=dx/d*f, fy=dy/d*f;
+      a.vx+=fx; a.vy+=fy; b.vx-=fx; b.vy-=fy;
+    });
+    nodes.forEach(n=>{
+      n.vx*=0.82; n.vy*=0.82;
+      n.x+=n.vx*alpha; n.y+=n.vy*alpha;
+      n.x=Math.max(28,Math.min(W-28,n.x)); n.y=Math.max(24,Math.min(H-24,n.y));
+    });
+  }
+
+  function shape(p,n,fill,stroke){
+    const t=TY[n.ty]||TY.research, R=t.r+Math.min(3,n.deg*.35);
+    p.fillStyle=fill; p.strokeStyle=stroke; p.lineWidth=1.4;
+    p.beginPath();
+    if(t.sq) p.rect(n.x-R,n.y-R,R*2,R*2);
+    else if(t.di){p.moveTo(n.x,n.y-R*1.2);p.lineTo(n.x+R*1.1,n.y);p.lineTo(n.x,n.y+R*1.2);p.lineTo(n.x-R*1.1,n.y);p.closePath();}
+    else if(t.tri){p.moveTo(n.x,n.y-R*1.25);p.lineTo(n.x+R*1.15,n.y+R*.85);p.lineTo(n.x-R*1.15,n.y+R*.85);p.closePath();}
+    else if(t.hex){for(let k=0;k<6;k++){const a=Math.PI/6+k*Math.PI/3;const fn=k?"lineTo":"moveTo";p[fn](n.x+Math.cos(a)*R,n.y+Math.sin(a)*R);}p.closePath();}
+    else p.arc(n.x,n.y,R,0,7);
+    p.fill(); p.stroke();
+    if(t.ring){ p.beginPath(); p.arc(n.x,n.y,R+3.5,0,7); p.lineWidth=1; p.stroke(); }
+    return R;
+  }
+
+  function draw(){
+    const W=cv.width/DPR, H=cv.height/DPR;
+    const ink=css("--ink"), ink2=css("--ink-2"), ink3=css("--ink-3"),
+          land=css("--land"), landE=css("--land-edge"), sea=css("--paper"),
+          snd=css("--sounding"), rule=css("--rule");
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle=sea; ctx.fillRect(0,0,W,H);
+
+    // graticule — the structural reference, deliberately the faintest thing here
+    ctx.strokeStyle=rule; ctx.lineWidth=.5; ctx.globalAlpha=.55;
+    for(let x=60;x<W;x+=60){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
+    for(let y=60;y<H;y+=60){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
+    ctx.globalAlpha=1;
+
+    links.forEach(l=>{
+      const a=nodes[l.a],b=nodes[l.b],k=EK[l.k]||EK.advances;
+      const hot = hoverIdx>=0 && (l.a===hoverIdx||l.b===hoverIdx);
+      ctx.strokeStyle = hot?snd:ink3; ctx.globalAlpha = hot?.95:(hoverIdx>=0?.16:.42);
+      ctx.lineWidth = hot?2:(k.w||1.1);
+      ctx.setLineDash(k.dash||[]);
+      ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
+    });
+    ctx.setLineDash([]); ctx.globalAlpha=1;
+
+    nodes.forEach(n=>{
+      const dim = hoverIdx>=0 && n.i!==hoverIdx && !links.some(l=>(l.a===hoverIdx&&l.b===n.i)||(l.b===hoverIdx&&l.a===n.i));
+      ctx.globalAlpha = dim?.25:1;
+      shape(ctx,n, n.arm==="s"?land:sea, n.i===hoverIdx?snd:(n.arm==="s"?landE:ink2));
+    });
+    ctx.globalAlpha=1;
+
+    // labels: the highest-degree marks only, so type never collides into mush
+    const lab=[...nodes].sort((a,b)=>b.deg-a.deg).slice(0, nodes.length>30?8:12);
+    ctx.font='500 10.5px "IBM Plex Mono",monospace'; ctx.textAlign="center";
+    lab.forEach(n=>{
+      if(hoverIdx>=0 && n.i!==hoverIdx) return;
+      let s=n.title.length>34?n.title.slice(0,32)+"…":n.title;
+      const w=ctx.measureText(s).width;
+      ctx.fillStyle=sea; ctx.globalAlpha=.86;
+      ctx.fillRect(n.x-w/2-3, n.y+13, w+6, 13);
+      ctx.globalAlpha=1; ctx.fillStyle=ink;
+      ctx.fillText(s, n.x, n.y+23);
+    });
+  }
+
+  let DPR=1;
+  function resize(){
+    DPR=Math.min(2,window.devicePixelRatio||1);
+    const r=cv.getBoundingClientRect();
+    cv.width=r.width*DPR; cv.height=r.height*DPR;
+  }
+
+  function run(){
+    cancelAnimationFrame(raf);
+    const reduce=matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if(reduce){ for(let i=0;i<260;i++) tick(1); draw(); return; }
+    let a=1.0;
+    const step=()=>{ for(let i=0;i<3;i++) tick(a); a*=0.975; draw();
+      if(a>0.02) raf=requestAnimationFrame(step); };
+    step();
+  }
+
+  function paintSide(e){
+    const b=e.bound;
+    document.getElementById("bound").innerHTML =
+      `<span class="lbl">Showing</span>`+
+      `<span><b>${b.walk[0]}</b> of ${b.walk[1].toLocaleString()} reachable</span>`+
+      (b.reg? `<span><b>${b.reg[0]}</b> of ${b.reg[1].toLocaleString()} groupings</span>`
+            : `<span class="na">no groupings used</span>`)+
+      `<span><b>${b.places[0]}</b> of ${b.places[1]} places asked</span>`;
+    document.getElementById("ro-lead").textContent=e.lead;
+    document.getElementById("ro-body").innerHTML = e.groups
+      ? e.groups.map(([t,d])=>`<div class="grouping"><b>${t}</b><span class="n">${d}</span></div>`).join("")
+      : `<div class="grouping"><b>Nothing was grouped</b><span class="n">A container of your own work needs no question, so none was asked and nothing ranked the answer.</span></div>`;
+  }
+
+  function select(i){
+    cur=i;
+    document.querySelectorAll(".tab").forEach(t=>t.setAttribute("aria-selected", t.dataset.e==String(i)));
+    hoverIdx=-1; hc.style.opacity=0;
+    resize(); build(ENTRIES[i]); paintSide(ENTRIES[i]); run();
+  }
+
+  document.querySelectorAll(".tab").forEach(t=>t.addEventListener("click",()=>select(+t.dataset.e)));
+
+  cv.addEventListener("mousemove",ev=>{
+    const r=cv.getBoundingClientRect(), mx=ev.clientX-r.left, my=ev.clientY-r.top;
+    let best=-1,bd=1e9;
+    nodes.forEach(n=>{const d=Math.hypot(n.x-mx,n.y-my); if(d<16&&d<bd){bd=d;best=n.i;}});
+    if(best!==hoverIdx){
+      hoverIdx=best; draw();
+      if(best<0){ hc.style.opacity=0; }
+      else{
+        const n=nodes[best], t=(TY[n.ty]||{}).label||n.ty;
+        const kinds=[...new Set(links.filter(l=>l.a===best||l.b===best).map(l=>l.k))];
+        hc.innerHTML=`<div class="t">${n.title}</div><div class="d">${t} · ${n.deg} edge${n.deg==1?"":"s"}`+
+          (kinds.length?` · ${kinds.join(" · ")}`:"")+`</div>`;
+        hc.style.opacity=1;
+        const w=hc.offsetWidth,h=hc.offsetHeight;
+        hc.style.left=Math.min(r.width-w-8,Math.max(8,n.x-w/2))+"px";
+        hc.style.top=Math.max(8,n.y-h-16)+"px";
+      }
+    }
+  });
+  cv.addEventListener("mouseleave",()=>{hoverIdx=-1;hc.style.opacity=0;draw();});
+
+  // legend
+  const legItems=[
+    ["goal","Goal"],["task","Task"],["session","Session"],["decision","Decision"],["research","Note"]
+  ];
+  document.getElementById("legend").innerHTML =
+    legItems.map(([ty,l])=>`<div>${swatch(ty)}<span>${l}</span></div>`).join("")+
+    `<div><svg width="30" height="16"><line x1="1" y1="8" x2="29" y2="8" stroke="currentColor" stroke-width="1.3" stroke-dasharray="5 3" opacity=".7"/></svg><span>derived_from</span></div>`+
+    `<div><svg width="30" height="16"><line x1="1" y1="8" x2="29" y2="8" stroke="currentColor" stroke-width="1.9" opacity=".7"/></svg><span>parent_of</span></div>`+
+    `<div style="color:var(--derived)"><svg width="16" height="16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3 2"/></svg><span style="color:var(--derived)">derived — never a mark</span></div>`;
+
+  function swatch(ty){
+    const t=TY[ty], R=6;
+    let s='';
+    if(t.sq) s=`<rect x="2" y="2" width="12" height="12" fill="var(--land)" stroke="var(--land-edge)"/>`;
+    else if(t.di) s=`<polygon points="8,1 15,8 8,15 1,8" fill="var(--land)" stroke="var(--land-edge)"/>`;
+    else if(t.tri) s=`<polygon points="8,1 15,14 1,14" fill="var(--land)" stroke="var(--land-edge)"/>`;
+    else if(t.hex) s=`<polygon points="8,1.5 14,5 14,11 8,14.5 2,11 2,5" fill="var(--land)" stroke="var(--land-edge)"/>`;
+    else s=`<circle cx="8" cy="8" r="4.5" fill="var(--land)" stroke="var(--land-edge)"/><circle cx="8" cy="8" r="7" fill="none" stroke="var(--land-edge)" stroke-width=".8"/>`;
+    return `<svg width="16" height="16" viewBox="0 0 16 16">${s}</svg>`;
+  }
+
+  addEventListener("resize",()=>{resize();draw();});
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change",()=>draw());
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change",()=>draw());
+  select(0);
+})();
+</script>

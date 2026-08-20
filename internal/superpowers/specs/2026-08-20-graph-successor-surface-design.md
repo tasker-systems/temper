@@ -10,6 +10,14 @@ The register states outcomes and names no mechanism. **This document is all mech
 what a spec is for. Where it makes a claim about what exists today, the claim carries a `file:line`
 citation or quoted output; where it goes beyond what exists, it says so.
 
+**Working mockup: [`mockups/2026-08-20-graph-successor-surface.html`](./mockups/2026-08-20-graph-successor-surface.html)**
+— all three entries of §2 rendered live, with the §3 mark vocabulary, the *why-these* readout and the
+bound line. `/dev/atlas`'s fixtures could not serve it: they are shaped for territories and tiers,
+and this surface has neither. Its own fixture uses real titles, doc types and edge kinds from
+`@me/temper`; the cogmap on the second tab is illustrative in name only. Its palette encodes §3's
+central rule — **magenta means derived, and it never appears as a mark** — so
+`no-derived-thing-poses-as-authored` can be checked by looking.
+
 ---
 
 ## 0. The finding that makes this cheap
@@ -373,9 +381,20 @@ It fires exactly when a cogmap node genuinely has no neighbours, telling the rea
 missing when the true answer is *"there are none"* — the live instance of
 `no-reader-is-left-to-blame-themselves` on a surface people use today.
 
-**It is not folded into this arc.** It is a one-line fix on the shipped surface, it is independent of
-everything here, and Beat D deletes the file it lives in — which means holding it until Beat D leaves
-the lie in production for the length of the arc for no gain. Ship it separately and immediately.
+**Not fixed. Beat D deletes it** `[decided — 2026-08-20, Pete]`. The case for a separate immediate
+fix was that the lie stays live for the length of the arc; the case against is that it is a string in
+a file this arc removes, and paying a PR to edit a doomed file buys a shorter exposure on a code path
+reached only by a cogmap node with zero neighbours.
+
+**The cost is real and is accepted, not waved away:** until Beat D merges, a reader who drills a
+neighbourless cogmap node is told a feature does not exist when the answer is *"there are none."* The
+clause it violates stays violated for that window.
+
+**Consequence for the task.** [Graph Atlas C3.1](./019f2fbe-f4ac-7e83-955e-c4dc885856f3) was
+re-scoped by its `[verification sweep — 2026-08-17]` down to exactly this one bug, with everything
+else measured as fixed, dead, or folded forward. With the bug absorbed into Beat D, **the task has no
+remaining content of its own** and should be closed against this spec rather than left open as
+apparently-live work.
 
 ---
 
