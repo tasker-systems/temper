@@ -156,7 +156,7 @@ RSpec.describe 'README' do
     end
 
     it 'points at the operator guide rather than restating it' do
-      expect(guide).to include('machine-credentials.md')
+      expect(guide).to include('standing-up-a-machine-credential')
     end
   end
 end
