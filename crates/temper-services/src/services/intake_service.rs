@@ -46,21 +46,93 @@ use crate::services::{connection_service, delivery_service};
 /// the ledger's subject matter, not an authority act.
 const WEBHOOK_RECEIVED_TYPE: &str = "webhook_received";
 
+/// Where the provider's event name came from — recorded on the event so the ledger row says
+/// where its own routing input originated.
+///
+/// The event name steers the coarse radius (`GitHubRepository { event_types }`), and the
+/// attestation covers **neither** the body nor the headers: `verify_inbound` returns
+/// `payload: req.body.to_vec()` with no claim binding content, and the live-captured claim set
+/// is `iss/aud/sub/kid/client_id/trigger/exp/iat` (research `019f62e6`). So "an unverified
+/// header steering the radius, versus the verified payload" is a false contrast — the
+/// attestation authenticates the **connector**, not the content, and header and body are
+/// equally the sender's word.
+///
+/// What is therefore worth recording is not a trust level but a **provenance**: which of the
+/// provider's conventions answered. Today only [`Self::Header`] is reachable, so the field is a
+/// constant — and that is exactly why it is written now. When a second rule lands, the events
+/// that predate it must not be retro-indistinguishable from the ones that used it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventTypeSource {
+    /// The provider stated its event name in a header of its own convention (GitHub's
+    /// `X-GitHub-Event`).
+    Header,
+}
+
+impl EventTypeSource {
+    /// The value written to the event's `metadata`.
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Header => "header",
+        }
+    }
+}
+
+/// The provider's own event name, together with where it came from. The two travel as one
+/// value because a steering input whose provenance is separable from it is a steering input
+/// whose provenance gets dropped at the first call site that finds it inconvenient.
+#[derive(Debug, Clone, Copy)]
+pub struct ProviderEvent<'a> {
+    event_type: &'a str,
+    source: EventTypeSource,
+}
+
+impl<'a> ProviderEvent<'a> {
+    /// The provider stated this event name in its own header.
+    pub fn from_header(event_type: &'a str) -> Self {
+        Self {
+            event_type,
+            source: EventTypeSource::Header,
+        }
+    }
+}
+
+/// The header a provider states its event name in, or `None` where temper has no witnessed rule
+/// for that provider.
+///
+/// `github` is the only entry, and the omission of every other provider is deliberate. Linear
+/// and Slack carry an event name in the *body*, but no forward from either has been observed
+/// through this path — and writing a payload-shape classifier from documentation would be temper
+/// inventing an opinion about a provider's taxonomy and presenting it as the provider's
+/// statement. A missing rule is a declared hole; a guessed rule is a silent one.
+///
+/// `provider` comes from the attestation's **signed** `trigger` claim, so the dispatch key is the
+/// one part of the request that is attested — the same discipline as reading the connector from
+/// the JWT rather than the unsigned `x-trigger-*` mirror headers
+/// (`broker/vercel_connect.rs:475-476`).
+pub fn event_type_header(provider: &str) -> Option<&'static str> {
+    match provider {
+        "github" => Some("x-github-event"),
+        _ => None,
+    }
+}
+
 /// Receive a webhook: compute the coarse radius, append one event with the matched
 /// subscribers in `references`.
 ///
-/// `connection_id` identifies the connection the payload arrived on. `provider_event_type`
-/// is the remote's own event name (e.g. GitHub's `pull_request`, Linear's `issue.updated`)
-/// — it rides `metadata`, not `payload`, so the verbatim payload is preserved untouched.
-/// `payload` is the remote's verbatim body, stored as-is in `kb_events.payload`.
+/// `connection_id` identifies the connection the payload arrived on. `event` carries the
+/// remote's own event name (e.g. GitHub's `pull_request`, Linear's `issue.updated`) and the
+/// provenance of that name ([`EventTypeSource`]) — both ride `metadata`, not `payload`, so the
+/// verbatim payload is preserved untouched. `payload` is the remote's verbatim body, stored
+/// as-is in `kb_events.payload`.
 ///
 /// Returns the appended event id. Never performs egress. Never UPDATEs `kb_events`.
 pub async fn receive_webhook(
     pool: &PgPool,
     connection_id: Uuid,
-    provider_event_type: &str,
+    event: ProviderEvent<'_>,
     payload: &serde_json::Value,
 ) -> ApiResult<Uuid> {
+    let provider_event_type = event.event_type;
     // Load the connection: emitter_entity_id + home_context_id. The emitter is the
     // connection's own entity (`<handle>@webhook`); the producing anchor is the
     // connection's home context — one event, one anchor, the receipt fact in one place.
@@ -105,7 +177,13 @@ pub async fn receive_webhook(
         &references_json,
         None::<Uuid> as Option<Uuid>, // correlation: self-roots inside _event_append
         1i32,                         // payload_version
-        serde_json::json!({ "provider_event_type": provider_event_type }), // metadata
+        // metadata: the event name AND where it came from. See `EventTypeSource` — the
+        // provenance is written even though only one source is reachable today, so events
+        // that predate a second rule are not retro-indistinguishable from ones that used it.
+        serde_json::json!({
+            "provider_event_type": provider_event_type,
+            "provider_event_type_source": event.source.as_str(),
+        }),
     )
     .fetch_one(&mut *tx)
     .await
@@ -320,10 +398,14 @@ mod tests {
         )
         .await;
 
-        let event_id =
-            receive_webhook(&pool, conn, "pull_request", &github_pr_payload(GITHUB_REPO))
-                .await
-                .expect("receive webhook");
+        let event_id = receive_webhook(
+            &pool,
+            conn,
+            ProviderEvent::from_header("pull_request"),
+            &github_pr_payload(GITHUB_REPO),
+        )
+        .await
+        .expect("receive webhook");
 
         // Exactly one event row (goal C2: one webhook receipt is one ledger event, always).
         assert_eq!(event_count_for_connection(&pool, conn).await, 1);
@@ -366,10 +448,14 @@ mod tests {
         };
         create_subscription(&pool, admin, "kb_teams", team, team, conn, selector).await;
 
-        let event_id =
-            receive_webhook(&pool, conn, "pull_request", &github_pr_payload(GITHUB_REPO))
-                .await
-                .expect("receive webhook");
+        let event_id = receive_webhook(
+            &pool,
+            conn,
+            ProviderEvent::from_header("pull_request"),
+            &github_pr_payload(GITHUB_REPO),
+        )
+        .await
+        .expect("receive webhook");
 
         // One event (C2: one webhook receipt is one ledger event, even a refused one).
         assert_eq!(event_count_for_connection(&pool, conn).await, 1);
@@ -397,17 +483,26 @@ mod tests {
         create_subscription(&pool, admin, "kb_teams", team, team, conn, selector).await;
 
         // Matching event type.
-        let id_match =
-            receive_webhook(&pool, conn, "pull_request", &github_pr_payload(GITHUB_REPO))
-                .await
-                .expect("match");
+        let id_match = receive_webhook(
+            &pool,
+            conn,
+            ProviderEvent::from_header("pull_request"),
+            &github_pr_payload(GITHUB_REPO),
+        )
+        .await
+        .expect("match");
         let refs = event_references(&pool, id_match).await;
         assert_eq!(refs.as_array().unwrap().len(), 1);
 
         // Non-matching event type (push vs pull_request).
-        let id_no_match = receive_webhook(&pool, conn, "push", &github_pr_payload(GITHUB_REPO))
-            .await
-            .expect("receive");
+        let id_no_match = receive_webhook(
+            &pool,
+            conn,
+            ProviderEvent::from_header("push"),
+            &github_pr_payload(GITHUB_REPO),
+        )
+        .await
+        .expect("receive");
         let refs = event_references(&pool, id_no_match).await;
         assert!(
             refs.as_array().unwrap().is_empty(),
@@ -418,7 +513,7 @@ mod tests {
         let id_repo_no_match = receive_webhook(
             &pool,
             conn,
-            "pull_request",
+            ProviderEvent::from_header("pull_request"),
             &github_pr_payload("acme/other"),
         )
         .await
@@ -443,9 +538,14 @@ mod tests {
         };
         create_subscription(&pool, admin, "kb_teams", team, team, conn, selector).await;
 
-        let id = receive_webhook(&pool, conn, "push", &github_pr_payload(GITHUB_REPO))
-            .await
-            .expect("receive");
+        let id = receive_webhook(
+            &pool,
+            conn,
+            ProviderEvent::from_header("push"),
+            &github_pr_payload(GITHUB_REPO),
+        )
+        .await
+        .expect("receive");
         let refs = event_references(&pool, id).await;
         assert_eq!(
             refs.as_array().unwrap().len(),
@@ -469,9 +569,14 @@ mod tests {
         };
         create_subscription(&pool, admin, "kb_teams", team, team, conn, selector).await;
 
-        let id = receive_webhook(&pool, conn, "pull_request", &github_pr_payload(GITHUB_REPO))
-            .await
-            .expect("receive");
+        let id = receive_webhook(
+            &pool,
+            conn,
+            ProviderEvent::from_header("pull_request"),
+            &github_pr_payload(GITHUB_REPO),
+        )
+        .await
+        .expect("receive");
         let refs = event_references(&pool, id).await;
         assert_eq!(
             refs.as_array().unwrap().len(),
@@ -496,7 +601,7 @@ mod tests {
         let id_match = receive_webhook(
             &pool,
             conn,
-            "issue.updated",
+            ProviderEvent::from_header("issue.updated"),
             &linear_issue_payload("proj-123"),
         )
         .await
@@ -508,7 +613,7 @@ mod tests {
         let id_no_match = receive_webhook(
             &pool,
             conn,
-            "issue.updated",
+            ProviderEvent::from_header("issue.updated"),
             &linear_issue_payload("proj-456"),
         )
         .await
@@ -536,9 +641,14 @@ mod tests {
             .await
             .expect("revoke");
 
-        let id = receive_webhook(&pool, conn, "pull_request", &github_pr_payload(GITHUB_REPO))
-            .await
-            .expect("receive");
+        let id = receive_webhook(
+            &pool,
+            conn,
+            ProviderEvent::from_header("pull_request"),
+            &github_pr_payload(GITHUB_REPO),
+        )
+        .await
+        .expect("receive");
         let refs = event_references(&pool, id).await;
         assert!(
             refs.as_array().unwrap().is_empty(),
@@ -564,10 +674,14 @@ mod tests {
         };
         create_subscription(&pool, admin, "kb_teams", team, team, conn, selector).await;
 
-        let event_id =
-            receive_webhook(&pool, conn, "pull_request", &github_pr_payload(GITHUB_REPO))
-                .await
-                .expect("receive");
+        let event_id = receive_webhook(
+            &pool,
+            conn,
+            ProviderEvent::from_header("pull_request"),
+            &github_pr_payload(GITHUB_REPO),
+        )
+        .await
+        .expect("receive");
 
         // The references column is populated on the inserted row. The append-only trigger
         // would refuse any UPDATE, so this is the proof the references were written in the
@@ -603,10 +717,14 @@ mod tests {
         )
         .await;
 
-        let event_id =
-            receive_webhook(&pool, conn, "pull_request", &github_pr_payload(GITHUB_REPO))
-                .await
-                .expect("receive");
+        let event_id = receive_webhook(
+            &pool,
+            conn,
+            ProviderEvent::from_header("pull_request"),
+            &github_pr_payload(GITHUB_REPO),
+        )
+        .await
+        .expect("receive");
         let refs = event_references(&pool, event_id).await;
         let arr = refs.as_array().unwrap();
         assert_eq!(arr.len(), 1);
@@ -635,9 +753,14 @@ mod tests {
         grant_reach(&pool, admin, conn, team).await;
 
         let payload = github_pr_payload(GITHUB_REPO);
-        let event_id = receive_webhook(&pool, conn, "pull_request", &payload)
-            .await
-            .expect("receive");
+        let event_id = receive_webhook(
+            &pool,
+            conn,
+            ProviderEvent::from_header("pull_request"),
+            &payload,
+        )
+        .await
+        .expect("receive");
 
         let stored: serde_json::Value =
             sqlx::query_scalar!(r#"SELECT payload FROM kb_events WHERE id = $1"#, event_id,)
@@ -655,10 +778,14 @@ mod tests {
         let conn = seed_connection(&pool, Some(team), admin).await;
         grant_reach(&pool, admin, conn, team).await;
 
-        let event_id =
-            receive_webhook(&pool, conn, "pull_request", &github_pr_payload(GITHUB_REPO))
-                .await
-                .expect("receive");
+        let event_id = receive_webhook(
+            &pool,
+            conn,
+            ProviderEvent::from_header("pull_request"),
+            &github_pr_payload(GITHUB_REPO),
+        )
+        .await
+        .expect("receive");
 
         let metadata: serde_json::Value =
             sqlx::query_scalar!(r#"SELECT metadata FROM kb_events WHERE id = $1"#, event_id,)

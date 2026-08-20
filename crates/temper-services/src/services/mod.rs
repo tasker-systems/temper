@@ -35,7 +35,11 @@ pub mod slack_mint_service;
 pub mod standing_service;
 pub mod steward_service;
 pub mod subscription_service;
-#[cfg(all(test, feature = "test-db"))]
+/// Shared seeding for the subscription/intake/delivery/transport suites. Gated on `test-db`
+/// alone — NOT `all(test, ...)` — so it is reachable from the integration suites in other crates
+/// (`temper_services::services::subscription_test_support`) as well as this crate's inline test
+/// modules. Same shape and same reason as [`crate::test_support`]; absent from production builds.
+#[cfg(feature = "test-db")]
 pub mod subscription_test_support;
 pub mod team_service;
 pub mod workflow_job_service;

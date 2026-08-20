@@ -37,7 +37,16 @@ ROUTES_FILE="${1:-${REPO_ROOT}/crates/temper-api/src/routes.rs}"
 
 # The operator-only / server-to-server surfaces deliberately mounted with plain
 # `.route()` and kept OUT of the OpenAPI contract. Keep in sync with the
-# comments in routes.rs (gated_routes / internal_routes / embed_internal_routes).
+# comments in routes.rs (gated_routes / internal_routes / embed_internal_routes /
+# webhook_intake_routes).
+#
+# On /api/intake/webhook: its caller is Vercel Connect forwarding a third-party system's
+# event. Connect reads no contract of ours -- it POSTs to a trigger path configured on the
+# connector -- so publishing this route would document an endpoint for an audience that
+# cannot consume the document, while advertising an unauthenticated path to every reader
+# who can. Its request shape is also not ours to publish: the body is the remote provider's
+# verbatim payload, which has no schema temper owns (the same reason its kb_event_types row
+# carries a NULL payload_schema).
 ALLOWLIST='/api/access/admin/requests
 /api/access/admin/requests/{id}
 /api/access/admin/settings
@@ -69,7 +78,8 @@ ALLOWLIST='/api/access/admin/requests
 /api/embed/warm
 /api/embed/admin/reembed
 /api/slack/intents/reap
-/api/region/dispatch'
+/api/region/dispatch
+/api/intake/webhook'
 
 if [ ! -f "$ROUTES_FILE" ]; then
     echo "ERROR: routes file not found: $ROUTES_FILE" >&2
