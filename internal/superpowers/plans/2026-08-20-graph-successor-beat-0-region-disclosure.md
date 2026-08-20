@@ -136,7 +136,11 @@ git commit -m "feat(query): carry survey's disclosed regions on the trace and th
 
 ---
 
-### Task 2: Carry the column through the compiler's stage contract
+### Task 2: Carry the column through the compiler's stage contract  ✅ `c420c96d`
+
+> **Two corrections from executing it** `[2026-08-20]`:
+> - **A `survey_stage(name)` fixture ALREADY EXISTS** at `tests/query_plan_compile.rs:1634`, with a cogmap anchor and an embedding. Use it. Writing a second one is an E0428 duplicate-definition error.
+> - **Do not assert the union column by counting occurrences.** The per-act CTE bodies name `region` too, so a count over the whole statement passes while an arm is still missing it — the first version of this test did exactly that. Slice per arm with the file's own `hit_arm` / `tally_arm` helpers.
 
 **Files:**
 - Modify: `crates/temper-substrate/src/readback/query_plan.rs` — survey arm `:657`, follow-from arm `:614`, the other act arms `:494`, `:527`, `:573`, `:687`, `final_select` `:1517-1545`, empty fallback `:348`
@@ -148,7 +152,7 @@ git commit -m "feat(query): carry survey's disclosed regions on the trace and th
 
 **⚠️ Do not overload `via`.** It would type-check and it would be wrong: `via` means *how a walk reached this row*, and a second meaning on one field is the drift this contract keeps removing. `via`'s own arrival is the precedent to copy — `query_plan.rs:609`: *"**`via` crosses into the stage contract as a fourth column.** Every other act emits `NULL::jsonb` for it — see `final_select`, which shares one column list across hit arms, tally arms and the empty fallback."* Do exactly that, one column over.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Find this module's existing emission-test harness first — it exists, because every act arm above is already covered:
 
@@ -185,7 +189,7 @@ fn every_arm_of_the_union_carries_the_region_column() {
 }
 ```
 
-- [ ] **Step 2: Run and watch it fail**
+- [x] **Step 2: Run and watch it fail**
 
 ```bash
 cargo nextest run -p temper-substrate a_survey_arm_projects_its_region
@@ -193,7 +197,7 @@ cargo nextest run -p temper-substrate a_survey_arm_projects_its_region
 
 Expected: FAIL — the assertion, showing SQL with `NULL::jsonb AS via` and no region column.
 
-- [ ] **Step 3: Widen the survey arm**
+- [x] **Step 3: Widen the survey arm**
 
 `query_plan.rs:655-659`, change:
 
@@ -210,7 +214,7 @@ to:
                  region_id::uuid AS region\n    \
 ```
 
-- [ ] **Step 4: Widen every other arm and the shared column list**
+- [x] **Step 4: Widen every other arm and the shared column list**
 
 Append `, NULL::uuid AS region` to the projections at `:494`, `:527`, `:573`, `:614` (follow-from), `:687`, and to the empty fallback at `:348`.
 
@@ -223,7 +227,7 @@ In `final_select` (`:1517`), the hit arm becomes:
 
 the tally arm gains `NULL::uuid AS region,` after its `NULL::jsonb AS via,`, and the zero-arm fallback gains `NULL::uuid AS region,` likewise. **All three, or the UNION will not type.**
 
-- [ ] **Step 5: Run and watch it pass**
+- [x] **Step 5: Run and watch it pass**
 
 ```bash
 cargo nextest run -p temper-substrate --lib readback::query_plan
@@ -231,7 +235,7 @@ cargo nextest run -p temper-substrate --lib readback::query_plan
 
 Expected: PASS, including every pre-existing emission test. A pre-existing test asserting an exact SQL string will fail here — that is the correct signal, not a problem; update its expectation to include the new column.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/temper-substrate/src/readback/query_plan.rs
@@ -240,7 +244,7 @@ git commit -m "feat(query): add region to the stage contract, following via's pr
 
 ---
 
-### Task 3: Carry it on `HitRow`
+### Task 3: Carry it on `HitRow`  ✅ `28bc95ca`
 
 **Files:**
 - Modify: `crates/temper-substrate/src/readback/query_exec.rs:31-49` (`HitRow`) and the row-mapping site below it
@@ -252,7 +256,7 @@ git commit -m "feat(query): add region to the stage contract, following via's pr
 
 **Why `Option<Uuid>` and not a typed newtype:** `grep -rn "pub struct RegionId" crates/temper-core/src/types/` returns nothing — there is no region newtype in this codebase, and `HitRow.id` is already a bare `Uuid`. Follow the file.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```rust
 #[test]
@@ -268,7 +272,7 @@ fn a_non_survey_hit_row_carries_no_region() {
 }
 ```
 
-- [ ] **Step 2: Run and watch it fail**
+- [x] **Step 2: Run and watch it fail**
 
 ```bash
 cargo nextest run -p temper-substrate a_hit_row_carries_the_region
@@ -276,7 +280,7 @@ cargo nextest run -p temper-substrate a_hit_row_carries_the_region
 
 Expected: FAIL — `no field named region`.
 
-- [ ] **Step 3: Add the field**
+- [x] **Step 3: Add the field**
 
 In `query_exec.rs`, after `pub via: Option<serde_json::Value>,`:
 
@@ -291,13 +295,13 @@ In `query_exec.rs`, after `pub via: Option<serde_json::Value>,`:
 
 and read it in the row mapping beside where `via` is read (`grep -n "via" crates/temper-substrate/src/readback/query_exec.rs` to find the site): `region: r.try_get("region").ok().flatten(),` — match the exact accessor style the neighbouring columns use rather than assuming `try_get`.
 
-- [ ] **Step 4: Run and watch it pass**
+- [x] **Step 4: Run and watch it pass**
 
 ```bash
 cargo nextest run -p temper-substrate --lib readback::query_exec
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/temper-substrate/src/readback/query_exec.rs
@@ -306,7 +310,7 @@ git commit -m "feat(query): carry the region column on HitRow"
 
 ---
 
-### Task 4: Aggregate into the trace and the result
+### Task 4: Aggregate into the trace and the result  ✅ `f8b039dd`
 
 **Files:**
 - Modify: `crates/temper-services/src/backend/query_read.rs` — `stage_trace()` `:609`, the `StageResult` construction `:573-587`
@@ -322,7 +326,7 @@ git commit -m "feat(query): carry the region column on HitRow"
 
 **⚠️ One definition, read twice.** Write `disclosed_regions_for(stage, rows)` once and call it from both `stage_trace()` and the `StageResult` construction. This is the pair rule's stated implementation shape — `terms_applied` records it as *"one `applied_terms` DEFINITION rather than two… Computed twice, they would eventually differ, and the difference would be a response claiming a page size that did not run."*
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 The existing fixture is `fn hit(stage: &str, id: Uuid, q: f64) -> HitRow` at `query_read.rs:1184`, and it constructs `HitRow { stage, id, kind, quantity, via }` **as a literal** — so it stops compiling the moment Task 3 lands. **That compile error is the correct signal, not an obstacle.** Give it the new field and add a sibling that sets a region:
 
@@ -410,7 +414,7 @@ fn the_trace_and_the_result_carry_the_same_disclosed_regions() {
 
 `act_node`, `plan` and the hydration fixture already exist in this module — confirm their exact signatures with `grep -n "fn act_node\|fn plan(\|fn no_rows\|Hydrated {" crates/temper-services/src/backend/query_read.rs` and match them rather than adapting the call above from memory.
 
-- [ ] **Step 2: Run and watch it fail**
+- [x] **Step 2: Run and watch it fail**
 
 ```bash
 cargo nextest run -p temper-services a_survey_stage_discloses_each_matched_region
@@ -418,7 +422,7 @@ cargo nextest run -p temper-services a_survey_stage_discloses_each_matched_regio
 
 Expected: FAIL — `cannot find function disclosed_regions_for`.
 
-- [ ] **Step 3: Write the one definition**
+- [x] **Step 3: Write the one definition**
 
 ```rust
 /// The regions a stage matched, one entry per region rather than per row.
@@ -455,17 +459,17 @@ fn disclosed_regions_for(stage: &str, rows: &QueryRows) -> Vec<RegionDisclosure>
 
 `rows.hits` is correct — `QueryRows { hits: Vec<HitRow>, tallies: Vec<TallyRow>, refusals: … }`, `query_exec.rs:69`.
 
-- [ ] **Step 4: Call it from both carriers**
+- [x] **Step 4: Call it from both carriers**
 
 In the `StageResult` construction (`:573`), after `narrowed_by: narrowed_by(node, rows),`, add `disclosed_regions: disclosed_regions_for(node.name().as_str(), rows),`. Add the identical line in `stage_trace()`.
 
-- [ ] **Step 5: Run and watch them pass**
+- [x] **Step 5: Run and watch them pass**
 
 ```bash
 cargo nextest run -p temper-services --lib backend::query_read
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/temper-services/src/backend/query_read.rs
@@ -474,7 +478,9 @@ git commit -m "feat(query): aggregate survey's matched regions onto the trace an
 
 ---
 
-### Task 5: Verify the derived artifacts, and the snapshots the hook does not check
+### Task 5: Verify the derived artifacts, and the snapshots the hook does not check  ✅ `pending commit`
+
+**✅ The rewrite was right.** Executed 2026-08-20: `openapi.json` was already clean (Tasks 1–4 each regenerated it to pass the hook), and **four schema snapshots had drifted unchecked** — `composition_trace`, `query_response`, `stage_result`, `stage_trace`. Regenerate with `UPDATE_SCHEMA=1 cargo nextest run -p temper-core --features mcp --test query_schema`, which the test's own header documents.
 
 **⚠️ Rewritten `[2026-08-20]`. This task used to say "regenerate the artifacts" and was sequenced last. That is impossible:** the pre-commit hook fails any commit whose wire types drift from `openapi.json`, so **Tasks 1–4 each regenerate in their own commit** as a condition of landing at all. What is left here is the part the hook does *not* cover.
 
@@ -491,7 +497,7 @@ cargo make openapi              # openapi.json + the temper-rb gem + temper-ts s
 cargo make generate-ts-types    # the ts-rs tree the UI reads
 ```
 
-- [ ] **Step 1: Confirm no artifact drifted**
+- [x] **Step 1: Confirm no artifact drifted**
 
 ```bash
 cargo make openapi && cargo make generate-ts-types && git status --short
@@ -499,7 +505,7 @@ cargo make openapi && cargo make generate-ts-types && git status --short
 
 Expected: **no modifications**. Anything that changes here is an artifact an earlier task failed to regenerate, which means that task's commit should not have passed the hook — investigate rather than committing the diff.
 
-- [ ] **Step 2: Confirm the new type reached the UI**
+- [x] **Step 2: Confirm the new type reached the UI**
 
 ```bash
 grep -n "RegionDisclosure\|disclosed_regions" packages/temper-ui/src/lib/types/generated/query.ts
@@ -507,7 +513,7 @@ grep -n "RegionDisclosure\|disclosed_regions" packages/temper-ui/src/lib/types/g
 
 Expected: `RegionDisclosure` declared, and `disclosed_regions` present on **both** `StageTrace` and `StageResult`. If it appears on only one, Task 4 missed a carrier — go back.
 
-- [ ] **Step 3: Update the schema snapshots — the hook does NOT check these**
+- [x] **Step 3: Update the schema snapshots — the hook does NOT check these**
 
 This is the substance of the task. `openapi` drift is caught per commit; the schema snapshots are not, so they are the artifact that can silently rot across Tasks 1–4.
 
@@ -518,13 +524,13 @@ cargo make test-schema-substrate
 
 Both regenerate a committed artifact. If either reports a diff, the snapshot needs committing — that is the expected outcome here, not a failure.
 
-- [ ] **Step 4: Full gate**
+- [x] **Step 4: Full gate**
 
 ```bash
 cargo make check
 ```
 
-- [ ] **Step 5: Commit — only if Step 1 or Step 3 actually changed something**
+- [x] **Step 5: Commit — only if Step 1 or Step 3 actually changed something**
 
 ```bash
 git add -A
