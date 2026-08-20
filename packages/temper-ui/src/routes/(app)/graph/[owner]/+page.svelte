@@ -1,8 +1,8 @@
 <script lang="ts">
+	import GraphPage from '$lib/components/graph/GraphPage.svelte';
 	import type { PageData } from './$types';
-	import AtlasPage from '$lib/components/graph/atlas/AtlasPage.svelte';
 
 	let { data }: { data: PageData } = $props();
 </script>
 
-<AtlasPage {data} />
+<GraphPage {data} />

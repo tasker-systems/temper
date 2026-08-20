@@ -428,6 +428,44 @@ and a bug that suppresses it is invisible.
 **A context entry runs no survey**, so its groupings axis is *not applicable* rather than zero. It
 says so; a missing axis and an exhausted one must never render alike.
 
+### Three measurements from the first real response `[found in Beat B — 2026-08-20]`
+
+Every number in §2 and §3 above came from reading code, from the old surface's reads, or from
+synthetic fixtures. These come from POSTing the builder's own output at the deployed `/api/query`.
+
+**1. `survey` ignored its funnel width entirely, and `terms_applied` said otherwise.**
+`__temper_ungated_survey` never filtered `wayfind_region_scores` on `in_top_n`, so every survey
+joined the whole candidate pool: widths 1, 3 and 20 returned identical 406-region, 731-row answers,
+and every anchor disclosed exactly its full region count. The flagship entry drew **2,947 marks**.
+Fixed as **Beat 0.5** (task `01a01fe6-4b96-7bb0-ac98-18dc2a8f33be`, migration `20260820000010`),
+which brings the same screen to a measured **~160**. §3's *"unbounded in rows"* was therefore
+understating it: the arm was unbounded in **regions** too, against the field that claimed otherwise.
+
+**2. The mark vocabulary needs a dedupe, and the layout target in §6 is understated.** `ViaEntry` is
+*"one entry per edge it was reached by"* — per **(seed, edge)** pair, so one edge repeats once per
+seed that reached it. On the real 50-node walk:
+
+```
+via entries (raw): 1973
+distinct edges:     102      19.3x inflation
+max via on one node: 98
+max degree by distinct edges: 25
+```
+
+So the canvas must collapse `via` on `(source_id, target_id, edge_kind, label)` before drawing, or it
+puts 1,973 edge marks where 102 belong. And §6's `legible-at-the-sizes-the-corpus-actually-reaches`
+witness says *"worst-case `via` density — 9 edges on one node, from the prod measurement"*: that 9
+came from the predecessor's own read. **This surface's measured worst case is 25**, so the witness
+target is 50 nodes / 102 edges / max degree 25.
+
+**3. A stale CLI silently drops a new field, and `--check` is free.** `temper query --format json`
+re-serializes through the local CLI's types, and `#[serde(default)]` on `StageTrace::disclosed_regions`
+means a CLI older than the field reports its **absence** rather than failing. The first reading of
+this arc's central disclosure was therefore wrong in the safest-looking direction; the raw wire
+carries it. Read the wire when the question is whether a field arrives. Separately,
+`temper query --plan … --check` consults **no server and needs no token**, and it refuses an
+ill-formed plan outright — it would have caught Beat A's intentionless surveys at authoring time.
+
 ---
 
 ## 4. What is replaced, and in what order
@@ -440,10 +478,44 @@ marks that displace into it are deleted, so no clause is uncovered at any point.
 | Beat | Contents | Why here |
 |---|---|---|
 | **0** | Make `survey`'s region disclosure real — [01a01f21-c2ab-78b0-ada5-e8190d9c0814](./01a01f21-c2ab-78b0-ada5-e8190d9c0814) | The only backend work in the arc, and a pre-existing contract defect. Beat A's readout cannot name a grouping until it lands |
+| **0.5** | `survey` honors its funnel width — [01a01fe6-4b96-7bb0-ac98-18dc2a8f33be](./01a01fe6-4b96-7bb0-ac98-18dc2a8f33be) `[added — 2026-08-20]` | Found from Beat B, fixed before it. Without it the flagship entry draws 2,947 marks and the bound line's second axis reports a clamp that never applied |
 | **A** | The composition builder + the bound declaration, as pure modules with tests. No rendering. | Every witness in §6 that is machine-decidable lands here, against no UI |
 | **B** | `/graph/[owner]` rebuilt on Beat A: the four params, the three entries, node/edge canvas on the surviving layout modules, the *why-these* readout | The successor, shipped |
 | **C** | **The receiver** — [Atlas analytics readout](./019f0e9a-f0ce-7de2-a848-0d3e4cd3add4), cogmap arm: telos, staleness, regulation against the existing endpoint, declaring itself as analysis | Must precede D |
 | **D** | Delete the evicted modules; retire the tier model; point `contextGraphHref` at the new shape | Nothing is displaced into nowhere |
+
+#### The displacement is at B, not D `[ruled — 2026-08-20, Pete]`
+
+The table above puts *"must precede D"* on Beat C, and the paragraph opening §4 says the receiver
+ships first *"so no clause is uncovered at any point."* Grounding in Beat B found that premise wrong
+about **which beat displaces**, and the ruling that followed is recorded here rather than left to be
+re-derived.
+
+`AtlasPage` is rendered by exactly two routes — `routes/(app)/graph/[owner]/+page.svelte` and
+`routes/dev/atlas/+page.svelte`. **B rebuilds the first**, so `TierPanorama`, `TerritoryCircle`,
+`RegionHoverCard` and the residual tray leave the reader's path the moment B merges, whatever
+`contextGraphHref` emits. D then deletes files B already orphaned. The nav flip is not what does it.
+
+**And Beat C as scoped does not receive what B displaces.** `CogmapAnalyticsRow`'s own doc says so:
+*"The map-level analytics picture as returned by `cogmap_analytics`: the telos charter resource id,
+staleness, and the regulation set. **Per-region scalar metrics are a SEPARATE read
+(`cogmap_region_metrics`)**"* (`types/generated/cognitive_maps.ts:48`). What B takes off the path is
+per-region metrics — `RegionHoverCard.svelte:17-19` renders `memberCount` · `salience` · `coherence`
+— and the superseding decision names exactly that payload as the receiver's: *"Region analytics get
+their own place… **Salience, coherence and member counts** carry enough axes to support a topographic
+reading."* Telos, staleness and regulation are surfaced **nowhere** in the UI today (measured twice on
+C's task), so B cannot displace them.
+
+Two rulings, both Pete's:
+
+- **B merges first; C stays before D.** Between B and C the region field is reachable from the API
+  and the terminal but not the UI — the same state as before the Atlas ever drew it, and the
+  pre-existing condition C's task was written to complain about. `displaced-structure-remains-reachable`
+  is **uncovered for that window, declared rather than silent**. This is the same posture §4.3
+  already takes for the `AtlasCanvas.svelte:53` lie, which is why *"no clause is uncovered at any
+  point"* was already not literally held.
+- **Beat C's scope widens** to carry the per-region metrics read alongside telos/staleness/regulation.
+  Without it C never covers the clause, whenever it merges.
 
 Task [019f0e9a](./019f0e9a-f0ce-7de2-a848-0d3e4cd3add4) folds in as Beat C. Its
 `[contradicted — 2026-08-16]` amendment already withdrew the lens-alternative criterion and gated its

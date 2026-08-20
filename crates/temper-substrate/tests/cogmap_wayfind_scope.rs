@@ -798,3 +798,176 @@ async fn the_region_width_clamp_holds_its_default_floor_and_ceiling(pool: PgPool
         );
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// 9. SURVEY APPLIES THE CUT. Task 01a01fe6-4b96-7bb0-ac98-18dc2a8f33be, migration 20260820000010.
+//
+//    Test 8 above pins that `wayfind_region_scores` ADMITS the right number of regions at each
+//    width. Nothing pinned that a consumer then honors `in_top_n`, and `__temper_ungated_survey`
+//    did not: it joined every CANDIDATE region to its members, so `p_regions_n` set a flag nobody
+//    read. Witnessed on prod at widths 1, 3 and 20 returning identical 406-region answers, and
+//    invisible to every test above because they all read the scoring function directly.
+//
+//    So this one deliberately reads through `__temper_ungated_survey` instead. The gap it covers
+//    is exactly the wiring between the two — the same shape as test 7's equivalence guard, one
+//    consumer further out.
+// ---------------------------------------------------------------------------------------------
+
+/// The system actor, for `mk_embedded` — survey's LATERAL join drops any member with no current
+/// chunk, so this test's members must be real embedded resources rather than the bare rows
+/// [`seed_region_on`] plants. A fixture using those would return **zero rows at every width** and
+/// the assertion below would hold vacuously.
+async fn system_actor(
+    pool: &PgPool,
+) -> (
+    temper_substrate::ids::ProfileId,
+    temper_substrate::ids::EntityId,
+) {
+    let profile: Uuid = sqlx::query_scalar("SELECT id FROM kb_profiles WHERE handle='system'")
+        .fetch_one(pool)
+        .await
+        .expect("system profile");
+    let entity: Uuid =
+        sqlx::query_scalar("SELECT id FROM kb_entities WHERE profile_id=$1 AND name='system'")
+            .bind(profile)
+            .fetch_one(pool)
+            .await
+            .expect("system entity");
+    (
+        temper_substrate::ids::ProfileId::from(profile),
+        temper_substrate::ids::EntityId::from(entity),
+    )
+}
+
+/// A region on the fixture map whose members are EMBEDDED resources homed in that map, so they
+/// survive survey's `kb_chunks` lateral join. Returns `(region_id, member_ids)`.
+async fn seed_region_with_embedded_members(
+    pool: &PgPool,
+    fx: &Fx,
+    salience: f64,
+    centroid: &str,
+    titles: &[&str],
+) -> (Uuid, Vec<Uuid>) {
+    use temper_substrate::payloads::AnchorRef;
+
+    let (owner, emitter) = system_actor(pool).await;
+    let region = insert_region(
+        pool,
+        RegionSeed {
+            cogmap: fx.cogmap,
+            lens: fx.lens,
+            event: fx.event,
+            salience,
+            telos_alignment: None,
+            reference_standing: None,
+            centrality: None,
+            centroid,
+            member_count: titles.len() as i32,
+        },
+    )
+    .await;
+    let mut members = Vec::new();
+    for t in titles {
+        let rid = common::mk_embedded(
+            pool,
+            AnchorRef::cogmap(temper_core::types::ids::CogmapId::from(fx.cogmap)),
+            owner,
+            emitter,
+            t,
+            common::unit(0),
+        )
+        .await;
+        add_member(pool, region, rid).await;
+        members.push(rid);
+    }
+    (region, members)
+}
+
+/// Call the survey core the way `query_survey` does, returning `(resource_id, region_id)` pairs.
+async fn survey_regions(pool: &PgPool, fx: &Fx, regions_n: i32) -> Vec<(Uuid, Uuid)> {
+    use sqlx::Row;
+
+    sqlx::query(
+        "SELECT s.resource_id, s.region_id
+           FROM __temper_ungated_survey(
+                  ARRAY(SELECT v.resource_id FROM resources_visible_to($1) v),
+                  $1, $2::vector, $3, 'kb_cogmaps', $4) s",
+    )
+    .bind(fx.p1)
+    .bind(vec768(&[(0, 1.0)]))
+    .bind(regions_n)
+    .bind(fx.cogmap)
+    .fetch_all(pool)
+    .await
+    .expect("__temper_ungated_survey")
+    .into_iter()
+    .map(|r| {
+        (
+            r.get::<Uuid, _>("resource_id"),
+            r.get::<Uuid, _>("region_id"),
+        )
+    })
+    .collect()
+}
+
+/// **A width of 1 returns ONE region's members, not every candidate's.**
+///
+/// Three regions, all on axis 0 so all three are genuine candidates with a positive `query_cos` —
+/// a loser that scored zero would be excluded by the blend rather than by the cut, and would pass
+/// this test against the broken function too.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn survey_returns_only_the_regions_that_cleared_the_cut(pool: PgPool) {
+    let fx = fixture(&pool).await;
+    let axis0 = vec768(&[(0, 1.0)]);
+
+    let (top, top_members) =
+        seed_region_with_embedded_members(&pool, &fx, 0.9, &axis0, &["a"]).await;
+    let (mid, _) = seed_region_with_embedded_members(&pool, &fx, 0.5, &axis0, &["b"]).await;
+    let (low, _) = seed_region_with_embedded_members(&pool, &fx, 0.1, &axis0, &["c"]).await;
+
+    // All three must be candidates, or the assertion below would be about scoring, not the cut.
+    let scored = scored_regions(&pool, fx.p1, &query_axis0(), 1).await;
+    assert_eq!(
+        scored.len(),
+        3,
+        "all three regions must reach the scoring function as candidates — otherwise this test \
+         witnesses the blend excluding one, not survey honoring the cut"
+    );
+
+    let at_one: HashSet<Uuid> = survey_regions(&pool, &fx, 1)
+        .await
+        .into_iter()
+        .map(|(_, region)| region)
+        .collect();
+    assert_eq!(
+        at_one,
+        HashSet::from([top]),
+        "at a funnel width of 1, survey returned members of {} regions. It must return only the \
+         regions `wayfind_region_scores` flagged `in_top_n` — until migration 20260820000010 it \
+         joined every candidate, so `p_regions_n` changed nothing at any width",
+        at_one.len()
+    );
+
+    // The width is honored across its range, not merely at 1 — a function that hard-coded one
+    // region would pass the assertion above.
+    let at_two: HashSet<Uuid> = survey_regions(&pool, &fx, 2)
+        .await
+        .into_iter()
+        .map(|(_, region)| region)
+        .collect();
+    assert_eq!(
+        at_two,
+        HashSet::from([top, mid]),
+        "a width of 2 must admit the top TWO by score and still exclude {low}"
+    );
+
+    // And the rows are the admitted region's real members, not an empty set that would satisfy
+    // every assertion above vacuously.
+    let rows = survey_regions(&pool, &fx, 1).await;
+    assert_eq!(
+        rows.iter().map(|(r, _)| *r).collect::<HashSet<_>>(),
+        top_members.into_iter().collect::<HashSet<_>>(),
+        "survey returns the MEMBERS of the admitted region — an empty result would pass the \
+         region-set assertions above while proving nothing"
+    );
+}

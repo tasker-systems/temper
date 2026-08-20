@@ -15,13 +15,27 @@ export function contextHref(ownerRef: string, slug: string): string {
 }
 
 /**
- * The Atlas context door. Both the left-nav "Graph" link and the Home build
+ * The graph door for one context. Both the left-nav "Graph" link and the Home build
  * circle resolve here, so there is exactly one context-graph URL in the app.
- * `ownerRef` keeps its sigils (a valid path segment); the slug is the `?context`
- * scope and is percent-encoded.
+ *
+ * **It emits an `in` anchor, not a `?context=` scope** `[2026-08-20]`. The graph surface reads
+ * `q`/`in`/`from`/`sel` and knows nothing about `context`, so this had to move in the same change
+ * that rebuilt the route rather than in a later one. The failure in that window would not have been
+ * the loud kind: an absent `in` means *"every readable anchor, bounded and declared"*, so a
+ * context-scoped nav click would have **silently widened to the whole corpus** while the bound line
+ * truthfully reported `12 of 12 places` — plausible, well-formed and wrong.
+ *
+ * There is deliberately **no backward compatibility for `?context=`** `[decided — 2026-08-20, Pete]`.
+ * Nobody holds a bookmark to this surface yet, so the only consumer of the old spelling is in-app
+ * nav, which this change updates. Accepting it would also have to resolve a bare slug against the
+ * route's `[owner]` — the owner-scoping the grammar rejects precisely because it makes a team
+ * context inexpressible — and would leave a compatibility path someone has to remember to delete.
+ *
+ * Delegates to {@link graphHref} rather than formatting a URL of its own: the anchor grammar and its
+ * encoding have exactly one author, and a second spelling here is how the two would drift.
  */
 export function contextGraphHref(ownerRef: string, slug: string): string {
-	return `/graph/${ownerRef}?context=${encodeURIComponent(slug)}`;
+	return graphHref(ownerRef, { anchors: [{ kind: 'context', ref: `${ownerRef}/${slug}` }] });
 }
 
 /** SvelteKit's `page.params` for the routes that can address a context. */
@@ -31,11 +45,18 @@ export interface ContextLocationParams {
 }
 
 /**
- * Inverse of the two builders above: does `url` address `ownerRef`'s `slug`
- * context? `contextHref` carries the context as the `[context]` path segment;
- * `contextGraphHref` carries it as the `?context=` scope. Callers pass
- * `page.params` alongside `page.url` so the sigil'd `[owner]` segment is matched
- * by the router rather than re-parsed here.
+ * Inverse of the two builders above: does `url` address `ownerRef`'s `slug` context?
+ *
+ * The two doors carry it differently, so this answers in two ways rather than one.
+ * `contextHref` carries the context as the `[context]` path segment, matched by the router — so
+ * there the route's `[owner]` is the owner, and both must agree.
+ *
+ * `contextGraphHref` carries it as an **`in` anchor holding a whole ref**, which is read back
+ * through {@link parseGraphAddress} — the same parser the route itself loads from, so nav can never
+ * disagree with the page about which places are being asked. And on that door the route's `[owner]`
+ * is deliberately **not** consulted: `/graph/@me` may legitimately ask about `+team/ops`, which is
+ * the reachability the anchor grammar exists to provide. Checking it would mark a team context
+ * inactive on the very screen that is showing it.
  */
 export function isContextLocation(
 	params: ContextLocationParams,
@@ -43,8 +64,11 @@ export function isContextLocation(
 	ownerRef: string,
 	slug: string,
 ): boolean {
-	if (params.owner !== ownerRef) return false;
-	return (params.context ?? url.searchParams.get('context')) === slug;
+	if (params.context !== undefined) {
+		return params.owner === ownerRef && params.context === slug;
+	}
+	const ref = `${ownerRef}/${slug}`;
+	return parseGraphAddress(url).anchors.some((a) => a.kind === 'context' && a.ref === ref);
 }
 
 /** True only on the Atlas door for `ownerRef`'s `slug` context. */
@@ -196,4 +220,55 @@ export function graphHref(ownerRef: string, address: Partial<GraphAddress>): str
 
 	const query = params.toString();
 	return query ? `/graph/${ownerRef}?${query}` : `/graph/${ownerRef}`;
+}
+
+/**
+ * The same graph URL with a different selection.
+ *
+ * **`sel` carries a bare resource uuid, with no kind prefix** — deliberately unlike the
+ * predecessor's `node:`/`edge:` grammar. The successor's marks are nodes and edges, and an edge is
+ * a `ViaEntry`, which carries `seed_id`, `source_id`, `target_id`, `edge_kind`, `label` and
+ * `polarity` and **no id at all**. So an edge has no durable address to put in a URL, only one kind
+ * is selectable, and a prefix would name a distinction that does not exist.
+ *
+ * This rewrites the URL in place rather than rebuilding it from an address, so `q`, `in` and `from`
+ * travel untouched — a selection must never silently change what was asked.
+ */
+export function withGraphSelection(url: URL, selection: string | null): string {
+	const next = new URL(url);
+	if (selection) next.searchParams.set('sel', selection);
+	else next.searchParams.delete('sel');
+	return `${next.pathname}${next.search}`;
+}
+
+/**
+ * The same graph URL asking a different question, with the selection dropped.
+ *
+ * The selection goes because it names a node in the previous answer: keeping it would open a rail
+ * onto something the new answer may not contain, which is a panel describing a resource that is
+ * not on screen.
+ */
+export function withGraphQuestion(url: URL, question: string | null): string {
+	const next = new URL(url);
+	const q = question?.trim();
+	if (q) next.searchParams.set('q', q);
+	else next.searchParams.delete('q');
+	next.searchParams.delete('sel');
+	return `${next.pathname}${next.search}`;
+}
+
+/**
+ * The same graph URL walking from one named seed, with the question and selection dropped.
+ *
+ * `from` *replaces* the upstream stage as what the walk grows from — the reader has named where to
+ * walk from, and the pipe is no longer the answer to that. Carrying a stale `q` alongside would
+ * leave a question on screen that no longer decides anything about the answer.
+ */
+export function withGraphSeed(url: URL, seed: string): string {
+	const next = new URL(url);
+	next.searchParams.delete('q');
+	next.searchParams.delete('sel');
+	next.searchParams.delete('from');
+	next.searchParams.append('from', seed);
+	return `${next.pathname}${next.search}`;
 }

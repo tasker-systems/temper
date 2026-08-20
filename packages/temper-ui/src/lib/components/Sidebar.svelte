@@ -2,6 +2,7 @@
 	import { page } from '$app/stores';
 	import ContextNavGroup from './ContextNavGroup.svelte';
 	import { navContextsState } from '$lib/nav-groups';
+	import { parseGraphAddress } from '$lib/vault-url';
 	import { sidebarGroups } from '$lib/stores/sidebar.svelte';
 	import type { ContextRowWithCounts, TeamRow } from '$lib/types';
 
@@ -39,11 +40,16 @@
 
 	let pathname = $derived($page.url.pathname as string);
 	let isAllActive = $derived(pathname === '/vault/all' || pathname === '/vault');
-	// The whole-vault graph home (`/graph/@me`). A context-scoped graph
-	// (`/graph/[owner]?context=<slug>`) belongs to its context's own Graph
-	// sub-link, so exclude it here to keep exactly one nav item lit.
+	// The UNADDRESSED graph door (`/graph/@me`), which is the whole footprint with no place
+	// named. A graph addressed at a place (`?in=ctx:@me/temper`) belongs to that context's own
+	// Graph sub-link, so exclude it here to keep exactly one nav item lit.
+	//
+	// Read through `parseGraphAddress` rather than by reaching for a param name: the anchor
+	// grammar has one author, and an inlined `searchParams.get(...)` here is how a nav highlight
+	// drifts from what the route actually loaded. This is also the shape of the `?context=`
+	// spelling it replaced, which would have gone on quietly matching nothing.
 	let isGraphActive = $derived(
-		pathname.startsWith('/graph/') && !$page.url.searchParams.get('context')
+		pathname.startsWith('/graph/') && parseGraphAddress($page.url).anchors.length === 0
 	);
 </script>
 

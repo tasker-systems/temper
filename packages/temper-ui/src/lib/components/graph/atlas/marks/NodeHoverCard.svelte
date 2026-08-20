@@ -18,12 +18,21 @@
 		docType: string | null;
 		edges: number;
 		excerpt: string | null;
+		/**
+		 * Node metadata beyond the title — where it lives, what stage it is at, when it last
+		 * moved. `[N2 — 2026-08-20]` The successor surface carries the whole `ResourceView` on
+		 * every node, so this is a projection of a row already in hand rather than a second read.
+		 * Empty on the Atlas, which has only an `AtlasNode` to draw from.
+		 */
+		meta?: { label: string; value: string }[];
 	}
-	let { x, y, r, title, docType, edges, excerpt }: Props = $props();
+	let { x, y, r, title, docType, edges, excerpt, meta = [] }: Props = $props();
 
 	const CARD_WIDTH = 220;
-	const CARD_HEIGHT = 128;
 	const GAP = 12;
+	// Reserve height for the rows actually present, so a short card still bottom-anchors right
+	// above its node instead of floating inside an over-generous box.
+	const CARD_HEIGHT = $derived(128 + meta.length * 14);
 
 	const hue = $derived(docTypeHue(docType));
 	const left = $derived(x - CARD_WIDTH / 2);
@@ -49,6 +58,13 @@
 			<div class="ctitle">{title}</div>
 			{#if excerpt}
 				<p class="snip">{excerpt}</p>
+			{/if}
+			{#if meta.length}
+				<dl class="meta">
+					{#each meta as m (m.label)}
+						<div><dt>{m.label}</dt><dd>{m.value}</dd></div>
+					{/each}
+				</dl>
 			{/if}
 			<div class="hint">click → open in rail</div>
 		</div>
@@ -129,6 +145,30 @@
 		line-clamp: 2;
 		-webkit-box-orient: vertical;
 		overflow: hidden;
+	}
+	.meta {
+		margin: 7px 0 0;
+		display: grid;
+		gap: 2px;
+	}
+	.meta div {
+		display: flex;
+		justify-content: space-between;
+		gap: 10px;
+	}
+	.meta dt {
+		font: 8.5px monospace;
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+		color: #6f7886;
+	}
+	.meta dd {
+		margin: 0;
+		font-size: 10.5px;
+		color: #9aa3b0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 	.hint {
 		margin-top: 7px;

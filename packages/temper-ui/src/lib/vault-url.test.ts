@@ -10,6 +10,9 @@ import {
 	parseGraphAddress,
 	resourceHref,
 	searchHref,
+	withGraphQuestion,
+	withGraphSeed,
+	withGraphSelection,
 } from './vault-url';
 
 describe('contextHref', () => {
@@ -24,12 +27,24 @@ describe('contextHref', () => {
 });
 
 describe('contextGraphHref', () => {
-	it('points at the Atlas context door', () => {
-		expect(contextGraphHref('@me', 'temper')).toBe('/graph/@me?context=temper');
+	it('addresses the context as an `in` anchor, not a `?context=` scope', () => {
+		expect(contextGraphHref('@me', 'temper')).toBe('/graph/@me?in=ctx%3A%40me%2Ftemper');
 	});
 
-	it('keeps the owner sigil but encodes the slug scope', () => {
-		expect(contextGraphHref('+acme-team', 'ops team')).toBe('/graph/+acme-team?context=ops%20team');
+	it('keeps the route owner sigil, and carries the anchor ref whole', () => {
+		// The route's `[owner]` is the reader whose graph this is; the ANCHOR carries its own
+		// owner, which is what makes a team context expressible at a personal door at all.
+		expect(contextGraphHref('+acme-team', 'ops team')).toBe(
+			'/graph/+acme-team?in=ctx%3A%2Bacme-team%2Fops+team',
+		);
+	});
+
+	it('round-trips through the parser, so the two spellings cannot drift', () => {
+		const url = new URL(contextGraphHref('+acme-team', 'ops team'), 'https://temperkb.io');
+
+		expect(parseGraphAddress(url).anchors).toEqual([
+			{ kind: 'context', ref: '+acme-team/ops team' },
+		]);
 	});
 });
 
@@ -111,14 +126,35 @@ describe('isContextLocation', () => {
 		).toBe(true);
 	});
 
-	it('matches the Atlas door, where the context is the ?context= scope', () => {
+	it('matches the graph door, where the context is an `in` anchor', () => {
 		expect(
-			isContextLocation({ owner: '@me' }, at('/graph/@me?context=temper'), '@me', 'temper'),
+			isContextLocation({ owner: '@me' }, at(contextGraphHref('@me', 'temper')), '@me', 'temper'),
 		).toBe(true);
 	});
 
+	it('matches a TEAM context at a personal door, because the anchor carries its own owner', () => {
+		// The route `[owner]` is deliberately not consulted on this door. `/graph/@me` asking about
+		// `+acme-team/ops` is the cross-owner reach the anchor grammar exists to provide, and
+		// checking the route owner would mark the place inactive on the screen showing it.
+		expect(
+			isContextLocation(
+				{ owner: '@me' },
+				at(`/graph/@me?in=ctx%3A%2Bacme-team%2Fops`),
+				'+acme-team',
+				'ops',
+			),
+		).toBe(true);
+	});
+
+	it('matches one anchor among several', () => {
+		const many = at('/graph/@me?in=ctx%3A%40me%2Ftemper&in=map%3Aabc&in=ctx%3A%40me%2Fwriting');
+
+		expect(isContextLocation({ owner: '@me' }, many, '@me', 'writing')).toBe(true);
+		expect(isContextLocation({ owner: '@me' }, many, '@me', 'absent')).toBe(false);
+	});
+
 	it('does not match a different owner or a different context', () => {
-		const door = at('/graph/@me?context=temper');
+		const door = at(contextGraphHref('@me', 'temper'));
 		expect(isContextLocation({ owner: '@me' }, door, '+acme-team', 'temper')).toBe(false);
 		expect(isContextLocation({ owner: '@me' }, door, '@me', 'writing')).toBe(false);
 	});
@@ -132,7 +168,7 @@ describe('isContextLocation', () => {
 		expect(
 			isContextLocation(
 				{ owner: '@me', context: 'temper' },
-				at('/vault/@me/temper?context=writing'),
+				at('/vault/@me/temper?in=ctx%3A%40me%2Fwriting'),
 				'@me',
 				'writing',
 			),
@@ -160,9 +196,14 @@ describe('isContextLocation', () => {
 });
 
 describe('isContextGraphLocation', () => {
-	it('is true on the Atlas door for that context', () => {
+	it('is true on the graph door for that context', () => {
 		expect(
-			isContextGraphLocation({ owner: '@me' }, at('/graph/@me?context=temper'), '@me', 'temper'),
+			isContextGraphLocation(
+				{ owner: '@me' },
+				at(contextGraphHref('@me', 'temper')),
+				'@me',
+				'temper',
+			),
 		).toBe(true);
 	});
 
@@ -303,5 +344,67 @@ describe('the graph surface address', () => {
 
 			expect(parseGraphAddress(at(graphHref('@me', address)))).toEqual(address);
 		});
+	});
+});
+
+describe('the graph URL mutators change one part and leave the rest alone', () => {
+	const at = (search: string) => new URL(`https://x.test/graph/@me${search}`);
+
+	it('selects a bare resource uuid — there is no kind prefix to give', () => {
+		// The vocabulary has one selectable kind. An edge is a `ViaEntry` and carries no id at
+		// all, so a `node:` prefix would name a distinction that does not exist.
+		expect(withGraphSelection(at('?q=x'), 'abc')).toBe('/graph/@me?q=x&sel=abc');
+	});
+
+	it('clearing the selection leaves the question and the places untouched', () => {
+		const url = at('?q=x&in=ctx%3A%40me%2Ftemper&from=r1&sel=abc');
+
+		expect(withGraphSelection(url, null)).toBe('/graph/@me?q=x&in=ctx%3A%40me%2Ftemper&from=r1');
+	});
+
+	it('a selection never changes what was asked', () => {
+		const url = at('?q=how&in=map%3A019f&from=r1');
+		const next = new URL(`https://x.test${withGraphSelection(url, 'n1')}`);
+
+		expect(next.searchParams.get('q')).toBe('how');
+		expect(next.searchParams.getAll('in')).toEqual(['map:019f']);
+		expect(next.searchParams.getAll('from')).toEqual(['r1']);
+	});
+
+	it('asking a new question drops the selection, which named a node in the old answer', () => {
+		expect(withGraphQuestion(at('?in=ctx%3A%40me%2Ftemper&sel=abc'), 'why')).toBe(
+			'/graph/@me?in=ctx%3A%40me%2Ftemper&q=why',
+		);
+	});
+
+	it('clearing the question keeps the places — the door is still addressed', () => {
+		expect(withGraphQuestion(at('?q=x&in=ctx%3A%40me%2Ftemper'), null)).toBe(
+			'/graph/@me?in=ctx%3A%40me%2Ftemper',
+		);
+	});
+
+	it('a blank question is the same as no question, not a question that is empty', () => {
+		expect(withGraphQuestion(at('?q=x'), '   ')).toBe('/graph/@me');
+	});
+
+	it('walking from a seed replaces the question, which no longer decides the answer', () => {
+		// `from` REPLACES the upstream stage as what the walk grows from, so a stale `q` would
+		// leave a question on screen that decides nothing about what is drawn.
+		expect(withGraphSeed(at('?q=x&in=ctx%3A%40me%2Ftemper&sel=abc'), 'r9')).toBe(
+			'/graph/@me?in=ctx%3A%40me%2Ftemper&from=r9',
+		);
+	});
+
+	it('walking from a seed replaces any previous seed rather than accumulating', () => {
+		expect(withGraphSeed(at('?from=r1&from=r2'), 'r9')).toBe('/graph/@me?from=r9');
+	});
+
+	it('every mutator round-trips through the parser it is the inverse of', () => {
+		const url = new URL(`https://x.test${withGraphSeed(at('?in=ctx%3A%2Bteam%2Fops'), 'r9')}`);
+		const address = parseGraphAddress(url);
+
+		expect(address.anchors).toEqual([{ kind: 'context', ref: '+team/ops' }]);
+		expect(address.seeds).toEqual(['r9']);
+		expect(address.question).toBeNull();
 	});
 });

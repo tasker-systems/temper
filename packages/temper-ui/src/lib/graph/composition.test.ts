@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { jsonBody } from '$lib/server/json-body';
 import type { ActInvocation, CombineNode, StageNode } from '$lib/types/generated/query';
 import {
 	ANCHOR_CEILING,
@@ -276,5 +277,122 @@ describe('explicit seeds', () => {
 		expect(walk?.inputs).toEqual([
 			{ from: 'caller', as: 'seed', ids: { kind: 'resource', provenance: null, ids: seeds } },
 		]);
+	});
+});
+
+/**
+ * The class of defect a fixture cannot see.
+ *
+ * Every test above compares the built object to an expected shape, and a comparison never sends
+ * anything. Both failures below shipped green under 69 such tests and were found the first time the
+ * builder's output met `/api/query` — one refused by the contract before the server ran it, the
+ * other unable to leave the process at all.
+ */
+describe('what only a real request could see', () => {
+	test('every survey carries the question — a survey without one is REFUSED, not merely blunt', () => {
+		// `temper query --check` (local, no server) on a plan whose surveys carried no intention:
+		//   { "expressible": false, "refusals": [
+		//       { "stage": "s1", "reason": "missing_intention",
+		//         "detail": "this survey act carries no intention, and survey needs a question" } ] }
+		// The act's own gated wrapper says why: "Survey requires an intention (query + embedding);
+		// without one it collapses into cogmap_read(shape)/context_read(shape), which already serve
+		// pure orientation." So an intention-less survey is not a broader survey — it is no plan.
+		const question = 'what am I working on';
+		const outcome = buildGraphPlan({
+			anchors: [ctx(0, 10), ctx(1, 20), map(0, 30)],
+			question,
+			seeds: null,
+		});
+
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) return;
+		const surveys = actsNamed(outcome.plan.composition.stages, 'survey');
+		expect(surveys).toHaveLength(3);
+		for (const s of surveys) {
+			expect(s.intention?.query, `survey ${s.name} carries no question`).toBe(question);
+		}
+	});
+
+	test('the zero-anchor entry carries the question too', () => {
+		const outcome = buildGraphPlan({ anchors: [], question: 'q', seeds: null });
+
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) return;
+		expect(
+			actsNamed(outcome.plan.composition.stages, 'find-about-anywhere')[0].intention?.query,
+		).toBe('q');
+	});
+
+	test('no act that requires a question is ever emitted without one', () => {
+		// Stated over the whole family rather than per entry, so an act added later to the builder
+		// is covered by this test on the day it is added rather than on the day someone remembers.
+		const REQUIRES_A_QUESTION = ['survey', 'find-about-anywhere', 'find-about-within'];
+
+		for (const anchors of [[], [ctx(0, 10)], [ctx(0, 10), map(0, 5)]]) {
+			const outcome = buildGraphPlan({ anchors, question: 'q', seeds: null });
+			expect(outcome.ok).toBe(true);
+			if (!outcome.ok) return;
+			for (const s of acts(outcome.plan.composition.stages)) {
+				if (!REQUIRES_A_QUESTION.includes(s.act)) continue;
+				expect(s.intention?.query, `${s.act} stage ${s.name} carries no question`).toBe('q');
+			}
+		}
+	});
+
+	test('the composition survives encoding — its terms are bigint, which JSON.stringify refuses', () => {
+		const outcome = buildGraphPlan({ anchors: [ctx(0, 10)], question: 'q', seeds: null });
+
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) return;
+		// The builder is right to hold bigint: `Composition.terms` is `{[key in BoundTerm]?: bigint}`
+		// in the generated contract. It is the SENDING that has to know, which is why the encoder
+		// lives at the request boundary (`lib/server/json-body.ts`) rather than here.
+		expect(() => JSON.stringify(outcome.plan.composition)).toThrow();
+		expect(JSON.parse(jsonBody(outcome.plan.composition))).toMatchObject({
+			stages: expect.arrayContaining([
+				expect.objectContaining({ act: 'survey', terms: { regions: REGIONS_PER_ANCHOR } }),
+				expect.objectContaining({ act: 'follow-from', terms: { limit: WALK_LIMIT } }),
+			]),
+		});
+	});
+});
+
+describe('a named place that no longer resolves', () => {
+	test('the denominator is what the reader named, not what resolved', () => {
+		// Two anchors named in the URL; one is gone or unreadable, so one Anchor reaches the builder.
+		const outcome = buildGraphPlan({
+			anchors: [ctx(0, 10)],
+			question: 'q',
+			seeds: null,
+			available: 2,
+		});
+
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) return;
+		expect(outcome.plan.anchorsAsked).toHaveLength(1);
+		expect(outcome.plan.anchorsAvailable).toBe(2);
+	});
+
+	test('without the override the denominator is still the anchors handed in', () => {
+		const outcome = buildGraphPlan({
+			anchors: [ctx(0, 10), ctx(1, 5)],
+			question: 'q',
+			seeds: null,
+		});
+
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) return;
+		expect(outcome.plan.anchorsAvailable).toBe(2);
+	});
+
+	test('the override never changes which anchors are asked', () => {
+		const anchors = Array.from({ length: 30 }, (_, i) => ctx(i, 100 - i));
+		const withOverride = buildGraphPlan({ anchors, question: 'q', seeds: null, available: 99 });
+		const without = buildGraphPlan({ anchors, question: 'q', seeds: null });
+
+		expect(withOverride.ok && without.ok).toBe(true);
+		if (!withOverride.ok || !without.ok) return;
+		expect(withOverride.plan.anchorsAsked).toEqual(without.plan.anchorsAsked);
+		expect(withOverride.plan.composition).toEqual(without.plan.composition);
 	});
 });

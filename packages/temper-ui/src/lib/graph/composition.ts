@@ -86,6 +86,21 @@ export interface PlanInput {
 	anchors: Anchor[];
 	question: string | null;
 	seeds: string[] | null;
+	/**
+	 * The denominator of the places axis, when it is not simply `anchors.length`.
+	 *
+	 * It differs in exactly one situation, and that situation is the reason this exists: the reader
+	 * NAMED some places and one of them did not resolve — deleted, or no longer readable. The
+	 * resolved set is what can be asked; the named count is what the reader believes they asked. A
+	 * line reading *"1 of 2 places"* declares the drop; *"1 of 1"* would hide it, and the surface
+	 * would answer a narrower question than the URL says while looking complete.
+	 *
+	 * This reveals nothing the refusal face protects. *"A place the reader cannot read is absent,
+	 * never hinted at, and its absence is not distinguishable from its nonexistence"* — and a bare
+	 * count cannot distinguish them either: one number covers deleted, never-existed and
+	 * not-readable-by-you alike.
+	 */
+	available?: number;
 }
 
 /**
@@ -140,7 +155,7 @@ const act = (fields: {
  * is not a combination."* A builder that always emitted a union would produce an invalid plan for the
  * single-anchor entry, which is §2.4, the most ordinary door of the three.
  */
-export function buildGraphPlan({ anchors, question, seeds }: PlanInput): PlanOutcome {
+export function buildGraphPlan({ anchors, question, seeds, available }: PlanInput): PlanOutcome {
 	const anchorsAsked = [...anchors].sort(byMaterialThenRef).slice(0, ANCHOR_CEILING);
 
 	// No place to ask about and no question to ask: there is no honest composition here, and an
@@ -177,6 +192,7 @@ export function buildGraphPlan({ anchors, question, seeds }: PlanInput): PlanOut
 				act({
 					name,
 					act: 'survey',
+					intention: question,
 					inputs: [anchorBound(anchor)],
 					terms: { regions: BigInt(REGIONS_PER_ANCHOR) },
 				}),
@@ -224,7 +240,7 @@ export function buildGraphPlan({ anchors, question, seeds }: PlanInput): PlanOut
 		plan: {
 			composition: { outcome: { returns }, stages },
 			anchorsAsked,
-			anchorsAvailable: anchors.length,
+			anchorsAvailable: available ?? anchors.length,
 			surveyStages,
 			walkStage,
 		},
