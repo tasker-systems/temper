@@ -1194,6 +1194,17 @@ mod tests {
             kind: "resource".to_string(),
             quantity: Some(q),
             via: None,
+            region: None,
+        }
+    }
+
+    /// A `survey` row: the region it came from, carrying that region's `region_score` as its
+    /// quantity — which is what the fragment projects, and why distinct `(region, quantity)` pairs
+    /// are the matched region set rather than an approximation of it.
+    fn hit_in_region(stage: &str, id: Uuid, region: Uuid, q: f64) -> HitRow {
+        HitRow {
+            region: Some(region),
+            ..hit(stage, id, q)
         }
     }
 
