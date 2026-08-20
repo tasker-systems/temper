@@ -461,6 +461,7 @@ read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260816000020_survey_act.sql
 20260817000010_decompose_walk.sql
 20260817000020_follow_from_offset.sql
+20260820000010_survey_honors_funnel_width.sql
 EOF
 
 # ── THE RELATION WATCH — derived from what the cores READ, not what names them ──
