@@ -608,6 +608,7 @@ pub fn openapi_spec() -> utoipa::openapi::OpenApi {
     // request/response body is not in `components` until the merges above collect it, so a
     // modifier registered on `ApiDoc` would run before the schema it repairs exists.
     crate::openapi::OpenStringEnumAddon.modify(&mut spec);
+    crate::openapi::ApidogFolderAddon.modify(&mut spec);
     spec
 }
 
