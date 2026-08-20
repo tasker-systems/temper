@@ -17,11 +17,15 @@
 - **`region_score` is carried raw.** It spans `[-0.57, 1.05]` and is an **OPEN ruling** `[2026-08-14, Pete]`. Do not normalize, clamp, or rescale it. Do not add a `QuantityScale` claim it does not have.
 - **A declaration describes the DEPLOYED system.** The rule this whole task enforces; do not widen `discloses` anywhere else while here.
 - **`grep`, not `rg`, in this repo.** `rg` mangles identifiers in this tree (renders type names as `n`) — observed 2026-08-20. Every search in this plan uses `grep`.
+- **The pre-commit hook gates the WHOLE WORKSPACE, and it is the real definition of "done" for every task here** `[learned by executing Task 1 — 2026-08-20]`. It runs fmt, clippy across every crate, docs, an **OpenAPI drift check**, and — the moment a commit touches `packages/temper-ui/src/lib/types/generated/` — `svelte-check` and `biome` over the UI. Three consequences that shape every task below:
+  - **No task may leave the workspace uncompilable**, even if its own crate builds. Adding a field to a wire type breaks every literal constructor of it downstream, and those must be satisfied in the *same* commit.
+  - **Every commit that changes a wire type regenerates the derived artifacts in that commit.** Deferring them to a later task cannot work; the hook rejects the commit.
+  - **Clippy over a cold workspace exceeds two minutes.** Give commit commands a generous timeout, and do not read a timeout as a failure — check `git log` before retrying.
 - Rust edition/toolchain as configured. Run `cargo make check` before any commit that claims completion.
 
 ---
 
-### Task 1: The wire type and the two carrier fields
+### Task 1: The wire type and the two carrier fields  ✅ `fd819fd9`
 
 **Files:**
 - Modify: `crates/temper-core/src/types/query/hits.rs` (add `RegionDisclosure`)
@@ -31,11 +35,14 @@
 
 **Interfaces:**
 - Produces: `RegionDisclosure { region_id: Uuid, region_score: f64 }`; `StageTrace::disclosed_regions: Vec<RegionDisclosure>`; `StageResult::disclosed_regions: Vec<RegionDisclosure>`.
-- Consumes: nothing — this task compiles standing alone with both fields defaulting to empty.
+- Consumes: nothing from an earlier task.
+- **⚠️ It does NOT compile standing alone** `[corrected — 2026-08-20]`. This plan originally claimed it did. `temper-core` builds, but `temper-services` does not: `query_read.rs` constructs both `StageResult` (`:573`) and `StageTrace` (`:611`) as **literals**, so both stop compiling the moment the field exists. Satisfy them in this same commit with `disclosed_regions: vec![]` — which is the *truthful* value at this point, not a placeholder, because nothing projects a region until Task 2. Say so in a comment; do not write a TODO. `envelope.rs`'s own test fixture `result()` (`:402`) needs the same.
+
+**⚠️ `StageTrace` derives `Eq`, and `f64` is not `Eq`** `[found by executing — 2026-08-20]`. Adding `Vec<RegionDisclosure>` therefore breaks the derive, and the break **cascades** to `CompositionTrace`, which holds `Vec<StageTrace>`. Drop `Eq` from both, keep `PartialEq`. This is safe and was checked rather than assumed: `grep` for `StageTrace` in a `HashSet`/`BTreeSet`/map-key position returns nothing, and `StageResult` never derived `PartialEq` or `Eq` at all — so the two carriers were already asymmetric. Leave a note at each dropped derive; an unexplained missing `Eq` invites a future reader to restore it.
 
 **Why a list and not an `Option`:** the same reasoning `ResourceHit::via` records — *"A collection has no such claim to carry: `[]` and absent would both mean 'no provenance', so a null adds a third spelling of one fact."* Empty means no regions disclosed; the act's `discloses` already says whether to expect any.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 In `crates/temper-core/src/types/query/trace.rs`, inside the existing `#[cfg(test)] mod tests`:
 
@@ -64,7 +71,7 @@ fn disclosed_regions_defaults_empty_on_a_trace() {
 
 If `sample_trace()` does not already exist in that module, use whatever constructor the neighbouring tests use — check with `grep -n "fn sample_trace\|StageTrace {" crates/temper-core/src/types/query/trace.rs`.
 
-- [ ] **Step 2: Run the test and watch it fail**
+- [x] **Step 2: Run the test and watch it fail**
 
 ```bash
 cargo nextest run -p temper-core a_disclosed_region_carries_its_id
@@ -72,7 +79,7 @@ cargo nextest run -p temper-core a_disclosed_region_carries_its_id
 
 Expected: FAIL — `cannot find type RegionDisclosure`.
 
-- [ ] **Step 3: Add the type**
+- [x] **Step 3: Add the type**
 
 In `crates/temper-core/src/types/query/hits.rs`, beside `RegionHit`, matching that file's existing derive stack (check it with `grep -n "derive" crates/temper-core/src/types/query/hits.rs | head -3` and copy — it will involve `Serialize`, `Deserialize`, and `cfg_attr` gates for `ts-rs`, `utoipa` and `schemars`):
 
@@ -94,7 +101,7 @@ pub struct RegionDisclosure {
 }
 ```
 
-- [ ] **Step 4: Add the field to both carriers**
+- [x] **Step 4: Add the field to both carriers**
 
 In `trace.rs`, after `pub narrowed_by: Vec<NarrowedBy>,`:
 
@@ -112,7 +119,7 @@ In `trace.rs`, after `pub narrowed_by: Vec<NarrowedBy>,`:
 
 Drop the `cfg_attr` line if the neighbouring fields in this struct do not use one — match the file, do not introduce a pattern. Add the identical field to `StageResult` in `envelope.rs` with a doc comment pointing back the other way.
 
-- [ ] **Step 5: Run the tests and watch them pass**
+- [x] **Step 5: Run the tests and watch them pass**
 
 ```bash
 cargo nextest run -p temper-core --test-threads 4 disclosed_region
@@ -120,7 +127,7 @@ cargo nextest run -p temper-core --test-threads 4 disclosed_region
 
 Expected: PASS, both tests.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/temper-core/src/types/query/
@@ -467,18 +474,30 @@ git commit -m "feat(query): aggregate survey's matched regions onto the trace an
 
 ---
 
-### Task 5: Regenerate the derived artifacts
+### Task 5: Verify the derived artifacts, and the snapshots the hook does not check
+
+**⚠️ Rewritten `[2026-08-20]`. This task used to say "regenerate the artifacts" and was sequenced last. That is impossible:** the pre-commit hook fails any commit whose wire types drift from `openapi.json`, so **Tasks 1–4 each regenerate in their own commit** as a condition of landing at all. What is left here is the part the hook does *not* cover.
 
 **Files:**
-- Modify (generated): `packages/temper-ui/src/lib/types/generated/query.ts`, `openapi.json`, the temper-rb gem, `temper-ts`'s `schema.ts`, schema snapshots
+- Verify (generated): `packages/temper-ui/src/lib/types/generated/query.ts`, `openapi.json`, `clients/temper-rb/`, `clients/temper-ts/src/generated/schema.ts`
+- Verify: the schema snapshots
 
-**REQUIRED SUB-SKILL:** load the `generated-artifacts` skill before this task. It owns which artifact regenerates from what, and this plan deliberately does not restate it — a second copy of that procedure is a second thing to drift.
+**REQUIRED SUB-SKILL:** load the `generated-artifacts` skill. It owns which artifact regenerates from what, and this plan deliberately does not restate it — a second copy of that procedure is a second thing to drift.
 
-- [ ] **Step 1: Regenerate the ts-rs tree**
+**The regeneration commands each earlier task needs**, recorded once here so they are not rediscovered four times:
 
 ```bash
-cargo make generate-ts-types
+cargo make openapi              # openapi.json + the temper-rb gem + temper-ts schema.ts
+cargo make generate-ts-types    # the ts-rs tree the UI reads
 ```
+
+- [ ] **Step 1: Confirm no artifact drifted**
+
+```bash
+cargo make openapi && cargo make generate-ts-types && git status --short
+```
+
+Expected: **no modifications**. Anything that changes here is an artifact an earlier task failed to regenerate, which means that task's commit should not have passed the hook — investigate rather than committing the diff.
 
 - [ ] **Step 2: Confirm the new type reached the UI**
 
@@ -488,14 +507,16 @@ grep -n "RegionDisclosure\|disclosed_regions" packages/temper-ui/src/lib/types/g
 
 Expected: `RegionDisclosure` declared, and `disclosed_regions` present on **both** `StageTrace` and `StageResult`. If it appears on only one, Task 4 missed a carrier — go back.
 
-- [ ] **Step 3: Regenerate the remaining artifacts and the schema snapshots**
+- [ ] **Step 3: Update the schema snapshots — the hook does NOT check these**
 
-Per the `generated-artifacts` skill. Then:
+This is the substance of the task. `openapi` drift is caught per commit; the schema snapshots are not, so they are the artifact that can silently rot across Tasks 1–4.
 
 ```bash
 cargo make test-schema-core
 cargo make test-schema-substrate
 ```
+
+Both regenerate a committed artifact. If either reports a diff, the snapshot needs committing — that is the expected outcome here, not a failure.
 
 - [ ] **Step 4: Full gate**
 
@@ -503,12 +524,14 @@ cargo make test-schema-substrate
 cargo make check
 ```
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Commit — only if Step 1 or Step 3 actually changed something**
 
 ```bash
 git add -A
-git commit -m "chore(generated): regenerate artifacts for the region disclosure"
+git commit -m "chore(generated): update schema snapshots for the region disclosure"
 ```
+
+**If nothing changed, this task ends with no commit, and that is the success case.** It means Tasks 1–4 each landed their own artifacts correctly. Do not manufacture a commit to make the task look done.
 
 ---
 
