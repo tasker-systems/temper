@@ -167,6 +167,12 @@ Resources return structured data that clients can display and inject directly:
 
 All mutations go through tools. There are no writable resources.
 
+> **Storing structured data?** If the content is JSON, YAML, a measurement, a query plan, or any
+> structured output that a later session must retrieve whole — do not write it as a fenced code
+> block inside the resource body. The chunker will split it at its own comment lines, the
+> fragments will be embedded into the search corpus as semantic noise, and the next reader will
+> face a reassembly puzzle. Read `data-artifacts.md` for when to commit a data artifact instead.
+
 ### Creating Resources
 
 Use `create_resource` to write content to the knowledge base. The server validates
