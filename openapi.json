@@ -2803,6 +2803,84 @@
         "x-apidog-folder": "Reference/API Reference/Events"
       }
     },
+    "/api/graph/entry": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Graph"
+        ],
+        "summary": "Read what your work is built around",
+        "description": "The entry door for a reader who has asked nothing: the most-connected resources they can see,\nplus every edge among them. Ranking and drawing use the same criterion, so no returned edge\npoints at a node that is not on the canvas.",
+        "operationId": "entry",
+        "parameters": [
+          {
+            "name": "k",
+            "in": "query",
+            "description": "How many marks to draw. Defaults to the service's parameter and is clamped by it.\n\n**Deliberately a parameter, not a constant on the wire.** The value it should settle at is\nruled in chunk C from the degree distribution chunk A measured; asserting it earlier is the\nerror the grounding/navigation spec was written to correct.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Orientation subgraph — top-K by degree with their induced edges",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AtlasSubgraph"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Non-positive k",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Graph"
+      }
+    },
     "/api/graph/home": {
       "parameters": [
         {

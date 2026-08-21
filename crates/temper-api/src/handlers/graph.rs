@@ -128,6 +128,44 @@ pub async fn region_composition(
     .map(Json)
 }
 
+/// Query parameters for `GET /api/graph/entry`.
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub struct EntryQuery {
+    /// How many marks to draw. Defaults to the service's parameter and is clamped by it.
+    ///
+    /// **Deliberately a parameter, not a constant on the wire.** The value it should settle at is
+    /// ruled in chunk C from the degree distribution chunk A measured; asserting it earlier is the
+    /// error the grounding/navigation spec was written to correct.
+    pub k: Option<i32>,
+}
+
+/// Read what your work is built around
+///
+/// The entry door for a reader who has asked nothing: the most-connected resources they can see,
+/// plus every edge among them. Ranking and drawing use the same criterion, so no returned edge
+/// points at a node that is not on the canvas.
+#[utoipa::path(
+    get,
+    path = "/api/graph/entry",
+    tag = "Graph",
+    params(EntryQuery),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Orientation subgraph — top-K by degree with their induced edges", body = AtlasSubgraph),
+        (status = 400, description = "Non-positive k", body = ErrorBody),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    )
+)]
+pub async fn entry(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(q): Query<EntryQuery>,
+) -> ApiResult<Json<AtlasSubgraph>> {
+    graph_service::entry_orientation_slice(&state.pool, ProfileId::from(auth.0.profile().id), q.k)
+        .await
+        .map(Json)
+}
+
 /// Read your teams and cognitive maps
 #[utoipa::path(
     get,

@@ -82,6 +82,7 @@ fn gated_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::graph::region_composition))
         .routes(routes!(handlers::graph::context_panorama))
         .routes(routes!(handlers::graph::context_composition))
+        .routes(routes!(handlers::graph::entry))
         .routes(routes!(handlers::graph::atlas_home))
         .routes(routes!(handlers::graph::cogmap_panorama))
         .routes(routes!(

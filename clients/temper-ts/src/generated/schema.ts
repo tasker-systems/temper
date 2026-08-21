@@ -719,6 +719,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/graph/entry": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read what your work is built around
+         * @description The entry door for a reader who has asked nothing: the most-connected resources they can see,
+         *     plus every edge among them. Ranking and drawing use the same criterion, so no returned edge
+         *     points at a node that is not on the canvas.
+         */
+        get: operations["entry"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/graph/home": {
         parameters: {
             query?: never;
@@ -8196,6 +8221,56 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    entry: {
+        parameters: {
+            query?: {
+                /**
+                 * @description How many marks to draw. Defaults to the service's parameter and is clamped by it.
+                 *
+                 *     **Deliberately a parameter, not a constant on the wire.** The value it should settle at is
+                 *     ruled in chunk C from the degree distribution chunk A measured; asserting it earlier is the
+                 *     error the grounding/navigation spec was written to correct.
+                 */
+                k?: number | null;
+            };
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Orientation subgraph — top-K by degree with their induced edges */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AtlasSubgraph"];
+                };
+            };
+            /** @description Non-positive k */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
         };
     };

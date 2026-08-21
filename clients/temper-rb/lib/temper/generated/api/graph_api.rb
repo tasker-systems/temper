@@ -393,6 +393,73 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Read what your work is built around
+    # The entry door for a reader who has asked nothing: the most-connected resources they can see, plus every edge among them. Ranking and drawing use the same criterion, so no returned edge points at a node that is not on the canvas.
+    # @param [Hash] opts the optional parameters
+    # @option opts [Integer] :k How many marks to draw. Defaults to the service&#39;s parameter and is clamped by it.  **Deliberately a parameter, not a constant on the wire.** The value it should settle at is ruled in chunk C from the degree distribution chunk A measured; asserting it earlier is the error the grounding/navigation spec was written to correct.
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [AtlasSubgraph]
+    def entry(opts = {})
+      data, _status_code, _headers = entry_with_http_info(opts)
+      data
+    end
+
+    # Read what your work is built around
+    # The entry door for a reader who has asked nothing: the most-connected resources they can see, plus every edge among them. Ranking and drawing use the same criterion, so no returned edge points at a node that is not on the canvas.
+    # @param [Hash] opts the optional parameters
+    # @option opts [Integer] :k How many marks to draw. Defaults to the service&#39;s parameter and is clamped by it.  **Deliberately a parameter, not a constant on the wire.** The value it should settle at is ruled in chunk C from the degree distribution chunk A measured; asserting it earlier is the error the grounding/navigation spec was written to correct.
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(AtlasSubgraph, Integer, Hash)>] AtlasSubgraph data, response status code and response headers
+    def entry_with_http_info(opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: GraphApi.entry ...'
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/graph/entry'
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+      query_params[:'k'] = opts[:'k'] if !opts[:'k'].nil?
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body]
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'AtlasSubgraph'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"GraphApi.entry",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:GET, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: GraphApi#entry\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
     # Read the resources composing a region
     # @param ids [String] Comma-separated region ids — one region, or a shift-selected union.
     # @param [Hash] opts the optional parameters

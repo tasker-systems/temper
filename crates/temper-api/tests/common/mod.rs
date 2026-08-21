@@ -122,7 +122,7 @@ async fn seed_context_scaffold(pool: &PgPool) -> (Uuid, Uuid, Uuid) {
 
 /// An emitter entity plus the one genesis event a context's seeded edges hang their
 /// `asserted_by_event_id` / `last_event_id` FKs on.
-async fn seed_genesis_event(pool: &PgPool, profile: Uuid, ctx: Uuid) -> Uuid {
+pub async fn seed_genesis_event(pool: &PgPool, profile: Uuid, ctx: Uuid) -> Uuid {
     let entity = Uuid::now_v7();
     sqlx::query("INSERT INTO kb_entities (id, profile_id, name) VALUES ($1, $2, $3)")
         .bind(entity)
@@ -152,7 +152,7 @@ async fn seed_genesis_event(pool: &PgPool, profile: Uuid, ctx: Uuid) -> Uuid {
 /// `source --parent_of--> target`: the historical containment spine (edge_kind `contains`,
 /// forward), homed in the context. The backfill (20260709000005) rewrites this to `advances`,
 /// reversing direction — which is precisely why container walks filter on neither.
-async fn seed_contains_edge(pool: &PgPool, source: Uuid, target: Uuid, ctx: Uuid, event: Uuid) {
+pub async fn seed_contains_edge(pool: &PgPool, source: Uuid, target: Uuid, ctx: Uuid, event: Uuid) {
     sqlx::query(
         "INSERT INTO kb_edges \
              (source_table, source_id, target_table, target_id, edge_kind, polarity, label, \
@@ -171,7 +171,7 @@ async fn seed_contains_edge(pool: &PgPool, source: Uuid, target: Uuid, ctx: Uuid
 
 /// Insert one resource homed in `ctx` (owned + originated by `profile`) carrying a
 /// `doc_type` property. Returns the resource id.
-async fn seed_resource(
+pub async fn seed_resource(
     pool: &PgPool,
     ctx: Uuid,
     profile: Uuid,

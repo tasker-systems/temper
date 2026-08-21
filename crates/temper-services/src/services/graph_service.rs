@@ -534,6 +534,155 @@ pub async fn atlas_home(pool: &PgPool, profile_id: ProfileId) -> ApiResult<Atlas
     Ok(AtlasHome { build, research })
 }
 
+/// Default number of marks the entry read draws. **This is not the ruled K.**
+///
+/// Chunk A's job was to measure the degree distribution, not to choose from it: the spec exists
+/// because asserting this number instead of measuring it is the error that produced the 244-of-250
+/// draw in the first place. K and rung 2's threshold are ruled in chunk C from A's report
+/// (spec §10.1). This constant is a *parameter's* default so the handler has something to answer
+/// with before C runs, and C is expected to replace it with a measured value.
+///
+/// The measurement it will be replaced from, taken on production `[2026-08-21]` over a
+/// 3574-resource / 4385-edge corpus, ranking by corpus degree and drawing the induced subgraph:
+///
+/// | K | cut degree | induced edges | unconnected | % |
+/// |---|---|---|---|---|
+/// | 50 | ≥16 | 56 | 18 | 36.0% |
+/// | 130 | ≥11 | 275 | 26 | 20.0% |
+/// | 250 | ≥8 | 594 | 51 | 20.4% |
+/// | 549 | ≥5 | 1441 | 61 | 11.1% |
+///
+/// Two things in that table are worth carrying forward. The unconnected band gets **worse as K
+/// shrinks**, not better. And spec §10.1's claim that degree ordering leaves every drawn node
+/// connected "by construction" is **false** — at K=50, 18 of 50 nodes with corpus degree ≥ 16 have
+/// no edge inside the drawing, because a hub's neighbours are typically leaves and leaves miss the
+/// cut. 130 is used here only because it matches the node count of the answered state the reader
+/// did not complain about, at a materially better band (20% against that state's 35%).
+const ENTRY_DEFAULT_K: i32 = 130;
+
+/// Hard ceiling on the entry read, independent of what the caller asks for.
+///
+/// Follows `region_composition_slice`'s `NODE_CAP` precedent rather than inventing a policy: a
+/// bound the caller cannot raise is what stops one query from becoming the hairball this chunk was
+/// written to prevent. Clamped loudly — the drop is logged, never silent.
+const ENTRY_MAX_K: i32 = 600;
+
+/// The entry read (spec §5.1) — **a place, and no question at all.**
+///
+/// Returns the K most-connected resources the caller can see, plus **every edge among them**, as an
+/// `AtlasSubgraph`. No seeds required: this is the door for a reader who has supplied nothing.
+///
+/// The rule that makes it work, and the whole point of the chunk:
+///
+/// > **Rank by corpus degree; return the induced subgraph over the top-K.**
+///
+/// Ranking and drawing are then decided by the *same* criterion, so every returned edge has both
+/// endpoints in the returned node set **by construction**. The defect this replaces did the
+/// opposite — it walked from all 3561 visible resources while drawing 200 rows chosen by
+/// `updated DESC`, two sets picked by unrelated criteria, so 244 of 250 marks came out unconnected.
+///
+/// Degree-zero resources are ranked and may be drawn. That is deliberate: a read must not make
+/// presentation decisions, and the fallback rung is the client's to choose (spec §6).
+///
+/// Note the node payload carries `AtlasNode.degree` = **corpus** degree, because A reuses the one
+/// incumbent node shape (spec §5.1). Spec §5.3's ruling that only the derived degree reaches the
+/// screen is a claim about the *screen*, not the wire, and it holds only while the client keeps
+/// recomputing degree over the drawn edge set.
+pub async fn entry_orientation_slice(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    k: Option<i32>,
+) -> ApiResult<AtlasSubgraph> {
+    let requested = k.unwrap_or(ENTRY_DEFAULT_K);
+    if requested <= 0 {
+        return Err(ApiError::BadRequest("k must be positive".into()));
+    }
+    let k = if requested > ENTRY_MAX_K {
+        tracing::warn!(requested, cap = ENTRY_MAX_K, "entry read k clamped");
+        ENTRY_MAX_K
+    } else {
+        requested
+    };
+
+    // Rank by CORPUS degree. The degree predicate lives in `edges_visible_to`, which the ranking
+    // function joins rather than restates — the same set the incumbent hydration counts, so the
+    // ranking cannot drift from the number the node carries.
+    //
+    // `resource_id!`/`degree!`: both are NOT NULL in the body (`v.id` comes through an inner join
+    // onto the visibility set, `degree` is a `count(*)::int`); the overrides exist only because a
+    // set-returning function types every column as nullable.
+    let ranked = sqlx::query!(
+        r#"SELECT resource_id AS "resource_id!", degree AS "degree!"
+             FROM graph_visible_degree_ranking($1, $2)"#,
+        profile_id.as_uuid(),
+        k,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let node_ids: Vec<Uuid> = ranked.iter().map(|r| r.resource_id).collect();
+    if node_ids.is_empty() {
+        // Rung 3 (spec §6): nothing readable. An empty subgraph, not an error — the caller
+        // distinguishes "no corpus" from "no structure", and both are declarations it must make.
+        return Ok(AtlasSubgraph {
+            nodes: vec![],
+            edges: vec![],
+        });
+    }
+
+    // Depth 0 is load-bearing, not a default: it makes this the INDUCED subgraph over exactly the
+    // ranked ids, with no outward expansion. Any depth above 0 would reintroduce endpoints that
+    // are not drawn — which is precisely the bug. Measured on production at K=130: depth 0 returns
+    // 275 edges, depth 1 returns 2672.
+    //
+    // Same override reasoning as `region_composition_slice`: every column but `label` is NOT NULL
+    // on `kb_edges` and the body's final SELECT reads them off `FROM kb_edges e` through inner
+    // joins only. EdgeKind/Polarity decode natively via their `sqlx::Type` derive.
+    let walked = sqlx::query!(
+        r#"SELECT id AS "id!", source_id AS "source_id!", target_id AS "target_id!",
+                  edge_kind AS "edge_kind!: EdgeKind", polarity AS "polarity!: Polarity",
+                  label, weight AS "weight!"
+             FROM graph_induced_edges($1, $2, 0)"#,
+        profile_id.as_uuid(),
+        &node_ids,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    // `graph_atlas_nodes_visible` carries NO `ORDER BY` — it is a hydration projection, and the row
+    // order it happens to return is a query-plan artifact. Re-imposing the ranking here is what
+    // makes "most-connected first" a property of the RESPONSE rather than of the id list that
+    // produced it. Found by a bite probe: reversing the ranking direction in SQL left two order
+    // assertions still passing, because the order they were reading was never the ranking's.
+    let rank_of: std::collections::HashMap<Uuid, usize> = node_ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| (*id, i))
+        .collect();
+    let mut nodes = hydrate_atlas_nodes_visible(pool, profile_id, &node_ids).await?;
+    nodes.sort_by_key(|n| rank_of.get(&n.id).copied().unwrap_or(usize::MAX));
+
+    // Keep only edges whose BOTH endpoints survived hydration, so the wire payload never dangles an
+    // edge into a node the client cannot place. Depth 0 already guarantees both endpoints were in
+    // the ranked set; this covers the narrower case of a node lost between the two reads.
+    let present: std::collections::HashSet<Uuid> = nodes.iter().map(|n| n.id).collect();
+    let edges: Vec<AtlasEdge> = walked
+        .into_iter()
+        .filter(|w| present.contains(&w.source_id) && present.contains(&w.target_id))
+        .map(|w| AtlasEdge {
+            id: w.id,
+            source: w.source_id,
+            target: w.target_id,
+            edge_kind: w.edge_kind,
+            polarity: w.polarity,
+            label: w.label,
+            weight: w.weight,
+        })
+        .collect();
+
+    Ok(AtlasSubgraph { nodes, edges })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
