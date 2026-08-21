@@ -899,6 +899,10 @@ pub enum ResourceAction {
 }
 
 #[derive(Subcommand)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "clap arg-definition enum, parsed once"
+)]
 pub enum DataArtifactAction {
     /// List data artifacts owned by a resource
     List {
@@ -923,6 +927,29 @@ pub enum DataArtifactAction {
         r#ref: String,
         /// Artifact ID (UUID)
         artifact_id: String,
+    },
+    /// Commit one data artifact to a resource
+    Commit {
+        /// Resource ref: a UUID or the decorated `slug-<uuid>` form
+        r#ref: String,
+        /// The bare family name (e.g. `"measurement"`)
+        #[arg(long)]
+        kind: String,
+        /// Selection intent: `"current"`, `"member"`, or `"pinned"`
+        #[arg(long)]
+        intent: String,
+        /// Ordering among peers. Meaningful for `member`; carried for all. Default: 0.0
+        #[arg(long, default_value_t = 0.0)]
+        precedence: f64,
+        /// Content source: `@<path>` (file), `-` (stdin), or omitted for implicit stdin.
+        /// The content must be valid JSON.
+        #[arg(long)]
+        content: Option<String>,
+        /// Artifact IDs this commit supersedes (UUIDs). Repeatable: `--supersedes <id> --supersedes <id>`
+        #[arg(long)]
+        supersedes: Vec<String>,
+        #[command(flatten)]
+        act: ActArgs,
     },
 }
 

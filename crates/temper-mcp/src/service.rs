@@ -505,6 +505,18 @@ impl TemperMcpService {
         self.ensure_profile_from_parts(&parts).await?;
         tools::data_artifacts::get_artifact(self, input).await
     }
+
+    #[tool(
+        description = "Commit one data artifact to a resource. The content payload is JSON, hashed and stored verbatim. Auth-gated: requires write standing on the owning resource. Use intent 'current' for the active value, 'member' for an ordered peer, or 'pinned' for a frozen reference. Use supersedes to name artifacts this one replaces (they become folded)."
+    )]
+    async fn commit_data_artifact(
+        &self,
+        Parameters(input): Parameters<tools::data_artifacts::CommitArtifactInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::data_artifacts::commit_artifact(self, input).await
+    }
 }
 
 /// The two things the JWT middleware injects for an authenticated request: the

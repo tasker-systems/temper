@@ -1,9 +1,10 @@
-//! Wire types for data artifact reads — the shape API, MCP, and CLI surfaces return.
+//! Wire types for data artifact reads and writes — the shape API, MCP, and CLI surfaces use.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::types::authorship::ActInput;
 use crate::types::ids::{DataArtifactId, ResourceId};
 
 /// One data artifact, as returned by the API and MCP surfaces.
@@ -68,4 +69,59 @@ pub struct ArtifactListParams {
     /// Default: `false` (full artifacts with content).
     #[serde(default)]
     pub counts: Option<bool>,
+}
+
+/// The namespace half of the family name — mirrors `temper_substrate::payloads::KindOwner`
+/// in a temper-core-native shape so the wire type does not depend on the substrate crate.
+/// `None` (the ordinary case) lets the SQL wrapper default the namespace from the owning
+/// resource's home.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "data_artifact.ts"))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub enum KindOwnerInput {
+    #[serde(rename = "kb_profiles")]
+    Profile(Uuid),
+    #[serde(rename = "kb_teams")]
+    Team(Uuid),
+}
+
+/// Request body for `POST /api/resources/{id}/artifacts` — commit one data artifact.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "data_artifact.ts"))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct ArtifactCommitRequest {
+    /// The bare family name, qualified by `kind_owner` (or defaulted from the resource's home).
+    pub kind: String,
+    /// Override the namespace half of the family name. Omit to let the server default it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind_owner: Option<KindOwnerInput>,
+    /// Selection intent: `"current"`, `"member"`, or `"pinned"`.
+    pub intent: String,
+    /// Ordering among peers. Meaningful for `member`; carried for all. Default: `0.0`.
+    #[serde(default)]
+    pub precedence: f64,
+    /// The structured payload as JSON. Hashed and stored verbatim — the hash is the proof.
+    pub content: serde_json::Value,
+    /// Artifacts this one replaces, named explicitly by the writer. Empty = replaces nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supersedes: Vec<DataArtifactId>,
+    /// Per-act correlation + authorship flags. Flattened into the request body.
+    #[serde(flatten)]
+    pub act: ActInput,
+}
+
+/// Response body for `POST /api/resources/{id}/artifacts` — the committed artifact's ID
+/// and its full readback view.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "data_artifact.ts"))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct ArtifactCommitResponse {
+    pub artifact_id: DataArtifactId,
+    pub artifact: ArtifactView,
 }

@@ -19,6 +19,87 @@ module Temper::Generated
     def initialize(api_client = ApiClient.default)
       @api_client = api_client
     end
+    # Commit one data artifact to a resource
+    # The content payload is JSON, hashed and stored verbatim. The hash is the proof — the ledger carries only the hash, never the bytes. Auth-gated: the caller must have write standing on the owning resource.
+    # @param id [String] Resource ID (the artifact&#39;s owner)
+    # @param artifact_commit_request [ArtifactCommitRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [ArtifactCommitResponse]
+    def commit_artifact(id, artifact_commit_request, opts = {})
+      data, _status_code, _headers = commit_artifact_with_http_info(id, artifact_commit_request, opts)
+      data
+    end
+
+    # Commit one data artifact to a resource
+    # The content payload is JSON, hashed and stored verbatim. The hash is the proof — the ledger carries only the hash, never the bytes. Auth-gated: the caller must have write standing on the owning resource.
+    # @param id [String] Resource ID (the artifact&#39;s owner)
+    # @param artifact_commit_request [ArtifactCommitRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(ArtifactCommitResponse, Integer, Hash)>] ArtifactCommitResponse data, response status code and response headers
+    def commit_artifact_with_http_info(id, artifact_commit_request, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: DataArtifactsApi.commit_artifact ...'
+      end
+      # verify the required parameter 'id' is set
+      if @api_client.config.client_side_validation && id.nil?
+        fail ArgumentError, "Missing the required parameter 'id' when calling DataArtifactsApi.commit_artifact"
+      end
+      # verify the required parameter 'artifact_commit_request' is set
+      if @api_client.config.client_side_validation && artifact_commit_request.nil?
+        fail ArgumentError, "Missing the required parameter 'artifact_commit_request' when calling DataArtifactsApi.commit_artifact"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/resources/{id}/artifacts'.sub('{id}', CGI.escape(id.to_s))
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      # HTTP header 'Content-Type'
+      content_type = @api_client.select_header_content_type(['application/json'])
+      if !content_type.nil?
+          header_params['Content-Type'] = content_type
+      end
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body] || @api_client.object_to_http_body(artifact_commit_request)
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'ArtifactCommitResponse'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"DataArtifactsApi.commit_artifact",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:POST, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: DataArtifactsApi#commit_artifact\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
     # Get a single artifact by ID under its owning resource
     # The resource ID in the path is the REST parent; visibility is gated on the artifact's actual owning resource via `resources_visible_to`. Returns 404 if the artifact does not exist or is not visible to the caller.
     # @param id [String] Resource ID (REST parent)

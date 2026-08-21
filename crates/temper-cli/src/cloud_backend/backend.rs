@@ -56,10 +56,11 @@ mod embed_impl {
     use temper_core::types::resource_view::ResourceView;
     use temper_workflow::operations::{
         AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick,
-        Backend, CloseInvocation, CommandOutput, CompleteAuditorJob, CreateCognitiveMap,
-        CreateResource, DeleteResource, DomainEvent, FoldRelationship, MaterializeOnThreshold,
-        OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit, RetypeRelationship,
-        ReweightRelationship, ShowResource, StewardDispatchTick, UpdateResource,
+        Backend, CloseInvocation, CommandOutput, CommitDataArtifact, CompleteAuditorJob,
+        CreateCognitiveMap, CreateResource, DeleteResource, DomainEvent, FoldRelationship,
+        MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit,
+        RetypeRelationship, ReweightRelationship, ShowResource, StewardDispatchTick,
+        UpdateResource,
     };
 
     use super::super::translators::{
@@ -125,6 +126,18 @@ mod embed_impl {
                 value: annotated,
                 events: vec![DomainEvent::RemoteSynced { resource_id }],
             })
+        }
+
+        async fn commit_data_artifact(
+            &self,
+            _cmd: CommitDataArtifact,
+        ) -> Result<CommandOutput<temper_core::types::data_artifact::ArtifactView>, TemperError>
+        {
+            Err(TemperError::Project(
+                "CloudBackend::commit_data_artifact not dispatched through the backend — \
+                 CLI uses the data-artifacts client directly"
+                    .to_string(),
+            ))
         }
 
         async fn delete_resource(
@@ -510,10 +523,11 @@ mod non_embed_impl {
     use temper_core::types::resource_view::ResourceView;
     use temper_workflow::operations::{
         AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick,
-        Backend, CloseInvocation, CommandOutput, CompleteAuditorJob, CreateCognitiveMap,
-        CreateResource, DeleteResource, FoldRelationship, MaterializeOnThreshold, OpenInvocation,
-        ReconcileCognitiveMap, RecordCitationAudit, RetypeRelationship, ReweightRelationship,
-        ShowResource, StewardDispatchTick, UpdateResource,
+        Backend, CloseInvocation, CommandOutput, CommitDataArtifact, CompleteAuditorJob,
+        CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship,
+        MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit,
+        RetypeRelationship, ReweightRelationship, ShowResource, StewardDispatchTick,
+        UpdateResource,
     };
 
     use super::CloudBackend;
@@ -556,6 +570,16 @@ mod non_embed_impl {
             &self,
             _cmd: AnnotateResource,
         ) -> Result<CommandOutput<ResourceView>, TemperError> {
+            Err(TemperError::BadRequest(
+                "cloud mode requires --features embed".to_string(),
+            ))
+        }
+
+        async fn commit_data_artifact(
+            &self,
+            _cmd: CommitDataArtifact,
+        ) -> Result<CommandOutput<temper_core::types::data_artifact::ArtifactView>, TemperError>
+        {
             Err(TemperError::BadRequest(
                 "cloud mode requires --features embed".to_string(),
             ))
