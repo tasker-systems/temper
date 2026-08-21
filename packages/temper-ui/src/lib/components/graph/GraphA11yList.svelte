@@ -31,7 +31,7 @@
 			{#each g.nodes as n (n.id)}
 				<li>
 					<a href={withGraphSelection(url, n.id)}>
-						{n.title} — {n.doc_type} in {whereOf(n.resource)}, {n.degree}
+						{n.title} — {n.doc_type} in {n.homeRef ?? 'home not reported'}, {n.degree}
 						{n.degree === 1 ? 'link' : 'links'}
 					</a>
 				</li>

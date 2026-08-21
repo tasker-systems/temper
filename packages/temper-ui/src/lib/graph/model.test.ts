@@ -251,7 +251,7 @@ describe('a node is the resource, projected as the marks already read it', () =>
 			seeds: [row({ id: 'a', title: 'A title' })],
 		});
 
-		expect(model.nodes[0].resource.ref).toBe('a-ref');
+		expect(model.nodes[0].resource?.ref).toBe('a-ref');
 		expect(model.nodes[0].title).toBe('A title');
 	});
 });

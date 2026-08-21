@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -48,6 +49,18 @@ pub struct AtlasNode {
     /// is load-bearing on a builder surface.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stage: Option<String>,
+    /// The id of the anchor this resource is homed in — **not** a decorated ref.
+    ///
+    /// `home` says which *kind*; this says which *one*. Deliberately an id: building `@owner/slug`
+    /// server-side would mean a second copy of `graph_home_contexts`' owner_ref CASE, linked to the
+    /// first by nothing. A client already holds every anchor it can read, with `slug` and
+    /// `owner_ref` on each, so it resolves this locally and no expression is duplicated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home_id: Option<Uuid>,
+    /// When the resource last moved. Present so a node can carry its own recency without a
+    /// second read — the orientation screen has no `ResourceView` behind its marks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated: Option<DateTime<Utc>>,
 }
 
 /// A directed edge on the Atlas canvas. `label` is nullable (matches
@@ -98,11 +111,16 @@ pub struct AtlasSubgraph {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct EntryBounds {
     /// Marks actually returned.
-    pub drawn: i64,
+    ///
+    /// `i32` rather than `i64` deliberately: these numbers cross to a browser, and ts-rs maps a
+    /// 64-bit count to `bigint`, which cannot survive `JSON.stringify` on the server/client
+    /// boundary — the same type-fidelity trap that once stopped a correct composition leaving the
+    /// process. `AtlasNode.degree` is already `i32`, so the payload stays one numeric kind.
+    pub drawn: i32,
     /// How many resources cleared the connection floor — the denominator the drawn count is *of*.
-    pub eligible: i64,
+    pub eligible: i32,
     /// Every resource visible to this reader within the places asked about, connected or not.
-    pub in_scope: i64,
+    pub in_scope: i32,
     /// Whether more eligible resources exist than were drawn.
     pub truncated: bool,
 }
@@ -156,6 +174,8 @@ mod tests {
             salience: Some(0.8),
             excerpt: None,
             stage: None,
+            home_id: None,
+            updated: None,
         };
         let json = serde_json::to_string(&n).unwrap();
         let back: AtlasNode = serde_json::from_str(&json).unwrap();

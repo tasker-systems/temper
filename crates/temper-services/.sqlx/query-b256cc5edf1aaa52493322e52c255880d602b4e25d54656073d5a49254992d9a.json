@@ -6,12 +6,12 @@
       {
         "ordinal": 0,
         "name": "in_scope!",
-        "type_info": "Int8"
+        "type_info": "Int4"
       },
       {
         "ordinal": 1,
         "name": "eligible!",
-        "type_info": "Int8"
+        "type_info": "Int4"
       }
     ],
     "parameters": {

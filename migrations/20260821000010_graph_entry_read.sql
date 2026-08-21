@@ -122,7 +122,7 @@ no induced edge at all.$c$;
 
 CREATE OR REPLACE FUNCTION graph_visible_degree_bounds(
     p_profile uuid, p_anchor_ids uuid[], p_min_degree int)
-RETURNS TABLE (in_scope bigint, eligible bigint)
+RETURNS TABLE (in_scope int, eligible int)
 LANGUAGE sql
 STABLE
 AS $$
@@ -150,8 +150,12 @@ AS $$
         SELECT v.id, count(inc.eid)::int AS degree
           FROM vis v LEFT JOIN inc ON inc.n = v.id GROUP BY v.id
     )
-    SELECT count(*)::bigint AS in_scope,
-           count(*) FILTER (WHERE degree >= coalesce(p_min_degree, 1))::bigint AS eligible
+    -- `::int`, not bigint: these cross to a browser, and ts-rs maps a 64-bit count to `bigint`,
+    -- which cannot survive `JSON.stringify` on the server/client boundary. A corpus large enough to
+    -- overflow int32 is not the constraint this surface has. `AtlasNode.degree` is int for the same
+    -- reason, so the whole node payload stays one numeric kind.
+    SELECT count(*)::int AS in_scope,
+           count(*) FILTER (WHERE degree >= coalesce(p_min_degree, 1))::int AS eligible
       FROM deg;
 $$;
 
@@ -247,8 +251,83 @@ does not claim a context frame it never had. Kept only so this migration is addi
 that predates it; deleted with `/api/graph/contexts/composition` in chunk E of the
 grounding-and-navigation split.$c$;
 
+-- ── 4. graph_atlas_nodes_visible gains the two fields a hover card cannot do without ────────────
+--
+-- `[ruled — 2026-08-21, Pete]` The entry read reuses the incumbent node shape (spec §5.1), and that
+-- shape could not say WHERE a resource lives or WHEN it last moved -- so the orientation screen,
+-- which is the one a reader meets first, would have carried the thinnest cards on the surface.
+--
+-- `home_id` is the anchor's id, NOT a decorated ref. Building `@owner/slug` here would mean copying
+-- `graph_home_contexts`'s owner_ref CASE (20260707140000:63) -- a second copy of a non-trivial
+-- expression, linked to the first by nothing, which is the drift this repo keeps ruling against. The
+-- client already loads every anchor it can read, with `slug` and `owner_ref` on each, so it resolves
+-- the id locally and no expression is duplicated.
+--
+-- Both columns are ADDITIVE at the end of the RETURNS TABLE. A binary that does not carry this
+-- migration selects its own named columns and is unaffected.
+
+-- DROP first: `CREATE OR REPLACE` cannot widen a `RETURNS TABLE`, and widening is exactly what this
+-- is. The ARGUMENT signature is untouched, and every caller names its own columns, so a binary
+-- without this migration issues the same call and reads the same seven columns -- which is why
+-- adding two on the end stays additive rather than shape-breaking.
+DROP FUNCTION IF EXISTS graph_atlas_nodes_visible(uuid, uuid[]);
+
+CREATE FUNCTION graph_atlas_nodes_visible(p_profile uuid, p_ids uuid[])
+RETURNS TABLE (id uuid, title text, doc_type text, home text, degree integer,
+               first_chunk text, stage text, home_id uuid, updated timestamptz)
+LANGUAGE sql
+STABLE
+AS $$
+    WITH vis AS (SELECT resource_id AS id FROM resources_visible_to(p_profile)),
+    ids AS (SELECT DISTINCT unnest(p_ids) AS id),
+    doc AS (
+        SELECT p.owner_id AS rid, (p.property_value #>> '{}') AS dt
+        FROM kb_properties p
+        WHERE p.owner_table = 'kb_resources' AND p.property_key = 'doc_type' AND NOT p.is_folded
+    ),
+    stg AS (
+        SELECT p.owner_id AS rid, (p.property_value #>> '{}') AS st
+        FROM kb_properties p
+        WHERE p.owner_table = 'kb_resources' AND p.property_key = 'temper-stage' AND NOT p.is_folded
+    )
+    SELECT r.id, r.title, d.dt AS doc_type, h.home,
+           COALESCE(deg.degree, 0) AS degree,
+           (SELECT cc.content FROM kb_chunks ch
+              JOIN kb_content_blocks b ON b.id = ch.block_id
+              JOIN kb_chunk_content cc ON cc.chunk_id = ch.id
+             WHERE ch.resource_id = r.id AND ch.is_current AND NOT b.is_folded
+             ORDER BY b.seq, ch.chunk_index LIMIT 1) AS first_chunk,
+           s.st AS stage,
+           h.home_id,
+           r.updated
+    FROM ids
+    JOIN vis v ON v.id = ids.id           -- deny-as-absence: unseen ids drop out
+    JOIN kb_resources r ON r.id = ids.id AND r.is_active
+    LEFT JOIN doc d ON d.rid = r.id
+    LEFT JOIN stg s ON s.rid = r.id
+    LEFT JOIN LATERAL (
+        -- `home` and `home_id` come from ONE aggregate over the same rows, so the kind and the id
+        -- can never describe different anchors. A resource has exactly one home
+        -- (`kb_resource_homes.resource_id` is unique), which is what makes taking the first element
+        -- a selection rather than an arbitrary pick. `bool_or` is carried over VERBATIM from the
+        -- incumbent rather than simplified to a LIMIT 1: with one row the two agree, and with more
+        -- than one they do not, so replacing it would be an unannounced behaviour change.
+        -- (Postgres has no `min(uuid)`, hence array_agg.)
+        SELECT CASE WHEN bool_or(h2.anchor_table = 'kb_cogmaps') THEN 'cogmap' ELSE 'context' END AS home,
+               (array_agg(h2.anchor_id))[1] AS home_id
+        FROM kb_resource_homes h2 WHERE h2.resource_id = r.id
+    ) h ON true
+    LEFT JOIN LATERAL (
+        SELECT count(*)::int AS degree
+        FROM kb_edges e
+        JOIN edges_visible_to(p_profile) ev ON ev.edge_id = e.id
+        WHERE e.source_table = 'kb_resources' AND e.target_table = 'kb_resources'
+          AND (e.source_id = r.id OR e.target_id = r.id)
+    ) deg ON true;
+$$;
+
 SELECT declare_migration(
     20260821000010,
     'additive',
-    'The entry read (chunk A of the grounding/navigation split, task 01a023df-f54c-7d90-aa53-1bd66011475c). Adds graph_visible_degree_ranking(profile, anchor_ids, min_degree, limit) -- visible resources, optionally confined to named anchors, with degree >= min_degree ordered by corpus degree, delegating the degree predicate to edges_visible_to rather than restating NOT is_folded -- and graph_visible_degree_bounds(profile, anchor_ids, min_degree), which reports in_scope and eligible so the surface can declare what it did not draw -- and graph_induced_edges(profile, node_ids, depth), which is graph_context_composition_edges'' body verbatim under a frame-neutral name; at depth 0 it returns the induced subgraph over the given array, which is what makes every drawn edge have both endpoints drawn. graph_context_composition_edges is REPLACED BY A DELEGATING WRAPPER over the new name, same signature and same columns, so a binary without this migration receives the identical answer -- which is why this is additive rather than a shape-breaking rename. Nothing dropped. The wrapper goes with the context door in chunk E.'
+    'The entry read (chunk A of the grounding/navigation split, task 01a023df-f54c-7d90-aa53-1bd66011475c). Adds graph_visible_degree_ranking(profile, anchor_ids, min_degree, limit) -- visible resources, optionally confined to named anchors, with degree >= min_degree ordered by corpus degree, delegating the degree predicate to edges_visible_to rather than restating NOT is_folded -- and graph_visible_degree_bounds(profile, anchor_ids, min_degree), which reports in_scope and eligible so the surface can declare what it did not draw -- and graph_induced_edges(profile, node_ids, depth), which is graph_context_composition_edges'' body verbatim under a frame-neutral name; at depth 0 it returns the induced subgraph over the given array, which is what makes every drawn edge have both endpoints drawn. graph_context_composition_edges is REPLACED BY A DELEGATING WRAPPER over the new name, same signature and same columns, so a binary without this migration receives the identical answer -- which is why this is additive rather than a shape-breaking rename. Nothing dropped. The wrapper goes with the context door in chunk E. Also REPLACES graph_atlas_nodes_visible with two additional trailing columns, home_id (the homing anchor id, so a client can name where a resource lives without this function duplicating graph_home_contexts owner_ref CASE) and updated; existing callers name their own columns and are unaffected.'
 );

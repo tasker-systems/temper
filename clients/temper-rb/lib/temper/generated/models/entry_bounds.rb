@@ -16,7 +16,7 @@ require 'time'
 module Temper::Generated
   # What the entry read was choosing from — so the surface can say *how many of how many*.  The bound line is deliberately **chrome, not a warning**: present whether or not the view is partial, \"so complete is something the reader is TOLD rather than something they infer from silence\" (spec §7.1). It is covered today only because the composition trace hands it these numbers for free; the entry read runs no composition, so it must carry its own.  `in_scope - eligible` is the count of resources the read deliberately did **not** draw because they have no visible connections. Naming it is what keeps `legibility-is-never-bought-with-silent-omission` covered — on the corpus that produced this design that difference is 1,077 resources, and dropping them unannounced is precisely the defect the goal exists to prevent.
   class EntryBounds < ApiModelBase
-    # Marks actually returned.
+    # Marks actually returned.  `i32` rather than `i64` deliberately: these numbers cross to a browser, and ts-rs maps a 64-bit count to `bigint`, which cannot survive `JSON.stringify` on the server/client boundary — the same type-fidelity trap that once stopped a correct composition leaving the process. `AtlasNode.degree` is already `i32`, so the payload stays one numeric kind.
     attr_accessor :drawn
 
     # How many resources cleared the connection floor — the denominator the drawn count is *of*.

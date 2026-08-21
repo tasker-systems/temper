@@ -38,7 +38,21 @@ excerpt: string | null,
  * do not source it. Ported from the legacy subgraph's `stage_raw` (spec D8): stage
  * is load-bearing on a builder surface.
  */
-stage: string | null, };
+stage: string | null, 
+/**
+ * The id of the anchor this resource is homed in — **not** a decorated ref.
+ *
+ * `home` says which *kind*; this says which *one*. Deliberately an id: building `@owner/slug`
+ * server-side would mean a second copy of `graph_home_contexts`' owner_ref CASE, linked to the
+ * first by nothing. A client already holds every anchor it can read, with `slug` and
+ * `owner_ref` on each, so it resolves this locally and no expression is duplicated.
+ */
+home_id: string | null, 
+/**
+ * When the resource last moved. Present so a node can carry its own recency without a
+ * second read — the orientation screen has no `ResourceView` behind its marks.
+ */
+updated: string | null, };
 
 /**
  * The response body for an R4 neighborhood slice.
@@ -62,16 +76,21 @@ export type AtlasSubgraph = { nodes: Array<AtlasNode>, edges: Array<AtlasEdge>, 
 export type EntryBounds = { 
 /**
  * Marks actually returned.
+ *
+ * `i32` rather than `i64` deliberately: these numbers cross to a browser, and ts-rs maps a
+ * 64-bit count to `bigint`, which cannot survive `JSON.stringify` on the server/client
+ * boundary — the same type-fidelity trap that once stopped a correct composition leaving the
+ * process. `AtlasNode.degree` is already `i32`, so the payload stays one numeric kind.
  */
-drawn: bigint, 
+drawn: number, 
 /**
  * How many resources cleared the connection floor — the denominator the drawn count is *of*.
  */
-eligible: bigint, 
+eligible: number, 
 /**
  * Every resource visible to this reader within the places asked about, connected or not.
  */
-in_scope: bigint, 
+in_scope: number, 
 /**
  * Whether more eligible resources exist than were drawn.
  */

@@ -27,6 +27,9 @@ const node = (o: {
 	degree: 0,
 	excerpt: null,
 	arm: o.arm ?? 'walk',
+	homeRef: o.cogmap ?? ('context' in o ? (o.context ?? null) : '@me/temper'),
+	updated: o.updated ?? '2026-08-20T10:00:00Z',
+	stage: o.stage ?? null,
 	resource: {
 		id: 'n',
 		title: 'A resource',
@@ -40,17 +43,17 @@ const node = (o: {
 
 describe('where a resource lives', () => {
 	test('a context-homed row names its context ref', () => {
-		expect(whereOf(node({}).resource)).toBe('@me/temper');
+		expect(whereOf(node({}).resource!)).toBe('@me/temper');
 	});
 
 	test('a cogmap-homed row names its map — the halves are mutually exclusive', () => {
-		expect(whereOf(node({ cogmap: 'Temper — self-cognition' }).resource)).toBe(
+		expect(whereOf(node({ cogmap: 'Temper — self-cognition' }).resource!)).toBe(
 			'Temper — self-cognition',
 		);
 	});
 
 	test('a row carrying neither says so rather than rendering blank', () => {
-		expect(whereOf(node({ context: null }).resource)).toBe('home not reported');
+		expect(whereOf(node({ context: null }).resource!)).toBe('home not reported');
 	});
 });
 

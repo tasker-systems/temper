@@ -130,8 +130,8 @@ describe('no derived thing reaches the canvas', () => {
 
 	test('every node is a resource the reader owns a row for', () => {
 		for (const n of model.nodes) {
-			expect(n.resource.id).toBe(n.id);
-			expect(typeof n.resource.title).toBe('string');
+			expect(n.resource?.id).toBe(n.id);
+			expect(typeof n.resource?.title).toBe('string');
 		}
 	});
 
@@ -140,6 +140,13 @@ describe('no derived thing reaches the canvas', () => {
 		// prose and legitimately contain words like "register" and "regions". A sweep over the
 		// JSON blob reported a leak that was a reader's sentence — the derived-structure rule is
 		// about what the surface attaches, never about what the reader wrote.
+		//
+		// `homeRef`, `stage` and `updated` were added `[2026-08-21]` for the entry read, whose marks
+		// have no `ResourceView` behind them. They belong on this list because each is an INTRINSIC
+		// fact about the reader's own resource — where they filed it, what they set its stage to,
+		// when it last moved — not something the system worked out about it. `salience` is the
+		// counter-example and is exactly what this list still excludes: it is region-derived, rides
+		// along on every graph read, and is the clause that got the tier model deleted.
 		for (const n of model.nodes) {
 			const fields = Object.keys(n).filter((k) => k !== 'resource');
 			expect(fields.sort()).toEqual([
@@ -148,8 +155,11 @@ describe('no derived thing reaches the canvas', () => {
 				'doc_type',
 				'excerpt',
 				'home',
+				'homeRef',
 				'id',
+				'stage',
 				'title',
+				'updated',
 			]);
 		}
 	});

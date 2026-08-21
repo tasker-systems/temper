@@ -127,7 +127,7 @@ async fn degree_zero_resources_are_excluded_but_never_silently(pool: PgPool) {
         2,
         "but it IS counted — it and the L0 kernel telos are the two undrawn"
     );
-    assert_eq!(sub.bounds.drawn, sub.nodes.len() as i64);
+    assert_eq!(sub.bounds.drawn, sub.nodes.len() as i32);
     assert!(
         sub.nodes.iter().all(|n| n.degree >= 1),
         "nothing below the floor reaches the canvas"
@@ -481,4 +481,36 @@ async fn a_corpus_with_no_structure_still_reports_its_size(pool: PgPool) {
         "but the reader still has material, and the surface is told how much"
     );
     assert!(!sub.bounds.truncated, "nothing eligible was withheld");
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn nodes_carry_where_they_live_and_when_they_moved(pool: PgPool) {
+    // `[ruled — 2026-08-21, Pete]` The orientation screen is the one a reader meets first, and its
+    // marks have no `ResourceView` behind them — so without these two fields its hover cards would
+    // be the thinnest on the surface, unable to say where a resource lives or when it last moved.
+    //
+    // `home_id` is an ID, not a decorated ref, and that is the point: rendering `@owner/slug`
+    // server-side would duplicate `graph_home_contexts`' owner_ref CASE. The client already holds
+    // every anchor it can read and resolves the id against them.
+    let (profile, ctx, goal) = seed_context_with_goal_and_tasks(&pool, 3).await;
+
+    let sub =
+        graph_service::entry_orientation_slice(&pool, ProfileId::from(profile), &[], Some(50))
+            .await
+            .expect("entry read");
+
+    let node = sub.nodes.iter().find(|n| n.id == goal).expect("goal drawn");
+    assert_eq!(
+        node.home_id,
+        Some(ctx),
+        "the node names the anchor that homes it, so the client can resolve its ref locally"
+    );
+    assert!(
+        node.updated.is_some(),
+        "and carries its own recency rather than requiring a second read"
+    );
+    assert!(
+        sub.nodes.iter().all(|n| n.home_id.is_some()),
+        "every drawn node knows its home — a mark that cannot say where it lives is the thin card"
+    );
 }

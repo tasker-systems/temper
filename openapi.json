@@ -8008,6 +8008,14 @@
           "home": {
             "$ref": "#/components/schemas/NodeHome"
           },
+          "home_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The id of the anchor this resource is homed in — **not** a decorated ref.\n\n`home` says which *kind*; this says which *one*. Deliberately an id: building `@owner/slug`\nserver-side would mean a second copy of `graph_home_contexts`' owner_ref CASE, linked to the\nfirst by nothing. A client already holds every anchor it can read, with `slug` and\n`owner_ref` on each, so it resolves this locally and no expression is duplicated."
+          },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -8028,6 +8036,14 @@
           },
           "title": {
             "type": "string"
+          },
+          "updated": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the resource last moved. Present so a node can carry its own recency without a\nsecond read — the orientation screen has no `ResourceView` behind its marks."
           }
         }
       },
@@ -9722,17 +9738,17 @@
         "properties": {
           "drawn": {
             "type": "integer",
-            "format": "int64",
-            "description": "Marks actually returned."
+            "format": "int32",
+            "description": "Marks actually returned.\n\n`i32` rather than `i64` deliberately: these numbers cross to a browser, and ts-rs maps a\n64-bit count to `bigint`, which cannot survive `JSON.stringify` on the server/client\nboundary — the same type-fidelity trap that once stopped a correct composition leaving the\nprocess. `AtlasNode.degree` is already `i32`, so the payload stays one numeric kind."
           },
           "eligible": {
             "type": "integer",
-            "format": "int64",
+            "format": "int32",
             "description": "How many resources cleared the connection floor — the denominator the drawn count is *of*."
           },
           "in_scope": {
             "type": "integer",
-            "format": "int64",
+            "format": "int32",
             "description": "Every resource visible to this reader within the places asked about, connected or not."
           },
           "truncated": {

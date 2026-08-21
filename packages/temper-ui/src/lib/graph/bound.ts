@@ -49,6 +49,29 @@ export interface SeedAxis {
 	truncated: boolean;
 }
 
+/**
+ * The entry read's own bound declaration.
+ *
+ * §7.1: the bound line is **chrome, not a warning** — present whether or not the view is partial,
+ * *"so complete is something the reader is TOLD rather than something they infer from silence."*
+ * Every other axis on this screen gets its numbers from the composition trace. The entry read runs
+ * no composition, so it carries its own, and this is where they land.
+ *
+ * `inScope - eligible` is the count of resources deliberately **not drawn** for having no visible
+ * connections. It is declared rather than dropped because
+ * `legibility-is-never-bought-with-silent-omission` is the clause this goal sits under — on the
+ * corpus that produced this design that difference is 1,077 of 3,574, and quietly omitting them is
+ * a bigger silence than the 244-of-250 band it replaced.
+ */
+export interface OrientationAxis {
+	drawn: number;
+	/** How many cleared the connection floor — the denominator `drawn` is *of*. */
+	eligible: number;
+	/** Everything visible in the places asked about, connected or not. */
+	inScope: number;
+	truncated: boolean;
+}
+
 export interface BoundDeclaration {
 	/** The only axis the client enumerated both halves of itself. */
 	places: { asked: number; available: number };
@@ -66,6 +89,11 @@ export interface BoundDeclaration {
 	fromYourPlaces: number | null;
 	/** The walked arm — the only one whose `Extent` can ever say complete or partial. */
 	followedOn: { rows: number; extent: Extent } | null;
+	/**
+	 * The entry read's axis. `null` on every view that ran a composition — which is all of them
+	 * except the door for a reader who asked nothing.
+	 */
+	orientation: OrientationAxis | null;
 }
 
 const rowsOf = (stage: StageResult | undefined): number => stage?.produced?.hits?.length ?? 0;
@@ -105,6 +133,30 @@ export function declareBounds(
 			? plan.surveyStages.reduce((n, s) => n + rowsOf(response.returned?.[s]), 0)
 			: null,
 		followedOn: walk ? { rows: rowsOf(walk), extent: walk.extent } : null,
+		orientation: null,
+	};
+}
+
+/**
+ * Declare the entry read's bounds — the composition-free path.
+ *
+ * Every axis a composition would have filled is **absent rather than zero**, and the difference
+ * matters: this view ran no funnel, so `groupings` is `applicable: false` (the third state, not a
+ * width of none), and it followed nothing on, so `followedOn` is null rather than `0 rows`.
+ * Reporting them as zeros would describe a composition that returned nothing, which is a different
+ * claim about the reader's corpus than one that was never run.
+ */
+export function declareEntryBounds(
+	bounds: OrientationAxis,
+	places: { asked: number; available: number },
+): BoundDeclaration {
+	return {
+		places,
+		inYourPlaces: null,
+		groupings: { applicable: false },
+		fromYourPlaces: null,
+		followedOn: null,
+		orientation: bounds,
 	};
 }
 
@@ -153,6 +205,15 @@ const groupingsPhrase = (axis: GroupingsAxis): string => {
  */
 export function renderBoundLine(d: BoundDeclaration): string {
 	const parts: string[] = [];
+
+	if (d.orientation) {
+		// Two numbers, not one, and never summed into a single "showing N". `drawn of eligible` is
+		// what the reader is looking at; the unconnected remainder is a different fact about their
+		// corpus, and collapsing them would hide exactly the omission this axis exists to declare.
+		parts.push(`${d.orientation.drawn} of ${d.orientation.eligible} connected`);
+		const unconnected = d.orientation.inScope - d.orientation.eligible;
+		if (unconnected > 0) parts.push(`${unconnected} unconnected not drawn`);
+	}
 
 	if (d.inYourPlaces) {
 		// The one arm that knows its own denominator, so it is the one arm that states one. Its

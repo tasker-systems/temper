@@ -2088,6 +2088,16 @@ export interface components {
              */
             excerpt?: string | null;
             home: components["schemas"]["NodeHome"];
+            /**
+             * Format: uuid
+             * @description The id of the anchor this resource is homed in — **not** a decorated ref.
+             *
+             *     `home` says which *kind*; this says which *one*. Deliberately an id: building `@owner/slug`
+             *     server-side would mean a second copy of `graph_home_contexts`' owner_ref CASE, linked to the
+             *     first by nothing. A client already holds every anchor it can read, with `slug` and
+             *     `owner_ref` on each, so it resolves this locally and no expression is duplicated.
+             */
+            home_id?: string | null;
             /** Format: uuid */
             id: string;
             /** Format: double */
@@ -2100,6 +2110,12 @@ export interface components {
              */
             stage?: string | null;
             title: string;
+            /**
+             * Format: date-time
+             * @description When the resource last moved. Present so a node can carry its own recency without a
+             *     second read — the orientation screen has no `ResourceView` behind its marks.
+             */
+            updated?: string | null;
         };
         /** @description The response body for an R4 neighborhood slice. */
         AtlasSubgraph: {
@@ -3261,17 +3277,22 @@ export interface components {
          */
         EntryBounds: {
             /**
-             * Format: int64
+             * Format: int32
              * @description Marks actually returned.
+             *
+             *     `i32` rather than `i64` deliberately: these numbers cross to a browser, and ts-rs maps a
+             *     64-bit count to `bigint`, which cannot survive `JSON.stringify` on the server/client
+             *     boundary — the same type-fidelity trap that once stopped a correct composition leaving the
+             *     process. `AtlasNode.degree` is already `i32`, so the payload stays one numeric kind.
              */
             drawn: number;
             /**
-             * Format: int64
+             * Format: int32
              * @description How many resources cleared the connection floor — the denominator the drawn count is *of*.
              */
             eligible: number;
             /**
-             * Format: int64
+             * Format: int32
              * @description Every resource visible to this reader within the places asked about, connected or not.
              */
             in_scope: number;

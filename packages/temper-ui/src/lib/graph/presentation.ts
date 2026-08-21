@@ -55,11 +55,13 @@ export function nodeMeta(
 	node: GraphNode,
 	now: Date = new Date(),
 ): { label: string; value: string }[] {
-	const rows = [{ label: 'in', value: whereOf(node.resource) }];
-	const stage = node.resource.managed_meta?.['temper-stage'];
-	if (stage) rows.push({ label: 'stage', value: String(stage) });
-	if (node.resource.updated) {
-		rows.push({ label: 'updated', value: relativeTime(node.resource.updated, now) });
+	// Read off the NODE, not off `node.resource`: the entry read's marks are an `AtlasNode`
+	// projection with no row behind them, and a panel that only works when a full row is present
+	// would be blank on the screen a reader meets first.
+	const rows = [{ label: 'in', value: node.homeRef ?? 'home not reported' }];
+	if (node.stage) rows.push({ label: 'stage', value: node.stage });
+	if (node.updated) {
+		rows.push({ label: 'updated', value: relativeTime(node.updated, now) });
 	}
 	rows.push({ label: 'reached', value: describeArm(node.arm).toLowerCase() });
 	return rows;

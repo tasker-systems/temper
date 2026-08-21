@@ -10,6 +10,8 @@ const node = (id: string, degree = 1): AtlasNode => ({
 	degree,
 	salience: null,
 	excerpt: null,
+	home_id: null,
+	updated: null,
 	stage: null,
 });
 const edge = (source: string, target: string): AtlasEdge => ({

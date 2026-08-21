@@ -177,7 +177,12 @@ pub async fn cogmap_neighborhood_slice(
         excerpt: n.first_chunk.as_deref().and_then(compute_excerpt),
         // graph_atlas_nodes_cogmap does not return a stage column (only the
         // graph_atlas_nodes_visible read was widened for it, spec D8), so None here.
+        // `home_id` and `updated` are absent for the same reason: only the visible-tier
+        // projection was widened. Absent, never guessed — this slice is cogmap-scoped, so a
+        // caller already knows the anchor, and inventing an `updated` would be a fabricated fact.
         stage: None,
+        home_id: None,
+        updated: None,
     })
     .collect();
 
@@ -322,7 +327,7 @@ pub(crate) async fn hydrate_atlas_nodes_visible(
     // optional (two LEFT JOINs onto `kb_properties` and a scalar subquery).
     Ok(sqlx::query!(
         r#"SELECT id AS "id!", title AS "title!", doc_type, home AS "home!",
-                  degree AS "degree!", first_chunk, stage
+                  degree AS "degree!", first_chunk, stage, home_id, updated
              FROM graph_atlas_nodes_visible($1, $2)"#,
         profile_id.as_uuid(),
         node_ids,
@@ -343,6 +348,8 @@ pub(crate) async fn hydrate_atlas_nodes_visible(
         salience: None,
         excerpt: n.first_chunk.as_deref().and_then(compute_excerpt),
         stage: n.stage,
+        home_id: n.home_id,
+        updated: n.updated,
     })
     .collect())
 }
@@ -643,10 +650,10 @@ pub async fn entry_orientation_slice(
 
     let node_ids: Vec<Uuid> = ranked.iter().map(|r| r.resource_id).collect();
     let declare = |drawn: usize| EntryBounds {
-        drawn: drawn as i64,
+        drawn: drawn as i32,
         eligible: bounds.eligible,
         in_scope: bounds.in_scope,
-        truncated: bounds.eligible > drawn as i64,
+        truncated: bounds.eligible > drawn as i32,
     };
 
     if node_ids.is_empty() {
