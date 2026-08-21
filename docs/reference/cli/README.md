@@ -12,31 +12,32 @@ Developer workflow tool for agent-assisted development
 Usage: temper [OPTIONS] <COMMAND>
 
 Commands:
-  init         Initialize a new vault
-  check        Check vault integrity and tool health
-  status       Show vault status overview
-  resource     Manage resources (tasks, goals, sessions, research, concepts, decisions)
-  context      Manage contexts (projects)
-  warmup       Context primer for new sessions — active goals, in-progress tasks, recent session pointers
-  invitations  List the pending team invitations addressed to you
-  skill        Manage agent skill (install for Claude Code or opencode)
-  memory       Manage the Claude Code memory projection
-  auth         Authenticate with temper cloud
-  slack        Manage the Slack account link
-  team         Manage team membership and access
-  admin        Administer the instance (system settings, promote admins, review requests)
-  pull         Materialize a context's resources into the local read-only projection
-  config       Manage temper global config
-  query        Run a composed query — declared acts, piped, answered in one round trip
-  search       Search the knowledge base
-  edge         Assert or mutate a relationship between resources (writes go through the cloud API)
-  cogmap       Operate on cognitive maps (admin-gated content reconcile)
-  invocation   Operate on agent-invocation envelopes (open / close / show / list)
-  steward      Team-self-cognition steward ingest trigger (delta / advance-watermark)
-  trail        Read the event trail (append-only history) of a graph element — a resource node or a relationship edge
-  version      Print the CLI version, optionally with the running binary's SHA-256 or an offline (or online) manifest verdict
-  update       Self-update the CLI to the latest release (curl-script installs only)
-  help         Print this message or the help of the given subcommand(s)
+  init           Initialize a new vault
+  check          Check vault integrity and tool health
+  status         Show vault status overview
+  resource       Manage resources (tasks, goals, sessions, research, concepts, decisions)
+  data-artifact  List and show data artifacts owned by a resource
+  context        Manage contexts (projects)
+  warmup         Context primer for new sessions — active goals, in-progress tasks, recent session pointers
+  invitations    List the pending team invitations addressed to you
+  skill          Manage agent skill (install for Claude Code or opencode)
+  memory         Manage the Claude Code memory projection
+  auth           Authenticate with temper cloud
+  slack          Manage the Slack account link
+  team           Manage team membership and access
+  admin          Administer the instance (system settings, promote admins, review requests)
+  pull           Materialize a context's resources into the local read-only projection
+  config         Manage temper global config
+  query          Run a composed query — declared acts, piped, answered in one round trip
+  search         Search the knowledge base
+  edge           Assert or mutate a relationship between resources (writes go through the cloud API)
+  cogmap         Operate on cognitive maps (admin-gated content reconcile)
+  invocation     Operate on agent-invocation envelopes (open / close / show / list)
+  steward        Team-self-cognition steward ingest trigger (delta / advance-watermark)
+  trail          Read the event trail (append-only history) of a graph element — a resource node or a relationship edge
+  version        Print the CLI version, optionally with the running binary's SHA-256 or an offline (or online) manifest verdict
+  update         Self-update the CLI to the latest release (curl-script installs only)
+  help           Print this message or the help of the given subcommand(s)
 
 Options:
       --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
@@ -55,6 +56,7 @@ Options:
 | [`temper check`](./check.md) | Check vault integrity and tool health |
 | [`temper status`](./status.md) | Show vault status overview |
 | [`temper resource`](./resource.md) | Manage resources (tasks, goals, sessions, research, concepts, decisions) |
+| [`temper data-artifact`](./data-artifact.md) | List and show data artifacts owned by a resource |
 | [`temper context`](./context.md) | Manage contexts (projects) |
 | [`temper warmup`](./warmup.md) | Context primer for new sessions — active goals, in-progress tasks, recent session pointers |
 | [`temper invitations`](./invitations.md) | List the pending team invitations addressed to you |

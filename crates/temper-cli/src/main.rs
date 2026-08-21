@@ -2,8 +2,8 @@ use clap::Parser;
 use temper_cli::cli::{
     AdminAction, AdminConnectionAction, AdminMachineAction, AdminRequestsAction, AdminSamlAction,
     AdminSlackAction, AdminSubscriptionAction, AuthAction, Cli, CogmapCmd, Commands, ConfigAction,
-    ContextAction, InvocationCmd, MemoryAction, ResourceAction, SkillAction, SlackAction,
-    StewardCmd, TeamAction,
+    ContextAction, DataArtifactAction, InvocationCmd, MemoryAction, ResourceAction, SkillAction,
+    SlackAction, StewardCmd, TeamAction,
 };
 use temper_cli::commands;
 use temper_cli::format::OutputFormat;
@@ -392,6 +392,38 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 } => temper_cli::commands::facet::run(r#ref, values, weight, act, output_format),
                 ResourceAction::Facets { r#ref } => {
                     temper_cli::commands::facet::list(r#ref, output_format)
+                }
+            }
+        }
+        Commands::DataArtifact { action } => {
+            let config = temper_cli::config::load(cli.vault.as_deref())?;
+            match action {
+                DataArtifactAction::List {
+                    r#ref,
+                    kind,
+                    intent,
+                    include_folded,
+                    counts,
+                } => temper_cli::commands::data_artifact::list(
+                    &config,
+                    temper_cli::commands::data_artifact::ListParams {
+                        r#ref: &r#ref,
+                        kind: kind.as_deref(),
+                        intent: intent.as_deref(),
+                        include_folded,
+                        counts,
+                        format: output_format,
+                    },
+                ),
+                DataArtifactAction::Show { r#ref, artifact_id } => {
+                    temper_cli::commands::data_artifact::show(
+                        &config,
+                        temper_cli::commands::data_artifact::ShowParams {
+                            r#ref: &r#ref,
+                            artifact_id: &artifact_id,
+                            format: output_format,
+                        },
+                    )
                 }
             }
         }

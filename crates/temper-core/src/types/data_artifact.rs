@@ -52,7 +52,7 @@ pub struct ArtifactCountRow {
 }
 
 /// Query parameters for listing artifacts on a resource.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::IntoParams))]
 pub struct ArtifactListParams {
     /// Filter by the bare family name (e.g. `"measurement"`).

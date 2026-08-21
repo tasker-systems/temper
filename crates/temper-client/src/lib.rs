@@ -11,6 +11,7 @@ pub mod cognitive_maps;
 pub mod config;
 pub mod connection;
 pub mod contexts;
+pub mod data_artifacts;
 pub mod error;
 pub mod events;
 pub mod facets;
@@ -131,6 +132,11 @@ impl TemperClient {
     /// Resource CRUD sub-client.
     pub fn resources(&self) -> resources::ResourceClient<'_> {
         resources::ResourceClient::new(&self.http)
+    }
+
+    /// Data artifact read sub-client.
+    pub fn data_artifacts(&self) -> data_artifacts::DataArtifactsClient<'_> {
+        data_artifacts::DataArtifactsClient::new(&self.http)
     }
 
     /// Relationship write sub-client (assert / retype / reweight / fold).

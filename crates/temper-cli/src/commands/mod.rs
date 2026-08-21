@@ -9,6 +9,7 @@ pub mod check;
 pub mod cogmap;
 pub mod config;
 pub mod context_cmd;
+pub mod data_artifact;
 pub mod edge;
 pub mod facet;
 pub mod init;

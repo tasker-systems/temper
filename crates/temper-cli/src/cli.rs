@@ -216,6 +216,11 @@ pub enum Commands {
         #[command(subcommand)]
         action: ResourceAction,
     },
+    /// List and show data artifacts owned by a resource
+    DataArtifact {
+        #[command(subcommand)]
+        action: DataArtifactAction,
+    },
     /// Manage contexts (projects)
     Context {
         #[command(subcommand)]
@@ -890,6 +895,34 @@ pub enum ResourceAction {
     Facets {
         /// Resource ref: a UUID or the decorated `slug-<uuid>` form
         r#ref: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum DataArtifactAction {
+    /// List data artifacts owned by a resource
+    List {
+        /// Resource ref: a UUID or the decorated `slug-<uuid>` form
+        r#ref: String,
+        /// Filter by the bare family name (e.g. `"measurement"`)
+        #[arg(long)]
+        kind: Option<String>,
+        /// Filter by selection intent: `"current"`, `"member"`, or `"pinned"`
+        #[arg(long)]
+        intent: Option<String>,
+        /// Include folded (superseded) artifacts in the result. Default: false.
+        #[arg(long)]
+        include_folded: bool,
+        /// Return per-family counts instead of full artifacts. No content hydration.
+        #[arg(long)]
+        counts: bool,
+    },
+    /// Show a single data artifact by ID
+    Show {
+        /// Resource ref: a UUID or the decorated `slug-<uuid>` form
+        r#ref: String,
+        /// Artifact ID (UUID)
+        artifact_id: String,
     },
 }
 
