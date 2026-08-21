@@ -190,6 +190,7 @@ describe('every machine name carries a plain gloss', () => {
 
 	test('the three the region hover card rendered are all present', () => {
 		// displaced-structure-remains-reachable, at the module boundary: RegionHoverCard.svelte:17-19
+		// (at 87ccd211, the last commit before Beat D deleted the file)
 		// rendered memberCount · salience · coherence, and this is where they are rehomed.
 		const keys = METRICS.map((m) => m.key);
 

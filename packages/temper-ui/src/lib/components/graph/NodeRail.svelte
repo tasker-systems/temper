@@ -12,11 +12,11 @@
 	 */
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
-	import { summarizeEvent } from '$lib/graph/atlas/eventSummary';
-	import { atlasNeighbors } from '$lib/graph/atlas/neighbors';
-	import { docTypeHue } from '$lib/graph/atlas/palette';
-	import { relativeTime } from '$lib/graph/atlas/relativeTime';
-	import { trailModel } from '$lib/graph/atlas/trail';
+	import { summarizeEvent } from '$lib/graph/eventSummary';
+	import { atlasNeighbors } from '$lib/graph/neighbors';
+	import { docTypeHue } from '$lib/graph/palette';
+	import { relativeTime } from '$lib/graph/relativeTime';
+	import { trailModel } from '$lib/graph/trail';
 	import type { GraphModel, GraphNode } from '$lib/graph/model';
 	import { describeArm, whereOf } from '$lib/graph/presentation';
 	import type { EventTrail } from '$lib/types/generated/element_trail';

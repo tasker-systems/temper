@@ -247,9 +247,30 @@ describe('derived structure is confined to the two modules that declare it — t
 	 */
 	const DECLARE_DERIVED = ['readout.ts', 'analysis.ts'];
 
+	/**
+	 * `[denominator widened — 2026-08-20, Beat D]` This sweep is `readdirSync` over ONE directory,
+	 * so what it covers is whatever happens to sit in `lib/graph/`. Beat D moved the surviving
+	 * Atlas modules up out of `lib/graph/atlas/`, which took the sweep from 8 modules to 17 —
+	 * `camera`, `eventSummary`, `labels`, `marks`, `neighbors`, `palette`, `payloadRows`,
+	 * `relativeTime` and `trail` are now covered and previously were not. The test below passed
+	 * before the move and passes after it, which is exactly why the change is written down: a
+	 * green result here says nothing about how much it swept. Bite-probed after the move — a
+	 * `region_id` planted in `palette.ts` fails it.
+	 *
+	 * Still NOT swept, unchanged by the move: `lib/graph/layout/`, because `readdirSync` does not
+	 * recurse. A layout module reaching for derived structure would not be caught here.
+	 */
 	test('there is more than one module here, so this sweep is not vacuous', () => {
 		expect(modules.length).toBeGreaterThan(DECLARE_DERIVED.length);
 		for (const m of DECLARE_DERIVED) expect(modules).toContain(m);
+	});
+
+	test('the sweep covers the modules Beat D moved in, not just the ones it always had', () => {
+		// Names the denominator so a future move OUT of this directory fails here rather than
+		// silently shrinking what the sweep above proves.
+		for (const moved of ['palette.ts', 'labels.ts', 'marks.ts', 'model.ts', 'presentation.ts']) {
+			expect(modules).toContain(moved);
+		}
 	});
 
 	test.each([
