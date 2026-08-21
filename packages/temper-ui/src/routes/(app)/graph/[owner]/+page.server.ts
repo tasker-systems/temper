@@ -47,7 +47,8 @@ export const load: PageServerLoad = async ({ locals, params, url }): Promise<Gra
 		question: address.question,
 		borrowedFrom: null,
 		refusal,
-		model: { nodes: [], edges: [], viaEntries: 0 },
+		// No read ran, so no read declared an arm. Empty rather than borrowed from a builder.
+		model: { nodes: [], edges: [], arms: [], viaEntries: 0 },
 		bound: null,
 		readout: null,
 		placesAsked: [],

@@ -93,6 +93,37 @@ describe('folding the entry read', () => {
 		expect(buildEntryGraph(entry, homes).viaEntries).toBe(0);
 	});
 
+	test('the read declares ONE arm, and it describes the read rather than the reader', () => {
+		// The entry read ranked the reader's whole visible corpus by connectedness and drew the top
+		// of it. Nothing here was asked for. It used to mark all of it `'seed'` and inherit
+		// `describeArm`'s sentence for a composition — *"In the places you asked about"* — on a
+		// screen where the box was empty, on all 130 cards and on the single a11y heading.
+		//
+		// @see internal/superpowers/specs/2026-08-21-the-handoff-and-the-arm-vocabulary-design.md §1.3a
+		const model = buildEntryGraph(entry, homes);
+
+		expect(model.arms).toHaveLength(1);
+		expect(model.arms[0].label).toBe('What your work is built around');
+		for (const arm of model.arms) {
+			expect(arm.label.toLowerCase()).not.toContain('asked');
+			expect(arm.label.toLowerCase()).not.toContain('question');
+		}
+	});
+
+	test('every mark carries a key this read declared — no node points outside its own legend', () => {
+		const model = buildEntryGraph(entry, homes);
+		const declared = new Set(model.arms.map((a) => a.key));
+
+		for (const n of model.nodes) expect(declared.has(n.arm)).toBe(true);
+	});
+
+	test('its one arm is where the read STOOD, so nothing is drawn as reached', () => {
+		// One arm means no contrast, so `armsDistinguish` withdraws the ring — unchanged from #741.
+		// `reached: false` is what keeps every mark in the force core, which used to be the global
+		// `arm !== 'walk'` check that no per-view vocabulary could have satisfied.
+		expect(buildEntryGraph(entry, homes).arms.every((a) => !a.reached)).toBe(true);
+	});
+
 	test('there is no ResourceView behind an entry mark, and none is fabricated', () => {
 		// A synthesised row would put invented values on a hover card, which is the exact defect
 		// class this surface is being repaired for.

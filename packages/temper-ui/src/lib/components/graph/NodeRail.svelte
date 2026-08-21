@@ -18,7 +18,7 @@
 	import { relativeTime } from '$lib/graph/relativeTime';
 	import { trailModel } from '$lib/graph/trail';
 	import type { GraphModel, GraphNode } from '$lib/graph/model';
-	import { describeArm, whereOf } from '$lib/graph/presentation';
+	import { whereOf } from '$lib/graph/presentation';
 	import type { EventTrail } from '$lib/types/generated/element_trail';
 	import { resourceHref, withGraphSeed, withGraphSelection } from '$lib/vault-url';
 
@@ -32,6 +32,10 @@
 	let { node, model, excerpt, trail }: Props = $props();
 
 	const hue = $derived(docTypeHue(node.doc_type));
+	// The read's own word for this node's arm. Looked up in the legend the model carries rather
+	// than translated here — no panel may name an arm a read did not declare — and the row is
+	// omitted outright when the key does not resolve.
+	const arm = $derived(model.arms.find((a) => a.key === node.arm));
 	const neighbors = $derived(atlasNeighbors(node.id, model.nodes, model.edges));
 	const history = $derived(trail ? trailModel(trail) : []);
 	const titles = $derived(new Map(model.nodes.map((n) => [n.id, { title: n.title }])));
@@ -80,7 +84,9 @@
 
 	<section class="meta">
 		<div><span class="k">IN</span><span>{node.homeRef ?? 'home not reported'}</span></div>
-		<div><span class="k">HOW</span><span>{describeArm(node.arm)}</span></div>
+		{#if arm}
+			<div><span class="k">HOW</span><span>{arm.label}</span></div>
+		{/if}
 		{#if node.stage}
 			<div><span class="k">STAGE</span><span>{node.stage}</span></div>
 		{/if}

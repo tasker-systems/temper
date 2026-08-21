@@ -8,25 +8,30 @@
 	 * is still named. Visually hidden, revealed on keyboard focus so it is not a dead trap.
 	 *
 	 * Grouped by ARM rather than by home. On this surface both homes are ordinary; what a reader
-	 * needs to tell apart is what they asked for from what a walk reached.
+	 * needs to tell apart is where the read stood from what it reached.
+	 *
+	 * **The headings are the read's own words.** The groups come from `model.arms`, in the order
+	 * that read declared them — this component knows no arm names and can therefore never put one
+	 * read's sentence above another read's marks, which is how the entry heading came to assert a
+	 * question nobody had asked. An arm the read declared but returned nothing for is dropped: a
+	 * heading over an empty list is a claim about a group that is not on screen.
 	 */
-	import type { GraphModel, NodeArm } from '$lib/graph/model';
-	import { describeArm, describeNodeLinks } from '$lib/graph/presentation';
+	import type { GraphModel } from '$lib/graph/model';
+	import { describeNodeLinks } from '$lib/graph/presentation';
 	import { withGraphSelection } from '$lib/vault-url';
 
 	let { model, url }: { model: GraphModel; url: URL } = $props();
 
-	const ARMS: NodeArm[] = ['seed', 'survey', 'walk'];
 	const groups = $derived(
-		ARMS.map((arm) => ({ arm, nodes: model.nodes.filter((n) => n.arm === arm) })).filter(
-			(g) => g.nodes.length > 0,
-		),
+		model.arms
+			.map((arm) => ({ arm, nodes: model.nodes.filter((n) => n.arm === arm.key) }))
+			.filter((g) => g.nodes.length > 0),
 	);
 </script>
 
 <nav class="graph-a11y" aria-label="Every resource on this graph">
-	{#each groups as g (g.arm)}
-		<h2>{describeArm(g.arm)} · {g.nodes.length}</h2>
+	{#each groups as g (g.arm.key)}
+		<h2>{g.arm.label} · {g.nodes.length}</h2>
 		<ul>
 			{#each g.nodes as n (n.id)}
 				<li>

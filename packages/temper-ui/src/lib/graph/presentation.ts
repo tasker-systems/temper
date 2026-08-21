@@ -1,5 +1,5 @@
 import type { ResourceView } from '$lib/types/generated/resource_view';
-import type { GraphNode, NodeArm } from './model';
+import type { GraphArm, GraphNode } from './model';
 import { relativeTime } from './relativeTime';
 
 /**
@@ -23,24 +23,6 @@ export function whereOf(row: ResourceView): string {
 }
 
 /**
- * What put this node on screen, said without naming an act.
- *
- * `no-internal-vocabulary-is-load-bearing` reaches here too: the reader is told *followed on from
- * your work*, never *"reached by `follow-from`"*. The three phrases are the three the bound line
- * uses, so the same partition reads the same way in both places.
- */
-export function describeArm(arm: NodeArm): string {
-	switch (arm) {
-		case 'seed':
-			return 'In the places you asked about';
-		case 'survey':
-			return 'From your places';
-		default:
-			return 'Followed on from your work';
-	}
-}
-
-/**
  * The metadata rows a hover card carries — **N2**, and the whole point of it.
  *
  * `[N2 — 2026-08-20]` Hover used to carry the title and little else. Every node here holds its
@@ -53,6 +35,7 @@ export function describeArm(arm: NodeArm): string {
  */
 export function nodeMeta(
 	node: GraphNode,
+	arm: GraphArm | undefined,
 	now: Date = new Date(),
 ): { label: string; value: string }[] {
 	// Read off the NODE, not off `node.resource`: the entry read's marks are an `AtlasNode`
@@ -74,7 +57,16 @@ export function nodeMeta(
 	if (node.updated) {
 		rows.push({ label: 'updated', value: relativeTime(node.updated, now) });
 	}
-	rows.push({ label: 'reached', value: describeArm(node.arm).toLowerCase() });
+	// **The read's own word for the arm, or no row at all.** This function cannot translate a key
+	// — that is the whole of the D1 ruling — so a node whose arm is not in the legend it was handed
+	// says nothing, under the same rule as every other row here: absence is not a claim.
+	//
+	// Labelled `how`, not `reached`. `reached` is now a declared property of an ARM
+	// (`GraphArm.reached`), so a row headed REACHED above a mark whose arm declares `reached: false`
+	// would be a fresh instance of the contradiction this change exists to remove — and REACHED over
+	// *"in the places you asked about"* is the exact string a reader filed. `HOW` is what the rail
+	// already calls the same fact.
+	if (arm) rows.push({ label: 'how', value: arm.label.toLowerCase() });
 	return rows;
 }
 
@@ -284,10 +276,13 @@ export function describeNodeLinks(node: Pick<GraphNode, 'degree' | 'corpusDegree
  * Stated as a property of the view rather than a special case for the entry read: any answer that
  * returns a single arm draws no ring, which is correct on all of them.
  *
- * Deliberately **not** repurposed to mark the band. The arm vocabulary is chunk D's subject, and
- * re-encoding it here is the merge the spec ruled against for `REACHED`.
+ * Deliberately **not** repurposed to mark the band, and deliberately **unchanged** by D1. The
+ * contrast is counted over the nodes actually drawn rather than over `GraphModel.arms`, and that is
+ * load-bearing: a read may declare an arm and return nothing for it, and a legend count would then
+ * light a channel that distinguishes nothing — which is the defect, restaged one level up.
  *
  * @see internal/superpowers/specs/2026-08-21-hub-stranding-is-a-telling-failure-design.md §5.5
+ * @see internal/superpowers/specs/2026-08-21-the-handoff-and-the-arm-vocabulary-design.md §2
  */
 export const armsDistinguish = (nodes: Pick<GraphNode, 'arm'>[]): boolean =>
 	new Set(nodes.map((n) => n.arm)).size > 1;

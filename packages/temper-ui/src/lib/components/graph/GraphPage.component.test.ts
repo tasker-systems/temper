@@ -4,7 +4,7 @@ import { render, screen } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { declareBounds } from '$lib/graph/bound';
 import type { GraphPlan } from '$lib/graph/composition';
-import { buildEntryGraph, buildGraph } from '$lib/graph/model';
+import { buildEntryGraph, buildGraph, COMPOSITION_ARMS } from '$lib/graph/model';
 import { buildReadout } from '$lib/graph/readout';
 import type { GraphViewData } from '$lib/graph/view';
 import type { CogmapRegionRow } from '$lib/types/generated/cognitive_maps';
@@ -37,6 +37,17 @@ const plan = {
 	surveyStages: Array.from({ length: 12 }, (_, i) => `s${i + 1}`),
 	walkStage: 'w',
 } as unknown as GraphPlan;
+
+/**
+ * The arm headings, read out of the accessibility list rather than off the whole page.
+ *
+ * Scoped because *Why these* also renders an `<h2>`, and an arm heading assertion that swept it up
+ * would be measuring the wrong thing. These headings ARE the arm legend as a reader meets it.
+ */
+const armHeadings = (container: HTMLElement): (string | null)[] =>
+	[...(container.querySelector('.graph-a11y')?.querySelectorAll('h2') ?? [])].map(
+		(h) => h.textContent,
+	);
 
 const view = (over: Partial<GraphViewData> = {}): GraphViewData => ({
 	owner: '@me',
@@ -416,6 +427,41 @@ describe('the entry read tells the truth about its band', () => {
 		expect(screen.getByRole('link', { name: /^A —/ }).textContent).toContain('1 link');
 	});
 
+	/**
+	 * D1 — the witness a reader filed, at the render level.
+	 *
+	 * The complaint was a hover card reading `REACHED — in the places you asked about` on a screen
+	 * where the question box was empty, with *Why these* three inches away saying *"No question was
+	 * asked."* Both on screen at once, contradicting each other. `[observed on production —
+	 * 2026-08-21]` on all 130 cards and on the accessibility list's single heading group.
+	 *
+	 * It is asserted over the WHOLE rendered entry surface rather than over one string, because
+	 * fixing the string is what produced instances two and three. What makes this hold is that
+	 * `GraphA11yList`, `NodeRail` and `nodeMeta` no longer know any arm's name — they read the
+	 * label off `model.arms`, and the entry read declares its own.
+	 *
+	 * @see internal/superpowers/specs/2026-08-21-the-handoff-and-the-arm-vocabulary-design.md §1, §2
+	 */
+	it('asserts NOTHING about a question, anywhere on the unaddressed entry', () => {
+		const { container } = render(GraphPage, { data: entryView() });
+
+		const rendered = (container.textContent ?? '').toLowerCase();
+		expect(rendered).not.toContain('you asked');
+		expect(rendered).not.toContain('asked about');
+	});
+
+	it("and the words it does use are the ones this read declared, not another read's", () => {
+		const { container } = render(GraphPage, { data: entryView() });
+
+		const headings = armHeadings(container);
+		expect(headings).toEqual(
+			entryModel.arms
+				.filter((a) => entryModel.nodes.some((n) => n.arm === a.key))
+				.map((a) => `${a.label} · ${entryModel.nodes.filter((n) => n.arm === a.key).length}`),
+		);
+		expect(headings).toEqual(['What your work is built around · 3']);
+	});
+
 	it('draws NO ring, because one arm across every mark distinguishes nothing', () => {
 		const { container } = render(GraphPage, { data: entryView() });
 
@@ -449,10 +495,45 @@ describe('the ring is withdrawn only where it distinguishes nothing', () => {
 	});
 
 	it('and rings exactly the marks that are not a walk — the encoding is unchanged', () => {
+		// Counted WITHOUT consulting `model.arms`, deliberately. The canvas now decides the ring
+		// from the read's declaration, so a count taken from that same declaration agrees with the
+		// canvas whatever the declaration says — it would pass on a screen ringing everything.
+		// This is the figure #741 shipped, stated independently, so a wrong declaration moves it.
 		const model = view().model;
 		const notWalk = model.nodes.filter((n) => n.arm !== 'walk').length;
 
 		const { container } = render(GraphPage, { data: view() });
 		expect(container.querySelectorAll('.arm-ring')).toHaveLength(notWalk);
+	});
+
+	it('and the READ declares which arm was reached — the canvas no longer assumes it', () => {
+		// The other half, and the half the render assertion above cannot reach. `coreOf` and the
+		// ring used to hard-code `!== 'walk'`: a global check about a global enum, which is what no
+		// per-view vocabulary could satisfy. The check moved into the read; this pins what it says.
+		expect(COMPOSITION_ARMS.map((a) => [a.key, a.reached])).toEqual([
+			['seed', false],
+			['survey', false],
+			['walk', true],
+		]);
+	});
+
+	it('the composition still names its own three arms — D1 changed no word of it', () => {
+		const { container } = render(GraphPage, { data: view() });
+		const model = view().model;
+
+		const headings = armHeadings(container);
+		expect(headings).toEqual(
+			model.arms
+				.map((a) => [a, model.nodes.filter((x) => x.arm === a.key).length] as const)
+				.filter(([, n]) => n > 0)
+				.map(([a, n]) => `${a.label} · ${n}`),
+		);
+		// This fixture is seeded with no rows of the reader's own, so the `seed` arm is DECLARED and
+		// empty — and correctly draws no heading. A legend count would have drawn one, which is why
+		// `armsDistinguish` and this list both derive from the marks and not from `model.arms`.
+		expect(model.arms.map((a) => a.key)).toContain('seed');
+		expect(headings.some((h) => h?.startsWith('In the places you asked about'))).toBe(false);
+		// And neither read can reach the other's sentence.
+		expect(headings.some((h) => h?.includes('What your work is built around'))).toBe(false);
 	});
 });

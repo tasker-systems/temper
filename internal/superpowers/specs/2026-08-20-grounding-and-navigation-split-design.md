@@ -318,6 +318,12 @@ zeros included; a read must not make presentation decisions.
 readout are covered today *because the composition trace hands them their numbers for free*. The
 moment navigation takes over, that source is gone.
 
+`[planned — 2026-08-21]` Chunk D's design is in
+[The handoff, and the arm vocabulary stops lying](./2026-08-21-the-handoff-and-the-arm-vocabulary-design.md).
+It conforms to §7.1, §7.2, §10.2 and §10.3 rather than re-arguing them, and adds the one thing this
+spec deferred without designing: **the arm vocabulary**, which §11 sent to D and which the
+hub-stranding spec §5.5 sent there too.
+
 ### 7.1 The bound line
 
 It must not keep displaying the grounding query's counts — on hop three those describe a screen the
@@ -508,9 +514,9 @@ serves B.
 | Chunk | | Depends on |
 |---|---|---|
 | **A** ✅ | Entry read — ranking fn, induced-edge fn, service, handler, tests. Rust only, nothing on screen. **Landed `[2026-08-21]`** as `GET /api/graph/entry`; distribution reported in §10.1.1 | — |
-| **B** | Traversal read — service + handler over the surviving walk and the induced-edge fn. Rust only | A (shares §5.4) |
-| **C** | Unaddressed entry switches to A; `readSeedRows` and the recency page **deleted**; rung ladder and its declaration; **K and the threshold fixed from A's distribution** | A |
-| **D** | The handoff — ground once, then navigate. Bound-line vocabulary, *Why these* becomes provenance, the §10.2 URL grammar | A, B, C |
+| **B** ✅ | Traversal read — service + handler over the surviving walk and the induced-edge fn. Rust only. **Landed `[2026-08-21]`** as `GET /api/graph/traverse` (`4b79e075`) — and, like A, **with zero callers**: D is its first | A (shares §5.4) |
+| **C** ✅ | Unaddressed entry switches to A; `readSeedRows` and the recency page **deleted**; rung ladder and its declaration; **K and the threshold fixed from A's distribution**. **Landed and validated on production `[2026-08-21]`** (`5f23f787`); K=130, floor 1 | A |
+| **D** | The handoff — ground once, then navigate. Bound-line vocabulary, *Why these* becomes provenance, the §10.2 URL grammar, **and the arm vocabulary**. Designed `[2026-08-21]` in [The handoff, and the arm vocabulary stops lying](./2026-08-21-the-handoff-and-the-arm-vocabulary-design.md); splits into **D1** (vocabulary) and **D2** (handoff) | A, B, C |
 | **E** | Delete `contexts/panorama`, `contexts/composition`, **and the dead directed chain** (`graph_traverse`, `graph_subgraph_nodes`) | C |
 
 **A and B are no longer fully independent** — B consumes §5.4, which A introduces. A first, then B;
