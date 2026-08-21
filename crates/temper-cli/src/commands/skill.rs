@@ -10,7 +10,8 @@ use crate::config::{self, Config};
 use crate::error::{Result, TemperError};
 use crate::output;
 use crate::templates::{
-    CommandWrapperTemplate, OutcomeRegistersTemplate, SessionLifecycleTemplate, SkillTemplate,
+    CommandWrapperTemplate, DataArtifactsTemplate, OutcomeRegistersTemplate,
+    SessionLifecycleTemplate, SkillTemplate,
 };
 
 // ── Surfaces ─────────────────────────────────────────────────────────────────
@@ -49,6 +50,10 @@ fn render_session_lifecycle(surface: &str) -> Result<String> {
 
 fn render_outcome_registers(surface: &str) -> Result<String> {
     render_md(&OutcomeRegistersTemplate { surface })
+}
+
+fn render_data_artifacts(surface: &str) -> Result<String> {
+    render_md(&DataArtifactsTemplate { surface })
 }
 
 // ── Static content (compiled into the binary) ────────────────────────────────
@@ -833,6 +838,10 @@ pub fn generate_agent_skill_files() -> Result<HashMap<String, String>> {
         "outcome-registers.md".to_string(),
         render_outcome_registers(SURFACE_MCP)?,
     );
+    files.insert(
+        "data-artifacts.md".to_string(),
+        render_data_artifacts(SURFACE_MCP)?,
+    );
     files.insert("memories.md".to_string(), MEMORIES_MCP_MD.to_string());
     // Shipped to both surfaces verbatim: these three name no command on either, so they are the
     // same bytes in both trees rather than two renders of one template.
@@ -1032,6 +1041,7 @@ fn check_expected_files(skill_dir: &Path) {
         "plan-verification.md",
         "implementation-grounding.md",
         "outcome-registers.md",
+        "data-artifacts.md",
         "session-lifecycle.md",
         "session-wrap.md",
         "cognitive-maps.md",
@@ -1166,6 +1176,10 @@ pub fn generate_skill_files_with_hash(
     files.insert(
         "outcome-registers.md".to_string(),
         render_outcome_registers(SURFACE_CLI)?,
+    );
+    files.insert(
+        "data-artifacts.md".to_string(),
+        render_data_artifacts(SURFACE_CLI)?,
     );
     files.insert(
         "session-lifecycle.md".to_string(),
@@ -1333,6 +1347,7 @@ mod tests {
         assert!(files.contains_key("plan-verification.md"));
         assert!(files.contains_key("implementation-grounding.md"));
         assert!(files.contains_key("outcome-registers.md"));
+        assert!(files.contains_key("data-artifacts.md"));
         assert!(files.contains_key("session-lifecycle.md"));
         assert!(files.contains_key("memories.md"));
         assert!(files.contains_key("cognitive-maps.md"));
@@ -1422,6 +1437,7 @@ mod tests {
             keys,
             [
                 "SKILL.md",
+                "data-artifacts.md",
                 "implementation-grounding.md",
                 "memories.md",
                 "outcome-registers.md",
