@@ -79,6 +79,51 @@ pub struct AtlasSubgraph {
     pub edges: Vec<AtlasEdge>,
 }
 
+/// What the entry read was choosing from — so the surface can say *how many of how many*.
+///
+/// The bound line is deliberately **chrome, not a warning**: present whether or not the view is
+/// partial, "so complete is something the reader is TOLD rather than something they infer from
+/// silence" (spec §7.1). It is covered today only because the composition trace hands it these
+/// numbers for free; the entry read runs no composition, so it must carry its own.
+///
+/// `in_scope - eligible` is the count of resources the read deliberately did **not** draw because
+/// they have no visible connections. Naming it is what keeps
+/// `legibility-is-never-bought-with-silent-omission` covered — on the corpus that produced this
+/// design that difference is 1,077 resources, and dropping them unannounced is precisely the defect
+/// the goal exists to prevent.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "graph_atlas.ts"))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct EntryBounds {
+    /// Marks actually returned.
+    pub drawn: i64,
+    /// How many resources cleared the connection floor — the denominator the drawn count is *of*.
+    pub eligible: i64,
+    /// Every resource visible to this reader within the places asked about, connected or not.
+    pub in_scope: i64,
+    /// Whether more eligible resources exist than were drawn.
+    pub truncated: bool,
+}
+
+/// The entry read's response — an `AtlasSubgraph` that declares its own bounds.
+///
+/// Separate from [`AtlasSubgraph`] rather than a field added to it: every other graph read gets its
+/// bound declaration from the composition trace that produced it, and giving them all an optional
+/// bounds field would make "did anyone actually fill this in?" a runtime question. Here it is not
+/// optional, because this read has no other source for it.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "graph_atlas.ts"))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct AtlasEntry {
+    pub nodes: Vec<AtlasNode>,
+    pub edges: Vec<AtlasEdge>,
+    pub bounds: EntryBounds,
+}
+
 /// R4 request: focus seeds (required, non-empty), BFS depth, and an optional
 /// edge-kind filter that constrains the *traversal* (induced subgraph).
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]

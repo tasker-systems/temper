@@ -394,22 +394,24 @@ module Temper::Generated
     end
 
     # Read what your work is built around
-    # The entry door for a reader who has asked nothing: the most-connected resources they can see, plus every edge among them. Ranking and drawing use the same criterion, so no returned edge points at a node that is not on the canvas.
+    # The entry door for a reader who has asked nothing: the most-connected resources they can see, plus every edge among them. Ranking and drawing use the same criterion, so no returned edge points at a node that is not on the canvas. The response declares its own bounds, including how many resources it did not draw for having no connections.
     # @param [Hash] opts the optional parameters
-    # @option opts [Integer] :k How many marks to draw. Defaults to the service&#39;s parameter and is clamped by it.  **Deliberately a parameter, not a constant on the wire.** The value it should settle at is ruled in chunk C from the degree distribution chunk A measured; asserting it earlier is the error the grounding/navigation spec was written to correct.
+    # @option opts [Integer] :k How many marks to draw. Defaults to the ruled K and is clamped by the service.
+    # @option opts [String] :_in Comma-separated anchor ids (contexts or cogmaps) to confine the ranking to.  Omitted means the reader&#39;s whole visible corpus. Present, it answers *\&quot;a place, and no question at all\&quot;* — ranking within the place rather than across everything, which is what lets a named place with no question be served by this read instead of by the recency page.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [AtlasSubgraph]
+    # @return [AtlasEntry]
     def entry(opts = {})
       data, _status_code, _headers = entry_with_http_info(opts)
       data
     end
 
     # Read what your work is built around
-    # The entry door for a reader who has asked nothing: the most-connected resources they can see, plus every edge among them. Ranking and drawing use the same criterion, so no returned edge points at a node that is not on the canvas.
+    # The entry door for a reader who has asked nothing: the most-connected resources they can see, plus every edge among them. Ranking and drawing use the same criterion, so no returned edge points at a node that is not on the canvas. The response declares its own bounds, including how many resources it did not draw for having no connections.
     # @param [Hash] opts the optional parameters
-    # @option opts [Integer] :k How many marks to draw. Defaults to the service&#39;s parameter and is clamped by it.  **Deliberately a parameter, not a constant on the wire.** The value it should settle at is ruled in chunk C from the degree distribution chunk A measured; asserting it earlier is the error the grounding/navigation spec was written to correct.
+    # @option opts [Integer] :k How many marks to draw. Defaults to the ruled K and is clamped by the service.
+    # @option opts [String] :_in Comma-separated anchor ids (contexts or cogmaps) to confine the ranking to.  Omitted means the reader&#39;s whole visible corpus. Present, it answers *\&quot;a place, and no question at all\&quot;* — ranking within the place rather than across everything, which is what lets a named place with no question be served by this read instead of by the recency page.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Array<(AtlasSubgraph, Integer, Hash)>] AtlasSubgraph data, response status code and response headers
+    # @return [Array<(AtlasEntry, Integer, Hash)>] AtlasEntry data, response status code and response headers
     def entry_with_http_info(opts = {})
       if @api_client.config.debugging
         @api_client.config.logger.debug 'Calling API: GraphApi.entry ...'
@@ -424,6 +426,7 @@ module Temper::Generated
       # query parameters
       query_params = opts[:query_params] || {}
       query_params[:'k'] = opts[:'k'] if !opts[:'k'].nil?
+      query_params[:'in'] = opts[:'_in'] if !opts[:'_in'].nil?
 
       # header parameters
       header_params = opts[:header_params] || {}
@@ -438,7 +441,7 @@ module Temper::Generated
       post_body = opts[:debug_body]
 
       # return_type
-      return_type = opts[:debug_return_type] || 'AtlasSubgraph'
+      return_type = opts[:debug_return_type] || 'AtlasEntry'
 
       # auth_names
       auth_names = opts[:debug_auth_names] || ['bearer_auth']

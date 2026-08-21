@@ -2824,13 +2824,13 @@
           "Graph"
         ],
         "summary": "Read what your work is built around",
-        "description": "The entry door for a reader who has asked nothing: the most-connected resources they can see,\nplus every edge among them. Ranking and drawing use the same criterion, so no returned edge\npoints at a node that is not on the canvas.",
+        "description": "The entry door for a reader who has asked nothing: the most-connected resources they can see,\nplus every edge among them. Ranking and drawing use the same criterion, so no returned edge\npoints at a node that is not on the canvas. The response declares its own bounds, including how\nmany resources it did not draw for having no connections.",
         "operationId": "entry",
         "parameters": [
           {
             "name": "k",
             "in": "query",
-            "description": "How many marks to draw. Defaults to the service's parameter and is clamped by it.\n\n**Deliberately a parameter, not a constant on the wire.** The value it should settle at is\nruled in chunk C from the degree distribution chunk A measured; asserting it earlier is the\nerror the grounding/navigation spec was written to correct.",
+            "description": "How many marks to draw. Defaults to the ruled K and is clamped by the service.",
             "required": false,
             "schema": {
               "type": [
@@ -2839,21 +2839,33 @@
               ],
               "format": "int32"
             }
+          },
+          {
+            "name": "in",
+            "in": "query",
+            "description": "Comma-separated anchor ids (contexts or cogmaps) to confine the ranking to.\n\nOmitted means the reader's whole visible corpus. Present, it answers *\"a place, and no\nquestion at all\"* — ranking within the place rather than across everything, which is what\nlets a named place with no question be served by this read instead of by the recency page.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "Orientation subgraph — top-K by degree with their induced edges",
+            "description": "Orientation subgraph — top-K by degree with their induced edges and bounds",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AtlasSubgraph"
+                  "$ref": "#/components/schemas/AtlasEntry"
                 }
               }
             }
           },
           "400": {
-            "description": "Non-positive k",
+            "description": "Non-positive k, or a malformed anchor id",
             "content": {
               "application/json": {
                 "schema": {
@@ -7918,6 +7930,32 @@
           }
         }
       },
+      "AtlasEntry": {
+        "type": "object",
+        "description": "The entry read's response — an `AtlasSubgraph` that declares its own bounds.\n\nSeparate from [`AtlasSubgraph`] rather than a field added to it: every other graph read gets its\nbound declaration from the composition trace that produced it, and giving them all an optional\nbounds field would make \"did anyone actually fill this in?\" a runtime question. Here it is not\noptional, because this read has no other source for it.",
+        "required": [
+          "nodes",
+          "edges",
+          "bounds"
+        ],
+        "properties": {
+          "bounds": {
+            "$ref": "#/components/schemas/EntryBounds"
+          },
+          "edges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AtlasEdge"
+            }
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AtlasNode"
+            }
+          }
+        }
+      },
       "AtlasHome": {
         "type": "object",
         "description": "The Atlas Home footprint, lensed by act: `build` = your contexts, `research` =\nthe cogmaps you can reach. Drops the `you` node (self implied).",
@@ -9669,6 +9707,37 @@
           },
           "system_access": {
             "type": "boolean"
+          }
+        }
+      },
+      "EntryBounds": {
+        "type": "object",
+        "description": "What the entry read was choosing from — so the surface can say *how many of how many*.\n\nThe bound line is deliberately **chrome, not a warning**: present whether or not the view is\npartial, \"so complete is something the reader is TOLD rather than something they infer from\nsilence\" (spec §7.1). It is covered today only because the composition trace hands it these\nnumbers for free; the entry read runs no composition, so it must carry its own.\n\n`in_scope - eligible` is the count of resources the read deliberately did **not** draw because\nthey have no visible connections. Naming it is what keeps\n`legibility-is-never-bought-with-silent-omission` covered — on the corpus that produced this\ndesign that difference is 1,077 resources, and dropping them unannounced is precisely the defect\nthe goal exists to prevent.",
+        "required": [
+          "drawn",
+          "eligible",
+          "in_scope",
+          "truncated"
+        ],
+        "properties": {
+          "drawn": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Marks actually returned."
+          },
+          "eligible": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many resources cleared the connection floor — the denominator the drawn count is *of*."
+          },
+          "in_scope": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Every resource visible to this reader within the places asked about, connected or not."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "Whether more eligible resources exist than were drawn."
           }
         }
       },

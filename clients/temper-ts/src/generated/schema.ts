@@ -733,7 +733,8 @@ export interface paths {
          * Read what your work is built around
          * @description The entry door for a reader who has asked nothing: the most-connected resources they can see,
          *     plus every edge among them. Ranking and drawing use the same criterion, so no returned edge
-         *     points at a node that is not on the canvas.
+         *     points at a node that is not on the canvas. The response declares its own bounds, including how
+         *     many resources it did not draw for having no connections.
          */
         get: operations["entry"];
         put?: never;
@@ -2049,6 +2050,19 @@ export interface components {
             weight: number;
         };
         /**
+         * @description The entry read's response — an `AtlasSubgraph` that declares its own bounds.
+         *
+         *     Separate from [`AtlasSubgraph`] rather than a field added to it: every other graph read gets its
+         *     bound declaration from the composition trace that produced it, and giving them all an optional
+         *     bounds field would make "did anyone actually fill this in?" a runtime question. Here it is not
+         *     optional, because this read has no other source for it.
+         */
+        AtlasEntry: {
+            bounds: components["schemas"]["EntryBounds"];
+            edges: components["schemas"]["AtlasEdge"][];
+            nodes: components["schemas"]["AtlasNode"][];
+        };
+        /**
          * @description The Atlas Home footprint, lensed by act: `build` = your contexts, `research` =
          *     the cogmaps you can reach. Drops the `you` node (self implied).
          */
@@ -3230,6 +3244,39 @@ export interface components {
             is_admin: boolean;
             join_request_status?: null | components["schemas"]["JoinRequestStatus"];
             system_access: boolean;
+        };
+        /**
+         * @description What the entry read was choosing from — so the surface can say *how many of how many*.
+         *
+         *     The bound line is deliberately **chrome, not a warning**: present whether or not the view is
+         *     partial, "so complete is something the reader is TOLD rather than something they infer from
+         *     silence" (spec §7.1). It is covered today only because the composition trace hands it these
+         *     numbers for free; the entry read runs no composition, so it must carry its own.
+         *
+         *     `in_scope - eligible` is the count of resources the read deliberately did **not** draw because
+         *     they have no visible connections. Naming it is what keeps
+         *     `legibility-is-never-bought-with-silent-omission` covered — on the corpus that produced this
+         *     design that difference is 1,077 resources, and dropping them unannounced is precisely the defect
+         *     the goal exists to prevent.
+         */
+        EntryBounds: {
+            /**
+             * Format: int64
+             * @description Marks actually returned.
+             */
+            drawn: number;
+            /**
+             * Format: int64
+             * @description How many resources cleared the connection floor — the denominator the drawn count is *of*.
+             */
+            eligible: number;
+            /**
+             * Format: int64
+             * @description Every resource visible to this reader within the places asked about, connected or not.
+             */
+            in_scope: number;
+            /** @description Whether more eligible resources exist than were drawn. */
+            truncated: boolean;
         };
         ErrorBody: {
             error: components["schemas"]["ErrorDetail"];
@@ -8252,14 +8299,16 @@ export interface operations {
     entry: {
         parameters: {
             query?: {
-                /**
-                 * @description How many marks to draw. Defaults to the service's parameter and is clamped by it.
-                 *
-                 *     **Deliberately a parameter, not a constant on the wire.** The value it should settle at is
-                 *     ruled in chunk C from the degree distribution chunk A measured; asserting it earlier is the
-                 *     error the grounding/navigation spec was written to correct.
-                 */
+                /** @description How many marks to draw. Defaults to the ruled K and is clamped by the service. */
                 k?: number | null;
+                /**
+                 * @description Comma-separated anchor ids (contexts or cogmaps) to confine the ranking to.
+                 *
+                 *     Omitted means the reader's whole visible corpus. Present, it answers *"a place, and no
+                 *     question at all"* — ranking within the place rather than across everything, which is what
+                 *     lets a named place with no question be served by this read instead of by the recency page.
+                 */
+                in?: string | null;
             };
             header?: {
                 /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
@@ -8270,16 +8319,16 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Orientation subgraph — top-K by degree with their induced edges */
+            /** @description Orientation subgraph — top-K by degree with their induced edges and bounds */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AtlasSubgraph"];
+                    "application/json": components["schemas"]["AtlasEntry"];
                 };
             };
-            /** @description Non-positive k */
+            /** @description Non-positive k, or a malformed anchor id */
             400: {
                 headers: {
                     [name: string]: unknown;

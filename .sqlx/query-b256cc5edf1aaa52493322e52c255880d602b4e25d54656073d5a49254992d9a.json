@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT in_scope AS \"in_scope!\", eligible AS \"eligible!\"\n             FROM graph_visible_degree_bounds($1, $2, $3)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "in_scope!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "eligible!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "b256cc5edf1aaa52493322e52c255880d602b4e25d54656073d5a49254992d9a"
+}

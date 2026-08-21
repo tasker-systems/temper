@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
 use temper_core::context_ref::parse_context_ref;
-use temper_core::types::graph_atlas::{AtlasSubgraph, SliceRequest};
+use temper_core::types::graph_atlas::{AtlasEntry, AtlasSubgraph, SliceRequest};
 use temper_core::types::graph_context::ContextPanorama;
 use temper_core::types::graph_home::AtlasHome;
 use temper_core::types::graph_territory::TerritoryOverview;
@@ -131,19 +131,23 @@ pub async fn region_composition(
 /// Query parameters for `GET /api/graph/entry`.
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
 pub struct EntryQuery {
-    /// How many marks to draw. Defaults to the service's parameter and is clamped by it.
-    ///
-    /// **Deliberately a parameter, not a constant on the wire.** The value it should settle at is
-    /// ruled in chunk C from the degree distribution chunk A measured; asserting it earlier is the
-    /// error the grounding/navigation spec was written to correct.
+    /// How many marks to draw. Defaults to the ruled K and is clamped by the service.
     pub k: Option<i32>,
+    /// Comma-separated anchor ids (contexts or cogmaps) to confine the ranking to.
+    ///
+    /// Omitted means the reader's whole visible corpus. Present, it answers *"a place, and no
+    /// question at all"* — ranking within the place rather than across everything, which is what
+    /// lets a named place with no question be served by this read instead of by the recency page.
+    #[serde(rename = "in")]
+    pub places: Option<String>,
 }
 
 /// Read what your work is built around
 ///
 /// The entry door for a reader who has asked nothing: the most-connected resources they can see,
 /// plus every edge among them. Ranking and drawing use the same criterion, so no returned edge
-/// points at a node that is not on the canvas.
+/// points at a node that is not on the canvas. The response declares its own bounds, including how
+/// many resources it did not draw for having no connections.
 #[utoipa::path(
     get,
     path = "/api/graph/entry",
@@ -151,8 +155,8 @@ pub struct EntryQuery {
     params(EntryQuery),
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "Orientation subgraph — top-K by degree with their induced edges", body = AtlasSubgraph),
-        (status = 400, description = "Non-positive k", body = ErrorBody),
+        (status = 200, description = "Orientation subgraph — top-K by degree with their induced edges and bounds", body = AtlasEntry),
+        (status = 400, description = "Non-positive k, or a malformed anchor id", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
     )
 )]
@@ -160,10 +164,24 @@ pub async fn entry(
     State(state): State<AppState>,
     auth: AuthUser,
     Query(q): Query<EntryQuery>,
-) -> ApiResult<Json<AtlasSubgraph>> {
-    graph_service::entry_orientation_slice(&state.pool, ProfileId::from(auth.0.profile().id), q.k)
-        .await
-        .map(Json)
+) -> ApiResult<Json<AtlasEntry>> {
+    let anchors: Vec<Uuid> = match q.places.as_deref() {
+        None | Some("") => Vec::new(),
+        Some(raw) => raw
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .map(Uuid::parse_str)
+            .collect::<Result<_, _>>()
+            .map_err(|e| ApiError::BadRequest(format!("invalid anchor id: {e}")))?,
+    };
+    graph_service::entry_orientation_slice(
+        &state.pool,
+        ProfileId::from(auth.0.profile().id),
+        &anchors,
+        q.k,
+    )
+    .await
+    .map(Json)
 }
 
 /// Query parameters for `GET /api/graph/traverse`.

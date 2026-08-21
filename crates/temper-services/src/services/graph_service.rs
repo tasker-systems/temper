@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::error::{ApiError, ApiResult};
 use temper_core::types::graph::{EdgeKind, Polarity};
 use temper_core::types::graph_atlas::{
-    AtlasEdge, AtlasNode, AtlasSubgraph, NodeHome, SliceRequest,
+    AtlasEdge, AtlasEntry, AtlasNode, AtlasSubgraph, EntryBounds, NodeHome, SliceRequest,
 };
 use temper_core::types::graph_home::{AtlasHome, HomeCogmap, HomeContext};
 use temper_core::types::graph_territory::{
@@ -534,16 +534,11 @@ pub async fn atlas_home(pool: &PgPool, profile_id: ProfileId) -> ApiResult<Atlas
     Ok(AtlasHome { build, research })
 }
 
-/// Default number of marks the entry read draws. **This is not the ruled K.**
+/// Default number of marks the entry read draws. `[ruled — 2026-08-21, Pete]` from A's measurement.
 ///
-/// Chunk A's job was to measure the degree distribution, not to choose from it: the spec exists
-/// because asserting this number instead of measuring it is the error that produced the 244-of-250
-/// draw in the first place. K and rung 2's threshold are ruled in chunk C from A's report
-/// (spec §10.1). This constant is a *parameter's* default so the handler has something to answer
-/// with before C runs, and C is expected to replace it with a measured value.
-///
-/// The measurement it will be replaced from, taken on production `[2026-08-21]` over a
-/// 3574-resource / 4385-edge corpus, ranking by corpus degree and drawing the induced subgraph:
+/// Chosen against numbers, not picked — the spec exists because asserting this instead of measuring
+/// it is the error that produced the 244-of-250 draw. Measured on production over a 3574-resource /
+/// 4385-edge corpus, ranking by corpus degree and drawing the induced subgraph:
 ///
 /// | K | cut degree | induced edges | unconnected | % |
 /// |---|---|---|---|---|
@@ -552,25 +547,38 @@ pub async fn atlas_home(pool: &PgPool, profile_id: ProfileId) -> ApiResult<Atlas
 /// | 250 | ≥8 | 594 | 51 | 20.4% |
 /// | 549 | ≥5 | 1441 | 61 | 11.1% |
 ///
-/// Two things in that table are worth carrying forward. The unconnected band gets **worse as K
-/// shrinks**, not better. And spec §10.1's claim that degree ordering leaves every drawn node
-/// connected "by construction" is **false** — at K=50, 18 of 50 nodes with corpus degree ≥ 16 have
-/// no edge inside the drawing, because a hub's neighbours are typically leaves and leaves miss the
-/// cut. 130 is used here only because it matches the node count of the answered state the reader
-/// did not complain about, at a materially better band (20% against that state's 35%).
+/// 130 is the node count of the *answered* state the reader met and did not complain about, at a
+/// materially better band than that state's 35%. Going wider buys nothing on the band (250 is
+/// 20.4%) and spends the density budget §2 found to be the binding constraint; going narrower makes
+/// the band **worse**, since it degrades as K shrinks.
 const ENTRY_DEFAULT_K: i32 = 130;
 
 /// Hard ceiling on the entry read, independent of what the caller asks for.
 ///
 /// Follows `region_composition_slice`'s `NODE_CAP` precedent rather than inventing a policy: a
-/// bound the caller cannot raise is what stops one query from becoming the hairball this chunk was
+/// bound the caller cannot raise is what stops one query becoming the hairball this chunk was
 /// written to prevent. Clamped loudly — the drop is logged, never silent.
 const ENTRY_MAX_K: i32 = 600;
 
+/// The connection floor. A resource with no visible edges is not drawn by the entry read.
+///
+/// **This is a floor, not a ranking tweak, and the difference is the whole point.** Selecting the
+/// top K purely by rank pads a sparse corpus with unconnected marks up to K — rebuilding the
+/// 244-of-250 band on exactly the corpus least able to absorb it. With a floor, a corpus holding
+/// twenty connected resources draws twenty, and that small number is what tells the surface to
+/// declare a different kind of answer (spec §6, rung 2) instead of drawing a worse one.
+///
+/// What is excluded is never silent: `EntryBounds` reports `in_scope` beside `eligible`, so the
+/// count of undrawn resources is on the screen. On the corpus that produced this design that is
+/// 1,077 of 3,574.
+const ENTRY_MIN_DEGREE: i32 = 1;
+
 /// The entry read (spec §5.1) — **a place, and no question at all.**
 ///
-/// Returns the K most-connected resources the caller can see, plus **every edge among them**, as an
-/// `AtlasSubgraph`. No seeds required: this is the door for a reader who has supplied nothing.
+/// Returns the most-connected resources the caller can see, plus **every edge among them**, and its
+/// own bound declaration. No seeds required: this is the door for a reader who has supplied nothing.
+/// `anchors` confines the ranking to resources homed in the named places; empty means the whole
+/// visible corpus.
 ///
 /// The rule that makes it work, and the whole point of the chunk:
 ///
@@ -581,9 +589,6 @@ const ENTRY_MAX_K: i32 = 600;
 /// opposite — it walked from all 3561 visible resources while drawing 200 rows chosen by
 /// `updated DESC`, two sets picked by unrelated criteria, so 244 of 250 marks came out unconnected.
 ///
-/// Degree-zero resources are ranked and may be drawn. That is deliberate: a read must not make
-/// presentation decisions, and the fallback rung is the client's to choose (spec §6).
-///
 /// Note the node payload carries `AtlasNode.degree` = **corpus** degree, because A reuses the one
 /// incumbent node shape (spec §5.1). Spec §5.3's ruling that only the derived degree reaches the
 /// screen is a claim about the *screen*, not the wire, and it holds only while the client keeps
@@ -591,8 +596,9 @@ const ENTRY_MAX_K: i32 = 600;
 pub async fn entry_orientation_slice(
     pool: &PgPool,
     profile_id: ProfileId,
+    anchors: &[Uuid],
     k: Option<i32>,
-) -> ApiResult<AtlasSubgraph> {
+) -> ApiResult<AtlasEntry> {
     let requested = k.unwrap_or(ENTRY_DEFAULT_K);
     if requested <= 0 {
         return Err(ApiError::BadRequest("k must be positive".into()));
@@ -604,6 +610,19 @@ pub async fn entry_orientation_slice(
         requested
     };
 
+    // The denominators, read FIRST and unconditionally. They are what the surface needs precisely
+    // when the ranking comes back empty — a corpus with nothing connected is the case that most
+    // needs explaining, and counts carried on result rows would vanish exactly there.
+    let bounds = sqlx::query!(
+        r#"SELECT in_scope AS "in_scope!", eligible AS "eligible!"
+             FROM graph_visible_degree_bounds($1, $2, $3)"#,
+        profile_id.as_uuid(),
+        anchors,
+        ENTRY_MIN_DEGREE,
+    )
+    .fetch_one(pool)
+    .await?;
+
     // Rank by CORPUS degree. The degree predicate lives in `edges_visible_to`, which the ranking
     // function joins rather than restates — the same set the incumbent hydration counts, so the
     // ranking cannot drift from the number the node carries.
@@ -613,20 +632,31 @@ pub async fn entry_orientation_slice(
     // set-returning function types every column as nullable.
     let ranked = sqlx::query!(
         r#"SELECT resource_id AS "resource_id!", degree AS "degree!"
-             FROM graph_visible_degree_ranking($1, $2)"#,
+             FROM graph_visible_degree_ranking($1, $2, $3, $4)"#,
         profile_id.as_uuid(),
+        anchors,
+        ENTRY_MIN_DEGREE,
         k,
     )
     .fetch_all(pool)
     .await?;
 
     let node_ids: Vec<Uuid> = ranked.iter().map(|r| r.resource_id).collect();
+    let declare = |drawn: usize| EntryBounds {
+        drawn: drawn as i64,
+        eligible: bounds.eligible,
+        in_scope: bounds.in_scope,
+        truncated: bounds.eligible > drawn as i64,
+    };
+
     if node_ids.is_empty() {
-        // Rung 3 (spec §6): nothing readable. An empty subgraph, not an error — the caller
-        // distinguishes "no corpus" from "no structure", and both are declarations it must make.
-        return Ok(AtlasSubgraph {
+        // Nothing cleared the floor. NOT an error, and not an empty canvas dressed as an answer:
+        // the bounds still say how much the reader has, which is what lets the surface declare that
+        // a graph is the wrong instrument here rather than drawing dots nobody can use.
+        return Ok(AtlasEntry {
             nodes: vec![],
             edges: vec![],
+            bounds: declare(0),
         });
     }
 
@@ -680,7 +710,12 @@ pub async fn entry_orientation_slice(
         })
         .collect();
 
-    Ok(AtlasSubgraph { nodes, edges })
+    let bounds = declare(nodes.len());
+    Ok(AtlasEntry {
+        nodes,
+        edges,
+        bounds,
+    })
 }
 
 /// Bound on how many seeds one traversal may walk from. Mirrors the context door's `MAX_SEEDS`,

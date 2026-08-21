@@ -30,7 +30,7 @@ const KERNEL_TELOS: Uuid = Uuid::from_u128(0x00000000_0000_0000_0005_00000000000
 
 /// The load-bearing property, asserted structurally rather than by counting: no returned edge may
 /// name an endpoint that is not in the returned node set. A failure here is the 244-of-250 bug.
-fn assert_no_dangling_edges(sub: &temper_core::types::graph_atlas::AtlasSubgraph) {
+fn assert_no_dangling_edges(sub: &temper_core::types::graph_atlas::AtlasEntry) {
     let present: std::collections::HashSet<Uuid> = sub.nodes.iter().map(|n| n.id).collect();
     for e in &sub.edges {
         assert!(
@@ -53,7 +53,7 @@ async fn entry_draws_the_induced_subgraph_and_never_dangles(pool: PgPool) {
     // A star: one goal at degree 5, five tasks at degree 1 each.
     let (profile, _ctx, goal) = seed_context_with_goal_and_tasks(&pool, 5).await;
 
-    let sub = graph_service::entry_orientation_slice(&pool, ProfileId::from(profile), Some(6))
+    let sub = graph_service::entry_orientation_slice(&pool, ProfileId::from(profile), &[], Some(6))
         .await
         .expect("entry read");
 
@@ -81,7 +81,7 @@ async fn a_high_corpus_degree_does_not_imply_an_edge_inside_the_drawing(pool: Pg
     // >= 16 had no induced edge at all. This test is that finding, shrunk to five tasks.
     let (profile, _ctx, goal) = seed_context_with_goal_and_tasks(&pool, 5).await;
 
-    let sub = graph_service::entry_orientation_slice(&pool, ProfileId::from(profile), Some(1))
+    let sub = graph_service::entry_orientation_slice(&pool, ProfileId::from(profile), &[], Some(1))
         .await
         .expect("entry read");
 
@@ -99,28 +99,38 @@ async fn a_high_corpus_degree_does_not_imply_an_edge_inside_the_drawing(pool: Pg
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn degree_zero_resources_are_ranked_not_filtered(pool: PgPool) {
-    // Spec §6: "The entry read returns its rows with their degrees, zeros included; a read must
-    // not make presentation decisions." Choosing the fallback rung is the client's job, and it
-    // cannot choose one it was never shown the evidence for.
+async fn degree_zero_resources_are_excluded_but_never_silently(pool: PgPool) {
+    // `[ruled — 2026-08-21, Pete]` The floor, and the declaration that pays for it.
+    //
+    // An earlier draft of this test asserted the OPPOSITE — that degree-zero resources are drawn —
+    // on spec §6's "returns its rows with their degrees, zeros included". The measurement changed
+    // the ruling: selecting purely by rank pads a sparse corpus with unconnected marks up to K,
+    // rebuilding the 244-of-250 band on the corpus least able to absorb it.
+    //
+    // So they are excluded. What makes that legitimate rather than a silent omission — the clause
+    // this whole goal sits under — is that the bounds still COUNT them.
     let (profile, ctx, _goal) = seed_context_with_goal_and_tasks(&pool, 2).await;
     let event = seed_genesis_event(&pool, profile, ctx).await;
     let lonely = seed_resource(&pool, ctx, profile, event, "Unconnected", "note").await;
 
-    let sub = graph_service::entry_orientation_slice(&pool, ProfileId::from(profile), Some(50))
-        .await
-        .expect("entry read");
+    let sub =
+        graph_service::entry_orientation_slice(&pool, ProfileId::from(profile), &[], Some(50))
+            .await
+            .expect("entry read");
 
-    let found = sub
-        .nodes
-        .iter()
-        .find(|n| n.id == lonely)
-        .expect("the degree-zero resource is returned, not silently dropped");
-    assert_eq!(found.degree, 0);
+    assert!(
+        !sub.nodes.iter().any(|n| n.id == lonely),
+        "an unconnected resource is not drawn"
+    );
     assert_eq!(
-        sub.nodes.last().map(|n| n.id),
-        Some(lonely),
-        "and it sorts last, because the ordering is by degree"
+        sub.bounds.in_scope - sub.bounds.eligible,
+        2,
+        "but it IS counted — it and the L0 kernel telos are the two undrawn"
+    );
+    assert_eq!(sub.bounds.drawn, sub.nodes.len() as i64);
+    assert!(
+        sub.nodes.iter().all(|n| n.degree >= 1),
+        "nothing below the floor reaches the canvas"
     );
     assert_no_dangling_edges(&sub);
 }
@@ -149,29 +159,20 @@ async fn folded_edges_do_not_rank_anything(pool: PgPool) {
         .await
         .expect("fold the ghost's edges");
 
-    let sub = graph_service::entry_orientation_slice(&pool, ProfileId::from(profile), Some(50))
-        .await
-        .expect("entry read");
+    let sub =
+        graph_service::entry_orientation_slice(&pool, ProfileId::from(profile), &[], Some(50))
+            .await
+            .expect("entry read");
 
-    let ghost_node = sub
-        .nodes
-        .iter()
-        .find(|n| n.id == ghost)
-        .expect("ghost drawn");
-    assert_eq!(
-        ghost_node.degree, 0,
-        "four retracted edges must count for nothing"
+    // With the connection floor in place this is a sharper witness than a degree comparison: four
+    // retracted edges leave the ghost at degree ZERO, so it falls below the floor entirely. Were
+    // folding ignored it would rank at degree 4 and be drawn ahead of the goal.
+    assert!(
+        !sub.nodes.iter().any(|n| n.id == ghost),
+        "four retracted edges must count for nothing — the ghost is below the floor"
     );
-    // Rank the two against EACH OTHER rather than against the whole canvas: the L0 kernel telos
-    // carries live edges of its own, so "the goal is first overall" would be an assertion about
-    // the kernel, not about folding.
-    let rank = |id: Uuid| sub.nodes.iter().position(|n| n.id == id).expect("drawn");
     let goal_node = sub.nodes.iter().find(|n| n.id == goal).expect("goal drawn");
     assert_eq!(goal_node.degree, 1, "the goal keeps its one LIVE edge");
-    assert!(
-        rank(goal) < rank(ghost),
-        "the goal outranks the ghost on one live edge against four retracted ones"
-    );
     assert_no_dangling_edges(&sub);
 }
 
@@ -182,7 +183,7 @@ async fn deny_direction_a_stranger_sees_nothing(pool: PgPool) {
     let stranger = seed_profile(&pool, "stranger").await;
 
     let owned: std::collections::HashSet<Uuid> =
-        graph_service::entry_orientation_slice(&pool, ProfileId::from(owner), Some(50))
+        graph_service::entry_orientation_slice(&pool, ProfileId::from(owner), &[], Some(50))
             .await
             .expect("owner read")
             .nodes
@@ -191,9 +192,10 @@ async fn deny_direction_a_stranger_sees_nothing(pool: PgPool) {
             .collect();
     assert!(owned.contains(&goal), "the owner sees their own star");
 
-    let sub = graph_service::entry_orientation_slice(&pool, ProfileId::from(stranger), Some(50))
-        .await
-        .expect("entry read");
+    let sub =
+        graph_service::entry_orientation_slice(&pool, ProfileId::from(stranger), &[], Some(50))
+            .await
+            .expect("entry read");
 
     // NOT `nodes.is_empty()`. Every profile sees the L0 kernel cogmap's telos — it is deliberately
     // public and root-team-joined (`internal/agents/key-patterns.md`), so an empty-canvas assertion
@@ -222,32 +224,33 @@ async fn k_is_bounded_and_non_positive_is_refused(pool: PgPool) {
     let (profile, _ctx, _goal) = seed_context_with_goal_and_tasks(&pool, 3).await;
 
     assert!(
-        graph_service::entry_orientation_slice(&pool, ProfileId::from(profile), Some(0))
+        graph_service::entry_orientation_slice(&pool, ProfileId::from(profile), &[], Some(0))
             .await
             .is_err(),
         "k=0 is a caller error, not an empty canvas"
     );
     assert!(
-        graph_service::entry_orientation_slice(&pool, ProfileId::from(profile), Some(-1))
+        graph_service::entry_orientation_slice(&pool, ProfileId::from(profile), &[], Some(-1))
             .await
             .is_err()
     );
 
     // Above the ceiling the read still answers — it clamps rather than refusing, because the
     // ceiling is our policy and not the caller's mistake.
-    let sub = graph_service::entry_orientation_slice(&pool, ProfileId::from(profile), Some(10_000))
-        .await
-        .expect("clamped, not refused");
-    // Four seeded (a goal and three tasks) plus the public L0 kernel telos every profile sees.
-    assert_eq!(
-        sub.nodes.len(),
-        5,
-        "the whole visible corpus, bounded above"
-    );
+    let sub =
+        graph_service::entry_orientation_slice(&pool, ProfileId::from(profile), &[], Some(10_000))
+            .await
+            .expect("clamped, not refused");
+    // Four seeded and connected (a goal and three tasks). The public L0 kernel telos every profile
+    // sees carries no resource-to-resource edges, so it sits below the floor: counted, not drawn.
+    assert_eq!(sub.nodes.len(), 4, "the connected corpus, bounded above");
     assert!(
-        sub.nodes.iter().any(|n| n.id == KERNEL_TELOS),
-        "the fifth is the kernel telos, not a stray"
+        !sub.nodes.iter().any(|n| n.id == KERNEL_TELOS),
+        "the kernel telos is unconnected here, so it is declared rather than drawn"
     );
+    assert_eq!(sub.bounds.in_scope, 5, "it is still counted");
+    assert_eq!(sub.bounds.eligible, 4);
+    assert!(!sub.bounds.truncated, "nothing eligible was left undrawn");
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
@@ -339,9 +342,10 @@ async fn the_response_is_in_ranking_order(pool: PgPool) {
     let event = seed_genesis_event(&pool, profile, ctx).await;
     seed_resource(&pool, ctx, profile, event, "Isolated", "note").await;
 
-    let sub = graph_service::entry_orientation_slice(&pool, ProfileId::from(profile), Some(100))
-        .await
-        .expect("entry read");
+    let sub =
+        graph_service::entry_orientation_slice(&pool, ProfileId::from(profile), &[], Some(100))
+            .await
+            .expect("entry read");
 
     assert!(
         sub.nodes.len() > 3,
@@ -354,4 +358,127 @@ async fn the_response_is_in_ranking_order(pool: PgPool) {
         degrees, sorted,
         "degrees must be non-increasing across the response — most-connected first"
     );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_named_place_ranks_within_that_place(pool: PgPool) {
+    // `[ruled — 2026-08-21, Pete]` What lets `/graph/@me?in=ctx` with no question be answered by
+    // this read instead of by the recency page — which is the condition on spec §10.4's deletion of
+    // `readSeedRows` actually being possible. §5.1's own headline is "A place, and no question at
+    // all", and without scoping the read would silently answer across the reader's whole corpus,
+    // ignoring the place they named.
+    let (profile, ctx_a, goal_a) = seed_context_with_goal_and_tasks(&pool, 3).await;
+
+    // A second context owned by the SAME profile — so both are visible, and only scoping separates
+    // them. Wired more densely, so that without scoping it would outrank everything in ctx_a.
+    let ctx_b = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name) \
+         VALUES ($1, 'kb_profiles', $2, $3, $3)",
+    )
+    .bind(ctx_b)
+    .bind(profile)
+    .bind(format!("ctx-b-{ctx_b}"))
+    .execute(&pool)
+    .await
+    .expect("second context");
+    let event_b = seed_genesis_event(&pool, profile, ctx_b).await;
+    let hub_b = seed_resource(&pool, ctx_b, profile, event_b, "Hub B", "goal").await;
+    for i in 0..8 {
+        let leaf = seed_resource(&pool, ctx_b, profile, event_b, &format!("B{i}"), "task").await;
+        seed_contains_edge(&pool, hub_b, leaf, ctx_b, event_b).await;
+    }
+
+    let unscoped =
+        graph_service::entry_orientation_slice(&pool, ProfileId::from(profile), &[], Some(50))
+            .await
+            .expect("unscoped");
+    assert!(
+        unscoped.nodes.iter().any(|n| n.id == hub_b)
+            && unscoped.nodes.iter().any(|n| n.id == goal_a),
+        "unscoped, both places are on the canvas"
+    );
+
+    let scoped =
+        graph_service::entry_orientation_slice(&pool, ProfileId::from(profile), &[ctx_a], Some(50))
+            .await
+            .expect("scoped");
+    assert!(
+        scoped.nodes.iter().any(|n| n.id == goal_a),
+        "the named place's own material is drawn"
+    );
+    assert!(
+        !scoped.nodes.iter().any(|n| n.id == hub_b),
+        "and the other place's is absent — even though it is visible and ranks higher"
+    );
+    assert!(
+        scoped.bounds.in_scope < unscoped.bounds.in_scope,
+        "the denominator narrows with the scope, so the bound line describes the place asked about"
+    );
+    assert_no_dangling_edges(&scoped);
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_bounds_declare_what_was_left_undrawn(pool: PgPool) {
+    // §7.1: the bound line is chrome, not a warning — present whether or not the view is partial,
+    // "so complete is something the reader is TOLD rather than something they infer from silence."
+    // The composition trace used to hand it these numbers; the entry read runs no composition.
+    let (profile, _ctx, _goal) = seed_context_with_goal_and_tasks(&pool, 20).await;
+
+    let partial =
+        graph_service::entry_orientation_slice(&pool, ProfileId::from(profile), &[], Some(5))
+            .await
+            .expect("k=5");
+    assert_eq!(partial.bounds.drawn, 5);
+    assert_eq!(
+        partial.bounds.eligible, 21,
+        "goal plus twenty tasks are connected"
+    );
+    assert_eq!(
+        partial.bounds.in_scope, 22,
+        "the kernel telos is in scope but not eligible"
+    );
+    assert!(
+        partial.bounds.truncated,
+        "more eligible exist than were drawn"
+    );
+
+    let whole =
+        graph_service::entry_orientation_slice(&pool, ProfileId::from(profile), &[], Some(500))
+            .await
+            .expect("k=500");
+    assert_eq!(whole.bounds.drawn, 21);
+    assert!(
+        !whole.bounds.truncated,
+        "nothing eligible left over — and the reader is TOLD that, not left to infer it"
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_corpus_with_no_structure_still_reports_its_size(pool: PgPool) {
+    // Spec §6, rung 2 — the case the bounds exist for. A corpus with resources but no edges must be
+    // able to say "a graph is the wrong instrument for this, here is the list view" rather than draw
+    // nothing and look broken. It cannot say that from an empty payload alone; it needs the size.
+    //
+    // This is also why the bounds are read SEPARATELY from the ranking: counts carried on result
+    // rows would vanish in exactly this case, which is the one that most needs explaining.
+    let (profile, ctx, _g) = seed_context_with_goal_and_tasks(&pool, 0).await;
+    let event = seed_genesis_event(&pool, profile, ctx).await;
+    for i in 0..6 {
+        seed_resource(&pool, ctx, profile, event, &format!("Loose {i}"), "note").await;
+    }
+
+    let sub =
+        graph_service::entry_orientation_slice(&pool, ProfileId::from(profile), &[], Some(50))
+            .await
+            .expect("entry read");
+
+    assert!(sub.nodes.is_empty(), "nothing clears the floor");
+    assert!(sub.edges.is_empty());
+    assert_eq!(sub.bounds.eligible, 0, "which is the rung-2 signal");
+    assert!(
+        sub.bounds.in_scope >= 7,
+        "but the reader still has material, and the surface is told how much"
+    );
+    assert!(!sub.bounds.truncated, "nothing eligible was withheld");
 }

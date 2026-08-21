@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT resource_id AS \"resource_id!\", degree AS \"degree!\"\n             FROM graph_visible_degree_ranking($1, $2)",
+  "query": "SELECT resource_id AS \"resource_id!\", degree AS \"degree!\"\n             FROM graph_visible_degree_ranking($1, $2, $3, $4)",
   "describe": {
     "columns": [
       {
@@ -17,6 +17,8 @@
     "parameters": {
       "Left": [
         "Uuid",
+        "UuidArray",
+        "Int4",
         "Int4"
       ]
     },
@@ -25,5 +27,5 @@
       null
     ]
   },
-  "hash": "558a4efc8b8f6c3f9f973e628989a1be1344fe721403521ab53868ab53a619bd"
+  "hash": "f7eefe9b08b8b7e4f30751fadfec745496801f1e29209f4991e37c0c564f73b4"
 }
