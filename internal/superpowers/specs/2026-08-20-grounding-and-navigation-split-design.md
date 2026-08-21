@@ -169,16 +169,28 @@ Fewer than the five an earlier draft carried, because degree degrades on what th
 rather than on what the reader was supposed to have done.
 
 1. **Most-connected, then traversable.** The entry read seeds the canvas.
-2. **Top degree is zero** — a corpus with no relationships at all, which is the document-corpus case
-   from §2.3. Fall back to the recency page, **declared as such**. The entry read still returns its
-   rows with their zeros; **choosing the rung is the client's job** — a read must not make
-   presentation decisions.
+2. **Too little structure to be a graph** — no edges at all, or below a threshold. The
+   document-corpus case from §2.3. `[ruled — 2026-08-20, Pete]` **The surface says so and sends the
+   reader somewhere better**: it names what cannot be rendered as a graph and points at the vault's
+   list view, which is the right instrument for a corpus with no relationships.
 3. **Nothing readable** — the existing refusal, unchanged.
+
+**Rung 2 is a declaration, not a degraded drawing.** An earlier draft had it fall back to the
+recency page — draw 200 dots and hope. That was rejected: dots the reader cannot use are not more
+honest than a sentence saying the graph is the wrong instrument here, and the sentence is the one
+that respects `the-unstructured-reader-is-never-worse-off`. Their need is greater, so they get a
+working door rather than an empty canvas.
+
+**The threshold is a number nobody has yet.** It comes from the same distribution A must report
+(§10.1), and until then it is a parameter rather than a constant.
 
 **The rung must be visible.** A reader on rung 2 is looking at a different claim than one on rung 1.
 Swapping silently is `legibility-is-never-bought-with-silent-omission`, and arguably
 `surface-declares-its-kind`, since the screen would be changing what kind of answer it is without
 saying so.
+
+**Choosing the rung is the client's job.** The entry read returns its rows with their degrees,
+zeros included; a read must not make presentation decisions.
 
 ## 7. What the surface owes the reader after the handoff
 
@@ -248,18 +260,47 @@ Assessed against the register as it stands after the `[2026-08-20]` amendment.
 
 ## 10. Open questions — rulings needed before build
 
-1. **K, and how it interacts with twelve anchors.** The entry read is visibility-scoped rather than
-   anchor-fanned, which dissolves the union-arity problem the composition had — but it does not
-   answer how many marks a first screen should carry. Wants a measurement.
-2. **The traversal URL grammar.** What a hop looks like in the address bar, what Back walks, and
-   whether an edge id ever appears in a URL.
+1. ~~**K, and how it interacts with twelve anchors.**~~ **DIRECTION RULED, VALUE STILL OPEN**
+   `[2026-08-20, Pete]` — *"agreed with the direction but also agreed that we will have to
+   investigate to be sure."* Visibility-scoping dissolves the union-arity problem, but not how many
+   marks a first screen carries. **K is a parameter in A, not a constant**; A must report the degree
+   distribution, and K (with rung 2's threshold) is fixed in C from real numbers, following
+   `ANCHOR_CEILING`'s precedent of measuring the heaviest real reader.
+
+   The distribution may also change K's *kind*. Degree-ordered selection means every node above the
+   cut has at least one edge to another drawn node **by construction**, so the unconnected band does
+   not exist until the connected material runs out. That argues K may want to be a **threshold**
+   (`degree ≥ n`, capped) rather than a count. **Deciding that without the measurement is exactly
+   the error this spec was written to correct**, so it stays open by design.
+2. ~~**The traversal URL grammar.**~~ **RULED** `[2026-08-20, Pete]`:
+
+   ```
+   /graph/@me?q=<grounding question>&from=<node-ids>&depth=<n>
+   ```
+
+   Mirrors `SliceRequest` (`seeds`, `depth`, `edge_kinds`), so the address says exactly what read
+   produced the screen. Each hop **pushes**, so Back walks the reader's path instead of leaving the
+   site — a change from `sel`'s deliberate `replaceState`, because a hop is not ephemeral panel
+   state.
+
+   **`q` survives the handoff as provenance**, and that is what makes §7.2 work: *Why these* stops
+   claiming to explain the current screen and says what the view descends from, because the question
+   is still in the address. *"It gives traversal a home."*
+
+   **No edge id ever appears in a URL.** An edge is not a place; you navigate to nodes.
+   `AtlasEdge.id` earns its keep in selection and trails, not in addressing a view.
 3. ~~**Does `?q=` still redraw on every change, or ground once and hand off?**~~ **RULED — hand off**
    `[2026-08-20, Pete]`: *"asking a question and our query composition frame helps set the space, but
    then you traverse the graph as normal without a question locking you in."* Not open; recorded
    here so it is not re-argued. The consequence is that the answered state stops re-running a
    composition per interaction, which is most of the latency the reader ranked second-most-jarring.
-4. **Whether the recency page survives at all** beyond rung 2, or whether rung 2 should say
-   *"nothing here connects to anything"* and draw nothing.
+4. ~~**Whether the recency page survives at all**~~ **RULED — it does not** `[2026-08-20, Pete]`:
+   *"a corpus with no edges or under some reasonable threshold should probably just say so — say
+   what is not really renderable and indicate that the vault list view is better than the graph one
+   for this."* Rung 2 became a declaration plus a door, not a degraded drawing. See §6.
+
+   **Consequence worth naming:** `readSeedRows` and the recency page have no remaining caller once C
+   lands. They are deleted in C rather than kept as a fallback — the fallback is now a sentence.
 
 ## 11. What this spec does not do
 
