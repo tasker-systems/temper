@@ -49,6 +49,18 @@ const PROJECTION_DUMPS: &[(&str, &str)] = &[
         "kb_chunk_content",
         "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.chunk_id), '[]'::jsonb) FROM kb_chunk_content t",
     ),
+    // Artifacts diff in FULL — ids included. Every column is payload-derivable (identity and the
+    // kind namespace are both identity-as-input), so there is nothing to mask and no need for the
+    // region tables' re-materialization escape. This is the whole reason the metadata/bytes split
+    // exists: it keeps the row byte-reconstructible while the bytes ride a sidecar.
+    (
+        "kb_data_artifacts",
+        "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.id), '[]'::jsonb) FROM kb_data_artifacts t",
+    ),
+    (
+        "kb_data_artifact_content",
+        "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.artifact_id), '[]'::jsonb) FROM kb_data_artifact_content t",
+    ),
     (
         "kb_block_revisions",
         // include `created` (the event occurred_at — replay-stable) in the mask order: a block revised
@@ -222,6 +234,11 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             // no blocks, no chunks, no sidecar. A received webhook (S2 chunk B) carries the
             // remote's verbatim body — foreign content temper did not author and does not chunk.
             | EventKind::SubscriptionDeliveryDisposed
+            // A data artifact carries structured bytes, not prose: no blocks, no chunks, and
+            // deliberately nothing in the search corpus. Its sidecar is real but comes from
+            // kb_data_artifact_content rather than from a chunk manifest, so it is built by the
+            // separate pass below and this arm only satisfies exhaustiveness.
+            | EventKind::DataArtifactCommitted
             | EventKind::WebhookReceived => None,
         }
         .context("content-bearing payload missing blocks")?;
@@ -335,6 +352,31 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
         }
         sidecars.insert(event_id, serde_json::Value::Object(side));
     }
+    // ── data-artifact content sidecars ──────────────────────────────────────────────────────
+    // Artifacts are the second content-bearing kind, and their bytes are NOT on the ledger: the
+    // payload carries only `content_hash`. Replay therefore re-supplies them from the projected
+    // content table, exactly as `__blocks` re-supplies verbatim block bytes above.
+    //
+    // Keyed by the ASSERTING event so the apply loop can hand each commit its own bytes. A folded
+    // artifact still has its content row (fold affects visibility, never existence), so this is
+    // deliberately not filtered on `is_folded` — filtering would drop the bytes for every
+    // superseded artifact and replay would reproduce a partial content table.
+    // `query!`, not a runtime `sqlx::query`, deliberately: this module's 37 exemptions are all
+    // `dynamic-table` (the dump/restore loop, where the table name is a loop variable). Both tables
+    // here are static literals, so none of the four documented reasons applies — and
+    // audit-sqlx-macro-exceptions.sh says so plainly: "If no reason fits, that IS the answer: it
+    // converts." Following the neighbours' runtime style would be exactly the "for consistency"
+    // exemption that script exists to stop.
+    let artifact_rows = sqlx::query!(
+        "SELECT a.asserted_by_event_id, c.content \
+           FROM kb_data_artifacts a JOIN kb_data_artifact_content c ON c.artifact_id = a.id"
+    )
+    .fetch_all(pool)
+    .await?;
+    for r in artifact_rows {
+        sidecars.insert(r.asserted_by_event_id, r.content);
+    }
+
     Ok(LedgerSnapshot {
         inputs,
         team_cogmaps,
@@ -393,6 +435,23 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     .bind(side)
                     .execute(pool)
                     .await?;
+            }
+            EventKind::DataArtifactCommitted => {
+                // `None` is legitimate, not an error: an artifact may be committed with no bytes
+                // (the metadata row alone), and the projector inserts no content row for it. A
+                // `context("missing sidecar")` here — as the block types use — would turn that
+                // valid state into a replay failure.
+                let side = snap.sidecars.get(&id);
+                // Macro form, for the same reason as the sidecar query above: the projector name
+                // is a static literal, so no `dynamic-table` claim is available to this call.
+                sqlx::query!(
+                    "SELECT _project_data_artifact_committed($1,$2,$3)",
+                    id,
+                    payload,
+                    side as Option<&serde_json::Value>,
+                )
+                .fetch_one(pool)
+                .await?;
             }
             EventKind::BlockMutated => {
                 let side = snap.sidecars.get(&id).context("missing sidecar")?;

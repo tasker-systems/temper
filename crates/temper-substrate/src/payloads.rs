@@ -15,8 +15,8 @@
 use crate::affinity::EdgeKind;
 use crate::content::PreparedBlock;
 use crate::ids::{
-    BlockId, ChunkId, CogmapId, ContextId, EdgeId, EntityId, EventId, InvocationId, LensId,
-    ProfileId, PropertyId, RegionId, ResourceId,
+    BlockId, ChunkId, CogmapId, ContextId, DataArtifactId, EdgeId, EntityId, EventId, InvocationId,
+    LensId, ProfileId, PropertyId, RegionId, ResourceId,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -547,6 +547,89 @@ pub struct PropertyAsserted {
     pub property_key: String,
     pub value: serde_json::Value,
     pub weight: f64,
+}
+
+/// How a reader should select among a resource's artifacts of one family. The **closed** selection
+/// vocabulary, and the only question a reader cannot function without: given a collection, which do
+/// I take?
+///
+/// It deliberately carries no ordering (that is `precedence`) and no timing (that is the row's
+/// `created` and its folded chain). Mixing those in was the earlier draft's mistake — an intent
+/// that also implied an order would have two ways to say the same thing and they would disagree.
+///
+/// The SQL side enforces the same three terms with a CHECK constraint, so a caller that bypasses
+/// this type still cannot store a fourth. Keep the `serde` renames pinned to that CHECK.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactIntent {
+    /// Replaces earlier artifacts of its family. A reader takes the newest live `Current`.
+    ///
+    /// Note what this does NOT do: declaring `Current` does not itself fold anything. The writer
+    /// still names what it supersedes, because the store cannot know whether this run replaces the
+    /// last one — see `DataArtifactCommitted::supersedes`.
+    Current,
+    /// A peer in a series, not a replacement. A reader takes them all, ordered by `precedence`, and
+    /// compares. Measurement runs live here.
+    Member,
+    /// Never auto-selected. Addressable by explicit reference only.
+    Pinned,
+}
+
+/// The owner whose namespace a family name lives in. A bare `"query-plan"` is never a complete
+/// reference; the pair `(kind_owner, artifact_kind)` is.
+///
+/// Registering a shape for a family validates the existing backlog and records a conformance
+/// verdict against every artifact of that family — so under a flat namespace one tenant's
+/// registration would stamp verdicts on another tenant's data, which it cannot even read.
+/// Qualification makes that impossible by construction rather than by a resolution rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub enum KindOwner {
+    #[serde(rename = "kb_profiles")]
+    Profile(Uuid),
+    #[serde(rename = "kb_teams")]
+    Team(Uuid),
+}
+
+/// Commit one data artifact to a resource (spec: resource-owned data artifacts, 2026-08-20).
+///
+/// **The body is NOT here, and that is the design.** The payload carries `content_hash`; the bytes
+/// ride a sidecar into `kb_data_artifact_content` and are proved by that hash — the same shape
+/// `kb_block_content` already uses, where replay re-supplies verbatim bytes rather than
+/// reconstructing them from an event. Replay's purpose for the ledger is *provenance*: resources
+/// are the replayable-difference core, and artifacts are event-sourced for governance and
+/// consistency. Consequence: the ledger stays light regardless of artifact size.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct DataArtifactCommitted {
+    /// Identity-as-input: minted by the caller and carried here so replay reproduces the same row
+    /// id. `kb_data_artifacts.id` deliberately has no DEFAULT for this reason.
+    pub artifact_id: DataArtifactId,
+    pub resource_id: ResourceId,
+    /// The namespace half of the family name. Resolved at COMMIT (defaulting from the owning
+    /// resource's home) rather than at projection: a context's owner can change, so re-resolving
+    /// during replay would qualify an old artifact with today's owner and break the byte-exact
+    /// diff. Identity-as-input applies to the namespace too.
+    pub kind_owner: KindOwner,
+    /// The bare family name, qualified by `kind_owner`. Carries no implication that a shape has
+    /// been registered — persistence never requires a prior declaration.
+    pub artifact_kind: String,
+    pub intent: ArtifactIntent,
+    /// Ordering among peers. Meaningful for `Member`; carried for all so a reader never has to
+    /// branch on intent to sort.
+    pub precedence: f64,
+    /// Bare sha256 hex of the content's raw bytes — the `sha256_hex` twin, exactly as
+    /// `kb_block_content.content_hash`.
+    pub content_hash: String,
+    pub content_bytes: i64,
+    /// The artifacts THIS one replaces, named explicitly by the writer.
+    ///
+    /// Empty is the common case and means "this replaces nothing". The store never infers
+    /// supersession from recency, ordering or family: it cannot know whether run #2 supersedes run
+    /// #1, and only the writer can. This field is that knowledge, made explicit.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supersedes: Vec<DataArtifactId>,
 }
 
 /// Set a **single-valued** property (WS6 4c): the projection folds prior active rows for
@@ -1192,8 +1275,8 @@ pub struct SubscriptionDeliveryDisposed {
     pub decided_by_invocation_id: Option<Uuid>,
 }
 
-/// The 22 typed event names — the registry-stamping and snapshot surfaces iterate this.
-pub const TYPED_EVENT_NAMES: [&str; 22] = [
+/// The 23 typed event names — the registry-stamping and snapshot surfaces iterate this.
+pub const TYPED_EVENT_NAMES: [&str; 23] = [
     "cogmap_seeded",
     "resource_created",
     "relationship_asserted",
@@ -1216,6 +1299,7 @@ pub const TYPED_EVENT_NAMES: [&str; 22] = [
     "principal_standing_changed",
     "principal_governance_changed",
     "subscription_delivery_disposed",
+    "data_artifact_committed",
 ];
 
 /// FOREIGN event names — registered permissive (NULL `payload_schema`) because their body is a
