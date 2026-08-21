@@ -187,8 +187,13 @@ will bite on the first route converted.
 The register's refusal face allows the system to **decline to keep waiting**, which is well-formed
 rather than a failure: the reader is told the system gave up.
 
-This is the **only** place a number is required. The register deliberately specifies no duration, so
-a value proposed here is a **recommendation and not a clause** until Pete rules it.
+This is the **only** place a number is required. `[ruled — 2026-08-21, Pete]` **8 seconds** —
+*"we have to bound it somewhere."*
+
+The register still specifies no duration and deliberately never will: a budget is a build decision,
+not an invariant, so this ruling changes no clause. It is recorded here and in
+`src/lib/server/bounded.ts`, and nowhere else, so a number that turns out wrong is changed in one
+place. **No measurement backs it**; instrumentation is Phase 2.
 
 ---
 

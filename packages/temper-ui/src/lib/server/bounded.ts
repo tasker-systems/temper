@@ -8,18 +8,25 @@
  * closes that hole: past it the wait is converted into a named `GaveUp`, so the region can say
  * *which* read the system declined to keep waiting for.
  *
- * **The duration is not settled.** The register deliberately specifies none, so
- * `GIVE_UP_AFTER_MS` is a recommendation awaiting Pete's ruling, not a clause — which is why
- * `ms` is a parameter and every caller may name its own.
+ * **The duration is settled; the clause is not about a number.** `[ruled — 2026-08-21, Pete]`
+ * *"we have to bound it somewhere."* The register still specifies no duration and deliberately
+ * never will — a budget is a build decision, not an invariant — so this is a ruling on the
+ * mechanism rather than an amendment to any clause. `ms` stays a parameter: a call site with a
+ * reason may name its own.
  */
 
 /**
  * How long a streamed read is waited for before the system declines to keep waiting.
  *
- * **UNRULED.** A recommendation, not a clause — see the module note. Chosen so the bound fires
- * while a reader is still watching the region rather than after they have concluded the page is
- * broken, and well inside the serverless function's own lifetime so the give-up is *ours* to
- * render rather than the platform's to truncate.
+ * `[ruled — 2026-08-21, Pete]` **8 seconds**, on the reasoning that *"we have to bound it
+ * somewhere"* — the alternative to a chosen number is not "no number", it is an unbounded wait
+ * that presents as arriving forever, which is the exact failure this exists to close.
+ *
+ * Chosen so the bound fires while a reader is still watching the region rather than after they
+ * have concluded the page is broken, and well inside the serverless function's own lifetime so
+ * the give-up is *ours* to render rather than the platform's to truncate. **No measurement backs
+ * it** — nothing has been instrumented, which is Phase 2's subject. A number that turns out wrong
+ * is changed here, in one place, without touching a clause.
  */
 export const GIVE_UP_AFTER_MS = 8_000;
 
