@@ -481,6 +481,30 @@ impl TemperMcpService {
         self.ensure_profile_from_parts(&parts).await?;
         tools::steward::steward_advance_watermark(self, input).await
     }
+
+    #[tool(
+        description = "List data artifacts owned by a resource. Each artifact is structured data committed by an agent session, retrieved whole. Filter by kind (the bare family name) or intent (current/member/pinned). Set include_folded to include superseded artifacts. Visibility-gated: you only see artifacts whose owning resource you can read."
+    )]
+    async fn list_data_artifacts(
+        &self,
+        Parameters(input): Parameters<tools::data_artifacts::ListArtifactsInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::data_artifacts::list_artifacts(self, input).await
+    }
+
+    #[tool(
+        description = "Get a single data artifact by its ID. Returns the full artifact with content payload. Visibility-gated: returns 'not found' if the owning resource is not visible to you."
+    )]
+    async fn get_data_artifact(
+        &self,
+        Parameters(input): Parameters<tools::data_artifacts::GetArtifactInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::data_artifacts::get_artifact(self, input).await
+    }
 }
 
 /// The two things the JWT middleware injects for an authenticated request: the

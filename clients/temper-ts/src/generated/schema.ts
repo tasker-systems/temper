@@ -1212,6 +1212,56 @@ export interface paths {
         patch: operations["update_resource"];
         trace?: never;
     };
+    "/api/resources/{id}/artifacts": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List artifacts for a resource, or counts with counts=true
+         * @description Without `counts=true`: returns fully hydrated artifacts (metadata + content).
+         *     With `counts=true`: returns per-family counts only, no content hydration —
+         *     for surfaces that need "3 measurements, 1 extraction" without fetching payloads.
+         */
+        get: operations["list_artifacts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/resources/{id}/artifacts/{artifact_id}": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a single artifact by ID under its owning resource
+         * @description The resource ID in the path is the REST parent; visibility is gated on the
+         *     artifact's actual owning resource via `resources_visible_to`. Returns 404
+         *     if the artifact does not exist or is not visible to the caller.
+         */
+        get: operations["get_artifact"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/resources/{id}/blocks": {
         parameters: {
             query?: never;
@@ -2019,6 +2069,36 @@ export interface components {
              *     skipped on the wire) = an un-attributed append, exactly the prior behaviour.
              */
             sources?: components["schemas"]["ProvenanceSource"][];
+        };
+        /**
+         * @description One data artifact, as returned by the API and MCP surfaces.
+         *
+         *     This is the readback `RetrievedArtifact` projected onto a wire shape: the typed enums
+         *     (`intent`, `shape_state`, `kind_owner`) are rendered as their serde-renamed strings so a
+         *     consumer that does not share the Rust types still gets a self-describing response.
+         */
+        ArtifactView: {
+            artifact_id: components["schemas"]["DataArtifactId"];
+            artifact_kind: string;
+            /** @description The content payload. `null` when the artifact was committed with no bytes. */
+            content?: unknown;
+            /** Format: int64 */
+            content_bytes: number;
+            content_hash: string;
+            /** Format: date-time */
+            created: string;
+            /** @description `"current"` / `"member"` / `"pinned"` — the closed selection vocabulary. */
+            intent: string;
+            is_folded: boolean;
+            /** Format: uuid */
+            kind_owner_id: string;
+            /** @description `"kb_profiles"` or `"kb_teams"` — the namespace half of the family name. */
+            kind_owner_table: string;
+            /** Format: double */
+            precedence: number;
+            resource_id: components["schemas"]["ResourceId"];
+            /** @description `"never_declared"` today; will carry conformance verdicts when the shape registry lands. */
+            shape_state: string;
         };
         /** @description Request body for `POST /api/relationships`. */
         AssertRelationshipRequest: components["schemas"]["ActInput"] & {
@@ -2956,6 +3036,11 @@ export interface components {
         CreateReviewBody: {
             message?: string | null;
         };
+        /**
+         * Format: uuid
+         * @description A `kb_data_artifacts.id` value — one schema-boundable structured datum owned by a resource.
+         */
+        DataArtifactId: string;
         /** @description Response body for resource deletion. */
         DeleteResponse: {
             deleted: boolean;
@@ -9735,6 +9820,99 @@ export interface operations {
                 };
             };
             /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    list_artifacts: {
+        parameters: {
+            query?: {
+                /** @description Filter by the bare family name (e.g. `"measurement"`). */
+                kind?: string | null;
+                /** @description Filter by selection intent: `"current"`, `"member"`, or `"pinned"`. */
+                intent?: string | null;
+                /** @description Include folded (superseded) artifacts in the result. Default: `false`. */
+                include_folded?: boolean | null;
+                /**
+                 * @description Return per-family counts instead of full artifacts. No content hydration.
+                 *     Default: `false` (full artifacts with content).
+                 */
+                counts?: boolean | null;
+            };
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Resource ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Artifacts owned by the resource (full or counts) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactView"][];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    get_artifact: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Resource ID (REST parent) */
+                id: string;
+                /** @description Artifact ID */
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The artifact with content */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactView"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not found or not visible */
             404: {
                 headers: {
                     [name: string]: unknown;

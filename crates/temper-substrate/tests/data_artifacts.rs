@@ -27,7 +27,8 @@ mod common;
 use temper_substrate::events::{fire, EventContext, SeedAction};
 use temper_substrate::ids::{ContextId, EntityId, ProfileId, ResourceId};
 use temper_substrate::payloads::AnchorRef;
-use temper_substrate::payloads::{ArtifactIntent, KindOwner};
+use temper_substrate::payloads::{ArtifactIntent, KindOwner, ShapeState};
+use temper_substrate::readback;
 use temper_substrate::scenario::bootseed;
 use temper_substrate::writes::{self, CreateParams};
 use uuid::Uuid;
@@ -905,5 +906,526 @@ async fn artifacts_replay_byte_identically(pool: sqlx::PgPool) {
     assert_eq!(
         checked, 2,
         "both artifact tables must be in PROJECTION_DUMPS"
+    );
+}
+
+// ── Beat C: the read path, visibility gating, shape-state reporting ──────────────────────────
+
+/// A world for visibility tests: Team A with Alice as member, Bob with no team, a context owned
+/// by Team A, and a resource homed in that context. The system actor creates the resource and
+/// commits the artifact — the visibility gate is tested on the READER, not the writer.
+async fn world_with_team(
+    pool: &sqlx::PgPool,
+    slug: &str,
+) -> (EntityId, ContextId, ResourceId, ProfileId, ProfileId) {
+    bootseed::seed_system(pool).await.unwrap();
+    let (owner, emitter) = system_actor(pool).await;
+
+    let team_a = common::create_team(pool, &format!("team-a-{slug}")).await;
+    let alice = ProfileId::from(common::create_profile(pool, &format!("alice-{slug}@test")).await);
+    let bob = ProfileId::from(common::create_profile(pool, &format!("bob-{slug}@test")).await);
+    common::add_team_member(pool, team_a, alice.uuid()).await;
+
+    let home = ContextId::from(
+        common::insert_context(pool, "kb_teams", team_a, slug, slug)
+            .await
+            .unwrap(),
+    );
+    let resource = make_resource(pool, owner, emitter, home, "team-scoped resource").await;
+    (emitter, home, resource, alice, bob)
+}
+
+/// Data committed through `fire()` round-trips through the read path: the content retrieved by
+/// `artifacts_for_resource` matches the content committed, byte-for-byte.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn retrieved_content_matches_committed(pool: sqlx::PgPool) {
+    let (emitter, _home, resource) = world(&pool, "read-round-trip").await;
+    let (owner, _) = system_actor(&pool).await;
+
+    let content = serde_json::json!({ "measurement": "delta-t", "rows": [1.0, 2.0, 3.0] });
+    let id = fire_commit(
+        &pool,
+        resource,
+        "measurement",
+        ArtifactIntent::Member,
+        &content,
+        emitter,
+    )
+    .await;
+
+    let retrieved = readback::artifacts_for_resource(&pool, owner, resource, None, None, false)
+        .await
+        .unwrap();
+
+    assert_eq!(retrieved.len(), 1, "one artifact committed, one retrieved");
+    let art = &retrieved[0];
+    assert_eq!(art.artifact_id, id);
+    assert_eq!(art.resource_id, resource);
+    assert_eq!(art.artifact_kind, "measurement");
+    assert_eq!(art.intent, ArtifactIntent::Member);
+    assert_eq!(
+        art.content.as_ref().unwrap(),
+        &content,
+        "retrieved content must match committed content"
+    );
+    assert!(!art.is_folded, "a non-superseded artifact is live");
+}
+
+/// Every retrieved artifact reports `shape_state == NeverDeclared` — no shape registry exists yet,
+/// and the reader is told "unchecked" rather than shown an empty field. This is where
+/// `unchecked-never-reads-as-checked` gets its first purchase.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn retrieved_artifacts_report_never_declared_shape_state(pool: sqlx::PgPool) {
+    let (emitter, _home, resource) = world(&pool, "shape-state").await;
+    let (owner, _) = system_actor(&pool).await;
+
+    fire_commit(
+        &pool,
+        resource,
+        "measurement",
+        ArtifactIntent::Member,
+        &serde_json::json!({"v": 1}),
+        emitter,
+    )
+    .await;
+
+    let retrieved = readback::artifacts_for_resource(&pool, owner, resource, None, None, false)
+        .await
+        .unwrap();
+
+    assert_eq!(retrieved.len(), 1);
+    assert_eq!(
+        retrieved[0].shape_state,
+        ShapeState::NeverDeclared,
+        "no registry exists — every artifact is 'never declared', not silently 'checked'"
+    );
+}
+
+/// Counts match committed artifacts, grouped by the qualified family name.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn counts_match_committed_artifacts(pool: sqlx::PgPool) {
+    let (emitter, _home, resource) = world(&pool, "counts").await;
+    let (owner, _) = system_actor(&pool).await;
+
+    // Two measurements, one extraction.
+    fire_commit(
+        &pool,
+        resource,
+        "measurement",
+        ArtifactIntent::Member,
+        &serde_json::json!({"run": 1}),
+        emitter,
+    )
+    .await;
+    fire_commit(
+        &pool,
+        resource,
+        "measurement",
+        ArtifactIntent::Member,
+        &serde_json::json!({"run": 2}),
+        emitter,
+    )
+    .await;
+    fire_commit(
+        &pool,
+        resource,
+        "extraction",
+        ArtifactIntent::Current,
+        &serde_json::json!({"v": 1}),
+        emitter,
+    )
+    .await;
+
+    let counts = readback::artifact_counts_for_resource(&pool, owner, resource, false)
+        .await
+        .unwrap();
+
+    assert_eq!(counts.len(), 2, "two distinct families");
+    let measurement = counts
+        .iter()
+        .find(|c| c.artifact_kind == "measurement")
+        .expect("measurement family present");
+    assert_eq!(measurement.count, 2, "two measurements committed");
+    assert!(
+        measurement.total_bytes > 0,
+        "total_bytes should reflect both payloads"
+    );
+
+    let extraction = counts
+        .iter()
+        .find(|c| c.artifact_kind == "extraction")
+        .expect("extraction family present");
+    assert_eq!(extraction.count, 1, "one extraction committed");
+}
+
+/// The IDs-only function returns the same IDs as the full hydration, just without content.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn ids_function_returns_artifact_ids(pool: sqlx::PgPool) {
+    let (emitter, _home, resource) = world(&pool, "ids-only").await;
+    let (owner, _) = system_actor(&pool).await;
+
+    let id1 = fire_commit(
+        &pool,
+        resource,
+        "measurement",
+        ArtifactIntent::Member,
+        &serde_json::json!({"run": 1}),
+        emitter,
+    )
+    .await;
+    let id2 = fire_commit(
+        &pool,
+        resource,
+        "measurement",
+        ArtifactIntent::Member,
+        &serde_json::json!({"run": 2}),
+        emitter,
+    )
+    .await;
+
+    let ids = readback::artifact_ids_for_resource(&pool, owner, resource, None, None, false)
+        .await
+        .unwrap();
+
+    assert_eq!(ids.len(), 2, "two artifacts committed");
+    assert!(ids.contains(&id1), "first artifact id present");
+    assert!(ids.contains(&id2), "second artifact id present");
+}
+
+/// Single-artifact-by-ID retrieval returns the full artifact, gated on the owning resource's
+/// visibility.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn artifact_by_id_returns_full_artifact(pool: sqlx::PgPool) {
+    let (emitter, _home, resource) = world(&pool, "by-id").await;
+    let (owner, _) = system_actor(&pool).await;
+
+    let content = serde_json::json!({"result": "ok", "values": [42]});
+    let id = fire_commit(
+        &pool,
+        resource,
+        "extraction",
+        ArtifactIntent::Current,
+        &content,
+        emitter,
+    )
+    .await;
+
+    let art = readback::artifact_by_id(&pool, owner, id)
+        .await
+        .unwrap()
+        .expect("the owner can see the resource, so the artifact is retrievable");
+
+    assert_eq!(art.artifact_id, id);
+    assert_eq!(art.artifact_kind, "extraction");
+    assert_eq!(art.intent, ArtifactIntent::Current);
+    assert_eq!(
+        art.content.as_ref().unwrap(),
+        &content,
+        "content matches committed"
+    );
+}
+
+/// Folded artifacts are excluded by default and included when `include_folded = true`. A folded
+/// artifact retains its content row (fold affects visibility, never existence).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn folded_artifacts_excluded_by_default_included_on_request(pool: sqlx::PgPool) {
+    let (emitter, _home, resource) = world(&pool, "folded-read").await;
+    let (owner, _) = system_actor(&pool).await;
+
+    let first = fire_commit(
+        &pool,
+        resource,
+        "extraction",
+        ArtifactIntent::Current,
+        &serde_json::json!({"v": 1, "note": "superseded"}),
+        emitter,
+    )
+    .await;
+    fire_commit(
+        &pool,
+        resource,
+        "extraction",
+        ArtifactIntent::Current,
+        &serde_json::json!({"v": 2}),
+        emitter,
+    )
+    .await;
+
+    // Commit a supersession that folds `first`.
+    let mut tx = pool.begin().await.unwrap();
+    fire(
+        &mut tx,
+        SeedAction::DataArtifactCommit {
+            resource,
+            kind: "extraction",
+            kind_owner: Some(KindOwner::Profile(Uuid::nil())),
+            intent: ArtifactIntent::Current,
+            precedence: 2.0,
+            content: &serde_json::json!({"v": 3}),
+            supersedes: &[first],
+            emitter,
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    // Default: live only — two artifacts (v2 and v3), `first` is folded.
+    let live = readback::artifacts_for_resource(&pool, owner, resource, None, None, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        live.len(),
+        2,
+        "two live artifacts (the folded one is excluded by default)"
+    );
+    assert!(
+        !live.iter().any(|a| a.artifact_id == first),
+        "the folded artifact must not appear in the default read"
+    );
+
+    // Include folded: three artifacts, including the superseded one.
+    let all = readback::artifacts_for_resource(&pool, owner, resource, None, None, true)
+        .await
+        .unwrap();
+    assert_eq!(all.len(), 3, "all three artifacts including folded");
+    let folded = all
+        .iter()
+        .find(|a| a.artifact_id == first)
+        .expect("the folded artifact is present when include_folded=true");
+    assert!(
+        folded.is_folded,
+        "the folded artifact reports is_folded=true"
+    );
+    assert!(
+        folded.content.is_some(),
+        "the folded artifact retains its content row"
+    );
+}
+
+/// Filtering by kind and intent narrows the result set correctly.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn filtering_by_kind_and_intent(pool: sqlx::PgPool) {
+    let (emitter, _home, resource) = world(&pool, "filter").await;
+    let (owner, _) = system_actor(&pool).await;
+
+    fire_commit(
+        &pool,
+        resource,
+        "measurement",
+        ArtifactIntent::Member,
+        &serde_json::json!({"r": 1}),
+        emitter,
+    )
+    .await;
+    fire_commit(
+        &pool,
+        resource,
+        "measurement",
+        ArtifactIntent::Member,
+        &serde_json::json!({"r": 2}),
+        emitter,
+    )
+    .await;
+    fire_commit(
+        &pool,
+        resource,
+        "extraction",
+        ArtifactIntent::Current,
+        &serde_json::json!({"v": 1}),
+        emitter,
+    )
+    .await;
+    fire_commit(
+        &pool,
+        resource,
+        "plan",
+        ArtifactIntent::Pinned,
+        &serde_json::json!({"p": 1}),
+        emitter,
+    )
+    .await;
+
+    // Filter by kind.
+    let measurements =
+        readback::artifacts_for_resource(&pool, owner, resource, Some("measurement"), None, false)
+            .await
+            .unwrap();
+    assert_eq!(measurements.len(), 2, "two measurements");
+
+    // Filter by intent.
+    let pinned = readback::artifacts_for_resource(
+        &pool,
+        owner,
+        resource,
+        None,
+        Some(ArtifactIntent::Pinned),
+        false,
+    )
+    .await
+    .unwrap();
+    assert_eq!(pinned.len(), 1, "one pinned artifact");
+    assert_eq!(pinned[0].artifact_kind, "plan");
+
+    // Filter by both.
+    let current_extractions = readback::artifacts_for_resource(
+        &pool,
+        owner,
+        resource,
+        Some("extraction"),
+        Some(ArtifactIntent::Current),
+        false,
+    )
+    .await
+    .unwrap();
+    assert_eq!(current_extractions.len(), 1, "one current extraction");
+}
+
+/// **THE VISIBILITY GATE.** A profile who cannot read the owning resource gets zero artifacts.
+/// This is the `data-visibility-never-exceeds-its-owners` clause, made testable.
+///
+/// The bite: the artifact EXISTS in the database (committed by the system actor). Bob's profile
+/// has no team membership that reaches Team A's context, so `resources_visible_to(bob)` does not
+/// include the owning resource. The INNER JOIN in `artifacts_for_resource` drops every row. If the
+/// JOIN were removed, Bob would see Alice's team's artifacts — a cross-scope visibility leak.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn visibility_gate_blocks_invisible_principal(pool: sqlx::PgPool) {
+    let (emitter, _home, resource, alice, bob) = world_with_team(&pool, "vis-gate").await;
+
+    let content = serde_json::json!({"secret": "team-a-data", "rows": [1, 2, 3]});
+    let id = fire_commit(
+        &pool,
+        resource,
+        "measurement",
+        ArtifactIntent::Member,
+        &content,
+        emitter,
+    )
+    .await;
+
+    // The artifact exists in the database — this is not a "no data" false negative.
+    let exists: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_data_artifacts WHERE resource_id = $1 AND NOT is_folded",
+    )
+    .bind(resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(exists, 1, "the artifact exists in the database");
+
+    // Alice (Team A member) can see the resource, so she gets the artifact.
+    let alice_artifacts =
+        readback::artifacts_for_resource(&pool, alice, resource, None, None, false)
+            .await
+            .unwrap();
+    assert_eq!(
+        alice_artifacts.len(),
+        1,
+        "Alice sees the artifact (Team A member)"
+    );
+    assert_eq!(alice_artifacts[0].artifact_id, id);
+
+    // Bob (NOT a Team A member) cannot see the resource, so he gets zero artifacts.
+    let bob_artifacts = readback::artifacts_for_resource(&pool, bob, resource, None, None, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        bob_artifacts.len(),
+        0,
+        "Bob sees zero artifacts — the visibility gate fail-closed. \
+         Removing the JOIN resources_visible_to from the SQL would make this test fail \
+         (Bob would see Team A's data despite having no visibility on the owning resource)."
+    );
+}
+
+/// `artifact_by_id` gates on the owning resource's visibility: Bob cannot fetch an artifact
+/// whose owning resource he cannot read, even if he knows the artifact ID.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn artifact_by_id_gates_on_owning_resource(pool: sqlx::PgPool) {
+    let (emitter, _home, resource, alice, bob) = world_with_team(&pool, "by-id-gate").await;
+
+    let id = fire_commit(
+        &pool,
+        resource,
+        "measurement",
+        ArtifactIntent::Member,
+        &serde_json::json!({"secret": "team-a-only"}),
+        emitter,
+    )
+    .await;
+
+    // Alice can fetch by ID.
+    let alice_art = readback::artifact_by_id(&pool, alice, id)
+        .await
+        .unwrap()
+        .expect("Alice can see the resource, so the artifact is retrievable");
+    assert_eq!(alice_art.artifact_id, id);
+
+    // Bob cannot fetch by ID — returns None, not an error (fail closed, no existence leak).
+    let bob_art = readback::artifact_by_id(&pool, bob, id).await.unwrap();
+    assert!(
+        bob_art.is_none(),
+        "Bob cannot retrieve the artifact by ID — the gate fail-closed. \
+         A None return (not an error) means Bob learns nothing about the artifact's existence."
+    );
+}
+
+/// The counts function also respects the visibility gate: an invisible principal gets zero counts.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn counts_respect_visibility_gate(pool: sqlx::PgPool) {
+    let (emitter, _home, resource, alice, bob) = world_with_team(&pool, "counts-gate").await;
+
+    fire_commit(
+        &pool,
+        resource,
+        "measurement",
+        ArtifactIntent::Member,
+        &serde_json::json!({"r": 1}),
+        emitter,
+    )
+    .await;
+
+    let alice_counts = readback::artifact_counts_for_resource(&pool, alice, resource, false)
+        .await
+        .unwrap();
+    assert_eq!(alice_counts.len(), 1, "Alice sees one family");
+
+    let bob_counts = readback::artifact_counts_for_resource(&pool, bob, resource, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        bob_counts.len(),
+        0,
+        "Bob sees zero families — gate fail-closed"
+    );
+}
+
+/// The IDs function also respects the visibility gate.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn ids_respect_visibility_gate(pool: sqlx::PgPool) {
+    let (emitter, _home, resource, alice, bob) = world_with_team(&pool, "ids-gate").await;
+
+    fire_commit(
+        &pool,
+        resource,
+        "measurement",
+        ArtifactIntent::Member,
+        &serde_json::json!({"r": 1}),
+        emitter,
+    )
+    .await;
+
+    let alice_ids = readback::artifact_ids_for_resource(&pool, alice, resource, None, None, false)
+        .await
+        .unwrap();
+    assert_eq!(alice_ids.len(), 1, "Alice sees one artifact ID");
+
+    let bob_ids = readback::artifact_ids_for_resource(&pool, bob, resource, None, None, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        bob_ids.len(),
+        0,
+        "Bob sees zero artifact IDs — gate fail-closed"
     );
 }
