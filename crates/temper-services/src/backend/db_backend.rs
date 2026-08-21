@@ -19,6 +19,7 @@ use temper_macros::act_span;
 
 use temper_core::error::TemperError;
 use temper_core::types::authorship::ActContext;
+use temper_core::types::data_artifact::{ArtifactView, KindOwnerInput};
 use temper_core::types::graph;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{
@@ -42,10 +43,11 @@ use temper_core::types::workflow_job::{DispatchType, Persona, RegionJobPayload};
 use temper_substrate::payloads::AnchorRef;
 use temper_workflow::operations::{
     AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick, Backend,
-    BodyUpdate, CloseInvocation, CommandOutput, CompleteAuditorJob, CreateCognitiveMap,
-    CreateResource, DeleteResource, FoldRelationship, GoalPatch, MaterializeOnThreshold,
-    OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit, RetypeRelationship,
-    ReweightRelationship, SetFacet, ShowResource, StewardDispatchTick, Surface, UpdateResource,
+    BodyUpdate, CloseInvocation, CommandOutput, CommitDataArtifact, CompleteAuditorJob,
+    CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship, GoalPatch,
+    MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit,
+    RetypeRelationship, ReweightRelationship, SetFacet, ShowResource, StewardDispatchTick, Surface,
+    UpdateResource,
 };
 
 use temper_substrate::content::PreparedBlock;
@@ -2211,6 +2213,61 @@ impl Backend for DbBackend {
         .map_err(api_err)?;
         let view =
             native_resource_view(&self.pool, self.profile_id, ResourceId::from(new_id)).await?;
+        Ok(CommandOutput::new(view))
+    }
+
+    #[act_span]
+    async fn commit_data_artifact(
+        &self,
+        cmd: CommitDataArtifact,
+    ) -> Result<CommandOutput<ArtifactView>, TemperError> {
+        let resource_uuid = uuid::Uuid::from(cmd.resource);
+        // Auth before any write (WS2): the caller must be able to modify this resource.
+        self.check_can_modify_next(resource_uuid).await?;
+        // Correlation-integrity gate for any claimed invocation.
+        self.check_act_invocation(cmd.act.invocation).await?;
+        // Parse intent string → substrate enum (reuses the same parser the read path uses).
+        let intent = crate::backend::substrate_read::parse_intent_str(&cmd.intent)
+            .map_err(|e| TemperError::BadRequest(e.to_string()))?;
+        // Convert wire KindOwnerInput → substrate KindOwner, if provided.
+        let kind_owner = cmd.kind_owner.map(|ko| match ko {
+            KindOwnerInput::Profile(id) => temper_substrate::payloads::KindOwner::Profile(id),
+            KindOwnerInput::Team(id) => temper_substrate::payloads::KindOwner::Team(id),
+        });
+        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
+            .await
+            .map_err(api_err)?;
+        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
+            .await
+            .map_err(api_err)?;
+        let act_ctx = act_context(&cmd.act);
+        let artifact_id = writes::commit_data_artifact_with(
+            &self.pool,
+            writes::CommitDataArtifactParams {
+                resource: cmd.resource,
+                kind: &cmd.kind,
+                kind_owner,
+                intent,
+                precedence: cmd.precedence,
+                content: &cmd.content,
+                supersedes: &cmd.supersedes,
+                emitter,
+            },
+            act_ctx,
+        )
+        .await
+        .map_err(api_err)?;
+        // Read back the committed artifact as an ArtifactView for the response.
+        let view =
+            crate::backend::substrate_read::get_artifact(&self.pool, self.profile_id, artifact_id)
+                .await
+                .map_err(api_err)?
+                .ok_or_else(|| {
+                    TemperError::Api(
+                "artifact committed but not found on readback — possible race or auth mismatch"
+                    .to_string(),
+            )
+                })?;
         Ok(CommandOutput::new(view))
     }
 
