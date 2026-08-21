@@ -2228,7 +2228,7 @@ impl Backend for DbBackend {
         self.check_act_invocation(cmd.act.invocation).await?;
         // Parse intent string → substrate enum (reuses the same parser the read path uses).
         let intent = crate::backend::substrate_read::parse_intent_str(&cmd.intent)
-            .map_err(|e| TemperError::Api(e.to_string()))?;
+            .map_err(|e| TemperError::BadRequest(e.to_string()))?;
         // Convert wire KindOwnerInput → substrate KindOwner, if provided.
         let kind_owner = cmd.kind_owner.map(|ko| match ko {
             KindOwnerInput::Profile(id) => temper_substrate::payloads::KindOwner::Profile(id),
