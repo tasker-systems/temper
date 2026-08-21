@@ -20,7 +20,20 @@ export type GraphRefusal =
 	/** Places were named; none of them is readable. A refusal, never a widened answer. */
 	| { kind: 'no-place-resolved'; named: number }
 	/** No place and no question, and nothing readable to fall back on. */
-	| { kind: 'nothing-to-ask' };
+	| { kind: 'nothing-to-ask' }
+	/**
+	 * Rung 2 (spec §6): there IS material, but too little structure to draw as a graph.
+	 *
+	 * A different claim from every other member of this union, and it must not render like them:
+	 * the reader is not being refused, they are being told the graph is the wrong instrument for
+	 * this corpus and pointed at the vault's list view, which is the right one. `inScope` is how
+	 * much they actually have, so the sentence can say it rather than implying emptiness.
+	 *
+	 * An earlier draft had this rung fall back to drawing the recency page — 200 dots and hope. It
+	 * was rejected: dots a reader cannot use are not more honest than a sentence, and this is the
+	 * reading that respects `the-unstructured-reader-is-never-worse-off`.
+	 */
+	| { kind: 'too-little-structure'; inScope: number };
 
 export interface GraphViewData {
 	owner: string;

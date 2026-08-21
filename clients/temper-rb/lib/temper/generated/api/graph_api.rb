@@ -393,6 +393,76 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Read what your work is built around
+    # The entry door for a reader who has asked nothing: the most-connected resources they can see, plus every edge among them. Ranking and drawing use the same criterion, so no returned edge points at a node that is not on the canvas. The response declares its own bounds, including how many resources it did not draw for having no connections.
+    # @param [Hash] opts the optional parameters
+    # @option opts [Integer] :k How many marks to draw. Defaults to the ruled K and is clamped by the service.
+    # @option opts [String] :_in Comma-separated anchor ids (contexts or cogmaps) to confine the ranking to.  Omitted means the reader&#39;s whole visible corpus. Present, it answers *\&quot;a place, and no question at all\&quot;* — ranking within the place rather than across everything, which is what lets a named place with no question be served by this read instead of by the recency page.
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [AtlasEntry]
+    def entry(opts = {})
+      data, _status_code, _headers = entry_with_http_info(opts)
+      data
+    end
+
+    # Read what your work is built around
+    # The entry door for a reader who has asked nothing: the most-connected resources they can see, plus every edge among them. Ranking and drawing use the same criterion, so no returned edge points at a node that is not on the canvas. The response declares its own bounds, including how many resources it did not draw for having no connections.
+    # @param [Hash] opts the optional parameters
+    # @option opts [Integer] :k How many marks to draw. Defaults to the ruled K and is clamped by the service.
+    # @option opts [String] :_in Comma-separated anchor ids (contexts or cogmaps) to confine the ranking to.  Omitted means the reader&#39;s whole visible corpus. Present, it answers *\&quot;a place, and no question at all\&quot;* — ranking within the place rather than across everything, which is what lets a named place with no question be served by this read instead of by the recency page.
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(AtlasEntry, Integer, Hash)>] AtlasEntry data, response status code and response headers
+    def entry_with_http_info(opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: GraphApi.entry ...'
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/graph/entry'
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+      query_params[:'k'] = opts[:'k'] if !opts[:'k'].nil?
+      query_params[:'in'] = opts[:'_in'] if !opts[:'_in'].nil?
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body]
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'AtlasEntry'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"GraphApi.entry",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:GET, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: GraphApi#entry\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
     # Read the resources composing a region
     # @param ids [String] Comma-separated region ids — one region, or a shift-selected union.
     # @param [Hash] opts the optional parameters
@@ -461,6 +531,80 @@ module Temper::Generated
       data, status_code, headers = @api_client.call_api(:GET, local_var_path, new_options)
       if @api_client.config.debugging
         @api_client.config.logger.debug "API called: GraphApi#region_composition\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
+    # Traverse from where you are
+    # Moves inside a space that a question already set, without re-running the question. The other half of *a composition grounds you; it does not navigate you* — grounding chooses the space, this walks it.
+    # @param from [String] Comma-separated node ids to hop from.  Named &#x60;from&#x60; to match the page grammar the split ruled (spec §10.2): &#x60;/graph/@me?q&#x3D;&lt;grounding question&gt;&amp;from&#x3D;&lt;node-ids&gt;&amp;depth&#x3D;&lt;n&gt;&#x60;, so the address says exactly what read produced the screen.
+    # @param [Hash] opts the optional parameters
+    # @option opts [Integer] :depth Hops to walk. Defaults to 1, clamped to 3 by the service.
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [AtlasSubgraph]
+    def traverse(from, opts = {})
+      data, _status_code, _headers = traverse_with_http_info(from, opts)
+      data
+    end
+
+    # Traverse from where you are
+    # Moves inside a space that a question already set, without re-running the question. The other half of *a composition grounds you; it does not navigate you* — grounding chooses the space, this walks it.
+    # @param from [String] Comma-separated node ids to hop from.  Named &#x60;from&#x60; to match the page grammar the split ruled (spec §10.2): &#x60;/graph/@me?q&#x3D;&lt;grounding question&gt;&amp;from&#x3D;&lt;node-ids&gt;&amp;depth&#x3D;&lt;n&gt;&#x60;, so the address says exactly what read produced the screen.
+    # @param [Hash] opts the optional parameters
+    # @option opts [Integer] :depth Hops to walk. Defaults to 1, clamped to 3 by the service.
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(AtlasSubgraph, Integer, Hash)>] AtlasSubgraph data, response status code and response headers
+    def traverse_with_http_info(from, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: GraphApi.traverse ...'
+      end
+      # verify the required parameter 'from' is set
+      if @api_client.config.client_side_validation && from.nil?
+        fail ArgumentError, "Missing the required parameter 'from' when calling GraphApi.traverse"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/graph/traverse'
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+      query_params[:'from'] = from
+      query_params[:'depth'] = opts[:'depth'] if !opts[:'depth'].nil?
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body]
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'AtlasSubgraph'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"GraphApi.traverse",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:GET, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: GraphApi#traverse\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
       end
       return data, status_code, headers
     end

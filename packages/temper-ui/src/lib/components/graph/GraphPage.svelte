@@ -88,6 +88,19 @@
 					{data.refusal.named === 1 ? 'its' : 'their'} place.
 				</p>
 				<p><a href={`/graph/${data.owner}`}>See everything you can read →</a></p>
+			{:else if data.refusal.kind === 'too-little-structure'}
+				<!-- Rung 2. NOT a refusal in the reader's terms and it must not read like one: they
+				     have material, it simply has no relationships to draw. So the screen says which
+				     instrument is the right one and hands them the door to it, rather than showing
+				     an empty canvas and letting them conclude they have nothing. -->
+				<h2>A graph is not the right view for this yet</h2>
+				<p>
+					You can read {data.refusal.inScope}
+					{data.refusal.inScope === 1 ? 'resource' : 'resources'} here, but nothing is linked to
+					anything else — so there is no shape to draw. The list view is the better instrument
+					until things start connecting.
+				</p>
+				<p><a href={`/vault/${data.owner}`}>Browse them as a list →</a></p>
 			{:else}
 				<h2>There is nothing here yet</h2>
 				<p>Once you have a place with work in it, this is where its shape appears.</p>

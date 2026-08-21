@@ -66,7 +66,7 @@
 
 	<section class="actions">
 		<button class="walk" onclick={walkFromHere}>Walk from here →</button>
-		<a class="view" href={resourceHref(node.resource)} data-testid="view-full-resource">
+		<a class="view" href={resourceHref(node)} data-testid="view-full-resource">
 			View full resource →
 		</a>
 	</section>
@@ -79,13 +79,13 @@
 	{/if}
 
 	<section class="meta">
-		<div><span class="k">IN</span><span>{whereOf(node.resource)}</span></div>
+		<div><span class="k">IN</span><span>{node.homeRef ?? 'home not reported'}</span></div>
 		<div><span class="k">HOW</span><span>{describeArm(node.arm)}</span></div>
-		{#if node.resource.managed_meta?.['temper-stage']}
-			<div><span class="k">STAGE</span><span>{node.resource.managed_meta['temper-stage']}</span></div>
+		{#if node.stage}
+			<div><span class="k">STAGE</span><span>{node.stage}</span></div>
 		{/if}
-		{#if node.resource.updated}
-			<div><span class="k">UPDATED</span><span>{relativeTime(node.resource.updated)}</span></div>
+		{#if node.updated}
+			<div><span class="k">UPDATED</span><span>{relativeTime(node.updated)}</span></div>
 		{/if}
 	</section>
 

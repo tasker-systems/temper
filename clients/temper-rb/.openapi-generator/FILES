@@ -39,6 +39,7 @@ lib/temper/generated/models/append_block_payload.rb
 lib/temper/generated/models/artifact_view.rb
 lib/temper/generated/models/assert_relationship_request.rb
 lib/temper/generated/models/atlas_edge.rb
+lib/temper/generated/models/atlas_entry.rb
 lib/temper/generated/models/atlas_home.rb
 lib/temper/generated/models/atlas_node.rb
 lib/temper/generated/models/atlas_subgraph.rb
@@ -108,6 +109,7 @@ lib/temper/generated/models/element_event.rb
 lib/temper/generated/models/element_kind.rb
 lib/temper/generated/models/embed_dispatch_summary.rb
 lib/temper/generated/models/entitlements.rb
+lib/temper/generated/models/entry_bounds.rb
 lib/temper/generated/models/error_body.rb
 lib/temper/generated/models/error_detail.rb
 lib/temper/generated/models/error_details.rb

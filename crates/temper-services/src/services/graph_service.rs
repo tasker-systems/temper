@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::error::{ApiError, ApiResult};
 use temper_core::types::graph::{EdgeKind, Polarity};
 use temper_core::types::graph_atlas::{
-    AtlasEdge, AtlasNode, AtlasSubgraph, NodeHome, SliceRequest,
+    AtlasEdge, AtlasEntry, AtlasNode, AtlasSubgraph, EntryBounds, NodeHome, SliceRequest,
 };
 use temper_core::types::graph_home::{AtlasHome, HomeCogmap, HomeContext};
 use temper_core::types::graph_territory::{
@@ -177,7 +177,12 @@ pub async fn cogmap_neighborhood_slice(
         excerpt: n.first_chunk.as_deref().and_then(compute_excerpt),
         // graph_atlas_nodes_cogmap does not return a stage column (only the
         // graph_atlas_nodes_visible read was widened for it, spec D8), so None here.
+        // `home_id` and `updated` are absent for the same reason: only the visible-tier
+        // projection was widened. Absent, never guessed — this slice is cogmap-scoped, so a
+        // caller already knows the anchor, and inventing an `updated` would be a fabricated fact.
         stage: None,
+        home_id: None,
+        updated: None,
     })
     .collect();
 
@@ -322,7 +327,7 @@ pub(crate) async fn hydrate_atlas_nodes_visible(
     // optional (two LEFT JOINs onto `kb_properties` and a scalar subquery).
     Ok(sqlx::query!(
         r#"SELECT id AS "id!", title AS "title!", doc_type, home AS "home!",
-                  degree AS "degree!", first_chunk, stage
+                  degree AS "degree!", first_chunk, stage, home_id, updated
              FROM graph_atlas_nodes_visible($1, $2)"#,
         profile_id.as_uuid(),
         node_ids,
@@ -343,6 +348,8 @@ pub(crate) async fn hydrate_atlas_nodes_visible(
         salience: None,
         excerpt: n.first_chunk.as_deref().and_then(compute_excerpt),
         stage: n.stage,
+        home_id: n.home_id,
+        updated: n.updated,
     })
     .collect())
 }
@@ -532,6 +539,288 @@ pub async fn atlas_home(pool: &PgPool, profile_id: ProfileId) -> ApiResult<Atlas
     .collect();
 
     Ok(AtlasHome { build, research })
+}
+
+/// Default number of marks the entry read draws. `[ruled — 2026-08-21, Pete]` from A's measurement.
+///
+/// Chosen against numbers, not picked — the spec exists because asserting this instead of measuring
+/// it is the error that produced the 244-of-250 draw. Measured on production over a 3574-resource /
+/// 4385-edge corpus, ranking by corpus degree and drawing the induced subgraph:
+///
+/// | K | cut degree | induced edges | unconnected | % |
+/// |---|---|---|---|---|
+/// | 50 | ≥16 | 56 | 18 | 36.0% |
+/// | 130 | ≥11 | 275 | 26 | 20.0% |
+/// | 250 | ≥8 | 594 | 51 | 20.4% |
+/// | 549 | ≥5 | 1441 | 61 | 11.1% |
+///
+/// 130 is the node count of the *answered* state the reader met and did not complain about, at a
+/// materially better band than that state's 35%. Going wider buys nothing on the band (250 is
+/// 20.4%) and spends the density budget §2 found to be the binding constraint; going narrower makes
+/// the band **worse**, since it degrades as K shrinks.
+const ENTRY_DEFAULT_K: i32 = 130;
+
+/// Hard ceiling on the entry read, independent of what the caller asks for.
+///
+/// Follows `region_composition_slice`'s `NODE_CAP` precedent rather than inventing a policy: a
+/// bound the caller cannot raise is what stops one query becoming the hairball this chunk was
+/// written to prevent. Clamped loudly — the drop is logged, never silent.
+const ENTRY_MAX_K: i32 = 600;
+
+/// The connection floor. A resource with no visible edges is not drawn by the entry read.
+///
+/// **This is a floor, not a ranking tweak, and the difference is the whole point.** Selecting the
+/// top K purely by rank pads a sparse corpus with unconnected marks up to K — rebuilding the
+/// 244-of-250 band on exactly the corpus least able to absorb it. With a floor, a corpus holding
+/// twenty connected resources draws twenty, and that small number is what tells the surface to
+/// declare a different kind of answer (spec §6, rung 2) instead of drawing a worse one.
+///
+/// What is excluded is never silent: `EntryBounds` reports `in_scope` beside `eligible`, so the
+/// count of undrawn resources is on the screen. On the corpus that produced this design that is
+/// 1,077 of 3,574.
+const ENTRY_MIN_DEGREE: i32 = 1;
+
+/// The entry read (spec §5.1) — **a place, and no question at all.**
+///
+/// Returns the most-connected resources the caller can see, plus **every edge among them**, and its
+/// own bound declaration. No seeds required: this is the door for a reader who has supplied nothing.
+/// `anchors` confines the ranking to resources homed in the named places; empty means the whole
+/// visible corpus.
+///
+/// The rule that makes it work, and the whole point of the chunk:
+///
+/// > **Rank by corpus degree; return the induced subgraph over the top-K.**
+///
+/// Ranking and drawing are then decided by the *same* criterion, so every returned edge has both
+/// endpoints in the returned node set **by construction**. The defect this replaces did the
+/// opposite — it walked from all 3561 visible resources while drawing 200 rows chosen by
+/// `updated DESC`, two sets picked by unrelated criteria, so 244 of 250 marks came out unconnected.
+///
+/// Note the node payload carries `AtlasNode.degree` = **corpus** degree, because A reuses the one
+/// incumbent node shape (spec §5.1). Spec §5.3's ruling that only the derived degree reaches the
+/// screen is a claim about the *screen*, not the wire, and it holds only while the client keeps
+/// recomputing degree over the drawn edge set.
+pub async fn entry_orientation_slice(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    anchors: &[Uuid],
+    k: Option<i32>,
+) -> ApiResult<AtlasEntry> {
+    let requested = k.unwrap_or(ENTRY_DEFAULT_K);
+    if requested <= 0 {
+        return Err(ApiError::BadRequest("k must be positive".into()));
+    }
+    let k = if requested > ENTRY_MAX_K {
+        tracing::warn!(requested, cap = ENTRY_MAX_K, "entry read k clamped");
+        ENTRY_MAX_K
+    } else {
+        requested
+    };
+
+    // The denominators, read FIRST and unconditionally. They are what the surface needs precisely
+    // when the ranking comes back empty — a corpus with nothing connected is the case that most
+    // needs explaining, and counts carried on result rows would vanish exactly there.
+    let bounds = sqlx::query!(
+        r#"SELECT in_scope AS "in_scope!", eligible AS "eligible!"
+             FROM graph_visible_degree_bounds($1, $2, $3)"#,
+        profile_id.as_uuid(),
+        anchors,
+        ENTRY_MIN_DEGREE,
+    )
+    .fetch_one(pool)
+    .await?;
+
+    // Rank by CORPUS degree. The degree predicate lives in `edges_visible_to`, which the ranking
+    // function joins rather than restates — the same set the incumbent hydration counts, so the
+    // ranking cannot drift from the number the node carries.
+    //
+    // `resource_id!`/`degree!`: both are NOT NULL in the body (`v.id` comes through an inner join
+    // onto the visibility set, `degree` is a `count(*)::int`); the overrides exist only because a
+    // set-returning function types every column as nullable.
+    let ranked = sqlx::query!(
+        r#"SELECT resource_id AS "resource_id!", degree AS "degree!"
+             FROM graph_visible_degree_ranking($1, $2, $3, $4)"#,
+        profile_id.as_uuid(),
+        anchors,
+        ENTRY_MIN_DEGREE,
+        k,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let node_ids: Vec<Uuid> = ranked.iter().map(|r| r.resource_id).collect();
+    let declare = |drawn: usize| EntryBounds {
+        drawn: drawn as i32,
+        eligible: bounds.eligible,
+        in_scope: bounds.in_scope,
+        truncated: bounds.eligible > drawn as i32,
+    };
+
+    if node_ids.is_empty() {
+        // Nothing cleared the floor. NOT an error, and not an empty canvas dressed as an answer:
+        // the bounds still say how much the reader has, which is what lets the surface declare that
+        // a graph is the wrong instrument here rather than drawing dots nobody can use.
+        return Ok(AtlasEntry {
+            nodes: vec![],
+            edges: vec![],
+            bounds: declare(0),
+        });
+    }
+
+    // Depth 0 is load-bearing, not a default: it makes this the INDUCED subgraph over exactly the
+    // ranked ids, with no outward expansion. Any depth above 0 would reintroduce endpoints that
+    // are not drawn — which is precisely the bug. Measured on production at K=130: depth 0 returns
+    // 275 edges, depth 1 returns 2672.
+    //
+    // Same override reasoning as `region_composition_slice`: every column but `label` is NOT NULL
+    // on `kb_edges` and the body's final SELECT reads them off `FROM kb_edges e` through inner
+    // joins only. EdgeKind/Polarity decode natively via their `sqlx::Type` derive.
+    let walked = sqlx::query!(
+        r#"SELECT id AS "id!", source_id AS "source_id!", target_id AS "target_id!",
+                  edge_kind AS "edge_kind!: EdgeKind", polarity AS "polarity!: Polarity",
+                  label, weight AS "weight!"
+             FROM graph_induced_edges($1, $2, 0)"#,
+        profile_id.as_uuid(),
+        &node_ids,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    // `graph_atlas_nodes_visible` carries NO `ORDER BY` — it is a hydration projection, and the row
+    // order it happens to return is a query-plan artifact. Re-imposing the ranking here is what
+    // makes "most-connected first" a property of the RESPONSE rather than of the id list that
+    // produced it. Found by a bite probe: reversing the ranking direction in SQL left two order
+    // assertions still passing, because the order they were reading was never the ranking's.
+    let rank_of: std::collections::HashMap<Uuid, usize> = node_ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| (*id, i))
+        .collect();
+    let mut nodes = hydrate_atlas_nodes_visible(pool, profile_id, &node_ids).await?;
+    nodes.sort_by_key(|n| rank_of.get(&n.id).copied().unwrap_or(usize::MAX));
+
+    // Keep only edges whose BOTH endpoints survived hydration, so the wire payload never dangles an
+    // edge into a node the client cannot place. Depth 0 already guarantees both endpoints were in
+    // the ranked set; this covers the narrower case of a node lost between the two reads.
+    let present: std::collections::HashSet<Uuid> = nodes.iter().map(|n| n.id).collect();
+    let edges: Vec<AtlasEdge> = walked
+        .into_iter()
+        .filter(|w| present.contains(&w.source_id) && present.contains(&w.target_id))
+        .map(|w| AtlasEdge {
+            id: w.id,
+            source: w.source_id,
+            target: w.target_id,
+            edge_kind: w.edge_kind,
+            polarity: w.polarity,
+            label: w.label,
+            weight: w.weight,
+        })
+        .collect();
+
+    let bounds = declare(nodes.len());
+    Ok(AtlasEntry {
+        nodes,
+        edges,
+        bounds,
+    })
+}
+
+/// Bound on how many seeds one traversal may walk from. Mirrors the context door's `MAX_SEEDS`,
+/// which this function absorbed — a hop from a large selection must not become a hairball.
+/// Clamped loudly: the drop is reported, never silent.
+const TRAVERSAL_MAX_SEEDS: usize = 250;
+
+/// The traversal read (spec §5.2) — **moving inside a space you have already been given.**
+///
+/// Given seeds and a depth, walks visible edges outward and returns the subgraph of everything
+/// reached, as an `AtlasSubgraph`. This is the other half of the thesis: *a composition grounds you;
+/// it does not navigate you.* Grounding sets the space; this moves inside it without re-running a
+/// composition, which is also most of the latency every hop pays today.
+///
+/// **It introduces no new walk, which is how it satisfies §5.2's constraint.** That section forbids
+/// the graph door from calling `__temper_ungated_follow_from` — the prefix is source discipline for
+/// a single compiler emitter, not a database permission — and requires that two walks which must
+/// agree be linked rather than left to drift. Nothing here is a second copy of anything:
+/// `graph_induced_edges` is the graph family's own undirected walk, the same body chunk A uses at
+/// depth 0. The retired `graph_traverse` was the directed one and is not used.
+///
+/// Note the graph family's walk is **stricter** than the composition's: it additionally requires
+/// `anchor_readable_by_profile` on the edge's home anchor, which `__temper_ungated_follow_from`
+/// does not check at all. That difference is pre-existing and is not resolved here.
+pub async fn traversal_slice(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    seeds: &[Uuid],
+    depth: i32,
+) -> ApiResult<AtlasSubgraph> {
+    if seeds.is_empty() {
+        return Err(ApiError::BadRequest("seeds must be non-empty".into()));
+    }
+
+    let bounded: &[Uuid] = if seeds.len() > TRAVERSAL_MAX_SEEDS {
+        tracing::warn!(
+            requested = seeds.len(),
+            cap = TRAVERSAL_MAX_SEEDS,
+            dropped = seeds.len() - TRAVERSAL_MAX_SEEDS,
+            "traversal seed set clamped"
+        );
+        &seeds[..TRAVERSAL_MAX_SEEDS]
+    } else {
+        seeds
+    };
+
+    // Clamped to the same 1..=3 the SQL enforces with `LEAST(p_depth, 3)`. Depth 0 is deliberately
+    // NOT reachable here: it is the induced-subgraph read chunk A uses, and asking a *traversal*
+    // to take no hops is a caller error, not a degenerate walk.
+    let depth = depth.clamp(1, 3);
+
+    // Same override reasoning as the entry read: every column but `label` is NOT NULL on `kb_edges`,
+    // and the overrides exist only because a set-returning function types every column as nullable.
+    let walked = sqlx::query!(
+        r#"SELECT id AS "id!", source_id AS "source_id!", target_id AS "target_id!",
+                  edge_kind AS "edge_kind!: EdgeKind", polarity AS "polarity!: Polarity",
+                  label, weight AS "weight!"
+             FROM graph_induced_edges($1, $2, $3)"#,
+        profile_id.as_uuid(),
+        bounded,
+        depth,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    // Seeds FIRST, then the walked endpoints. A seed that reached nothing still renders — a hop
+    // that silently drops the thing you hopped from would leave the reader nowhere.
+    let mut seen: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
+    let mut node_ids: Vec<Uuid> = Vec::new();
+    for id in bounded
+        .iter()
+        .copied()
+        .chain(walked.iter().flat_map(|w| [w.source_id, w.target_id]))
+    {
+        if seen.insert(id) {
+            node_ids.push(id);
+        }
+    }
+
+    let nodes = hydrate_atlas_nodes_visible(pool, profile_id, &node_ids).await?;
+
+    // No dangling edge into a node the client cannot place.
+    let present: std::collections::HashSet<Uuid> = nodes.iter().map(|n| n.id).collect();
+    let edges: Vec<AtlasEdge> = walked
+        .into_iter()
+        .filter(|w| present.contains(&w.source_id) && present.contains(&w.target_id))
+        .map(|w| AtlasEdge {
+            id: w.id,
+            source: w.source_id,
+            target: w.target_id,
+            edge_kind: w.edge_kind,
+            polarity: w.polarity,
+            label: w.label,
+            weight: w.weight,
+        })
+        .collect();
+
+    Ok(AtlasSubgraph { nodes, edges })
 }
 
 #[cfg(test)]
