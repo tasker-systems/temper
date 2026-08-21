@@ -21,8 +21,8 @@
 use crate::affinity::EdgeKind;
 use crate::content::{PreparedBlock, PreparedChunk};
 use crate::ids::{
-    BlockId, CogmapId, ContextId, CorrelationId, EdgeId, EntityId, EventId, InvocationId, LensId,
-    ProfileId, PropertyId, RegionId, ResourceId,
+    BlockId, CogmapId, ContextId, CorrelationId, DataArtifactId, EdgeId, EntityId, EventId,
+    InvocationId, LensId, ProfileId, PropertyId, RegionId, ResourceId,
 };
 use crate::payloads;
 use crate::scenario::model::LensDef;
@@ -50,6 +50,9 @@ pub enum EventKind {
     RelationshipReweighted,
     PropertyAsserted,
     PropertySet,
+    /// One data artifact committed to a resource (spec 2026-08-20). The payload carries the
+    /// content HASH; the bytes ride a sidecar into `kb_data_artifact_content`.
+    DataArtifactCommitted,
     LensCreated,
     RegionMaterialized,
     /// The cheap clock's act (T6, spec §3.5): salience recomputed against a moved telos, with NO
@@ -134,6 +137,7 @@ impl EventKind {
             EventKind::RelationshipReweighted => "relationship_reweighted",
             EventKind::PropertyAsserted => "property_asserted",
             EventKind::PropertySet => "property_set",
+            EventKind::DataArtifactCommitted => "data_artifact_committed",
             EventKind::LensCreated => "lens_created",
             EventKind::RegionMaterialized => "region_materialized",
             EventKind::SalienceRefreshed => "salience_refreshed",
@@ -178,6 +182,7 @@ impl EventKind {
             "relationship_reweighted" => EventKind::RelationshipReweighted,
             "property_asserted" => EventKind::PropertyAsserted,
             "property_set" => EventKind::PropertySet,
+            "data_artifact_committed" => EventKind::DataArtifactCommitted,
             "lens_created" => EventKind::LensCreated,
             "region_materialized" => EventKind::RegionMaterialized,
             "salience_refreshed" => EventKind::SalienceRefreshed,
@@ -305,6 +310,23 @@ pub enum SeedAction<'a> {
         key: &'a str,
         value: &'a serde_json::Value,
         weight: f64,
+        emitter: EntityId,
+    },
+    /// Commit one data artifact to a resource.
+    ///
+    /// `kind_owner` is `None` in the ordinary case: the SQL wrapper defaults the family namespace
+    /// from the owning resource's home and writes the resolved value INTO the payload before the
+    /// event is appended. Pass `Some` only to name another owner's namespace deliberately.
+    DataArtifactCommit {
+        resource: ResourceId,
+        kind: &'a str,
+        kind_owner: Option<payloads::KindOwner>,
+        intent: payloads::ArtifactIntent,
+        precedence: f64,
+        /// The bytes. Hashed here, carried to the projector as the `__content` sidecar — never
+        /// inside the event payload itself.
+        content: &'a serde_json::Value,
+        supersedes: &'a [DataArtifactId],
         emitter: EntityId,
     },
     LensCreate {
@@ -473,6 +495,7 @@ impl SeedAction<'_> {
             SeedAction::FacetSet { .. } => EventKind::PropertyAsserted,
             SeedAction::PropertyAssert { .. } => EventKind::PropertyAsserted,
             SeedAction::PropertySet { .. } => EventKind::PropertySet,
+            SeedAction::DataArtifactCommit { .. } => EventKind::DataArtifactCommitted,
             SeedAction::LensCreate { .. } => EventKind::LensCreated,
             SeedAction::Materialize { .. } => EventKind::RegionMaterialized,
             SeedAction::SalienceRefresh { .. } => EventKind::SalienceRefreshed,
@@ -521,9 +544,20 @@ pub enum Fired {
     /// The telos resource id a `CharterSet` fire replaced the charter on.
     Charter(ResourceId),
     Invocation(InvocationId),
+    /// The artifact row a `DataArtifactCommit` fire produced. Singular — one commit, one artifact
+    /// (unlike `Facet`, where a multi-valued key mints a row per inner key).
+    DataArtifact(DataArtifactId),
 }
 
 impl Fired {
+    /// Extract the artifact id a `DataArtifactCommit` fire produced.
+    pub fn data_artifact(self) -> Result<DataArtifactId> {
+        match self {
+            Fired::DataArtifact(id) => Ok(id),
+            other => anyhow::bail!("expected Fired::DataArtifact, got {other:?}"),
+        }
+    }
+
     /// Extract the cogmap + telos-resource ids a `CogmapGenesis` fire produced.
     pub fn cogmap_genesis(self) -> Result<(CogmapId, ResourceId)> {
         match self {
@@ -853,6 +887,76 @@ pub async fn fire_with(
             .context("property_set returned null")?;
             Ok(Fired::Facet(
                 ids.into_iter().map(PropertyId::from).collect(),
+            ))
+        }
+
+        SeedAction::DataArtifactCommit {
+            resource,
+            kind,
+            kind_owner,
+            intent,
+            precedence,
+            content,
+            supersedes,
+            emitter,
+        } => {
+            // The wire form of the bytes, hashed exactly as stored. `to_string` on a
+            // `serde_json::Value` is deterministic for a given Value (object keys are BTreeMap-
+            // ordered), so the hash a reader recomputes from the stored JSONB matches this one.
+            let raw = serde_json::to_string(content)?;
+            let digest = crate::content::sha256_hex(&raw);
+
+            let payload = payloads::DataArtifactCommitted {
+                artifact_id: DataArtifactId::from(Uuid::now_v7()),
+                resource_id: resource,
+                // A placeholder is NOT written here. When the caller names no namespace the field
+                // is omitted from the JSON entirely, and the SQL wrapper fills it in before
+                // appending the event — so the stored payload always carries a resolved namespace
+                // and replay never has to re-derive one.
+                kind_owner: kind_owner.unwrap_or(payloads::KindOwner::Profile(Uuid::nil())),
+                artifact_kind: kind.to_owned(),
+                intent,
+                precedence,
+                content_hash: digest.clone(),
+                content_bytes: raw.len() as i64,
+                supersedes: supersedes.to_vec(),
+            };
+            let artifact_id = payload.artifact_id;
+
+            let mut wire = serde_json::to_value(&payload)?;
+            if kind_owner.is_none() {
+                // Let the wrapper's default win. Serializing `KindOwner` unconditionally would put
+                // a nil profile id on the wire and the wrapper would honour it as an explicit
+                // choice — a silently wrong namespace, which is worse than either a refusal or a
+                // default.
+                wire.as_object_mut()
+                    .context("artifact payload is not an object")?
+                    .remove("kind_owner");
+            }
+
+            // The bytes ride their OWN argument, exactly as `resource_create(p_payload, p_content, …)`
+            // does. Never inside `wire`: whatever is in the payload is what `_event_append` writes
+            // verbatim into `kb_events`, so smuggling content there would put artifact bodies in the
+            // ledger and silently defeat the hash-not-body property. The wrapper refuses a payload
+            // carrying a content key, so this is enforced on both sides of the boundary.
+            let ids = sqlx::query_scalar!(
+                "SELECT data_artifact_commit($1,$2,$3,$4,$5,$6)",
+                wire,
+                content,
+                emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
+                ctx_corr,
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .context("data_artifact_commit returned null")?;
+            debug_assert_eq!(ids.len(), 1, "one commit mints exactly one artifact");
+            Ok(Fired::DataArtifact(
+                ids.first()
+                    .copied()
+                    .map(DataArtifactId::from)
+                    .unwrap_or(artifact_id),
             ))
         }
 

@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DataArtifactCommitted",
+  "description": "Commit one data artifact to a resource (spec: resource-owned data artifacts, 2026-08-20).\n\n**The body is NOT here, and that is the design.** The payload carries `content_hash`; the bytes\nride a sidecar into `kb_data_artifact_content` and are proved by that hash — the same shape\n`kb_block_content` already uses, where replay re-supplies verbatim bytes rather than\nreconstructing them from an event. Replay's purpose for the ledger is *provenance*: resources\nare the replayable-difference core, and artifacts are event-sourced for governance and\nconsistency. Consequence: the ledger stays light regardless of artifact size.",
+  "type": "object",
+  "properties": {
+    "artifact_id": {
+      "description": "Identity-as-input: minted by the caller and carried here so replay reproduces the same row\nid. `kb_data_artifacts.id` deliberately has no DEFAULT for this reason.",
+      "$ref": "#/$defs/DataArtifactId"
+    },
+    "artifact_kind": {
+      "description": "The bare family name, qualified by `kind_owner`. Carries no implication that a shape has\nbeen registered — persistence never requires a prior declaration.",
+      "type": "string"
+    },
+    "content_bytes": {
+      "type": "integer",
+      "format": "int64"
+    },
+    "content_hash": {
+      "description": "Bare sha256 hex of the content's raw bytes — the `sha256_hex` twin, exactly as\n`kb_block_content.content_hash`.",
+      "type": "string"
+    },
+    "intent": {
+      "$ref": "#/$defs/ArtifactIntent"
+    },
+    "kind_owner": {
+      "description": "The namespace half of the family name. Resolved at COMMIT (defaulting from the owning\nresource's home) rather than at projection: a context's owner can change, so re-resolving\nduring replay would qualify an old artifact with today's owner and break the byte-exact\ndiff. Identity-as-input applies to the namespace too.",
+      "$ref": "#/$defs/KindOwner"
+    },
+    "precedence": {
+      "description": "Ordering among peers. Meaningful for `Member`; carried for all so a reader never has to\nbranch on intent to sort.",
+      "type": "number",
+      "format": "double"
+    },
+    "resource_id": {
+      "$ref": "#/$defs/ResourceId"
+    },
+    "supersedes": {
+      "description": "The artifacts THIS one replaces, named explicitly by the writer.\n\nEmpty is the common case and means \"this replaces nothing\". The store never infers\nsupersession from recency, ordering or family: it cannot know whether run #2 supersedes run\n#1, and only the writer can. This field is that knowledge, made explicit.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/DataArtifactId"
+      }
+    }
+  },
+  "required": [
+    "artifact_id",
+    "resource_id",
+    "kind_owner",
+    "artifact_kind",
+    "intent",
+    "precedence",
+    "content_hash",
+    "content_bytes"
+  ],
+  "$defs": {
+    "ArtifactIntent": {
+      "description": "How a reader should select among a resource's artifacts of one family. The **closed** selection\nvocabulary, and the only question a reader cannot function without: given a collection, which do\nI take?\n\nIt deliberately carries no ordering (that is `precedence`) and no timing (that is the row's\n`created` and its folded chain). Mixing those in was the earlier draft's mistake — an intent\nthat also implied an order would have two ways to say the same thing and they would disagree.\n\nThe SQL side enforces the same three terms with a CHECK constraint, so a caller that bypasses\nthis type still cannot store a fourth. Keep the `serde` renames pinned to that CHECK.",
+      "oneOf": [
+        {
+          "description": "Replaces earlier artifacts of its family. A reader takes the newest live `Current`.\n\nNote what this does NOT do: declaring `Current` does not itself fold anything. The writer\nstill names what it supersedes, because the store cannot know whether this run replaces the\nlast one — see `DataArtifactCommitted::supersedes`.",
+          "type": "string",
+          "const": "current"
+        },
+        {
+          "description": "A peer in a series, not a replacement. A reader takes them all, ordered by `precedence`, and\ncompares. Measurement runs live here.",
+          "type": "string",
+          "const": "member"
+        },
+        {
+          "description": "Never auto-selected. Addressable by explicit reference only.",
+          "type": "string",
+          "const": "pinned"
+        }
+      ]
+    },
+    "DataArtifactId": {
+      "description": "A `kb_data_artifacts.id` value — one schema-boundable structured datum owned by a resource.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "KindOwner": {
+      "description": "The owner whose namespace a family name lives in. A bare `\"query-plan\"` is never a complete\nreference; the pair `(kind_owner, artifact_kind)` is.\n\nRegistering a shape for a family validates the existing backlog and records a conformance\nverdict against every artifact of that family — so under a flat namespace one tenant's\nregistration would stamp verdicts on another tenant's data, which it cannot even read.\nQualification makes that impossible by construction rather than by a resolution rule.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kb_profiles": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kb_profiles"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kb_teams": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kb_teams"
+          ]
+        }
+      ]
+    },
+    "ResourceId": {
+      "description": "A `kb_resources.id` value.",
+      "type": "string",
+      "format": "uuid"
+    }
+  }
+}

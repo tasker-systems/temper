@@ -179,6 +179,11 @@ define_id!(
 );
 
 define_id!(
+    /// A `kb_data_artifacts.id` value — one schema-boundable structured datum owned by a resource.
+    DataArtifactId
+);
+
+define_id!(
     /// A `kb_properties.id` value — a facet/doc_type/block_role assertion.
     PropertyId
 );

@@ -47,6 +47,7 @@ fn payload_schemas_match_snapshots() {
     check::<p::PrincipalStandingChanged>("principal_standing_changed");
     check::<p::PrincipalGovernanceChanged>("principal_governance_changed");
     check::<p::SubscriptionDeliveryDisposed>("subscription_delivery_disposed");
+    check::<p::DataArtifactCommitted>("data_artifact_committed");
 }
 
 #[test]
