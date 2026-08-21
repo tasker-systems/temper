@@ -44,6 +44,28 @@ export interface GraphNode {
 	home: 'context' | 'cogmap';
 	/** Degree over the DEDUPED edge set — see {@link buildGraph}. */
 	degree: number;
+	/**
+	 * How connected this resource is in the reader's whole corpus — **or `null` when the read that
+	 * produced this node did not report one.**
+	 *
+	 * The second of the two degrees §5.3 found, kept under a second name because that is the whole
+	 * of what §5.3 was protecting: *"a node can carry `degree: 12` and show zero edges, and a
+	 * reader has no way to reconcile that but to doubt themselves."* One name for two quantities is
+	 * the hazard; two names are not.
+	 *
+	 * `[narrowed — 2026-08-21, Pete]` §5.3 ruled the corpus figure must never reach the screen. It
+	 * now may, **only inside a sentence that states its relationship to the drawn one** — a bare
+	 * second number beside a mark stays forbidden. What forced it: measured on production, every
+	 * node in the entry read's band carries corpus degree ≥ the cut (min 11, max 87 at K=130), so
+	 * `0 links` is false for all 26 and nothing but this figure can say why.
+	 *
+	 * **`null` means NOT REPORTED, never zero.** `ResourceView` carries no degree, so
+	 * {@link buildGraph} genuinely cannot supply one — and a screen built from it must not borrow
+	 * the entry read's sentence for a fact its own read never measured.
+	 *
+	 * @see internal/superpowers/specs/2026-08-21-hub-stranding-is-a-telling-failure-design.md §4, §5.1
+	 */
+	corpusDegree: number | null;
 	excerpt: string | null;
 	arm: NodeArm;
 	/**
@@ -210,6 +232,10 @@ export function buildEntryGraph(entry: AtlasEntry, homes: Map<string, string>): 
 		// Recomputed below over the drawn edges. Starting from the wire's corpus degree and
 		// incrementing would blend two different quantities into one number.
 		degree: 0,
+		// The wire figure, kept rather than dropped — `AtlasNode.degree` IS the corpus degree
+		// (`graph_service.rs`: "§5.3's ruling ... is a claim about the screen, not the wire").
+		// It is what lets the band say what its marks ARE connected to instead of asserting 0.
+		corpusDegree: n.degree,
 		excerpt: n.excerpt,
 		homeRef: (n.home_id && homes.get(n.home_id)) ?? null,
 		updated: n.updated,
@@ -277,6 +303,10 @@ export function buildGraph({ response, plan, seeds }: GraphInput): GraphModel {
 			doc_type: row.doc_type_name,
 			home: homeOf(row),
 			degree: 0,
+			// **Absent, not zero.** `ResourceView` carries no degree, so this read has nothing to
+			// say about the corpus — and a band on this screen may genuinely hold resources
+			// connected to nothing at all, which the entry read's band never can.
+			corpusDegree: null,
 			excerpt: excerptOf(row),
 			arm,
 			// Hoisted from the row so a panel reads the same fields whichever read produced the

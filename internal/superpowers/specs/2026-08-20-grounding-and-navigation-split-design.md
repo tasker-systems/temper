@@ -274,6 +274,14 @@ with two field names** — there is never a second quantity on screen to disagre
 The corpus figure still appears in **A's distribution report** (§5.1), which is a build-time
 measurement feeding the choice of K, not a rendered number.
 
+**`[narrowed — 2026-08-21, Pete]` The corpus figure may reach the screen inside a sentence that
+states its relationship to the drawn one.** A bare second number beside a mark stays forbidden —
+that is the shape this ruling was pointed at. What forced the narrowing is that the ruling as
+written makes the entry read's band undescribable: measured on production, **every** node in it
+carries corpus degree ≥ the cut, so `0 links` is false for all 26 and only the corpus figure can say
+why. See
+[The band is where the hubs go — and no selection can reach them](./2026-08-21-hub-stranding-is-a-telling-failure-design.md) §4.
+
 ## 6. The fallback ladder
 
 `[ruled — 2026-08-20, Pete]` — *"a kind of lower-density-down-to-empty-state fallback"*. Three rungs.
@@ -428,6 +436,14 @@ But **every K measured beats the state the reader accepted.** Today's unaddresse
 244/250 = **97.6%** unconnected; the *answered* state the reader did not complain about is
 45/130 = **35%**. The design works at any of these; what remains is a density-vs-band trade, and it
 is C's to rule against §2's finding that no visual encoding survives 250 marks.
+
+`[measured — 2026-08-21]` **A third reading, and it closes the family.** The band is not merely
+hard to shrink — it is unreachable. Every node in it carries corpus degree ≥ the cut *by
+construction*, and the K at which each one's best neighbour clears that cut runs from 189 to 2499:
+`Maintenance` needs **K=739**, past `ENTRY_MAX_K`; all 26 need **K=2499**, the whole eligible
+corpus. No selection-side fix reaches them at a drawable size, which is why the repair is to the
+telling. See
+[The band is where the hubs go](./2026-08-21-hub-stranding-is-a-telling-failure-design.md) §2.
 
 2. ~~**The traversal URL grammar.**~~ **RULED** `[2026-08-20, Pete]`:
 

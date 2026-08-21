@@ -145,3 +145,40 @@ describe('the bound line declares what was not drawn', () => {
 		expect(line).toContain('1 of 12 places');
 	});
 });
+
+describe('the corpus figure is kept beside the derived one, never merged into it', () => {
+	/**
+	 * `AtlasNode.degree` was already on the wire and already the CORPUS degree — the fold simply
+	 * dropped it. §5.3 originally ruled it must never reach the screen; that ruling was
+	 * `[narrowed — 2026-08-21, Pete]` to *"only inside a sentence that states its relationship to
+	 * the drawn one"*, because the entry read's band is otherwise undescribable: every member of
+	 * it carries corpus degree ≥ the cut, so `0 links` is false for all of them.
+	 *
+	 * The two quantities keep two names. That is the whole of what §5.3 was protecting.
+	 *
+	 * @see internal/superpowers/specs/2026-08-21-hub-stranding-is-a-telling-failure-design.md §4, §5.1
+	 */
+	const strandedHub: AtlasEntry = {
+		// `a`—`b` is the only edge, so `c` is drawn with 87 corpus connections and no stroke: the
+		// production shape of `Maintenance` at K=130, in miniature.
+		nodes: [node('a', 12), node('b', 3), node('c', 87)],
+		edges: [edge('a', 'b')],
+		bounds: { drawn: 3, eligible: 2499, in_scope: 3583, truncated: true },
+	};
+
+	test('the wire figure is carried under its own name', () => {
+		const byId = new Map(buildEntryGraph(strandedHub, homes).nodes.map((n) => [n.id, n]));
+		expect(byId.get('c')!.corpusDegree).toBe(87);
+		expect(byId.get('a')!.corpusDegree).toBe(12);
+	});
+
+	test('and the derived one is still what it was — the two disagree on purpose', () => {
+		const byId = new Map(buildEntryGraph(strandedHub, homes).nodes.map((n) => [n.id, n]));
+		// The hub the whole repair exists for: nothing drawn, 87 in the corpus.
+		expect(byId.get('c')!.degree).toBe(0);
+		expect(byId.get('c')!.corpusDegree).toBe(87);
+		// And a connected node's derived count is NOT its corpus count either.
+		expect(byId.get('a')!.degree).toBe(1);
+		expect(byId.get('a')!.corpusDegree).toBe(12);
+	});
+});

@@ -11,7 +11,16 @@
 		title: string;
 		docType: string | null;
 		home: 'context' | 'cogmap';
-		seed?: boolean;
+		/**
+		 * Draw the arm ring around this mark.
+		 *
+		 * Named for what it DOES, not for the arm it used to stand for: whether an arm is worth a
+		 * ring is a judgment about the whole view — a canvas whose marks all share one arm has no
+		 * contrast to encode — and the mark cannot make it. Called `seed` until `[2026-08-21]`,
+		 * when a view that ringed all 130 of its marks made the old name read as a fact about the
+		 * node rather than a decision about the screen.
+		 */
+		ringed?: boolean;
 		anchored?: boolean;
 		/** Visual-only doc-type filter dimming (Task 8) — never affects the read. */
 		dim?: boolean;
@@ -30,7 +39,7 @@
 		title,
 		docType,
 		home,
-		seed = false,
+		ringed = false,
 		anchored = false,
 		dim = false,
 		edges = 0,
@@ -61,8 +70,11 @@
 	onmouseleave={() => (hovered = false)}
 	{style}
 >
-	{#if seed}
-		<circle cx={x} cy={y} r={r + 6} fill="none" stroke="#cfd6e2" stroke-width="1.5" />
+	{#if ringed}
+		<!-- Classed so a test can assert its ABSENCE: a channel that fires on every mark encodes
+		     nothing, and nothing in the type system could have caught that. Not a mark — the
+		     vocabulary test counts `<g class>`, and this is a bare circle inside one. -->
+		<circle class="arm-ring" cx={x} cy={y} r={r + 6} fill="none" stroke="#cfd6e2" stroke-width="1.5" />
 	{/if}
 	{#if shape === 'circle'}
 		<!-- cogmap facet = an idea in the map -->

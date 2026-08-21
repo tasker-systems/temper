@@ -4,7 +4,7 @@ import { render, screen } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { declareBounds } from '$lib/graph/bound';
 import type { GraphPlan } from '$lib/graph/composition';
-import { buildGraph } from '$lib/graph/model';
+import { buildEntryGraph, buildGraph } from '$lib/graph/model';
 import { buildReadout } from '$lib/graph/readout';
 import type { GraphViewData } from '$lib/graph/view';
 import type { CogmapRegionRow } from '$lib/types/generated/cognitive_maps';
@@ -337,5 +337,122 @@ describe('the receiver is reachable from the readout, not merely built', () => {
 	it('an answer drawn from no place offers no link rather than an empty row', () => {
 		render(GraphPage, { data: view({ placesAsked: [] }) });
 		expect(screen.queryByTestId('measured-links')).toBeNull();
+	});
+});
+
+describe('the entry read tells the truth about its band', () => {
+	/**
+	 * `[observed on production — 2026-08-21]` The entry canvas drew `Maintenance` — corpus degree
+	 * 87, the most-connected resource in the corpus — in the band captioned *"not connected to
+	 * anything else"*, and the accessibility list called it `0 links`. Measured across the whole
+	 * band: 26 marks, **every one of them at corpus degree ≥ 11**, because 11 IS the cut.
+	 *
+	 * Options 1 and 2 (pull in the hub's neighbours; re-rank on induced degree) were measured and
+	 * cannot reach these nodes at a drawable size — `Maintenance` needs K=739, all 26 need K=2499.
+	 * The repair is therefore to the TELLING, and this is what witnesses it at the render.
+	 *
+	 * @see internal/superpowers/specs/2026-08-21-hub-stranding-is-a-telling-failure-design.md
+	 */
+	const entryNode = (id: string, degree: number, title = id.toUpperCase()) => ({
+		id,
+		title,
+		doc_type: 'goal',
+		home: 'context' as const,
+		degree,
+		salience: null,
+		excerpt: null,
+		stage: null,
+		home_id: 'ctx-1',
+		updated: '2026-08-20T10:00:00Z',
+	});
+
+	// Two connected marks and one stranded hub — the production shape at K=130, in miniature.
+	const entryModel = buildEntryGraph(
+		{
+			nodes: [entryNode('a', 12), entryNode('b', 3), entryNode('c', 87, 'Maintenance')],
+			edges: [
+				{
+					id: 'a-b',
+					source: 'a',
+					target: 'b',
+					edge_kind: 'contains' as const,
+					polarity: 'forward' as const,
+					label: null,
+					weight: 2,
+				},
+			],
+			bounds: { drawn: 3, eligible: 2499, in_scope: 3583, truncated: true },
+		},
+		new Map([['ctx-1', '@me/temper']]),
+	);
+
+	const entryView = () =>
+		view({ model: entryModel, question: '', readout: null } as Partial<GraphViewData>);
+
+	it('the caption says what the band IS connected to, not that it is connected to nothing', () => {
+		render(GraphPage, { data: entryView() });
+
+		const caption = screen.getByTestId('unconnected-caption').textContent ?? '';
+		expect(caption).toBe(
+			'1 of these 3 is not connected to anything else drawn here — but it connects to 87 things elsewhere in your corpus.',
+		);
+		// no-internal-vocabulary-is-load-bearing still governs the chrome.
+		for (const word of ['degree', 'orphan', 'node']) {
+			expect(caption.toLowerCase()).not.toContain(word);
+		}
+	});
+
+	it('the accessibility list stops asserting 0 links about a hub', () => {
+		render(GraphPage, { data: entryView() });
+
+		const row = screen.getByRole('link', { name: /Maintenance/ }).textContent ?? '';
+		expect(row).toContain('0 drawn here · 87 in your corpus');
+		expect(row).not.toContain('0 links');
+	});
+
+	it('a mark with strokes on screen still reads as links — §5.3 stands where it always did', () => {
+		render(GraphPage, { data: entryView() });
+
+		expect(screen.getByRole('link', { name: /^A —/ }).textContent).toContain('1 link');
+	});
+
+	it('draws NO ring, because one arm across every mark distinguishes nothing', () => {
+		const { container } = render(GraphPage, { data: entryView() });
+
+		expect(new Set(entryModel.nodes.map((n) => n.arm)).size).toBe(1);
+		expect(container.querySelectorAll('.arm-ring')).toHaveLength(0);
+		// The marks themselves are untouched — what was withdrawn is an encoding, not a node.
+		expect(container.querySelectorAll('.node-chip')).toHaveLength(entryModel.nodes.length);
+	});
+
+	it('and the field is still a place, not a bound — every mark is drawn', () => {
+		const { container } = render(GraphPage, { data: entryView() });
+		const markClasses = new Set(
+			[...container.querySelectorAll('svg g[class]')]
+				.map((g) => g.getAttribute('class')?.split(' ')[0])
+				.filter((c): c is string => !!c && c !== 'labels'),
+		);
+
+		expect([...markClasses].sort()).toEqual(['edge', 'node-chip']);
+	});
+});
+
+describe('the ring is withdrawn only where it distinguishes nothing', () => {
+	it('an answer with more than one arm still rings — this is not a blanket removal', () => {
+		const model = view().model;
+		// Guards the test above from passing vacuously: if the flagship ever collapsed to one arm,
+		// "no rings on the entry read" would stop being evidence of anything.
+		expect(new Set(model.nodes.map((n) => n.arm)).size).toBeGreaterThan(1);
+
+		const { container } = render(GraphPage, { data: view() });
+		expect(container.querySelectorAll('.arm-ring').length).toBeGreaterThan(0);
+	});
+
+	it('and rings exactly the marks that are not a walk — the encoding is unchanged', () => {
+		const model = view().model;
+		const notWalk = model.nodes.filter((n) => n.arm !== 'walk').length;
+
+		const { container } = render(GraphPage, { data: view() });
+		expect(container.querySelectorAll('.arm-ring')).toHaveLength(notWalk);
 	});
 });

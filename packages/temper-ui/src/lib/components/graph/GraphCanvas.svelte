@@ -28,6 +28,7 @@
 	import { CANVAS_BG, paletteStyleVars } from '$lib/graph/palette';
 	import type { GraphModel } from '$lib/graph/model';
 	import {
+		armsDistinguish,
 		describeUnconnected,
 		nodeMeta,
 		nodeRadius,
@@ -86,9 +87,23 @@
 		),
 	);
 
+	// The band's corpus figures are handed over rather than reached for: the caption must be TOLD
+	// what this read measured. `buildGraph` reports `null` for all of them and gets the
+	// answer-scoped sentence; `buildEntryGraph` reports real ones and gets the sentence that says
+	// what its marks ARE connected to. Neither borrows the other's claim.
 	const caption = $derived(
-		describeUnconnected(parts.unconnected.length, model.nodes.length, field.undrawn),
+		describeUnconnected(
+			parts.unconnected.length,
+			model.nodes.length,
+			field.undrawn,
+			parts.unconnected.map((n) => n.corpusDegree),
+		),
 	);
+
+	// The ring encodes a contrast between arms. Where every mark shares one — which is every entry
+	// read, since `buildEntryGraph` has no arms to tell apart — there is no contrast to encode and
+	// the channel is not spent.
+	const rings = $derived(armsDistinguish(model.nodes));
 
 	const nodeById = $derived(new Map(model.nodes.map((n) => [n.id, n])));
 
@@ -225,7 +240,7 @@
 							title={n.title}
 							docType={n.docType}
 							home={n.home}
-							seed={node.arm !== 'walk'}
+							ringed={rings && node.arm !== 'walk'}
 							anchored={false}
 							edges={n.degree}
 							excerpt={node.excerpt}
