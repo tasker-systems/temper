@@ -21,29 +21,79 @@
 	import type { NamedPlace } from '$lib/graph/entry';
 	import { graphAnalysisHref } from '$lib/vault-url';
 
+	/**
+	 * `readout` is `null` on a **traversed** view, and the panel becomes PROVENANCE rather than
+	 * disappearing — §7.2's recommended option of three.
+	 *
+	 * *"Declare itself as the grounding that the current view descends from… It stops claiming to
+	 * explain the current screen and becomes provenance for it."* Disappearing was the second-best,
+	 * and it was rejected because it *"loses the reader's route back to how they got here."*
+	 *
+	 * `[ruled — 2026-08-21, Pete]` **Provenance only.** The question, the places and the route back
+	 * survive; the stage accounting and the grouping list do not — they were measured for a screen
+	 * the reader has left, and no composition ran for this one.
+	 */
 	let {
 		readout,
 		question,
 		owner,
 		places,
-	}: { readout: Readout; question: string | null; owner: string; places: NamedPlace[] } = $props();
+		backHref = null,
+	}: {
+		readout: Readout | null;
+		question: string | null;
+		owner: string;
+		places: NamedPlace[];
+		/** The grounding this view descends from. Non-null exactly when this is a traversal. */
+		backHref?: string | null;
+	} = $props();
 
-	const lead = $derived(describeReadout(readout));
-	const listed = $derived(listGroupings(readout));
+	const lead = $derived(readout ? describeReadout(readout) : null);
+	const listed = $derived(readout ? listGroupings(readout) : null);
 </script>
 
-<aside class="why" aria-label="Why these">
-	<h2>Why these</h2>
+<!--
+	The heading is part of the claim, so it changes with the rest. `Why these` asserts that what
+	follows explains the marks on screen; on a traversed view it does not, and it would be false in
+	exactly the way `REACHED` was — a string asserting a reader act that did not happen on the view
+	rendering it.
+-->
+<aside class="why" aria-label={readout ? 'Why these' : 'Where you started'}>
+	<h2>{readout ? 'Why these' : 'Where you started'}</h2>
 
-	{#if question}
-		<p class="asked">You asked: <em>{question}</em></p>
+	{#if readout}
+		{#if question}
+			<p class="asked">You asked: <em>{question}</em></p>
+		{:else}
+			<p class="asked">
+				No question was asked, so everything in the places you named is the answer.
+			</p>
+		{/if}
+	{:else if question}
+		<!--
+			Past tense, and deliberately so. §4: the walk is NOT confined to the grounding's result
+			set — `traversal_slice` runs over the reader's whole visible corpus — so `q` is where the
+			reader STARTED and never a filter still in force. "You asked" in the present would say
+			the question is still narrowing, which is the thing this panel exists to stop saying.
+		-->
+		<p class="asked">You started from this question: <em>{question}</em></p>
 	{:else}
-		<p class="asked">No question was asked, so everything in the places you named is the answer.</p>
+		<p class="asked">You started from the shape of your work, without asking a question.</p>
 	{/if}
 
-	<p class="lead">{lead}</p>
+	{#if !readout}
+		<p class="lead">
+			These marks were reached by following edges from where you were — not by asking again.
+		</p>
+	{/if}
 
-	{#if listed.shown.length}
+	{#if backHref}
+		<p class="back"><a href={backHref}>← Back to where you started</a></p>
+	{/if}
+
+	{#if lead}<p class="lead">{lead}</p>{/if}
+
+	{#if listed && listed.shown.length}
 		<ul class="groupings">
 			{#each listed.shown as g (g.id)}
 				<li class:absent={g.name.state !== 'named'}>{describeGrouping(g)}</li>
@@ -61,14 +111,26 @@
 		     rather than one per grouping, because a grouping's id is resolved from a flat set and
 		     carries no anchor — deliberately, so the readout needs no per-kind branch. -->
 		<p class="measured" data-testid="measured-links">
-			How these were measured:
+			<!--
+				On a traversal these describe the GROUNDING, not the marks on screen, and they survive
+				"under a sentence that says so" (§6) rather than being dropped. Dropping them is what
+				would break `displaced-structure-remains-reachable`: the analysis door has to stay
+				reachable without the reader being told a URL.
+			-->
+			{readout ? 'How these were measured:' : 'How your starting places were measured:'}
 			{#each places as p, i (`${p.kind}:${p.ref}`)}<a
 					href={graphAnalysisHref(owner, { kind: p.kind, ref: p.ref })}>{p.title}</a
 				>{i < places.length - 1 ? ' · ' : ''}{/each}
 		</p>
 	{/if}
 
-	<details class="accounting">
+	<!--
+		The stage accounting is composition-only, and not merely irrelevant on a traversal — there
+		are no stages. Rendering an empty `What each step was handed` would be a disclosure about a
+		pipeline that never ran.
+	-->
+	{#if readout}
+		<details class="accounting">
 		<summary>What each step was handed</summary>
 		<ul>
 			{#each readout.stages as s (s.stage)}
@@ -79,7 +141,8 @@
 				</li>
 			{/each}
 		</ul>
-	</details>
+		</details>
+	{/if}
 </aside>
 
 <style>
@@ -90,6 +153,13 @@
 		color: #8b94a5;
 	}
 	.measured a {
+		color: #8fb6e8;
+	}
+	.back {
+		margin: 0;
+		font-size: 12px;
+	}
+	.back a {
 		color: #8fb6e8;
 	}
 	.why {

@@ -1,8 +1,14 @@
 import { error } from '@sveltejs/kit';
-import { declareBounds, declareEntryBounds } from '$lib/graph/bound';
+import { declareBounds, declareEntryBounds, declareTraversalBounds } from '$lib/graph/bound';
 import { buildGraphPlan } from '$lib/graph/composition';
 import { describeAnchor, questionFor, readableAnchors, resolveAnchors } from '$lib/graph/entry';
-import { buildEntryGraph, buildGraph, excerptOf, type GraphModel } from '$lib/graph/model';
+import {
+	buildEntryGraph,
+	buildGraph,
+	buildTraversal,
+	excerptOf,
+	type GraphModel,
+} from '$lib/graph/model';
 import { buildReadout, disclosedRegionIds } from '$lib/graph/readout';
 import type { GraphRefusal, GraphViewData } from '$lib/graph/view';
 import { ApiError } from '$lib/server/api';
@@ -12,6 +18,7 @@ import {
 	readEntry,
 	readResourceBody,
 	readSeedResources,
+	readTraversal,
 	runComposition,
 } from '$lib/server/graph-query';
 import { readTrail } from '$lib/server/graph-reads';
@@ -92,6 +99,24 @@ async function resolveSelection(
 
 /** Which of the reader's own rows a `from` seed no longer resolving refers to. */
 const isNotFound = (e: unknown): boolean => e instanceof ApiError && e.status === 404;
+
+/**
+ * Anchor id → how the reader names it.
+ *
+ * The server returns an id deliberately: rendering `@owner/slug` in SQL would duplicate
+ * `graph_home_contexts`' owner_ref expression, and this page has already read every anchor it can
+ * see. Shared by the two reads whose marks carry a `home_id` — the entry read and the traversal —
+ * rather than rebuilt in each, which is how the second one would come to name places differently
+ * from the first.
+ */
+const homesOf = (
+	contexts: { id: string; owner_ref: string; slug: string }[],
+	cogmaps: { id: string; name: string }[],
+): Map<string, string> =>
+	new Map<string, string>([
+		...contexts.map((c): [string, string] => [c.id, `${c.owner_ref}/${c.slug}`]),
+		...cogmaps.map((m): [string, string] => [m.id, m.name]),
+	]);
 
 /**
  * The whole load: **read, then assemble.** Six lines, and the shape is the point.
@@ -175,6 +200,54 @@ async function readFor(token: string, address: GraphAddress): Promise<GraphRead>
 		}
 	}
 
+	// ── The handoff: `from` present means NAVIGATE, and the question stops deciding ─────────────
+	//
+	// §10.3, ruled: "asking a question and our query composition frame helps set the space, but then
+	// you traverse the graph as normal WITHOUT A QUESTION LOCKING YOU IN." So this branch runs no
+	// composition — `q` is still in the address, and it is provenance rather than a filter.
+	//
+	// It is checked BEFORE `isEntry` and before the composition, which is the whole of the routing
+	// change: `?q=X&from=Y` used to run the composition with Y as an explicit seed, which is why a
+	// hop re-ran the question and drew the answer under a legend that said "In the places you asked
+	// about" over a mark the reader had hopped to.
+	//
+	// **The walk is not confined to the grounding's result set**, and that is the ruling rather than
+	// a gap: `traversal_slice` calls `graph_induced_edges` over the reader's whole visible corpus.
+	// Nothing this branch returns may imply the question is still narrowing.
+	if (address.seeds.length > 0) {
+		// Resolved HERE rather than left to the service's `unwrap_or(1)`, because the bound line has
+		// to report the depth that actually ran. A client that omitted the param would be reporting
+		// a number it did not choose and cannot see — two copies of one default, on either side of
+		// the wire, with nothing linking them.
+		const depth = address.depth ?? 1;
+		const walked = await readTraversal(token, address.seeds, depth);
+		const model = buildTraversal(walked, address.seeds, homesOf(contexts, cogmaps));
+
+		return {
+			// The reader's own `q`, never `questionFor`'s borrowed one: a charter question stands in
+			// for a question the reader did not ask, and this panel's whole job is to say where THEY
+			// started. Borrowing here would attribute a question to them that they never typed.
+			question: address.question,
+			borrowedFrom: null,
+			refusal: null,
+			model,
+			bound: declareTraversalBounds({
+				drawn: model.nodes.length,
+				// Counted over the marks actually DRAWN, not over what was asked for. A seed the
+				// reader cannot see is not returned, and claiming to have hopped from it would put a
+				// number on screen with no mark under it.
+				from: model.nodes.filter((n) => address.seeds.includes(n.id)).length,
+				depth,
+			}),
+			// No composition ran, so there is no reasoning to report. The provenance panel is built
+			// from `question` and `placesAsked` instead — see `GraphPage`.
+			readout: null,
+			// The places the GROUNDING named, carried so its measurements stay reachable. They
+			// describe where the reader started, not this screen, and the panel says so.
+			placesAsked: plan.anchorsAsked.map((a) => describeAnchor(a, cogmaps)),
+		};
+	}
+
 	// ── The grounding/navigation split, at the one place it is observable ───────────────────────
 	//
 	// A reader who has asked nothing gets the ENTRY READ, and runs no composition at all.
@@ -197,14 +270,6 @@ async function readFor(token: string, address: GraphAddress): Promise<GraphRead>
 			addressed ? resolution.anchors.map((a) => a.id) : [],
 		);
 
-		// Anchor id → how the reader names it. The server returns an id deliberately: rendering
-		// `@owner/slug` in SQL would duplicate an expression that already exists elsewhere, and this
-		// page has already read every anchor it can see.
-		const homes = new Map<string, string>([
-			...contexts.map((c): [string, string] => [c.id, `${c.owner_ref}/${c.slug}`]),
-			...cogmaps.map((m): [string, string] => [m.id, m.name]),
-		]);
-
 		const bounds = {
 			drawn: entry.bounds.drawn,
 			eligible: entry.bounds.eligible,
@@ -222,7 +287,7 @@ async function readFor(token: string, address: GraphAddress): Promise<GraphRead>
 			// reader on it is looking at a different claim than one on rung 1.
 			refusal:
 				bounds.eligible === 0 ? { kind: 'too-little-structure', inScope: bounds.inScope } : null,
-			model: buildEntryGraph(entry, homes),
+			model: buildEntryGraph(entry, homesOf(contexts, cogmaps)),
 			bound: declareEntryBounds(bounds, {
 				asked: plan.anchorsAsked.length,
 				available: plan.anchorsAvailable,

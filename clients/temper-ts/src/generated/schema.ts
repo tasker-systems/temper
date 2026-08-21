@@ -1230,7 +1230,13 @@ export interface paths {
          */
         get: operations["list_artifacts"];
         put?: never;
-        post?: never;
+        /**
+         * Commit one data artifact to a resource
+         * @description The content payload is JSON, hashed and stored verbatim. The hash is the proof —
+         *     the ledger carries only the hash, never the bytes. Auth-gated: the caller must
+         *     have write standing on the owning resource.
+         */
+        post: operations["commit_artifact"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2069,6 +2075,31 @@ export interface components {
              *     skipped on the wire) = an un-attributed append, exactly the prior behaviour.
              */
             sources?: components["schemas"]["ProvenanceSource"][];
+        };
+        /** @description Request body for `POST /api/resources/{id}/artifacts` — commit one data artifact. */
+        ArtifactCommitRequest: components["schemas"]["ActInput"] & {
+            /** @description The structured payload as JSON. Hashed and stored verbatim — the hash is the proof. */
+            content: unknown;
+            /** @description Selection intent: `"current"`, `"member"`, or `"pinned"`. */
+            intent: string;
+            /** @description The bare family name, qualified by `kind_owner` (or defaulted from the resource's home). */
+            kind: string;
+            kind_owner?: null | components["schemas"]["KindOwnerInput"];
+            /**
+             * Format: double
+             * @description Ordering among peers. Meaningful for `member`; carried for all. Default: `0.0`.
+             */
+            precedence?: number;
+            /** @description Artifacts this one replaces, named explicitly by the writer. Empty = replaces nothing. */
+            supersedes?: components["schemas"]["DataArtifactId"][];
+        };
+        /**
+         * @description Response body for `POST /api/resources/{id}/artifacts` — the committed artifact's ID
+         *     and its full readback view.
+         */
+        ArtifactCommitResponse: {
+            artifact: components["schemas"]["ArtifactView"];
+            artifact_id: components["schemas"]["DataArtifactId"];
         };
         /**
          * @description One data artifact, as returned by the API and MCP surfaces.
@@ -4159,6 +4190,19 @@ export interface components {
          * @enum {string}
          */
         JoinRequestStatus: "pending" | "approved" | "rejected" | "withdrawn";
+        /**
+         * @description The namespace half of the family name — mirrors `temper_substrate::payloads::KindOwner`
+         *     in a temper-core-native shape so the wire type does not depend on the substrate crate.
+         *     `None` (the ordinary case) lets the SQL wrapper default the namespace from the owning
+         *     resource's home.
+         */
+        KindOwnerInput: {
+            /** Format: uuid */
+            kb_profiles: string;
+        } | {
+            /** Format: uuid */
+            kb_teams: string;
+        };
         /**
          * Format: uuid
          * @description A `kb_cogmap_lenses.id` value.
@@ -9868,6 +9912,63 @@ export interface operations {
             };
             /** @description Unauthorized */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    commit_artifact: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Resource ID (the artifact's owner) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactCommitRequest"];
+            };
+        };
+        responses: {
+            /** @description Committed artifact */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactCommitResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No write standing on the owning resource */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Resource not found or not visible */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

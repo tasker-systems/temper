@@ -243,7 +243,7 @@ describe('the graph surface address', () => {
 		it('is empty, not malformed, at the unaddressed door', () => {
 			const a = parseGraphAddress(at('/graph/@me'));
 
-			expect(a).toEqual({ question: null, anchors: [], seeds: [], selection: null });
+			expect(a).toEqual({ question: null, anchors: [], seeds: [], selection: null, depth: null });
 		});
 
 		it('carries a WHOLE ref, so a team context is expressible at all', () => {
@@ -329,6 +329,7 @@ describe('the graph surface address', () => {
 				],
 				seeds: ['aaaa-1', 'bbbb-2'],
 				selection: 'cccc-3',
+				depth: 2,
 			};
 
 			expect(parseGraphAddress(at(graphHref('@me', address)))).toEqual(address);
@@ -340,6 +341,7 @@ describe('the graph surface address', () => {
 				anchors: [{ kind: 'context' as const, ref: '@me/a b&c' }],
 				seeds: [],
 				selection: null,
+				depth: null,
 			};
 
 			expect(parseGraphAddress(at(graphHref('@me', address)))).toEqual(address);
@@ -387,24 +389,95 @@ describe('the graph URL mutators change one part and leave the rest alone', () =
 		expect(withGraphQuestion(at('?q=x'), '   ')).toBe('/graph/@me');
 	});
 
-	it('walking from a seed replaces the question, which no longer decides the answer', () => {
-		// `from` REPLACES the upstream stage as what the walk grows from, so a stale `q` would
-		// leave a question on screen that decides nothing about what is drawn.
+	it('walking from a seed KEEPS the question, because it is where the reader started', () => {
+		// §10.2, ruled: "`q` survives the handoff as provenance, and that is what makes §7.2 work."
+		// This assertion was the exact inverse until 2026-08-21 — it asserted the question was
+		// dropped, and the reason it gave (a question that no longer decides the answer) is the
+		// reason it now stays. The selection still goes: it names a node in the previous answer.
 		expect(withGraphSeed(at('?q=x&in=ctx%3A%40me%2Ftemper&sel=abc'), 'r9')).toBe(
-			'/graph/@me?in=ctx%3A%40me%2Ftemper&from=r9',
+			'/graph/@me?q=x&in=ctx%3A%40me%2Ftemper&from=r9&depth=1',
 		);
 	});
 
 	it('walking from a seed replaces any previous seed rather than accumulating', () => {
-		expect(withGraphSeed(at('?from=r1&from=r2'), 'r9')).toBe('/graph/@me?from=r9');
+		expect(withGraphSeed(at('?from=r1&from=r2'), 'r9')).toBe('/graph/@me?from=r9&depth=1');
+	});
+
+	it('every hop walks ONE hop, whatever depth the address arrived carrying', () => {
+		// `depth` is grammar, not a control. A second hop from a `depth=3` screen is still one hop
+		// from where the reader now stands, so it is written rather than carried forward.
+		expect(withGraphSeed(at('?from=r1&depth=3'), 'r9')).toBe('/graph/@me?from=r9&depth=1');
 	});
 
 	it('every mutator round-trips through the parser it is the inverse of', () => {
-		const url = new URL(`https://x.test${withGraphSeed(at('?in=ctx%3A%2Bteam%2Fops'), 'r9')}`);
+		const url = new URL(
+			`https://x.test${withGraphSeed(at('?q=how%20does%20this%20work&in=ctx%3A%2Bteam%2Fops'), 'r9')}`,
+		);
 		const address = parseGraphAddress(url);
 
 		expect(address.anchors).toEqual([{ kind: 'context', ref: '+team/ops' }]);
 		expect(address.seeds).toEqual(['r9']);
-		expect(address.question).toBeNull();
+		expect(address.question).toBe('how does this work');
+		expect(address.depth).toBe(1);
+	});
+});
+
+describe('depth — grammar only, and clamped to what the read will actually walk', () => {
+	const at = (search: string) => new URL(`https://x.test/graph/@me${search}`);
+
+	it('is absent rather than defaulted when the address does not carry one', () => {
+		// The default lives in the read (`depth: Option<i32>`, `unwrap_or(1)`). Defaulting here too
+		// would put two copies of one rule on either side of the wire.
+		expect(parseGraphAddress(at('?from=r1')).depth).toBeNull();
+	});
+
+	it('clamps to the 1..=3 the service walks, so the address cannot promise a deeper graph', () => {
+		// `graph_service::traversal_slice` does `depth.clamp(1, 3)` and the SQL does
+		// `LEAST(p_depth, 3)`. A hand-written `depth=9` draws a 3-hop graph either way; clamping
+		// here is what stops the address reading a number the screen does not show.
+		expect(parseGraphAddress(at('?from=r1&depth=9')).depth).toBe(3);
+		expect(parseGraphAddress(at('?from=r1&depth=-4')).depth).toBe(1);
+		expect(parseGraphAddress(at('?from=r1&depth=2')).depth).toBe(2);
+	});
+
+	it('DROPS an unreadable depth rather than guessing at one', () => {
+		// Same rule as an unreadable `in`: a value that cannot be read is not evidence for any
+		// particular number of hops.
+		expect(parseGraphAddress(at('?from=r1&depth=deep')).depth).toBeNull();
+		expect(parseGraphAddress(at('?from=r1&depth=')).depth).toBeNull();
+	});
+
+	it('emits what it parsed, so the grammar is a round trip', () => {
+		expect(graphHref('@me', { seeds: ['r1'], depth: 2 })).toBe('/graph/@me?from=r1&depth=2');
+		expect(parseGraphAddress(new URL('https://x.test/graph/@me?from=r1&depth=2')).depth).toBe(2);
+	});
+
+	it('emits no depth at all when there is none, rather than writing the default in', () => {
+		expect(graphHref('@me', { seeds: ['r1'] })).toBe('/graph/@me?from=r1');
+	});
+});
+
+describe('asking a question ends the walk — grounding and navigation are different acts', () => {
+	const at = (search: string) => new URL(`https://x.test/graph/@me${search}`);
+
+	it('drops `from` and `depth`, so the Ask box is not a control that does nothing', () => {
+		// Caught before it shipped, and it would have been invisible: D2 routes any address with
+		// `from` to the traversal read, which never consults `q`. Keeping the walk would leave a
+		// reader typing a new question, watching the URL change, and seeing the same graph.
+		expect(withGraphQuestion(at('?q=old&from=r1&depth=2'), 'a new question')).toBe(
+			'/graph/@me?q=a+new+question',
+		);
+	});
+
+	it('ends the walk even when the question is cleared, rather than stranding it', () => {
+		// Clearing the box means "show me the entry read again", not "keep walking from wherever I
+		// happened to be with no question attached".
+		expect(withGraphQuestion(at('?q=old&from=r1&depth=1'), '')).toBe('/graph/@me');
+	});
+
+	it('leaves the places alone — a new question is still asked in the places you named', () => {
+		expect(withGraphQuestion(at('?in=ctx%3A%40me%2Ftemper&from=r1'), 'next')).toBe(
+			'/graph/@me?in=ctx%3A%40me%2Ftemper&q=next',
+		);
 	});
 });

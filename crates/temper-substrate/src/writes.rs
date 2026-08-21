@@ -17,8 +17,8 @@ use crate::affinity::EdgeKind;
 use crate::content::{prepare_block, prepare_block_from_chunks, IncomingChunk, PreparedBlock};
 use crate::events::{fire, fire_with, EdgeHome, EventContext, SeedAction};
 use crate::ids::{
-    BlockId, CogmapId, ContextId, EdgeId, EntityId, EventId, InvocationId, ProfileId, PropertyId,
-    ResourceId,
+    BlockId, CogmapId, ContextId, DataArtifactId, EdgeId, EntityId, EventId, InvocationId,
+    ProfileId, PropertyId, ResourceId,
 };
 use crate::payloads::{self, AnchorRef, EdgePolarity, Incorporation, ProvenanceSource};
 use crate::text::slugify;
@@ -1440,4 +1440,57 @@ pub async fn upsert_ingestion_record(pool: &PgPool, r: IngestionRecord<'_>) -> R
     .execute(pool)
     .await?;
     Ok(())
+}
+
+// ── data artifact writes ──────────────────────────────────────────────────────
+
+/// Parameters for [`commit_data_artifact_with`] — the attributed write that fires a
+/// `DataArtifactCommit` seed action.
+#[derive(Debug)]
+pub struct CommitDataArtifactParams<'a> {
+    pub resource: ResourceId,
+    pub kind: &'a str,
+    pub kind_owner: Option<payloads::KindOwner>,
+    pub intent: payloads::ArtifactIntent,
+    pub precedence: f64,
+    pub content: &'a serde_json::Value,
+    pub supersedes: &'a [DataArtifactId],
+    pub emitter: EntityId,
+}
+
+/// [`commit_data_artifact_with`] under the default (un-attributed) context.
+pub async fn commit_data_artifact(
+    pool: &PgPool,
+    p: CommitDataArtifactParams<'_>,
+) -> Result<DataArtifactId> {
+    commit_data_artifact_with(pool, p, EventContext::default()).await
+}
+
+/// Commit one data artifact to a resource under an explicit [`EventContext`]. Opens one
+/// transaction, fires the `DataArtifactCommit` seed action (which hashes the content, calls
+/// `data_artifact_commit()` SQL, and returns the new artifact id), and commits.
+pub async fn commit_data_artifact_with(
+    pool: &PgPool,
+    p: CommitDataArtifactParams<'_>,
+    ctx: EventContext,
+) -> Result<DataArtifactId> {
+    let mut tx = begin_scoped(pool).await?;
+    let id = fire_with(
+        &mut tx,
+        SeedAction::DataArtifactCommit {
+            resource: p.resource,
+            kind: p.kind,
+            kind_owner: p.kind_owner,
+            intent: p.intent,
+            precedence: p.precedence,
+            content: p.content,
+            supersedes: p.supersedes,
+            emitter: p.emitter,
+        },
+        ctx,
+    )
+    .await?
+    .data_artifact()?;
+    tx.commit().await?;
+    Ok(id)
 }

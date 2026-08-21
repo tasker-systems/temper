@@ -13,8 +13,11 @@ use serde_json::Value;
 
 use crate::types::managed_meta::ManagedMeta;
 use temper_core::types::authorship::ActContext;
+use temper_core::types::data_artifact::KindOwnerInput;
 use temper_core::types::home::HomeAnchor;
-use temper_core::types::ids::{BlockId, CogmapId, ContextId, CorrelationId, EdgeId, ResourceId};
+use temper_core::types::ids::{
+    BlockId, CogmapId, ContextId, CorrelationId, DataArtifactId, EdgeId, ResourceId,
+};
 use temper_core::types::property_owner::PropertyOwner;
 use temper_core::types::provenance::ProvenanceSource;
 
@@ -179,6 +182,29 @@ pub struct AnnotateResource {
     pub content_block: Option<uuid::Uuid>,
     /// Per-act correlation + authorship — stamps the `block_provenance_annotated` act. Empty by
     /// default; correlation never authorizes the write.
+    #[serde(default, skip_serializing_if = "ActContext::is_empty")]
+    pub act: ActContext,
+    pub origin: Surface,
+}
+
+/// Commit one data artifact to a resource. The substrate `fire_with` dispatch hashes the
+/// content, calls `data_artifact_commit()` SQL, and returns the new `DataArtifactId`. The
+/// `kind_owner` field is `None` in the ordinary case — the SQL wrapper defaults the namespace
+/// from the owning resource's home.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CommitDataArtifact {
+    pub resource: ResourceId,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind_owner: Option<KindOwnerInput>,
+    /// String form (`"current"` / `"member"` / `"pinned"`) — the backend converts to
+    /// `temper_substrate::payloads::ArtifactIntent`.
+    pub intent: String,
+    #[serde(default)]
+    pub precedence: f64,
+    pub content: Value,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supersedes: Vec<DataArtifactId>,
     #[serde(default, skip_serializing_if = "ActContext::is_empty")]
     pub act: ActContext,
     pub origin: Surface,

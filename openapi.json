@@ -5204,6 +5204,84 @@
           }
         ],
         "x-apidog-folder": "Reference/API Reference/Data Artifacts"
+      },
+      "post": {
+        "tags": [
+          "Data Artifacts"
+        ],
+        "summary": "Commit one data artifact to a resource",
+        "description": "The content payload is JSON, hashed and stored verbatim. The hash is the proof —\nthe ledger carries only the hash, never the bytes. Auth-gated: the caller must\nhave write standing on the owning resource.",
+        "operationId": "commit_artifact",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Resource ID (the artifact's owner)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArtifactCommitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Committed artifact",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactCommitResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No write standing on the owning resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Data Artifacts"
       }
     },
     "/api/resources/{id}/artifacts/{artifact_id}": {
@@ -8043,6 +8121,75 @@
               "$ref": "#/components/schemas/ProvenanceSource"
             },
             "description": "Block-provenance sources this appended segment's content was distilled from — recorded\nagainst **this** content block (a block, not a chunk), list position → accretion `seq`.\nSame value grammar and projector path as `IngestPayload::sources` / `resource create\n--sources` (a resource ref → `Resource`; an http/https URL → `Remote`). Empty (the default,\nskipped on the wire) = an un-attributed append, exactly the prior behaviour."
+          }
+        }
+      },
+      "ArtifactCommitRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ActInput",
+            "description": "Per-act correlation + authorship flags. Flattened into the request body."
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind",
+              "intent",
+              "content"
+            ],
+            "properties": {
+              "content": {
+                "description": "The structured payload as JSON. Hashed and stored verbatim — the hash is the proof."
+              },
+              "intent": {
+                "type": "string",
+                "description": "Selection intent: `\"current\"`, `\"member\"`, or `\"pinned\"`."
+              },
+              "kind": {
+                "type": "string",
+                "description": "The bare family name, qualified by `kind_owner` (or defaulted from the resource's home)."
+              },
+              "kind_owner": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/KindOwnerInput",
+                    "description": "Override the namespace half of the family name. Omit to let the server default it."
+                  }
+                ]
+              },
+              "precedence": {
+                "type": "number",
+                "format": "double",
+                "description": "Ordering among peers. Meaningful for `member`; carried for all. Default: `0.0`."
+              },
+              "supersedes": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/DataArtifactId"
+                },
+                "description": "Artifacts this one replaces, named explicitly by the writer. Empty = replaces nothing."
+              }
+            }
+          }
+        ],
+        "description": "Request body for `POST /api/resources/{id}/artifacts` — commit one data artifact."
+      },
+      "ArtifactCommitResponse": {
+        "type": "object",
+        "description": "Response body for `POST /api/resources/{id}/artifacts` — the committed artifact's ID\nand its full readback view.",
+        "required": [
+          "artifact_id",
+          "artifact"
+        ],
+        "properties": {
+          "artifact": {
+            "$ref": "#/components/schemas/ArtifactView"
+          },
+          "artifact_id": {
+            "$ref": "#/components/schemas/DataArtifactId"
           }
         }
       },
@@ -11331,6 +11478,35 @@
           "rejected",
           "withdrawn"
         ]
+      },
+      "KindOwnerInput": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "kb_profiles"
+            ],
+            "properties": {
+              "kb_profiles": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kb_teams"
+            ],
+            "properties": {
+              "kb_teams": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          }
+        ],
+        "description": "The namespace half of the family name — mirrors `temper_substrate::payloads::KindOwner`\nin a temper-core-native shape so the wire type does not depend on the substrate crate.\n`None` (the ordinary case) lets the SQL wrapper default the namespace from the owning\nresource's home."
       },
       "LensId": {
         "type": "string",

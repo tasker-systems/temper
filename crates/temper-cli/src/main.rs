@@ -425,6 +425,27 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         },
                     )
                 }
+                DataArtifactAction::Commit {
+                    r#ref,
+                    kind,
+                    intent,
+                    precedence,
+                    content,
+                    supersedes,
+                    act,
+                } => temper_cli::commands::data_artifact::commit(
+                    &config,
+                    temper_cli::commands::data_artifact::CommitParams {
+                        r#ref: &r#ref,
+                        kind: &kind,
+                        intent: &intent,
+                        precedence,
+                        content_flag: content.as_deref(),
+                        supersedes: &supersedes,
+                        act: act.into_act_input()?,
+                        format: output_format,
+                    },
+                ),
             }
         }
         Commands::Context { action } => match action {

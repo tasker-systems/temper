@@ -1649,7 +1649,7 @@ pub async fn get_artifact(
     )
 }
 
-fn parse_intent_str(s: &str) -> ApiResult<temper_substrate::payloads::ArtifactIntent> {
+pub fn parse_intent_str(s: &str) -> ApiResult<temper_substrate::payloads::ArtifactIntent> {
     match s {
         "current" => Ok(temper_substrate::payloads::ArtifactIntent::Current),
         "member" => Ok(temper_substrate::payloads::ArtifactIntent::Member),

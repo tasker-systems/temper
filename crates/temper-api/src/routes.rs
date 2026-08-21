@@ -56,6 +56,7 @@ fn gated_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::resources::get_content))
         .routes(routes!(handlers::data_artifacts::list))
         .routes(routes!(handlers::data_artifacts::get))
+        .routes(routes!(handlers::data_artifacts::commit))
         .routes(routes!(
             handlers::resources::provenance,
             handlers::resources::annotate
