@@ -632,6 +632,30 @@ pub struct DataArtifactCommitted {
     pub supersedes: Vec<DataArtifactId>,
 }
 
+/// The conformance state of a data artifact against any shape declared for its family.
+///
+/// This is where `unchecked-never-reads-as-checked` gets its first purchase: the reader is told
+/// "unchecked" rather than shown a field that is merely empty. Every retrieved artifact carries
+/// this, so a reader never has to infer conformance from the absence of a verdict.
+///
+/// Until the shape registry exists (Beat D or later), every artifact is permanently
+/// [`ShapeState::NeverDeclared`] — no shape has been registered for any family, so there is nothing
+/// to conform to or diverge from. The SQL read functions hardcode `'never_declared'`; this enum
+/// makes the value typed on the Rust side so a `""` or `NULL` is a decode error, not a silent
+/// "looks fine."
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShapeState {
+    /// No shape has been declared for this artifact's family. The artifact is useful and
+    /// first-class; this state is not a degradation.
+    NeverDeclared,
+    // Future variants, when the shape registry lands:
+    //   DeclaredSatisfied — a shape is in force and the artifact conforms.
+    //   DeclaredNotSatisfied — a shape is in force and the artifact does not conform.
+    //   DeclaredNotYetChecked — a shape was registered but the validation sweep has not reached
+    //     this artifact.
+}
+
 /// Set a **single-valued** property (WS6 4c): the projection folds prior active rows for
 /// `(owner, property_key)` then inserts this value, so the key holds exactly one current value (the
 /// resource-frontmatter shape, where each managed/open key has one value). Distinct from

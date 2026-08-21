@@ -70,7 +70,8 @@ use temper_core::types::home::HomeAnchor;
 use uuid::Uuid;
 
 use crate::ids::{
-    BlockId, CogmapId, ContextId, EdgeId, EntityId, LensId, ProfileId, RegionId, ResourceId,
+    BlockId, CogmapId, ContextId, DataArtifactId, EdgeId, EntityId, LensId, ProfileId, RegionId,
+    ResourceId,
 };
 use crate::keys::{is_managed_property_key, MANAGED_PROPERTY_KEYS};
 use temper_core::types::managed_meta::ManagedMeta;
@@ -2055,4 +2056,255 @@ pub async fn cogmap_analytics(
         },
         regulation: r.regulation.0,
     }))
+}
+
+// ── Data artifact reads (Beat C) ───────────────────────────────────────────────────────────────
+//
+// Four read surfaces over `kb_data_artifacts`, all gated through `resources_visible_to` in the
+// SQL (migration `20260820000030`). The set reads JOIN-filter the visible set; the single-artifact
+// read (`artifact_by_id`) JOINs the gate directly. An artifact is never visible to a principal who
+// cannot read its owning resource.
+//
+// The visibility gate is an INNER JOIN, not an `array_agg` into a NULL-means-unbounded predicate,
+// so the `array_agg`-over-empty-scope fall-open scar does not apply. If a future change
+// restructures these to collect IDs into an array, COALESCE to `ARRAY[]::uuid[]` or the gate
+// falls open (vault memory 019fc290-b5c6-7160-a9a5-db40f3fff2d2).
+
+/// One fully-hydrated data artifact, as returned by [`artifacts_for_resource`] and
+/// [`artifact_by_id`]. The content sidecar is `None` when the artifact was committed with no
+/// bytes (`p_content` was NULL) — that is legitimate, not a missing-data signal.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RetrievedArtifact {
+    pub artifact_id: DataArtifactId,
+    pub resource_id: ResourceId,
+    pub kind_owner: crate::payloads::KindOwner,
+    pub artifact_kind: String,
+    pub intent: crate::payloads::ArtifactIntent,
+    pub precedence: f64,
+    pub content_hash: String,
+    pub content_bytes: i64,
+    pub shape_state: crate::payloads::ShapeState,
+    pub is_folded: bool,
+    pub created: DateTime<Utc>,
+    pub content: Option<serde_json::Value>,
+}
+
+/// One row of per-family counts, as returned by [`artifact_counts_for_resource`]. Grouped by the
+/// qualified family name so a caller sees "3 measurements, 1 query-plan" without fetching payloads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactCount {
+    pub kind_owner: crate::payloads::KindOwner,
+    pub artifact_kind: String,
+    pub count: i64,
+    pub total_bytes: i64,
+}
+
+/// Parse the SQL `intent` text into the typed enum. The CHECK constraint and the service-edge
+/// refusal make any other value impossible from committed data, so an unexpected value here is a
+/// genuine fault (not a user error) and is returned as `anyhow::Error`.
+fn parse_intent(s: &str) -> Result<crate::payloads::ArtifactIntent> {
+    Ok(match s {
+        "current" => crate::payloads::ArtifactIntent::Current,
+        "member" => crate::payloads::ArtifactIntent::Member,
+        "pinned" => crate::payloads::ArtifactIntent::Pinned,
+        other => anyhow::bail!("unrecognized intent from database: {other}"),
+    })
+}
+
+/// Parse the SQL `shape_state` text into the typed enum. Today only `'never_declared'` is emitted
+/// (no registry exists); when the registry lands, new variants will be added here alongside the
+/// SQL literals.
+fn parse_shape_state(s: &str) -> Result<crate::payloads::ShapeState> {
+    Ok(match s {
+        "never_declared" => crate::payloads::ShapeState::NeverDeclared,
+        other => anyhow::bail!("unrecognized shape_state from database: {other}"),
+    })
+}
+
+/// Reconstruct the `KindOwner` enum from the two SQL columns. The CHECK constraint on
+/// `kind_owner_table` makes any other value impossible from committed data.
+fn parse_kind_owner(table: &str, id: Uuid) -> Result<crate::payloads::KindOwner> {
+    Ok(match table {
+        "kb_profiles" => crate::payloads::KindOwner::Profile(id),
+        "kb_teams" => crate::payloads::KindOwner::Team(id),
+        other => anyhow::bail!("unrecognized kind_owner_table from database: {other}"),
+    })
+}
+
+/// Full hydration: metadata + content for every visible artifact of a resource, optionally
+/// filtered by kind and intent. Set reads JOIN-filter the visible set — an invisible resource
+/// yields zero rows, never an error.
+///
+/// `include_folded` defaults to `false` (live artifacts only). Folded artifacts are retained (fold
+/// affects visibility, never existence); pass `true` to include them for history/audit.
+pub async fn artifacts_for_resource(
+    pool: &PgPool,
+    principal: ProfileId,
+    resource: ResourceId,
+    kind: Option<&str>,
+    intent: Option<crate::payloads::ArtifactIntent>,
+    include_folded: bool,
+) -> Result<Vec<RetrievedArtifact>> {
+    let intent_str = intent.map(|i| match i {
+        crate::payloads::ArtifactIntent::Current => "current",
+        crate::payloads::ArtifactIntent::Member => "member",
+        crate::payloads::ArtifactIntent::Pinned => "pinned",
+    });
+
+    let rows = sqlx::query!(
+        r#"SELECT artifact_id        AS "artifact_id!",
+                  resource_id        AS "resource_id!",
+                  kind_owner_table   AS "kind_owner_table!",
+                  kind_owner_id      AS "kind_owner_id!",
+                  artifact_kind      AS "artifact_kind!",
+                  intent             AS "intent!",
+                  precedence         AS "precedence!",
+                  content_hash       AS "content_hash!",
+                  content_bytes      AS "content_bytes!",
+                  shape_state        AS "shape_state!",
+                  is_folded          AS "is_folded!",
+                  created            AS "created!",
+                  content
+             FROM artifacts_for_resource($1, $2, $3, $4, $5)"#,
+        principal.uuid(),
+        resource.uuid(),
+        kind,
+        intent_str,
+        include_folded,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    rows.into_iter()
+        .map(|r| {
+            Ok(RetrievedArtifact {
+                artifact_id: DataArtifactId::from(r.artifact_id),
+                resource_id: ResourceId::from(r.resource_id),
+                kind_owner: parse_kind_owner(&r.kind_owner_table, r.kind_owner_id)?,
+                artifact_kind: r.artifact_kind,
+                intent: parse_intent(&r.intent)?,
+                precedence: r.precedence,
+                content_hash: r.content_hash,
+                content_bytes: r.content_bytes,
+                shape_state: parse_shape_state(&r.shape_state)?,
+                is_folded: r.is_folded,
+                created: r.created,
+                content: r.content,
+            })
+        })
+        .collect()
+}
+
+/// Counts only: per-family counts and total bytes, no content hydration. Same visibility gate.
+pub async fn artifact_counts_for_resource(
+    pool: &PgPool,
+    principal: ProfileId,
+    resource: ResourceId,
+    include_folded: bool,
+) -> Result<Vec<ArtifactCount>> {
+    let rows = sqlx::query!(
+        r#"SELECT kind_owner_table   AS "kind_owner_table!",
+                  kind_owner_id      AS "kind_owner_id!",
+                  artifact_kind      AS "artifact_kind!",
+                  count              AS "count!",
+                  total_bytes        AS "total_bytes!"
+             FROM artifact_counts_for_resource($1, $2, $3)"#,
+        principal.uuid(),
+        resource.uuid(),
+        include_folded,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    rows.into_iter()
+        .map(|r| {
+            Ok(ArtifactCount {
+                kind_owner: parse_kind_owner(&r.kind_owner_table, r.kind_owner_id)?,
+                artifact_kind: r.artifact_kind,
+                count: r.count,
+                total_bytes: r.total_bytes,
+            })
+        })
+        .collect()
+}
+
+/// IDs only: for fetch-by-id patterns where the caller wants to enumerate first and hydrate
+/// later. Same visibility gate.
+pub async fn artifact_ids_for_resource(
+    pool: &PgPool,
+    principal: ProfileId,
+    resource: ResourceId,
+    kind: Option<&str>,
+    intent: Option<crate::payloads::ArtifactIntent>,
+    include_folded: bool,
+) -> Result<Vec<DataArtifactId>> {
+    let intent_str = intent.map(|i| match i {
+        crate::payloads::ArtifactIntent::Current => "current",
+        crate::payloads::ArtifactIntent::Member => "member",
+        crate::payloads::ArtifactIntent::Pinned => "pinned",
+    });
+
+    let rows = sqlx::query!(
+        r#"SELECT artifact_id AS "id!" FROM artifact_ids_for_resource($1, $2, $3, $4, $5)"#,
+        principal.uuid(),
+        resource.uuid(),
+        kind,
+        intent_str,
+        include_folded,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| DataArtifactId::from(r.id))
+        .collect())
+}
+
+/// Single artifact by ID: resolves the owning resource and gates on its visibility. Never trusts
+/// the caller — even if the caller knows the artifact id, the owning resource must be visible or
+/// the artifact is absent (fail closed, returned as `Ok(None)`).
+pub async fn artifact_by_id(
+    pool: &PgPool,
+    principal: ProfileId,
+    artifact: DataArtifactId,
+) -> Result<Option<RetrievedArtifact>> {
+    let row = sqlx::query!(
+        r#"SELECT artifact_id        AS "artifact_id!",
+                  resource_id        AS "resource_id!",
+                  kind_owner_table   AS "kind_owner_table!",
+                  kind_owner_id      AS "kind_owner_id!",
+                  artifact_kind      AS "artifact_kind!",
+                  intent             AS "intent!",
+                  precedence         AS "precedence!",
+                  content_hash       AS "content_hash!",
+                  content_bytes      AS "content_bytes!",
+                  shape_state        AS "shape_state!",
+                  is_folded          AS "is_folded!",
+                  created            AS "created!",
+                  content
+             FROM artifact_by_id($1, $2)"#,
+        principal.uuid(),
+        artifact.uuid(),
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    row.map(|r| {
+        Ok(RetrievedArtifact {
+            artifact_id: DataArtifactId::from(r.artifact_id),
+            resource_id: ResourceId::from(r.resource_id),
+            kind_owner: parse_kind_owner(&r.kind_owner_table, r.kind_owner_id)?,
+            artifact_kind: r.artifact_kind,
+            intent: parse_intent(&r.intent)?,
+            precedence: r.precedence,
+            content_hash: r.content_hash,
+            content_bytes: r.content_bytes,
+            shape_state: parse_shape_state(&r.shape_state)?,
+            is_folded: r.is_folded,
+            created: r.created,
+            content: r.content,
+        })
+    })
+    .transpose()
 }
