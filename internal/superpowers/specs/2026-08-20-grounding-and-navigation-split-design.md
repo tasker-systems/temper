@@ -135,11 +135,28 @@ Three constraints on the degree computation, each with a reason:
 
 1. **`WHERE NOT is_folded`** — folded edges are retracted assertions. Omitting this counts things
    somebody took back, and it would never surface as a bug, only as subtly wrong ordering.
-2. **Both endpoints inside the visible set** — §2.1 restated as a rule. A node ranked *highly
-   connected* whose edges all point off-canvas rebuilds the current failure one layer down.
-   **Degree must be measured over the set that will be drawn.**
+2. **`[corrected — 2026-08-20]` The induced subgraph is what protects §2.1 — not the ranking
+   metric.** This constraint first read *"degree must be measured over the set that will be drawn"*,
+   which is **circular**: the drawn set is chosen *by* the ranking, so the ranking cannot be scoped
+   to it. The rule that actually holds:
+
+   > **Rank by corpus degree; return the induced subgraph over the top-K.**
+
+   Every drawn edge then has both endpoints drawn **by construction**, which is what §2.1 was
+   protecting. Whether the top-K by corpus degree actually cohere is an **empirical** question, not
+   something to assert here — see the reporting requirement below.
 3. **Both endpoints `kb_resources`** — `kb_edges` may target `kb_cogmaps`, which are not drawable
    resource marks.
+
+**`[ruled — 2026-08-20, Pete]` A reuses the incumbent node shape.** `graph_atlas_nodes_visible(p_profile, p_ids)`
+already returns the whole payload — `id, title, doc_type, home, degree, first_chunk, stage`. A is
+therefore a **ranking function returning ids**, then the incumbent for hydration. One node shape
+across every graph read, and no second place for it to drift.
+
+**A must report the degree distribution, not just the top K** — including, for the returned set,
+both the corpus degree and the induced-subgraph edge count. K and rung 2's threshold (§6, §10.1) are
+fixed in C from those numbers, and the two figures side by side are what say whether ranking by
+corpus degree produces a set that actually coheres.
 
 Existing indexes serve this: `idx_kb_edges_source`, `idx_kb_edges_target`, `idx_kb_edges_home`, all
 `WHERE NOT is_folded`.
@@ -168,14 +185,42 @@ It is already visibility-scoped (`resources_visible_to(p_profile)`, both endpoin
 excludes folded edges, already restricts to `kb_resources` on both ends, and **is bound to no anchor
 at all.** B is therefore a service function and a handler over an existing fragment, not new SQL.
 
-**Two real gaps remain, and both are decisions rather than oversights:**
+**`[ruled — 2026-08-20, Pete]` The directed chain is retired; one walk body survives.**
 
-- **`graph_traverse` walks FORWARD only.** The base arm matches `e.source_id = ANY(p_seed_ids)` and
-  the recursive arm joins `e.source_id = w.target_id`. A neighbourhood read almost certainly wants
-  undirected. Whether to widen the incumbent or add a sibling is a build decision with a blast
-  radius — `graph_subgraph_nodes` calls it (`canonical_functions.sql:1348`).
-- **It returns no edge `id` and no `weight`**, both of which `AtlasEdge` requires.
-  `graph_region_composition_edges` already returns them, so the shape to match exists.
+`graph_traverse` walks **forward only** — base arm matches `e.source_id = ANY(p_seed_ids)`, recursive
+arm joins `e.source_id = w.target_id` — while the composition's `__temper_ungated_follow_from` is
+*"Undirected adjacency over admitted, unfolded, `kb_resources` edges"*, joining `admitted` on **both**
+endpoints. Two walks that disagree, and the repo already ruled on that shape:
+
+> *"two walks that must agree and are linked by nothing will drift silently, both still returning
+> plausible rows"* — `20260814000030`
+
+**The blast radius turned out to be nil.** `graph_traverse`'s only consumer is `graph_subgraph_nodes`
+(`canonical_functions.sql:1348`), and **`graph_subgraph_nodes` has no Rust caller at all** — grep
+across `crates/` returns nothing outside `.sqlx`. So the directed chain is already dead.
+
+It is **retired in chunk E** alongside the territory pair. B gets undirected-and-induced, which is
+what a neighbourhood read wants, and nothing regresses because nothing consumed it.
+
+**One constraint on how B gets there.** B must **not** call `__temper_ungated_follow_from` directly:
+that prefix is *"source discipline enforced by `audit-ungated-fragments.sh` and a single compiler
+emitter, NOT a database permission"*, and the graph door is not that emitter. Either extract the
+shared adjacency body, or link B's `graph_*` wrapper to it by a test that fails on drift. The
+precedent is re-pointing at a byte-identical signature — **one body, two names**.
+
+**Neither walk yields `AtlasEdge`.** `graph_traverse` returns no edge `id` or `weight`;
+`__temper_ungated_follow_from` returns `via` naming edges *as asserted*, deliberately carrying no id
+and no numbers. Both gaps are closed by the induced-edge read in §5.4.
+
+### 5.4 The induced-edge read — one function, serving A and B
+
+`graph_region_composition_edges(p_profile, p_regions, p_depth)` already returns exactly the
+`AtlasEdge` shape — `id, source_id, target_id, edge_kind, polarity, label, weight` — over an induced
+subgraph. It is parameterised by **region ids**.
+
+**A sibling taking an arbitrary node-id array serves both chunks**: A returns the induced edges over
+its top-K, B returns them over its walked set. This is the piece neither walk provides and is the
+reason `AtlasEdge` is reachable at all.
 
 ### 5.3 `[found — 2026-08-20]` There are two degrees, and they must not share a name
 
@@ -198,8 +243,17 @@ measured over one set and displayed over another. A node can carry `degree: 12` 
 and a reader has no way to reconcile that but to doubt themselves.
 
 Today the successor does not hit this — `model.ts` recomputes degree client-side over the drawn edge
-set. **The moment A and B feed `AtlasNode` through, two degrees coexist under one name.** The build
-must name them separately or carry only one.
+set. **The moment A and B feed `AtlasNode` through, two degrees coexist under one name.**
+
+**`[ruled — 2026-08-20, Pete]` Only one degree ever reaches the screen, and it is the derived one.**
+
+The corpus degree is a **ranking input for A** and does not need to be sent to the client at all.
+What the reader sees stays what they see today: a count derived from the edges actually returned,
+which `model.ts` already computes. **This kills the hazard at its source rather than managing it
+with two field names** — there is never a second quantity on screen to disagree with the first.
+
+The corpus figure still appears in **A's distribution report** (§5.1), which is a build-time
+measurement feeding the choice of K, not a rendered number.
 
 ## 6. The fallback ladder
 
@@ -352,3 +406,32 @@ Assessed against the register as it stands after the `[2026-08-20]` amendment.
 - **It does not address latency directly**, though §10.3 would remove most of it as a side effect.
   That axis is filed with no goal link (`01a0215d-7dc5-77e1-b055-76c52d3c013b`) and still has no
   clause anywhere.
+
+## 12. Build order, and the true new-SQL surface
+
+`[settled — 2026-08-20, Pete]` Grounding shrank this considerably. **Two new SQL functions, not a
+new act framework.**
+
+| New SQL | Serves |
+|---|---|
+| A degree ranking over the visible corpus → ids **+ the distribution** (§5.1) | A |
+| Induced edges in `AtlasEdge` shape over an arbitrary node-id array (§5.4) | **A and B both** |
+
+Everything else is a service function and a handler over fragments that already exist:
+`graph_atlas_nodes_visible` hydrates nodes for both chunks, and the surviving undirected walk body
+serves B.
+
+| Chunk | | Depends on |
+|---|---|---|
+| **A** | Entry read — ranking fn, induced-edge fn, service, handler, tests. Rust only, nothing on screen | — |
+| **B** | Traversal read — service + handler over the surviving walk and the induced-edge fn. Rust only | A (shares §5.4) |
+| **C** | Unaddressed entry switches to A; `readSeedRows` and the recency page **deleted**; rung ladder and its declaration; **K and the threshold fixed from A's distribution** | A |
+| **D** | The handoff — ground once, then navigate. Bound-line vocabulary, *Why these* becomes provenance, the §10.2 URL grammar | A, B, C |
+| **E** | Delete `contexts/panorama`, `contexts/composition`, **and the dead directed chain** (`graph_traverse`, `graph_subgraph_nodes`) | C |
+
+**A and B are no longer fully independent** — B consumes §5.4, which A introduces. A first, then B;
+or §5.4 lands as its own step ahead of both.
+
+**C cannot be planned in detail until A has run**, because K and rung 2's threshold come out of A's
+distribution report. That is deliberate: choosing them earlier is the exact error — asserting a
+number instead of measuring it — that this spec exists to correct.
