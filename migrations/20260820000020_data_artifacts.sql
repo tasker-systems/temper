@@ -1,174 +1,63 @@
--- Migration: resource-owned data artifacts — the storage substrate and its write path.
+-- Resource-owned data artifacts: schema-boundable JSONB owned by a resource, committed as an event.
 --
--- Design: internal/superpowers/specs/2026-08-20-resource-owned-data-artifacts-design.md
--- Goal:   01a02163-ba6a-7b00-91f5-5f416e43f4f6
--- Task:   01a02163-faba-7a71-b09a-45eade04baba  (Beat A)
---
--- ── Why this exists (measured, not argued, 2026-08-20) ──────────────────────────────────────────
--- Agents already persist structured data in temper — JSON and YAML written into fenced code blocks
--- inside resource bodies, read back by a LATER, unrelated agent session to ground its next stage.
--- The practice is load-bearing and has no home. Three failures of it were measured:
---
---   1. kb_properties (and therefore open_meta) REJECTS anything over 2704 bytes. uq_kb_properties_active
---      is a btree over (owner_table, owner_id, property_key, property_value):
---          index row size 3648 exceeds btree version 4 maximum 2704
---      A minimal query composition is ~450 bytes; one carrying a 768-float embedding is ~15KB.
---   2. Resource bodies SHRED fenced data. temper-ingest's collect_sections_with_stack applies
---      heading_re() (^(#{1,6})\s+(.+)$) with no fence-state tracking, so a YAML comment at column 0
---      is parsed as a markdown heading. An executed probe split a 12-line YAML fence into three
---      chunks, promoted the comment text into header_path, and orphaned both fence delimiters onto
---      neighbouring prose. MAX_CHARS ~= 1428 splits anything larger regardless of comments.
---   3. Every fragment is then embedded into a corpus built for prose.
---
--- ── The load-bearing constraint ─────────────────────────────────────────────────────────────────
--- Data artifacts are NOT queryable and are never made queryable. Their relationship to resources,
--- edges and properties is what makes them FINDABLE; the graph is the index and the artifact is the
--- payload at the end of it. kb_properties remains the key-value JSONB store with predicates and
--- facets — artifacts deliberately do not compete with it. Nothing here is ever searched or embedded.
+-- Design and rationale: internal/superpowers/specs/2026-08-20-resource-owned-data-artifacts-design.md
+-- (vault research 01a02163-8670-7cc2-96a6-1a520ec8a0f8). Read that before changing anything here —
+-- the reasoning for the shape is there, not in this file.
 
--- ════════════════════════════════════════════════════════════════════════════════════════════════
--- A1 — the metadata/bytes split
--- ════════════════════════════════════════════════════════════════════════════════════════════════
---
--- Shaped after kb_block_content (20260714000002_block_content_verbatim.sql): the METADATA row holds
--- everything derivable from the event payload, and the BYTES live in a companion table keyed by the
--- artifact, carrying the content and its hash.
---
--- This split is what keeps replay honest WITHOUT inventing a new replay category (the design spec's
--- Replay section supersedes an earlier draft that wrongly claimed one was needed). Every column of
--- kb_data_artifacts is payload-derivable, so the table joins PROJECTION_DUMPS and diffs
--- byte-identically like any other projection. The bytes ride the sidecar and are proved by hash —
--- exactly as kb_block_content already does ("Re-supply the __blocks sidecar (verbatim block bytes,
--- PR 3) from kb_block_content", replay.rs:265).
---
--- The event payload therefore carries the HASH, never the body. Replay's purpose for the ledger is
--- PROVENANCE: resources are the replayable-difference core; artifacts are event-sourced for
--- governance and consistency. Consequence: the ledger stays light regardless of artifact size, and
--- replay fidelity imposes no size ceiling.
+-- Metadata and bytes are split, following kb_block_content (20260714000002). Every column here is
+-- derivable from the event payload, so the table byte-diffs under replay; the bytes ride a sidecar
+-- and are proved by content_hash.
 CREATE TABLE kb_data_artifacts (
-    id                    UUID PRIMARY KEY,   -- identity-as-input: minted by the caller, carried in
-                                              -- the payload, so replay reproduces it. Deliberately
-                                              -- NO DEFAULT — a server-side default would mint a
-                                              -- different id on replay and break the byte-diff.
-                                              -- (_project_property_set reads property_id the same way.)
+    -- No DEFAULT, deliberately: the id is minted by the caller and carried in the payload
+    -- (identity-as-input), so a server-side default would mint a different id on replay.
+    id                    UUID PRIMARY KEY,
     resource_id           UUID NOT NULL REFERENCES kb_resources(id) ON DELETE CASCADE,
-    -- The family this datum belongs to, as an OWNER-QUALIFIED name. A bare "query-plan" is never a
-    -- complete reference: the pair (kind_owner, artifact_kind) is.
-    --
-    -- WHY QUALIFICATION IS STRUCTURAL AND NOT A LATER REFINEMENT. Registering a shape for a family
-    -- does not merely describe it — it VALIDATES THE EXISTING BACKLOG and records a conformance
-    -- verdict against every artifact of that family. With a flat global namespace, one tenant
-    -- registering `query-plan` would stamp verdicts onto another tenant's `query-plan` artifacts —
-    -- data it cannot even read. That is a principal writing outside its reach, not a naming
-    -- inconvenience, and it is why the doc-type precedent (global, unscoped, deliberately so) does
-    -- NOT transfer: a doc type is an inert label, and registering one writes nothing to anyone's
-    -- data.
-    --
-    -- Artifacts are therefore BORN qualified. Adding the qualifier later would require backfilling
-    -- an owner onto existing rows, and there is no correct value to backfill.
-    --
-    -- The qualifier is DEFAULTED, not demanded: the wrapper resolves it from the owning resource's
-    -- home when the caller omits it (see _data_artifact_kind_owner). An agent writes "query-plan"
-    -- and gets its own namespace without saying so; naming another owner's namespace is possible
-    -- and explicit. This keeps the anti-friction property that the whole write-first/bind-later
-    -- posture exists to protect.
+    -- Family names are owner-qualified: (kind_owner, artifact_kind), never the bare name. Defaulted
+    -- from the owning resource's home by _data_artifact_kind_owner when the caller omits it.
     kind_owner_table      VARCHAR(64) NOT NULL
                               CHECK (kind_owner_table IN ('kb_profiles', 'kb_teams')),
     kind_owner_id         UUID NOT NULL,
     artifact_kind         TEXT NOT NULL,
-    -- A7. The closed selection vocabulary. It answers exactly one question a reader cannot function
-    -- without: given a collection, which do I take?
-    --   current — replaces earlier artifacts of its kind. Take the newest live `current`.
-    --   member  — a peer in a series, NOT a replacement. Take them all, ordered by precedence.
-    --   pinned  — never auto-selected; addressable by explicit reference only.
-    -- Enforced HERE and not only at the service edge, so a path that bypasses the service layer
-    -- still cannot store a term outside the vocabulary.
+    -- The closed selection vocabulary. Enforced here as well as at the service edge so a path that
+    -- bypasses the service layer cannot store a fourth term. Pinned to payloads::ArtifactIntent's
+    -- serde renames.
     intent                TEXT NOT NULL CHECK (intent IN ('current', 'member', 'pinned')),
-    -- Ordering among peers. Meaningful for `member`; carried for all so a reader never has to
-    -- branch on intent to sort.
     precedence            DOUBLE PRECISION NOT NULL DEFAULT 0.0,
-    -- Bare sha256 hex of the content's raw bytes — the Rust `sha256_hex` twin, exactly as
-    -- kb_block_content.content_hash. This is what the event payload carries in place of the body.
-    content_hash          TEXT NOT NULL,
+    content_hash          TEXT NOT NULL,      -- bare sha256 hex of content's raw bytes
     content_bytes         BIGINT NOT NULL,    -- surfaced so a reader can decide whether to fetch
-    -- Assert/fold, the incumbent trio (kb_properties, kb_edges, kb_content_blocks). Rows are never
-    -- UPDATEd in place and never DELETEd: a revision folds the prior row and inserts a new one.
-    --
-    -- REVISION IS THE FOLDED CHAIN. There is deliberately no mutable `revised` column: `revised` is
-    -- INFERRED from history on read. A mutable timestamp would be the one field in this table that
-    -- is not payload-derivable, which would cost the byte-exact replay diff for nothing. (Decided
-    -- with the frame owner, 2026-08-20.)
+    -- Assert/fold, as kb_properties and kb_edges. No mutable `revised` column: revision IS the
+    -- folded chain, and a mutable timestamp would be the one non-payload-derivable column.
     asserted_by_event_id  UUID NOT NULL REFERENCES kb_events(id),
     last_event_id         UUID NOT NULL REFERENCES kb_events(id),
     is_folded             BOOLEAN NOT NULL DEFAULT false,
     created               TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- ── A2 — the uniqueness index that is DELIBERATELY ABSENT ───────────────────────────────────────
---
--- Every sibling assert/fold table carries a partial unique index over its live rows
--- (uq_kb_properties_active, uq_kb_edges_assertion). THIS TABLE HAS NONE, ON PURPOSE.
---
--- A resource owns a HAS-MANY collection of artifacts. There is no one-live-per-kind rule because
--- THE STORE CANNOT KNOW WHETHER RUN #2 SUPERSEDES RUN #1 — only the writer can. A measurement run
--- does not replace the run before it; a recomputed extraction does. Encoding either as a uniqueness
--- constraint would make the store assert a relationship it has no basis for, so ordering, precedence
--- and replacement are things the artifact DECLARES about itself (see `intent` above), never things
--- an index decides on its behalf.
---
--- This is the goal clause `no-supersession-is-asserted-that-a-writer-did-not-declare`. If you are
--- reading this because a missing unique index looked like an oversight: it is not. Adding one here
--- breaks the design.
+-- NO partial unique index over (resource_id, kind), unlike every sibling assert/fold table. This is
+-- deliberate and load-bearing: a resource owns a has-many collection, and only the writer knows
+-- whether one artifact replaces another, so supersession is declared per-commit (see the projector's
+-- `supersedes` handling) and never enforced here. Adding one breaks the design.
 CREATE INDEX idx_kb_data_artifacts_resource ON kb_data_artifacts(resource_id) WHERE NOT is_folded;
--- Keyed on the QUALIFIED name — a lookup by bare `artifact_kind` would silently span namespaces.
+-- Keyed on the QUALIFIED name — a lookup by bare artifact_kind would silently span namespaces.
 CREATE INDEX idx_kb_data_artifacts_kind     ON kb_data_artifacts(resource_id, kind_owner_table, kind_owner_id, artifact_kind) WHERE NOT is_folded;
 
--- The bytes. Keyed by artifact id (1:1), cascading with it — the kb_block_content shape.
+-- NO GIN index on content, deliberately. kb_properties indexes its JSONB because it exists to be
+-- queried; artifacts are reached only through what points at them, never by resemblance.
 CREATE TABLE kb_data_artifact_content (
     artifact_id   UUID PRIMARY KEY REFERENCES kb_data_artifacts(id) ON DELETE CASCADE,
     content       JSONB NOT NULL,
     content_hash  TEXT  NOT NULL   -- bare sha256 hex of content's raw bytes (Rust `sha256_hex` twin)
 );
 
--- NO GIN INDEX ON content, DELIBERATELY.
---
--- kb_properties carries `USING gin (property_value jsonb_path_ops)` because it EXISTS to be queried.
--- This column exists NOT to be queried: the goal clause is
--- `structured-data-is-never-found-by-resemblance` — an artifact is reached only through what points
--- at it. A GIN index here would be the first step toward a query surface the design has committed
--- not to have, and it would be added by someone who thought they were helping.
-
--- ════════════════════════════════════════════════════════════════════════════════════════════════
--- A3 — the event type
--- ════════════════════════════════════════════════════════════════════════════════════════════════
---
--- _event_append hard-fails on an unseeded type ("event_type % not seeded"), so registration is a
--- precondition of the write path, not a nicety.
---
--- category='domain', spelled explicitly. 20260719000010 dropped the column DEFAULT precisely so an
--- omitting registration fails loudly (NOT NULL) rather than silently joining the trail allowlist.
--- 'domain' is correct: committing an artifact is an ordinary knowledge-graph mutation, not admin
--- action and not system infra.
---
--- TYPED, with a published payload_schema — the subscription_delivery_disposed shape
--- (20260819000030), not the permissive webhook_received one. Committing an artifact is temper's own
--- act with a shape temper controls, so the permissive path does not apply.
---
--- The literal below is the committed schemars snapshot,
--- crates/temper-substrate/tests/fixtures/payloads/data_artifact_committed.v1.schema.json, verbatim.
--- repo == registry == Rust types (payload spec §6); tests/payload_schema.rs pins repo == types and
--- this INSERT pins registry == repo. Regenerate both together with
+-- TYPED, with a published payload_schema (the subscription_delivery_disposed shape, 20260819000030
+-- — not the permissive webhook_received one). The literal is the committed schemars snapshot,
+-- crates/temper-substrate/tests/fixtures/payloads/data_artifact_committed.v1.schema.json, verbatim:
+-- repo == registry == Rust types. Regenerate both halves together with
 --   UPDATE_SCHEMA=1 cargo make test-schema
--- and paste the result here; a hand-edit of either half breaks the chain silently.
+-- and paste the result here; hand-editing either half breaks the chain silently.
 --
--- NOTE the payload has no content field, deliberately: the bytes ride data_artifact_commit's
--- p_content argument and land in kb_data_artifact_content. A schema that admitted a body would
--- describe a ledger this design does not want.
---
--- There is deliberately NO `data_artifact_folded` type. An earlier draft registered one before the
--- write path existed; folding turned out to be a clause of the commit act (the writer names what it
--- supersedes) rather than an act of its own, so the type had no emitter. Per the incumbent
--- discipline, an unused arm is state we do not need.
+-- category is spelled explicitly because 20260719000010 dropped the column DEFAULT so an omitting
+-- registration fails loudly rather than silently joining the trail allowlist.
 INSERT INTO kb_event_types (name, payload_schema, schema_version, category) VALUES
   ('data_artifact_committed', $JS${
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -294,18 +183,9 @@ ON CONFLICT (name) DO UPDATE
       schema_version = EXCLUDED.schema_version,
       category       = EXCLUDED.category;
 
--- ════════════════════════════════════════════════════════════════════════════════════════════════
--- A4 — anchor resolution
--- ════════════════════════════════════════════════════════════════════════════════════════════════
---
--- Artifact events are homed, exactly as property and edge events are: the producing anchor gates
--- nothing by itself (every homed object carries its own gating) but it is the event's provenance and
--- must be resolvable or the write is meaningless.
---
--- An artifact has no home of its own — it inherits its owning resource's. This arm is carried
--- VERBATIM from _property_owner_anchor's kb_resources arm (20260727000030_edge_owned_properties.sql),
--- including the tiebreak, which is load-bearing: a resource homed in BOTH a context and a cogmap
--- anchors on the cogmap. Re-deriving that ordering rather than reusing it is how the two drift.
+-- An artifact has no home of its own; it inherits the owning resource's. The tiebreak is carried
+-- verbatim from _property_owner_anchor (20260727000030) and is load-bearing: a resource homed in
+-- both a context and a cogmap anchors on the cogmap. Re-deriving it is how the two drift.
 CREATE FUNCTION _data_artifact_anchor(p_resource uuid,
                                       OUT anchor_table text, OUT anchor_id uuid)
 LANGUAGE plpgsql STABLE AS $$
@@ -323,30 +203,10 @@ BEGIN
 END;
 $$;
 
--- ════════════════════════════════════════════════════════════════════════════════════════════════
--- A5/A6 — projector and wrapper
--- ════════════════════════════════════════════════════════════════════════════════════════════════
---
--- The projector half. Reads ONLY the payload (payload-first design) so replay reproduces it.
---
--- A6 — WHAT THIS FUNCTION DELIBERATELY DOES NOT DO.
--- _project_property_set ends with:
---     IF v_owner_tbl = 'kb_resources' AND v_key IN ('keywords','descriptor','tags') THEN
---         PERFORM _rebuild_resource_search_vector(v_owner);
---     END IF;
--- There is no equivalent here and there must never be one. Committing an artifact changes NOTHING
--- about the corpus of searchable material: no chunk, no embedding, no FTS vector. That is the goal
--- clause `structured-data-is-never-found-by-resemblance`, and it is a STANDING boundary rather than
--- a not-yet — the plausible future change is "why don't we index artifact content too", which would
--- reintroduce precisely the shredding this table exists to escape.
--- The DEFAULT namespace a bare family name lands in: the owner of the resource the artifact hangs
--- on. For a TEAM-owned context that is the team, deliberately — if it defaulted to the writing
--- profile instead, every member of a team would mint kinds in their own personal namespace and the
--- team would never converge on a shared shape, which is the opposite of what a registry is for.
---
--- A cogmap-homed resource has no polymorphic owner to read (kb_cogmaps reaches teams only through
--- kb_team_cogmaps, which is a many-to-many and so names no single owner). Those fall back to the
--- home's owner_profile_id, which is NOT NULL and always present.
+-- The default namespace for a bare family name. For a TEAM-owned context this is the team, not the
+-- writing profile — otherwise each member mints families privately and the team never converges on a
+-- shared shape. A cogmap-homed resource has no polymorphic owner to read (kb_team_cogmaps is
+-- many-to-many and names none), so it falls back to the home's owner_profile_id.
 CREATE FUNCTION _data_artifact_kind_owner(p_resource uuid,
                                           OUT owner_table text, OUT owner_id uuid)
 LANGUAGE plpgsql STABLE AS $$
@@ -374,6 +234,9 @@ BEGIN
 END;
 $$;
 
+-- Reads ONLY the payload, plus the content sidecar. Note what is absent: _project_property_set ends
+-- by calling _rebuild_resource_search_vector, and there is deliberately no equivalent here —
+-- committing an artifact must change nothing about the searchable corpus.
 CREATE FUNCTION _project_data_artifact_committed(p_event uuid, p_payload jsonb, p_content jsonb)
 RETURNS uuid[]
 LANGUAGE plpgsql AS $$
@@ -421,8 +284,7 @@ BEGIN
 END;
 $$;
 
--- The wrapper. Same four moves as property_set, in the same order: validate, resolve anchor,
--- _event_append, _project_*.
+-- Wrapper: validate, resolve anchor, append event, project. Same four moves as property_set.
 CREATE FUNCTION data_artifact_commit(p_payload jsonb, p_content jsonb, p_emitter uuid,
                                      p_metadata jsonb DEFAULT '{}'::jsonb,
                                      p_invocation uuid DEFAULT NULL::uuid,
@@ -483,5 +345,5 @@ $$;
 SELECT declare_migration(
     20260820000020,
     'additive',
-    'Resource-owned data artifacts: kb_data_artifacts + kb_data_artifact_content, the data_artifact_committed event type (domain, TYPED with the committed schemars payload_schema), the _data_artifact_anchor and _data_artifact_kind_owner resolvers, and the _project_data_artifact_committed / data_artifact_commit projector+wrapper pair. Content rides data_artifact_commit''s p_content argument and never enters the event payload — the ledger carries the hash, so replay re-supplies bytes from the content table as a sidecar exactly as kb_block_content does. Family names are owner-qualified (kind_owner_table/kind_owner_id, defaulted from the owning resource''s home): registering a shape validates the backlog and stamps conformance verdicts, so a flat namespace would let one tenant stamp verdicts on another tenant''s unreadable data. Gives structured agent output (query plans, measurements, computation artifacts) a home of its own, instead of fenced code blocks in resource bodies which kb_properties rejects over 2704 bytes and the chunker shreds at its own YAML comment lines. Deliberately carries NO uniqueness index over (resource, kind) and NO GIN index on content: the store never asserts a supersession the writer did not declare, and artifacts are never findable by resemblance.'
+    'Resource-owned data artifacts: kb_data_artifacts + kb_data_artifact_content, the data_artifact_committed event type (domain, TYPED with the committed schemars payload_schema), the _data_artifact_anchor and _data_artifact_kind_owner resolvers, and the _project_data_artifact_committed / data_artifact_commit projector+wrapper pair. Content rides data_artifact_commit''s p_content argument and never enters the event payload, so the ledger carries only the hash and replay re-supplies bytes from the content table as a sidecar (the kb_block_content shape). Family names are owner-qualified because registering a shape validates the backlog and stamps conformance verdicts, which under a flat namespace would let one tenant stamp verdicts on another tenant''s unreadable data. Deliberately carries NO uniqueness index over (resource, kind) and NO GIN index on content. Design: internal/superpowers/specs/2026-08-20-resource-owned-data-artifacts-design.md.'
 );
