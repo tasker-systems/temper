@@ -19,14 +19,52 @@ import { whereOf } from './presentation';
  */
 
 /**
- * Which arm of the answer put this node on the canvas.
+ * One arm of the read that produced this model, and the words that read supplies for it.
  *
- * The three are exactly the three arms the bound line declares, so a reader who asks *"which of
- * these did I ask for and which did the machine reach"* is answered by the same partition in both
- * places. `seed` and `survey` are both **the reader's own material in the places they named**;
- * `walk` is what was reached by following an edge out of it.
+ * `[ruled — 2026-08-21, Pete]` **A read declares the arms it produced and what to call them. No
+ * read may name another read's arms, and nothing outside a model may translate one.**
+ *
+ * What this replaces, and why the replacement is structural rather than a better wording: there
+ * used to be a `NodeArm` union of `'seed' | 'survey' | 'walk'` naming **which stage of a
+ * composition produced a row**, and a `describeArm` switch in `presentation.ts` translating it into
+ * **a claim about what the reader did** — *"In the places you asked about"*. Those coincided
+ * exactly as long as the composition was the only read on the surface, and have not since the entry
+ * read landed. Three live instances followed, each one a new view meeting an old label:
+ *
+ * 1. the unaddressed entry, where {@link buildEntryGraph} marked all 130 marks `'seed'` and every
+ *    hover card and the accessibility heading asserted a question nobody had asked;
+ * 2. the ring, which fired on all 130 of them because they shared an arm;
+ * 3. *"Walk from here →"*, which drops `q` and re-runs the composition with the hopped-from node as
+ *    a seed, so its card said *"in the places you asked about"* about a node the reader hopped from.
+ *
+ * A fourth view would have produced a fourth. **The switch was the defect** — a claim made in one
+ * place about screens built somewhere else — so the words moved to the read that knows what it did.
+ * That is why reader-facing strings live in this file rather than in `presentation.ts`: they are
+ * not a shared vocabulary any more, they are part of what a read returns.
+ *
+ * @see internal/superpowers/specs/2026-08-21-the-handoff-and-the-arm-vocabulary-design.md §1, §2
  */
-export type NodeArm = 'seed' | 'survey' | 'walk';
+export interface GraphArm {
+	/**
+	 * Identifies this arm **within this model** — the value {@link GraphNode.arm} carries.
+	 *
+	 * Deliberately not a union. A global enum is a vocabulary every read shares, which is exactly
+	 * what let one read's words reach another's screen; a key is meaningless except against the
+	 * `arms` of the model it came from.
+	 */
+	key: string;
+	/** What this read calls the arm, to a reader. The only place these words come from. */
+	label: string;
+	/**
+	 * Whether this arm holds what following edges **reached**, as against where the read stood.
+	 *
+	 * A declared property rather than the string `'walk'`, because `coreOf` and the ring both used
+	 * to hard-code `!== 'walk'` — a global check no per-view vocabulary can satisfy. The ring
+	 * encodes the view's standing point: ringed = what this view was built from, bare = what
+	 * following edges reached from it.
+	 */
+	reached: boolean;
+}
 
 /**
  * One resource, drawn.
@@ -67,7 +105,13 @@ export interface GraphNode {
 	 */
 	corpusDegree: number | null;
 	excerpt: string | null;
-	arm: NodeArm;
+	/**
+	 * Which of **this model's** {@link GraphModel.arms} put this node on the canvas.
+	 *
+	 * A key, resolved against the legend the read declared. Nothing may translate it except the
+	 * model it belongs to.
+	 */
+	arm: string;
 	/**
 	 * Where this resource lives, already in the reader's terms (`@owner/slug`, or a map's name).
 	 *
@@ -130,6 +174,16 @@ export interface GraphEdge {
 export interface GraphModel {
 	nodes: GraphNode[];
 	edges: GraphEdge[];
+	/**
+	 * The arms this read produced, in the order a reader should meet them, each carrying its own
+	 * words — the legend for {@link GraphNode.arm}.
+	 *
+	 * **Declaring an arm does not light a channel.** {@link armsDistinguish} still derives the ring's
+	 * contrast from the nodes actually drawn, and the accessibility list still drops a group with no
+	 * members. An arm a read declares but returns nothing for must not draw ink, and a count taken
+	 * from this list rather than from the marks would do exactly that.
+	 */
+	arms: GraphArm[];
 	/**
 	 * How many raw `ViaEntry` rows collapsed into {@link edges}.
 	 *
@@ -223,6 +277,19 @@ const edgeKey = (e: {
  *
  * @see internal/superpowers/specs/2026-08-20-grounding-and-navigation-split-design.md §5.1, §5.3, §8
  */
+/**
+ * The entry read's own arm — **one**, because it made one pass.
+ *
+ * It ranked the reader's whole visible corpus by how connected each thing is and drew the top of
+ * it. That is the honest description, and it is a description of the READ: nothing here was asked
+ * for, and nothing here was followed on to. `reached: false` follows from the same fact — there is
+ * no second arm for these marks to stand apart from, so every one of them is core and
+ * {@link armsDistinguish} withdraws the ring for want of a contrast.
+ */
+export const ENTRY_ARMS: GraphArm[] = [
+	{ key: 'ranked', label: 'What your work is built around', reached: false },
+];
+
 export function buildEntryGraph(entry: AtlasEntry, homes: Map<string, string>): GraphModel {
 	const nodes: GraphNode[] = entry.nodes.map((n) => ({
 		id: n.id,
@@ -239,7 +306,7 @@ export function buildEntryGraph(entry: AtlasEntry, homes: Map<string, string>): 
 		excerpt: n.excerpt,
 		homeRef: (n.home_id && homes.get(n.home_id)) ?? null,
 		updated: n.updated,
-		arm: 'seed',
+		arm: ENTRY_ARMS[0].key,
 		stage: n.stage,
 		resource: null,
 	}));
@@ -265,7 +332,7 @@ export function buildEntryGraph(entry: AtlasEntry, homes: Map<string, string>): 
 
 	// No `via` entries collapsed, because there were none to collapse — the server returned distinct
 	// `kb_edges` rows. Zero is the honest count, not a missing measurement.
-	return { nodes, edges, viaEntries: 0 };
+	return { nodes, edges, arms: ENTRY_ARMS, viaEntries: 0 };
 }
 
 export interface GraphInput {
@@ -292,10 +359,28 @@ export interface GraphInput {
  * to declare, because the edge was never a row of any arm — it is provenance attached to a node
  * that IS declared.
  */
+/**
+ * The composition's three arms, with the three words they have always carried.
+ *
+ * Unchanged wording, moved: these sentences were `describeArm`'s three cases, and they were true
+ * of this read the whole time — a composition IS built from the places the reader asked about. What
+ * was false was that any other read could reach them. They are declared here, by the read they
+ * describe, and that is the whole of the repair.
+ *
+ * `no-internal-vocabulary-is-load-bearing` reaches here too: the reader is told *followed on from
+ * your work*, never *"reached by `follow-from`"*. The order is the order the bound line declares
+ * them, so the same partition reads the same way in both places.
+ */
+export const COMPOSITION_ARMS: GraphArm[] = [
+	{ key: 'seed', label: 'In the places you asked about', reached: false },
+	{ key: 'survey', label: 'From your places', reached: false },
+	{ key: 'walk', label: 'Followed on from your work', reached: true },
+];
+
 export function buildGraph({ response, plan, seeds }: GraphInput): GraphModel {
 	const nodes = new Map<string, GraphNode>();
 
-	const add = (row: ResourceView, arm: NodeArm): void => {
+	const add = (row: ResourceView, arm: string): void => {
 		if (nodes.has(row.id)) return;
 		nodes.set(row.id, {
 			id: row.id,
@@ -319,12 +404,13 @@ export function buildGraph({ response, plan, seeds }: GraphInput): GraphModel {
 		});
 	};
 
-	for (const row of seeds) add(row, 'seed');
+	const [SEED, SURVEY, WALK] = COMPOSITION_ARMS.map((a) => a.key);
+	for (const row of seeds) add(row, SEED);
 	for (const stage of plan.surveyStages) {
-		for (const hit of hitsOf(response.returned?.[stage])) add(hit.resource, 'survey');
+		for (const hit of hitsOf(response.returned?.[stage])) add(hit.resource, SURVEY);
 	}
 	const walk = hitsOf(response.returned?.[plan.walkStage]);
-	for (const hit of walk) add(hit.resource, 'walk');
+	for (const hit of walk) add(hit.resource, WALK);
 
 	// The collapse. Keyed on the four fields the spec names; `polarity` rides along rather than
 	// keying, because it is a property of the identified row rather than part of its identity.
@@ -359,5 +445,10 @@ export function buildGraph({ response, plan, seeds }: GraphInput): GraphModel {
 		if (t) t.degree++;
 	}
 
-	return { nodes: [...nodes.values()], edges: [...edges.values()], viaEntries };
+	return {
+		nodes: [...nodes.values()],
+		edges: [...edges.values()],
+		arms: COMPOSITION_ARMS,
+		viaEntries,
+	};
 }

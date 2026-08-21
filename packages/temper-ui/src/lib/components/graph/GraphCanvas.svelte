@@ -7,10 +7,13 @@
 	 * visible, reviewable act, and `model.ts`'s own test fails the moment the model grows a third
 	 * collection to draw from.
 	 *
-	 * The arm a node arrived by is carried by a **ring** around the mark, not by a different mark:
-	 * what the reader named in the places they asked about is ringed, what a walk reached is bare.
-	 * Shape still carries home and hue still carries doc-type, exactly as they do on every other
-	 * screen in the app — so the arm is a fourth channel on one mark, never a second mark.
+	 * The arm a node arrived by is carried by a **ring** around the mark, not by a different mark.
+	 * `[ruled — 2026-08-21, Pete]` **The ring encodes the view's standing point**: ringed = what
+	 * this view was built from, bare = what following edges reached from it. Which arms are which
+	 * is read off `model.arms` — the read declares it — rather than hard-coded here against a
+	 * global `'walk'`, which no per-view vocabulary could have satisfied. Shape still carries home
+	 * and hue still carries doc-type, exactly as they do on every other screen in the app — so the
+	 * arm is a fourth channel on one mark, never a second mark.
 	 *
 	 * `[ruled — 2026-08-20, Pete]` **The unconnected field.** Measured post-Beat-0.5, 80 of the
 	 * flagship answer's 155 nodes have degree zero. They used to settle through the same force pass
@@ -61,15 +64,21 @@
 	// laid out exactly as it was before the field existed.
 	const coreH = $derived(parts.unconnected.length > 0 ? H - FIELD_H : H);
 
-	// The reader's own material holds the core; what a walk reached rings it. Keyed on the ARM
+	// Where this read stood holds the core; what it reached from there rings it. Keyed on the ARM
 	// rather than on `home`, because on this surface both homes are ordinary — a reader whose
 	// corpus is entirely context-homed would otherwise find all of it flung to the outer ring.
-	const armById = $derived(new Map(model.nodes.map((n) => [n.id, n.arm])));
+	//
+	// Resolved through the read's OWN legend. An arm this model does not declare is treated as
+	// standing rather than reached: the two channels below then leave it alone, which is what an
+	// unresolvable key should cost — nothing said about it, never a claim made up for it.
+	const legend = $derived(new Map(model.arms.map((a) => [a.key, a])));
+	const armOfNode = $derived(new Map(model.nodes.map((n) => [n.id, legend.get(n.arm)])));
+	const reached = (id: string): boolean => armOfNode.get(id)?.reached === true;
 	const graph = $derived(
 		forceNeighborhood({ nodes: parts.connected, edges: model.edges }, [], {
 			width: W,
 			height: coreH,
-			coreOf: (n) => armById.get(n.id) !== 'walk',
+			coreOf: (n) => !reached(n.id),
 		}),
 	);
 
@@ -240,11 +249,11 @@
 							title={n.title}
 							docType={n.docType}
 							home={n.home}
-							ringed={rings && node.arm !== 'walk'}
+							ringed={rings && !reached(n.id)}
 							anchored={false}
 							edges={n.degree}
 							excerpt={node.excerpt}
-							meta={nodeMeta(node)}
+							meta={nodeMeta(node, legend.get(node.arm))}
 							onEnter={() => onSelect(n.id)}
 						/>
 					{/if}

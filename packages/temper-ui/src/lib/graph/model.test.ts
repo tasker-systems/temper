@@ -74,7 +74,10 @@ describe('the mark vocabulary is exactly node and edge', () => {
 	test('the model carries no third collection — a third mark cannot be added silently', () => {
 		const model = buildGraph({ response: response({}), plan: plan({}), seeds: [] });
 
-		expect(Object.keys(model).sort()).toEqual(['edges', 'nodes', 'viaEntries']);
+		// `arms` is a LEGEND, not marks: it names how to talk about the nodes, and nothing on the
+		// canvas is drawn from it. `nodes` and `edges` are still the only two things drawn, which
+		// is the property this pins — any new key here is a reviewable act, which is the point.
+		expect(Object.keys(model).sort()).toEqual(['arms', 'edges', 'nodes', 'viaEntries']);
 	});
 
 	test('a stage that produced REGIONS contributes no node', () => {

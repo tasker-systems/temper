@@ -1,9 +1,8 @@
 import { describe, expect, test } from 'vitest';
 import type { ResourceView } from '$lib/types/generated/resource_view';
-import type { GraphNode, NodeArm } from './model';
+import { COMPOSITION_ARMS, ENTRY_ARMS, type GraphNode } from './model';
 import {
 	armsDistinguish,
-	describeArm,
 	describeNodeLinks,
 	describeUnconnected,
 	nodeMeta,
@@ -16,7 +15,7 @@ import {
 const NOW = new Date('2026-08-20T12:00:00Z');
 
 const node = (o: {
-	arm?: NodeArm;
+	arm?: string;
 	context?: string | null;
 	cogmap?: string;
 	stage?: string;
@@ -64,14 +63,16 @@ describe('where a resource lives', () => {
 	});
 });
 
-describe('the arm is said without naming an act', () => {
-	test.each<[NodeArm, string]>([
-		['seed', 'In the places you asked about'],
-		['survey', 'From your places'],
-		['walk', 'Followed on from your work'],
-	])('%s reads as %s', (arm, expected) => {
-		expect(describeArm(arm)).toBe(expected);
-	});
+describe('the arm is said without naming an act, by the read that produced it', () => {
+	/**
+	 * There is no `describeArm` to test any more, and that is the finding rather than an omission
+	 * here: a global switch is a claim made in one place about screens built somewhere else, and it
+	 * produced a new false label per view. What survives is the RULE it carried —
+	 * `no-internal-vocabulary-is-load-bearing` — applied to every arm any read declares.
+	 *
+	 * @see internal/superpowers/specs/2026-08-21-the-handoff-and-the-arm-vocabulary-design.md §1, §2
+	 */
+	const declared = [...ENTRY_ARMS, ...COMPOSITION_ARMS];
 
 	test.each([
 		'region',
@@ -79,18 +80,32 @@ describe('the arm is said without naming an act', () => {
 		'wayfind',
 		'survey',
 		'follow-from',
-	])('no arm phrase contains %s', (word) => {
-		for (const arm of ['seed', 'survey', 'walk'] as NodeArm[]) {
-			expect(describeArm(arm).toLowerCase()).not.toContain(word);
-		}
+	])('no arm phrase any read declares contains %s', (word) => {
+		for (const arm of declared) expect(arm.label.toLowerCase()).not.toContain(word);
+	});
+
+	test('the composition still says exactly what it always said', () => {
+		expect(COMPOSITION_ARMS.map((a) => a.label)).toEqual([
+			'In the places you asked about',
+			'From your places',
+			'Followed on from your work',
+		]);
+	});
+
+	test("and no read may borrow another read's key", () => {
+		// The structural half. The entry read cannot render a composition's sentence because its
+		// nodes carry no key the composition declares — not because anyone remembered not to.
+		const entry = new Set(ENTRY_ARMS.map((a) => a.key));
+		expect(COMPOSITION_ARMS.filter((a) => entry.has(a.key))).toEqual([]);
 	});
 });
 
 describe('N2 — the hover card carries node metadata, not only the title', () => {
 	test('where it lives, its stage, when it moved, and how it was reached', () => {
-		const rows = nodeMeta(node({ arm: 'seed', stage: 'in-progress' }), NOW);
+		const rows = nodeMeta(node({ arm: 'seed', stage: 'in-progress' }), COMPOSITION_ARMS[0], NOW);
 
-		expect(rows.map((r) => r.label)).toEqual(['in', 'stage', 'updated', 'reached']);
+		expect(rows.map((r) => r.label)).toEqual(['in', 'stage', 'updated', 'how']);
+		expect(rows[3].value).toBe('in the places you asked about');
 		expect(rows[0].value).toBe('@me/temper');
 		expect(rows[1].value).toBe('in-progress');
 		expect(rows[2].value).toBe('2h ago');
@@ -99,7 +114,7 @@ describe('N2 — the hover card carries node metadata, not only the title', () =
 	test('a row is OMITTED when the field is absent, never rendered as a dash', () => {
 		// An empty value in a metadata list reads as "this resource has no stage", which is a
 		// claim. Leaving the row out says only that nothing was reported.
-		const rows = nodeMeta(node({}), NOW);
+		const rows = nodeMeta(node({}), COMPOSITION_ARMS[2], NOW);
 
 		expect(rows.map((r) => r.label)).not.toContain('stage');
 		expect(rows.map((r) => r.value)).not.toContain('—');
@@ -107,10 +122,20 @@ describe('N2 — the hover card carries node metadata, not only the title', () =
 	});
 
 	test('a resource is always at least placed and accounted for', () => {
-		const rows = nodeMeta(node({ context: null }), NOW);
+		const rows = nodeMeta(node({ context: null }), COMPOSITION_ARMS[2], NOW);
 
 		expect(rows.map((r) => r.label)).toContain('in');
-		expect(rows.map((r) => r.label)).toContain('reached');
+		expect(rows.map((r) => r.label)).toContain('how');
+	});
+
+	test('an arm the model did not declare says NOTHING — this card cannot translate a key', () => {
+		// The unit-level shape of the D1 ruling. `nodeMeta` used to switch on the arm and always
+		// had a sentence for it, whichever read the node came from. Handed no arm, it now omits
+		// the row under the same rule as every other absent field: absence is not a claim.
+		const rows = nodeMeta(node({ arm: 'ranked' }), undefined, NOW);
+
+		expect(rows.map((r) => r.label)).not.toContain('how');
+		expect(rows.map((r) => r.label)).not.toContain('reached');
 	});
 });
 
@@ -353,22 +378,22 @@ describe('a row in the accessibility list never asserts "0 links" about a hub', 
 
 describe('the hover card points at what is not on screen', () => {
 	test('a stranded node carries a row naming what it connects to elsewhere', () => {
-		const rows = nodeMeta(node({ degree: 0, corpusDegree: 87 }), NOW);
+		const rows = nodeMeta(node({ degree: 0, corpusDegree: 87 }), COMPOSITION_ARMS[2], NOW);
 		expect(rows).toContainEqual({ label: 'connects to', value: '87 things not drawn here' });
 	});
 
 	test('one thing reads as one thing', () => {
-		const rows = nodeMeta(node({ degree: 0, corpusDegree: 1 }), NOW);
+		const rows = nodeMeta(node({ degree: 0, corpusDegree: 1 }), COMPOSITION_ARMS[2], NOW);
 		expect(rows).toContainEqual({ label: 'connects to', value: '1 thing not drawn here' });
 	});
 
 	test('a connected node gets no such row — its strokes are on the screen', () => {
-		const rows = nodeMeta(node({ degree: 4, corpusDegree: 87 }), NOW);
+		const rows = nodeMeta(node({ degree: 4, corpusDegree: 87 }), COMPOSITION_ARMS[2], NOW);
 		expect(rows.map((r) => r.label)).not.toContain('connects to');
 	});
 
 	test('a node whose read reported no corpus figure claims nothing', () => {
-		const rows = nodeMeta(node({ degree: 0, corpusDegree: null }), NOW);
+		const rows = nodeMeta(node({ degree: 0, corpusDegree: null }), COMPOSITION_ARMS[2], NOW);
 		expect(rows.map((r) => r.label)).not.toContain('connects to');
 	});
 });
