@@ -1,5 +1,5 @@
 import type { EdgeKind, Polarity } from '$lib/types/generated/graph';
-import type { AtlasEntry } from '$lib/types/generated/graph_atlas';
+import type { AtlasEntry, AtlasSubgraph } from '$lib/types/generated/graph_atlas';
 import type { QueryResponse, ResourceHit, StageResult } from '$lib/types/generated/query';
 import type { ResourceView } from '$lib/types/generated/resource_view';
 import { isCogmapHomed } from '$lib/vault-url';
@@ -352,6 +352,99 @@ export function buildEntryGraph(entry: AtlasEntry, homes: Map<string, string>): 
 	// No `via` entries collapsed, because there were none to collapse — the server returned distinct
 	// `kb_edges` rows. Zero is the honest count, not a missing measurement.
 	return { nodes, edges, arms: ENTRY_ARMS, viaEntries: 0 };
+}
+
+/**
+ * The traversal read's arms — **two**, and they name a standing point rather than a pipeline stage.
+ *
+ * `[ruled — 2026-08-21, Pete]` §2. The composition's three arms are the three things a *plan* did;
+ * these two are where the reader **is** and what following edges reached from there. That is the
+ * whole reason the vocabulary could not stay global: `seed` / `survey` / `walk` are true of a
+ * composition and meaningless on a hop, and a hop drawn under them said *"In the places you asked
+ * about"* over a mark the reader had asked nothing about.
+ *
+ * `reached` is declared here rather than inferred from the key, which is what lets the ring and
+ * {@link coreOf} encode the standing point without knowing this read's words — §2.1: *"Ringed = the
+ * mark(s) this view was built from; bare = what following edges reached from them."*
+ *
+ * @see internal/superpowers/specs/2026-08-21-the-handoff-and-the-arm-vocabulary-design.md §2, §2.1
+ */
+export const TRAVERSAL_ARMS: GraphArm[] = [
+	{ key: 'from', label: 'Where you hopped from', reached: false },
+	{ key: 'reached', label: 'Reached from there', reached: true },
+];
+
+/**
+ * Fold a traversal into the same two marks.
+ *
+ * **Which arm a node is in comes from `seeds`, not from the response**, and it has to: `AtlasSubgraph`
+ * is `{ nodes, edges }` and marks nothing as a seed. The read that asked knows what it asked from;
+ * the answer does not carry it back.
+ *
+ * **A seed that reached nothing is still drawn**, because the service returns it —
+ * *"Seeds FIRST, then the walked endpoints. A seed that reached nothing still renders — a hop that
+ * silently drops the thing you hopped from would leave the reader nowhere"*
+ * (`graph_service.rs`, `traversal_slice`). So this function never synthesises a missing seed: if one
+ * is absent it was not visible to this reader, and drawing a mark for it would put a resource on
+ * screen that the read declined to return.
+ *
+ * The consequence, and it is deliberate: when no seed is visible, **every** node is in `reached`,
+ * {@link armsDistinguish} finds one arm, and the ring withdraws. A ring is a contrast between where
+ * you stand and what you reached; with nowhere standing there is no contrast to draw.
+ *
+ * Follows {@link buildEntryGraph} in every other respect, and for the same reasons: degree is
+ * recomputed over the DRAWN edges (`AtlasNode.degree` is the corpus degree and reaches the screen
+ * only through `corpusDegree`), `salience` is dropped as region-derived, and `AtlasEdge.weight` is
+ * carried because it is really stored.
+ *
+ * @see internal/superpowers/specs/2026-08-21-the-handoff-and-the-arm-vocabulary-design.md §4
+ */
+export function buildTraversal(
+	sub: AtlasSubgraph,
+	seeds: string[],
+	homes: Map<string, string>,
+): GraphModel {
+	const hoppedFrom = new Set(seeds);
+
+	const nodes: GraphNode[] = sub.nodes.map((n) => ({
+		id: n.id,
+		title: n.title,
+		doc_type: n.doc_type,
+		home: n.home,
+		degree: 0,
+		corpusDegree: n.degree,
+		excerpt: n.excerpt,
+		homeRef: (n.home_id && homes.get(n.home_id)) ?? null,
+		updated: n.updated,
+		arm: hoppedFrom.has(n.id) ? TRAVERSAL_ARMS[0].key : TRAVERSAL_ARMS[1].key,
+		stage: n.stage,
+		resource: null,
+	}));
+	const byId = new Map(nodes.map((n) => [n.id, n]));
+
+	const edges: GraphEdge[] = sub.edges.map((e) => ({
+		source: e.source,
+		target: e.target,
+		edge_kind: e.edge_kind,
+		label: e.label,
+		polarity: e.polarity,
+		weight: e.weight,
+		// The walk grew from the seeds, so every edge here was reached from one — but WHICH one is
+		// not reported. `graph_induced_edges` returns the induced edge set, not a per-edge
+		// provenance, and the rail's "reached from" rows are built by looking these ids up. Empty
+		// rather than filled with every seed, which would claim a path this read never traced.
+		seedIds: [],
+	}));
+
+	for (const e of edges) {
+		const s = byId.get(e.source);
+		const t = byId.get(e.target);
+		if (s) s.degree++;
+		if (t) t.degree++;
+	}
+
+	// Nothing collapsed: these are distinct `kb_edges` rows, as the entry read's are.
+	return { nodes, edges, arms: TRAVERSAL_ARMS, viaEntries: 0 };
 }
 
 export interface GraphInput {

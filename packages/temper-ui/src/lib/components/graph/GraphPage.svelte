@@ -18,7 +18,7 @@
 	import GraphCanvas from './GraphCanvas.svelte';
 	import NodeRail from './NodeRail.svelte';
 	import WhyThese from './WhyThese.svelte';
-	import { withGraphQuestion, withGraphSelection } from '$lib/vault-url';
+	import { withGraphQuestion, withGraphSelection, withoutGraphWalk } from '$lib/vault-url';
 
 	let { data }: { data: GraphViewData } = $props();
 
@@ -126,12 +126,19 @@
 				{/if}
 			</div>
 
-			{#if data.readout}
+			<!--
+				Rendered on a traversal too, where `readout` is null. Until D2 the condition was
+				`{#if data.readout}` alone, which is composition-only — so a hop got §7.2's
+				"disappear", explicitly named there as the second-best of three because it "loses the
+				reader's route back to how they got here."
+			-->
+			{#if data.readout || data.bound?.traversed}
 				<WhyThese
 					readout={data.readout}
 					question={data.question}
 					owner={data.owner}
 					places={data.placesAsked}
+					backHref={data.bound?.traversed ? withoutGraphWalk($page.url) : null}
 				/>
 			{/if}
 		</div>
