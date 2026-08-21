@@ -152,15 +152,54 @@ readers of the same region can legitimately see different numbers; that is the p
 was set from the heaviest real reader's 12 anchors, and a ceiling that fires routinely would make an
 ordinary act silently change what the door asks.
 
-### 5.2 The traversal read
+### 5.2 The traversal read — `[corrected — 2026-08-20]` the SQL already exists
 
-`cogmap_neighborhood_slice` already does seeds → depth → induced subgraph, but is **bound to one
-cogmap** and gated on `cogmap_readable_by_profile`. There is no equivalent for context-homed
-resources, so a reader cannot traverse their own work outside a map.
+An earlier draft of this section said a visibility-scoped slice was missing. **It is not.**
+`cogmap_neighborhood_slice` is bound to one cogmap, but the function underneath its family is not:
 
-Needed: the same slice, scoped by **visibility** rather than by a single anchor. `SliceRequest`
-(`seeds`, `depth`, `edge_kinds`) is the right request shape and should be reused rather than
-mirrored.
+```sql
+-- canonical_functions.sql:1308
+CREATE OR REPLACE FUNCTION graph_traverse(p_profile uuid, p_seed_ids uuid[], p_depth int)
+RETURNS TABLE (resource_id uuid, source_id uuid, target_id uuid,
+               edge_kind edge_kind, polarity edge_polarity, label text, depth int)
+```
+
+It is already visibility-scoped (`resources_visible_to(p_profile)`, both endpoints checked), already
+excludes folded edges, already restricts to `kb_resources` on both ends, and **is bound to no anchor
+at all.** B is therefore a service function and a handler over an existing fragment, not new SQL.
+
+**Two real gaps remain, and both are decisions rather than oversights:**
+
+- **`graph_traverse` walks FORWARD only.** The base arm matches `e.source_id = ANY(p_seed_ids)` and
+  the recursive arm joins `e.source_id = w.target_id`. A neighbourhood read almost certainly wants
+  undirected. Whether to widen the incumbent or add a sibling is a build decision with a blast
+  radius — `graph_subgraph_nodes` calls it (`canonical_functions.sql:1348`).
+- **It returns no edge `id` and no `weight`**, both of which `AtlasEdge` requires.
+  `graph_region_composition_edges` already returns them, so the shape to match exists.
+
+### 5.3 `[found — 2026-08-20]` There are two degrees, and they must not share a name
+
+The incumbent degree is **corpus-scoped**:
+
+```sql
+-- graph_region_composition.sql:77-83
+SELECT count(*)::int AS degree FROM kb_edges e
+  JOIN edges_visible_to(p_profile) ev ON ev.edge_id = e.id
+ WHERE e.source_table = 'kb_resources' AND e.target_table = 'kb_resources'
+   AND (e.source_id = r.id OR e.target_id = r.id)
+```
+
+Nothing requires the *other* endpoint to be in the set being drawn. So `AtlasNode.degree` answers
+*"how connected is this in your corpus"*, while §5.1 constraint 2 requires *"how connected is this
+in what you are looking at"*. **Both are legitimate; they are different quantities.**
+
+This matters because it is **the same confusion this whole spec is about, a third time**: a quantity
+measured over one set and displayed over another. A node can carry `degree: 12` and show zero edges,
+and a reader has no way to reconcile that but to doubt themselves.
+
+Today the successor does not hit this — `model.ts` recomputes degree client-side over the drawn edge
+set. **The moment A and B feed `AtlasNode` through, two degrees coexist under one name.** The build
+must name them separately or carry only one.
 
 ## 6. The fallback ladder
 
