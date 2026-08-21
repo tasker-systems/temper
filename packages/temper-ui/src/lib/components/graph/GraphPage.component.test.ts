@@ -483,6 +483,87 @@ describe('the entry read tells the truth about its band', () => {
 	});
 });
 
+describe('two edges between the same pair do not blank the page', () => {
+	/**
+	 * `[observed on production — 2026-08-21]` Opening the rail on 5 of the entry read's 130 marks
+	 * threw `each_key_duplicate` and rendered a **blank page**. The rail keyed its neighbour list
+	 * on `other.id + label + dir`, which drops the kind — and **43 of the 275 edges share a pair**,
+	 * because a resource can `relates_to` another AND `derived_from` it. Where two of those
+	 * coalesce to the same displayed label, the keys were identical.
+	 *
+	 * This is not entry-specific: the composition rail could collide the same way. What made it
+	 * reachable is that the entry read only started opening its rail in #744, over 130 marks.
+	 *
+	 * The fixture is the measured shape — same pair, same direction, same effective label,
+	 * different kind — not an invented one.
+	 */
+	/** An `AtlasNode` as the entry read returns them — no `ResourceView` behind it. */
+	const pairNode = (id: string, title: string) => ({
+		id,
+		title,
+		doc_type: 'goal',
+		home: 'context' as const,
+		degree: 2,
+		salience: null,
+		excerpt: null,
+		stage: null,
+		home_id: 'ctx-1',
+		updated: '2026-08-20T10:00:00Z',
+	});
+
+	const paired = buildEntryGraph(
+		{
+			nodes: [pairNode('a', 'Focus'), pairNode('b', 'Both ways')],
+			edges: [
+				{
+					id: 'e1',
+					source: 'a',
+					target: 'b',
+					edge_kind: 'leads_to' as const,
+					polarity: 'forward' as const,
+					label: 'supports',
+					weight: 1,
+				},
+				{
+					id: 'e2',
+					source: 'a',
+					target: 'b',
+					edge_kind: 'contains' as const,
+					polarity: 'forward' as const,
+					label: 'supports',
+					weight: 1,
+				},
+			],
+			bounds: { drawn: 2, eligible: 2, in_scope: 2, truncated: false },
+		},
+		new Map([['ctx-1', '@me/temper']]),
+	);
+
+	const pairedView = () =>
+		view({
+			model: paired,
+			question: '',
+			readout: null,
+			selected: 'a',
+		} as Partial<GraphViewData>);
+
+	it('opens the rail instead of throwing each_key_duplicate', () => {
+		render(GraphPage, { data: pairedView() });
+
+		expect(screen.getByTestId('node-rail')).toBeTruthy();
+	});
+
+	it('and lists BOTH — they read alike and are two different edges', () => {
+		render(GraphPage, { data: pairedView() });
+
+		const rail = screen.getByTestId('node-rail').textContent ?? '';
+		expect(rail).toContain('NEIGHBORS · 2');
+		// Not deduped away: all 275 production edges are distinct under the four-field identity,
+		// so collapsing them would drop a real relationship rather than a duplicate.
+		expect(rail.match(/supports/g)).toHaveLength(2);
+	});
+});
+
 describe('the ring is withdrawn only where it distinguishes nothing', () => {
 	it('an answer with more than one arm still rings — this is not a blanket removal', () => {
 		const model = view().model;
