@@ -150,14 +150,145 @@ CREATE TABLE kb_data_artifact_content (
 -- 'domain' is correct: committing an artifact is an ordinary knowledge-graph mutation, not admin
 -- action and not system infra.
 --
--- payload_schema stays NULL (permissive) IN THIS BEAT ONLY. The typed payload struct, its committed
--- schemars snapshot and the bootseed stamping are Beat B — at which point this type joins
--- TYPED_EVENT_NAMES and gets a real schema. It is NOT added to system.yaml here, following the
--- webhook_received / slack_principal_disconnected precedent for a migration-stamped type that the
--- typed registry does not yet cover.
+-- TYPED, with a published payload_schema — the subscription_delivery_disposed shape
+-- (20260819000030), not the permissive webhook_received one. Committing an artifact is temper's own
+-- act with a shape temper controls, so the permissive path does not apply.
+--
+-- The literal below is the committed schemars snapshot,
+-- crates/temper-substrate/tests/fixtures/payloads/data_artifact_committed.v1.schema.json, verbatim.
+-- repo == registry == Rust types (payload spec §6); tests/payload_schema.rs pins repo == types and
+-- this INSERT pins registry == repo. Regenerate both together with
+--   UPDATE_SCHEMA=1 cargo make test-schema
+-- and paste the result here; a hand-edit of either half breaks the chain silently.
+--
+-- NOTE the payload has no content field, deliberately: the bytes ride data_artifact_commit's
+-- p_content argument and land in kb_data_artifact_content. A schema that admitted a body would
+-- describe a ledger this design does not want.
+--
+-- There is deliberately NO `data_artifact_folded` type. An earlier draft registered one before the
+-- write path existed; folding turned out to be a clause of the commit act (the writer names what it
+-- supersedes) rather than an act of its own, so the type had no emitter. Per the incumbent
+-- discipline, an unused arm is state we do not need.
 INSERT INTO kb_event_types (name, payload_schema, schema_version, category) VALUES
-  ('data_artifact_committed', NULL, 1, 'domain'),
-  ('data_artifact_folded',    NULL, 1, 'domain')
+  ('data_artifact_committed', $JS${
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DataArtifactCommitted",
+  "description": "Commit one data artifact to a resource (spec: resource-owned data artifacts, 2026-08-20).\n\n**The body is NOT here, and that is the design.** The payload carries `content_hash`; the bytes\nride a sidecar into `kb_data_artifact_content` and are proved by that hash — the same shape\n`kb_block_content` already uses, where replay re-supplies verbatim bytes rather than\nreconstructing them from an event. Replay's purpose for the ledger is *provenance*: resources\nare the replayable-difference core, and artifacts are event-sourced for governance and\nconsistency. Consequence: the ledger stays light regardless of artifact size.",
+  "type": "object",
+  "properties": {
+    "artifact_id": {
+      "description": "Identity-as-input: minted by the caller and carried here so replay reproduces the same row\nid. `kb_data_artifacts.id` deliberately has no DEFAULT for this reason.",
+      "$ref": "#/$defs/DataArtifactId"
+    },
+    "artifact_kind": {
+      "description": "The bare family name, qualified by `kind_owner`. Carries no implication that a shape has\nbeen registered — persistence never requires a prior declaration.",
+      "type": "string"
+    },
+    "content_bytes": {
+      "type": "integer",
+      "format": "int64"
+    },
+    "content_hash": {
+      "description": "Bare sha256 hex of the content's raw bytes — the `sha256_hex` twin, exactly as\n`kb_block_content.content_hash`.",
+      "type": "string"
+    },
+    "intent": {
+      "$ref": "#/$defs/ArtifactIntent"
+    },
+    "kind_owner": {
+      "description": "The namespace half of the family name. Resolved at COMMIT (defaulting from the owning\nresource's home) rather than at projection: a context's owner can change, so re-resolving\nduring replay would qualify an old artifact with today's owner and break the byte-exact\ndiff. Identity-as-input applies to the namespace too.",
+      "$ref": "#/$defs/KindOwner"
+    },
+    "precedence": {
+      "description": "Ordering among peers. Meaningful for `Member`; carried for all so a reader never has to\nbranch on intent to sort.",
+      "type": "number",
+      "format": "double"
+    },
+    "resource_id": {
+      "$ref": "#/$defs/ResourceId"
+    },
+    "supersedes": {
+      "description": "The artifacts THIS one replaces, named explicitly by the writer.\n\nEmpty is the common case and means \"this replaces nothing\". The store never infers\nsupersession from recency, ordering or family: it cannot know whether run #2 supersedes run\n#1, and only the writer can. This field is that knowledge, made explicit.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/DataArtifactId"
+      }
+    }
+  },
+  "required": [
+    "artifact_id",
+    "resource_id",
+    "kind_owner",
+    "artifact_kind",
+    "intent",
+    "precedence",
+    "content_hash",
+    "content_bytes"
+  ],
+  "$defs": {
+    "ArtifactIntent": {
+      "description": "How a reader should select among a resource's artifacts of one family. The **closed** selection\nvocabulary, and the only question a reader cannot function without: given a collection, which do\nI take?\n\nIt deliberately carries no ordering (that is `precedence`) and no timing (that is the row's\n`created` and its folded chain). Mixing those in was the earlier draft's mistake — an intent\nthat also implied an order would have two ways to say the same thing and they would disagree.\n\nThe SQL side enforces the same three terms with a CHECK constraint, so a caller that bypasses\nthis type still cannot store a fourth. Keep the `serde` renames pinned to that CHECK.",
+      "oneOf": [
+        {
+          "description": "Replaces earlier artifacts of its family. A reader takes the newest live `Current`.\n\nNote what this does NOT do: declaring `Current` does not itself fold anything. The writer\nstill names what it supersedes, because the store cannot know whether this run replaces the\nlast one — see `DataArtifactCommitted::supersedes`.",
+          "type": "string",
+          "const": "current"
+        },
+        {
+          "description": "A peer in a series, not a replacement. A reader takes them all, ordered by `precedence`, and\ncompares. Measurement runs live here.",
+          "type": "string",
+          "const": "member"
+        },
+        {
+          "description": "Never auto-selected. Addressable by explicit reference only.",
+          "type": "string",
+          "const": "pinned"
+        }
+      ]
+    },
+    "DataArtifactId": {
+      "description": "A `kb_data_artifacts.id` value — one schema-boundable structured datum owned by a resource.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "KindOwner": {
+      "description": "The owner whose namespace a family name lives in. A bare `\"query-plan\"` is never a complete\nreference; the pair `(kind_owner, artifact_kind)` is.\n\nRegistering a shape for a family validates the existing backlog and records a conformance\nverdict against every artifact of that family — so under a flat namespace one tenant's\nregistration would stamp verdicts on another tenant's data, which it cannot even read.\nQualification makes that impossible by construction rather than by a resolution rule.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kb_profiles": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kb_profiles"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kb_teams": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kb_teams"
+          ]
+        }
+      ]
+    },
+    "ResourceId": {
+      "description": "A `kb_resources.id` value.",
+      "type": "string",
+      "format": "uuid"
+    }
+  }
+}$JS$::jsonb, 1, 'domain')
 ON CONFLICT (name) DO UPDATE
   SET payload_schema = EXCLUDED.payload_schema,
       schema_version = EXCLUDED.schema_version,
@@ -243,7 +374,7 @@ BEGIN
 END;
 $$;
 
-CREATE FUNCTION _project_data_artifact_committed(p_event uuid, p_payload jsonb)
+CREATE FUNCTION _project_data_artifact_committed(p_event uuid, p_payload jsonb, p_content jsonb)
 RETURNS uuid[]
 LANGUAGE plpgsql AS $$
 DECLARE v_id       uuid := (p_payload->>'artifact_id')::uuid;
@@ -256,9 +387,7 @@ DECLARE v_id       uuid := (p_payload->>'artifact_id')::uuid;
         v_prec     double precision := COALESCE((p_payload->>'precedence')::double precision, 0.0);
         v_hash     text := p_payload->>'content_hash';
         v_bytes    bigint := (p_payload->>'content_bytes')::bigint;
-        -- The sidecar: bytes travel BESIDE the payload, never inside it. Absent on replay until the
-        -- content table is re-supplied, exactly as kb_block_content's __blocks sidecar works.
-        v_content  jsonb := p_payload->'__content';
+
         v_supersedes uuid[] := COALESCE(
             (SELECT array_agg(x::uuid) FROM jsonb_array_elements_text(
                  COALESCE(p_payload->'supersedes', '[]'::jsonb)) x), '{}');
@@ -279,9 +408,13 @@ BEGIN
     VALUES (v_id, v_resource, v_kind_tbl, v_kind_own, v_kind, v_intent, v_prec, v_hash, v_bytes,
             p_event, p_event, v_occurred);
 
-    IF v_content IS NOT NULL THEN
+    -- The bytes arrive as a SEPARATE ARGUMENT, never inside p_payload — the same split
+    -- resource_create/_project_resource_created uses. This is what makes "the payload carries the
+    -- hash, never the body" true of the stored event rather than merely of the design doc: whatever
+    -- is in p_payload is what _event_append wrote to kb_events.
+    IF p_content IS NOT NULL AND jsonb_typeof(p_content) <> 'null' THEN
         INSERT INTO kb_data_artifact_content (artifact_id, content, content_hash)
-        VALUES (v_id, v_content, v_hash);
+        VALUES (v_id, p_content, v_hash);
     END IF;
 
     RETURN ARRAY[v_id];
@@ -290,7 +423,7 @@ $$;
 
 -- The wrapper. Same four moves as property_set, in the same order: validate, resolve anchor,
 -- _event_append, _project_*.
-CREATE FUNCTION data_artifact_commit(p_payload jsonb, p_emitter uuid,
+CREATE FUNCTION data_artifact_commit(p_payload jsonb, p_content jsonb, p_emitter uuid,
                                      p_metadata jsonb DEFAULT '{}'::jsonb,
                                      p_invocation uuid DEFAULT NULL::uuid,
                                      p_correlation uuid DEFAULT NULL::uuid)
@@ -310,6 +443,14 @@ BEGIN
                         'member (a peer in a series), '
                         'pinned (never auto-selected, addressed by reference only)',
                         COALESCE(v_intent, '<null>');
+    END IF;
+
+    -- The split is enforced, not merely documented. A caller that put the bytes in the payload
+    -- would have them written verbatim into kb_events by _event_append, silently defeating the
+    -- hash-not-body property — and nothing downstream would notice.
+    IF p_payload ? '__content' OR p_payload ? 'content' THEN
+        RAISE EXCEPTION 'data_artifact_commit: content must ride the p_content argument, not the '
+                        'payload — the event ledger carries the hash, never the body';
     END IF;
 
     IF p_payload->>'content_hash' IS NULL THEN
@@ -335,12 +476,12 @@ BEGIN
     v_ev := _event_append('data_artifact_committed', p_emitter, v_anchor_tbl, v_anchor, p_payload,
                           p_metadata => p_metadata, p_invocation => p_invocation,
                           p_correlation => p_correlation);
-    RETURN _project_data_artifact_committed(v_ev, p_payload);
+    RETURN _project_data_artifact_committed(v_ev, p_payload, p_content);
 END;
 $$;
 
 SELECT declare_migration(
     20260820000020,
     'additive',
-    'Resource-owned data artifacts (Beat A): kb_data_artifacts + kb_data_artifact_content, the data_artifact_committed/data_artifact_folded event types (domain, permissive until Beat B stamps a typed schema), the _data_artifact_anchor resolver, and the _project_data_artifact_committed / data_artifact_commit projector+wrapper pair. Gives structured agent output (query plans, measurements, computation artifacts) a home of its own, instead of fenced code blocks in resource bodies which kb_properties rejects over 2704 bytes and the chunker shreds at its own YAML comment lines. Deliberately carries NO uniqueness index over (resource, kind) and NO GIN index on content: the store never asserts a supersession the writer did not declare, and artifacts are never findable by resemblance.'
+    'Resource-owned data artifacts: kb_data_artifacts + kb_data_artifact_content, the data_artifact_committed event type (domain, TYPED with the committed schemars payload_schema), the _data_artifact_anchor and _data_artifact_kind_owner resolvers, and the _project_data_artifact_committed / data_artifact_commit projector+wrapper pair. Content rides data_artifact_commit''s p_content argument and never enters the event payload — the ledger carries the hash, so replay re-supplies bytes from the content table as a sidecar exactly as kb_block_content does. Family names are owner-qualified (kind_owner_table/kind_owner_id, defaulted from the owning resource''s home): registering a shape validates the backlog and stamps conformance verdicts, so a flat namespace would let one tenant stamp verdicts on another tenant''s unreadable data. Gives structured agent output (query plans, measurements, computation artifacts) a home of its own, instead of fenced code blocks in resource bodies which kb_properties rejects over 2704 bytes and the chunker shreds at its own YAML comment lines. Deliberately carries NO uniqueness index over (resource, kind) and NO GIN index on content: the store never asserts a supersession the writer did not declare, and artifacts are never findable by resemblance.'
 );

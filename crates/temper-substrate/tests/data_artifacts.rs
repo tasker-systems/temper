@@ -24,9 +24,10 @@
 
 mod common;
 
-use temper_substrate::events::EventContext;
+use temper_substrate::events::{fire, EventContext, SeedAction};
 use temper_substrate::ids::{ContextId, EntityId, ProfileId, ResourceId};
 use temper_substrate::payloads::AnchorRef;
+use temper_substrate::payloads::{ArtifactIntent, KindOwner};
 use temper_substrate::scenario::bootseed;
 use temper_substrate::writes::{self, CreateParams};
 use uuid::Uuid;
@@ -89,8 +90,10 @@ async fn world(pool: &sqlx::PgPool, slug: &str) -> (EntityId, ContextId, Resourc
     (emitter, home, resource)
 }
 
-/// The payload `data_artifact_commit` takes. Bytes ride `__content` BESIDE the payload's hash —
-/// the event carries the hash, never the body.
+/// The payload `data_artifact_commit` takes. It carries the content HASH and never the content —
+/// the bytes ride the wrapper's own `p_content` argument (see [`commit`]).
+///
+/// The content is returned alongside so callers can pass both without recomputing the hash.
 fn payload(
     artifact: Uuid,
     resource: ResourceId,
@@ -108,17 +111,26 @@ fn payload(
         "content_hash":  format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(raw.as_bytes())),
         "content_bytes": raw.len() as i64,
         "supersedes":    supersedes,
-        "__content":     content,
+        // Carried here ONLY so `commit` can lift it back out into the separate argument. The
+        // wrapper refuses a payload that still holds it — see `a_payload_carrying_content_is_refused`.
+        "__test_content": content,
     })
 }
 
+/// Drive the SQL wrapper directly, splitting `__test_content` out of the payload into `p_content`
+/// the way `fire()` does.
 async fn commit(
     pool: &sqlx::PgPool,
     emitter: EntityId,
-    p: serde_json::Value,
+    mut p: serde_json::Value,
 ) -> Result<Vec<Uuid>, sqlx::Error> {
-    sqlx::query_scalar::<_, Vec<Uuid>>("SELECT data_artifact_commit($1, $2)")
+    let content = p
+        .as_object_mut()
+        .and_then(|o| o.remove("__test_content"))
+        .unwrap_or(serde_json::Value::Null);
+    sqlx::query_scalar::<_, Vec<Uuid>>("SELECT data_artifact_commit($1, $2, $3)")
         .bind(p)
+        .bind(content)
         .bind(emitter.uuid())
         .fetch_one(pool)
         .await
@@ -698,5 +710,200 @@ async fn the_same_bare_name_under_two_owners_stays_distinct(pool: sqlx::PgPool) 
         distinct, 2,
         "one bare name, two namespaces — a flat namespace would have conflated these, and a shape \
          registered by one owner would then have stamped verdicts on the other's data"
+    );
+}
+
+// ── Beat B: the typed Rust path, and replay ───────────────────────────────────────────────────
+
+/// Commit through `fire()` — the typed path — rather than the raw SQL wrapper.
+async fn fire_commit(
+    pool: &sqlx::PgPool,
+    resource: ResourceId,
+    kind: &str,
+    intent: ArtifactIntent,
+    content: &serde_json::Value,
+    emitter: EntityId,
+) -> temper_substrate::ids::DataArtifactId {
+    let mut tx = pool.begin().await.unwrap();
+    let id = fire(
+        &mut tx,
+        SeedAction::DataArtifactCommit {
+            resource,
+            kind,
+            kind_owner: None,
+            intent,
+            precedence: 0.0,
+            content,
+            supersedes: &[],
+            emitter,
+        },
+    )
+    .await
+    .unwrap()
+    .data_artifact()
+    .unwrap();
+    tx.commit().await.unwrap();
+    id
+}
+
+/// `the-governance-record-outlives-the-data` — the ledger records the act and proves the bytes,
+/// without holding them.
+///
+/// This is the property the whole metadata/bytes split exists for. It is easy to *say* and easy to
+/// lose: `_event_append` writes whatever is in `p_payload` verbatim, so a single well-meaning
+/// "just put the content in the payload, it's simpler" would move every artifact body into
+/// `kb_events` and nothing downstream would complain.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_ledger_carries_the_hash_and_never_the_body(pool: sqlx::PgPool) {
+    let (emitter, _home, resource) = world(&pool, "hash-not-body").await;
+    const TOKEN: &str = "zzqxbodytoken";
+    let content = serde_json::json!({ "secret": TOKEN, "rows": [1, 2, 3] });
+
+    let id = fire_commit(
+        &pool,
+        resource,
+        "measurement",
+        ArtifactIntent::Member,
+        &content,
+        emitter,
+    )
+    .await;
+
+    let event: serde_json::Value = sqlx::query_scalar(
+        "SELECT e.payload FROM kb_events e
+           JOIN kb_data_artifacts a ON a.asserted_by_event_id = e.id WHERE a.id = $1",
+    )
+    .bind(id.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let rendered = serde_json::to_string(&event).unwrap();
+    assert!(
+        !rendered.contains(TOKEN),
+        "the artifact body reached the event ledger: {rendered}"
+    );
+    for key in ["__content", "content"] {
+        assert!(
+            event.get(key).is_none(),
+            "the event payload carries a {key:?} key — the split has been defeated"
+        );
+    }
+    assert!(
+        event.get("content_hash").is_some(),
+        "the payload must carry the hash it uses in place of the body"
+    );
+
+    // And the hash actually proves the stored bytes.
+    let (stored, hash): (serde_json::Value, String) = sqlx::query_as(
+        "SELECT content, content_hash FROM kb_data_artifact_content WHERE artifact_id=$1",
+    )
+    .bind(id.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stored, content);
+    assert_eq!(
+        event["content_hash"].as_str().unwrap(),
+        hash,
+        "the ledger's hash and the stored content's hash must agree, or the ledger proves nothing"
+    );
+}
+
+/// The wrapper refuses a payload that smuggles content, so the split cannot be bypassed by a caller
+/// that does not go through `fire()`.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_payload_carrying_content_is_refused(pool: sqlx::PgPool) {
+    let (emitter, _home, resource) = world(&pool, "no-smuggling").await;
+    let mut p = payload(
+        Uuid::now_v7(),
+        resource,
+        "measurement",
+        "member",
+        serde_json::json!({}),
+        &[],
+    );
+    p["__content"] = serde_json::json!({"smuggled": true});
+
+    let err = commit(&pool, emitter, p)
+        .await
+        .expect_err("a payload carrying content must be refused");
+    assert!(
+        err.to_string().contains("never the body"),
+        "the refusal must name the reason: {err}"
+    );
+}
+
+/// Artifacts replay byte-identically: the metadata rows rebuild from the ledger, and the bytes come
+/// back from the sidecar.
+///
+/// The fold is included deliberately. A folded artifact keeps its content row (fold affects
+/// visibility, never existence), so a sidecar pass that filtered on `NOT is_folded` would drop
+/// those bytes and replay would reproduce a partial content table — which only a round-trip like
+/// this can catch.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn artifacts_replay_byte_identically(pool: sqlx::PgPool) {
+    use temper_substrate::replay;
+    let (emitter, _home, resource) = world(&pool, "replay").await;
+
+    let first = fire_commit(
+        &pool,
+        resource,
+        "extraction",
+        ArtifactIntent::Current,
+        &serde_json::json!({"v": 1, "note": "superseded below"}),
+        emitter,
+    )
+    .await;
+    fire_commit(
+        &pool,
+        resource,
+        "measurement",
+        ArtifactIntent::Member,
+        &serde_json::json!({"run": 1, "rows": [1, 2, 3]}),
+        emitter,
+    )
+    .await;
+
+    // A supersession, so the replayed set includes a folded row AND its retained bytes.
+    let mut tx = pool.begin().await.unwrap();
+    fire(
+        &mut tx,
+        SeedAction::DataArtifactCommit {
+            resource,
+            kind: "extraction",
+            kind_owner: Some(KindOwner::Profile(Uuid::nil())),
+            intent: ArtifactIntent::Current,
+            precedence: 1.0,
+            content: &serde_json::json!({"v": 2}),
+            supersedes: &[first],
+            emitter,
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    let before = replay::dump_projections(&pool).await.unwrap();
+    let snap = replay::snapshot(&pool).await.unwrap();
+    common::reset_schema(&pool).await;
+    replay::replay(&pool, &snap).await.unwrap();
+    let after = replay::dump_projections(&pool).await.unwrap();
+
+    let mut checked = 0;
+    for ((ta, va), (tb, vb)) in before.iter().zip(after.iter()) {
+        assert_eq!(ta, tb);
+        assert_eq!(va, vb, "projection table {ta} diverged under replay");
+        if ta.starts_with("kb_data_artifact") {
+            checked += 1;
+            assert!(
+                va.as_array().is_some_and(|a| !a.is_empty()),
+                "{ta} is empty, so comparing it proves nothing — the fixture must actually write rows"
+            );
+        }
+    }
+    assert_eq!(
+        checked, 2,
+        "both artifact tables must be in PROJECTION_DUMPS"
     );
 }
