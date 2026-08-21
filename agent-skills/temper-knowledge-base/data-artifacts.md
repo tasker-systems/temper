@@ -87,7 +87,7 @@ as a silent "looks fine" — a `""` or `NULL` is a decode error, not a default.
 
 ## The CLI surface
 ```
-Tool: data_artifact_commit
+Tool: commit_data_artifact
 Input: {
   "resource": "<resource UUID>",
   "kind": "measurement",
@@ -97,10 +97,10 @@ Input: {
   "supersedes": ["<artifact UUID>"]   // optional, repeatable
 }
 
-Tool: data_artifact_get
+Tool: get_data_artifact
 Input: { "resource": "<resource UUID>", "artifact_id": "<artifact UUID>" }
 
-Tool: data_artifact_list
+Tool: list_data_artifacts
 Input: {
   "resource": "<resource UUID>",
   "kind": "measurement",              // optional filter

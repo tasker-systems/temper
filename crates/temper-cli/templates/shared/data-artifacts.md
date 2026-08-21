@@ -109,7 +109,7 @@ The `--content` must be valid JSON. The commit returns the artifact with its ser
 content hash, and shape state. See `reference.md` for the full command table.
 {%- else %}
 ```
-Tool: data_artifact_commit
+Tool: commit_data_artifact
 Input: {
   "resource": "<resource UUID>",
   "kind": "measurement",
@@ -119,10 +119,10 @@ Input: {
   "supersedes": ["<artifact UUID>"]   // optional, repeatable
 }
 
-Tool: data_artifact_get
+Tool: get_data_artifact
 Input: { "resource": "<resource UUID>", "artifact_id": "<artifact UUID>" }
 
-Tool: data_artifact_list
+Tool: list_data_artifacts
 Input: {
   "resource": "<resource UUID>",
   "kind": "measurement",              // optional filter
