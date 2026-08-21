@@ -291,11 +291,18 @@ would stop being evidence of anything.
 - **`REACHED` still claims a question nobody asked**, on all 130 cards — arm vocabulary, sequenced
   with D.
 - **One profile's corpus**, as everything in §2 is.
-- **Nothing has been seen rendered against real data.** The local database holds **1** active
-  resource, so a dev-server look would draw an empty canvas and witness nothing; the render-level
-  component tests are the strongest evidence available short of deploying. That is the same gap
-  chunk A shipped through — *"the modules are green, so the question left is whether the thing they
-  compose into renders at all"* — and it closes on the deploy, not here.
+- **Nothing has been seen rendered against real data, and both routes to it are closed.** The local
+  database holds **1** active resource, so a dev-server look draws an empty canvas and witnesses
+  nothing. The PR's Vercel preview deploys and serves, but `/graph/@me` is behind auth and the
+  preview origin cannot complete it — the login round-trip returns `?error=auth_state_lost` and
+  lands on production, because Auth0 callback URLs are registered per domain and a per-deployment
+  preview host is not among them. **A preview deployment therefore cannot witness any authenticated
+  surface**, which is worth knowing beyond this change: every graph screen is one.
+
+  So the render-level component tests are the strongest evidence available, and this closes on the
+  production deploy rather than in this branch. It is the same gap chunk A shipped through — *"the
+  modules are green, so the question left is whether the thing they compose into renders at all"* —
+  and the first look after merge is what shuts it.
 - **The caption is a single SVG `<text>`, and SVG text does not wrap.** The new sentence is roughly
   twice the old one's length (~125 characters against ~65). At `font-size: 11` in a 992px-wide band
   that leaves headroom, and the worst realistic case — large counts plus the `undrawn` clause —
