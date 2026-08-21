@@ -2,12 +2,13 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { render, screen } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { declareBounds } from '$lib/graph/bound';
+import { declareBounds, declareTraversalBounds } from '$lib/graph/bound';
 import type { GraphPlan } from '$lib/graph/composition';
-import { buildEntryGraph, buildGraph, COMPOSITION_ARMS } from '$lib/graph/model';
+import { buildEntryGraph, buildGraph, buildTraversal, COMPOSITION_ARMS } from '$lib/graph/model';
 import { buildReadout } from '$lib/graph/readout';
 import type { GraphViewData } from '$lib/graph/view';
 import type { CogmapRegionRow } from '$lib/types/generated/cognitive_maps';
+import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
 import type { QueryResponse } from '$lib/types/generated/query';
 import { resetAppContext, setPage } from '../../../test/app-context';
 import GraphPage from './GraphPage.svelte';
@@ -616,5 +617,158 @@ describe('the ring is withdrawn only where it distinguishes nothing', () => {
 		expect(headings.some((h) => h?.startsWith('In the places you asked about'))).toBe(false);
 		// And neither read can reach the other's sentence.
 		expect(headings.some((h) => h?.includes('What your work is built around'))).toBe(false);
+	});
+});
+
+/**
+ * D2 — the traversed view, rendered.
+ *
+ * **The trap this block is written against.** A traversal declares its own arms *and* its own bound
+ * line, so it can validate itself: an expected ring count taken from `model.arms`, or an expected
+ * sentence taken from the `BoundDeclaration`, agrees with the canvas whatever either says. The
+ * ground used here is the **seed id** — an argument the caller took from the URL, which nothing in
+ * the response carries — and hand-written strings.
+ */
+describe('a traversed view', () => {
+	const HOPPED_FROM = 'n-hopped-from';
+
+	const subgraph: AtlasSubgraph = {
+		nodes: ['n-a', 'n-b', HOPPED_FROM, 'n-c'].map((id, i) => ({
+			id,
+			title: id.toUpperCase(),
+			doc_type: 'task',
+			home: 'context' as const,
+			degree: 10 + i,
+			salience: null,
+			excerpt: null,
+			stage: null,
+			home_id: 'ctx-1',
+			updated: '2026-08-21T10:00:00Z',
+		})),
+		edges: [
+			[HOPPED_FROM, 'n-a'],
+			[HOPPED_FROM, 'n-b'],
+			['n-a', 'n-c'],
+		].map(([source, target]) => ({
+			id: `${source}-${target}`,
+			source,
+			target,
+			// `edge_kind` is the stored enum (`express` | `contains` | `leads_to` | `near`); the
+			// reader-facing word is `label`. Typing this fixture as `AtlasSubgraph` is what caught
+			// the two being conflated here.
+			edge_kind: 'leads_to' as const,
+			polarity: 'forward' as const,
+			label: 'supports',
+			weight: 2,
+		})),
+	};
+
+	const traversed = (over: Partial<GraphViewData> = {}): GraphViewData => {
+		const model = buildTraversal(subgraph, [HOPPED_FROM], new Map([['ctx-1', '@me/temper']]));
+		return {
+			...view(),
+			model,
+			// The read ran no composition, so there is nothing to explain the marks with.
+			readout: null,
+			bound: declareTraversalBounds({
+				drawn: model.nodes.length,
+				from: model.nodes.filter((n) => n.id === HOPPED_FROM).length,
+				depth: 1,
+			}),
+			...over,
+		};
+	};
+
+	beforeEach(() =>
+		setPage(`/graph/@me?q=what+keeps+a+surface+honest&from=${HOPPED_FROM}&depth=1`, {
+			owner: '@me',
+		}),
+	);
+
+	it('rings the mark the reader hopped from, and only that one', () => {
+		// Counted off the DOM; the expected value is the seed id passed to `buildTraversal`, which
+		// is the one fact the response does not carry. A canvas that ringed everything, or nothing,
+		// moves this number — a count taken from `model.arms` would not.
+		const { container } = render(GraphPage, { data: traversed() });
+		const rings = container.querySelectorAll('.arm-ring');
+
+		expect(rings).toHaveLength(1);
+		expect(subgraph.nodes).toHaveLength(4);
+	});
+
+	it('draws no ring at all when the mark hopped from is not visible to this reader', () => {
+		// The service returns a seed "that reached nothing", so an absent seed was not readable.
+		// Every mark is then something the walk reached, and a ring would encode a constant —
+		// exactly the defect #741 removed from the entry read.
+		const model = buildTraversal(subgraph, ['a-seed-i-cannot-read'], new Map());
+		const { container } = render(GraphPage, {
+			data: traversed({
+				model,
+				bound: declareTraversalBounds({ drawn: model.nodes.length, from: 0, depth: 1 }),
+			}),
+		});
+
+		expect(container.querySelectorAll('.arm-ring')).toHaveLength(0);
+	});
+
+	it('replaces "Why these" rather than letting the panel disappear', () => {
+		// §7.2 named "disappear" the second-best of three, because it "loses the reader's route back
+		// to how they got here." Until D2 the panel rendered only `{#if data.readout}`.
+		const { container } = render(GraphPage, { data: traversed() });
+		const panel = container.querySelector('.why');
+
+		expect(panel).not.toBeNull();
+		expect(panel?.textContent).not.toContain('Why these');
+	});
+
+	it('says the reader STARTED from the question, never that it is still narrowing', () => {
+		// §4: the walk runs over the reader's whole visible corpus, so `q` is provenance and not a
+		// filter still in force. "You asked:" in the present tense is the sentence that would imply
+		// otherwise, and it is what a composition screen says.
+		const panel = render(GraphPage, { data: traversed() }).container.querySelector('.why');
+
+		expect(panel?.textContent).toContain('You started from this question');
+		expect(panel?.textContent).not.toContain('You asked:');
+		// The composition's sentence about the places being the whole answer — false on a hop, and
+		// contradicted by the bound line beside it. Observed on production 2026-08-21.
+		expect(panel?.textContent).not.toContain('everything in the places you named is the answer');
+	});
+
+	it('offers the route back, with the walk taken off the address', () => {
+		const back = render(GraphPage, { data: traversed() })
+			.container.querySelector('.why a[href*="/graph/"]')
+			?.getAttribute('href');
+
+		expect(back).toBe('/graph/@me?q=what+keeps+a+surface+honest');
+	});
+
+	it('keeps the per-place measurement links, under a sentence that says what they describe', () => {
+		// `displaced-structure-remains-reachable`: the analysis door has to stay reachable without
+		// the reader being told a URL. These describe the GROUNDING, not this screen, so they
+		// survive with their sentence changed rather than being dropped with the readout.
+		const measured = render(GraphPage, { data: traversed() }).container.querySelector(
+			'[data-testid="measured-links"]',
+		);
+
+		expect(measured).not.toBeNull();
+		expect(measured?.textContent).toContain('How your starting places were measured');
+		expect(measured?.querySelectorAll('a').length).toBeGreaterThan(0);
+	});
+
+	it('reports no stage accounting, because no pipeline ran', () => {
+		const panel = render(GraphPage, { data: traversed() }).container.querySelector('.why');
+
+		expect(panel?.textContent).not.toContain('What each step was handed');
+	});
+
+	it('draws a bound line describing THIS screen, with nothing borrowed from the composition', () => {
+		// §7.1: the line "must not keep displaying the grounding query's counts — on hop three those
+		// describe a screen the reader is no longer looking at." Written as a whole string, so any
+		// composition axis leaking back in fails it.
+		const { container } = render(GraphPage, { data: traversed() });
+
+		expect(container.querySelector('.bound')?.textContent?.trim()).toBe(
+			'Showing 4 marks · 1 you hopped from · complete within 1 hop · deeper not reported',
+		);
 	});
 });

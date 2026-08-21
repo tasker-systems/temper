@@ -133,6 +133,7 @@ describe('the groupings axis', () => {
 			fromYourPlaces: null,
 			followedOn: { rows: 3, extent: { extent: 'complete' } as Extent },
 			orientation: null,
+			traversed: null,
 		};
 
 		const lines = [

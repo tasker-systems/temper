@@ -147,7 +147,30 @@ export interface GraphAddress {
 	anchors: GraphAnchorRef[];
 	seeds: string[];
 	selection: string | null;
+	/**
+	 * How many hops a traversal walks from {@link GraphAddress.seeds}.
+	 *
+	 * **Grammar only** `[ruled — 2026-08-21, Pete]`. It is parsed, emitted and clamped, and every
+	 * hop this surface emits writes `1`. No control ships: §10.2 ruled an address, not a widget, and
+	 * a depth the reader cannot set is still worth addressing — it is what lets a hand-written or
+	 * shared URL say exactly which read produced the screen.
+	 *
+	 * `null` when absent or unreadable, never a defaulted number. The default lives in the read
+	 * (`/api/graph/traverse` takes `depth: Option<i32>`, `unwrap_or(1)`), and duplicating it here
+	 * would put two copies of one rule on either side of the wire.
+	 */
+	depth: number | null;
 }
+
+/**
+ * The hop range the service will actually walk — `LEAST(p_depth, 3)` in the SQL, `depth.clamp(1, 3)`
+ * in `graph_service::traversal_slice`.
+ *
+ * Clamped rather than rejected, and clamped **here** rather than trusted to the server, so the
+ * address and the screen cannot disagree: an out-of-range `depth` in a hand-written URL draws the
+ * graph it will actually get, instead of one the reader can read a different number for.
+ */
+const clampDepth = (n: number): number => Math.min(3, Math.max(1, Math.trunc(n)));
 
 const ANCHOR_PREFIX: Record<string, GraphAnchorRef['kind']> = {
 	ctx: 'context',
@@ -197,11 +220,18 @@ export function parseGraphAddress(url: URL): GraphAddress {
 		if (kind && ref) anchors.push({ kind, ref });
 	}
 
+	// Unreadable is DROPPED, exactly as an unreadable `in` is — a depth that cannot be read is not
+	// evidence for any particular number of hops, and defaulting one here would silently answer a
+	// different question than the address asks.
+	const rawDepth = Number(params.get('depth'));
+	const depth = Number.isFinite(rawDepth) && rawDepth !== 0 ? clampDepth(rawDepth) : null;
+
 	return {
 		question: question ? question : null,
 		anchors,
 		seeds: params.getAll('from').filter((s) => s.length > 0),
 		selection: selection ? selection : null,
+		depth,
 	};
 }
 
@@ -220,6 +250,7 @@ export function graphHref(ownerRef: string, address: Partial<GraphAddress>): str
 		params.append('in', `${a.kind === 'cogmap' ? 'map' : 'ctx'}:${a.ref}`);
 	}
 	for (const seed of address.seeds ?? []) params.append('from', seed);
+	if (address.depth != null) params.set('depth', String(clampDepth(address.depth)));
 	if (address.selection) params.set('sel', address.selection);
 
 	const query = params.toString();
@@ -246,11 +277,23 @@ export function withGraphSelection(url: URL, selection: string | null): string {
 }
 
 /**
- * The same graph URL asking a different question, with the selection dropped.
+ * The same graph URL asking a different question — **the walk ends, and the selection goes.**
  *
  * The selection goes because it names a node in the previous answer: keeping it would open a rail
  * onto something the new answer may not contain, which is a panel describing a resource that is
  * not on screen.
+ *
+ * `[amended — 2026-08-21]` **The walk goes for a sharper reason: without this, the Ask box does
+ * nothing on a traversed screen.** §10.3 splits the two acts — grounding sets the space, navigation
+ * moves inside it — and D2 routes any address carrying `from` to the traversal read, which never
+ * looks at `q`. So a reader who typed a new question while standing on a hop would watch the URL
+ * change and the graph stay exactly as it was: a control that appears to work and does not, which
+ * is `no-reader-is-left-to-blame-themselves` in its purest form and the same shape as the click
+ * that opened no rail.
+ *
+ * Asking is therefore a **re-grounding**: it ends the walk rather than filtering it. That is the
+ * split read in the other direction, and it is why this deletion belongs here rather than in a
+ * guard on the routing.
  */
 export function withGraphQuestion(url: URL, question: string | null): string {
 	const next = new URL(url);
@@ -258,22 +301,62 @@ export function withGraphQuestion(url: URL, question: string | null): string {
 	if (q) next.searchParams.set('q', q);
 	else next.searchParams.delete('q');
 	next.searchParams.delete('sel');
+	next.searchParams.delete('from');
+	next.searchParams.delete('depth');
 	return `${next.pathname}${next.search}`;
 }
 
 /**
- * The same graph URL walking from one named seed, with the question and selection dropped.
+ * The same graph URL walking from one named seed — **the question survives, the selection does not.**
  *
- * `from` *replaces* the upstream stage as what the walk grows from — the reader has named where to
- * walk from, and the pipe is no longer the answer to that. Carrying a stale `q` alongside would
- * leave a question on screen that no longer decides anything about the answer.
+ * `from` *replaces* the upstream stage as what the walk grows from: the reader has named where to
+ * walk from, and the pipe is no longer the answer to that.
+ *
+ * `[amended — 2026-08-21]` **`q` used to be deleted here, and the reason given was right about the
+ * fact and wrong about the response.** It said *"carrying a stale `q` alongside would leave a
+ * question on screen that no longer decides anything about the answer"* — which is true, and is
+ * exactly why §10.2 rules that it stays: *"`q` survives the handoff as provenance, and that is what
+ * makes §7.2 work."* A question that no longer decides anything is not stale, it is **where the
+ * reader started**, and dropping it is what left them with no route back to it. What must not
+ * happen is a screen that reads as though the question were still narrowing — and that is the
+ * panel's job to say, not this function's to prevent by deletion.
+ *
+ * The selection still goes, unchanged: it names a node in the previous answer, and the walk may not
+ * contain it.
+ *
+ * **Every hop this surface emits walks one hop.** `depth` is grammar, not a control (see
+ * {@link GraphAddress.depth}), so it is written rather than carried forward — a second hop from a
+ * `depth=3` screen is still one hop from where the reader now stands.
  */
 export function withGraphSeed(url: URL, seed: string): string {
 	const next = new URL(url);
-	next.searchParams.delete('q');
 	next.searchParams.delete('sel');
 	next.searchParams.delete('from');
+	// Deleted before it is written, not `set` in place: `set` keeps an existing key's ORIGINAL
+	// position, so hopping from a `?from=x&depth=3` screen would emit `depth` before `from` while
+	// hopping from a screen without one emits it after. Same address, two spellings, decided by
+	// where the reader happened to come from.
+	next.searchParams.delete('depth');
 	next.searchParams.append('from', seed);
+	next.searchParams.set('depth', '1');
+	return `${next.pathname}${next.search}`;
+}
+
+/**
+ * The grounding a traversed view descends from — {@link withGraphSeed} undone.
+ *
+ * §7.2 rejected letting *Why these* simply disappear on a hop precisely because that *"loses the
+ * reader's route back to how they got here."* This is that route: the same address with the walk
+ * taken off it, so `q` and `in` land the reader back on the screen they started from.
+ *
+ * The selection goes too. It names a node in the TRAVERSAL's answer, and the grounding may not
+ * contain it — the same rule {@link withGraphQuestion} follows, for the same reason.
+ */
+export function withoutGraphWalk(url: URL): string {
+	const next = new URL(url);
+	next.searchParams.delete('from');
+	next.searchParams.delete('depth');
+	next.searchParams.delete('sel');
 	return `${next.pathname}${next.search}`;
 }
 
