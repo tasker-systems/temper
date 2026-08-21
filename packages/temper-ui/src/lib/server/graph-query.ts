@@ -6,7 +6,7 @@ import type {
 	CogmapRow,
 } from '$lib/types/generated/cognitive_maps';
 import type { ContextRowWithCounts } from '$lib/types/generated/context';
-import type { AtlasEntry } from '$lib/types/generated/graph_atlas';
+import type { AtlasEntry, AtlasSubgraph } from '$lib/types/generated/graph_atlas';
 import type { Composition, QueryResponse } from '$lib/types/generated/query';
 import type { ContentResponse } from '$lib/types/generated/resource';
 import type { ResourceView } from '$lib/types/generated/resource_view';
@@ -49,6 +49,40 @@ export const readEntry = (token: string, anchorIds: string[]): Promise<AtlasEntr
 	const qs = params.toString();
 	return apiGet<AtlasEntry>(`/api/graph/entry${qs ? `?${qs}` : ''}`, token);
 };
+
+/**
+ * The traversal read — **moving inside a space a question already set, without re-running it.**
+ *
+ * `[ruled — §10.3]` *"asking a question and our query composition frame helps set the space, but
+ * then you traverse the graph as normal without a question locking you in."* So this runs no
+ * composition, and the walk is deliberately **not confined to the grounding's result set**:
+ * `traversal_slice` calls `graph_induced_edges` over the reader's whole visible corpus.
+ *
+ * **The seeds go over the wire comma-separated in ONE param, not as repeated ones.** The page
+ * grammar spells them `?from=a&from=b` (`params.getAll('from')`) and this endpoint spells them
+ * `?from=a,b` (`q.from.split(',')` in `handlers/graph.rs`). Two spellings of one list, and the join
+ * is where they meet — passing the page's repeated form straight through would hand the service a
+ * single unparseable uuid and 400.
+ *
+ * `depth` is omitted when the address carries none, so the default stays in one place: the handler
+ * declares `depth: Option<i32>` and does `unwrap_or(1)`. The service clamps to `1..=3` regardless.
+ *
+ * **This endpoint has had no caller since chunk B landed it.** Chunk A shipped in the same shape —
+ * green tests, zero callers — and three defects fell out the moment its output met a real server.
+ *
+ * @see internal/superpowers/specs/2026-08-21-the-handoff-and-the-arm-vocabulary-design.md §4
+ */
+export const traversePath = (seeds: string[], depth: number | null): string => {
+	const params = new URLSearchParams({ from: seeds.join(',') });
+	if (depth !== null) params.set('depth', String(depth));
+	return `/api/graph/traverse?${params.toString()}`;
+};
+
+export const readTraversal = (
+	token: string,
+	seeds: string[],
+	depth: number | null,
+): Promise<AtlasSubgraph> => apiGet<AtlasSubgraph>(traversePath(seeds, depth), token);
 
 /**
  * The rows for explicitly named `from` seeds.

@@ -18,16 +18,25 @@ const readAnchorSources = vi.fn();
 const readEntry = vi.fn();
 const readResourceBody = vi.fn();
 const readTrail = vi.fn();
+const readTraversal = vi.fn();
+const readSeedResources = vi.fn();
+/**
+ * Rejects by default, and that is the guard rather than an oversight: any test that takes the
+ * composition branch by accident fails loudly instead of quietly answering. The routing tests below
+ * assert on `mock.calls` rather than on a return value, so nothing needs it to resolve.
+ */
+const runComposition = vi.fn(() =>
+	Promise.reject(new Error('this read must not run a composition')),
+);
 
 vi.mock('$lib/server/graph-query', () => ({
 	readAnchorSources: (...a: unknown[]) => readAnchorSources(...a),
 	readEntry: (...a: unknown[]) => readEntry(...a),
 	readResourceBody: (...a: unknown[]) => readResourceBody(...a),
-	// Present so the module shape is honest. The entry path calls neither; a test that reached
-	// them would fail loudly rather than silently taking a composition branch.
-	runComposition: () => Promise.reject(new Error('the entry read must not run a composition')),
-	readAnchorRegions: () => Promise.reject(new Error('the entry read discloses no regions')),
-	readSeedResources: () => Promise.reject(new Error('an unaddressed entry names no seeds')),
+	readTraversal: (...a: unknown[]) => readTraversal(...a),
+	readSeedResources: (...a: unknown[]) => readSeedResources(...a),
+	runComposition: (...a: unknown[]) => runComposition(...(a as [])),
+	readAnchorRegions: () => Promise.reject(new Error('these reads disclose no regions')),
 }));
 vi.mock('$lib/server/graph-reads', () => ({
 	readTrail: (...a: unknown[]) => readTrail(...a),
@@ -87,6 +96,15 @@ const ENTRY: AtlasEntry = {
 	bounds: { drawn: 2, eligible: 40, in_scope: 100, truncated: true },
 } as unknown as AtlasEntry;
 
+/**
+ * What `/api/graph/traverse` returns — an `AtlasSubgraph`, which is `{ nodes, edges }` and marks
+ * **nothing** as a seed. Which mark the reader hopped from is knowable only from the address.
+ */
+const WALKED = {
+	nodes: ENTRY.nodes,
+	edges: ENTRY.edges,
+} as unknown as { nodes: AtlasEntry['nodes']; edges: AtlasEntry['edges'] };
+
 const run = (search = '') =>
 	(load as (e: unknown) => Promise<Record<string, unknown>>)({
 		locals: { accessToken: 'tok' },
@@ -98,6 +116,9 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	readAnchorSources.mockResolvedValue([CONTEXTS, []]);
 	readEntry.mockResolvedValue(ENTRY);
+	readTraversal.mockResolvedValue(WALKED);
+	readSeedResources.mockResolvedValue([]);
+	runComposition.mockRejectedValue(new Error('this read must not run a composition'));
 	readResourceBody.mockResolvedValue(null);
 	readTrail.mockResolvedValue({ events: [] });
 });
@@ -172,5 +193,97 @@ describe('a failed side-read degrades the rail, never the screen', () => {
 		expect(data.selectedTrail).toBeNull();
 		expect(data.selected).toBe(NODE);
 		expect((data.model as { nodes: unknown[] }).nodes).toHaveLength(2);
+	});
+});
+
+/**
+ * D2 — the handoff. `from` present means NAVIGATE, and the question stops deciding.
+ *
+ * §10.3, ruled: *"asking a question and our query composition frame helps set the space, but then
+ * you traverse the graph as normal without a question locking you in."*
+ */
+describe('the three-way split — which read an address gets', () => {
+	it('routes a `from` to the traversal, and runs no composition at all', async () => {
+		// Before D2 this address ran the composition with the hopped-to node as an explicit seed,
+		// which is why a hop re-ran the question and drew the answer under a legend reading "In the
+		// places you asked about" over a mark the reader had hopped to.
+		const data = await run(`?from=${NODE}`);
+
+		expect(readTraversal).toHaveBeenCalledOnce();
+		expect(runComposition).not.toHaveBeenCalled();
+		expect(readEntry).not.toHaveBeenCalled();
+		expect(data.readout).toBeNull();
+	});
+
+	it('still traverses when a question is in the address — `q` no longer decides the answer', async () => {
+		// The load-bearing half of §10.3. `q` survives the hop as provenance (§10.2), and a surface
+		// that re-ran it on every hop would be the grounding locking the reader in.
+		await run(`?q=what+am+I+working+on&from=${NODE}`);
+
+		expect(readTraversal).toHaveBeenCalledOnce();
+		expect(runComposition).not.toHaveBeenCalled();
+	});
+
+	it('carries the question through as provenance rather than dropping or re-asking it', async () => {
+		const data = await run(`?q=what+am+I+working+on&from=${NODE}`);
+
+		expect(data.question).toBe('what am I working on');
+		// No composition ran, so there is no reasoning to report — and the panel that renders from
+		// `question` is provenance, not an explanation of these marks.
+		expect(data.readout).toBeNull();
+	});
+
+	it('walks the depth the address names, clamped to what the service will actually walk', async () => {
+		await run(`?from=${NODE}&depth=9`);
+
+		expect(readTraversal).toHaveBeenCalledWith('tok', [NODE], 3);
+	});
+
+	it('walks ONE hop when the address names no depth, and says so in one place', async () => {
+		// Resolved in the load rather than left to the service's `unwrap_or(1)`, because the bound
+		// line has to report the depth that actually ran.
+		await run(`?from=${NODE}`);
+
+		expect(readTraversal).toHaveBeenCalledWith('tok', [NODE], 1);
+		expect((await run(`?from=${NODE}`)).bound).toMatchObject({ traversed: { depth: 1 } });
+	});
+
+	it('an address with neither still gets the ENTRY read', async () => {
+		await run();
+
+		expect(readEntry).toHaveBeenCalledOnce();
+		expect(readTraversal).not.toHaveBeenCalled();
+		expect(runComposition).not.toHaveBeenCalled();
+	});
+
+	it('a question with no `from` still gets the COMPOSITION', async () => {
+		// Asserted on the call rather than the result: the mock rejects, which is what makes every
+		// other test in this block a real guard rather than a hopeful one.
+		await expect(run('?q=what+am+I+working+on')).rejects.toThrow();
+
+		expect(runComposition).toHaveBeenCalledOnce();
+		expect(readTraversal).not.toHaveBeenCalled();
+		expect(readEntry).not.toHaveBeenCalled();
+	});
+
+	it('resolves a selection on a traversal too, because no read may decide that for itself', async () => {
+		// The defect #744 closed was one branch forgetting this. A third read was already designed
+		// when that fix landed, and `GraphRead` is why this one could not forget it.
+		const data = await run(`?from=other-node&sel=${NODE}`);
+
+		expect(data.selected).toBe(NODE);
+		expect(readResourceBody).toHaveBeenCalledWith('tok', NODE);
+	});
+
+	it('declares its bounds from the marks it drew, not from the seeds it asked for', async () => {
+		// A seed the reader cannot read is not returned, so `from` counts what is on SCREEN. The
+		// walked fixture contains `NODE`, so hopping from it counts one; hopping from something the
+		// response does not contain counts none, and the line says so rather than going quiet.
+		expect((await run(`?from=${NODE}`)).bound).toMatchObject({
+			traversed: { drawn: 2, from: 1, depth: 1 },
+		});
+		expect((await run('?from=019fffff-ffff-7fff-bfff-ffffffffffff')).bound).toMatchObject({
+			traversed: { drawn: 2, from: 0, depth: 1 },
+		});
 	});
 });
