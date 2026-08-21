@@ -18,7 +18,6 @@
 	import { relativeTime } from '$lib/graph/relativeTime';
 	import { trailModel } from '$lib/graph/trail';
 	import type { GraphModel, GraphNode } from '$lib/graph/model';
-	import { whereOf } from '$lib/graph/presentation';
 	import type { EventTrail } from '$lib/types/generated/element_trail';
 	import { resourceHref, withGraphSeed, withGraphSelection } from '$lib/vault-url';
 

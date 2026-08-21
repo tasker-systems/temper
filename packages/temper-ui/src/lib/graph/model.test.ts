@@ -260,23 +260,28 @@ describe('a node is the resource, projected as the marks already read it', () =>
 });
 
 describe('an excerpt is derived only from a body that was actually requested', () => {
+	// Still fed THROUGH `row(...)` rather than with bare strings: these cases are about what a
+	// `ResourceView.content` can be — absent, empty, or present — and reaching them via the row
+	// keeps that the subject. What changed is that `excerptOf` no longer asks for the other
+	// fifteen fields it never read.
+
 	test('a row with no body has no excerpt — absent is not empty', () => {
-		expect(excerptOf(row({ id: 'a' }))).toBeNull();
+		expect(excerptOf(row({ id: 'a' }).content)).toBeNull();
 	});
 
 	test('an empty body is still no excerpt', () => {
-		expect(excerptOf(row({ id: 'a', body: '' }))).toBeNull();
+		expect(excerptOf(row({ id: 'a', body: '' }).content)).toBeNull();
 	});
 
 	test('the first paragraph only, whitespace collapsed', () => {
-		expect(excerptOf(row({ id: 'a', body: 'One   line\nand more.\n\nSecond para.' }))).toBe(
+		expect(excerptOf(row({ id: 'a', body: 'One   line\nand more.\n\nSecond para.' }).content)).toBe(
 			'One line and more.',
 		);
 	});
 
 	test('a long paragraph is truncated at a word boundary', () => {
 		const words = `${'alpha '.repeat(80)}`;
-		const out = excerptOf(row({ id: 'a', body: words }), 40);
+		const out = excerptOf(row({ id: 'a', body: words }).content, 40);
 
 		expect(out?.endsWith('…')).toBe(true);
 		expect(out?.length).toBeLessThanOrEqual(41);

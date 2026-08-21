@@ -218,11 +218,20 @@ const homeOf = (row: ResourceView): 'context' | 'cogmap' =>
  * single targeted read. The client-side twin of the server's `compute_excerpt`, at the same
  * 280-char word-boundary bound the `AtlasNode.excerpt` doc names, so the two do not render
  * differently for the same resource.
+ *
+ * **Takes the body, not the row.** It only ever read one field, and asking for a whole
+ * `ResourceView` to reach it had a cost that was not obvious: the graph load holds markdown from
+ * `/api/resources/{id}/content` and a node that may have no row behind it (the entry read's marks
+ * are an `AtlasNode` projection), so it had to write
+ * `md === null || node.resource === null ? md : excerptOf({ ...node.resource, content: md })` —
+ * a branch that hands the **whole document** to a slot sized for a paragraph. That branch was
+ * unreachable only because one of the two reads happened to always carry a row. Narrowing the
+ * parameter to what the function actually uses deletes the branch and the leak with it.
  */
-export function excerptOf(row: ResourceView, max = 280): string | null {
-	const body = row.content?.trim();
-	if (!body) return null;
-	const para = body
+export function excerptOf(body: string | null | undefined, max = 280): string | null {
+	const trimmed = body?.trim();
+	if (!trimmed) return null;
+	const para = trimmed
 		.split(/\n\s*\n/, 1)[0]
 		.replace(/\s+/g, ' ')
 		.trim();
@@ -392,7 +401,7 @@ export function buildGraph({ response, plan, seeds }: GraphInput): GraphModel {
 			// say about the corpus — and a band on this screen may genuinely hold resources
 			// connected to nothing at all, which the entry read's band never can.
 			corpusDegree: null,
-			excerpt: excerptOf(row),
+			excerpt: excerptOf(row.content),
 			arm,
 			// Hoisted from the row so a panel reads the same fields whichever read produced the
 			// node. `whereOf` still prefers the row when one is present — this is the fallback the

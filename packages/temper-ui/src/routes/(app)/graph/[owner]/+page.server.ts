@@ -2,7 +2,7 @@ import { error } from '@sveltejs/kit';
 import { declareBounds, declareEntryBounds } from '$lib/graph/bound';
 import { buildGraphPlan } from '$lib/graph/composition';
 import { describeAnchor, questionFor, readableAnchors, resolveAnchors } from '$lib/graph/entry';
-import { buildEntryGraph, buildGraph, excerptOf } from '$lib/graph/model';
+import { buildEntryGraph, buildGraph, excerptOf, type GraphModel } from '$lib/graph/model';
 import { buildReadout, disclosedRegionIds } from '$lib/graph/readout';
 import type { GraphRefusal, GraphViewData } from '$lib/graph/view';
 import { ApiError } from '$lib/server/api';
@@ -17,7 +17,7 @@ import {
 import { readTrail } from '$lib/server/graph-reads';
 import type { EventTrail } from '$lib/types/generated/element_trail';
 import type { ResourceView } from '$lib/types/generated/resource_view';
-import { parseGraphAddress } from '$lib/vault-url';
+import { type GraphAddress, parseGraphAddress } from '$lib/vault-url';
 import type { PageServerLoad } from './$types';
 
 /**
@@ -35,15 +35,92 @@ import type { PageServerLoad } from './$types';
  * @see internal/superpowers/specs/2026-08-20-graph-successor-surface-design.md §1, §2, §3
  */
 
+/**
+ * What a READ returns: everything about the answer, and **nothing about the selection**.
+ *
+ * Derived from {@link GraphViewData} by subtraction rather than written out, so the two cannot
+ * drift and a field added to the view is a field a read must supply — except the four named here,
+ * which a read may not decide.
+ *
+ * `[found on production — 2026-08-21]` This type exists because of a defect it makes
+ * unrepresentable. Every branch of this load used to assemble the whole `GraphViewData` itself, so
+ * resolving `?sel=` was something a branch had to *remember*. The composition branch remembered;
+ * the entry read — added later, by chunk A — did not, and hard-coded `selected: null`. The result
+ * was that **clicking any mark on the screen every reader meets first wrote `?sel=` into the URL
+ * and opened nothing**, for every node, for as long as that read has existed. No test could fail:
+ * the rail's tests all run on the composition fixture.
+ *
+ * A third read is already designed (chunk D2's traversal). Adding the three lines to the entry
+ * branch would have closed the instance and left the next branch free to forget it again.
+ */
+type GraphRead = Omit<GraphViewData, 'owner' | 'selected' | 'selectedExcerpt' | 'selectedTrail'>;
+
+/**
+ * The rail's contents for `?sel=`, resolved against whatever the read actually drew.
+ *
+ * **Resolved against the model, not looked up in the corpus**: a `sel` naming a resource this
+ * answer does not contain opens nothing, rather than a rail describing something that is not on
+ * screen. That rule predates this function — it is why the selection is resolved here at all — and
+ * it now holds for every read instead of one.
+ *
+ * Both reads take a **bare id**, which is what makes this work on an entry mark: those marks are an
+ * `AtlasNode` projection with `resource: null`, and neither `/api/resources/{id}/content` nor the
+ * element trail needs a row. Nothing is synthesised to stand in for the missing one.
+ *
+ * A failed trail read degrades to `null` — the rail simply carries no history — while a failed body
+ * read is already `null` inside {@link readResourceBody}. Neither is allowed to take down a screen
+ * whose marks are all drawn and correct.
+ */
+async function resolveSelection(
+	token: string,
+	model: GraphModel,
+	selection: string | null,
+): Promise<Pick<GraphViewData, 'selected' | 'selectedExcerpt' | 'selectedTrail'>> {
+	const node = selection ? (model.nodes.find((n) => n.id === selection) ?? null) : null;
+	if (!node) return { selected: null, selectedExcerpt: null, selectedTrail: null };
+
+	const [selectedExcerpt, selectedTrail] = await Promise.all([
+		// 600 rather than the 280 the canvas uses: the rail has the room, and this is the one
+		// targeted body read on the screen. `excerptOf` takes the markdown directly — it never
+		// needed a row, and asking for one is what used to force a branch that handed the WHOLE
+		// document to this slot whenever a node had no row behind it.
+		readResourceBody(token, node.id).then((md) => excerptOf(md, 600)),
+		readTrail(token, 'node', node.id).catch((): EventTrail | null => null),
+	]);
+	return { selected: node.id, selectedExcerpt, selectedTrail };
+}
+
 /** Which of the reader's own rows a `from` seed no longer resolving refers to. */
 const isNotFound = (e: unknown): boolean => e instanceof ApiError && e.status === 404;
 
-export const load: PageServerLoad = async ({ locals, params, url }): Promise<GraphViewData> => {
-	const token = locals.accessToken!;
-	const address = parseGraphAddress(url);
+/**
+ * The whole load: **read, then assemble.** Six lines, and the shape is the point.
+ *
+ * Every branch of the answer lives in {@link readFor}, whose return type is {@link GraphRead} —
+ * so a branch that tries to decide `selected` is an excess property and **fails to compile**.
+ * That is the difference between a defect that is fixed and one that cannot recur: the entry read
+ * shipped hard-coding `selected: null` and nothing objected, for months.
+ *
+ * The selection is then resolved once, against whatever that read actually drew.
+ */
+export const load: PageServerLoad = async (event): Promise<GraphViewData> => {
+	const token = event.locals.accessToken!;
+	const address = parseGraphAddress(event.url);
+	const read = await readFor(token, address);
+	return {
+		owner: event.params.owner,
+		...read,
+		...(await resolveSelection(token, read.model, address.selection)),
+	};
+};
 
-	const empty = (refusal: GraphRefusal): GraphViewData => ({
-		owner: params.owner,
+/**
+ * Which answer this address gets, and everything about it **except the selection**.
+ *
+ * Three exits, and the return type is what keeps them honest — see {@link GraphRead}.
+ */
+async function readFor(token: string, address: GraphAddress): Promise<GraphRead> {
+	const empty = (refusal: GraphRefusal): GraphRead => ({
 		question: address.question,
 		borrowedFrom: null,
 		refusal,
@@ -52,9 +129,6 @@ export const load: PageServerLoad = async ({ locals, params, url }): Promise<Gra
 		bound: null,
 		readout: null,
 		placesAsked: [],
-		selected: null,
-		selectedExcerpt: null,
-		selectedTrail: null,
 	});
 
 	const [contexts, cogmaps] = await readAnchorSources(token);
@@ -139,7 +213,6 @@ export const load: PageServerLoad = async ({ locals, params, url }): Promise<Gra
 		};
 
 		return {
-			owner: params.owner,
 			question: null,
 			borrowedFrom: null,
 			// Rung 2 (spec §6): too little structure to BE a graph. Declared, never drawn as an
@@ -158,9 +231,6 @@ export const load: PageServerLoad = async ({ locals, params, url }): Promise<Gra
 			// readout: inventing one would fabricate an explanation for a screen nobody questioned.
 			readout: null,
 			placesAsked: plan.anchorsAsked.map((a) => describeAnchor(a, cogmaps)),
-			selected: null,
-			selectedExcerpt: null,
-			selectedTrail: null,
 		};
 	}
 
@@ -181,25 +251,7 @@ export const load: PageServerLoad = async ({ locals, params, url }): Promise<Gra
 		seeds: namedSeeds,
 	});
 
-	// The selection is ephemeral panel state and is resolved against what is actually drawn: a
-	// `sel` naming a node this answer does not contain opens nothing rather than a rail describing
-	// a resource that is not on screen.
-	const selectedNode = address.selection
-		? (model.nodes.find((n) => n.id === address.selection) ?? null)
-		: null;
-	const [selectedExcerpt, selectedTrail] = selectedNode
-		? await Promise.all([
-				readResourceBody(token, selectedNode.id).then((md) =>
-					md === null || selectedNode.resource === null
-						? md
-						: excerptOf({ ...selectedNode.resource, content: md }, 600),
-				),
-				readTrail(token, 'node', selectedNode.id).catch((): EventTrail | null => null),
-			])
-		: [null, null];
-
 	return {
-		owner: params.owner,
 		question: question.text,
 		borrowedFrom: question.borrowedFrom,
 		refusal: null,
@@ -207,8 +259,5 @@ export const load: PageServerLoad = async ({ locals, params, url }): Promise<Gra
 		bound: declareBounds(response, plan),
 		readout: buildReadout(response, regions),
 		placesAsked: plan.anchorsAsked.map((a) => describeAnchor(a, cogmaps)),
-		selected: selectedNode?.id ?? null,
-		selectedExcerpt,
-		selectedTrail,
 	};
-};
+}
