@@ -2,7 +2,9 @@ import { describe, expect, test } from 'vitest';
 import type { ResourceView } from '$lib/types/generated/resource_view';
 import type { GraphNode, NodeArm } from './model';
 import {
+	armsDistinguish,
 	describeArm,
+	describeNodeLinks,
 	describeUnconnected,
 	nodeMeta,
 	nodeRadius,
@@ -19,12 +21,17 @@ const node = (o: {
 	cogmap?: string;
 	stage?: string;
 	updated?: string;
+	degree?: number;
+	corpusDegree?: number | null;
 }): GraphNode => ({
 	id: 'n',
 	title: 'A resource',
 	doc_type: 'task',
 	home: o.cogmap ? 'cogmap' : 'context',
-	degree: 0,
+	degree: o.degree ?? 0,
+	// `null` is the composition path's honest answer: `ResourceView` carries no degree, so that
+	// read cannot report one. The default is therefore the ABSENT case, never a zero.
+	corpusDegree: o.corpusDegree ?? null,
 	excerpt: null,
 	arm: o.arm ?? 'walk',
 	homeRef: o.cogmap ?? ('context' in o ? (o.context ?? null) : '@me/temper'),
@@ -199,29 +206,193 @@ describe('the unconnected field — degree-zero nodes are declared, not scattere
 
 describe('the field says what it is, in the reader’s words', () => {
 	test('nothing unconnected means no caption at all', () => {
-		expect(describeUnconnected(0, 155, 0)).toBeNull();
+		expect(describeUnconnected(0, 155, 0, [])).toBeNull();
 	});
 
 	test('it states the count against the whole answer', () => {
-		expect(describeUnconnected(80, 155, 0)).toBe(
+		expect(describeUnconnected(80, 155, 0, [])).toBe(
 			'80 of these 155 are not connected to anything else in this answer.',
 		);
 	});
 
 	test('one reads as one', () => {
-		expect(describeUnconnected(1, 12, 0)).toBe(
+		expect(describeUnconnected(1, 12, 0, [])).toBe(
 			'1 of these 12 is not connected to anything else in this answer.',
 		);
 	});
 
 	test('an undrawn remainder is added rather than left implicit', () => {
-		expect(describeUnconnected(500, 600, 120)).toContain('120 of them are not drawn');
+		expect(describeUnconnected(500, 600, 120, [])).toContain('120 of them are not drawn');
 	});
 
 	test('it never names a machine concept', () => {
-		const s = describeUnconnected(80, 155, 3)!;
+		const s = describeUnconnected(80, 155, 3, [])!;
 		for (const word of ['degree', 'node', 'orphan', 'edge', 'graph']) {
 			expect(s.toLowerCase()).not.toContain(word);
 		}
+	});
+});
+
+describe('the band on the ENTRY read is the hub band, and the caption says so', () => {
+	/**
+	 * `[measured on production — 2026-08-21]` Every node in the entry read's band carries corpus
+	 * degree **≥ the cut** — it must, because the cut IS the minimum drawn degree. Measured at
+	 * K=130: 26 stranded, min 11, max 87, and `Maintenance` (the most-connected resource in the
+	 * corpus) among them. The old sentence is true and reads as *"connected to nothing"*.
+	 *
+	 * @see internal/superpowers/specs/2026-08-21-hub-stranding-is-a-telling-failure-design.md §2.1
+	 */
+	test('with corpus evidence it says what they ARE connected to', () => {
+		// The production band at K=130: 26 marks, min 11 (the cut), max 87 (`Maintenance`).
+		const band = [87, 81, 59, 46, ...Array(21).fill(20), 11];
+		expect(band).toHaveLength(26);
+
+		expect(describeUnconnected(26, 130, 0, band)).toBe(
+			'26 of these 130 are not connected to anything else drawn here — but each connects to 11 to 87 things elsewhere in your corpus.',
+		);
+	});
+
+	test('one reads as one, and one number reads as one number', () => {
+		expect(describeUnconnected(1, 130, 0, [87])).toBe(
+			'1 of these 130 is not connected to anything else drawn here — but it connects to 87 things elsewhere in your corpus.',
+		);
+	});
+
+	test('a band whose members all report the same figure does not say "between"', () => {
+		expect(describeUnconnected(3, 40, 0, [11, 11, 11])).toBe(
+			'3 of these 40 are not connected to anything else drawn here — but each connects to 11 things elsewhere in your corpus.',
+		);
+	});
+
+	test('it names no machine concept either', () => {
+		const s = describeUnconnected(26, 130, 0, [87, 11])!;
+		for (const word of ['degree', 'node', 'orphan', 'edge', 'graph']) {
+			expect(s.toLowerCase()).not.toContain(word);
+		}
+	});
+
+	test('an undrawn remainder is still added rather than left implicit', () => {
+		// legibility-is-never-bought-with-silent-omission does not lapse because the lead sentence
+		// changed. This arm is the one that keeps a truncated field declared.
+		expect(describeUnconnected(500, 600, 120, Array(500).fill(9))).toContain(
+			'120 of them are not drawn',
+		);
+	});
+});
+
+describe('the two reads do not say the same sentence', () => {
+	/**
+	 * The composition path has **no corpus degree to offer** — `ResourceView` carries none — so
+	 * degree zero there may genuinely mean *no connections anywhere*. Handing that screen the
+	 * entry read's wording would put a claim on it that nothing measured: the same defect one
+	 * surface over. The function is TOLD what it holds; it does not assume.
+	 *
+	 * @see internal/superpowers/specs/2026-08-21-hub-stranding-is-a-telling-failure-design.md §5.2
+	 */
+	test('no evidence keeps the answer-scoped sentence, byte for byte', () => {
+		expect(describeUnconnected(80, 155, 0, [])).toBe(
+			'80 of these 155 are not connected to anything else in this answer.',
+		);
+	});
+
+	test('all-null evidence is no evidence, not zero connections', () => {
+		expect(describeUnconnected(3, 40, 0, [null, null, null])).toBe(
+			'3 of these 40 are not connected to anything else in this answer.',
+		);
+	});
+
+	test('PARTIAL evidence claims nothing — the weaker sentence wins', () => {
+		// A mixed model cannot arise from either builder today. It falls back anyway, because the
+		// direction to fail in is the one that claims less than it can prove.
+		expect(describeUnconnected(3, 40, 0, [87, null, 11])).toBe(
+			'3 of these 40 are not connected to anything else in this answer.',
+		);
+	});
+
+	test('a figure list shorter than the band is not evidence about the band', () => {
+		expect(describeUnconnected(26, 130, 0, [87])).toBe(
+			'26 of these 130 are not connected to anything else in this answer.',
+		);
+	});
+
+	test('a reported ZERO is honest and takes the plain sentence', () => {
+		// A read that reports corpus degree 0 has said something true: this really is connected to
+		// nothing. There is no "elsewhere" to point at.
+		expect(describeUnconnected(2, 40, 0, [0, 0])).toBe(
+			'2 of these 40 are not connected to anything else in this answer.',
+		);
+	});
+});
+
+describe('a row in the accessibility list never asserts "0 links" about a hub', () => {
+	/**
+	 * `GraphA11yList` is the first thing a screen-reader user meets, and on the entry read its
+	 * first row was `Maintenance — goal in @j-cole-taylor/temper, 0 links` about a resource with
+	 * 87 connections. That is the FALSE half of the defect, where the caption was merely the
+	 * misleading half.
+	 */
+	test('a drawn connection count reads as links, as it always did', () => {
+		expect(describeNodeLinks(node({ degree: 3, corpusDegree: 21 }))).toBe('3 links');
+		expect(describeNodeLinks(node({ degree: 1, corpusDegree: 21 }))).toBe('1 link');
+	});
+
+	test('nothing drawn but connections elsewhere states BOTH and their relationship', () => {
+		expect(describeNodeLinks(node({ degree: 0, corpusDegree: 87 }))).toBe(
+			'0 drawn here · 87 in your corpus',
+		);
+	});
+
+	test('nothing drawn and nothing reported stays the plain claim', () => {
+		expect(describeNodeLinks(node({ degree: 0, corpusDegree: null }))).toBe('0 links');
+	});
+
+	test('a reported zero is a real zero', () => {
+		expect(describeNodeLinks(node({ degree: 0, corpusDegree: 0 }))).toBe('0 links');
+	});
+});
+
+describe('the hover card points at what is not on screen', () => {
+	test('a stranded node carries a row naming what it connects to elsewhere', () => {
+		const rows = nodeMeta(node({ degree: 0, corpusDegree: 87 }), NOW);
+		expect(rows).toContainEqual({ label: 'connects to', value: '87 things not drawn here' });
+	});
+
+	test('one thing reads as one thing', () => {
+		const rows = nodeMeta(node({ degree: 0, corpusDegree: 1 }), NOW);
+		expect(rows).toContainEqual({ label: 'connects to', value: '1 thing not drawn here' });
+	});
+
+	test('a connected node gets no such row — its strokes are on the screen', () => {
+		const rows = nodeMeta(node({ degree: 4, corpusDegree: 87 }), NOW);
+		expect(rows.map((r) => r.label)).not.toContain('connects to');
+	});
+
+	test('a node whose read reported no corpus figure claims nothing', () => {
+		const rows = nodeMeta(node({ degree: 0, corpusDegree: null }), NOW);
+		expect(rows.map((r) => r.label)).not.toContain('connects to');
+	});
+});
+
+describe('a channel that encodes a constant encodes nothing', () => {
+	/**
+	 * `buildEntryGraph` puts every node in one arm, so the ring fired on all 130 marks of the
+	 * entry canvas and gave a reader no way to tell anything from anything. This is a property of
+	 * the VIEW rather than a special case for that read: any answer returning a single arm draws
+	 * no ring, correctly.
+	 *
+	 * Deliberately not repurposed to mark the band — the arm vocabulary is chunk D's subject.
+	 *
+	 * @see internal/superpowers/specs/2026-08-21-hub-stranding-is-a-telling-failure-design.md §5.5
+	 */
+	test('one arm across every mark distinguishes nothing', () => {
+		expect(armsDistinguish([node({ arm: 'seed' }), node({ arm: 'seed' })])).toBe(false);
+	});
+
+	test('two arms is a contrast worth an ink channel', () => {
+		expect(armsDistinguish([node({ arm: 'seed' }), node({ arm: 'walk' })])).toBe(true);
+	});
+
+	test('an empty canvas has nothing to distinguish', () => {
+		expect(armsDistinguish([])).toBe(false);
 	});
 });

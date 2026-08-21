@@ -147,10 +147,17 @@ describe('no derived thing reaches the canvas', () => {
 		// when it last moved — not something the system worked out about it. `salience` is the
 		// counter-example and is exactly what this list still excludes: it is region-derived, rides
 		// along on every graph read, and is the clause that got the tier model deleted.
+		//
+		// `corpusDegree` joined them `[2026-08-21]` on the SAME footing as `degree`, which this list
+		// has always allowed: both count the reader's own edges, and differ only in the set they
+		// count over — what you are looking at, versus everything you can see. Neither is something
+		// the system inferred ABOUT the resource, which is the line `salience` falls the wrong side
+		// of. On this path it is `null` throughout: `ResourceView` reports no degree.
 		for (const n of model.nodes) {
 			const fields = Object.keys(n).filter((k) => k !== 'resource');
 			expect(fields.sort()).toEqual([
 				'arm',
+				'corpusDegree',
 				'degree',
 				'doc_type',
 				'excerpt',

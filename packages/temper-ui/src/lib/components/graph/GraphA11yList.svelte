@@ -11,7 +11,7 @@
 	 * needs to tell apart is what they asked for from what a walk reached.
 	 */
 	import type { GraphModel, NodeArm } from '$lib/graph/model';
-	import { describeArm, whereOf } from '$lib/graph/presentation';
+	import { describeArm, describeNodeLinks } from '$lib/graph/presentation';
 	import { withGraphSelection } from '$lib/vault-url';
 
 	let { model, url }: { model: GraphModel; url: URL } = $props();
@@ -31,8 +31,7 @@
 			{#each g.nodes as n (n.id)}
 				<li>
 					<a href={withGraphSelection(url, n.id)}>
-						{n.title} — {n.doc_type} in {n.homeRef ?? 'home not reported'}, {n.degree}
-						{n.degree === 1 ? 'link' : 'links'}
+						{n.title} — {n.doc_type} in {n.homeRef ?? 'home not reported'}, {describeNodeLinks(n)}
 					</a>
 				</li>
 			{/each}

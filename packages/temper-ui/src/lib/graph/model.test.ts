@@ -280,3 +280,35 @@ describe('an excerpt is derived only from a body that was actually requested', (
 		expect(out).not.toContain('alph…');
 	});
 });
+
+describe('the composition path reports no corpus degree, and says so', () => {
+	/**
+	 * `ResourceView` carries no degree — verified: nothing named `degree` exists on the generated
+	 * type. So this path genuinely cannot report how connected a resource is in the corpus, and
+	 * `null` says *not reported* rather than *zero*.
+	 *
+	 * This is what stops the entry read's band sentence — *"but each connects to N things
+	 * elsewhere in your corpus"* — from appearing on a screen whose read never measured it.
+	 *
+	 * @see internal/superpowers/specs/2026-08-21-hub-stranding-is-a-telling-failure-design.md §5.2
+	 */
+	test('a node from a composition answer reports its corpus degree as absent', () => {
+		const model = buildGraph({
+			response: response({}),
+			plan: plan({}),
+			seeds: [row({ id: 'a' })],
+		});
+
+		expect(model.nodes[0].corpusDegree).toBeNull();
+	});
+
+	test('every node on that path, not just the first', () => {
+		const model = buildGraph({
+			response: response({}),
+			plan: plan({}),
+			seeds: [row({ id: 'a' }), row({ id: 'b' }), row({ id: 'c' })],
+		});
+
+		expect(model.nodes.every((n) => n.corpusDegree === null)).toBe(true);
+	});
+});
