@@ -1,8 +1,10 @@
 import type { EdgeKind, Polarity } from '$lib/types/generated/graph';
+import type { AtlasEntry } from '$lib/types/generated/graph_atlas';
 import type { QueryResponse, ResourceHit, StageResult } from '$lib/types/generated/query';
 import type { ResourceView } from '$lib/types/generated/resource_view';
 import { isCogmapHomed } from '$lib/vault-url';
 import type { GraphPlan } from './composition';
+import { whereOf } from './presentation';
 
 /**
  * The whole mark vocabulary: **node** and **edge**, and nothing else.
@@ -44,7 +46,27 @@ export interface GraphNode {
 	degree: number;
 	excerpt: string | null;
 	arm: NodeArm;
-	resource: ResourceView;
+	/**
+	 * Where this resource lives, already in the reader's terms (`@owner/slug`, or a map's name).
+	 *
+	 * Carried on the node rather than read off `resource`, because the entry read has no
+	 * `ResourceView` behind its marks and every panel must work the same on both paths. `null` means
+	 * the read did not report a home — which the panels state, rather than rendering an empty cell.
+	 */
+	homeRef: string | null;
+	/** When it last moved. Same reason as {@link homeId}. */
+	updated: string | null;
+	/** Workflow stage, where the read sourced one. */
+	stage: string | null;
+	/**
+	 * The whole row, when the read that produced this node returned one.
+	 *
+	 * **`null` on the entry read**, whose marks come from `AtlasNode` — a projection, not a row.
+	 * Nothing that renders a node may require this: the fields a panel needs are hoisted above, and
+	 * a synthesised `ResourceView` would put fabricated values on a hover card, which is the exact
+	 * defect class this surface is being repaired for.
+	 */
+	resource: ResourceView | null;
 }
 
 /**
@@ -150,6 +172,76 @@ const edgeKey = (e: {
 	label: string | null;
 }): string => JSON.stringify([e.source_id, e.target_id, e.edge_kind, e.label]);
 
+/**
+ * Fold the entry read into the same two marks.
+ *
+ * **This is what replaces the recency page.** The old no-question entry drew 200 rows ordered
+ * `updated DESC` while the walk seeded from every visible resource — two sets chosen by unrelated
+ * criteria, so 244 of 250 marks arrived with their edges dropped for having an endpoint off-canvas.
+ * Here one criterion decides both, and the server returns the induced subgraph, so **every edge has
+ * both endpoints drawn by construction** and this function has no filtering left to do.
+ *
+ * Two differences from {@link buildGraph} worth naming rather than discovering:
+ *
+ * - **Degree is recomputed over the drawn edges, not taken from the wire.** `AtlasNode.degree` is
+ *   the CORPUS degree — how connected this is in everything you can see — and the derived one is
+ *   how connected it is in *what you are looking at*. Both are legitimate and they are different
+ *   quantities; a node showing `degree: 12` beside three strokes gives a reader nothing to do but
+ *   doubt themselves. Only the derived one reaches the screen.
+ * - **Edges carry a real `weight`**, because `AtlasEdge` stores one. The composition's `ViaEntry`
+ *   does not, which is why the field is nullable at all.
+ *
+ * `homes` maps an anchor id to how a reader names it. The server deliberately returns an id and not
+ * a decorated ref: rendering `@owner/slug` in SQL would duplicate `graph_home_contexts`' owner_ref
+ * expression, and the client already holds every anchor it can read.
+ *
+ * `salience` is deliberately dropped rather than carried: it is region-DERIVED, and a mark sized or
+ * coloured by it would be `no-derived-thing-poses-as-authored` — the clause that got the tier model
+ * deleted. `degree` may drive a channel because it counts the reader's own edges.
+ *
+ * @see internal/superpowers/specs/2026-08-20-grounding-and-navigation-split-design.md §5.1, §5.3, §8
+ */
+export function buildEntryGraph(entry: AtlasEntry, homes: Map<string, string>): GraphModel {
+	const nodes: GraphNode[] = entry.nodes.map((n) => ({
+		id: n.id,
+		title: n.title,
+		doc_type: n.doc_type,
+		home: n.home,
+		// Recomputed below over the drawn edges. Starting from the wire's corpus degree and
+		// incrementing would blend two different quantities into one number.
+		degree: 0,
+		excerpt: n.excerpt,
+		homeRef: (n.home_id && homes.get(n.home_id)) ?? null,
+		updated: n.updated,
+		arm: 'seed',
+		stage: n.stage,
+		resource: null,
+	}));
+	const byId = new Map(nodes.map((n) => [n.id, n]));
+
+	const edges: GraphEdge[] = entry.edges.map((e) => ({
+		source: e.source,
+		target: e.target,
+		edge_kind: e.edge_kind,
+		label: e.label,
+		polarity: e.polarity,
+		weight: e.weight,
+		// No walk, so no seed reached this edge. Empty rather than fabricated.
+		seedIds: [],
+	}));
+
+	for (const e of edges) {
+		const s = byId.get(e.source);
+		const t = byId.get(e.target);
+		if (s) s.degree++;
+		if (t) t.degree++;
+	}
+
+	// No `via` entries collapsed, because there were none to collapse — the server returned distinct
+	// `kb_edges` rows. Zero is the honest count, not a missing measurement.
+	return { nodes, edges, viaEntries: 0 };
+}
+
 export interface GraphInput {
 	response: QueryResponse;
 	plan: GraphPlan;
@@ -187,6 +279,12 @@ export function buildGraph({ response, plan, seeds }: GraphInput): GraphModel {
 			degree: 0,
 			excerpt: excerptOf(row),
 			arm,
+			// Hoisted from the row so a panel reads the same fields whichever read produced the
+			// node. `whereOf` still prefers the row when one is present — this is the fallback the
+			// entry read needs, not a replacement for it.
+			homeRef: whereOf(row),
+			updated: row.updated ?? null,
+			stage: (row.managed_meta?.['temper-stage'] as string | undefined) ?? null,
 			resource: row,
 		});
 	};

@@ -9,6 +9,16 @@ import type { Polarity } from "./graph";
 export type AtlasEdge = { id: string, source: string, target: string, edge_kind: EdgeKind, polarity: Polarity, label: string | null, weight: number, };
 
 /**
+ * The entry read's response — an `AtlasSubgraph` that declares its own bounds.
+ *
+ * Separate from [`AtlasSubgraph`] rather than a field added to it: every other graph read gets its
+ * bound declaration from the composition trace that produced it, and giving them all an optional
+ * bounds field would make "did anyone actually fill this in?" a runtime question. Here it is not
+ * optional, because this read has no other source for it.
+ */
+export type AtlasEntry = { nodes: Array<AtlasNode>, edges: Array<AtlasEdge>, bounds: EntryBounds, };
+
+/**
  * A node on the Atlas canvas. `doc_type` is the raw, optional `kb_properties`
  * value (a node may carry none); the UI maps it to a hue with a fallback.
  * `degree` is the node's total visible edge count (sizing hint). `salience`
@@ -28,12 +38,63 @@ excerpt: string | null,
  * do not source it. Ported from the legacy subgraph's `stage_raw` (spec D8): stage
  * is load-bearing on a builder surface.
  */
-stage: string | null, };
+stage: string | null, 
+/**
+ * The id of the anchor this resource is homed in — **not** a decorated ref.
+ *
+ * `home` says which *kind*; this says which *one*. Deliberately an id: building `@owner/slug`
+ * server-side would mean a second copy of `graph_home_contexts`' owner_ref CASE, linked to the
+ * first by nothing. A client already holds every anchor it can read, with `slug` and
+ * `owner_ref` on each, so it resolves this locally and no expression is duplicated.
+ */
+home_id: string | null, 
+/**
+ * When the resource last moved. Present so a node can carry its own recency without a
+ * second read — the orientation screen has no `ResourceView` behind its marks.
+ */
+updated: string | null, };
 
 /**
  * The response body for an R4 neighborhood slice.
  */
 export type AtlasSubgraph = { nodes: Array<AtlasNode>, edges: Array<AtlasEdge>, };
+
+/**
+ * What the entry read was choosing from — so the surface can say *how many of how many*.
+ *
+ * The bound line is deliberately **chrome, not a warning**: present whether or not the view is
+ * partial, "so complete is something the reader is TOLD rather than something they infer from
+ * silence" (spec §7.1). It is covered today only because the composition trace hands it these
+ * numbers for free; the entry read runs no composition, so it must carry its own.
+ *
+ * `in_scope - eligible` is the count of resources the read deliberately did **not** draw because
+ * they have no visible connections. Naming it is what keeps
+ * `legibility-is-never-bought-with-silent-omission` covered — on the corpus that produced this
+ * design that difference is 1,077 resources, and dropping them unannounced is precisely the defect
+ * the goal exists to prevent.
+ */
+export type EntryBounds = { 
+/**
+ * Marks actually returned.
+ *
+ * `i32` rather than `i64` deliberately: these numbers cross to a browser, and ts-rs maps a
+ * 64-bit count to `bigint`, which cannot survive `JSON.stringify` on the server/client
+ * boundary — the same type-fidelity trap that once stopped a correct composition leaving the
+ * process. `AtlasNode.degree` is already `i32`, so the payload stays one numeric kind.
+ */
+drawn: number, 
+/**
+ * How many resources cleared the connection floor — the denominator the drawn count is *of*.
+ */
+eligible: number, 
+/**
+ * Every resource visible to this reader within the places asked about, connected or not.
+ */
+in_scope: number, 
+/**
+ * Whether more eligible resources exist than were drawn.
+ */
+truncated: boolean, };
 
 /**
  * Which home a node is bound to — drives the Atlas fill-vs-outline encoding

@@ -199,6 +199,10 @@ endpoints. Two walks that disagree, and the repo already ruled on that shape:
 (`canonical_functions.sql:1348`), and **`graph_subgraph_nodes` has no Rust caller at all** — grep
 across `crates/` returns nothing outside `.sqlx`. So the directed chain is already dead.
 
+`[corrected — 2026-08-21]` **It is deader than that.** `graph_subgraph_nodes` is not in the database
+at all — `pg_proc` returns zero rows for it, so a later migration already dropped it. Only
+`graph_traverse` itself remains for E to retire.
+
 It is **retired in chunk E** alongside the territory pair. B gets undirected-and-induced, which is
 what a neighbourhood read wants, and nothing regresses because nothing consumed it.
 
@@ -212,15 +216,30 @@ precedent is re-pointing at a byte-identical signature — **one body, two names
 `__temper_ungated_follow_from` returns `via` naming edges *as asserted*, deliberately carrying no id
 and no numbers. Both gaps are closed by the induced-edge read in §5.4.
 
-### 5.4 The induced-edge read — one function, serving A and B
+### 5.4 The induced-edge read — `[corrected — 2026-08-21]` it already existed too
 
-`graph_region_composition_edges(p_profile, p_regions, p_depth)` already returns exactly the
-`AtlasEdge` shape — `id, source_id, target_id, edge_kind, polarity, label, weight` — over an induced
-subgraph. It is parameterised by **region ids**.
+This section called for "a sibling taking an arbitrary node-id array". **That sibling was already in
+the database.** `graph_context_composition_edges(p_profile, p_seed_ids uuid[], p_depth int)` takes an
+arbitrary node-id array, returns exactly the `AtlasEdge` shape, and is visibility-scoped,
+unfolded-only and `kb_resources` on both ends. At `p_depth = 0` its recursive arm is dead
+(`r.depth < LEAST(0, 3)`), so it returns **precisely the induced subgraph** over the array.
 
-**A sibling taking an arbitrary node-id array serves both chunks**: A returns the induced edges over
-its top-K, B returns them over its walked set. This is the piece neither walk provides and is the
-reason `AtlasEdge` is reachable at all.
+Proved by execution rather than reading: on production, `graph_context_composition_edges(pete,
+top130, 0)` returns **275** edges, matching the independently computed K=130 induced count. At
+depth 1 it returns 2672.
+
+**This is the fourth time a `/api/graph/*` affordance was asserted missing and was not** — after the
+three in §3 and `graph_traverse` in §5.2. The pattern is now established well enough to be a rule:
+*before specifying a new graph read, print the live function list.*
+
+`[ruled — 2026-08-21, Pete]` The body moves to **`graph_induced_edges`** — a frame-neutral name, since
+it was never context-specific and chunk E deletes the context door that is currently its only caller.
+The old name survives as a **delegating wrapper**, which is what keeps the migration `additive`
+rather than a shape-breaking rename, and is deleted with the endpoint in E. A test pins the two
+across every depth — one body, two names, the same precedent §5.2 names for B.
+
+`graph_region_composition_edges` is the region-parameterised member of the same family and is
+untouched.
 
 ### 5.3 `[found — 2026-08-20]` There are two degrees, and they must not share a name
 
@@ -360,11 +379,56 @@ Assessed against the register as it stands after the `[2026-08-20]` amendment.
    distribution, and K (with rung 2's threshold) is fixed in C from real numbers, following
    `ANCHOR_CEILING`'s precedent of measuring the heaviest real reader.
 
-   The distribution may also change K's *kind*. Degree-ordered selection means every node above the
+   The distribution may also change K's *kind*. ~~Degree-ordered selection means every node above the
    cut has at least one edge to another drawn node **by construction**, so the unconnected band does
-   not exist until the connected material runs out. That argues K may want to be a **threshold**
+   not exist until the connected material runs out.~~ That argues K may want to be a **threshold**
    (`degree ≥ n`, capped) rather than a count. **Deciding that without the measurement is exactly
    the error this spec was written to correct**, so it stays open by design.
+
+   `[refuted by measurement — 2026-08-21]` **The struck sentence is false, and it is the reason the
+   measurement was worth insisting on.** Degree ordering guarantees *nothing* about induced
+   connectivity: a hub's neighbours are typically **leaves**, which is precisely why they are
+   low-degree and miss the cut. Measured on production (3574 visible resources, 4385 edges) — see
+   §10.1.1 — **at K=50, 18 of 50 nodes with corpus degree ≥ 16 have no edge inside the drawing.**
+
+   It is the spec's own defect a sixth time: a quantity measured over one set (corpus degree) used
+   to predict a property of another (induced connectivity).
+### 10.1.1 `[measured — 2026-08-21]` The distribution, and what it licenses
+
+Production, profile `j-cole-taylor`: **3574 visible resources**, **4385 visible edges**, all
+resource↔resource. Degree via the incumbent `edges_visible_to`, which already excludes folded edges.
+
+| degree | 0 | 1 | 2 | 3–4 | 5–9 | 10–19 | 20–49 | ≥50 |
+|---|---|---|---|---|---|---|---|---|
+| nodes | 1077 | 1063 | 439 | 446 | 360 | 161 | 24 | 4 |
+
+`max 87 · mean 2.45 · 2497 at degree ≥ 1 · 549 at ≥ 5 · 189 at ≥ 10`
+
+Rank by corpus degree, draw the top K, keep every edge with both endpoints in the set:
+
+| K | cut degree | induced edges | connected | unconnected | % |
+|---|---|---|---|---|---|
+| 50 | ≥16 | 56 | 32 | 18 | **36.0%** |
+| 75 | ≥13 | 121 | 58 | 17 | 22.7% |
+| 100 | ≥12 | 193 | 75 | 25 | 25.0% |
+| 130 | ≥11 | 275 | 104 | 26 | **20.0%** |
+| 150 | ≥10 | 312 | 113 | 37 | 24.7% |
+| 200 | ≥9 | 447 | 154 | 46 | 23.0% |
+| 250 | ≥8 | 594 | 199 | 51 | 20.4% |
+| 400 | ≥6 | 1029 | 341 | 59 | 14.8% |
+| 549 | ≥5 | 1441 | 488 | 61 | 11.1% |
+
+**Two readings C must carry.**
+
+The band **gets worse as K shrinks** — 36% at K=50 against 11% at K=549. Every instinct that says
+"draw fewer marks to get a cleaner graph" is backwards here, and the fallback ladder was drafted on
+that instinct.
+
+But **every K measured beats the state the reader accepted.** Today's unaddressed entry is
+244/250 = **97.6%** unconnected; the *answered* state the reader did not complain about is
+45/130 = **35%**. The design works at any of these; what remains is a density-vs-band trade, and it
+is C's to rule against §2's finding that no visual encoding survives 250 marks.
+
 2. ~~**The traversal URL grammar.**~~ **RULED** `[2026-08-20, Pete]`:
 
    ```
@@ -415,7 +479,11 @@ new act framework.**
 | New SQL | Serves |
 |---|---|
 | A degree ranking over the visible corpus → ids **+ the distribution** (§5.1) | A |
-| Induced edges in `AtlasEdge` shape over an arbitrary node-id array (§5.4) | **A and B both** |
+| ~~Induced edges in `AtlasEdge` shape over an arbitrary node-id array (§5.4)~~ | ~~**A and B both**~~ |
+
+`[corrected — 2026-08-21]` **The true new-SQL surface is ONE function, not two.** The induced-edge
+read already existed (§5.4); chunk A gave its body a frame-neutral name and left a delegating
+wrapper behind. So the only genuinely new SQL in this whole spec is the degree ranking.
 
 Everything else is a service function and a handler over fragments that already exist:
 `graph_atlas_nodes_visible` hydrates nodes for both chunks, and the surviving undirected walk body
@@ -423,7 +491,7 @@ serves B.
 
 | Chunk | | Depends on |
 |---|---|---|
-| **A** | Entry read — ranking fn, induced-edge fn, service, handler, tests. Rust only, nothing on screen | — |
+| **A** ✅ | Entry read — ranking fn, induced-edge fn, service, handler, tests. Rust only, nothing on screen. **Landed `[2026-08-21]`** as `GET /api/graph/entry`; distribution reported in §10.1.1 | — |
 | **B** | Traversal read — service + handler over the surviving walk and the induced-edge fn. Rust only | A (shares §5.4) |
 | **C** | Unaddressed entry switches to A; `readSeedRows` and the recency page **deleted**; rung ladder and its declaration; **K and the threshold fixed from A's distribution** | A |
 | **D** | The handoff — ground once, then navigate. Bound-line vocabulary, *Why these* becomes provenance, the §10.2 URL grammar | A, B, C |

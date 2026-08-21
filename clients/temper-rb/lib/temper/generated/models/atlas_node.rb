@@ -25,6 +25,9 @@ module Temper::Generated
 
     attr_accessor :home
 
+    # The id of the anchor this resource is homed in — **not** a decorated ref.  `home` says which *kind*; this says which *one*. Deliberately an id: building `@owner/slug` server-side would mean a second copy of `graph_home_contexts`' owner_ref CASE, linked to the first by nothing. A client already holds every anchor it can read, with `slug` and `owner_ref` on each, so it resolves this locally and no expression is duplicated.
+    attr_accessor :home_id
+
     attr_accessor :id
 
     attr_accessor :salience
@@ -33,6 +36,9 @@ module Temper::Generated
     attr_accessor :stage
 
     attr_accessor :title
+
+    # When the resource last moved. Present so a node can carry its own recency without a second read — the orientation screen has no `ResourceView` behind its marks.
+    attr_accessor :updated
 
     class EnumAttributeValidator
       attr_reader :datatype
@@ -63,10 +69,12 @@ module Temper::Generated
         :'doc_type' => :'doc_type',
         :'excerpt' => :'excerpt',
         :'home' => :'home',
+        :'home_id' => :'home_id',
         :'id' => :'id',
         :'salience' => :'salience',
         :'stage' => :'stage',
-        :'title' => :'title'
+        :'title' => :'title',
+        :'updated' => :'updated'
       }
     end
 
@@ -87,10 +95,12 @@ module Temper::Generated
         :'doc_type' => :'String',
         :'excerpt' => :'String',
         :'home' => :'NodeHome',
+        :'home_id' => :'String',
         :'id' => :'String',
         :'salience' => :'Float',
         :'stage' => :'String',
-        :'title' => :'String'
+        :'title' => :'String',
+        :'updated' => :'Time'
       }
     end
 
@@ -99,8 +109,10 @@ module Temper::Generated
       Set.new([
         :'doc_type',
         :'excerpt',
+        :'home_id',
         :'salience',
         :'stage',
+        :'updated'
       ])
     end
 
@@ -140,6 +152,10 @@ module Temper::Generated
         self.home = nil
       end
 
+      if attributes.key?(:'home_id')
+        self.home_id = attributes[:'home_id']
+      end
+
       if attributes.key?(:'id')
         self.id = attributes[:'id']
       else
@@ -158,6 +174,10 @@ module Temper::Generated
         self.title = attributes[:'title']
       else
         self.title = nil
+      end
+
+      if attributes.key?(:'updated')
+        self.updated = attributes[:'updated']
       end
     end
 
@@ -245,10 +265,12 @@ module Temper::Generated
           doc_type == o.doc_type &&
           excerpt == o.excerpt &&
           home == o.home &&
+          home_id == o.home_id &&
           id == o.id &&
           salience == o.salience &&
           stage == o.stage &&
-          title == o.title
+          title == o.title &&
+          updated == o.updated
     end
 
     # @see the `==` method
@@ -260,7 +282,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [degree, doc_type, excerpt, home, id, salience, stage, title].hash
+      [degree, doc_type, excerpt, home, home_id, id, salience, stage, title, updated].hash
     end
 
     # Builds the object from hash

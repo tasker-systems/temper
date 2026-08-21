@@ -719,6 +719,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/graph/entry": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read what your work is built around
+         * @description The entry door for a reader who has asked nothing: the most-connected resources they can see,
+         *     plus every edge among them. Ranking and drawing use the same criterion, so no returned edge
+         *     points at a node that is not on the canvas. The response declares its own bounds, including how
+         *     many resources it did not draw for having no connections.
+         */
+        get: operations["entry"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/graph/home": {
         parameters: {
             query?: never;
@@ -751,6 +777,31 @@ export interface paths {
         };
         /** Read the resources composing a region */
         get: operations["region_composition"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/graph/traverse": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Traverse from where you are
+         * @description Moves inside a space that a question already set, without re-running the question. The other
+         *     half of *a composition grounds you; it does not navigate you* — grounding chooses the space,
+         *     this walks it.
+         */
+        get: operations["traverse"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1999,6 +2050,19 @@ export interface components {
             weight: number;
         };
         /**
+         * @description The entry read's response — an `AtlasSubgraph` that declares its own bounds.
+         *
+         *     Separate from [`AtlasSubgraph`] rather than a field added to it: every other graph read gets its
+         *     bound declaration from the composition trace that produced it, and giving them all an optional
+         *     bounds field would make "did anyone actually fill this in?" a runtime question. Here it is not
+         *     optional, because this read has no other source for it.
+         */
+        AtlasEntry: {
+            bounds: components["schemas"]["EntryBounds"];
+            edges: components["schemas"]["AtlasEdge"][];
+            nodes: components["schemas"]["AtlasNode"][];
+        };
+        /**
          * @description The Atlas Home footprint, lensed by act: `build` = your contexts, `research` =
          *     the cogmaps you can reach. Drops the `you` node (self implied).
          */
@@ -2024,6 +2088,16 @@ export interface components {
              */
             excerpt?: string | null;
             home: components["schemas"]["NodeHome"];
+            /**
+             * Format: uuid
+             * @description The id of the anchor this resource is homed in — **not** a decorated ref.
+             *
+             *     `home` says which *kind*; this says which *one*. Deliberately an id: building `@owner/slug`
+             *     server-side would mean a second copy of `graph_home_contexts`' owner_ref CASE, linked to the
+             *     first by nothing. A client already holds every anchor it can read, with `slug` and
+             *     `owner_ref` on each, so it resolves this locally and no expression is duplicated.
+             */
+            home_id?: string | null;
             /** Format: uuid */
             id: string;
             /** Format: double */
@@ -2036,6 +2110,12 @@ export interface components {
              */
             stage?: string | null;
             title: string;
+            /**
+             * Format: date-time
+             * @description When the resource last moved. Present so a node can carry its own recency without a
+             *     second read — the orientation screen has no `ResourceView` behind its marks.
+             */
+            updated?: string | null;
         };
         /** @description The response body for an R4 neighborhood slice. */
         AtlasSubgraph: {
@@ -3180,6 +3260,44 @@ export interface components {
             is_admin: boolean;
             join_request_status?: null | components["schemas"]["JoinRequestStatus"];
             system_access: boolean;
+        };
+        /**
+         * @description What the entry read was choosing from — so the surface can say *how many of how many*.
+         *
+         *     The bound line is deliberately **chrome, not a warning**: present whether or not the view is
+         *     partial, "so complete is something the reader is TOLD rather than something they infer from
+         *     silence" (spec §7.1). It is covered today only because the composition trace hands it these
+         *     numbers for free; the entry read runs no composition, so it must carry its own.
+         *
+         *     `in_scope - eligible` is the count of resources the read deliberately did **not** draw because
+         *     they have no visible connections. Naming it is what keeps
+         *     `legibility-is-never-bought-with-silent-omission` covered — on the corpus that produced this
+         *     design that difference is 1,077 resources, and dropping them unannounced is precisely the defect
+         *     the goal exists to prevent.
+         */
+        EntryBounds: {
+            /**
+             * Format: int32
+             * @description Marks actually returned.
+             *
+             *     `i32` rather than `i64` deliberately: these numbers cross to a browser, and ts-rs maps a
+             *     64-bit count to `bigint`, which cannot survive `JSON.stringify` on the server/client
+             *     boundary — the same type-fidelity trap that once stopped a correct composition leaving the
+             *     process. `AtlasNode.degree` is already `i32`, so the payload stays one numeric kind.
+             */
+            drawn: number;
+            /**
+             * Format: int32
+             * @description How many resources cleared the connection floor — the denominator the drawn count is *of*.
+             */
+            eligible: number;
+            /**
+             * Format: int32
+             * @description Every resource visible to this reader within the places asked about, connected or not.
+             */
+            in_scope: number;
+            /** @description Whether more eligible resources exist than were drawn. */
+            truncated: boolean;
         };
         ErrorBody: {
             error: components["schemas"]["ErrorDetail"];
@@ -8199,6 +8317,58 @@ export interface operations {
             };
         };
     };
+    entry: {
+        parameters: {
+            query?: {
+                /** @description How many marks to draw. Defaults to the ruled K and is clamped by the service. */
+                k?: number | null;
+                /**
+                 * @description Comma-separated anchor ids (contexts or cogmaps) to confine the ranking to.
+                 *
+                 *     Omitted means the reader's whole visible corpus. Present, it answers *"a place, and no
+                 *     question at all"* — ranking within the place rather than across everything, which is what
+                 *     lets a named place with no question be served by this read instead of by the recency page.
+                 */
+                in?: string | null;
+            };
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Orientation subgraph — top-K by degree with their induced edges and bounds */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AtlasEntry"];
+                };
+            };
+            /** @description Non-positive k, or a malformed anchor id */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     atlas_home: {
         parameters: {
             query?: never;
@@ -8261,6 +8431,58 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    traverse: {
+        parameters: {
+            query: {
+                /**
+                 * @description Comma-separated node ids to hop from.
+                 *
+                 *     Named `from` to match the page grammar the split ruled (spec §10.2):
+                 *     `/graph/@me?q=<grounding question>&from=<node-ids>&depth=<n>`, so the address says exactly
+                 *     what read produced the screen.
+                 */
+                from: string;
+                /** @description Hops to walk. Defaults to 1, clamped to 3 by the service. */
+                depth?: number | null;
+            };
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The subgraph reached from the given nodes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AtlasSubgraph"];
+                };
+            };
+            /** @description Malformed or empty node id list */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
         };
     };

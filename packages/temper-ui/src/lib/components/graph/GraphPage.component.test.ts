@@ -174,6 +174,42 @@ describe('a refusal is a refusal, never a widened answer', () => {
 		expect(container.querySelector('svg')).toBeNull();
 		expect(container.querySelector('[data-testid="bound-line"]')).toBeNull();
 	});
+
+	it('rung 2 says which instrument is right and hands the reader its door', () => {
+		// Spec §6. An earlier draft had this rung fall back to drawing the recency page — 200 dots
+		// and hope. Rejected: dots a reader cannot use are not more honest than a sentence saying
+		// the graph is the wrong instrument here, and the sentence is the one that respects
+		// `the-unstructured-reader-is-never-worse-off`. Their need is greater, so they get a working
+		// door rather than an empty canvas.
+		const { container } = render(GraphPage, {
+			data: view({
+				refusal: { kind: 'too-little-structure', inScope: 42 },
+				bound: null,
+				readout: null,
+			}),
+		});
+
+		expect(screen.getByText(/A graph is not the right view for this yet/)).toBeTruthy();
+		// It must say how much they HAVE — the reader is not empty-handed, and a sentence implying
+		// they are would be a false claim about their corpus.
+		expect(screen.getByText(/42 resources/)).toBeTruthy();
+		expect(screen.getByText(/Browse them as a list/)).toBeTruthy();
+		expect(container.querySelector('svg')).toBeNull();
+	});
+
+	it('the rung is VISIBLE — it does not render like the other refusals', () => {
+		// "A reader on rung 2 is looking at a different claim than one on rung 1. Swapping silently
+		// is `legibility-is-never-bought-with-silent-omission`."
+		render(GraphPage, {
+			data: view({
+				refusal: { kind: 'too-little-structure', inScope: 42 },
+				bound: null,
+				readout: null,
+			}),
+		});
+		expect(screen.queryByText(/There is nothing here yet/)).toBeNull();
+		expect(screen.queryByText(/Nothing to show for/)).toBeNull();
+	});
 });
 
 describe('the rail opens on a node — and only on a node', () => {

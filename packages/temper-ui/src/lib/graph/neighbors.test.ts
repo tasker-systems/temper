@@ -12,6 +12,8 @@ const node = (o: Partial<AtlasNode>): AtlasNode => ({
 	salience: null,
 	excerpt: null,
 	stage: null,
+	home_id: null,
+	updated: null,
 	...o,
 });
 const edge = (o: Partial<AtlasEdge>): AtlasEdge => ({

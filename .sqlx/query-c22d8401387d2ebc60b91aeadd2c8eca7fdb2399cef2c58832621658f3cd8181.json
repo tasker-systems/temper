@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id AS \"id!\", source_id AS \"source_id!\", target_id AS \"target_id!\",\n                  edge_kind AS \"edge_kind!: EdgeKind\", polarity AS \"polarity!: Polarity\",\n                  label, weight AS \"weight!\"\n             FROM graph_context_composition_edges($1, $2, $3)",
+  "query": "SELECT id AS \"id!\", source_id AS \"source_id!\", target_id AS \"target_id!\",\n                  edge_kind AS \"edge_kind!: EdgeKind\", polarity AS \"polarity!: Polarity\",\n                  label, weight AS \"weight!\"\n             FROM graph_induced_edges($1, $2, 0)",
   "describe": {
     "columns": [
       {
@@ -64,8 +64,7 @@
     "parameters": {
       "Left": [
         "Uuid",
-        "UuidArray",
-        "Int4"
+        "UuidArray"
       ]
     },
     "nullable": [
@@ -78,5 +77,5 @@
       null
     ]
   },
-  "hash": "bd7c007024b712c56ed46769cf63a62e945dad87365f93367a6e1dbffd97b47b"
+  "hash": "c22d8401387d2ebc60b91aeadd2c8eca7fdb2399cef2c58832621658f3cd8181"
 }
