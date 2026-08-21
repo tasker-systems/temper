@@ -555,3 +555,148 @@ async fn an_artifact_exceeds_what_a_property_can_physically_hold(pool: sqlx::PgP
             .unwrap();
     assert_eq!(stored, content);
 }
+
+/// The kind namespace defaults to the owning resource's home owner, and is resolved INTO THE
+/// PAYLOAD at commit rather than at projection.
+///
+/// The payload-carrying matters for replay: a context's owner can change (`context_reassigned`), so
+/// a projector that re-resolved the namespace would qualify an old artifact with today's owner and
+/// the byte-exact diff would fail. Identity-as-input applies to the namespace too.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_kind_namespace_defaults_from_the_home_and_rides_the_payload(pool: sqlx::PgPool) {
+    let (emitter, home, resource) = world(&pool, "namespace-default").await;
+    let id = Uuid::now_v7();
+
+    // The caller says only "query-plan" — no namespace. That is the whole anti-friction promise.
+    commit(
+        &pool,
+        emitter,
+        payload(
+            id,
+            resource,
+            "query-plan",
+            "current",
+            serde_json::json!({"stages": []}),
+            &[],
+        ),
+    )
+    .await
+    .unwrap();
+
+    let (owner_table, owner_id): (String, Uuid) =
+        sqlx::query_as("SELECT kind_owner_table, kind_owner_id FROM kb_data_artifacts WHERE id=$1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    let (ctx_table, ctx_owner): (String, Uuid) =
+        sqlx::query_as("SELECT owner_table, owner_id FROM kb_contexts WHERE id=$1")
+            .bind(home.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    assert_eq!(
+        (owner_table.as_str(), owner_id),
+        (ctx_table.as_str(), ctx_owner),
+        "a bare family name lands in the owning resource's namespace"
+    );
+
+    // The resolved namespace is in the EVENT payload, not merely in the projected row.
+    let stored: serde_json::Value = sqlx::query_scalar(
+        "SELECT e.payload FROM kb_events e
+           JOIN kb_data_artifacts a ON a.asserted_by_event_id = e.id WHERE a.id = $1",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        stored["kind_owner_id"]
+            .as_str()
+            .and_then(|s| s.parse::<Uuid>().ok()),
+        Some(owner_id),
+        "the resolved namespace must be payload-carried so replay reproduces it verbatim"
+    );
+}
+
+/// An explicit namespace is honoured — naming another owner's family is possible, just never
+/// implicit.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_explicit_kind_namespace_overrides_the_default(pool: sqlx::PgPool) {
+    let (emitter, _home, resource) = world(&pool, "namespace-explicit").await;
+    let team = common::create_team(&pool, "someone-elses-team").await;
+    let id = Uuid::now_v7();
+
+    let mut p = payload(
+        id,
+        resource,
+        "query-plan",
+        "current",
+        serde_json::json!({}),
+        &[],
+    );
+    p["kind_owner_table"] = serde_json::json!("kb_teams");
+    p["kind_owner_id"] = serde_json::json!(team);
+    commit(&pool, emitter, p).await.unwrap();
+
+    let (owner_table, owner_id): (String, Uuid) =
+        sqlx::query_as("SELECT kind_owner_table, kind_owner_id FROM kb_data_artifacts WHERE id=$1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!((owner_table.as_str(), owner_id), ("kb_teams", team));
+}
+
+/// Two owners may hold a family of the SAME bare name, and their artifacts never conflate.
+/// This is the collision the qualification exists to make impossible.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_same_bare_name_under_two_owners_stays_distinct(pool: sqlx::PgPool) {
+    let (emitter, _home, resource) = world(&pool, "namespace-collision").await;
+    let team = common::create_team(&pool, "other-team").await;
+
+    let mine = Uuid::now_v7();
+    commit(
+        &pool,
+        emitter,
+        payload(
+            mine,
+            resource,
+            "query-plan",
+            "member",
+            serde_json::json!({"whose": "mine"}),
+            &[],
+        ),
+    )
+    .await
+    .unwrap();
+
+    let theirs = Uuid::now_v7();
+    let mut p = payload(
+        theirs,
+        resource,
+        "query-plan",
+        "member",
+        serde_json::json!({"whose": "theirs"}),
+        &[],
+    );
+    p["kind_owner_table"] = serde_json::json!("kb_teams");
+    p["kind_owner_id"] = serde_json::json!(team);
+    commit(&pool, emitter, p).await.unwrap();
+
+    let distinct: i64 = sqlx::query_scalar(
+        "SELECT count(DISTINCT (kind_owner_table, kind_owner_id)) FROM kb_data_artifacts
+          WHERE resource_id=$1 AND artifact_kind='query-plan' AND NOT is_folded",
+    )
+    .bind(resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        distinct, 2,
+        "one bare name, two namespaces — a flat namespace would have conflated these, and a shape \
+         registered by one owner would then have stamped verdicts on the other's data"
+    );
+}

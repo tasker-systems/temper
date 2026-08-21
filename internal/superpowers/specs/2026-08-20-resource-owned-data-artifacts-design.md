@@ -144,11 +144,54 @@ Artifact kinds are registered in a **new first-class table**, sibling in spirit 
 `asserted_by_event_id`. A registered schema never enters the chunk/embed pipeline and never appears
 in search.
 
-**Registry tenancy is undecided and must not be read as settled.** `kb_event_types.name` is
-globally UNIQUE with no scoping, which is adequate for a closed system-defined set and is *not*
-adequate for a registry callers extend — two teams both wanting a `query-plan` kind is the
-immediate collision. Whether kinds are global, team-scoped, or context-scoped, and who may
-register one, is an open question carried in the remainder below.
+### Tenancy: family names are owner-qualified
+
+**Decided 2026-08-20.** A family is identified by the pair `(owner, name)`. A bare `"query-plan"` is
+never a complete reference, and collision between tenants is impossible by construction rather than
+resolved by a rule.
+
+**The argument is safety, not naming.** Registration does not merely describe a family — it
+validates the existing backlog and records a conformance verdict against every artifact of that
+family. Under a flat global namespace, one tenant registering `query-plan` would stamp verdicts onto
+another tenant's `query-plan` artifacts, which it cannot even read. That is a principal writing
+outside its reach.
+
+**This is why the doc-type precedent does not transfer.** Doc types are deliberately global and
+unscoped — shared categorical vocabulary — and that is sound *because a doc type is an inert label*.
+Registering one writes nothing to anyone's data. An artifact family carries a shape whose
+registration mutates verdicts, so it is a different kind of thing wearing a similar name. (The
+`kb_doc_types` table itself no longer exists; doc type is a `kb_properties` key. The principle
+outlived the mechanism.)
+
+Owner is polymorphic over `('kb_profiles','kb_teams')`, matching `kb_contexts.owner_table`.
+
+**Qualification is defaulted, never demanded.** The write path resolves the namespace from the owning
+resource's home when the caller omits it, so an agent writes `"query-plan"` and lands in its own
+namespace without saying so; naming another owner's family is possible and explicit. This preserves
+the anti-friction property the write-first/bind-later posture exists to protect — a registry that
+made agents state a namespace on every commit would be routed around exactly like a mandatory
+registration step.
+
+For a **team-owned** context the default is the *team*, deliberately. Defaulting to the writing
+profile would have every member of a team minting families in their own personal namespace, and the
+team would never converge on a shared shape — the opposite of what a registry is for.
+
+A **cogmap-homed** resource has no polymorphic owner to read (`kb_cogmaps` reaches teams only through
+the many-to-many `kb_team_cogmaps`, which names no single owner), so those fall back to
+`kb_resource_homes.owner_profile_id`, which is NOT NULL and always present.
+
+**Artifacts are born qualified.** Adding the qualifier later would require backfilling an owner onto
+existing rows with no correct value to backfill, which is why this landed in the storage substrate
+rather than with the registry it serves.
+
+**The namespace is resolved into the event payload at commit, not at projection.** A context's owner
+can change (`context_reassigned`), so a projector that re-resolved would qualify an old artifact with
+today's owner and break the byte-exact replay diff. Identity-as-input applies to the namespace, not
+only to the id.
+
+**Still open: registration authority.** *Which* principal may register or amend a family within an
+owner's namespace is not decided here. Qualification bounds the blast radius to one namespace; it
+does not say who may act inside it.
 
 Rejected: making a schema a resource (`doc_type: schema`). It would inherit visibility, RBAC, edges
 and supersession for free, but `body_storage` is *derived* from block coverage
@@ -276,10 +319,11 @@ Well-formed acts the system declines, and says why.
 
 ## Named remainder — unexamined
 
-**Registry tenancy and registration authority.** Whether an artifact kind is global,
-team-scoped or context-scoped, and which principal may register or amend one, was raised in
-design and never resolved. It is not a detail: it decides collision behaviour between tenants and
-the RBAC surface of the registry, and an open registry cannot ship without an answer. Unexamined.
+**Registration authority — unexamined.** Tenancy is settled (families are owner-qualified;
+see above), which bounds a registration's blast radius to a single namespace. Which principal may
+register or amend a family *inside* that namespace is not decided: presumably it follows
+`kb_access_grants` (`can_write` on the owner), but that has not been examined and must not be read
+as settled by the tenancy decision.
 
 **Volume, size and write-rate are unmeasured.** No distribution of real artifact sizes or write
 frequencies from the enterprise usage has been gathered. Per the carried closure scar — *"state
