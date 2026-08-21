@@ -243,19 +243,29 @@ export function excerptOf(body: string | null | undefined, max = 280): string | 
 }
 
 /**
- * `(source, target, kind, label)` — the four fields the spec names, and no more.
+ * `(source, target, kind, label)` — the four fields the spec names, and no more. **An edge's
+ * identity on this surface**, and the only one: anything that has to tell two edges apart uses
+ * this rather than assembling its own.
  *
  * JSON-encoded rather than interpolated so a **null label and an empty one stay distinct**.
  * `kb_edges.label` is `TEXT` with no `NOT NULL`, so the `None` is real and unobserved rather than
- * impossible; joining with an empty-string fallback would fold the two together and draw one mark where the
- * substrate holds two. A separator can be escaped into a label; a JSON array cannot be forged.
+ * impossible; joining with an empty-string fallback would fold the two together and draw one mark
+ * where the substrate holds two. A separator can be escaped into a label; a JSON array cannot be
+ * forged.
+ *
+ * `[exported — 2026-08-21]` The rail's neighbour list keyed its render on `other.id + label + dir`,
+ * which is **not** this and cannot substitute for it: it drops the kind, so two edges between the
+ * same pair with the same effective label collided and Svelte threw `each_key_duplicate`, blanking
+ * the whole page. Measured on the production entry read: **43 of 275 edges share a pair, and 5 of
+ * 130 nodes crashed the rail.** All 275 are distinct under THIS key — which is also why deduping
+ * them would have been wrong, and why the repair is one identity rather than a better ad-hoc one.
  */
-const edgeKey = (e: {
-	source_id: string;
-	target_id: string;
-	edge_kind: string;
-	label: string | null;
-}): string => JSON.stringify([e.source_id, e.target_id, e.edge_kind, e.label]);
+export const edgeIdentity = (
+	source: string,
+	target: string,
+	edge_kind: string,
+	label: string | null,
+): string => JSON.stringify([source, target, edge_kind, label]);
 
 /**
  * Fold the entry read into the same two marks.
@@ -429,7 +439,7 @@ export function buildGraph({ response, plan, seeds }: GraphInput): GraphModel {
 		for (const v of hit.via ?? []) {
 			viaEntries++;
 			if (!nodes.has(v.source_id) || !nodes.has(v.target_id)) continue;
-			const key = edgeKey(v);
+			const key = edgeIdentity(v.source_id, v.target_id, v.edge_kind, v.label);
 			const seen = edges.get(key);
 			if (seen) {
 				if (!seen.seedIds.includes(v.seed_id)) seen.seedIds.push(v.seed_id);

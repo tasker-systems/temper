@@ -106,7 +106,7 @@
 	{#if neighbors.length}
 		<section class="neighbors">
 			<div class="label">NEIGHBORS · {neighbors.length}</div>
-			{#each neighbors as n (n.other.id + n.label + n.dir)}
+			{#each neighbors as n (n.key)}
 				<a class="nb" href={withGraphSelection($page.url, n.other.id)}>
 					<span class="dir">{n.dir}</span>
 					<span class="rel">{n.label}</span>
