@@ -784,6 +784,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/graph/traverse": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Traverse from where you are
+         * @description Moves inside a space that a question already set, without re-running the question. The other
+         *     half of *a composition grounds you; it does not navigate you* — grounding chooses the space,
+         *     this walks it.
+         */
+        get: operations["traverse"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/health": {
         parameters: {
             query?: never;
@@ -8336,6 +8361,58 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    traverse: {
+        parameters: {
+            query: {
+                /**
+                 * @description Comma-separated node ids to hop from.
+                 *
+                 *     Named `from` to match the page grammar the split ruled (spec §10.2):
+                 *     `/graph/@me?q=<grounding question>&from=<node-ids>&depth=<n>`, so the address says exactly
+                 *     what read produced the screen.
+                 */
+                from: string;
+                /** @description Hops to walk. Defaults to 1, clamped to 3 by the service. */
+                depth?: number | null;
+            };
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The subgraph reached from the given nodes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AtlasSubgraph"];
+                };
+            };
+            /** @description Malformed or empty node id list */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
         };
     };

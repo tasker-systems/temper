@@ -166,6 +166,58 @@ pub async fn entry(
         .map(Json)
 }
 
+/// Query parameters for `GET /api/graph/traverse`.
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub struct TraverseQuery {
+    /// Comma-separated node ids to hop from.
+    ///
+    /// Named `from` to match the page grammar the split ruled (spec §10.2):
+    /// `/graph/@me?q=<grounding question>&from=<node-ids>&depth=<n>`, so the address says exactly
+    /// what read produced the screen.
+    pub from: String,
+    /// Hops to walk. Defaults to 1, clamped to 3 by the service.
+    pub depth: Option<i32>,
+}
+
+/// Traverse from where you are
+///
+/// Moves inside a space that a question already set, without re-running the question. The other
+/// half of *a composition grounds you; it does not navigate you* — grounding chooses the space,
+/// this walks it.
+#[utoipa::path(
+    get,
+    path = "/api/graph/traverse",
+    tag = "Graph",
+    params(TraverseQuery),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The subgraph reached from the given nodes", body = AtlasSubgraph),
+        (status = 400, description = "Malformed or empty node id list", body = ErrorBody),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    )
+)]
+pub async fn traverse(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(q): Query<TraverseQuery>,
+) -> ApiResult<Json<AtlasSubgraph>> {
+    let ids: Vec<Uuid> = q
+        .from
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(Uuid::parse_str)
+        .collect::<Result<_, _>>()
+        .map_err(|e| ApiError::BadRequest(format!("invalid node id: {e}")))?;
+    graph_service::traversal_slice(
+        &state.pool,
+        ProfileId::from(auth.0.profile().id),
+        &ids,
+        q.depth.unwrap_or(1),
+    )
+    .await
+    .map(Json)
+}
+
 /// Read your teams and cognitive maps
 #[utoipa::path(
     get,

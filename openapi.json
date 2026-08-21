@@ -2995,6 +2995,93 @@
         "x-apidog-folder": "Reference/API Reference/Graph"
       }
     },
+    "/api/graph/traverse": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Graph"
+        ],
+        "summary": "Traverse from where you are",
+        "description": "Moves inside a space that a question already set, without re-running the question. The other\nhalf of *a composition grounds you; it does not navigate you* — grounding chooses the space,\nthis walks it.",
+        "operationId": "traverse",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Comma-separated node ids to hop from.\n\nNamed `from` to match the page grammar the split ruled (spec §10.2):\n`/graph/@me?q=<grounding question>&from=<node-ids>&depth=<n>`, so the address says exactly\nwhat read produced the screen.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "depth",
+            "in": "query",
+            "description": "Hops to walk. Defaults to 1, clamped to 3 by the service.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The subgraph reached from the given nodes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AtlasSubgraph"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed or empty node id list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Graph"
+      }
+    },
     "/api/health": {
       "parameters": [
         {

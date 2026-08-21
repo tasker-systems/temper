@@ -683,6 +683,104 @@ pub async fn entry_orientation_slice(
     Ok(AtlasSubgraph { nodes, edges })
 }
 
+/// Bound on how many seeds one traversal may walk from. Mirrors the context door's `MAX_SEEDS`,
+/// which this function absorbed — a hop from a large selection must not become a hairball.
+/// Clamped loudly: the drop is reported, never silent.
+const TRAVERSAL_MAX_SEEDS: usize = 250;
+
+/// The traversal read (spec §5.2) — **moving inside a space you have already been given.**
+///
+/// Given seeds and a depth, walks visible edges outward and returns the subgraph of everything
+/// reached, as an `AtlasSubgraph`. This is the other half of the thesis: *a composition grounds you;
+/// it does not navigate you.* Grounding sets the space; this moves inside it without re-running a
+/// composition, which is also most of the latency every hop pays today.
+///
+/// **It introduces no new walk, which is how it satisfies §5.2's constraint.** That section forbids
+/// the graph door from calling `__temper_ungated_follow_from` — the prefix is source discipline for
+/// a single compiler emitter, not a database permission — and requires that two walks which must
+/// agree be linked rather than left to drift. Nothing here is a second copy of anything:
+/// `graph_induced_edges` is the graph family's own undirected walk, the same body chunk A uses at
+/// depth 0. The retired `graph_traverse` was the directed one and is not used.
+///
+/// Note the graph family's walk is **stricter** than the composition's: it additionally requires
+/// `anchor_readable_by_profile` on the edge's home anchor, which `__temper_ungated_follow_from`
+/// does not check at all. That difference is pre-existing and is not resolved here.
+pub async fn traversal_slice(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    seeds: &[Uuid],
+    depth: i32,
+) -> ApiResult<AtlasSubgraph> {
+    if seeds.is_empty() {
+        return Err(ApiError::BadRequest("seeds must be non-empty".into()));
+    }
+
+    let bounded: &[Uuid] = if seeds.len() > TRAVERSAL_MAX_SEEDS {
+        tracing::warn!(
+            requested = seeds.len(),
+            cap = TRAVERSAL_MAX_SEEDS,
+            dropped = seeds.len() - TRAVERSAL_MAX_SEEDS,
+            "traversal seed set clamped"
+        );
+        &seeds[..TRAVERSAL_MAX_SEEDS]
+    } else {
+        seeds
+    };
+
+    // Clamped to the same 1..=3 the SQL enforces with `LEAST(p_depth, 3)`. Depth 0 is deliberately
+    // NOT reachable here: it is the induced-subgraph read chunk A uses, and asking a *traversal*
+    // to take no hops is a caller error, not a degenerate walk.
+    let depth = depth.clamp(1, 3);
+
+    // Same override reasoning as the entry read: every column but `label` is NOT NULL on `kb_edges`,
+    // and the overrides exist only because a set-returning function types every column as nullable.
+    let walked = sqlx::query!(
+        r#"SELECT id AS "id!", source_id AS "source_id!", target_id AS "target_id!",
+                  edge_kind AS "edge_kind!: EdgeKind", polarity AS "polarity!: Polarity",
+                  label, weight AS "weight!"
+             FROM graph_induced_edges($1, $2, $3)"#,
+        profile_id.as_uuid(),
+        bounded,
+        depth,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    // Seeds FIRST, then the walked endpoints. A seed that reached nothing still renders — a hop
+    // that silently drops the thing you hopped from would leave the reader nowhere.
+    let mut seen: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
+    let mut node_ids: Vec<Uuid> = Vec::new();
+    for id in bounded
+        .iter()
+        .copied()
+        .chain(walked.iter().flat_map(|w| [w.source_id, w.target_id]))
+    {
+        if seen.insert(id) {
+            node_ids.push(id);
+        }
+    }
+
+    let nodes = hydrate_atlas_nodes_visible(pool, profile_id, &node_ids).await?;
+
+    // No dangling edge into a node the client cannot place.
+    let present: std::collections::HashSet<Uuid> = nodes.iter().map(|n| n.id).collect();
+    let edges: Vec<AtlasEdge> = walked
+        .into_iter()
+        .filter(|w| present.contains(&w.source_id) && present.contains(&w.target_id))
+        .map(|w| AtlasEdge {
+            id: w.id,
+            source: w.source_id,
+            target: w.target_id,
+            edge_kind: w.edge_kind,
+            polarity: w.polarity,
+            label: w.label,
+            weight: w.weight,
+        })
+        .collect();
+
+    Ok(AtlasSubgraph { nodes, edges })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
