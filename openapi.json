@@ -4913,6 +4913,207 @@
         "x-apidog-folder": "Reference/API Reference/Resources"
       }
     },
+    "/api/resources/{id}/artifacts": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Data Artifacts"
+        ],
+        "summary": "List artifacts for a resource, or counts with counts=true",
+        "description": "Without `counts=true`: returns fully hydrated artifacts (metadata + content).\nWith `counts=true`: returns per-family counts only, no content hydration —\nfor surfaces that need \"3 measurements, 1 extraction\" without fetching payloads.",
+        "operationId": "list_artifacts",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Resource ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "Filter by the bare family name (e.g. `\"measurement\"`).",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "intent",
+            "in": "query",
+            "description": "Filter by selection intent: `\"current\"`, `\"member\"`, or `\"pinned\"`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "include_folded",
+            "in": "query",
+            "description": "Include folded (superseded) artifacts in the result. Default: `false`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "counts",
+            "in": "query",
+            "description": "Return per-family counts instead of full artifacts. No content hydration.\nDefault: `false` (full artifacts with content).",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Artifacts owned by the resource (full or counts)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ArtifactView"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Data Artifacts"
+      }
+    },
+    "/api/resources/{id}/artifacts/{artifact_id}": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Data Artifacts"
+        ],
+        "summary": "Get a single artifact by ID under its owning resource",
+        "description": "The resource ID in the path is the REST parent; visibility is gated on the\nartifact's actual owning resource via `resources_visible_to`. Returns 404\nif the artifact does not exist or is not visible to the caller.",
+        "operationId": "get_artifact",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Resource ID (REST parent)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "description": "Artifact ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The artifact with content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Data Artifacts"
+      }
+    },
     "/api/resources/{id}/blocks": {
       "parameters": [
         {
@@ -7668,6 +7869,72 @@
           }
         }
       },
+      "ArtifactView": {
+        "type": "object",
+        "description": "One data artifact, as returned by the API and MCP surfaces.\n\nThis is the readback `RetrievedArtifact` projected onto a wire shape: the typed enums\n(`intent`, `shape_state`, `kind_owner`) are rendered as their serde-renamed strings so a\nconsumer that does not share the Rust types still gets a self-describing response.",
+        "required": [
+          "artifact_id",
+          "resource_id",
+          "kind_owner_table",
+          "kind_owner_id",
+          "artifact_kind",
+          "intent",
+          "precedence",
+          "content_hash",
+          "content_bytes",
+          "shape_state",
+          "is_folded",
+          "created"
+        ],
+        "properties": {
+          "artifact_id": {
+            "$ref": "#/components/schemas/DataArtifactId"
+          },
+          "artifact_kind": {
+            "type": "string"
+          },
+          "content": {
+            "description": "The content payload. `null` when the artifact was committed with no bytes."
+          },
+          "content_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "content_hash": {
+            "type": "string"
+          },
+          "created": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "intent": {
+            "type": "string",
+            "description": "`\"current\"` / `\"member\"` / `\"pinned\"` — the closed selection vocabulary."
+          },
+          "is_folded": {
+            "type": "boolean"
+          },
+          "kind_owner_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind_owner_table": {
+            "type": "string",
+            "description": "`\"kb_profiles\"` or `\"kb_teams\"` — the namespace half of the family name."
+          },
+          "precedence": {
+            "type": "number",
+            "format": "double"
+          },
+          "resource_id": {
+            "$ref": "#/components/schemas/ResourceId"
+          },
+          "shape_state": {
+            "type": "string",
+            "description": "`\"never_declared\"` today; will carry conformance verdicts when the shape registry lands."
+          }
+        }
+      },
       "AssertRelationshipRequest": {
         "allOf": [
           {
@@ -9113,6 +9380,11 @@
             ]
           }
         }
+      },
+      "DataArtifactId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "A `kb_data_artifacts.id` value — one schema-boundable structured datum owned by a resource."
       },
       "DeleteResponse": {
         "type": "object",

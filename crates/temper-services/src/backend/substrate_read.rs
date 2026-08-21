@@ -37,7 +37,7 @@ use temper_core::types::cognitive_maps::{
     CogmapStaleness,
 };
 use temper_core::types::home::HomeAnchor;
-use temper_core::types::ids::{CogmapId, ContextId, LensId, ProfileId, ResourceId};
+use temper_core::types::ids::{CogmapId, ContextId, DataArtifactId, LensId, ProfileId, ResourceId};
 use temper_core::types::invocation::{
     Disposition, InvocationActRow, InvocationSummary, InvocationView,
 };
@@ -1515,6 +1515,149 @@ pub async fn invocation_list_select(
             correlation_id: r.correlation_id,
         })
         .collect())
+}
+
+// ── Data artifact reads ───────────────────────────────────────────────────────────────────────
+
+/// List data artifacts for a resource, fully hydrated (metadata + content). Visibility-gated
+/// through `resources_visible_to` in the SQL.
+pub async fn list_artifacts(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    resource_id: ResourceId,
+    kind: Option<&str>,
+    intent: Option<&str>,
+    include_folded: bool,
+) -> ApiResult<Vec<temper_core::types::data_artifact::ArtifactView>> {
+    let intent = intent.map(parse_intent_str).transpose()?;
+    let artifacts = readback::artifacts_for_resource(
+        pool,
+        profile_id,
+        resource_id,
+        kind,
+        intent,
+        include_folded,
+    )
+    .await
+    .map_err(|e| ApiError::from(TemperError::Api(e.to_string())))?;
+
+    Ok(artifacts
+        .into_iter()
+        .map(|a| temper_core::types::data_artifact::ArtifactView {
+            artifact_id: a.artifact_id,
+            resource_id: a.resource_id,
+            kind_owner_table: match a.kind_owner {
+                temper_substrate::payloads::KindOwner::Profile(_) => "kb_profiles".to_owned(),
+                temper_substrate::payloads::KindOwner::Team(_) => "kb_teams".to_owned(),
+            },
+            kind_owner_id: match a.kind_owner {
+                temper_substrate::payloads::KindOwner::Profile(id) => id,
+                temper_substrate::payloads::KindOwner::Team(id) => id,
+            },
+            artifact_kind: a.artifact_kind,
+            intent: match a.intent {
+                temper_substrate::payloads::ArtifactIntent::Current => "current".to_owned(),
+                temper_substrate::payloads::ArtifactIntent::Member => "member".to_owned(),
+                temper_substrate::payloads::ArtifactIntent::Pinned => "pinned".to_owned(),
+            },
+            precedence: a.precedence,
+            content_hash: a.content_hash,
+            content_bytes: a.content_bytes,
+            shape_state: match a.shape_state {
+                temper_substrate::payloads::ShapeState::NeverDeclared => {
+                    "never_declared".to_owned()
+                }
+            },
+            is_folded: a.is_folded,
+            created: a.created,
+            content: a.content,
+        })
+        .collect())
+}
+
+/// Per-family artifact counts for a resource, without content hydration.
+pub async fn artifact_counts(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    resource_id: ResourceId,
+    include_folded: bool,
+) -> ApiResult<Vec<temper_core::types::data_artifact::ArtifactCountRow>> {
+    let counts =
+        readback::artifact_counts_for_resource(pool, profile_id, resource_id, include_folded)
+            .await
+            .map_err(|e| ApiError::from(TemperError::Api(e.to_string())))?;
+
+    Ok(counts
+        .into_iter()
+        .map(|c| temper_core::types::data_artifact::ArtifactCountRow {
+            kind_owner_table: match c.kind_owner {
+                temper_substrate::payloads::KindOwner::Profile(_) => "kb_profiles".to_owned(),
+                temper_substrate::payloads::KindOwner::Team(_) => "kb_teams".to_owned(),
+            },
+            kind_owner_id: match c.kind_owner {
+                temper_substrate::payloads::KindOwner::Profile(id) => id,
+                temper_substrate::payloads::KindOwner::Team(id) => id,
+            },
+            artifact_kind: c.artifact_kind,
+            count: c.count,
+            total_bytes: c.total_bytes,
+        })
+        .collect())
+}
+
+/// Retrieve a single data artifact by ID. Returns `None` (→ 404) if the artifact does not
+/// exist or the owning resource is not visible to the caller.
+pub async fn get_artifact(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    artifact_id: DataArtifactId,
+) -> ApiResult<Option<temper_core::types::data_artifact::ArtifactView>> {
+    let artifact = readback::artifact_by_id(pool, profile_id, artifact_id)
+        .await
+        .map_err(|e| ApiError::from(TemperError::Api(e.to_string())))?;
+
+    Ok(
+        artifact.map(|a| temper_core::types::data_artifact::ArtifactView {
+            artifact_id: a.artifact_id,
+            resource_id: a.resource_id,
+            kind_owner_table: match a.kind_owner {
+                temper_substrate::payloads::KindOwner::Profile(_) => "kb_profiles".to_owned(),
+                temper_substrate::payloads::KindOwner::Team(_) => "kb_teams".to_owned(),
+            },
+            kind_owner_id: match a.kind_owner {
+                temper_substrate::payloads::KindOwner::Profile(id) => id,
+                temper_substrate::payloads::KindOwner::Team(id) => id,
+            },
+            artifact_kind: a.artifact_kind,
+            intent: match a.intent {
+                temper_substrate::payloads::ArtifactIntent::Current => "current".to_owned(),
+                temper_substrate::payloads::ArtifactIntent::Member => "member".to_owned(),
+                temper_substrate::payloads::ArtifactIntent::Pinned => "pinned".to_owned(),
+            },
+            precedence: a.precedence,
+            content_hash: a.content_hash,
+            content_bytes: a.content_bytes,
+            shape_state: match a.shape_state {
+                temper_substrate::payloads::ShapeState::NeverDeclared => {
+                    "never_declared".to_owned()
+                }
+            },
+            is_folded: a.is_folded,
+            created: a.created,
+            content: a.content,
+        }),
+    )
+}
+
+fn parse_intent_str(s: &str) -> ApiResult<temper_substrate::payloads::ArtifactIntent> {
+    match s {
+        "current" => Ok(temper_substrate::payloads::ArtifactIntent::Current),
+        "member" => Ok(temper_substrate::payloads::ArtifactIntent::Member),
+        "pinned" => Ok(temper_substrate::payloads::ArtifactIntent::Pinned),
+        other => Err(ApiError::from(TemperError::Api(format!(
+            "unrecognized intent '{other}'; the vocabulary is current, member, pinned"
+        )))),
+    }
 }
 
 #[cfg(test)]

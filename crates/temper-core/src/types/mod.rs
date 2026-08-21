@@ -20,6 +20,7 @@ pub mod config;
 pub mod conflict;
 pub mod connection;
 pub mod context;
+pub mod data_artifact;
 pub mod delivery;
 pub mod device;
 pub mod diagnostics;
@@ -82,6 +83,7 @@ pub use config::{
 };
 pub use conflict::{ConflictRecord, TemperSystemAnnotation};
 pub use context::{ContextCreateRequest, ContextRow, ContextRowWithCounts};
+pub use data_artifact::{ArtifactCountRow, ArtifactListParams, ArtifactView};
 pub use device::DeviceSyncState;
 pub use diagnostics::{Diagnostic, DiagnosticLevel, ErrorPayload};
 pub use element_trail::{ElementEvent, ElementKind, EventTrail};

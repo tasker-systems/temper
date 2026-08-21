@@ -3,6 +3,7 @@ lib/temper/generated/api/access_api.rb
 lib/temper/generated/api/auditor_api.rb
 lib/temper/generated/api/cognitive_maps_api.rb
 lib/temper/generated/api/contexts_api.rb
+lib/temper/generated/api/data_artifacts_api.rb
 lib/temper/generated/api/events_api.rb
 lib/temper/generated/api/facets_api.rb
 lib/temper/generated/api/graph_api.rb
@@ -35,6 +36,7 @@ lib/temper/generated/models/advance_watermark_ack.rb
 lib/temper/generated/models/advance_watermark_request.rb
 lib/temper/generated/models/agent_authorship.rb
 lib/temper/generated/models/append_block_payload.rb
+lib/temper/generated/models/artifact_view.rb
 lib/temper/generated/models/assert_relationship_request.rb
 lib/temper/generated/models/atlas_edge.rb
 lib/temper/generated/models/atlas_home.rb

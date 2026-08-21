@@ -5,6 +5,7 @@ pub mod citation_audits;
 pub mod cognitive_maps;
 pub mod connections;
 pub mod contexts;
+pub mod data_artifacts;
 pub mod edges;
 pub mod embed;
 pub mod events;
