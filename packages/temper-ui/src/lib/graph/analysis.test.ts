@@ -1,8 +1,12 @@
 import { describe, expect, test } from 'vitest';
 import type { CogmapRegionMetricsRow, CogmapRegionRow } from '$lib/types/generated/cognitive_maps';
 import {
+	type AnalysedRegion,
 	analyseShape,
+	axisFor,
 	CONTEXT_HAS_NO_MAP_READOUT,
+	describeAxis,
+	describeConcentration,
 	describeConstant,
 	describeGroupingCount,
 	describeNulls,
@@ -12,6 +16,7 @@ import {
 	distributionOf,
 	formatValue,
 	METRICS,
+	positionOn,
 	reportMetrics,
 } from './analysis';
 
@@ -282,5 +287,101 @@ describe('what a context genuinely does not have is declared, not fabricated', (
 			'406 groupings, in the order this place itself ranks them.',
 		);
 		expect(describeGroupingCount(0)).toBe('This place has no groupings yet.');
+	});
+});
+
+describe('the axis a quantity is plotted on', () => {
+	const dist = (min: number, median: number, max: number) => ({
+		n: 3,
+		nulls: 0,
+		min,
+		median,
+		max,
+		constant: false,
+	});
+
+	test('compresses when the median sits low, because a linear axis would hide most marks', () => {
+		// Measured on the captured context: salience runs 0 → 69.54 with a median of 0.55, and a
+		// linear axis puts 94% of 501 marks in the first tenth of the width.
+		expect(axisFor(dist(0, 0.55, 69.54))?.compressed).toBe(true);
+	});
+
+	test('stays linear when the values already fill their span', () => {
+		// content_cohesion: 0.87 → 1.00, median 0.97. Nothing to rescue.
+		expect(axisFor(dist(0.87, 0.97, 1.0))?.compressed).toBe(false);
+	});
+
+	test('is nothing at all when there is no spread to plot against', () => {
+		expect(axisFor(dist(0, 0, 0))).toBeNull();
+		expect(
+			axisFor({ n: 0, nulls: 5, min: null, median: null, max: null, constant: false }),
+		).toBeNull();
+	});
+
+	test('places the ends at the ends, on either spacing', () => {
+		for (const a of [dist(0, 0.55, 69.54), dist(0.87, 0.97, 1.0)]) {
+			const axis = axisFor(a)!;
+			expect(positionOn(axis.min, axis)).toBeCloseTo(0);
+			expect(positionOn(axis.max, axis)).toBeCloseTo(1);
+		}
+	});
+
+	test('a compressed axis says that distance is not difference; a linear one says nothing', () => {
+		expect(describeAxis(axisFor(dist(0, 0.55, 69.54))!)).toMatch(/not equal differences/);
+		expect(describeAxis(axisFor(dist(0.87, 0.97, 1.0))!)).toBeNull();
+	});
+
+	test('compression genuinely spreads the marks — the property, not the flag', () => {
+		// The flag is easy to assert and proves nothing. This asserts the thing it exists to buy:
+		// a heavy-tailed population must occupy more of the axis compressed than linear.
+		const values = [...Array(100)].map((_, i) => (i < 94 ? i * 0.01 : 10 + i));
+		const axis = axisFor(dist(Math.min(...values), 0.5, Math.max(...values)))!;
+		const linear = axisFor({ ...dist(Math.min(...values), 50, Math.max(...values)) })!;
+		const used = (a: typeof axis) =>
+			new Set(values.map((v) => Math.floor(positionOn(v, a) * 10))).size;
+		expect(axis.compressed).toBe(true);
+		expect(linear.compressed).toBe(false);
+		expect(used(axis)).toBeGreaterThan(used(linear));
+	});
+});
+
+describe('a quantity most groupings agree on', () => {
+	const region = (v: number | null): AnalysedRegion => ({
+		regionId: `r${Math.random()}`,
+		lensId: 'l',
+		label: null,
+		values: {
+			member_count: 1,
+			salience: null,
+			centrality: null,
+			content_cohesion: null,
+			internal_tension: null,
+			reference_standing: v,
+			telos_alignment: null,
+		},
+	});
+
+	test('says how many share the modal value when most of them do', () => {
+		// 97% of the captured context's groupings have a reference_standing of 0, so the marks pile
+		// at one point however they are spaced. No axis rescues that; the number has to be said.
+		const regions = [...Array(97)].map(() => region(0)).concat([...Array(3)].map(() => region(5)));
+		expect(describeConcentration(regions, 'reference_standing')).toBe('97 of 100 measure 0.');
+	});
+
+	test('says nothing when the pile is only part of the picture', () => {
+		// Below half, the mode is a feature of the distribution rather than the whole of it, and the
+		// plot can show it. 40 / 35 / 25 — no value carries a majority.
+		const regions = [
+			...[...Array(40)].map(() => region(0)),
+			...[...Array(35)].map(() => region(5)),
+			...[...Array(25)].map(() => region(9)),
+		];
+		expect(describeConcentration(regions, 'reference_standing')).toBeNull();
+	});
+
+	test('says nothing when EVERY value is the same — that is the constant case, said elsewhere', () => {
+		// Two sentences for one fact would read as two findings.
+		const regions = [...Array(50)].map(() => region(0));
+		expect(describeConcentration(regions, 'reference_standing')).toBeNull();
 	});
 });

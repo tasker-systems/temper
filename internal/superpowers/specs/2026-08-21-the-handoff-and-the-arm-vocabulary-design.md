@@ -90,7 +90,7 @@ construction: it is a claim made in one place about screens built somewhere else
 
 ---
 
-## 2. `[ruled — 2026-08-21, Pete]` The arm becomes a per-view fact, and the read supplies its words
+## 2. `[provisional — 2026-08-21, judgement call]` The arm becomes a per-view fact, and the read supplies its words
 
 > **A read declares the arms it produced and what to call them. No read may name another read's
 > arms, and nothing outside a model may translate one.**
@@ -122,7 +122,7 @@ buildGraph       → arms: [ seed / survey / walk, today's three words, unchange
 
 ### 2.1 What each channel encodes after D — **AMEND** (§7 of the parent authorizes the vocabulary change; §5.5 of the hub-stranding spec defers the ring here)
 
-`[ruled — 2026-08-21, Pete]` **The ring encodes the view's standing point.** Ringed = the mark(s)
+`[provisional — 2026-08-21, judgement call]` **The ring encodes the view's standing point.** Ringed = the mark(s)
 this view was built from; bare = what following edges reached from them.
 
 | view | arms | ring | core |
@@ -163,7 +163,7 @@ Four facts about what is on disk:
   Back walks the reader's path"* is **already satisfied** and needs no change. Recorded so nobody
   re-implements it.
 
-`[ruled — 2026-08-21, Pete]` **`depth` is grammar-only in D.** Parsed, emitted, clamped `1..=3` to
+`[provisional — 2026-08-21, judgement call]` **`depth` is grammar-only in D.** Parsed, emitted, clamped `1..=3` to
 match the service (`graph_service.rs`: `depth.clamp(1, 3)`), and every hop writes `depth=1`. No
 control ships. The spec ruled a grammar, not a widget.
 
@@ -252,7 +252,7 @@ addresses cannot trigger it, which the one-node hop satisfies by construction.
 > *"Declare itself as the grounding that the current view descends from — recommended. It stops
 > claiming to explain the current screen and becomes provenance for it."* — §7.2
 
-`[ruled — 2026-08-21, Pete]` **Provenance only.** The question, the places, and the route back
+`[provisional — 2026-08-21, judgement call]` **Provenance only.** The question, the places, and the route back
 survive. **The stage accounting and the grouping list do not** — they were measured for a screen the
 reader has left, and no composition ran for this one.
 

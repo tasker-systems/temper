@@ -1,6 +1,6 @@
 # The schema and the binary that speaks it never silently disagree
 
-`[decided — 2026-07-30, Pete]` for the design below. `[observed]` for everything under *Evidence*.
+`[provisional — 2026-07-30, judgement call]` for the design below. `[observed]` for everything under *Evidence*.
 Anything unmarked is inferred.
 
 Goal: `019fb35b-c64e-7cd2-a7c0-aa117d1ab1a7`. Grounded in the production outage of 2026-07-30
@@ -284,7 +284,7 @@ is the exact drift this goal exists to eliminate.
 ### 4. Preview builds are the canary
 
 `ignoreCommand` in `vercel.json` turns preview builds **on for PRs that touch `migrations/`**, and
-leaves them off otherwise. `[decided — 2026-07-30, Pete]`
+leaves them off otherwise. `[provisional — 2026-07-30, judgement call]`
 
 This is the only clause that gets *rehearsal* rather than *detection*: the PR's migration is applied
 to its own Neon branch and the PR's binary is built and run against it, before merge. A preview of
@@ -300,7 +300,7 @@ mismatch is `crates/temper-ingest/build.rs`.
 
 ### 6. The macro is the rule; exceptions are an allow-list, not a habit
 
-`[decided — 2026-07-30, Pete]`
+`[provisional — 2026-07-30, judgement call]`
 
 Everything above depends on the `.sqlx` cache being a *faithful* record of the binary↔schema wire
 contract. It is faithful only for `query!`-family macros. A runtime `sqlx::query(...)` call leaves no

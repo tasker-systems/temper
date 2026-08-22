@@ -4,6 +4,7 @@ import { fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type BoundDeclaration, declareBounds, declareTraversalBounds } from '$lib/graph/bound';
 import type { GraphPlan } from '$lib/graph/composition';
+import { type HarnessBundle, scenarioNames, viewFor } from '$lib/graph/harness';
 import {
 	buildEntryGraph,
 	buildGraph,
@@ -1423,5 +1424,53 @@ describe('the canvas has a floor, and Why these is what yields to it', () => {
 
 		expect(container.querySelector('.why')).not.toBeNull();
 		expect(container.querySelector('[data-testid="readout-strip"]')).toBeNull();
+	});
+});
+
+describe('the /dev/graph harness renders every scenario it offers', () => {
+	/**
+	 * The **wiring** between the committed bundle and the real page — not its appearance, which no
+	 * test here may claim (`src/test/README.md`), and not the builders, which the pure suite pins.
+	 *
+	 * What this buys that nothing else does: `viewFor` assembles a whole `GraphViewData` per
+	 * scenario, and a scenario whose shape the adapter mishandles would render a page with no marks
+	 * — a harness that silently offers a button leading to an empty frame. The person the harness
+	 * exists for would find that by clicking, one scenario at a time, which is the cost this
+	 * removes. It is the same failure the atlas bundle's `fixtures.test.ts` guarded, one layer up.
+	 */
+	const bundle = JSON.parse(
+		readFileSync(join(import.meta.dirname, '../../../test/fixtures/graph-harness.json'), 'utf8'),
+	) as HarnessBundle;
+
+	/** Scenarios whose answer has marks — i.e. every one except the two that legitimately draw none. */
+	const DRAWN = scenarioNames(bundle).filter(
+		(n) => n !== 'entryTooLittleStructure' && n !== 'mapColdStart',
+	);
+
+	it.each(DRAWN)('scenario "%s" draws marks the reader can reach', async (name) => {
+		const { container } = await painted(viewFor(bundle, name));
+		expect(container.querySelectorAll('.graph-a11y h2').length).toBeGreaterThan(0);
+		expect(container.querySelector('[data-testid="bound-line"]')).not.toBeNull();
+	});
+
+	it('rung 2 replaces the canvas with the sentence, rather than drawing an empty one', async () => {
+		render(GraphPage, { data: viewFor(bundle, 'entryTooLittleStructure') });
+		const said = await screen.findByText(/A graph is not the right view for this yet/);
+		expect(said).not.toBeNull();
+	});
+
+	it('and on THIS fixture the sentence reads "0 resources" — declared, not fixed here', async () => {
+		// `[found — 2026-08-22]` The only anchor on the corpus that reaches `eligible === 0` also has
+		// `in_scope === 0`, so the sentence rung 2 exists to say — *"you can read N resources here,
+		// but nothing is linked"* — renders with N = 0 and becomes *"you can read 0 resources here,
+		// but nothing is linked to anything else"*. That tells a reader with nothing that they have
+		// nothing, in the words written for a reader who has plenty.
+		//
+		// Asserted rather than repaired, and NOT presented as coverage of rung 2: the fixture says so
+		// in its own `_does_not_witness`, and the harness prints that above the frame. Repairing the
+		// sentence is a different change from building the place to look at it.
+		render(GraphPage, { data: viewFor(bundle, 'entryTooLittleStructure') });
+		const said = await screen.findByText(/You can read/);
+		expect(sentenceOf(said)).toMatch(/You can read 0 resources here, but nothing is linked/);
 	});
 });

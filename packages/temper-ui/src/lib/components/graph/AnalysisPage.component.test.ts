@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { render, screen } from '@testing-library/svelte';
+import { fireEvent, render, screen } from '@testing-library/svelte';
 import { describe, expect, it, vi } from 'vitest';
-import { type AnalysedRegion, analyseShape } from '$lib/graph/analysis';
+import { type AnalysedRegion, analyseShape, METRICS } from '$lib/graph/analysis';
 import type { AnalysisViewData } from '$lib/graph/view';
 import { describeFailure, GaveUp } from '$lib/server/bounded';
 import type {
@@ -453,5 +453,118 @@ describe('the page declares what its own read is doing', () => {
 
 		expect(screen.getByText(/There is nothing here yet/)).toBeTruthy();
 		expect(screen.queryByTestId('region-arriving')).toBeNull();
+	});
+});
+
+describe('the groupings are marks on their own axes, not only rows in a table', () => {
+	/**
+	 * `[from the reader session, 2026-08-21, repeated 2026-08-22]` *"the long, long grouping table is
+	 * interesting but probably the wrong visual register for that much data density about things
+	 * folks don't really understand. a visualization that they could hover over pieces to understand
+	 * the grouping would be better."*
+	 *
+	 * Wiring, not appearance — nothing here may claim the plot is legible (`src/test/README.md`).
+	 * What it pins is that every grouping reaches the picture, that a quantity with no spread is
+	 * said rather than drawn, and that pointing at one strip lights the same grouping on all of them,
+	 * which is the property a table cannot have.
+	 */
+	it('every grouping the place publishes is a mark — no top-N in the picture either', async () => {
+		const { container } = await painted(contextView());
+		const strips = container.querySelectorAll('[data-testid="grouping-strips"] svg');
+		expect(strips.length).toBeGreaterThan(0);
+		for (const svg of strips) {
+			// 501 groupings; a strip carries one mark per grouping that HAS a value for it, and the
+			// rest are declared in that strip's own "N of M have no value for this" line.
+			expect(svg.querySelectorAll('circle').length).toBeGreaterThan(400);
+		}
+	});
+
+	it('a quantity with no spread is SAID, never drawn as a row of identical marks', async () => {
+		// `internal_tension` is identically 0 across all 501 groupings of the captured context. A
+		// strip of 501 marks stacked on one point is a picture of nothing that invites a reader to
+		// look for structure in it — the same argument that keeps it out of the table's columns.
+		const { container } = await painted(contextView());
+		const flat = container.querySelector('[data-testid="flat-internal_tension"]');
+		expect(flat).not.toBeNull();
+		expect(sentenceOf(flat)).toContain('Every grouping here measures 0');
+	});
+
+	it('each strip is labelled with the span THIS place measures, never a 0–100 scale', async () => {
+		// The sound half of what §8.2 was reaching for, kept on its merits: the axes are the real
+		// ones, so no two strips share a scale and a mark's position is never a rank.
+		const { container } = await painted(contextView());
+		const scales = [...container.querySelectorAll('[data-testid="grouping-strips"] .scale')];
+		expect(scales.length).toBeGreaterThan(0);
+		for (const s of scales) expect(s.textContent).not.toMatch(/%/);
+	});
+
+	it('the median is ticked WHERE IT IS, not in the middle of the strip', async () => {
+		// `[found by looking, 2026-08-22]` The median started as the centre item of a
+		// space-between row, so every strip printed it at 50% of the width whatever its value.
+		// Measured on this fixture: `centrality` and `reference_standing` both said "median 0" at
+		// the halfway mark while the real median sits hard against the left end — a label claiming
+		// a position it does not have, wrong on all six strips, by up to half the width.
+		//
+		// No test could have caught it: jsdom computes no layout, so this asserts the DECLARED
+		// position rather than the rendered one, which is the most a test here may claim.
+		const { container } = await painted(contextView());
+		const labels = [...container.querySelectorAll('[data-testid="grouping-strips"] .median-label')];
+		expect(labels.length).toBeGreaterThan(0);
+
+		const lefts = labels.map((l) => (l as HTMLElement).style.left);
+		for (const left of lefts) expect(left).toMatch(/%$/);
+		// The bug's signature is every strip agreeing on one position. A median that genuinely sat
+		// at the same place on all six would be a coincidence worth failing on and looking at.
+		expect(new Set(lefts).size).toBeGreaterThan(1);
+		expect(lefts.every((l) => l === '50%')).toBe(false);
+	});
+
+	it('a median that lands ON a bound is said once, by that bound', async () => {
+		// `centrality` and `reference_standing` both have a median of 0, which IS their minimum.
+		// A floating "median 0" stacked on the "0" end label would read as two facts about two
+		// places; it is one fact about one.
+		const { container } = await painted(contextView());
+		const ends = [
+			...container.querySelectorAll('[data-testid="grouping-strips"] .scale .is-median'),
+		];
+		expect(ends.length).toBeGreaterThan(0);
+		for (const e of ends) expect(e.textContent).toMatch(/median/);
+	});
+
+	it('each quantity says what it tells you AND what it does not', async () => {
+		const { container } = await painted(contextView());
+		const readings = [...container.querySelectorAll('[data-testid="grouping-strips"] .reading')];
+		expect(readings.length).toBe(METRICS.length);
+		// The second half is the one that exists because a gloss alone invited readers to supply a
+		// stronger meaning than the number carries.
+		for (const r of readings) expect(r.textContent).toMatch(/does not/i);
+	});
+
+	it('pointing at one strip lights the same grouping on every strip — what a table cannot do', async () => {
+		const { container } = await painted(contextView());
+		const readout = container.querySelector('[data-testid="strip-readout"]');
+		expect(sentenceOf(readout)).toContain('Point at a strip');
+
+		const svg = container.querySelector('[data-testid="grouping-strips"] svg') as SVGElement;
+		// jsdom gives every element a zero-size box, so the pointer maths resolves to the first
+		// mark rather than one chosen by position. That is fine for this assertion: what is under
+		// test is that ONE grouping becomes active everywhere, not which one.
+		await fireEvent.pointerMove(svg, { clientX: 10, clientY: 10 });
+
+		const strips = container.querySelectorAll('[data-testid="grouping-strips"] svg');
+		for (const s of strips) {
+			expect(s.querySelectorAll('circle.lit').length).toBeLessThanOrEqual(1);
+		}
+		const lit = container.querySelectorAll('[data-testid="grouping-strips"] circle.lit');
+		expect(lit.length).toBeGreaterThan(1); // the same grouping, on more than one strip
+		expect(sentenceOf(readout)).not.toContain('Point at a strip');
+	});
+
+	it('the figures are kept and reachable, not deleted', async () => {
+		// The strips answer "what is this telling me"; the table answers "what exactly does this one
+		// measure". Behind a disclosure, and still every row in the document.
+		const { container } = await painted(contextView());
+		expect(container.querySelector('details.figures')).not.toBeNull();
+		expect(container.querySelectorAll('tbody tr')).toHaveLength(501);
 	});
 });

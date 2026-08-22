@@ -117,7 +117,7 @@ selection, and `legibility-is-never-bought-with-silent-omission` is satisfied th
 bound line declares its remainder correctly. The screen misleads anyway, which is the whole point:
 a clause can be covered while the reader is still told something they know to be untrue.
 
-## 4. `[ruled — 2026-08-21, Pete]` §5.3 is narrowed, not overturned
+## 4. `[provisional — 2026-08-21, judgement call]` §5.3 is narrowed, not overturned
 
 §5.3 ruled: *"Only one degree ever reaches the screen, and it is the derived one."* Option 3 cannot
 be built under it. The ruling is **AMENDED**:
@@ -195,7 +195,7 @@ passes `seed={node.arm !== 'walk'}`; `NodeChip.svelte:64` rings on it. **Every m
 canvas is ringed, so the channel spends ink on a constant** — and it is the channel a reader has
 already misread once.
 
-`[ruled — 2026-08-21, Pete]` **The ring encodes a contrast between arms; where every node shares
+`[provisional — 2026-08-21, judgement call]` **The ring encodes a contrast between arms; where every node shares
 one arm there is no contrast, so no ring is drawn.** This is a property of the *view*, computed
 from the model, not a special case for the entry read — a composition answer that happens to return
 one arm also draws none, correctly.

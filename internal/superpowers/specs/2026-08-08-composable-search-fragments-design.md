@@ -276,7 +276,7 @@ spine*.
 **A per-request temp table for the visible set.** Refused upstream (session affinity, which pooled
 Neon behind Vercel does not guarantee); unchanged here.
 
-**Caching the gate.** Deferred with its precondition named `[decided — 2026-08-07, Pete]`. No part
+**Caching the gate.** Deferred with its precondition named `[provisional — 2026-08-07, judgement call]`. No part
 of this design may assume a cache.
 
 **A cron-refreshed materialized view of the whole visibility relation** — one point-in-time

@@ -3,7 +3,7 @@
 **Status:** design complete. Ships nothing by itself. **One section is deliberately OPEN** (§7) and
 is named as a hole rather than filled — see §9.
 
-**`[ruled — 2026-08-14, Pete]` at the start of the build session, before any code.** Four questions
+**`[provisional — 2026-08-14, judgement call]` at the start of the build session, before any code.** Four questions
 the design left to the builder, each answered where it was raised rather than in a list here:
 **depth is definitional and fixed at 2** — no `BoundTerm::Depth`, `accepts_bound_terms` stays
 `[Limit]` (§2.1, §5) · **three functions**, the incumbent re-pointed so there is one body (§10) ·
@@ -31,13 +31,13 @@ which §3 said belonged here — settled in §3 below.
 - **`[measured on prod — 2026-08-14]`** — a read-only query run against `temper-cloud` (Neon, PG17)
   this session, quoted with its numbers.
 - **`[carried]`** — taken from a cited document and not re-opened.
-- **`[decided — 2026-08-14, Pete]`** — ruled in session.
+- **`[provisional — 2026-08-14, judgement call]`** — ruled in session.
 
 ---
 
 ## 1. The frame this was designed under, because it changed the design
 
-`[decided — 2026-08-14, Pete]` **There is no urgency here and none may be imported.** This is fresh
+`[provisional — 2026-08-14, judgement call]` **There is no urgency here and none may be imported.** This is fresh
 work with no dependents: nothing outside temper-substrate's tests calls `search_graph_expand`
 `[carried — 20260806000010:102]`, and the act is `DoorReach::Absent` at all three doors
 `[verified — registry.rs:368-372]`.
@@ -69,13 +69,13 @@ caller configure a walk" question:
 
 | knob | decides | nature |
 |---|---|---|
-| `depth` | **membership** — a node three hops out is not in the answer at depth 2 | **the definition of the neighbourhood** `[ruled — 2026-08-14, Pete]` — see §2.1 |
+| `depth` | **membership** — a node three hops out is not in the answer at depth 2 | **the definition of the neighbourhood** `[provisional — 2026-08-14, judgement call]` — see §2.1 |
 | `gamma` | **rank only** — monotone in hop count, so it reorders without changing the set | the definition of the quantity |
 | `limit` | how much of the ranked set returns | already declared (`BoundTerm::Limit`, ceiling 50) `[verified — registry.rs:332-334]` |
 
 ### 2.1 Depth cannot be composed from outside the walk — and it is not a caller input either
 
-> **`[ruled — 2026-08-14, Pete]` Depth is DEFINITIONAL, fixed at 2. `BoundTerm` does not grow a
+> **`[provisional — 2026-08-14, judgement call]` Depth is DEFINITIONAL, fixed at 2. `BoundTerm` does not grow a
 > `Depth` variant and `accepts_bound_terms` stays `[Limit]`.** *"Depth 3 seems too large for a
 > neighborhood traversal of this kind"* — which is a claim about what `follow-from` **means**, not
 > about what a caller may ask for, and that puts depth in gamma's category (§2.2) rather than
@@ -91,7 +91,7 @@ caller configure a walk" question:
 > A caller-settable depth returns additively if it is ever wanted (§1) — a new `BoundTerm` variant is
 > additive on the wire, and clamp-and-disclose is already the mechanism.
 
-`[decided — 2026-08-14, Pete]` The tempting alternative is that depth needs no slot, because a
+`[provisional — 2026-08-14, judgement call]` The tempting alternative is that depth needs no slot, because a
 composition can chain `follow-from` → `follow-from`, one hop each. It is *more* expressive in one
 direction (a different `edge_filter` per hop).
 
@@ -112,7 +112,7 @@ taken in an earlier draft and is retracted above.
 
 ### 2.2 Gamma is not a caller input, and the blocker is concrete before it is philosophical
 
-`[decided — 2026-08-14, Pete]` `pub terms: BTreeMap<BoundTerm, i64>` `[verified — envelope.rs:53]`,
+`[provisional — 2026-08-14, judgement call]` `pub terms: BTreeMap<BoundTerm, i64>` `[verified — envelope.rs:53]`,
 `bound_ceilings: BTreeMap<BoundTerm, i64>` `[verified — act.rs:338]`, and `paging_for` binds
 `QueryBind::Int` `[verified — query_plan.rs:797-801]`. **The bound-term mechanism is integer-valued
 end to end.** Gamma is `double precision`. It cannot be a bound term without re-typing the whole
@@ -130,7 +130,7 @@ near ones under a declaration that says "best path."
 
 ### 2.3 `asker_holds` is rewritten
 
-`[decided — 2026-08-14, Pete]` The sentence says **a** found thing; the act declares
+`[provisional — 2026-08-14, judgement call]` The sentence says **a** found thing; the act declares
 `accepts_seeds: vec![IdKind::Resource]` — an id *set* — and its own `means` already says *"from any
 seed."* A found thing is always a set, even a set of one. The plural is not a detail: **it is the
 entire reason `via` exists** (§3). The sentence is rewritten to say so.
@@ -139,7 +139,7 @@ entire reason `via` exists** (§3). The sentence is rewritten to say so.
 
 ## 3. `via` is part of the answer, not a disclosure bolted onto it
 
-`[decided — 2026-08-14, Pete]` **This settles the fork §3 of the compositional design left OPEN:
+`[provisional — 2026-08-14, judgement call]` **This settles the fork §3 of the compositional design left OPEN:
 one row per node with a `via` array. Flat `(node, parent, …)` rows are refused.**
 
 §3 gave two arguments (the contract stated in two unlinked places; an arm's output IS the next
@@ -170,7 +170,7 @@ Cost is the only argument for a knob, and it is measured away in §5.
 
 ### 3.2 Every parent, not only the winning path's
 
-`[decided — 2026-08-14, Pete]` `graph_score` is `MAX` over paths; the parent set is a union over
+`[provisional — 2026-08-14, judgement call]` `graph_score` is `MAX` over paths; the parent set is a union over
 **all** paths. They disagree by construction: a node reached both by a strong 1-hop edge and a weak
 3-hop chain reports both parents and a score from only one.
 
@@ -194,7 +194,7 @@ A member returns, and `follow-from`'s `discloses` stops being empty.
 
 ## 4. What a `via` entry names — the edge **as asserted**
 
-`[decided — 2026-08-14, Pete]` `seed_id` · the edge's own `source_id` / `target_id` ·
+`[provisional — 2026-08-14, judgement call]` `seed_id` · the edge's own `source_id` / `target_id` ·
 `edge_kind` · `label` · `polarity`.
 
 **Reporting source/target rather than a `from_id` plus a direction flag is the load-bearing choice.**
@@ -277,7 +277,7 @@ be trusted about.
 term); 33,684 path rows collapse to 9,434 distinct tuples, aggregated over rows the walk already
 holds. **Depth is the cost parameter; `via` is not.**
 
-> **`[ruled — 2026-08-14, Pete]` Depth is fixed at 2 and is not a caller input at all** (§2.1). This
+> **`[provisional — 2026-08-14, judgement call]` Depth is fixed at 2 and is not a caller input at all** (§2.1). This
 > section's numbers are what set the constant: the ×8 step to depth 3 is the cost, and *"depth 3
 > seems too large for a neighborhood traversal of this kind"* is the meaning. An earlier draft read
 > this table as recommending *"default 2 with a ceiling of 3"* — the measurement supports the 2 and
@@ -320,7 +320,7 @@ inherits rather than re-derives, per the same rule §3 followed for the `via` fo
 
 ### 7.1 The rule that places edge predicates here
 
-`[carried — task 01a000c2]`, `[decided — 2026-08-14, Pete]`:
+`[carried — task 01a000c2]`, `[provisional — 2026-08-14, judgement call]`:
 
 > **A narrowing that can be expressed as a set must be an act. A narrowing that cannot be a set
 > belongs to the act whose semantics it constrains.**
@@ -423,7 +423,7 @@ composed from outside it — which is why depth is a parameter and why edge pred
 - **The open-key resource property half has no filed task**, and this document does not file one —
   it belongs to whoever takes §7's fork.
 - **Bounded `follow-from` is CLOSED, and the semantic half was answered rather than assumed.**
-  `[ruled — 2026-08-14, Pete]` The sibling **carries `p_bound_ids`**, and a bound **constrains the
+  `[provisional — 2026-08-14, judgement call]` The sibling **carries `p_bound_ids`**, and a bound **constrains the
   whole walk — every node on it, intermediates included** — not merely the returned set.
 
   Three things decide it, and the first is that the declaration had already said so: the incumbent
@@ -452,7 +452,7 @@ composed from outside it — which is why depth is a parameter and why edge pred
   > Declaring `accepts_bounds: [Resource]` against that wire would name a capability no caller can
   > express — the same falsehood `DoorReach::Absent` was introduced to stop telling, one field over.
   >
-  > **`[ruled — 2026-08-14, Pete]` The wire is widened: `input: Option<StageInput>` becomes
+  > **`[provisional — 2026-08-14, judgement call]` The wire is widened: `input: Option<StageInput>` becomes
   > `inputs: Vec<StageInput>`, at most one per relation.** The relation already distinguishes them,
   > so a bound gets no second spelling — which is why this was taken over the additive
   > `bound: Option<IdSet>` field beside `input`, that being the incumbent literal `bounds` shape
@@ -501,7 +501,7 @@ composed from outside it — which is why depth is a parameter and why edge pred
   that trade, and saying so is what stops a later reader mistaking it for an oversight.
 - **Anything under a visibility gate.** §5's numbers are ungated upper bounds; a real walk sees a
   subset.
-- ~~**Whether the sibling should be two functions or three.**~~ **`[ruled — 2026-08-14, Pete]`
+- ~~**Whether the sibling should be two functions or three.**~~ **`[provisional — 2026-08-14, judgement call]`
   THREE**, and the third level's job here is not the find family's.
 
   There, the top level exists because `/api/search` must keep its shape

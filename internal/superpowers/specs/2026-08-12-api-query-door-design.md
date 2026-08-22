@@ -10,7 +10,7 @@ this document answers: *"the door — still the next beat, still opens with a de
 a DAG is expressed through a flag surface and a tool schema."*
 
 The wire contract [`internal/api/query.openapi.yaml`](../../api/query.openapi.yaml) remains
-**provisional** `[decided — 2026-08-09, Pete]`; alignment with it is bidirectional and adjudicated
+**provisional** `[provisional — 2026-08-09, judgement call]`; alignment with it is bidirectional and adjudicated
 case by case. Nothing here re-opens its RATIFICATION block or the ADJ rulings.
 
 ---
@@ -41,7 +41,7 @@ there are no term flags to lie about. See ⟨5⟩ for where the axis genuinely m
 
 ### ⟨2⟩ The MCP tool is deferred, and not for schema-size reasons
 
-`[decided — 2026-08-12, Pete]` The MCP tool is taken up separately, in the context of MCP tooling
+`[provisional — 2026-08-12, judgement call]` The MCP tool is taken up separately, in the context of MCP tooling
 consolidation — the current tool set should be slimmed and generalized, and some tools removed.
 The reason is a real asymmetry between the surfaces: *a CLI can carry many top-level commands and
 flags at near-zero cost to a caller, where proliferating MCP tools eats the context window every
@@ -99,7 +99,7 @@ rather than weaker: C ships a CLI flag over a function already exercised in prod
 one nothing has run.
 
 **Capability's two halves are gated differently, and that was a ruling rather than an
-implementation detail.** `[decided — 2026-08-12, Pete]` `validate_stages` reads the stage graph, so
+implementation detail.** `[provisional — 2026-08-12, judgement call]` `validate_stages` reads the stage graph, so
 `validate` runs it only over a plan that topologically sorts. `validate_returns` compares each
 entry's `with` against a constant and never looks a stage up, so it runs **whatever the plan's
 shape** — gating it on the topology would take a refusal away from a cyclic plan that used to
@@ -168,7 +168,7 @@ the classification and the module for the code.
 | `:488` | `MissingIntention` | shape — hardcoded `matches!` on three act names, never consults `search_family()` |
 | `:272` | `MissingProvenance` | shape — `kind == Region && provenance.is_none()`, pure plan inspection |
 | `:311`, zero ids | `AnchorTakesOneId` | shape — **on direction of failure, not impossibility**: admitting it today silently WIDENS the question, which is a correctness problem; refusing it costs a stale client only an empty answer. See the straddle bullet below |
-| `:311`, more than one | `AnchorTakesOneId` | capability — **`[split — 2026-08-12, Pete]`**, see below |
+| `:311`, more than one | `AnchorTakesOneId` | capability — **`[provisional — 2026-08-12, judgement call]`**, see below |
 | `:497` | `UnknownFilterValue` | shape — `PropertySubject::Other(_)`, a closed vocabulary in the schema |
 | `:408` | `BoundTermNotApplicable`, negative value | shape — a count below zero is malformed whatever the act. Said as *"a row count"* until `[2026-08-12]`, which is false of `BoundTerm::Regions`, a funnel width (`scalars.rs:47`) |
 | `:238`, `:246` | `NotImplemented`, `NotSeparablyReachable` | capability |
@@ -185,7 +185,7 @@ variants:
 - **`BoundTermNotApplicable`** — its negative-value site is shape; its 32-bit-range and
   not-admitted sites are capability.
 - **`AnchorTakesOneId`** — its zero-id site is shape; its more-than-one site is capability.
-  `[split — 2026-08-12, Pete]` One site used to refuse `ids.len() != 1` and so conflated two
+  `[provisional — 2026-08-12, judgement call]` One site used to refuse `ids.len() != 1` and so conflated two
   claims. *Supplied several* is refused only because today's fragments take an
   `(anchor_table, anchor_id)` PAIR; an `anchor_ids uuid[]` retires it. That is structurally the
   same check as `f.doc_type.len() > 1`, which this table already classifies capability as *"a
@@ -236,7 +236,7 @@ difference is why both are tolerable:** `UnknownAct` refuses a plan the newer se
 **answered**; the zero anchor refuses one that would have returned **nothing**. Blast radius, not
 kind, is what separates them.
 
-`[decided — 2026-08-12, Pete]` `ActName` is open and grows with `search_family()`, so the direction that bites is
+`[provisional — 2026-08-12, judgement call]` `ActName` is open and grows with `search_family()`, so the direction that bites is
 GROWTH: when an eighth act is declared, a released CLI whose binary predates it deserializes that
 name into `ActName::Other` and `validate_shape` refuses `unknown_act` for a plan the current server
 would run — the exact failure this seam exists to prevent, inside the pass that is supposed to be
@@ -292,7 +292,7 @@ tests pin"* — and that reason is now spent.
 
 ### ⟨6⟩ `/api/search` accepts a resource bound, and the door-varying shortfall never happens
 
-`[decided — 2026-08-12, Pete]` Planning PR B surfaced what looked like a structural first: `/api/query`
+`[provisional — 2026-08-12, judgement call]` Planning PR B surfaced what looked like a structural first: `/api/query`
 would be the only door able to supply a resource-id set, so `bounds_unreachable: [IdKind::Resource]`
 would go empty at Api and Cli while staying true at Mcp, and `unified_doors` — which passes that axis
 once for all three doors — would need a per-door literal.
@@ -352,7 +352,7 @@ shortfall, and leaving B's `door_coverage` untouched.
 
 ### ⟨7⟩ The intention moves onto the stage — and it was never ruled onto the envelope
 
-`[decided — 2026-08-12, Pete]` A find act's question — its text, and now its vector — is a
+`[provisional — 2026-08-12, judgement call]` A find act's question — its text, and now its vector — is a
 **parameter of that act**, carried on `ActInvocation` beside `terms`, `resource_filter` and
 `properties`. `Composition.intention` goes away.
 
@@ -371,7 +371,7 @@ moment `/api/query` publishes.
 mirroring `SearchParams.embedding`: the CLI precomputes (it links `temper-ingest`, and
 `actions/search.rs:11-20` is the incumbent path), and the server embeds when none arrives — which is
 `Intention`'s own standing ruling, *"The CLI can embed; the ruby gem, the TypeScript package and MCP
-structurally cannot"* `[decided — 2026-08-08, Pete]`. The reason a vector was kept off the wire —
+structurally cannot"* `[provisional — 2026-08-08, judgement call]`. The reason a vector was kept off the wire —
 *"putting it in the envelope would be a wire contract nobody asked for"* — was about **response**
 bloat and does not apply: `CompositionTrace` is `{ stages }` (`trace.rs:93-98`) and never echoes an
 intention, so `Intention` is request-only. Pairing the two is what stops a vector and the text it was
@@ -389,13 +389,13 @@ everything.
 `3d73a70b` (2026-08-03, *"feat(query): the composition envelope and its per-stage trace"*), whose
 message argues it in the first person, and then hardened into the test name
 `the_intention_is_a_composition_level_field_not_a_per_stage_one`. The diagnostic is in the file:
-**every** other decision in `composition.rs` carries an attribution — `[decided — 2026-08-08, Pete]`
+**every** other decision in `composition.rs` carries an attribution — `[provisional — 2026-08-08, judgement call]`
 on `Intention`'s absent-embedding rule and on the `on_stage_refusal` tombstone, `ADJ-4
-[2026-08-10, Pete]` on the `meta_detail` and `bounds` removals — and this one carries none. It is a
+[provisional — 2026-08-10, judgement call]` on the `meta_detail` and `bounds` removals — and this one carries none. It is a
 commit narrative that read as a decision, the same shape ⟨6⟩ caught in this document's own
 *"cannot take a resource bound and will not"*. So ⟨7⟩ overturns nothing; it rules for the first time.
 
-**`Intention.embedded` is DELETED, not relocated.** `[decided — 2026-08-13, Pete]` `[was OPEN;
+**`Intention.embedded` is DELETED, not relocated.** `[provisional — 2026-08-13, judgement call]` `[was OPEN;
 ruled after the proposal to move it to `StageTrace` was put and declined]` The request `Intention`
 becomes `{ query, embedding }`.
 
@@ -424,7 +424,7 @@ This is the `ADJ-4` precedent applied unchanged: `meta_detail` and `bounds` were
 nobody could state"*. **If real provenance is ever wanted it returns as a model identity on
 `StageTrace`** — additive, and answering a question the boolean could not.
 
-**It lands as its own PR (A2) before B** `[decided — 2026-08-12, Pete]`, on the A1 precedent: a
+**It lands as its own PR (A2) before B** `[provisional — 2026-08-12, judgement call]`, on the A1 precedent: a
 contract reshape, independent of the door, with one story. B's story stays *"the door opens, end to
 end"*. `[The sequencing was first written into the cut table below as a consequence of precedent
 rather than as a question — flagged as an unratified agent decision in the same session and then
@@ -522,7 +522,7 @@ variant ever carry details, this becomes a `oneOf` — widen it then, deliberate
 **Consequence for the cut table: B touches `temper-services`**, which this section previously did
 not list.
 
-`[decided — 2026-08-13, Pete]` — **re-confirmed in prose after being flagged.** `[This carried
+`[provisional — 2026-08-13, judgement call]` — **re-confirmed in prose after being flagged.** `[This carried
 `[PROVISIONAL — 2026-08-12]` for a day: it was first chosen from a two-option prompt, and it changes
 `ErrorDetail`, which **every route in the project shares** — larger than the ratification it rested
 on. Recorded here as a worked instance of the re-confirmation habit, not because the outcome moved;
@@ -614,7 +614,7 @@ adjudicates case by case rather than conforming code to the yaml.
 
 ### D shipped `[2026-08-13]` — and three of the seven above were already stale
 
-`[decided — 2026-08-13, Pete]` The file is **re-scoped, not retired and not fixed in place.** Its
+`[provisional — 2026-08-13, judgement call]` The file is **re-scoped, not retired and not fixed in place.** Its
 premise had expired — B1 shipped the route, so `openapi.json` publishes `POST /api/query` and 34 of
 the 37 schemas the file hand-wrote. It now keeps the two things a generated document structurally
 cannot hold, and `$ref`s everything else:
@@ -630,7 +630,7 @@ keep.** The yaml was a *tighter* contract than the generated one on `StageName`'
 what stops a caller-chosen stage shadowing a compiler-internal relation), `CombineNode.inputs`'
 minimum of two and `OutcomeDeclaration.returns`' minimum of one — and simply *right* where
 `openapi.json` was wrong on `ResourceHit.located_at`'s required-ness and `NarrowedBy`'s nullability,
-both of which contradicted the `[ruled — 2026-08-10, Pete]` absent-versus-null rule the Rust
+both of which contradicted the `[provisional — 2026-08-10, judgement call]` absent-versus-null rule the Rust
 honours. Those moved into the Rust as utoipa annotations, so the published document can say what the
 yaml said, and the `$ref`s are lossless rather than merely shorter.
 

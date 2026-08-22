@@ -18,6 +18,7 @@
 	 * @see internal/superpowers/specs/2026-08-20-graph-successor-surface-design.md §4 (Beat C)
 	 */
 	import RegionState from '$lib/components/RegionState.svelte';
+	import GroupingStrips from './GroupingStrips.svelte';
 	import {
 		CONTEXT_HAS_NO_MAP_READOUT,
 		MAP_READOUT_UNAVAILABLE,
@@ -198,6 +199,16 @@
 						{/each}
 					</dl>
 
+					<GroupingStrips {regions} />
+
+					<!-- The table is kept, and moved BEHIND a disclosure rather than deleted.
+					     The strips answer "what is this telling me"; the figures answer "what exactly
+					     does this one measure", and a reader who wants the second should not have to
+					     ask anyone for it. `<details>` keeps every row in the document whether or not
+					     it is open, so nothing is withheld and nothing is lazily built — the
+					     no-top-N property is unchanged, and so is every assertion that counts rows. -->
+					<details class="figures">
+						<summary>Show the figures — every grouping, every quantity</summary>
 					<div class="table-scroll">
 						<table>
 							<thead>
@@ -224,6 +235,7 @@
 							</tbody>
 						</table>
 					</div>
+					</details>
 				{/if}
 			</section>
 		{:catch error}
@@ -304,6 +316,15 @@
 		color: #c3ccd9;
 		font-size: 13px;
 		line-height: 1.8;
+	}
+	.figures > summary {
+		cursor: pointer;
+		padding: 8px 0;
+		color: #8b94a5;
+		font-size: 12.5px;
+	}
+	.figures > summary:hover {
+		color: #c3ccd9;
 	}
 	.legend {
 		display: grid;

@@ -231,7 +231,7 @@ Then take it as a cutover (§5 below) and redeploy. The next run finds it alread
 **Three things worth knowing before you reach for a workaround:**
 
 - **Unrelated deploys are blocked too**, including hotfixes. That is the accepted cost of the
-  decision `[decided — 2026-07-31, Pete]`, not an oversight: the alternative is deploying a binary
+  decision `[provisional — 2026-07-31, judgement call]`, not an oversight: the alternative is deploying a binary
   that expects schema it does not have, which is the 2026-07-30 outage inverted. If the migration
   should not have merged, **revert it** — that is the fast path, not disabling the gate.
 - **There is no override flag, on purpose.** The operator gate *is* applying the migration. A switch

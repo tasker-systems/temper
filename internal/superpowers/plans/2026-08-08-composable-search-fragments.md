@@ -53,7 +53,7 @@ Verbatim from the spec and `CLAUDE.md`. Every task's requirements implicitly inc
 - **`search_exact` and `search_wide` signatures MUST NOT change.** `DROP`/`CREATE` is shape-breaking and needs an operator cutover; `CREATE OR REPLACE` at an unchanged signature is additive and auto-deploys. (spec §1)
 - **Every migration ends with `SELECT declare_migration(<version>, '<class>', '<description>');`** — see `migrations/20260807000010_single_team_closure_per_gate_call.sql` for the shape. Silence fails CI.
 - **After adding or editing a migration: `cargo clean -p temper-migrate`.** `sqlx::migrate!` embeds `migrations/` at compile time and cargo's tracking of that directory is unreliable.
-- **No part of this design may assume a gate cache.** `[decided — 2026-08-07, Pete]` (spec §8)
+- **No part of this design may assume a gate cache.** `[provisional — 2026-08-07, judgement call]` (spec §8)
 - **The visibility-hoist rule stays unadopted**, owned by `019fddc6`. This plan does not choose materialize-vs-inline; Task 6 measures one specific plan comparison and nothing more. (spec §9)
 - **Never scope a test with `--workspace`** — it is both slow and a known nextest hang. Always `-p <crate>`, and prefer `--test <target>`.
 - **CI owns the broad suites.** Run the tests you wrote, their neighbours, and anything regenerating a committed artifact. Do not run `cargo make test-all` / `test-e2e` locally.

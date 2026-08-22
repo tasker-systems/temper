@@ -34,21 +34,21 @@ steered three sessions of planning before anyone asked who took it.
 
 | # | Decision | Rests on | Status |
 |---|---|---|---|
-| 1 | `Intention` moves from `Composition` onto `ActInvocation` | Pete, from a three-option prompt carrying the wire JSON for each | **decided** `[2026-08-12, Pete]` |
-| 2 | `Intention` gains `embedding: Option<Vec<f32>>`; the server still embeds when none arrives | Pete, in his own words: *"the cli already has the ability to generate the vector embedding… but we cannot assume that many api callers will have this ability"* | **decided** `[2026-08-12, Pete]` |
-| 3 | This lands as its own PR, before B | Pete, after the sequencing was flagged as an unratified agent decision | **decided** `[2026-08-12, Pete]` |
+| 1 | `Intention` moves from `Composition` onto `ActInvocation` | Pete, from a three-option prompt carrying the wire JSON for each | **decided** `[provisional — 2026-08-12, judgement call]` |
+| 2 | `Intention` gains `embedding: Option<Vec<f32>>`; the server still embeds when none arrives | Pete, in his own words: *"the cli already has the ability to generate the vector embedding… but we cannot assume that many api callers will have this ability"* | **decided** `[provisional — 2026-08-12, judgement call]` |
+| 3 | This lands as its own PR, before B | Pete, after the sequencing was flagged as an unratified agent decision | **decided** `[provisional — 2026-08-12, judgement call]` |
 | 4 | `compile` loses its `embedding` parameter | Derived from #1 + #2 — two sources for one fact is the prev-else-context shape this contract refuses | **derived**, argued at Task 3 |
 | 5 | The envelope-level intention is **deleted, not demoted to a default** | Derived from #1 — a stage inheriting the envelope's intention is prev-else-context under another name | **derived**, argued in Declared risk |
-| 6 | The server embeds **before** `validate()`, behind a `validate_shape` gate — deserialize → shape → embed → validate → compile | Pete, in prose: *"if a composition is structurally invalid then we don't want to pay the onnx cost"* | **decided** `[2026-08-13, Pete]` |
-| 7 | `Intention.embedded` is **deleted**, not moved to `StageTrace` | Pete, in prose, after the `StageTrace` proposal was put and declined — the boolean's only live distinction is already covered by `EmbeddingUnavailable` | **decided** `[2026-08-13, Pete]` |
-| 8 | `validate_shape` is **not** reserved for PR C | The reservation was an unsigned line in a ⟨3⟩ code block that hardened into a hand-off constraint | **decided** `[2026-08-13, Pete]` |
-| 9 | The shape→embed→validate order lives in ONE function, `query_read::prepare` — not spelled at each call site | Pete, from a three-option prompt. Row 6 ruled the *order*; it did not say where the order lives, and Task 4 found there is no caller of `run_composition` to build it in — B's route does not exist | **decided** `[2026-08-13, Pete]` |
+| 6 | The server embeds **before** `validate()`, behind a `validate_shape` gate — deserialize → shape → embed → validate → compile | Pete, in prose: *"if a composition is structurally invalid then we don't want to pay the onnx cost"* | **decided** `[provisional — 2026-08-13, judgement call]` |
+| 7 | `Intention.embedded` is **deleted**, not moved to `StageTrace` | Pete, in prose, after the `StageTrace` proposal was put and declined — the boolean's only live distinction is already covered by `EmbeddingUnavailable` | **decided** `[provisional — 2026-08-13, judgement call]` |
+| 8 | `validate_shape` is **not** reserved for PR C | The reservation was an unsigned line in a ⟨3⟩ code block that hardened into a hand-off constraint | **decided** `[provisional — 2026-08-13, judgement call]` |
+| 9 | The shape→embed→validate order lives in ONE function, `query_read::prepare` — not spelled at each call site | Pete, from a three-option prompt. Row 6 ruled the *order*; it did not say where the order lives, and Task 4 found there is no caller of `run_composition` to build it in — B's route does not exist | **decided** `[provisional — 2026-08-13, judgement call]` |
 
 **Nothing in this plan is OPEN.** `[2026-08-13]` Rows 6 and 7 were open for a day and are now ruled;
 Tasks 4 and 5 are implementations rather than questions. If execution turns up a decision this table
 does not carry, that is the signal to **stop and ask** — not to record one and continue.
 
-**Efficiency is measured, not assumed** `[2026-08-13, Pete]`: row 6 is taken on the expectation that
+**Efficiency is measured, not assumed** `[provisional — 2026-08-13, judgement call]`: row 6 is taken on the expectation that
 invalid compositions rarely reach the embed step — the CLI catches them offline, MCP carries the
 schema, and serde rejects malformed bodies before anything runs. If that proves false the shape gate
 is where the counter goes. Do not pre-optimise it.
@@ -123,7 +123,7 @@ pub struct ActInvocation {
 /// of a precomputed vector would deny this surface to every non-CLI client. The server embeds when
 /// none arrives, exactly as `/api/search` already does, and only a FAILED embed refuses — as
 /// [`super::disposition::RefusalReason::EmbeddingUnavailable`], the one runtime refusal in the
-/// contract. `[decided — 2026-08-08, Pete]`
+/// contract. `[provisional — 2026-08-08, judgement call]`
 pub struct Intention {
     pub query: String,
     /// Whether an embedding was computed for it. Inspectable in the trace, which is what makes
@@ -289,7 +289,7 @@ async fn resolve_embedding(
 `wants_a_vector` is **already a per-node predicate** (`v.ordered().iter().any(wants_a_vector)`), so
 the per-stage shape is a `filter` where there is an `any` — the smaller half of this task.
 
-**DECIDED `[2026-08-13, Pete]` — the pipeline is shape-gated, and the vector is written into the
+**DECIDED `[provisional — 2026-08-13, judgement call]` — the pipeline is shape-gated, and the vector is written into the
 plan before it is validated:**
 
 ```
@@ -320,7 +320,7 @@ question — which would make paraphrase-stability unmeasurable in precisely the
 placement was trying to protect.
 
 **Tag: AMEND**, authorized by ⟨7⟩; the *"server embeds when none arrives"* rule it implements is
-CONFORM to `[decided — 2026-08-08, Pete]` (`composition.rs:20-25`).
+CONFORM to `[provisional — 2026-08-08, judgement call]` (`composition.rs:20-25`).
 
 **Steps:**
 
@@ -376,7 +376,7 @@ CONFORM to `[decided — 2026-08-08, Pete]` (`composition.rs:20-25`).
 - Removes: `Intention.embedded`.
 
 **Tag: AMEND**, authorized by spec ⟨7⟩ *"`Intention.embedded` is DELETED, not relocated"*
-`[decided — 2026-08-13, Pete]`. **`StageTrace` is NOT touched** — the proposal to move the field
+`[provisional — 2026-08-13, judgement call]`. **`StageTrace` is NOT touched** — the proposal to move the field
 there was put and declined.
 
 **The argument, carried so the field is not re-added by someone who spots its absence.** The
