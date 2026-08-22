@@ -56,18 +56,13 @@ Every task's requirements implicitly include these.
     are **warnings, not errors**. Do not fix them; do not count them as yours.
   - `biome.json` scopes to `src/**/*.ts`, so **`.svelte` files are neither linted nor formatted**
     by it, and no pre-commit hook covers them.
-- **No API call changes in this plan.** Phase 2 owns the reads.
-- Run tests from `packages/temper-ui`: `bunx vitest run --project unit <path>` /
-  `--project component <path>`. Do not run the workspace Rust suites; nothing here is Rust.
-- Verify with `bunx svelte-check --threshold error` and `bunx biome check src`.
-  **Baselines, corrected 2026-08-21 — the original text attributed the error to the wrong tool,
-  which would have masked a real one:**
-  - `svelte-check --threshold error` → **0 errors**. Any error is yours.
-  - `biome check src` → **1 pre-existing error** (`src/lib/server/proxy.test.ts:265`,
-    `noUnusedFunctionParameters`) and **~50 pre-existing `noNonNullAssertion` warnings** across
-    the test files. Do not fix either; do not count them as yours.
-  - `biome.json` scopes to `src/**/*.ts`, so **`.svelte` files are not linted or formatted** by it
-    and no pre-commit hook covers them.
+> `[deleted — 2026-08-21]` A second, **contradictory** copy of the constraints above stood here. It
+> said `biome check src` had *"1 pre-existing error at `proxy.test.ts:265`"*; the measured baseline
+> is that this is a **warning** and both tools are at **zero errors**. The correction was added
+> above without the wrong text being removed, so the plan asserted both readings at once — and an
+> implementer reading the stale copy would have treated a real error of their own as pre-existing.
+> That is the failure the baseline was written down to prevent, committed inside the document
+> carrying the warning. Deleted rather than annotated in place: two baselines is the defect.
 
 ---
 

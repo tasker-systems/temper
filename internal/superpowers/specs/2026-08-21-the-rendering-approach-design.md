@@ -139,9 +139,28 @@ client-side page state **gives it back**, and shallow routing additionally needs
 modifier-key bail-outs.
 
 Carried as [Opening a panel re-runs the whole page
-load](./01a0265c-7064-7371-993c-b907dd46f9f5), with one thing to settle first: **whether SvelteKit
-re-runs this load on a search-param change at all**, or whether fine-grained `url.searchParams`
-dependency tracking makes the question moot. Unverified, and it would change the answer completely.
+load](./01a0265c-7064-7371-993c-b907dd46f9f5).
+
+### `[verified — 2026-08-21]` The open question is answered, and it narrows the problem
+
+This section used to end *"whether SvelteKit re-runs this load on a search-param change at all, or
+whether fine-grained `url.searchParams` dependency tracking makes the question moot. Unverified, and
+it would change the answer completely."* It did change it.
+
+**SvelteKit tracks search params individually.** `load_data.js:64` and `client.js:877` both record
+each param a load reads — `uses.search_params.add(param)` — and `client.js:1010-1011` re-runs a load
+only when a param **it actually read** has changed. Fine-grained tracking exists and is on.
+
+So the re-run is not the framework being coarse. **This load re-runs on a panel open because it
+reads `sel`** — `parseGraphAddress` reads `url.searchParams` (`vault-url.ts:209`) and pulls the
+selection out of it — and reading it makes all nine reads depend on it. It reads `sel` for one
+reason: to resolve the selection server-side and start the rail's two reads.
+
+That reframes the deferral. The problem is not *"shallow routing is complex"*; it is **one query
+param, read in a load that needs it only for a panel**. Shallow routing is one way to stop reading
+it, and it is no longer obviously the cheapest — which is what the Phase 2 task should now weigh.
+`[Pete — 2026-08-21]` *"I don't understand why the graph needs to reload when a panel opens — if the
+code is coupled in that way, that's a bad design."*
 
 ---
 
