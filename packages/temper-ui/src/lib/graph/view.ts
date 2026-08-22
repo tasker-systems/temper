@@ -173,17 +173,49 @@ export interface AnalysisViewData {
 	alsoNamed: NamedPlace[];
 	/** Every place the reader could measure — the index, and the no-`in` entry. */
 	choices: NamedPlace[];
-	refusal: AnalysisRefusal | null;
-	regions: AnalysedRegion[];
-	/** False when the analytics-tier read did not answer: the five scalars are UNKNOWN, not absent. */
-	metricsAvailable: boolean;
 	/**
-	 * The map-level picture. Null for a context (which has no charter and no regulation set) and
-	 * for a map whose analytics read was declined — the page tells those two apart.
+	 * The refusal a reader is given **before any read runs**, so it renders as an answer rather than
+	 * as a delay — the same contract {@link GraphViewData.refusal} states, and for the same reason.
+	 *
+	 * Both members are decided from the address and from what the reader can see, above the read.
+	 * Unlike the graph door, this route has no read-derived verdict to split out: nothing here is a
+	 * conclusion about the measurements that came back.
 	 */
-	map: {
+	refusal: AnalysisRefusal | null;
+	/**
+	 * The place's groupings — **streamed**, so the declaration, the title and the also-named line
+	 * paint before anything is measured (spec §3.2, C1).
+	 *
+	 * Unconditionally a promise, on every branch including the index and the refusals — where it
+	 * resolves to an empty list because no read ran. An outer `null` would add a state to a field
+	 * that already has three (arriving, measured, failed) and nothing would be able to say which of
+	 * them it meant.
+	 */
+	regions: Promise<AnalysedRegion[]>;
+	/**
+	 * False when the analytics-tier read did not answer: the five scalars are UNKNOWN, not absent.
+	 *
+	 * Streamed, and derived from the **same read** as {@link AnalysisViewData.regions} — the table
+	 * and the caption above it are two views of one read and cannot disagree about whether it
+	 * answered. `true` on the branches that read nothing, which is the honest reading of *no metrics
+	 * read was declined*.
+	 */
+	metricsAvailable: Promise<boolean>;
+	/**
+	 * The map-level picture — streamed, from the same read as the two above.
+	 *
+	 * The inner `null` keeps both meanings it has always carried, and the page tells them apart by
+	 * `place.kind`: a **context**, which genuinely has neither a charter nor a regulation set, and a
+	 * **map whose analytics read was declined** by `readAnchorAnalysis`'s own `.catch(() => null)`.
+	 *
+	 * `[2026-08-21]` Streaming adds the third state that was missing. *The read failed* used to be
+	 * indistinguishable from the second — the whole load rejected, or would have had to degrade —
+	 * and it is now a **rejection**, rendered as a named failure. That is exactly the conflation
+	 * spec §5.1 catalogued: a failed read must never be spelled as an absence.
+	 */
+	map: Promise<{
 		telos: { id: string; title: string | null };
 		staleness: CogmapStaleness;
 		regulation: CogmapRegulationRow[];
-	} | null;
+	} | null>;
 }

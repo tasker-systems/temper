@@ -12,7 +12,7 @@ import {
 import { buildReadout, disclosedRegionIds } from '$lib/graph/readout';
 import type { GraphRefusal, GraphViewData } from '$lib/graph/view';
 import { ApiError } from '$lib/server/api';
-import { bounded } from '$lib/server/bounded';
+import { bounded, derive } from '$lib/server/bounded';
 import {
 	readAnchorRegions,
 	readAnchorSources,
@@ -61,24 +61,6 @@ import type { PageServerLoad } from './$types';
  * branch would have closed the instance and left the next branch free to forget it again.
  */
 type GraphRead = Omit<GraphViewData, 'owner' | 'selected' | 'selectedExcerpt' | 'selectedTrail'>;
-
-/**
- * A promise derived from another, with spec §5.3's **other** catch attached at creation.
- *
- * Every `.then()` in this file produces a NEW promise, and `bounded`'s own guard sits on the promise
- * `bounded` handed out — one link upstream of these. `[found by Task 4 — 2026-08-21]` that is
- * exactly the trap: a catch on the input does not give you one on the output, and the output is what
- * a load hands to `{#await}`, which on the server stays unsubscribed until SvelteKit serializes it.
- * So a promise that does not itself come through `bounded` still needs its own.
- *
- * `.catch()` returns a new promise and consumes nothing, so every consumer still observes the
- * rejection; this only marks it handled.
- */
-function derive<T, U>(p: Promise<T>, f: (v: T) => U | Promise<U>): Promise<U> {
-	const next = p.then(f);
-	next.catch(() => {});
-	return next;
-}
 
 /**
  * A `sel` that names something this answer does not contain — the one branch on which a rail read is

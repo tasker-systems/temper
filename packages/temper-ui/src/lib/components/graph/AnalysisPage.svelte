@@ -17,6 +17,7 @@
 	 *
 	 * @see internal/superpowers/specs/2026-08-20-graph-successor-surface-design.md §4 (Beat C)
 	 */
+	import RegionState from '$lib/components/RegionState.svelte';
 	import {
 		CONTEXT_HAS_NO_MAP_READOUT,
 		MAP_READOUT_UNAVAILABLE,
@@ -35,8 +36,22 @@
 
 	let { data }: { data: AnalysisViewData } = $props();
 
-	const reports = $derived(reportMetrics(data.regions));
-	const columns = $derived(reports.filter((r) => r.asColumn));
+	/**
+	 * **One read, one arrival.** The map-level section and the groupings section are two views of a
+	 * single streamed read, so they are awaited together — two arriving markers for one read would
+	 * tell the reader those regions could disagree about whether it answered, and they cannot.
+	 *
+	 * The `.catch()` is spec §5.3's *other* catch, at the one place this page creates a promise that
+	 * did not come through `bounded`: `Promise.all` is a new promise, and during SSR the `{#await}`
+	 * below renders its pending branch without subscribing to it. `.catch()` consumes nothing, so
+	 * `{:catch}` still sees the failure.
+	 */
+	const measurements = $derived.by(() => {
+		const all = Promise.all([data.regions, data.metricsAvailable, data.map]);
+		all.catch(() => {});
+		return all;
+	});
+
 	const placeHref = $derived(
 		data.place
 			? graphHref(data.owner, { anchors: [{ kind: data.place.kind, ref: data.place.ref }] })
@@ -85,7 +100,10 @@
 			{/each}
 		</ul>
 	{:else}
-		<h1>{data.place.title}</h1>
+		<!-- Named once, where `data.place` is narrowed. The awaited block below reads `place` rather
+		     than re-narrowing inside a branch that has nothing to do with the read. -->
+		{@const place = data.place}
+		<h1>{place.title}</h1>
 
 		{#if data.alsoNamed.length > 0}
 			<p class="also" data-testid="also-named">
@@ -96,89 +114,113 @@
 			</p>
 		{/if}
 
-		<section class="map-level" aria-labelledby="map-level-h">
-			<h2 id="map-level-h">What this place says it is for</h2>
-			{#if data.map}
-				<p>
-					Its charter is <a href={resourceHref({ id: data.map.telos.id })}
-						>{data.map.telos.title ?? 'the charter resource'}</a
-					>.
-				</p>
-				<p data-testid="staleness">{describeStaleness(data.map.staleness)}</p>
-				<p data-testid="regulation">{describeRegulation(data.map.regulation.length)}</p>
-				{#if data.map.regulation.length > 0}
-					<ul class="regulation">
-						{#each data.map.regulation as r (r.resource_id)}
-							<li><a href={resourceHref({ id: r.resource_id })}>{r.title}</a></li>
-						{/each}
-					</ul>
+		<!--
+			Everything above this line — the declaration, the title and the also-named line — renders
+			OUTSIDE every await. That is C1 for this route, and it is structural rather than a promise
+			anyone has to keep: none of it reads a measurement.
+
+			ONE await for both sections. They are two views of a single read, so they arrive together.
+		-->
+		{#await measurements}
+			<div class="region-slot">
+				<RegionState state="arriving" label="measurements" />
+			</div>
+		{:then [regions, metricsAvailable, map]}
+			{@const reports = reportMetrics(regions)}
+			{@const columns = reports.filter((r) => r.asColumn)}
+			<section class="map-level" aria-labelledby="map-level-h">
+				<h2 id="map-level-h">What this place says it is for</h2>
+				{#if map}
+					<p>
+						Its charter is <a href={resourceHref({ id: map.telos.id })}
+							>{map.telos.title ?? 'the charter resource'}</a
+						>.
+					</p>
+					<p data-testid="staleness">{describeStaleness(map.staleness)}</p>
+					<p data-testid="regulation">{describeRegulation(map.regulation.length)}</p>
+					{#if map.regulation.length > 0}
+						<ul class="regulation">
+							{#each map.regulation as r (r.resource_id)}
+								<li><a href={resourceHref({ id: r.resource_id })}>{r.title}</a></li>
+							{/each}
+						</ul>
+					{/if}
+				{:else if place.kind === 'context'}
+					<!-- Declared, not fabricated. D6 is unshipped and a context has no charter and no
+					     regulation set even in principle; inventing a peer field is what the task
+					     explicitly forbids. -->
+					<p class="declared-absent" data-testid="map-absent">{CONTEXT_HAS_NO_MAP_READOUT}</p>
+				{:else}
+					<!-- A map whose analytics read was DECLINED — the read answered, and this is what it
+					     said. A read that FAILED is the third state and renders in `{:catch}` below. -->
+					<p class="declared-absent" data-testid="map-absent">{MAP_READOUT_UNAVAILABLE}</p>
 				{/if}
-			{:else if data.place.kind === 'context'}
-				<!-- Declared, not fabricated. D6 is unshipped and a context has no charter and no
-				     regulation set even in principle; inventing a peer field is what the task
-				     explicitly forbids. -->
-				<p class="declared-absent" data-testid="map-absent">{CONTEXT_HAS_NO_MAP_READOUT}</p>
-			{:else}
-				<p class="declared-absent" data-testid="map-absent">{MAP_READOUT_UNAVAILABLE}</p>
-			{/if}
-		</section>
+			</section>
 
-		<section class="groupings" aria-labelledby="groupings-h">
-			<h2 id="groupings-h">How its work has been grouped</h2>
-			<p class="lead" data-testid="grouping-count">{describeGroupingCount(data.regions.length)}</p>
+			<section class="groupings" aria-labelledby="groupings-h">
+				<h2 id="groupings-h">How its work has been grouped</h2>
+				<p class="lead" data-testid="grouping-count">{describeGroupingCount(regions.length)}</p>
 
-			{#if !data.metricsAvailable}
-				<p class="unavailable" role="status" data-testid="metrics-unavailable">
-					{METRICS_UNAVAILABLE}
-				</p>
-			{/if}
+				{#if !metricsAvailable}
+					<p class="unavailable" role="status" data-testid="metrics-unavailable">
+						{METRICS_UNAVAILABLE}
+					</p>
+				{/if}
 
-			{#if data.regions.length > 0}
-				<dl class="legend" data-testid="metric-legend">
-					{#each reports as r (r.spec.key)}
-						<div class="metric" class:collapsed={!r.asColumn}>
-							<dt>{r.spec.label} <code>{r.spec.field}</code></dt>
-							<dd class="gloss">{r.spec.gloss}</dd>
-							{#if r.distribution.constant}
-								<dd class="finding">{describeConstant(r.distribution)}</dd>
-							{:else}
-								<dd class="range">{describeRange(r.distribution)}</dd>
-							{/if}
-							{#if describeNulls(r.distribution)}
-								<dd class="nulls">{describeNulls(r.distribution)}</dd>
-							{/if}
-						</div>
-					{/each}
-				</dl>
+				{#if regions.length > 0}
+					<dl class="legend" data-testid="metric-legend">
+						{#each reports as r (r.spec.key)}
+							<div class="metric" class:collapsed={!r.asColumn}>
+								<dt>{r.spec.label} <code>{r.spec.field}</code></dt>
+								<dd class="gloss">{r.spec.gloss}</dd>
+								{#if r.distribution.constant}
+									<dd class="finding">{describeConstant(r.distribution)}</dd>
+								{:else}
+									<dd class="range">{describeRange(r.distribution)}</dd>
+								{/if}
+								{#if describeNulls(r.distribution)}
+									<dd class="nulls">{describeNulls(r.distribution)}</dd>
+								{/if}
+							</div>
+						{/each}
+					</dl>
 
-				<div class="table-scroll">
-					<table>
-						<thead>
-							<tr>
-								<th scope="col">Grouping</th>
-								{#each columns as c (c.spec.key)}
-									<th scope="col">{c.spec.label}</th>
-								{/each}
-							</tr>
-						</thead>
-						<tbody>
-							{#each data.regions as r (`${r.regionId}|${r.lensId}`)}
+					<div class="table-scroll">
+						<table>
+							<thead>
 								<tr>
-									<th scope="row" class:unnamed={r.label === null}
-										>{r.label ?? 'An unnamed grouping'}</th
-									>
+									<th scope="col">Grouping</th>
 									{#each columns as c (c.spec.key)}
-										<td class:absent={r.values[c.spec.key] === null}
-											>{formatValue(r.values[c.spec.key])}</td
-										>
+										<th scope="col">{c.spec.label}</th>
 									{/each}
 								</tr>
-							{/each}
-						</tbody>
-					</table>
-				</div>
-			{/if}
-		</section>
+							</thead>
+							<tbody>
+								{#each regions as r (`${r.regionId}|${r.lensId}`)}
+									<tr>
+										<th scope="row" class:unnamed={r.label === null}
+											>{r.label ?? 'An unnamed grouping'}</th
+										>
+										{#each columns as c (c.spec.key)}
+											<td class:absent={r.values[c.spec.key] === null}
+												>{formatValue(r.values[c.spec.key])}</td
+											>
+										{/each}
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				{/if}
+			</section>
+		{:catch}
+			<!-- The third state, and never the second one held open: nothing here says "arriving". The
+			     measurements are not late, they were not read — and this page keeps saying which place
+			     it was measuring, because that never depended on the read. -->
+			<div class="region-slot">
+				<RegionState state="failed" label="measurements" />
+			</div>
+		{/await}
 	{/if}
 </div>
 
@@ -228,6 +270,12 @@
 		margin: 0;
 		color: #d9b26a;
 		font-size: 13px;
+	}
+	/* The one region marker this page has, given the section rule above it so an arrival sits where
+	   the sections it stands in for will sit. */
+	.region-slot {
+		padding-top: 12px;
+		border-top: 1px solid #2b3140;
 	}
 	section {
 		display: flex;

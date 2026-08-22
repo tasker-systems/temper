@@ -85,3 +85,25 @@ export function bounded<T>(
 
 	return raced;
 }
+
+/**
+ * A promise derived from another, with spec §5.3's **other** catch attached at creation.
+ *
+ * Every `.then()` produces a NEW promise, and {@link bounded}'s own guard sits on the promise
+ * `bounded` handed out — one link upstream of this one. `[found by Task 4 — 2026-08-21]` that is
+ * exactly the trap: a catch on the input does not give you one on the output, and the output is what
+ * a load hands to `{#await}`, which on the server stays unsubscribed until SvelteKit serializes it.
+ * So a promise that does not itself come through `bounded` still needs its own.
+ *
+ * `.catch()` returns a new promise and consumes nothing, so every consumer still observes the
+ * rejection; this only marks it handled.
+ *
+ * It lives here beside `bounded` rather than in a load, for the reason that function's own note
+ * gives: **a rule every caller must remember is a rule the next caller forgets**, and two copies of
+ * a safety invariant drift. Both streaming loads derive through this one.
+ */
+export function derive<T, U>(p: Promise<T>, f: (v: T) => U | Promise<U>): Promise<U> {
+	const next = p.then(f);
+	next.catch(() => {});
+	return next;
+}
