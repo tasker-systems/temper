@@ -46,7 +46,8 @@ impl McpConfig {
             toml::from_str(MCP_SERVER_TOML).map_err(McpConfigError::Toml)?;
 
         Ok(Self {
-            mcp_base_url: env::var("MCP_BASE_URL").map_err(McpConfigError::Env)?,
+            mcp_base_url: env::var("MCP_BASE_URL")
+                .map_err(|e| McpConfigError::Env("MCP_BASE_URL", e))?,
             mcp_client_id: env::var("MCP_CLIENT_ID").ok(),
             oauth: server_file.oauth,
         })
@@ -56,14 +57,17 @@ impl McpConfig {
 /// Errors that can occur when loading MCP configuration.
 #[derive(Debug)]
 pub enum McpConfigError {
-    Env(env::VarError),
+    /// The variable's name, then what went wrong reading it. The name is carried because the
+    /// entrypoint aborts on `Display` — and "environment variable not found" with no name is a
+    /// remedy an operator cannot act on.
+    Env(&'static str, env::VarError),
     Toml(toml::de::Error),
 }
 
 impl std::fmt::Display for McpConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Env(e) => write!(f, "missing environment variable: {e}"),
+            Self::Env(name, e) => write!(f, "environment variable {name}: {e}"),
             Self::Toml(e) => write!(f, "invalid mcp-server.toml: {e}"),
         }
     }
