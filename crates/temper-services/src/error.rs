@@ -69,9 +69,9 @@ pub struct ErrorBody {
 }
 
 impl ErrorBody {
-    /// Build a typed error body with no `details` payload — the shape used by
-    /// both `ApiError::into_response` and the router fallback handler (the latter
-    /// lives in temper-api, so this constructor is `pub` across the crate boundary).
+    /// Build a typed error body with no `details` payload — the shape used by both
+    /// `ApiError::into_response` and [`crate::transport::fallback_handler`], so an unmatched route
+    /// is not the one error a client has to special-case.
     pub fn new(code: &'static str, message: String) -> Self {
         Self {
             error: ErrorDetail {

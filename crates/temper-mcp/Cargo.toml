@@ -31,3 +31,5 @@ uuid = { version = "1", features = ["v7", "serde"] }
 [dev-dependencies]
 # `ServiceExt::oneshot` — drives a request through the assembled router without binding a port.
 tower = { version = "0.5", features = ["util"] }
+# Builds the gzip body that witnesses the request-decompression layer.
+flate2 = "1"

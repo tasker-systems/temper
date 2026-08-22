@@ -20,61 +20,19 @@
 
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
-use sqlx::postgres::PgPoolOptions;
-use temper_mcp::config::{McpConfig, OAuthStaticConfig};
-use temper_services::{
-    auth_config::{AuthConfig, AuthMode},
-    config::ApiConfig,
-    state::{AppState, JwksKeyStore},
-};
 use tower::ServiceExt;
 
+mod common;
+
 const PROBE_ORIGIN: &str = "https://app.example.com";
-
-/// An `AppState` carrying `cors_origins` and nothing else that matters here.
-fn state_with_cors_origins(cors_origins: Vec<String>) -> AppState {
-    let pool = PgPoolOptions::new()
-        .connect_lazy("postgres://__cors_witness_no_db__")
-        .expect("lazy pool constructs without a server");
-
-    let config = ApiConfig {
-        database_url: "unused".to_string(),
-        auth: AuthConfig {
-            issuer: "unused".to_string(),
-            jwks_url: "unused".to_string(),
-            audience: "unused".to_string(),
-            mode: AuthMode::ExternalIdp,
-        },
-        auth_provider_name: "unused".to_string(),
-        cors_origins,
-        port: 0,
-        enable_swagger: false,
-        internal_reconcile_secret: None,
-        embed_dispatch_secret: None,
-        vercel_connect: None,
-        slack_link: None,
-        slack_mint_secret: None,
-    };
-
-    let jwks = JwksKeyStore::new("https://example.invalid/.well-known/jwks.json".to_string());
-    AppState::new(pool, jwks, config)
-}
-
-fn mcp_config() -> McpConfig {
-    McpConfig {
-        mcp_base_url: "https://temper.invalid".to_string(),
-        mcp_client_id: None,
-        oauth: OAuthStaticConfig {
-            redirect_uris: vec![],
-            allow_localhost: false,
-        },
-    }
-}
 
 /// Send a cross-origin GET to the router's public health route and return the
 /// `access-control-allow-origin` it answered with, if any.
 async fn allow_origin_for(cors_origins: Vec<String>) -> Option<String> {
-    let router = temper_mcp::build_router(state_with_cors_origins(cors_origins), mcp_config());
+    let router = temper_mcp::build_router(
+        common::state_with_cors_origins(cors_origins),
+        common::mcp_config(),
+    );
 
     let response = router
         .oneshot(

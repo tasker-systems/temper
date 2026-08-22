@@ -27,9 +27,10 @@ sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "chron
 # executor (`spawn_blocking`) under a wall-clock budget (`timeout`) so a cold-instance model load
 # can never hold the serverless request past its deadline — issue #427.
 tokio = { version = "1", features = ["sync", "rt", "time"] }
-# `cors` only — this crate owns the shared cross-origin policy (`cors::cors_layer`) so both
-# surfaces derive it from one configured value instead of hand-assembling their own.
-tower-http = { version = "0.6", features = ["cors"] }
+# This crate owns the transport concerns both surfaces share — the cross-origin policy
+# (`cors::cors_layer`) and the base layers below each surface's root span
+# (`transport::apply_base_layers`) — so neither surface can be assembled without them.
+tower-http = { version = "0.6", features = ["cors", "decompression-gzip"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 jsonwebtoken = "9"

@@ -83,28 +83,34 @@ pub fn build_router(api_state: AppState, mcp_config: McpConfig) -> Router {
     // ── Health (public) ────────────────────────────────────────────────
     let health = Router::new().route("/mcp/health", get(|| async { "ok" }));
 
-    Router::new()
-        .merge(discovery_routes)
-        .merge(registration_routes)
-        .merge(health)
-        .merge(mcp_routes)
-        // HTTP root span, mirroring temper-api's `apply_transport_layers`. Until this landed, MCP
-        // requests had NO root span at all — every MCP log line was parentless, on the surface that
-        // carries the most automated traffic. The span name is `mcp_request`, deliberately NOT the
-        // `http_request` that temper-api's root span and temper-client's request span both already
-        // use: three different things under one name is unreadable once they are exported together.
-        //
-        // `profile_id` is declared Empty and recorded in `service.rs`, not in `require_mcp_auth` —
-        // that middleware only validates the JWT, and a validated token is not yet a profile. Same
-        // deferred-field pattern temper-api uses in its auth middleware, one seam further in.
-        .layer(axum::middleware::from_fn(root_span))
-        // The same cross-origin policy the HTTP surfaces apply, from the same configured value.
-        // This was `CorsLayer::permissive()` — a literal, so `CORS_ORIGINS` was parsed into
-        // `ApiConfig`, carried here inside `AppState`, and then dropped at the one layer that
-        // acts. Tightening the allowlist changed nothing on the agent-facing door and nothing
-        // reported that. `temper_services::cors` now owns the policy so there is one place it
-        // can be read from and no second stack to forget.
-        .layer(temper_services::cors::cors_layer(&cors_config))
+    // The layers below the root span, from the same place temper-api takes them: the structured
+    // 404 and request decompression. Applied to the merged router so the fallback outranks the one
+    // `mcp_routes` inherits — without it an unmatched path was answered by the auth middleware
+    // wrapping that router's fallback, so a typo'd URL came back `401`, not a 404 of any shape.
+    temper_services::transport::apply_base_layers(
+        Router::new()
+            .merge(discovery_routes)
+            .merge(registration_routes)
+            .merge(health)
+            .merge(mcp_routes),
+    )
+    // HTTP root span, mirroring temper-api's `apply_transport_layers`. Until this landed, MCP
+    // requests had NO root span at all — every MCP log line was parentless, on the surface that
+    // carries the most automated traffic. The span name is `mcp_request`, deliberately NOT the
+    // `http_request` that temper-api's root span and temper-client's request span both already
+    // use: three different things under one name is unreadable once they are exported together.
+    //
+    // `profile_id` is declared Empty and recorded in `service.rs`, not in `require_mcp_auth` —
+    // that middleware only validates the JWT, and a validated token is not yet a profile. Same
+    // deferred-field pattern temper-api uses in its auth middleware, one seam further in.
+    .layer(axum::middleware::from_fn(root_span))
+    // The same cross-origin policy the HTTP surfaces apply, from the same configured value.
+    // This was `CorsLayer::permissive()` — a literal, so `CORS_ORIGINS` was parsed into
+    // `ApiConfig`, carried here inside `AppState`, and then dropped at the one layer that
+    // acts. Tightening the allowlist changed nothing on the agent-facing door and nothing
+    // reported that. `temper_services::cors` now owns the policy so there is one place it
+    // can be read from and no second stack to forget.
+    .layer(temper_services::cors::cors_layer(&cors_config))
 }
 
 /// The `mcp_request` root span, and the end of its life.
