@@ -1000,23 +1000,36 @@ pub async fn fire_with(
             .fetch_optional(&mut *conn)
             .await?;
 
-            let shape_state = match &shape {
-                None => payloads::ShapeState::NeverDeclared,
+            // Validate once, reuse the errors for both the verdict decision and the detail
+            // record. Compiling a JSON Schema is the expensive part — doing it twice per commit
+            // is wasteful and was flagged in review. The errors are collected into owned strings
+            // because `ValidationError` borrows from the validator (which is dropped here).
+            let (shape_state, validation_error_details): (
+                payloads::ShapeState,
+                Option<Vec<(String, String)>>,
+            ) = match &shape {
+                None => (payloads::ShapeState::NeverDeclared, None),
                 Some(row) => {
                     let schema = row
                         .schema
                         .as_ref()
                         .context("shape in force returned null schema")?;
-                    let enforcement = row.enforcement.as_deref().unwrap_or("advisory");
+                    let enforcement = row
+                        .enforcement
+                        .as_deref()
+                        .context("shape in force returned null enforcement despite CHECK")?;
                     let validator = jsonschema::validator_for(schema)
                         .map_err(|e| anyhow::anyhow!("failed to compile shape schema: {e}"))?;
-                    let errors: Vec<_> = validator.iter_errors(content).collect();
+                    let errors: Vec<(String, String)> = validator
+                        .iter_errors(content)
+                        .map(|e| (e.instance_path().to_string(), e.to_string()))
+                        .collect();
                     if errors.is_empty() {
-                        payloads::ShapeState::DeclaredSatisfied
+                        (payloads::ShapeState::DeclaredSatisfied, None)
                     } else if enforcement == "enforcing" {
                         let detail = errors
                             .iter()
-                            .map(|e| format!("{}: {}", e.instance_path(), e))
+                            .map(|(path, msg)| format!("{path}: {msg}"))
                             .collect::<Vec<_>>()
                             .join("; ");
                         anyhow::bail!(
@@ -1024,7 +1037,7 @@ pub async fn fire_with(
                              shape in force for this family — {detail}"
                         );
                     } else {
-                        payloads::ShapeState::DeclaredNotSatisfied
+                        (payloads::ShapeState::DeclaredNotSatisfied, Some(errors))
                     }
                 }
             };
@@ -1087,30 +1100,21 @@ pub async fn fire_with(
                 let detail = if satisfied {
                     None
                 } else {
-                    // Record what failed so the read side can surface it without re-validating.
-                    let schema = row
-                        .schema
-                        .as_ref()
-                        .context("shape in force returned null schema")?;
-                    let validator = jsonschema::validator_for(schema).map_err(|e| {
-                        anyhow::anyhow!("failed to compile shape schema for detail: {e}")
-                    })?;
-                    let errors: Vec<_> = validator.iter_errors(content).collect();
-                    if errors.is_empty() {
-                        None
-                    } else {
-                        Some(serde_json::Value::Array(
+                    // Reuse the errors collected during the verdict decision above —
+                    // recompiling the schema a second time was wasteful and flagged in review.
+                    validation_error_details.as_ref().map(|errors| {
+                        serde_json::Value::Array(
                             errors
                                 .iter()
-                                .map(|e| {
+                                .map(|(path, msg)| {
                                     serde_json::json!({
-                                        "path": e.instance_path().to_string(),
-                                        "message": e.to_string(),
+                                        "path": path,
+                                        "message": msg,
                                     })
                                 })
                                 .collect(),
-                        ))
-                    }
+                        )
+                    })
                 };
                 sqlx::query!(
                     "SELECT data_artifact_verdict_upsert($1,$2,$3,$4,$5,$6)",

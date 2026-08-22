@@ -726,7 +726,7 @@ pub struct ShapeDeclared {
     /// The chain depth of the assert/fold lineage — 1 for the first declaration, N for the Nth
     /// amendment. A verdict recorded against a folded version stops matching, and the artifact
     /// reads as unchecked until reconciled.
-    pub shape_version: i64,
+    pub shape_version: i32,
 }
 
 /// Set a **single-valued** property (WS6 4c): the projection folds prior active rows for

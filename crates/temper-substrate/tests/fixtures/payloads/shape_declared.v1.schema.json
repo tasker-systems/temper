@@ -30,7 +30,7 @@
     "shape_version": {
       "description": "The chain depth of the assert/fold lineage — 1 for the first declaration, N for the Nth\namendment. A verdict recorded against a folded version stops matching, and the artifact\nreads as unchecked until reconciled.",
       "type": "integer",
-      "format": "int64"
+      "format": "int32"
     }
   },
   "required": [
