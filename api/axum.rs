@@ -67,7 +67,10 @@ async fn main() -> Result<(), vercel_runtime::Error> {
 
     let service = ServiceBuilder::new().layer(VercelLayer::new()).service(app);
 
-    tracing::info!("temper-cloud: Vercel function initialized");
+    // Named for the service this binary claims above, not for the Vercel project the three
+    // executables share — a log line and a span from one invocation identifying their emitter
+    // differently is what makes the waterfall unreadable.
+    tracing::info!("temper-api: Vercel function initialized");
 
     vercel_runtime::run(service).await
 }

@@ -43,6 +43,7 @@ This file is the router. Read a supporting file when the work calls for it, not 
 | `subagent-guidance.md` | Before dispatching any subagent |
 | `plan-verification.md` | Before acting on a written plan's claims about code |
 | `implementation-grounding.md` | Writing a plan, or writing code from one — including yourself |
+| `data-artifacts.md` | **Before storing structured data** — when to commit a data artifact vs. writing into a resource body, and the selection vocabulary |
 | `outcome-registers.md` | **Authoring or amending a goal**, or deciding whether a criterion belongs on one |
 
 > **Read these as principles, not checklists.** Each carries a worked example from the incident that
