@@ -25,16 +25,16 @@ search_domain:
 - all files (path citations)
 - 'excluded: target, node_modules, .git, .venv, __pycache__, dist, public'
 totals:
-  goals_in_context: 64
-  goals_projected: 31
+  goals_in_context: 66
+  goals_projected: 33
   goals_projected_note: active goals only; non-active goals are not read
-  registers_with_no_clauses_read: 12
-  registers_with_clauses_and_a_witness_table: 16
-  registers_with_clauses_but_no_witness_table: 4
+  registers_with_no_clauses_read: 13
+  registers_with_clauses_and_a_witness_table: 17
+  registers_with_clauses_but_no_witness_table: 5
   witness_table_note: 'absence of a witness table is not a defect: a register whose mechanism is unbuilt
     has no witnesses to name, and giving it an empty table would read as ''checked, found nothing'' rather
     than ''nothing to check yet'''
-  clauses: 154
+  clauses: 161
   clauses_withdrawn: 2
   witness_citations: 129
   witness_citations_unresolved: 8
@@ -201,7 +201,7 @@ registers:
     unreadable: no clause declarations parsed
   clauses: []
   advancing:
-    total: 11
+    total: 17
     citing_nothing:
     - 019f5e15-0732-7a12-b734-04220f150043
     - 019f6030-0c37-7540-9149-c8a84c7ab5eb
@@ -214,9 +214,17 @@ registers:
     - 01a0165f-ecbf-77b1-aec4-85310b6d121c
     - 01a017ad-dac6-7d73-baad-b5790a789ee5
     - 01a019f2-85af-76d0-a1a8-7c5c78c11d5d
+    - 01a01bb8-e725-7ee1-b6f7-e89adc5a9cec
+    - 01a01c2e-044f-73a1-8cb5-4dba7d2793c4
+    - 01a01c76-f8d3-7d80-a232-0b09d644a7dd
+    - 01a01c77-5579-78c0-b598-2a2922a61923
+    - 01a01c8e-9dc7-7c01-9760-88f259eee532
+    - 01a01ce5-ad36-7a91-b393-96a60a028d10
   coverage_rows_naming_no_clause:
   - C1
   - C10
+  - C11 · `routing-is-readable-by-the-routed-to
+  - C12 · `a-silent-declaration-is-distinguishable-from-a-quiet-source
   - C2
   - C3
   - C4
@@ -438,7 +446,7 @@ registers:
   - name: no-surface-reports-a-count-its-filter-did-not-produce
     interrogatable: true
   advancing:
-    total: 8
+    total: 9
     citing_nothing:
     - 019f9bbd-6b4d-78e1-a117-36e23b905d2b
     - 019fa607-25f3-7bd0-88b4-ab8b7844225f
@@ -447,6 +455,7 @@ registers:
     - 019fae2c-9fb9-7eb0-b630-252732720e26
     - 019faef9-48f7-75b2-a599-9c32ac0562e1
     - 019faf20-7840-7ac0-a6a7-34d1ba160b41
+    - 01a026e6-873f-7381-81fe-1f11f083ee00
 - goal_id: 019fa618-ce41-7762-97dd-179132503ea2
   goal_title: What a door offers, and who may use it, is read — not discovered
   context: '@j-cole-taylor/temper'
@@ -497,11 +506,16 @@ registers:
   - name: no-statement-of-remaining-work-outlives-the-work
     interrogatable: true
   advancing:
-    total: 3
+    total: 8
     citing_nothing:
     - 019f93fd-308a-7192-b960-e22c49f713fa
     - 019f97a8-cbdf-72b0-b4f2-f1996288a2f5
     - 019f9a95-ae41-79f2-98e2-9af243752301
+    - 01a01b37-8caa-7a12-8342-ec48849009f7
+    - 01a01bb9-931c-7a11-8c8b-2b54813a9dbc
+    - 01a01c48-bb96-7343-a56b-cf9517a67b05
+    - 01a01ca8-2974-7c63-bd16-3ad116ec2c93
+    - 01a01ce4-ffed-78c3-8376-afda378b6ede
 - goal_id: 019fa844-2d80-7291-8416-35656104a8e3
   goal_title: The registry and the repo disagree — prod's event-type schemas are not what we ship
   context: '@j-cole-taylor/temper'
@@ -822,7 +836,7 @@ registers:
     never mistaken for it
   context: '@j-cole-taylor/temper'
   read:
-    clause_form: prose+table
+    clause_form: table
     witness_table: false
     unreadable: 'no coverage table declares a witness column, so no witness of this register is machine-readable
       here. This is the CORRECT state for a register whose mechanism is unbuilt: it has no witnesses to
@@ -850,20 +864,43 @@ registers:
     interrogatable: false
   - name: no-derived-thing-poses-as-authored
     interrogatable: false
-  - name: no-reader-is-left-to-blame-themselves
-    interrogatable: false
   - name: legibility-is-never-bought-with-silent-omission
     interrogatable: false
   - name: no-internal-vocabulary-is-load-bearing
     interrogatable: false
   - name: the-unstructured-reader-is-never-worse-off
     interrogatable: false
+  - name: no-reader-is-left-to-blame-themselves
+    interrogatable: false
   advancing:
-    total: 4
+    total: 27
     citing_nothing:
     - 019f0e9a-f0ce-7de2-a848-0d3e4cd3add4
     - 019f2fbe-f4ac-7e83-955e-c4dc885856f3
     - 019f4a25-75ab-7650-b602-eb68594de2fc
+    - 01a01f13-fa79-76a3-a1d8-b08f05d9800c
+    - 01a01f14-4fd0-7d92-8cde-858a1b1ef0bf
+    - 01a01f14-ad22-76a3-b383-15de0ba86a59
+    - 01a01fe6-4b96-7bb0-ac98-18dc2a8f33be
+    - 01a0209b-7359-7653-a77d-55fd11c38e6f
+    - 01a02131-4b0c-75c1-9279-8799393f4f27
+    - 01a0215d-65d5-7373-92c4-c1559dd911d4
+    - 01a0215d-6da3-78d2-89e1-cab40e8848ef
+    - 01a0215d-75aa-7db2-8df0-088832b46485
+    - 01a0215d-84db-71e2-bf0f-b8818e905bb8
+    - 01a023df-f54c-7d90-aa53-1bd66011475c
+    - 01a024d3-2a16-78b1-9e7e-a0e98bd87e0e
+    - 01a024f2-3e27-7df2-b889-fa5918c3fb68
+    - 01a02554-d43a-7233-8715-bef880fe99cc
+    - 01a0255f-1c7b-7b53-bdd1-462acf954f8f
+    - 01a0257c-01f9-7a31-abdf-e00b9f310e36
+    - 01a0257c-4eb0-7751-b569-92941f2d77e6
+    - 01a025b7-9a55-7d23-bb6c-4baf8393edfd
+    - 01a025f7-b705-7150-943f-a50c94c09bd5
+    - 01a02644-fc0c-7822-9e09-8dcc76fbe597
+    - 01a02931-81e8-7001-a423-ef0422044472
+    - 01a02931-c1b9-74a0-81fa-9fc219988951
+    - 01a02a32-2554-7e61-a02b-4237cbe6342e
 - goal_id: 019fbdb9-f287-79c0-aab6-efa0b1de12c8
   goal_title: Every question to Temper is answered by a situated act — acts compose by piping, no constant
     decides between them, and no composition flatters
@@ -1248,7 +1285,7 @@ registers:
     citations_witnesses:
     - 01a00670-e069-7dd2-a213-7b1cf4317d02
   advancing:
-    total: 40
+    total: 42
     citing_nothing:
     - 019fd214-add4-7ab3-8653-0a07727bbfe2
     - 019fd25e-95f0-7373-9a6e-0574deea5ab3
@@ -1281,6 +1318,8 @@ registers:
     - 01a010ec-98b9-7220-b6f4-b210c7a7fe39
     - 01a0112c-4155-7b62-9a63-85e79c970125
     - 01a0149c-c723-7612-9f13-42cced6dfb5a
+    - 01a01f21-c2ab-78b0-ada5-e8190d9c0814
+    - 01a01f51-137e-7111-8371-b7622a980c3c
 - goal_id: 019fbf6a-34d7-7a00-9bb2-7d61faa2ce38
   goal_title: Operational memory travels with the work, not with the machine — and what it says about
     itself is true
@@ -1612,3 +1651,92 @@ registers:
     - 01a01765-ed1a-7233-93ee-3695086f4826
     - 01a019dd-f176-77b0-812f-233937584066
     - 01a019de-673d-7a10-af88-492ad7bd48dd
+- goal_id: 01a02163-ba6a-7b00-91f5-5f416e43f4f6
+  goal_title: Structured data is stored as structured data — owned by a resource, reached through the
+    graph, and handed to the next session intact
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: none
+    witness_table: true
+    unreadable: 'body does not parse as a register: no clause section found'
+  clauses: []
+  advancing:
+    total: 6
+    citing_nothing:
+    - 01a024f0-ad08-7162-baa3-dc9278ea373c
+    - 01a025c6-6830-7a51-80bc-8515fdc6aa81
+    - 01a0263d-99c4-7762-8b33-34e6ae4e9492
+    - 01a0265e-85e4-7450-b279-7fedbce59555
+    - 01a02719-97d1-7d23-b429-78425f25aa1e
+  coverage_rows_naming_no_clause:
+  - a-declined-act-teaches-its-vocabulary
+  - data-visibility-never-exceeds-its-owners
+  - declaring-a-shape-never-destroys-what-came-before
+  - no-supersession-is-asserted-that-a-writer-did-not-declare
+  - persistence-never-requires-a-prior-declaration
+  - selection-among-many-is-decidable-from-what-is-stored
+  - structured-data-is-never-found-by-resemblance
+  - structured-data-survives-the-round-trip
+  - the-governance-record-outlives-the-data
+  - unchecked-never-reads-as-checked
+  citations_naming_no_clause:
+  - task: 01a02163-faba-7a71-b09a-45eade04baba
+    clause: a-declined-act-teaches-its-vocabulary
+    kind: enables
+  - task: 01a02163-faba-7a71-b09a-45eade04baba
+    clause: data-visibility-never-exceeds-its-owners
+    kind: enables
+  - task: 01a02163-faba-7a71-b09a-45eade04baba
+    clause: no-supersession-is-asserted-that-a-writer-did-not-declare
+    kind: enables
+  - task: 01a02163-faba-7a71-b09a-45eade04baba
+    clause: persistence-never-requires-a-prior-declaration
+    kind: enables
+  - task: 01a02163-faba-7a71-b09a-45eade04baba
+    clause: selection-among-many-is-decidable-from-what-is-stored
+    kind: enables
+  - task: 01a02163-faba-7a71-b09a-45eade04baba
+    clause: structured-data-is-never-found-by-resemblance
+    kind: enables
+  - task: 01a02163-faba-7a71-b09a-45eade04baba
+    clause: structured-data-survives-the-round-trip
+    kind: enables
+  - task: 01a02163-faba-7a71-b09a-45eade04baba
+    clause: the-governance-record-outlives-the-data
+    kind: enables
+  - task: 01a02163-faba-7a71-b09a-45eade04baba
+    clause: unchecked-never-reads-as-checked
+    kind: enables
+- goal_id: 01a02654-a920-7123-9c24-328e50022ffe
+  goal_title: The surface tells the reader what it is doing — an act is acknowledged, and what is still
+    arriving is never mistaken for what is not there
+  context: '@j-cole-taylor/temper'
+  read:
+    clause_form: heading+table
+    witness_table: false
+    unreadable: 'no coverage table declares a witness column, so no witness of this register is machine-readable
+      here. This is the CORRECT state for a register whose mechanism is unbuilt: it has no witnesses to
+      name. Do not read it as a formatting backlog'
+  clauses:
+  - name: every-act-is-acknowledged
+    interrogatable: false
+  - name: arriving-and-settled-are-distinguishable
+    interrogatable: false
+  - name: working-and-stopped-are-distinguishable
+    interrogatable: false
+  - name: acting-on-a-part-does-not-discard-the-whole
+    interrogatable: false
+  - name: no-two-region-states-present-alike
+    interrogatable: false
+  - name: responsiveness-is-never-bought-with-a-false-claim
+    interrogatable: false
+  - name: acting-on-a-part
+    interrogatable: false
+  advancing:
+    total: 5
+    citing_nothing:
+    - 01a0215d-7dc5-77e1-b055-76c52d3c013b
+    - 01a02655-3b83-7c13-a2fd-b67166b06c44
+    - 01a0265c-7064-7371-993c-b907dd46f9f5
+    - 01a026be-7e3f-7601-8b0c-b3ff7835aefc
+    - 01a02932-033d-7852-985d-fc943b9e3101
