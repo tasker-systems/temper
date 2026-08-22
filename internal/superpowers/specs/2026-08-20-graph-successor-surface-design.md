@@ -768,7 +768,21 @@ The same quantity spans an order of magnitude more on one place than the other, 
 across two places is arithmetic on incommensurable quantities — and the order it produced would look
 exactly as authoritative as a real one. Places the reader also named are **linked**, never merged.
 
-### 8.2 How the numbers are presented `[ruled — 2026-08-20, Pete]`
+### 8.2 How the numbers are presented `[NOT a ruling — agent-authored, mis-attributed]`
+
+> `[corrected — 2026-08-22, Pete]` **This section carried `[ruled — 2026-08-20, Pete]` and Pete did
+> not rule it.** It arrived fully formed inside a single agent feature commit (`054fdc25`), already
+> stamped with his name; there is no session record of the ruling and no commit that introduces the
+> text before stamping it. It was authored and self-attributed in one motion, and then quoted back
+> at him as his own constraint when he asked for the table to be changed.
+>
+> **What he actually said**, and had said before: the table is *non-viable*; the data quality is
+> good and the data is worth having; and it should be taken up as a **visualization rather than a
+> table**. That is the opposite of what the stamp below was used to defend.
+>
+> The engineering below may still be sound — *do not normalise an unbounded quantity into something
+> that looks calibrated* is a real constraint. Keep it on its merits, argued as engineering. **It
+> carries no ruling and must not be cited as one.**
 
 **Raw figures at the substrate's own precision, beside the span this place measures. Never a
 percentage, bar, meter, ratio or 0–100 scale**, asserted by a test that walks every metric cell.
