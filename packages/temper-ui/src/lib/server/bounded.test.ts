@@ -38,10 +38,8 @@ describe('a read the system stops waiting for', () => {
 	// makes this trap unreachable.
 	//
 	// Kept, with its claim corrected, because it still pins the observable behaviour: the bound wins
-	// and a late rejection changes nothing. It would bite a rewrite that stopped racing. **It does
-	// not witness the global `.catch()`-at-creation constraint** — that constraint is real for a
-	// promise handed to `{#await}` from a load, which genuinely is unsubscribed on the server, and
-	// its probe lands there rather than here.
+	// and a late rejection changes nothing. It would bite a rewrite that stopped racing. The
+	// constraint it does *not* witness is witnessed by the test below, which was the thing missing.
 	it('the bound wins, and a late rejection changes nothing', async () => {
 		vi.useFakeTimers();
 		let reject!: (e: Error) => void;
@@ -53,5 +51,41 @@ describe('a read the system stops waiting for', () => {
 		await expect(p).rejects.toBeInstanceOf(GaveUp);
 		expect(() => reject(new Error('too late'))).not.toThrow();
 		vi.useRealTimers();
+	});
+
+	/**
+	 * The OTHER catch (spec §5.3), and **the version of it that can actually fail** — which is why
+	 * this test exists at all. `[found — 2026-08-21]` The catch used to be attached to `bounded`'s
+	 * *input*, where it is unwitnessable, and that was read as satisfying the constraint. It did not:
+	 * a load hands `{#await}` the promise `bounded` **returns**, and on the server nothing subscribes
+	 * to that one until SvelteKit serializes it.
+	 *
+	 * That is spec §5.3's own warning — *"having one does not give you the other"* — recurring one
+	 * level down, inside the mechanism written to honour it.
+	 */
+	it('a returned promise nobody subscribed to does not crash the process', async () => {
+		const fired: unknown[] = [];
+		const onUnhandled = (reason: unknown) => fired.push(reason);
+		process.on('unhandledRejection', onUnhandled);
+		try {
+			// Exactly the production shape: created, handed out, never consumed. Consuming it would
+			// attach the very handler under test.
+			void bounded(Promise.reject(new Error('503')), 'history', 50);
+
+			// Node reports at the end of the turn in which the rejection went unhandled, not
+			// synchronously — so drain a macrotask turn before looking.
+			await new Promise((r) => setTimeout(r, 20));
+			await new Promise((r) => setImmediate(r));
+
+			expect(fired).toEqual([]);
+		} finally {
+			process.off('unhandledRejection', onUnhandled);
+		}
+	});
+
+	// The catch above must MARK the rejection handled without CONSUMING it: a consumer's `{:catch}`
+	// still has to see the failure, or the region renders nothing and the server merely survives.
+	it('and every consumer still observes that rejection', async () => {
+		await expect(bounded(Promise.reject(new Error('503')), 'history', 50)).rejects.toThrow('503');
 	});
 });

@@ -46,21 +46,29 @@ export class GaveUp extends Error {
  *
  * A real failure surfaces as itself — `bounded` never converts one rejection into another.
  *
- * The `.catch()` attached to `p` is the *other* catch (spec §5.3), the one that keeps a rejection
- * arriving after the bound has fired from becoming an unhandled rejection and crashing the server.
- * It is not the `{:catch}` that renders the failure, and having one does not give you the other.
- * Stated plainly, because it is easy to bank wrongly: **`Promise.race` already subscribes to `p`,
- * so the losing side's late rejection is absorbed by the race whether this line is here or not** —
- * no test can witness its absence. It stays as the explicit statement of the invariant, so a
- * rewrite that stops racing does not silently take the guarantee with it.
+ * **The catch goes on what this function HANDS OUT, not on what it is given** (spec §5.3's other
+ * catch — the one that keeps an unhandled rejection from crashing the server, never the `{:catch}`
+ * that renders the failure).
+ *
+ * `[corrected — 2026-08-21]` It used to go on `p`, and that was the same trap spec §5.3 warns
+ * about, one level down: **having a catch on the input does not give you one on the output.**
+ * `Promise.race([p, bound])` subscribes to `p`, so `p` is safe either way and no test could witness
+ * a catch on it — but the promise this function *returns* is a further derivation
+ * (`.race(...).finally(...)`) that **nothing inside here subscribes to**, and that is the one a load
+ * hands to `{#await}`. Verified by executing a real `unhandledRejection` listener against an
+ * unconsumed return value: with the catch on `p` it fires; with the catch here it does not, and a
+ * consumer's own `{:catch}` still sees the rejection unchanged.
+ *
+ * Centralised here rather than left as a duty at each call site, deliberately. A rule every caller
+ * must remember is a rule the next caller forgets — the same argument `GraphRead`'s subtraction
+ * type makes on the graph load. A promise that does **not** go through `bounded` still needs its
+ * own `.catch()` at creation.
  */
 export function bounded<T>(
 	p: Promise<T>,
 	label: string,
 	ms: number = GIVE_UP_AFTER_MS,
 ): Promise<T> {
-	p.catch(() => {});
-
 	let timer: ReturnType<typeof setTimeout>;
 	const bound = new Promise<never>((_, reject) => {
 		timer = setTimeout(() => reject(new GaveUp(label, ms)), ms);
@@ -68,5 +76,12 @@ export function bounded<T>(
 
 	// `finally` and not `then`: the timer is cleared however the race ends, so a read that answers
 	// first does not leave a pending timer holding the process open.
-	return Promise.race([p, bound]).finally(() => clearTimeout(timer));
+	const raced = Promise.race([p, bound]).finally(() => clearTimeout(timer));
+
+	// Attached to `raced` — the value returned below — and not to `p`. See the note above.
+	// `.catch()` returns a NEW promise and does not consume this one, so every consumer still
+	// observes the rejection; this only marks it handled.
+	raced.catch(() => {});
+
+	return raced;
 }
