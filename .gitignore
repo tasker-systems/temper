@@ -38,3 +38,10 @@ crates/*/bindings/
 __pycache__/
 *.pyc
 .venv/
+
+# graphify knowledge-graph output (`/graphify` skill). Regenerated on demand, never committed:
+# graph.json is ~22MB raw and its semantic layer is LLM-derived, so a rebuild produces a large
+# diff no reviewer can check. The AST half is deterministic; the semantic half is not. Treat
+# graphify as an on-demand analysis tool, not an artifact — temper itself is the durable map.
+graphify-out/
+**/graphify-out/
