@@ -29,14 +29,46 @@
 // a no-op when no OTLP endpoint is configured (local dev, endpoint-less installs).
 import '$lib/server/telemetry/register';
 
-import { type Handle, text } from '@sveltejs/kit';
+import { type Handle, type HandleServerError, text } from '@sveltejs/kit';
 import { ApiError, apiGet } from '$lib/server/api';
+import { describeFailure } from '$lib/server/bounded';
 import { CSRF_FORBIDDEN_MESSAGE, isForbiddenCrossOriginFormPost } from '$lib/server/csrf';
 import { REFRESH_THRESHOLD_SECONDS, refreshAccessToken } from '$lib/server/oidc';
 import { isProxiedPath, proxyRequest } from '$lib/server/proxy';
 import { clearSession, readSession, writeSession } from '$lib/server/session';
 import { traceRequest } from '$lib/server/telemetry/request-span';
 import type { ProfileWithEntitlements } from '$lib/types';
+
+/**
+ * What a failed read is allowed to say once it has left the server.
+ *
+ * SvelteKit's default sanitises every rejection to `{ message: 'Internal Error' }` — including a
+ * **streamed** one, which takes the same path (`handle_error_and_jsonify`, then devalue) on its way
+ * into the chunk a `{:catch}` is resolved from. `[found — 2026-08-21]` That is why the give-up in
+ * `$lib/server/bounded` had a `label` nothing read: a class cannot survive serialisation, so no
+ * amount of care in the template could have recovered it. A hook is the only place the app gets to
+ * put something on the far side.
+ *
+ * It adds **one** field and changes nothing else: every other error keeps SvelteKit's own sanitised
+ * message, so this is not a route for internals to escape. See `App.Error` in `src/app.d.ts`.
+ *
+ * The `console.error` replaces the default's own logging, which stops the moment a hook is exported.
+ * It keeps that default's shape — status, method, path, and the error itself for everything except a
+ * 404, where SvelteKit logged the line alone because a missing route is routing, not a fault.
+ */
+export const handleError: HandleServerError = ({ error, message, status, event }) => {
+	// A rejection a branch raises ON PURPOSE is not a fault and is not logged. Every rejected
+	// streamed promise arrives here, including ones that mean "no read ran" rather than "a read
+	// failed" — and logging those buries the real entries under traffic-proportional noise. The
+	// flag is duck-typed rather than an imported class so a load can mark its own expected
+	// rejections without this file learning about every one of them.
+	const expected = (error as { expected?: boolean } | null)?.expected === true;
+	const where = `[${status}] ${event.request.method} ${event.url.pathname}`;
+	if (status === 404 || expected) console.error(where);
+	else console.error(where, error);
+
+	return describeFailure(error, message);
+};
 
 // The exported hook wraps the whole request in a server span (parented on the inbound
 // `traceparent`) and runs the body inside its active context, so every outbound fetch —

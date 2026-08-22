@@ -6033,7 +6033,6 @@ dependencies = [
  "temper-telemetry",
  "temper-workflow",
  "tokio",
- "tower-http",
  "tracing",
  "tracing-subscriber",
  "utoipa",
@@ -6250,6 +6249,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "chrono",
+ "flate2",
  "http",
  "jsonwebtoken",
  "rmcp",
@@ -6264,7 +6264,7 @@ dependencies = [
  "temper-workflow",
  "tokio",
  "toml 0.8.23",
- "tower-http",
+ "tower",
  "tracing",
  "uuid",
 ]
@@ -6322,6 +6322,7 @@ dependencies = [
  "temper-workflow",
  "thiserror 2.0.18",
  "tokio",
+ "tower-http",
  "tracing",
  "tracing-subscriber",
  "trybuild",
@@ -6836,7 +6837,6 @@ dependencies = [
  "tower",
  "tower-layer",
  "tower-service",
- "tracing",
 ]
 
 [[package]]

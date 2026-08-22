@@ -23,9 +23,11 @@ async fn main() -> Result<(), vercel_runtime::Error> {
 
     // `unwrap_or_else(panic!)` rather than `.expect()`: expect prints Debug, and these errors carry
     // their remedy in Display. An instance that cannot state which audience it validates must not
-    // serve traffic.
+    // serve traffic. This governs BOTH loads below — `McpConfig` used `.expect()` until
+    // `[found — 2026-08-21]`, so a misconfigured MCP deployment aborted with a Debug dump instead
+    // of the remedy, on the surface whose misconfiguration is hardest to notice.
     let api_config = ApiConfig::from_env().unwrap_or_else(|e| panic!("refusing to start: {e}"));
-    let mcp_config = McpConfig::from_env().expect("Failed to load McpConfig from environment");
+    let mcp_config = McpConfig::from_env().unwrap_or_else(|e| panic!("refusing to start: {e}"));
 
     // Bound connection acquisition — same rationale and same value as `api/axum.rs`, including its
     // note that **`acquire_timeout` is not an execution bound**; read that comment before treating

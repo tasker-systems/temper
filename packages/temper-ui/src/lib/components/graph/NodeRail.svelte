@@ -12,9 +12,11 @@
 	 */
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
+	import RegionState from '$lib/components/RegionState.svelte';
 	import { summarizeEvent } from '$lib/graph/eventSummary';
 	import { atlasNeighbors } from '$lib/graph/neighbors';
 	import { docTypeHue } from '$lib/graph/palette';
+	import { regionStateFor } from '$lib/region';
 	import { relativeTime } from '$lib/graph/relativeTime';
 	import { trailModel } from '$lib/graph/trail';
 	import type { GraphModel, GraphNode } from '$lib/graph/model';
@@ -24,9 +26,15 @@
 	interface Props {
 		node: GraphNode;
 		model: GraphModel;
-		/** The body of THIS resource, read on selection. `null` when it has none or the read failed. */
-		excerpt: string | null;
-		trail: EventTrail | null;
+		/**
+		 * The body of THIS resource, read on selection and **streamed** — the frame around it does
+		 * not wait. Resolving to `null` means the resource has no body; a **rejection** means the
+		 * read failed, and the two are rendered as different things. Null itself means no read was
+		 * started, which only happens when nothing is selected.
+		 */
+		excerpt: Promise<string | null> | null;
+		/** This node's history, streamed on the same rule as {@link Props.excerpt}. */
+		trail: Promise<EventTrail> | null;
 	}
 	let { node, model, excerpt, trail }: Props = $props();
 
@@ -36,7 +44,6 @@
 	// omitted outright when the key does not resolve.
 	const arm = $derived(model.arms.find((a) => a.key === node.arm));
 	const neighbors = $derived(atlasNeighbors(node.id, model.nodes, model.edges));
-	const history = $derived(trail ? trailModel(trail) : []);
 	const titles = $derived(new Map(model.nodes.map((n) => [n.id, { title: n.title }])));
 	// Which seeds reached this node — `ViaEntry.seed_id` is the reason `via` exists at all: the
 	// score is the best path from ANY seed, so without it a multi-seed walk cannot say which.
@@ -74,10 +81,29 @@
 		</a>
 	</section>
 
+	<!--
+		The label sits OUTSIDE the await, and that is the rule rather than a layout preference: a
+		region that disappears while it is arriving cannot tell the reader that it is arriving. Only
+		the paragraph waits.
+	-->
 	{#if excerpt}
 		<section>
 			<div class="label">EXCERPT</div>
-			<p class="excerpt">{excerpt}</p>
+			{#await excerpt}
+				<RegionState state="arriving" label="excerpt" />
+			{:then text}
+				{#if text}
+					<p class="excerpt">{text}</p>
+				{:else}
+					<!-- The read answered, and the answer is that this resource has no body. -->
+					<RegionState state="empty" label="excerpt" />
+				{/if}
+			{:catch error}
+				<!-- Not `empty`. Nothing was read, so nothing may be claimed about the material — and
+				     `regionStateFor` separates a read that FAILED from one the system stopped waiting
+				     for, which are two different things to have not read it for. -->
+				<RegionState state={regionStateFor(error)} label="excerpt" />
+			{/await}
 		</section>
 	{/if}
 
@@ -116,19 +142,40 @@
 		</section>
 	{/if}
 
-	{#if history.length}
+	<!--
+		`[amended — 2026-08-21, spec §5.1/§5.2]` This section used to read
+		`const history = $derived(trail ? trailModel(trail) : [])` and then `{#if history.length}`,
+		so a failed read and a resource with genuinely no history both collapsed to `[]` and the
+		section simply was not there. Identical renderings for two different facts — the *failed vs
+		empty* pair the register's negative face had missed, live on this very panel. Each branch now
+		says which one it is, and each carries the label.
+	-->
+	{#if trail}
 		<section class="history">
-			<div class="label">HISTORY · {history.length}</div>
-			{#each history as row (row.id)}
-				<div class="ev">
-					<span class="when">{relativeTime(row.occurredAt)}</span>
-					<span class="what">{row.kind}</span>
-					<span class="who">{row.actorName}</span>
-					{#if summarizeEvent(row.rawKind, row.payload, titles)}
-						<span class="sum">{summarizeEvent(row.rawKind, row.payload, titles)}</span>
-					{/if}
-				</div>
-			{/each}
+			{#await trail}
+				<div class="label">HISTORY</div>
+				<RegionState state="arriving" label="history" />
+			{:then answered}
+				{@const history = trailModel(answered)}
+				<div class="label">HISTORY · {history.length}</div>
+				{#if history.length}
+					{#each history as row (row.id)}
+						<div class="ev">
+							<span class="when">{relativeTime(row.occurredAt)}</span>
+							<span class="what">{row.kind}</span>
+							<span class="who">{row.actorName}</span>
+							{#if summarizeEvent(row.rawKind, row.payload, titles)}
+								<span class="sum">{summarizeEvent(row.rawKind, row.payload, titles)}</span>
+							{/if}
+						</div>
+					{/each}
+				{:else}
+					<RegionState state="empty" label="history" />
+				{/if}
+			{:catch error}
+				<div class="label">HISTORY</div>
+				<RegionState state={regionStateFor(error)} label="history" />
+			{/await}
 		</section>
 	{/if}
 </aside>

@@ -4,18 +4,38 @@
 	import { summarizeEvent } from '$lib/graph/eventSummary';
 	import { flattenPayload } from '$lib/graph/payloadRows';
 	import { relativeTime } from '$lib/graph/relativeTime';
+	import RegionState from '$lib/components/RegionState.svelte';
 
-	let { trail }: { trail: EventTrail | null } = $props();
+	/**
+	 * `trail` is no longer nullable. It used to be, because a failed read degraded to `null` in the
+	 * load — and that made a failure indistinguishable from a resource with genuinely no history.
+	 * Failure now travels to the page's `{:catch}`, so the only value that reaches here is one a
+	 * read actually returned.
+	 */
+	let { trail }: { trail: EventTrail } = $props();
 
-	// trailModel takes a non-null EventTrail — guard here, don't widen it.
-	let rows = $derived(trail ? trailModel(trail) : []);
+	let rows = $derived(trailModel(trail));
 	let openEvent = $state<string | null>(null);
 </script>
 
 <section>
 	<div class="label">History · {rows.length}</div>
+	<!--
+		The emptiness verdict stays HERE rather than in the page, because the count beside it comes
+		from the same `rows`: one derivation decides both what this heading says and whether the
+		region is empty, so they cannot disagree. Deciding emptiness in the page would be a second
+		predicate over the same data, and two predicates drift.
+
+		`[corrected — 2026-08-21]` This comment used to justify itself by saying `trailModel` filters,
+		so a trail whose events all filter out would still be empty. **It does not filter** —
+		`trail.ts:23` reverses and maps 1:1, so `rows.length === trail.events.length` always, and that
+		state is unreachable. The rule survives its wrong reason; the reason is replaced rather than
+		quietly dropped, because it is the kind of claim that gets built on.
+
+		The words come from `RegionState` so this region cannot drift away from every other one.
+	-->
 	{#if rows.length === 0}
-		<p class="empty">No recorded history.</p>
+		<RegionState state="empty" label="history" />
 	{:else}
 		{#each rows.slice(0, 50) as row (row.id)}
 			<!-- summarizeEvent resolves relationship targets through an optional node
@@ -63,13 +83,6 @@
 		text-transform: uppercase;
 		color: var(--color-quiet-dim);
 		margin-bottom: 6px;
-	}
-	.empty {
-		font-family: var(--font-serif);
-		font-style: italic;
-		font-size: 11px;
-		color: var(--color-quiet-dim);
-		margin: 0;
 	}
 	.event {
 		padding: 4px 0;

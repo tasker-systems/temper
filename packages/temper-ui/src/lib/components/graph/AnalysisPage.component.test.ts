@@ -1,14 +1,16 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { render, screen } from '@testing-library/svelte';
-import { describe, expect, it } from 'vitest';
-import { analyseShape } from '$lib/graph/analysis';
+import { describe, expect, it, vi } from 'vitest';
+import { type AnalysedRegion, analyseShape } from '$lib/graph/analysis';
 import type { AnalysisViewData } from '$lib/graph/view';
+import { describeFailure, GaveUp } from '$lib/server/bounded';
 import type {
 	CogmapAnalyticsRow,
 	CogmapRegionMetricsRow,
 	CogmapRegionRow,
 } from '$lib/types/generated/cognitive_maps';
+import { sentenceOf } from '../../../test/sentence';
 import AnalysisPage from './AnalysisPage.svelte';
 
 /**
@@ -37,39 +39,94 @@ const fixture = JSON.parse(
 	};
 };
 
+/**
+ * Overrides in their **settled** form, for the three fields the load now streams.
+ *
+ * A test that only cares about content keeps writing `regions: analyseShape(...).regions` or
+ * `map: null`, and this builder wraps it; a test that cares about the *state* of the read passes a
+ * promise through untouched — never-settling for arriving, rejected for failed. That is what keeps
+ * C1 and C3 expressible here without every call site learning what a promise is.
+ */
+type AnalysisMap = Awaited<AnalysisViewData['map']>;
+
+type ViewOverrides = Partial<Omit<AnalysisViewData, 'regions' | 'metricsAvailable' | 'map'>> & {
+	regions?: AnalysedRegion[] | Promise<AnalysedRegion[]>;
+	metricsAvailable?: boolean | Promise<boolean>;
+	map?: AnalysisMap | Promise<AnalysisMap>;
+};
+
+/**
+ * The wrapper for the three fields whose promise is **unconditional**.
+ *
+ * `null` on `map` becomes `Promise.resolve(null)` rather than staying `null`: the inner null is the
+ * only null there is. A test writing `map: null` means *this place published no map-level readout*,
+ * which is a fact about the place; an outer null would be a fourth state on a field that already
+ * carries three.
+ */
+const always = <T>(v: T | Promise<T>): Promise<T> =>
+	v instanceof Promise ? v : Promise.resolve(v);
+
 const base: AnalysisViewData = {
 	owner: '@me',
 	place: null,
 	alsoNamed: [],
 	choices: [],
 	refusal: null,
-	regions: [],
-	metricsAvailable: true,
-	map: null,
+	regions: Promise.resolve([]),
+	metricsAvailable: Promise.resolve(true),
+	map: Promise.resolve(null),
 };
 
-const contextView = (over: Partial<AnalysisViewData> = {}): AnalysisViewData => ({
-	...base,
-	place: { kind: 'context', ref: '@me/temper', title: '@me/temper' },
-	...analyseShape(fixture.context.shape, fixture.context.region_metrics),
-	...over,
-});
+const view = (over: ViewOverrides = {}): AnalysisViewData => {
+	const { regions, metricsAvailable, map, ...settled } = over;
+	return {
+		...base,
+		...settled,
+		regions: always(regions ?? []),
+		metricsAvailable: always(metricsAvailable ?? true),
+		// `=== undefined` rather than `??`, on the field where a caller passing `null` means it.
+		map: always(map === undefined ? null : map),
+	};
+};
 
-const cogmapView = (over: Partial<AnalysisViewData> = {}): AnalysisViewData => ({
-	...base,
-	place: {
-		kind: 'cogmap',
-		ref: '019f2391-e001-7933-b88a-28fb92e56ac1',
-		title: fixture.cogmap.name,
-	},
-	...analyseShape(fixture.cogmap.shape, fixture.cogmap.region_metrics),
-	map: {
-		telos: { id: fixture.cogmap.analytics.telos_resource_id, title: 'Temper — telos charter' },
-		staleness: fixture.cogmap.analytics.staleness,
-		regulation: fixture.cogmap.analytics.regulation,
-	},
-	...over,
-});
+const contextView = (over: ViewOverrides = {}): AnalysisViewData =>
+	view({
+		place: { kind: 'context', ref: '@me/temper', title: '@me/temper' },
+		...analyseShape(fixture.context.shape, fixture.context.region_metrics),
+		...over,
+	});
+
+const cogmapView = (over: ViewOverrides = {}): AnalysisViewData =>
+	view({
+		place: {
+			kind: 'cogmap',
+			ref: '019f2391-e001-7933-b88a-28fb92e56ac1',
+			title: fixture.cogmap.name,
+		},
+		...analyseShape(fixture.cogmap.shape, fixture.cogmap.region_metrics),
+		map: {
+			telos: { id: fixture.cogmap.analytics.telos_resource_id, title: 'Temper — telos charter' },
+			staleness: fixture.cogmap.analytics.staleness,
+			regulation: fixture.cogmap.analytics.regulation,
+		},
+		...over,
+	});
+
+/**
+ * Render, and wait for the one read to land.
+ *
+ * `render` is synchronous and returns while the page is still showing its arriving marker — which
+ * is C1 from the other side, and the reason this helper exists rather than a `tick()` at twenty
+ * call sites. The wait is on the groupings section, which lives in the `{:then}` branch and is
+ * drawn for every place that has measurements.
+ */
+const painted = async (data: AnalysisViewData) => {
+	const rendered = render(AnalysisPage, { data });
+	await vi.waitFor(() => {
+		expect(rendered.container.querySelector('.groupings')).not.toBeNull();
+	});
+	return rendered;
+};
 
 describe('the page declares what it is, before it shows anything', () => {
 	it('says the content is the machine’s and not the reader’s', () => {
@@ -84,7 +141,7 @@ describe('the page declares what it is, before it shows anything', () => {
 		// A page that announces its kind only when it has content announces nothing. Both the
 		// refusal and the index must carry it too.
 		render(AnalysisPage, {
-			data: { ...base, refusal: { kind: 'no-place-resolved', named: 2 } },
+			data: view({ refusal: { kind: 'no-place-resolved', named: 2 } }),
 		});
 		expect(screen.getByTestId('kind-declaration')).toBeTruthy();
 	});
@@ -98,8 +155,8 @@ describe('the page declares what it is, before it shows anything', () => {
 });
 
 describe('nothing on the page is presented as a normalised score', () => {
-	it('no percentage, bar, meter or ratio appears anywhere', () => {
-		const { container } = render(AnalysisPage, { data: cogmapView() });
+	it('no percentage, bar, meter or ratio appears anywhere', async () => {
+		const { container } = await painted(cogmapView());
 
 		expect(container.querySelector('progress')).toBeNull();
 		expect(container.querySelector('meter')).toBeNull();
@@ -117,15 +174,15 @@ describe('nothing on the page is presented as a normalised score', () => {
 		}
 	});
 
-	it('a raw figure appears beside the span THIS place measures', () => {
-		render(AnalysisPage, { data: cogmapView() });
+	it('a raw figure appears beside the span THIS place measures', async () => {
+		await painted(cogmapView());
 		const legend = screen.getByTestId('metric-legend').textContent ?? '';
 
 		expect(legend).toContain('here: 0 – 2342.2');
 	});
 
-	it('an uncomputed value is a dash and never a zero', () => {
-		const { container } = render(AnalysisPage, { data: cogmapView() });
+	it('an uncomputed value is a dash and never a zero', async () => {
+		const { container } = await painted(cogmapView());
 		const absent = [...container.querySelectorAll('td.absent')];
 
 		// Measured: 4 of the 406 groupings have no cohesion and no telos alignment.
@@ -135,8 +192,8 @@ describe('nothing on the page is presented as a normalised score', () => {
 });
 
 describe('a quantity that does not vary is said once instead of tabulated', () => {
-	it('internal tension gets no column for a context, and a sentence instead', () => {
-		const { container } = render(AnalysisPage, { data: contextView() });
+	it('internal tension gets no column for a context, and a sentence instead', async () => {
+		const { container } = await painted(contextView());
 		const headers = [...container.querySelectorAll('thead th')].map((h) => h.textContent);
 		const legend = screen.getByTestId('metric-legend').textContent ?? '';
 
@@ -144,17 +201,17 @@ describe('a quantity that does not vary is said once instead of tabulated', () =
 		expect(legend).toContain('Every grouping here measures 0.');
 	});
 
-	it('the same quantity DOES get a column where it actually varies', () => {
+	it('the same quantity DOES get a column where it actually varies', async () => {
 		// The cogmap's internal_tension spans 0 → 4.7, so the collapse is a property of the data
 		// rather than a decision about the metric.
-		const { container } = render(AnalysisPage, { data: cogmapView() });
+		const { container } = await painted(cogmapView());
 		const headers = [...container.querySelectorAll('thead th')].map((h) => h.textContent);
 
 		expect(headers).toContain('Disagreement among the members');
 	});
 
-	it('a collapsed quantity is still reported — nothing is dropped', () => {
-		render(AnalysisPage, { data: contextView() });
+	it('a collapsed quantity is still reported — nothing is dropped', async () => {
+		await painted(contextView());
 		const legend = screen.getByTestId('metric-legend').textContent ?? '';
 
 		expect(legend).toContain('Disagreement among the members');
@@ -162,10 +219,10 @@ describe('a quantity that does not vary is said once instead of tabulated', () =
 });
 
 describe('the displaced payload is here, whole', () => {
-	it('member count, salience and coherence all reach the reader', () => {
+	it('member count, salience and coherence all reach the reader', async () => {
 		// RegionHoverCard.svelte:17-19 — at 87ccd211, the last commit before Beat D deleted the
 		// file — rendered exactly these three on the navigational canvas.
-		const { container } = render(AnalysisPage, { data: cogmapView() });
+		const { container } = await painted(cogmapView());
 		const headers = [...container.querySelectorAll('thead th')].map((h) => h.textContent);
 
 		expect(headers).toContain('Resources in it');
@@ -173,14 +230,14 @@ describe('the displaced payload is here, whole', () => {
 		expect(headers).toContain('How alike the members are');
 	});
 
-	it('every grouping the place publishes gets a row, with no top-N', () => {
-		const { container } = render(AnalysisPage, { data: contextView() });
+	it('every grouping the place publishes gets a row, with no top-N', async () => {
+		const { container } = await painted(contextView());
 
 		expect(container.querySelectorAll('tbody tr')).toHaveLength(501);
 	});
 
-	it('the count says whose order it is showing', () => {
-		render(AnalysisPage, { data: contextView() });
+	it('the count says whose order it is showing', async () => {
+		await painted(contextView());
 		expect(screen.getByTestId('grouping-count').textContent).toBe(
 			'501 groupings, in the order this place itself ranks them.',
 		);
@@ -188,8 +245,8 @@ describe('the displaced payload is here, whole', () => {
 });
 
 describe('what a place does not have is declared, not fabricated', () => {
-	it('a context says why it has no charter rather than reporting a failure', () => {
-		render(AnalysisPage, { data: contextView() });
+	it('a context says why it has no charter rather than reporting a failure', async () => {
+		await painted(contextView());
 		const said = screen.getByTestId('map-absent').textContent ?? '';
 
 		expect(said).toContain('a context has neither');
@@ -197,29 +254,29 @@ describe('what a place does not have is declared, not fabricated', () => {
 		expect(screen.queryByTestId('staleness')).toBeNull();
 	});
 
-	it('an empty regulation set reads as a fact about the map', () => {
+	it('an empty regulation set reads as a fact about the map', async () => {
 		// Measured: every readable map returns []. This is the routine case, not an edge case.
-		render(AnalysisPage, { data: cogmapView() });
+		await painted(cogmapView());
 
 		expect(screen.getByTestId('regulation').textContent).toBe(
 			'No concepts have been set to regulate this map.',
 		);
 	});
 
-	it('a declined map-level read is unavailable, never an error', () => {
-		render(AnalysisPage, { data: cogmapView({ map: null }) });
+	it('a declined map-level read is unavailable, never an error', async () => {
+		await painted(cogmapView({ map: null }));
 		const said = screen.getByTestId('map-absent').textContent ?? '';
 
 		expect(said).toContain('not available');
 		expect(said).not.toMatch(/error|failed/i);
 	});
 
-	it('a metrics read that did not answer says unknown, and does not zero the columns', () => {
+	it('a metrics read that did not answer says unknown, and does not zero the columns', async () => {
 		const data = cogmapView({
 			...analyseShape(fixture.cogmap.shape, null),
 			map: null,
 		});
-		const { container } = render(AnalysisPage, { data });
+		const { container } = await painted(data);
 
 		expect(screen.getByTestId('metrics-unavailable').textContent).toContain('unknown');
 		// The surface tier's own two survive — they never came from the read that failed.
@@ -231,20 +288,19 @@ describe('what a place does not have is declared, not fabricated', () => {
 
 describe('the door answers an address it cannot resolve, and one with no address at all', () => {
 	it('a named place that does not resolve is refused, never widened', () => {
-		render(AnalysisPage, { data: { ...base, refusal: { kind: 'no-place-resolved', named: 1 } } });
+		render(AnalysisPage, { data: view({ refusal: { kind: 'no-place-resolved', named: 1 } }) });
 
 		expect(screen.getByText(/Nothing to measure for that place/)).toBeTruthy();
 		expect(screen.queryByRole('table')).toBeNull();
 	});
 
 	it('no address at all offers the places the reader can read', () => {
-		const data = {
-			...base,
+		const data = view({
 			choices: [
 				{ kind: 'context' as const, ref: '@me/temper', title: '@me/temper' },
 				{ kind: 'cogmap' as const, ref: 'abc', title: 'Temper — self-cognition' },
 			],
-		};
+		});
 		const { container } = render(AnalysisPage, { data });
 
 		expect(container.querySelectorAll('.choices a')).toHaveLength(2);
@@ -257,5 +313,145 @@ describe('the door answers an address it cannot resolve, and one with no address
 		render(AnalysisPage, { data });
 
 		expect(screen.getByTestId('also-named').textContent).toContain('@me/temper');
+	});
+});
+
+/**
+ * C1–C4 on the region this route streams: **the measurements**.
+ *
+ * What the page owes a reader while that read is in flight is everything that does not depend on
+ * it — the declaration, the title of the place being measured, the also-named line — and it owes
+ * them a region that says, in words, that the rest is still coming. The map-level section and the
+ * groupings section are two views of one read, so they share one marker.
+ */
+describe('the page declares what its own read is doing', () => {
+	/** Never settles, so anything that waits for it never paints. */
+	const pending = () => new Promise<AnalysedRegion[]>(() => {});
+
+	/** Rejects, with §5.3's *other* catch attached — the one that is not the template's. */
+	const broken = (): Promise<AnalysedRegion[]> => {
+		const p = Promise.reject(new Error('503'));
+		p.catch(() => {});
+		return p;
+	};
+
+	it('C1: the place it is measuring is named while the measurements are still in flight', () => {
+		const { container } = render(AnalysisPage, {
+			data: cogmapView({ regions: pending() }),
+		});
+
+		// Everything here is decided above the read, so none of it may wait on one.
+		expect(screen.getByTestId('kind-declaration')).toBeTruthy();
+		expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(fixture.cogmap.name);
+		expect(container.querySelector('table')).toBeNull();
+	});
+
+	it('C2: and the region that is waiting says so in words, not only in colour', () => {
+		const { container } = render(AnalysisPage, {
+			data: cogmapView({ regions: pending() }),
+		});
+		const arriving = container.querySelector('[data-testid="region-arriving"]');
+
+		expect(arriving).not.toBeNull();
+		// The sentence, with the decorative glyph stripped — what reaches the accessibility tree.
+		expect(sentenceOf(arriving)).toBe('Loading measurements…');
+	});
+
+	it('one read, one marker: the map-level section waits with the groupings', () => {
+		// They are two views of a single read. Two arriving markers would tell the reader those
+		// regions could disagree about whether it answered, and they cannot.
+		const { container } = render(AnalysisPage, {
+			data: cogmapView({ regions: pending() }),
+		});
+
+		expect(container.querySelectorAll('[data-testid="region-arriving"]')).toHaveLength(1);
+		expect(container.querySelector('.map-level')).toBeNull();
+		expect(container.querySelector('.groupings')).toBeNull();
+	});
+
+	it('C3: measurements that will not read say so, and do NOT read as still arriving', async () => {
+		const { container } = render(AnalysisPage, { data: cogmapView({ regions: broken() }) });
+
+		await vi.waitFor(() => {
+			expect(container.querySelector('[data-testid="region-failed"]')).not.toBeNull();
+		});
+		// The perpetual-skeleton bug: a read that will not resolve must stop presenting as one that
+		// has not resolved YET.
+		expect(container.querySelector('[data-testid="region-arriving"]')).toBeNull();
+		// And the page still says which place it was measuring — that never depended on the read.
+		expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(fixture.cogmap.name);
+	});
+
+	/**
+	 * The refusal on the second call site, and a different shape from the rail's: a page-level region
+	 * rather than one panel of several.
+	 *
+	 * The rejection is what `handleError` hands the client runtime, not a `GaveUp` instance — the
+	 * class does not survive serialisation, so a test that threw the instance would be asserting a
+	 * discriminator the browser never receives. That the hook's output really travels is witnessed in
+	 * `src/hooks.server.test.ts`, against SvelteKit's own serialiser.
+	 */
+	const stopped = (): Promise<AnalysedRegion[]> => {
+		const p = Promise.reject(describeFailure(new GaveUp('measurements', 8000), 'Internal Error'));
+		p.catch(() => {});
+		return p as Promise<AnalysedRegion[]>;
+	};
+
+	it('C4: measurements the system gave up on do not present like ones that failed', async () => {
+		const gaveUp = render(AnalysisPage, { data: cogmapView({ regions: stopped() }) });
+		await vi.waitFor(() => {
+			expect(gaveUp.container.querySelector('[data-testid="region-gave-up"]')).not.toBeNull();
+		});
+		const stoppedWords = sentenceOf(
+			gaveUp.container.querySelector('[data-testid="region-gave-up"]'),
+		);
+		// Read BEFORE unmounting: a detached container answers `null` to everything, which would make
+		// this the inert assertion the README warns about rather than the perpetual-skeleton check.
+		const stillArriving = gaveUp.container.querySelector('[data-testid="region-arriving"]');
+		gaveUp.unmount();
+
+		const failed = render(AnalysisPage, { data: cogmapView({ regions: broken() }) });
+		await vi.waitFor(() => {
+			expect(failed.container.querySelector('[data-testid="region-failed"]')).not.toBeNull();
+		});
+		const failedWords = sentenceOf(failed.container.querySelector('[data-testid="region-failed"]'));
+
+		// It names the read, it is not the failure's sentence, and it is not the skeleton either.
+		expect(stoppedWords.toLowerCase()).toContain('measurements');
+		expect(stoppedWords).not.toBe(failedWords);
+		expect(stillArriving).toBeNull();
+	});
+
+	it('C4: a failed read does not present like a place with nothing measured', async () => {
+		const empty = await painted(cogmapView({ regions: [], map: null }));
+		const emptyWords = (empty.container.querySelector('.groupings')?.textContent ?? '')
+			.replace(/\s+/g, ' ')
+			.trim();
+		empty.unmount();
+
+		const failed = render(AnalysisPage, { data: cogmapView({ regions: broken() }) });
+		await vi.waitFor(() => {
+			expect(failed.container.querySelector('[data-testid="region-failed"]')).not.toBeNull();
+		});
+		const failedWords = sentenceOf(failed.container.querySelector('[data-testid="region-failed"]'));
+
+		// Differential, per spec §3.3, and on the SENTENCE with the glyph stripped — so neither a
+		// redesign of either state nor a one-channel difference satisfies it.
+		expect(emptyWords).not.toBe('');
+		expect(failedWords).not.toBe('');
+		expect(failedWords).not.toBe(emptyWords);
+		// The load-bearing half: a failed read must never be spelled as an absence (spec §5.1).
+		expect(failed.container.querySelector('[data-testid="grouping-count"]')).toBeNull();
+	});
+
+	it('a refusal is the answer, so it renders before the read rather than behind it', () => {
+		// The two addressed refusals are decided above every read, and a refusal arriving behind a
+		// loading marker would be a delay dressed as an answer.
+		render(AnalysisPage, {
+			data: view({ refusal: { kind: 'nothing-to-analyse' }, regions: pending() }),
+		});
+
+		expect(screen.getByText(/There is nothing here yet/)).toBeTruthy();
+		expect(screen.queryByTestId('region-arriving')).toBeNull();
 	});
 });

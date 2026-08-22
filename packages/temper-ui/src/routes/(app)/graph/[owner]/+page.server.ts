@@ -10,8 +10,9 @@ import {
 	type GraphModel,
 } from '$lib/graph/model';
 import { buildReadout, disclosedRegionIds } from '$lib/graph/readout';
-import type { GraphRefusal, GraphViewData } from '$lib/graph/view';
+import type { GraphViewData } from '$lib/graph/view';
 import { ApiError } from '$lib/server/api';
+import { bounded, derive } from '$lib/server/bounded';
 import {
 	readAnchorRegions,
 	readAnchorSources,
@@ -22,7 +23,6 @@ import {
 	runComposition,
 } from '$lib/server/graph-query';
 import { readTrail } from '$lib/server/graph-reads';
-import type { EventTrail } from '$lib/types/generated/element_trail';
 import type { ResourceView } from '$lib/types/generated/resource_view';
 import { type GraphAddress, parseGraphAddress } from '$lib/vault-url';
 import type { PageServerLoad } from './$types';
@@ -57,10 +57,44 @@ import type { PageServerLoad } from './$types';
  * and opened nothing**, for every node, for as long as that read has existed. No test could fail:
  * the rail's tests all run on the composition fixture.
  *
+ * `[corrected — 2026-08-21]` An earlier draft of this comment said the defect *"shipped and nothing
+ * objected, for months."* **It did not.** `readEntry` first appears in `5f23f787`, the same day it
+ * was fixed, and this route is four weeks old (`bc8ed6f0`, 2026-07-24). The defect lasted hours. The
+ * correction matters because the false number was the most persuasive sentence here, and it was
+ * being quoted onward as grounds for deferring other work — a claim in a comment gets repeated
+ * without being rechecked, which is exactly what a comment is for and exactly why a wrong one is
+ * worse than none. What the type buys does not need the exaggeration: no test could have caught it.
+ *
  * A third read is already designed (chunk D2's traversal). Adding the three lines to the entry
  * branch would have closed the instance and left the next branch free to forget it again.
  */
 type GraphRead = Omit<GraphViewData, 'owner' | 'selected' | 'selectedExcerpt' | 'selectedTrail'>;
+
+/**
+ * A `sel` that names something this answer does not contain — the one branch on which a rail read is
+ * neither started nor answerable.
+ *
+ * **Unreachable by any consumer, and a rejection rather than a value on purpose.** `selected`
+ * resolves to `null` in exactly this case and the rail is gated on it, so nothing ever awaits the
+ * two promises this lands in. What it must not do is stand in for the read with a *value*: `null` on
+ * the excerpt says *this resource has no body*, and an empty trail says *it has no history*. Both
+ * are claims about the reader's material that no read verified, which is the conflation spec §5.2
+ * rules out. Nothing was read, and this says only that.
+ */
+class NotInThisAnswer extends Error {
+	/**
+	 * Not a fault, so `handleError` does not log it. `[found in review — 2026-08-21]` Every rejected
+	 * streamed promise reaches that hook, so without this a stale `?sel=` — a bookmark, a shared
+	 * link — wrote two errors to the server log on every page load, for a branch that is working
+	 * exactly as designed. Log noise of that shape is not harmless: it is what a real error hides in.
+	 */
+	readonly expected = true;
+
+	constructor(label: string) {
+		super(`no ${label} read ran: this selection is not in the answer`);
+		this.name = 'NotInThisAnswer';
+	}
+}
 
 /**
  * The rail's contents for `?sel=`, resolved against whatever the read actually drew.
@@ -74,27 +108,68 @@ type GraphRead = Omit<GraphViewData, 'owner' | 'selected' | 'selectedExcerpt' | 
  * `AtlasNode` projection with `resource: null`, and neither `/api/resources/{id}/content` nor the
  * element trail needs a row. Nothing is synthesised to stand in for the missing one.
  *
- * A failed trail read degrades to `null` — the rail simply carries no history — while a failed body
- * read is already `null` inside {@link readResourceBody}. Neither is allowed to take down a screen
- * whose marks are all drawn and correct.
+ * **Everything here is STREAMED, including the selection itself.** `[2026-08-21]` The selection used
+ * to be settled, and could be while the model was — this function took a resolved `GraphModel`. Once
+ * the model streams, the only way to keep `selected` a value is to `await` the model here, which
+ * would silently restore the blocking the whole page was changed to stop, and every test would still
+ * pass. So the resolution moved into a `.then()`. **What it resolves against did not change**: the
+ * model this read actually produced, not the corpus.
+ *
+ * Everything the rail shows apart from the excerpt and the history comes from `model.nodes`, so once
+ * the model lands the rail frame paints fully populated with two regions declaring themselves as
+ * arriving.
+ *
+ * The degradation policy is unchanged and still right: *a failed side-read must never take down a
+ * screen whose marks are all drawn.* What changed is what it degrades **to**.
+ * `[amended — 2026-08-21, spec §5.2]` Both reads used to degrade to `null` — the trail through a
+ * `.catch()` here, the body inside {@link readResourceBody} — and `null` asserts *there is nothing
+ * here*, which is a claim about the reader's material that a failed read has verified nothing
+ * about. A rejection now travels to the template, where `{:catch}` renders it as a **named
+ * failure**: *history unavailable*, distinct from *no history*.
+ *
+ * {@link bounded} supplies both the give-up (spec §5.4 — a read that never answers presents as
+ * arriving forever, which is the exact failure of `working-and-stopped-are-distinguishable`) and
+ * the `.catch()` attached at creation that keeps an unawaited rejection from crashing the server.
+ * That catch is a *different mechanism* from the template's `{:catch}`; spec §5.3 says so, and
+ * having one does not give you the other.
  */
-async function resolveSelection(
+function resolveSelection(
 	token: string,
-	model: GraphModel,
+	model: Promise<GraphModel>,
 	selection: string | null,
-): Promise<Pick<GraphViewData, 'selected' | 'selectedExcerpt' | 'selectedTrail'>> {
-	const node = selection ? (model.nodes.find((n) => n.id === selection) ?? null) : null;
-	if (!node) return { selected: null, selectedExcerpt: null, selectedTrail: null };
+): Pick<GraphViewData, 'selected' | 'selectedExcerpt' | 'selectedTrail'> {
+	// **A reader who opened no rail pays nothing, and knows it before any read.** That `?sel=` is
+	// absent is knowable from the ADDRESS, so this case is decided here rather than chained off the
+	// model: no read is started, and the outer null on the two read fields keeps saying what it has
+	// always said — *nothing is selected*, which is a different fact from a read that answered with
+	// nothing. `selected` is the one that changes spelling, because it is a promise on every path.
+	if (!selection) {
+		return { selected: Promise.resolve(null), selectedExcerpt: null, selectedTrail: null };
+	}
 
-	const [selectedExcerpt, selectedTrail] = await Promise.all([
+	const node = derive(model, (m) => m.nodes.find((n) => n.id === selection) ?? null);
+
+	/** Start a rail read **only if the selection was drawn**, and bound it from that moment. */
+	const railRead = <T>(start: (id: string) => Promise<T>, label: string): Promise<T> =>
+		derive(node, (n) => {
+			if (!n) throw new NotInThisAnswer(label);
+			// `bounded` inside rather than around, so the give-up measures the READ rather than the
+			// read plus however long the model took to arrive.
+			return bounded(start(n.id), label);
+		});
+
+	return {
+		selected: derive(node, (n) => n?.id ?? null),
 		// 600 rather than the 280 the canvas uses: the rail has the room, and this is the one
 		// targeted body read on the screen. `excerptOf` takes the markdown directly — it never
 		// needed a row, and asking for one is what used to force a branch that handed the WHOLE
 		// document to this slot whenever a node had no row behind it.
-		readResourceBody(token, node.id).then((md) => excerptOf(md, 600)),
-		readTrail(token, 'node', node.id).catch((): EventTrail | null => null),
-	]);
-	return { selected: node.id, selectedExcerpt, selectedTrail };
+		selectedExcerpt: railRead(
+			(id) => readResourceBody(token, id).then((md) => excerptOf(md, 600)),
+			'excerpt',
+		),
+		selectedTrail: railRead((id) => readTrail(token, 'node', id), 'history'),
+	};
 }
 
 /** Which of the reader's own rows a `from` seed no longer resolving refers to. */
@@ -127,6 +202,12 @@ const homesOf = (
  * shipped hard-coding `selected: null` and nothing objected, for months.
  *
  * The selection is then resolved once, against whatever that read actually drew.
+ *
+ * **The `await` on the left is the scaffold's, never the answer's.** {@link readFor} awaits exactly
+ * two things and returns the rest as promises (spec §2, §3.1): the anchor sources, because the plan
+ * they feed decides *which read runs at all*, and the `from` seeds, because a seed that no longer
+ * resolves is a real 404 about the reader's own material rather than a page frame around a failed
+ * region. Everything downstream of the plan streams.
  */
 export const load: PageServerLoad = async (event): Promise<GraphViewData> => {
 	const token = event.locals.accessToken!;
@@ -135,7 +216,7 @@ export const load: PageServerLoad = async (event): Promise<GraphViewData> => {
 	return {
 		owner: event.params.owner,
 		...read,
-		...(await resolveSelection(token, read.model, address.selection)),
+		...resolveSelection(token, read.model, address.selection),
 	};
 };
 
@@ -145,14 +226,23 @@ export const load: PageServerLoad = async (event): Promise<GraphViewData> => {
  * Three exits, and the return type is what keeps them honest — see {@link GraphRead}.
  */
 async function readFor(token: string, address: GraphAddress): Promise<GraphRead> {
-	const empty = (refusal: GraphRefusal): GraphRead => ({
+	// **A refusal is the answer, not a delay.** Nothing here is read and nothing here waits: the
+	// refusal is settled, so it renders with the page chrome, and the four streamed fields are
+	// already-resolved promises rather than nulls. An outer null on any of them would be a fourth
+	// state on a field that already carries three.
+	// The parameter is the NARROWED union, not `GraphRefusal`: rung 2 travels on
+	// `tooLittleStructure` and this helper is the pre-read exit, so a rung-2 value reaching here
+	// would be a verdict about an answer no read produced. Widening it back is how the two would
+	// silently rejoin — see `GraphViewData.refusal`.
+	const empty = (refusal: GraphViewData['refusal']): GraphRead => ({
 		question: address.question,
 		borrowedFrom: null,
 		refusal,
 		// No read ran, so no read declared an arm. Empty rather than borrowed from a builder.
-		model: { nodes: [], edges: [], arms: [], viaEntries: 0 },
-		bound: null,
-		readout: null,
+		model: Promise.resolve({ nodes: [], edges: [], arms: [], viaEntries: 0 }),
+		bound: Promise.resolve(null),
+		readout: Promise.resolve(null),
+		tooLittleStructure: Promise.resolve(null),
 		placesAsked: [],
 	});
 
@@ -188,6 +278,10 @@ async function readFor(token: string, address: GraphAddress): Promise<GraphRead>
 	// declined rather than silently answered as a smaller graph. `/api/resources/{id}` answers 404
 	// for a resource that is gone or was never readable, and the two are deliberately
 	// indistinguishable.
+	//
+	// **This read stays awaited, and that is the reason.** Streaming it would turn an honest 404
+	// into a page frame around a failed region — the same call the resource page makes about its own
+	// scaffold read. A 404 must be a 404.
 	let namedSeeds: ResourceView[] = [];
 	if (address.seeds.length > 0) {
 		try {
@@ -220,8 +314,14 @@ async function readFor(token: string, address: GraphAddress): Promise<GraphRead>
 		// a number it did not choose and cannot see — two copies of one default, on either side of
 		// the wire, with nothing linking them.
 		const depth = address.depth ?? 1;
-		const walked = await readTraversal(token, address.seeds, depth);
-		const model = buildTraversal(walked, address.seeds, homesOf(contexts, cogmaps));
+		// **One read, three fields.** The canvas, the bound line and the panel beside them are three
+		// views of this single walk, so all three are derived from it rather than from three reads
+		// of their own — they cannot disagree about whether it answered, because there is nothing
+		// for them to disagree about.
+		const walked = bounded(readTraversal(token, address.seeds, depth), 'graph');
+		const model = derive(walked, (w) =>
+			buildTraversal(w, address.seeds, homesOf(contexts, cogmaps)),
+		);
 
 		return {
 			// The reader's own `q`, never `questionFor`'s borrowed one: a charter question stands in
@@ -231,17 +331,24 @@ async function readFor(token: string, address: GraphAddress): Promise<GraphRead>
 			borrowedFrom: null,
 			refusal: null,
 			model,
-			bound: declareTraversalBounds({
-				drawn: model.nodes.length,
-				// Counted over the marks actually DRAWN, not over what was asked for. A seed the
-				// reader cannot see is not returned, and claiming to have hopped from it would put a
-				// number on screen with no mark under it.
-				from: model.nodes.filter((n) => address.seeds.includes(n.id)).length,
-				depth,
-			}),
+			bound: derive(model, (m) =>
+				declareTraversalBounds({
+					drawn: m.nodes.length,
+					// Counted over the marks actually DRAWN, not over what was asked for. A seed the
+					// reader cannot see is not returned, and claiming to have hopped from it would put a
+					// number on screen with no mark under it.
+					from: m.nodes.filter((n) => address.seeds.includes(n.id)).length,
+					depth,
+				}),
+			),
 			// No composition ran, so there is no reasoning to report. The provenance panel is built
-			// from `question` and `placesAsked` instead — see `GraphPage`.
-			readout: null,
+			// from `question` and `placesAsked` instead — see `GraphPage`. Derived from the walk
+			// rather than resolved outright, so this null is only ever asserted about an answer that
+			// actually arrived.
+			readout: derive(model, () => null),
+			// Rung 2 is the entry read's verdict about its own answer, and this read has no such
+			// axis: `traversal_slice` ranks and cuts nothing, so no walk can reach that conclusion.
+			tooLittleStructure: Promise.resolve(null),
 			// The places the GROUNDING named, carried so its measurements stay reachable. They
 			// describe where the reader started, not this screen, and the panel says so.
 			placesAsked: plan.anchorsAsked.map((a) => describeAnchor(a, cogmaps)),
@@ -263,66 +370,87 @@ async function readFor(token: string, address: GraphAddress): Promise<GraphRead>
 	// reader ranked second-most-jarring.
 	const isEntry = !question.text && address.seeds.length === 0;
 	if (isEntry) {
-		const entry = await readEntry(
-			token,
-			// Empty ranks across everything visible; named places confine it. `addressed` is exactly
-			// the distinction — a reader who named a place is answered WITHIN it.
-			addressed ? resolution.anchors.map((a) => a.id) : [],
+		// One read, and everything below is a view of it — see the traversal branch's note.
+		const entry = bounded(
+			readEntry(
+				token,
+				// Empty ranks across everything visible; named places confine it. `addressed` is exactly
+				// the distinction — a reader who named a place is answered WITHIN it.
+				addressed ? resolution.anchors.map((a) => a.id) : [],
+			),
+			'graph',
 		);
 
-		const bounds = {
-			drawn: entry.bounds.drawn,
-			eligible: entry.bounds.eligible,
-			inScope: entry.bounds.in_scope,
-			truncated: entry.bounds.truncated,
-		};
+		const bounds = derive(entry, (e) => ({
+			drawn: e.bounds.drawn,
+			eligible: e.bounds.eligible,
+			inScope: e.bounds.in_scope,
+			truncated: e.bounds.truncated,
+		}));
 
 		return {
 			question: null,
 			borrowedFrom: null,
+			// Nothing about the ADDRESS refuses this reader, and that is all this field may report.
+			refusal: null,
+			model: derive(entry, (e) => buildEntryGraph(e, homesOf(contexts, cogmaps))),
+			bound: derive(bounds, (b) =>
+				declareEntryBounds(b, {
+					asked: plan.anchorsAsked.length,
+					available: plan.anchorsAvailable,
+				}),
+			),
+			// No question was asked, so there is no reasoning to report. Absent rather than an empty
+			// readout: inventing one would fabricate an explanation for a screen nobody questioned.
+			readout: derive(entry, () => null),
 			// Rung 2 (spec §6): too little structure to BE a graph. Declared, never drawn as an
 			// empty canvas — "dots the reader cannot use are not more honest than a sentence saying
 			// the graph is the wrong instrument here", and the sentence is the one that respects
 			// `the-unstructured-reader-is-never-worse-off`. The rung must be VISIBLE, because a
 			// reader on it is looking at a different claim than one on rung 1.
-			refusal:
-				bounds.eligible === 0 ? { kind: 'too-little-structure', inScope: bounds.inScope } : null,
-			model: buildEntryGraph(entry, homesOf(contexts, cogmaps)),
-			bound: declareEntryBounds(bounds, {
-				asked: plan.anchorsAsked.length,
-				available: plan.anchorsAvailable,
-			}),
-			// No question was asked, so there is no reasoning to report. Absent rather than an empty
-			// readout: inventing one would fabricate an explanation for a screen nobody questioned.
-			readout: null,
+			//
+			// **It streams, and `refusal` above does not.** `eligible` is a number this read
+			// reports, so the verdict cannot precede the read — it arrives in place of the canvas
+			// it replaces, which is where a reader is already looking. Putting it on `refusal`
+			// would have meant awaiting this read to decide the page frame, and that is the
+			// blocking this whole route was changed to stop.
+			tooLittleStructure: derive(bounds, (b) =>
+				b.eligible === 0 ? { kind: 'too-little-structure' as const, inScope: b.inScope } : null,
+			),
 			placesAsked: plan.anchorsAsked.map((a) => describeAnchor(a, cogmaps)),
 		};
 	}
 
 	// Past this point a question (or an explicit `from`) is in hand, so the composition IS the
 	// answer and there is no second, unranked copy of the reader's places to fetch.
-	const response = await runComposition(token, plan.composition);
-
-	// Naming a grouping needs the anchors' shapes, and only when something was disclosed — a
-	// no-question entry runs no funnel and discloses nothing, so it pays nothing.
-	const regions =
-		disclosedRegionIds(response).length > 0
-			? await readAnchorRegions(token, plan.anchorsAsked)
-			: { rows: [], complete: true };
-
-	const model = buildGraph({
-		response,
-		plan,
-		seeds: namedSeeds,
-	});
+	//
+	// One read, three fields, again — and the second read here is INSIDE the first because it is
+	// downstream of it: whether any grouping was disclosed is something only the response can say.
+	// The chained promise needs no `.catch()` of its own; `bounded`'s `Promise.race` subscribes to
+	// what it is given, and its guard is on what it hands back.
+	const composed = bounded(
+		runComposition(token, plan.composition).then(async (response) => ({
+			response,
+			// Naming a grouping needs the anchors' shapes, and only when something was disclosed — a
+			// no-question entry runs no funnel and discloses nothing, so it pays nothing.
+			regions:
+				disclosedRegionIds(response).length > 0
+					? await readAnchorRegions(token, plan.anchorsAsked)
+					: { rows: [], complete: true },
+		})),
+		'graph',
+	);
 
 	return {
 		question: question.text,
 		borrowedFrom: question.borrowedFrom,
 		refusal: null,
-		model,
-		bound: declareBounds(response, plan),
-		readout: buildReadout(response, regions),
+		model: derive(composed, ({ response }) => buildGraph({ response, plan, seeds: namedSeeds })),
+		bound: derive(composed, ({ response }) => declareBounds(response, plan)),
+		readout: derive(composed, ({ response, regions }) => buildReadout(response, regions)),
+		// A composition has no connection floor and no `eligible` axis, so it can never reach rung
+		// 2's verdict — see the entry branch, which is the only read that can.
+		tooLittleStructure: Promise.resolve(null),
 		placesAsked: plan.anchorsAsked.map((a) => describeAnchor(a, cogmaps)),
 	};
 }

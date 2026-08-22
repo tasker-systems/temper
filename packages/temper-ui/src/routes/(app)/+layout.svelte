@@ -4,6 +4,7 @@
 	import { page } from '$app/stores';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import CommandPalette from '$lib/components/CommandPalette.svelte';
+	import NavProgress from '$lib/components/NavProgress.svelte';
 	import { sidebarCollapsed, sidebarGroups } from '$lib/stores/sidebar.svelte';
 
 	let { data, children }: { data: LayoutData; children: Snippet } = $props();
@@ -28,6 +29,7 @@
 <svelte:window onkeydown={onKeydown} />
 
 <div class="flex h-screen bg-zinc-950 text-zinc-100">
+	<NavProgress />
 	<Sidebar
 		contexts={data.contexts}
 		teams={data.teams}
