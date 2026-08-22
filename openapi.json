@@ -2111,6 +2111,152 @@
         "x-apidog-folder": "Reference/API Reference/Contexts"
       }
     },
+    "/api/contexts/{id}/shapes": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Data Artifact Shapes"
+        ],
+        "summary": "List live shapes declared for a context home.",
+        "description": "Visibility-gated: the caller only sees shapes whose home anchor they can read.\nReturns an empty set (never an error) for an unreadable context.",
+        "operationId": "list_shapes",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Context ID (the shape's home anchor)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Live shapes declared for this context",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ShapeView"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Data Artifact Shapes"
+      },
+      "post": {
+        "tags": [
+          "Data Artifact Shapes"
+        ],
+        "summary": "Declare a shape for a data-artifact family within a context home.",
+        "description": "Authority-gated: the caller must have authoring authority over the context\n(`context_authorable_by_profile`). The service layer applies the gate before\nany write — a caller who cannot author the home is refused with 403.",
+        "operationId": "declare_shape",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Context ID (the shape's home anchor)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShapeDeclareRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Declared shape",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShapeView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No authoring authority over the home context",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Context not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Data Artifact Shapes"
+      }
+    },
     "/api/contexts/{id}/teams": {
       "parameters": [
         {
@@ -6695,6 +6841,81 @@
         "x-apidog-folder": "Reference/API Reference/Search"
       }
     },
+    "/api/shapes/{shape_id}": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Data Artifact Shapes"
+        ],
+        "summary": "Get a single shape by ID.",
+        "description": "Visibility-gated: returns 404 if the shape does not exist or its owning home\nanchor is not readable to the caller. Includes folded shapes (audit/history).",
+        "operationId": "get_shape",
+        "parameters": [
+          {
+            "name": "shape_id",
+            "in": "path",
+            "description": "Shape ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The shape with its schema and enforcement mode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShapeView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Data Artifact Shapes"
+      }
+    },
     "/api/steward/candidates": {
       "parameters": [
         {
@@ -10118,6 +10339,14 @@
             "minimum": 0
           }
         }
+      },
+      "EnforcementMode": {
+        "type": "string",
+        "description": "Whether a non-conforming commit is refused or merely recorded.\n\nThe closed vocabulary the register closes over (spec §6): `advisory` (default) or `enforcing`.\nMirrors `temper_substrate::payloads::EnforcementMode` in a temper-core-native shape so the wire\ntype does not depend on the substrate crate, with the full derive stack the wire surfaces require.\n`schemars(inline)` is required for MCP tool inputs (the same fix applied to `ConfidenceBand` and\nthe graph enums — a `$ref` into `$defs` reaches the Anthropic tool-use layer with no type signal).",
+        "enum": [
+          "advisory",
+          "enforcing"
+        ]
       },
       "Entitlements": {
         "type": "object",
@@ -14339,6 +14568,112 @@
           "resource_id": {
             "type": "string",
             "format": "uuid"
+          }
+        }
+      },
+      "ShapeDeclareRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ActInput",
+            "description": "Per-act correlation + authorship flags. Flattened into the request body."
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind",
+              "schema",
+              "enforcement"
+            ],
+            "properties": {
+              "enforcement": {
+                "$ref": "#/components/schemas/EnforcementMode",
+                "description": "Whether a non-conforming commit is refused (`enforcing`) or merely recorded (`advisory`)."
+              },
+              "kind": {
+                "type": "string",
+                "description": "The bare family name, qualified by `kind_owner` (or defaulted from the home)."
+              },
+              "kind_owner": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/KindOwnerInput",
+                    "description": "Override the namespace half of the family name. Omit to let the server default it."
+                  }
+                ]
+              },
+              "schema": {
+                "description": "The JSON Schema (draft 2020-12) governing this family. Validated Rust-side."
+              }
+            }
+          }
+        ],
+        "description": "Request body for declaring a shape — the write surface.\n\nThe home anchor is resolved by the handler from the URL path (API) or tool input (MCP), not\ncarried in this body — the same split `ArtifactCommitRequest` uses for the resource id. `kind`\nis the bare family name, qualified by `kind_owner` (or defaulted from the home)."
+      },
+      "ShapeId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "A `kb_data_artifact_shapes.id` value — one declared JSON Schema governing a data-artifact\nfamily within a single home (spec: data-artifact shape registry, 2026-08-21)."
+      },
+      "ShapeView": {
+        "type": "object",
+        "description": "One declared shape, as returned by the API and MCP surfaces.\n\nThis is the readback `RetrievedShape` projected onto a wire shape: `HomeAnchor` and `KindOwner`\nare rendered as their `(table, id)` scalar pairs (the same split `ArtifactView` uses for\n`kind_owner_table`/`kind_owner_id`) so a consumer that does not share the Rust types still gets a\nself-describing response.",
+        "required": [
+          "shape_id",
+          "home_anchor_table",
+          "home_anchor_id",
+          "kind_owner_table",
+          "kind_owner_id",
+          "artifact_kind",
+          "schema",
+          "enforcement",
+          "shape_version",
+          "is_folded",
+          "created"
+        ],
+        "properties": {
+          "artifact_kind": {
+            "type": "string"
+          },
+          "created": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "enforcement": {
+            "$ref": "#/components/schemas/EnforcementMode",
+            "description": "`\"advisory\"` or `\"enforcing\"`."
+          },
+          "home_anchor_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "home_anchor_table": {
+            "type": "string",
+            "description": "`\"kb_contexts\"` or `\"kb_cogmaps\"` — the home anchor discriminant."
+          },
+          "is_folded": {
+            "type": "boolean"
+          },
+          "kind_owner_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind_owner_table": {
+            "type": "string",
+            "description": "`\"kb_profiles\"` or `\"kb_teams\"` — the namespace half of the family name."
+          },
+          "schema": {
+            "description": "The JSON Schema (draft 2020-12) governing this family."
+          },
+          "shape_id": {
+            "$ref": "#/components/schemas/ShapeId"
+          },
+          "shape_version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The chain depth of the assert/fold lineage — 1 for the first declaration, N for the Nth."
           }
         }
       },

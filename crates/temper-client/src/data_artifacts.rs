@@ -8,6 +8,7 @@ use crate::http::HttpClient;
 use temper_core::types::data_artifact::{
     ArtifactCommitRequest, ArtifactCommitResponse, ArtifactListParams, ArtifactView,
 };
+use temper_core::types::data_artifact_shape::{ShapeDeclareRequest, ShapeView};
 
 /// Sub-client for data artifact reads and writes.
 pub struct DataArtifactsClient<'a> {
@@ -62,6 +63,40 @@ impl<'a> DataArtifactsClient<'a> {
     ) -> Result<ArtifactCommitResponse> {
         let token = self.http.resolve_token()?;
         let path = format!("/api/resources/{resource_id}/artifacts");
+        let req = self.http.post(&path).json(request);
+        self.http
+            .send_json(&Method::POST, &path, req, Some(&token))
+            .await
+    }
+
+    /// List live shapes declared for a context home.
+    pub async fn list_shapes(&self, context_id: Uuid) -> Result<Vec<ShapeView>> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/contexts/{context_id}/shapes");
+        let req = self.http.get(&path);
+        self.http
+            .send_json(&Method::GET, &path, req, Some(&token))
+            .await
+    }
+
+    /// Get a single shape by ID.
+    pub async fn get_shape(&self, shape_id: Uuid) -> Result<ShapeView> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/shapes/{shape_id}");
+        let req = self.http.get(&path);
+        self.http
+            .send_json(&Method::GET, &path, req, Some(&token))
+            .await
+    }
+
+    /// Declare a shape for a data-artifact family within a context home.
+    pub async fn declare_shape(
+        &self,
+        context_id: Uuid,
+        request: &ShapeDeclareRequest,
+    ) -> Result<ShapeView> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/contexts/{context_id}/shapes");
         let req = self.http.post(&path).json(request);
         self.http
             .send_json(&Method::POST, &path, req, Some(&token))

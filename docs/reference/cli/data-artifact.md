@@ -13,6 +13,7 @@ Commands:
   list    List data artifacts owned by a resource
   show    Show a single data artifact by ID
   commit  Commit one data artifact to a resource
+  schema  Declare and inspect data-artifact shapes (the schema registry)
   help    Print this message or the help of the given subcommand(s)
 
 Options:
@@ -92,4 +93,127 @@ Options:
       --persona <PERSONA>          Persona/role the author acted as (authorship; requires --confidence)
       --model <MODEL>              Model that authored the act (authorship; requires --confidence)
   -h, --help                       Print help
+```
+
+### `temper data-artifact schema`
+
+```text
+Declare and inspect data-artifact shapes (the schema registry)
+
+Usage: temper data-artifact schema [OPTIONS] <COMMAND>
+
+Commands:
+  list     List live shapes declared for a context — what families are governed and how
+  show     Show a single shape by its ID — the schema, version, and enforcement mode
+  declare  Declare a shape for a data-artifact family within a context home
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+      --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
+      --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+      --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+      --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+  -h, --help               Print help
+```
+
+#### `temper data-artifact schema list`
+
+```text
+List live shapes declared for a context — what families are governed and how
+
+Usage: temper data-artifact schema list [OPTIONS] --context <CONTEXT>
+
+Options:
+      --context <CONTEXT>  Context ref: a UUID or the `@owner/slug` / `+team-slug/slug` form
+      --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
+      --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+      --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+      --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+  -h, --help               Print help
+```
+
+#### `temper data-artifact schema show`
+
+```text
+Show a single shape by its ID — the schema, version, and enforcement mode
+
+Usage: temper data-artifact schema show [OPTIONS] <REF>
+
+Arguments:
+  <REF>  Shape ref: a UUID or the decorated `slug-<uuid>` form
+
+Options:
+      --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
+      --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+      --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+      --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+  -h, --help               Print help
+```
+
+#### `temper data-artifact schema declare`
+
+```text
+Declare a shape for a data-artifact family within a context home.
+
+Gated on authoring authority over the context. The schema content is read from `--content @<path>`, `--content -` (stdin), or piped stdin — the same convention as `data-artifact commit`. The content must be a valid JSON Schema (draft 2020-12).
+
+Usage: temper data-artifact schema declare [OPTIONS] --kind <KIND> <REF>
+
+Arguments:
+  <REF>
+          Context ref: a UUID or the `@owner/slug` / `+team-slug/slug` form
+
+Options:
+      --kind <KIND>
+          The bare family name (e.g. `"measurement"`)
+
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --enforcement <ENFORCEMENT>
+          Enforcement mode: `advisory` (default — non-conforming commits succeed and are recorded) or `enforcing` (non-conforming commits are refused)
+
+          Possible values:
+          - advisory:  Non-conforming commits succeed and are recorded as non-conforming
+          - enforcing: Non-conforming commits are refused, and the refusal carries what failed
+          
+          [default: advisory]
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --content <CONTENT>
+          Content source: `@<path>` (file), `-` (stdin), or omitted for implicit stdin. The content must be valid JSON (a JSON Schema draft 2020-12 document)
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+      --invocation <INVOCATION>
+          Correlate this act with an open invocation envelope (its ref/UUID from `invocation open`)
+
+      --correlation <CORRELATION>
+          Stitch this write into an act-grain thread shared with other writes (a bare UUID you mint). Provenance only — it never authorizes. Omit and the event self-roots
+
+      --confidence <CONFIDENCE>
+          Graded authorship confidence: tentative, probable, or confident
+          
+          [possible values: tentative, probable, confident]
+
+      --reasoning <REASONING>
+          Free-text reasoning for the act (authorship; requires --confidence)
+
+      --rationale <RATIONALE>
+          Structured rationale for the act (authorship; requires --confidence)
+
+      --persona <PERSONA>
+          Persona/role the author acted as (authorship; requires --confidence)
+
+      --model <MODEL>
+          Model that authored the act (authorship; requires --confidence)
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```

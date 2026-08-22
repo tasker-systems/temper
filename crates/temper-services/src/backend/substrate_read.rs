@@ -37,7 +37,9 @@ use temper_core::types::cognitive_maps::{
     CogmapStaleness,
 };
 use temper_core::types::home::HomeAnchor;
-use temper_core::types::ids::{CogmapId, ContextId, DataArtifactId, LensId, ProfileId, ResourceId};
+use temper_core::types::ids::{
+    CogmapId, ContextId, DataArtifactId, LensId, ProfileId, ResourceId, ShapeId,
+};
 use temper_core::types::invocation::{
     Disposition, InvocationActRow, InvocationSummary, InvocationView,
 };
@@ -1567,6 +1569,15 @@ pub async fn list_artifacts(
                 temper_substrate::payloads::ShapeState::NeverDeclared => {
                     "never_declared".to_owned()
                 }
+                temper_substrate::payloads::ShapeState::DeclaredSatisfied => {
+                    "declared_satisfied".to_owned()
+                }
+                temper_substrate::payloads::ShapeState::DeclaredNotSatisfied => {
+                    "declared_not_satisfied".to_owned()
+                }
+                temper_substrate::payloads::ShapeState::DeclaredNotYetChecked => {
+                    "declared_not_yet_checked".to_owned()
+                }
             },
             is_folded: a.is_folded,
             created: a.created,
@@ -1641,12 +1652,83 @@ pub async fn get_artifact(
                 temper_substrate::payloads::ShapeState::NeverDeclared => {
                     "never_declared".to_owned()
                 }
+                temper_substrate::payloads::ShapeState::DeclaredSatisfied => {
+                    "declared_satisfied".to_owned()
+                }
+                temper_substrate::payloads::ShapeState::DeclaredNotSatisfied => {
+                    "declared_not_satisfied".to_owned()
+                }
+                temper_substrate::payloads::ShapeState::DeclaredNotYetChecked => {
+                    "declared_not_yet_checked".to_owned()
+                }
             },
             is_folded: a.is_folded,
             created: a.created,
             content: a.content,
         }),
     )
+}
+
+// ── Data-artifact shape reads ─────────────────────────────────────────────────────────────────
+
+/// Map a substrate readback `RetrievedShape` to the wire `ShapeView`.
+fn shape_to_view(
+    s: readback::RetrievedShape,
+) -> temper_core::types::data_artifact_shape::ShapeView {
+    use temper_core::types::data_artifact_shape::{EnforcementMode, ShapeView};
+
+    ShapeView {
+        shape_id: s.shape_id,
+        home_anchor_table: s.home_anchor.table().to_owned(),
+        home_anchor_id: s.home_anchor.uuid(),
+        kind_owner_table: match s.kind_owner {
+            temper_substrate::payloads::KindOwner::Profile(_) => "kb_profiles".to_owned(),
+            temper_substrate::payloads::KindOwner::Team(_) => "kb_teams".to_owned(),
+        },
+        kind_owner_id: match s.kind_owner {
+            temper_substrate::payloads::KindOwner::Profile(id) => id,
+            temper_substrate::payloads::KindOwner::Team(id) => id,
+        },
+        artifact_kind: s.artifact_kind,
+        schema: s.schema,
+        enforcement: match s.enforcement {
+            temper_substrate::payloads::EnforcementMode::Advisory => EnforcementMode::Advisory,
+            temper_substrate::payloads::EnforcementMode::Enforcing => EnforcementMode::Enforcing,
+        },
+        shape_version: s.shape_version,
+        is_folded: s.is_folded,
+        created: s.created,
+    }
+}
+
+/// List all live (non-folded) shapes declared for a home anchor. Visibility-gated
+/// through `anchor_readable_by_profile` in the SQL — an unreadable anchor yields an
+/// empty set, never an error.
+pub async fn list_shapes(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    anchor: HomeAnchor,
+) -> ApiResult<Vec<temper_core::types::data_artifact_shape::ShapeView>> {
+    let shapes = readback::shapes_for_home(pool, profile_id, anchor)
+        .await
+        .map_err(|e| ApiError::from(TemperError::Api(e.to_string())))?;
+
+    Ok(shapes.into_iter().map(shape_to_view).collect())
+}
+
+/// Retrieve a single shape by ID. Returns `None` (→ 404) if the shape does not exist
+/// or the owning home anchor is not readable to the caller. Includes folded shapes
+/// (audit/history).
+pub async fn get_shape(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    shape_id: ShapeId,
+) -> ApiResult<Option<temper_core::types::data_artifact_shape::ShapeView>> {
+    let shape = readback::shape_by_id(pool, profile_id, shape_id)
+        .await
+        .map_err(|e| ApiError::from(TemperError::Api(e.to_string())))?;
+
+    Ok(shape.map(shape_to_view))
 }
 
 pub fn parse_intent_str(s: &str) -> ApiResult<temper_substrate::payloads::ArtifactIntent> {

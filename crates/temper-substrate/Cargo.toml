@@ -40,6 +40,9 @@ serde_yaml = "0.9"
 schemars = { version = "1", features = ["uuid1"], optional = true }
 anyhow = "1"
 sha2 = "0.10"
+# Used in Task 3 (Beat B) for commit-time JSON Schema validation. Added here per the plan so the
+# dependency is in place before the validation code lands.
+jsonschema = "0.45"
 
 # (No dev-dependencies: the WS6 chunk-3 parity tests that dev-depended on temper-api/temper-core were
 # retired with synthesis at the endgame collapse.)

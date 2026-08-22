@@ -899,10 +899,6 @@ pub enum ResourceAction {
 }
 
 #[derive(Subcommand)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "clap arg-definition enum, parsed once"
-)]
 pub enum DataArtifactAction {
     /// List data artifacts owned by a resource
     List {
@@ -951,6 +947,60 @@ pub enum DataArtifactAction {
         #[command(flatten)]
         act: ActArgs,
     },
+    /// Declare and inspect data-artifact shapes (the schema registry)
+    Schema {
+        #[command(subcommand)]
+        action: SchemaAction,
+    },
+}
+
+#[derive(Subcommand)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "clap arg-definition enum, parsed once"
+)]
+pub enum SchemaAction {
+    /// List live shapes declared for a context — what families are governed and how
+    List {
+        /// Context ref: a UUID or the `@owner/slug` / `+team-slug/slug` form
+        #[arg(long)]
+        context: String,
+    },
+    /// Show a single shape by its ID — the schema, version, and enforcement mode
+    Show {
+        /// Shape ref: a UUID or the decorated `slug-<uuid>` form
+        r#ref: String,
+    },
+    /// Declare a shape for a data-artifact family within a context home.
+    ///
+    /// Gated on authoring authority over the context. The schema content is read from
+    /// `--content @<path>`, `--content -` (stdin), or piped stdin — the same convention as
+    /// `data-artifact commit`. The content must be a valid JSON Schema (draft 2020-12).
+    Declare {
+        /// Context ref: a UUID or the `@owner/slug` / `+team-slug/slug` form
+        r#ref: String,
+        /// The bare family name (e.g. `"measurement"`)
+        #[arg(long)]
+        kind: String,
+        /// Enforcement mode: `advisory` (default — non-conforming commits succeed and are
+        /// recorded) or `enforcing` (non-conforming commits are refused)
+        #[arg(long, value_enum, default_value_t = CliEnforcementMode::Advisory)]
+        enforcement: CliEnforcementMode,
+        /// Content source: `@<path>` (file), `-` (stdin), or omitted for implicit stdin.
+        /// The content must be valid JSON (a JSON Schema draft 2020-12 document).
+        #[arg(long)]
+        content: Option<String>,
+        #[command(flatten)]
+        act: ActArgs,
+    },
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum CliEnforcementMode {
+    /// Non-conforming commits succeed and are recorded as non-conforming
+    Advisory,
+    /// Non-conforming commits are refused, and the refusal carries what failed
+    Enforcing,
 }
 
 #[derive(Subcommand)]

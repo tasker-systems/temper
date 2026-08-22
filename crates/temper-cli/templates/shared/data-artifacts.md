@@ -63,15 +63,52 @@ stored record alone — with no out-of-band knowledge and no local convention.
 
 Every artifact carries a `shape_state`:
 
-- `never_declared` — no shape has been declared for this family. **Today, this is the only live
-  state.** The shape registry is future work.
-- `declared_and_satisfied`, `declared_and_not_satisfied`, `declared_and_not_yet_checked` — future
-  states, dependent on the shape registry.
+- `never_declared` — no shape has been declared for this family in the artifact's home.
+- `declared_satisfied` — a shape is in force and the artifact conforms to it.
+- `declared_not_satisfied` — a shape is in force and the artifact does not conform.
+- `declared_not_yet_checked` — a shape was declared but the validation sweep has not reached this
+  artifact yet.
 
 The absence of a shape is a **first-class state**, not a degraded one. An actor can commit
 structured data without first declaring its shape, and that is a first-class act — the system does
 not require a prior declaration to persist data. `never_declared` is reported as a typed value, not
 as a silent "looks fine" — a `""` or `NULL` is a decode error, not a default.
+
+A stored verdict is trusted **only** while its `(shape_id, shape_version, content_hash)` triple
+matches the currently governing shape and the artifact's current content. Anything else reads as
+`declared_not_yet_checked`. This means staleness can never be misread as conformance — it reads as
+unchecked, which is honest.
+
+## Declaring a shape
+
+A shape is a JSON Schema (draft 2020-12) declared for a family within a home. Declaring is a
+separate act from committing data — you never need to declare a shape to commit an artifact.
+
+**Declaring is never required to commit.** The system persists your data whether or not a shape
+exists. `never_declared` is a first-class state, not a gate. If you declare a shape later, the
+system reconciles existing artifacts asynchronously — they read as `declared_not_yet_checked` until
+the sweep reaches them, never as silently conforming.
+
+**A shape governs its home.** The shape in force for a family is keyed per home (a context or a
+cogmap), not globally. So the same family can carry different shapes in different contexts — a
+`measurement` in one context may have a different schema than a `measurement` in another. This is
+by construction: a shape declared in a context you cannot read must not verdict your data. When a
+resource is rehomed, the governing shape changes with it, and the artifact reads as unchecked until
+reconciled against the new home's shape.
+
+### Enforcement modes
+
+A shape carries an **enforcement mode** — a closed vocabulary, like `intent`:
+
+- **`advisory`** (default) — a non-conforming commit **succeeds** and is recorded as
+  `declared_not_satisfied`. The shape informs; it does not gate.
+- **`enforcing`** — a non-conforming commit is **refused**, and the refusal carries what failed.
+
+`advisory` is the default because the registry exists to make shapes **discoverable and
+informative**, not to force a writer to be right up front. An `enforcing` shape is an opt-in
+coercive contract. Shapes are not "just schema validation" — the why-anchor is still that the writer
+and the reader are different sessions separated in time, and a shape tells the reader whether the
+data they retrieved conforms to anything the writer declared.
 
 ## What data artifacts are NOT
 
@@ -107,6 +144,20 @@ temper data-artifact list <resource-ref> \
 
 The `--content` must be valid JSON. The commit returns the artifact with its server-assigned ID,
 content hash, and shape state. See `reference.md` for the full command table.
+
+```bash
+# Declare a shape for a family within a context (gated on authoring authority)
+temper data-artifact schema declare <context-ref> \
+  --kind "measurement" \
+  --enforcement advisory          # default; use --enforcement enforcing to refuse non-conforming commits
+  --content @schema.json          # a JSON Schema draft 2020-12 document
+
+# List live shapes declared for a context
+temper data-artifact schema list --context <context-ref>
+
+# Show a single shape by ID
+temper data-artifact schema show <shape-id>
+```
 {%- else %}
 ```
 Tool: commit_data_artifact
@@ -133,4 +184,20 @@ Input: {
 
 The `content` field takes a JSON value (object, array, string, number, boolean, or null), not a
 string. The commit returns the artifact with its server-assigned ID, content hash, and shape state.
+
+```
+Tool: declare_data_artifact_shape
+Input: {
+  "context": "<context UUID>",
+  "kind": "measurement",
+  "schema": { ... },                // a JSON Schema draft 2020-12 document
+  "enforcement": "advisory"         // "advisory" (default) or "enforcing"
+}
+
+Tool: list_data_artifact_shapes
+Input: { "context": "<context UUID>" }
+
+Tool: get_data_artifact_shape
+Input: { "shape_id": "<shape UUID>" }
+```
 {%- endif %}

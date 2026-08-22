@@ -239,6 +239,9 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             // kb_data_artifact_content rather than from a chunk manifest, so it is built by the
             // separate pass below and this arm only satisfies exhaustiveness.
             | EventKind::DataArtifactCommitted
+            // A shape declaration carries a JSON Schema in the payload, not prose: no blocks, no
+            // chunks, no sidecar.
+            | EventKind::ShapeDeclared
             | EventKind::WebhookReceived => None,
         }
         .context("content-bearing payload missing blocks")?;
@@ -449,6 +452,18 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     id,
                     payload,
                     side as Option<&serde_json::Value>,
+                )
+                .fetch_one(pool)
+                .await?;
+            }
+            EventKind::ShapeDeclared => {
+                // A shape declaration carries its JSON Schema in the payload — no content sidecar.
+                // Macro form, for the same reason as the artifact arm above: the projector name
+                // is a static literal, so no `dynamic-table` claim is available to this call.
+                sqlx::query!(
+                    "SELECT _project_data_artifact_shape_declared($1,$2)",
+                    id,
+                    payload,
                 )
                 .fetch_one(pool)
                 .await?;

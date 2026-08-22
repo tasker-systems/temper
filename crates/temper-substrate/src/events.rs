@@ -22,7 +22,7 @@ use crate::affinity::EdgeKind;
 use crate::content::{PreparedBlock, PreparedChunk};
 use crate::ids::{
     BlockId, CogmapId, ContextId, CorrelationId, DataArtifactId, EdgeId, EntityId, EventId,
-    InvocationId, LensId, ProfileId, PropertyId, RegionId, ResourceId,
+    InvocationId, LensId, ProfileId, PropertyId, RegionId, ResourceId, ShapeId,
 };
 use crate::payloads;
 use crate::scenario::model::LensDef;
@@ -53,6 +53,9 @@ pub enum EventKind {
     /// One data artifact committed to a resource (spec 2026-08-20). The payload carries the
     /// content HASH; the bytes ride a sidecar into `kb_data_artifact_content`.
     DataArtifactCommitted,
+    /// A shape declared for a data-artifact family within one home (spec 2026-08-21). The shape
+    /// registry's governance event: assert/fold, keyed per home, enforced Rust-side.
+    ShapeDeclared,
     LensCreated,
     RegionMaterialized,
     /// The cheap clock's act (T6, spec §3.5): salience recomputed against a moved telos, with NO
@@ -138,6 +141,7 @@ impl EventKind {
             EventKind::PropertyAsserted => "property_asserted",
             EventKind::PropertySet => "property_set",
             EventKind::DataArtifactCommitted => "data_artifact_committed",
+            EventKind::ShapeDeclared => "shape_declared",
             EventKind::LensCreated => "lens_created",
             EventKind::RegionMaterialized => "region_materialized",
             EventKind::SalienceRefreshed => "salience_refreshed",
@@ -183,6 +187,7 @@ impl EventKind {
             "property_asserted" => EventKind::PropertyAsserted,
             "property_set" => EventKind::PropertySet,
             "data_artifact_committed" => EventKind::DataArtifactCommitted,
+            "shape_declared" => EventKind::ShapeDeclared,
             "lens_created" => EventKind::LensCreated,
             "region_materialized" => EventKind::RegionMaterialized,
             "salience_refreshed" => EventKind::SalienceRefreshed,
@@ -327,6 +332,23 @@ pub enum SeedAction<'a> {
         /// inside the event payload itself.
         content: &'a serde_json::Value,
         supersedes: &'a [DataArtifactId],
+        emitter: EntityId,
+    },
+    /// Declare a shape for a data-artifact family within one home (spec 2026-08-21).
+    ///
+    /// `kind_owner` is `None` in the ordinary case: the SQL wrapper defaults the family namespace
+    /// from the home and writes the resolved value INTO the payload before the event is appended,
+    /// the same identity-as-input pattern `DataArtifactCommit` uses. Pass `Some` only to name
+    /// another owner's namespace deliberately.
+    ///
+    /// The `home` names where the shape lives — polymorphic over `(kb_contexts, kb_cogmaps)`. A
+    /// shape never verdicts data its declarer cannot read, because the home bounds the reach.
+    ShapeDeclare {
+        home: payloads::AnchorRef,
+        kind: &'a str,
+        kind_owner: Option<payloads::KindOwner>,
+        schema: &'a serde_json::Value,
+        enforcement: payloads::EnforcementMode,
         emitter: EntityId,
     },
     LensCreate {
@@ -496,6 +518,7 @@ impl SeedAction<'_> {
             SeedAction::PropertyAssert { .. } => EventKind::PropertyAsserted,
             SeedAction::PropertySet { .. } => EventKind::PropertySet,
             SeedAction::DataArtifactCommit { .. } => EventKind::DataArtifactCommitted,
+            SeedAction::ShapeDeclare { .. } => EventKind::ShapeDeclared,
             SeedAction::LensCreate { .. } => EventKind::LensCreated,
             SeedAction::Materialize { .. } => EventKind::RegionMaterialized,
             SeedAction::SalienceRefresh { .. } => EventKind::SalienceRefreshed,
@@ -544,17 +567,45 @@ pub enum Fired {
     /// The telos resource id a `CharterSet` fire replaced the charter on.
     Charter(ResourceId),
     Invocation(InvocationId),
-    /// The artifact row a `DataArtifactCommit` fire produced. Singular — one commit, one artifact
-    /// (unlike `Facet`, where a multi-valued key mints a row per inner key).
-    DataArtifact(DataArtifactId),
+    /// The artifact row a `DataArtifactCommit` fire produced, and the conformance verdict
+    /// computed at commit time. Singular — one commit, one artifact (unlike `Facet`, where a
+    /// multi-valued key mints a row per inner key). The `shape_state` is `NeverDeclared` when no
+    /// shape governs the artifact's family; `DeclaredSatisfied` or `DeclaredNotSatisfied` when a
+    /// shape is in force and the content was validated against it in Rust.
+    DataArtifact {
+        artifact: DataArtifactId,
+        shape_state: payloads::ShapeState,
+    },
+    /// The shape row a `ShapeDeclare` fire produced. Singular — one declaration, one shape row
+    /// (assert/fold: a prior row is folded, not superseded in place).
+    Shape(ShapeId),
 }
 
 impl Fired {
     /// Extract the artifact id a `DataArtifactCommit` fire produced.
     pub fn data_artifact(self) -> Result<DataArtifactId> {
         match self {
-            Fired::DataArtifact(id) => Ok(id),
+            Fired::DataArtifact { artifact, .. } => Ok(artifact),
             other => anyhow::bail!("expected Fired::DataArtifact, got {other:?}"),
+        }
+    }
+
+    /// Extract the artifact id and conformance verdict a `DataArtifactCommit` fire produced.
+    pub fn data_artifact_verdict(self) -> Result<(DataArtifactId, payloads::ShapeState)> {
+        match self {
+            Fired::DataArtifact {
+                artifact,
+                shape_state,
+            } => Ok((artifact, shape_state)),
+            other => anyhow::bail!("expected Fired::DataArtifact, got {other:?}"),
+        }
+    }
+
+    /// Extract the shape id a `ShapeDeclare` fire produced.
+    pub fn shape(self) -> Result<ShapeId> {
+        match self {
+            Fired::Shape(id) => Ok(id),
+            other => anyhow::bail!("expected Fired::Shape, got {other:?}"),
         }
     }
 
@@ -906,6 +957,91 @@ pub async fn fire_with(
             let raw = serde_json::to_string(content)?;
             let digest = crate::content::sha256_hex(&raw);
 
+            // ── Commit-time conformance verdict (spec §7.1, §7.2) ─────────────────────
+            //
+            // The shape in force is resolved through SQL — Rust never re-derives the namespace
+            // or the home. When the caller omits kind_owner, the SQL resolver
+            // _data_artifact_kind_owner fills it in (the same function data_artifact_commit's
+            // wrapper uses), so Rust calls it here within the same transaction. Then
+            // _data_artifact_shape_in_force resolves the home via _data_artifact_anchor and
+            // looks up the live shape for (home, kind_owner, kind).
+            //
+            // If a shape is in force, the content is validated against its JSON Schema in Rust
+            // (spec §7.2: there is no in-database validator). Under `enforcing` + non-conformance
+            // the commit is refused and no artifact row is written. Under `advisory` the commit
+            // succeeds and the verdict is DeclaredNotSatisfied. When no shape is in force the
+            // verdict stays NeverDeclared — persistence never requires a prior declaration.
+            let (ko_table, ko_id) = match kind_owner {
+                Some(ref ko) => (ko.owner_table().to_string(), ko.owner_id()),
+                None => {
+                    let row = sqlx::query!(
+                        "SELECT owner_table, owner_id FROM _data_artifact_kind_owner($1)",
+                        resource.uuid(),
+                    )
+                    .fetch_one(&mut *conn)
+                    .await?;
+                    (
+                        row.owner_table
+                            .context("_data_artifact_kind_owner returned null owner_table")?,
+                        row.owner_id
+                            .context("_data_artifact_kind_owner returned null owner_id")?,
+                    )
+                }
+            };
+
+            let shape = sqlx::query!(
+                "SELECT shape_id, shape_version, schema, enforcement \
+                 FROM _data_artifact_shape_in_force($1,$2,$3,$4)",
+                resource.uuid(),
+                ko_table.as_str(),
+                ko_id,
+                kind,
+            )
+            .fetch_optional(&mut *conn)
+            .await?;
+
+            // Validate once, reuse the errors for both the verdict decision and the detail
+            // record. Compiling a JSON Schema is the expensive part — doing it twice per commit
+            // is wasteful and was flagged in review. The errors are collected into owned strings
+            // because `ValidationError` borrows from the validator (which is dropped here).
+            let (shape_state, validation_error_details): (
+                payloads::ShapeState,
+                Option<Vec<(String, String)>>,
+            ) = match &shape {
+                None => (payloads::ShapeState::NeverDeclared, None),
+                Some(row) => {
+                    let schema = row
+                        .schema
+                        .as_ref()
+                        .context("shape in force returned null schema")?;
+                    let enforcement = row
+                        .enforcement
+                        .as_deref()
+                        .context("shape in force returned null enforcement despite CHECK")?;
+                    let validator = jsonschema::validator_for(schema)
+                        .map_err(|e| anyhow::anyhow!("failed to compile shape schema: {e}"))?;
+                    let errors: Vec<(String, String)> = validator
+                        .iter_errors(content)
+                        .map(|e| (e.instance_path().to_string(), e.to_string()))
+                        .collect();
+                    if errors.is_empty() {
+                        (payloads::ShapeState::DeclaredSatisfied, None)
+                    } else if enforcement == "enforcing" {
+                        let detail = errors
+                            .iter()
+                            .map(|(path, msg)| format!("{path}: {msg}"))
+                            .collect::<Vec<_>>()
+                            .join("; ");
+                        anyhow::bail!(
+                            "data_artifact_commit: content does not conform to the enforcing \
+                             shape in force for this family — {detail}"
+                        );
+                    } else {
+                        (payloads::ShapeState::DeclaredNotSatisfied, Some(errors))
+                    }
+                }
+            };
+
             let payload = payloads::DataArtifactCommitted {
                 artifact_id: DataArtifactId::from(Uuid::now_v7()),
                 resource_id: resource,
@@ -952,11 +1088,128 @@ pub async fn fire_with(
             .await?
             .context("data_artifact_commit returned null")?;
             debug_assert_eq!(ids.len(), 1, "one commit mints exactly one artifact");
-            Ok(Fired::DataArtifact(
-                ids.first()
-                    .copied()
-                    .map(DataArtifactId::from)
-                    .unwrap_or(artifact_id),
+            let artifact_uuid = ids.first().copied().unwrap_or(artifact_id.uuid());
+
+            // Persist the verdict so the read path can match it against the staleness triple
+            // (spec §7.5). Only when a shape is in force — NeverDeclared means no shape governs
+            // the family, so there is nothing to record. The verdict row's (shape_id,
+            // shape_version, content_hash) are written here so _data_artifact_shape_state can
+            // match against them on the read side.
+            if let Some(ref row) = shape {
+                let satisfied = shape_state == payloads::ShapeState::DeclaredSatisfied;
+                let detail = if satisfied {
+                    None
+                } else {
+                    // Reuse the errors collected during the verdict decision above —
+                    // recompiling the schema a second time was wasteful and flagged in review.
+                    validation_error_details.as_ref().map(|errors| {
+                        serde_json::Value::Array(
+                            errors
+                                .iter()
+                                .map(|(path, msg)| {
+                                    serde_json::json!({
+                                        "path": path,
+                                        "message": msg,
+                                    })
+                                })
+                                .collect(),
+                        )
+                    })
+                };
+                sqlx::query!(
+                    "SELECT data_artifact_verdict_upsert($1,$2,$3,$4,$5,$6)",
+                    artifact_uuid,
+                    row.shape_id,
+                    row.shape_version,
+                    digest,
+                    satisfied,
+                    detail,
+                )
+                .execute(&mut *conn)
+                .await?;
+            }
+
+            Ok(Fired::DataArtifact {
+                artifact: DataArtifactId::from(artifact_uuid),
+                shape_state,
+            })
+        }
+
+        SeedAction::ShapeDeclare {
+            home,
+            kind,
+            kind_owner,
+            schema,
+            enforcement,
+            emitter,
+        } => {
+            let payload = payloads::ShapeDeclared {
+                shape_id: ShapeId::from(Uuid::now_v7()),
+                home_anchor: home,
+                // A placeholder is NOT written here, mirroring DataArtifactCommit. When the caller
+                // names no namespace the field is omitted from the JSON entirely, and the SQL
+                // wrapper fills it in before appending the event — so the stored payload always
+                // carries a resolved namespace and replay never has to re-derive one.
+                kind_owner: kind_owner.unwrap_or(payloads::KindOwner::Profile(Uuid::nil())),
+                artifact_kind: kind.to_owned(),
+                schema: schema.clone(),
+                enforcement,
+                // 0 is a placeholder; the SQL wrapper computes the real chain depth (version) from
+                // the folded lineage and writes it INTO the payload before the event is appended, so
+                // the stored payload always carries the resolved version.
+                shape_version: 0,
+            };
+            let shape_id = payload.shape_id;
+
+            let mut wire = serde_json::to_value(&payload)?;
+            // Flatten `home_anchor` into top-level `home_anchor_table`/`home_anchor_id` so the SQL
+            // wrapper can read them as top-level payload keys (matching how the projector and the
+            // kb_data_artifact_shapes columns are keyed). The typed `AnchorRef` stays in the Rust
+            // struct; the wire carries the flattened form.
+            wire.as_object_mut()
+                .context("shape payload is not an object")?
+                .remove("home_anchor");
+            wire.as_object_mut()
+                .context("shape payload is not an object")?
+                .insert(
+                    "home_anchor_table".to_string(),
+                    serde_json::json!(match home.table {
+                        payloads::AnchorTable::Contexts => "kb_contexts",
+                        payloads::AnchorTable::Cogmaps => "kb_cogmaps",
+                        _ => anyhow::bail!("shape home must be a context or cogmap anchor"),
+                    }),
+                );
+            wire.as_object_mut()
+                .context("shape payload is not an object")?
+                .insert("home_anchor_id".to_string(), serde_json::json!(home.id));
+            if kind_owner.is_none() {
+                // Let the wrapper's default win. Serializing `KindOwner` unconditionally would put
+                // a nil profile id on the wire and the wrapper would honour it as an explicit
+                // choice — a silently wrong namespace, the same hazard DataArtifactCommit guards.
+                wire.as_object_mut()
+                    .context("shape payload is not an object")?
+                    .remove("kind_owner");
+            }
+            // shape_version is a placeholder until the wrapper resolves the chain depth; remove it
+            // so the wrapper's computed value is the only one written to the ledger.
+            wire.as_object_mut()
+                .context("shape payload is not an object")?
+                .remove("shape_version");
+
+            let ids = sqlx::query_scalar!(
+                "SELECT data_artifact_shape_declare($1,$2,$3,$4,$5)",
+                wire,
+                emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
+                ctx_corr,
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .context("data_artifact_shape_declare returned null")?;
+            debug_assert_eq!(ids.len(), 1, "one declaration mints exactly one shape row");
+            Ok(Fired::Shape(
+                ids.first().copied().map(ShapeId::from).unwrap_or(shape_id),
             ))
         }
 

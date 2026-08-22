@@ -41,6 +41,9 @@ understanding. The conceptual walkthrough is at
   memories are captured and recalled, and what makes one worth keeping.
 - **[Operational memory](../concepts/operational-memory.md)** — the concept: what it is, the
   CLI memory model, and shared memory across a team.
+- **[Committing structured data as an artifact](../playbooks/commit-structured-data-as-an-artifact.md)**
+  — when to store structured data as a data artifact instead of fenced JSON in a resource body,
+  how to declare a shape, and what enforcement modes mean.
 
 ## Every command
 

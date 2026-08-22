@@ -18,7 +18,7 @@ use crate::content::{prepare_block, prepare_block_from_chunks, IncomingChunk, Pr
 use crate::events::{fire, fire_with, EdgeHome, EventContext, SeedAction};
 use crate::ids::{
     BlockId, CogmapId, ContextId, DataArtifactId, EdgeId, EntityId, EventId, InvocationId,
-    ProfileId, PropertyId, ResourceId,
+    ProfileId, PropertyId, ResourceId, ShapeId,
 };
 use crate::payloads::{self, AnchorRef, EdgePolarity, Incorporation, ProvenanceSource};
 use crate::text::slugify;
@@ -1491,6 +1491,53 @@ pub async fn commit_data_artifact_with(
     )
     .await?
     .data_artifact()?;
+    tx.commit().await?;
+    Ok(id)
+}
+
+// ── data-artifact shape writes ────────────────────────────────────────────────
+
+/// Parameters for [`declare_shape_with`] — the attributed write that fires a `ShapeDeclare`
+/// seed action.
+#[derive(Debug)]
+pub struct DeclareShapeParams<'a> {
+    pub home: payloads::AnchorRef,
+    pub kind: &'a str,
+    pub kind_owner: Option<payloads::KindOwner>,
+    pub schema: &'a serde_json::Value,
+    pub enforcement: payloads::EnforcementMode,
+    pub emitter: EntityId,
+}
+
+/// [`declare_shape_with`] under the default (un-attributed) context.
+pub async fn declare_shape(pool: &PgPool, p: DeclareShapeParams<'_>) -> Result<ShapeId> {
+    declare_shape_with(pool, p, EventContext::default()).await
+}
+
+/// Declare a shape for a data-artifact family within one home under an explicit [`EventContext`].
+/// Opens one transaction, fires the `ShapeDeclare` seed action (which calls
+/// `data_artifact_shape_declare()` SQL, defaulting the namespace and computing the chain-depth
+/// version before appending the event), and commits.
+pub async fn declare_shape_with(
+    pool: &PgPool,
+    p: DeclareShapeParams<'_>,
+    ctx: EventContext,
+) -> Result<ShapeId> {
+    let mut tx = begin_scoped(pool).await?;
+    let id = fire_with(
+        &mut tx,
+        SeedAction::ShapeDeclare {
+            home: p.home,
+            kind: p.kind,
+            kind_owner: p.kind_owner,
+            schema: p.schema,
+            enforcement: p.enforcement,
+            emitter: p.emitter,
+        },
+        ctx,
+    )
+    .await?
+    .shape()?;
     tx.commit().await?;
     Ok(id)
 }

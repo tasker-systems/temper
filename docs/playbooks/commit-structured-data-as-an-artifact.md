@@ -69,6 +69,70 @@ temper data-artifact commit <resource-ref> \
 
 The commit returns the artifact with its server-assigned ID, content hash, and shape state.
 
+## Declaring a shape
+
+A shape is a JSON Schema (draft 2020-12) you declare for a family within a context. Declaring is a
+**separate act** from committing data — you never need to declare a shape to commit an artifact.
+The system persists your data whether or not a shape exists. `never_declared` is a first-class
+state, not a gate.
+
+If you declare a shape after artifacts already exist, the system reconciles them asynchronously —
+they read as `declared_not_yet_checked` until the sweep reaches them, never as silently conforming.
+
+```bash
+temper data-artifact schema declare <context-ref> \
+  --kind "measurement" \
+  --enforcement advisory \
+  --content @measurement-schema.json
+```
+
+The schema file is a JSON Schema draft 2020-12 document:
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "metric": { "type": "string" },
+    "value": { "type": "number" },
+    "endpoint": { "type": "string" },
+    "timestamp": { "type": "string", "format": "date-time" }
+  },
+  "required": ["metric", "value", "timestamp"]
+}
+```
+
+### Enforcement modes
+
+A shape carries an enforcement mode — a closed vocabulary:
+
+- **`advisory`** (default) — a non-conforming commit **succeeds** and is recorded as
+  `declared_not_satisfied`. The shape informs; it does not gate.
+- **`enforcing`** — a non-conforming commit is **refused**, and the refusal carries what failed.
+
+`advisory` is the default because the registry exists to make shapes discoverable and informative,
+not to force a writer to be right up front. Switch to `enforcing` only when you want a hard
+contract.
+
+### A shape governs its home
+
+The shape in force for a family is keyed per home (a context or a cogmap), not globally. So the
+same family can carry different shapes in different contexts — a `measurement` in one context may
+have a different schema than a `measurement` in another. This is by construction: a shape declared
+in a context you cannot read must not verdict your data.
+
+### Listing and inspecting shapes
+
+```bash
+# List live shapes declared for a context
+temper data-artifact schema list --context <context-ref>
+
+# Show a single shape by ID — the schema, version, and enforcement mode
+temper data-artifact schema show <shape-id>
+```
+
+Shapes are not searchable — they are reached only through the context they govern, like artifacts
+themselves.
+
 ## Retrieve it later
 
 A later, unrelated session retrieves the artifact by its ID:
@@ -131,9 +195,15 @@ The distinction is not about format — it is about whether the content is data 
 session must retrieve whole, or prose that a reader must understand. A fenced JSON block in a
 session note is prose with a shape; a data artifact is the shape without the prose.
 
+Shapes are not "just schema validation" either. The why-anchor is still that the writer and the
+reader are different sessions separated in time. A shape tells the reader whether the data they
+retrieved conforms to anything the writer declared — it bridges the gap, it does not gate it.
+
 ## Further reading
 
 - **CLI reference for `temper data-artifact`:**
   [data-artifact](../reference/cli/data-artifact.md).
+- **CLI reference for `temper data-artifact schema`:**
+  [data-artifact schema](../reference/cli/data-artifact.md).
 - **Contexts and resource refs:** [Contexts and Refs](../concepts/contexts-and-refs.md).
 - **Using Temper from the CLI:** [temperkb.io/using-temper](https://temperkb.io/using-temper).

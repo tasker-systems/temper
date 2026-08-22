@@ -517,6 +517,42 @@ impl TemperMcpService {
         self.ensure_profile_from_parts(&parts).await?;
         tools::data_artifacts::commit_artifact(self, input).await
     }
+
+    #[tool(
+        description = "List data-artifact shapes declared for a context or cogmap home. Each shape is a JSON Schema (draft 2020-12) governing one artifact family in that home. Visibility-gated: you only see shapes whose home anchor you can read. An unreadable home yields an empty set, never an error."
+    )]
+    async fn list_data_artifact_shapes(
+        &self,
+        Parameters(input): Parameters<tools::data_artifact_shapes::ListShapesInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::data_artifact_shapes::list_shapes(self, input).await
+    }
+
+    #[tool(
+        description = "Get a single data-artifact shape by its ID. Returns the full shape with its JSON Schema, enforcement mode, and lineage version. Visibility-gated: returns 'not found' if the owning home anchor is not readable to you. Includes folded (superseded) shapes for audit history."
+    )]
+    async fn get_data_artifact_shape(
+        &self,
+        Parameters(input): Parameters<tools::data_artifact_shapes::GetShapeInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::data_artifact_shapes::get_shape(self, input).await
+    }
+
+    #[tool(
+        description = "Declare a data-artifact shape for a family within a context or cogmap home. The schema is a JSON Schema (draft 2020-12) that governs the family; enforcement 'advisory' (default) records non-conformance, 'enforcing' refuses the commit. Authority-gated: requires authoring authority over the home (context_authorable_by_profile or cogmap_authorable_by_profile). A principal who cannot author the home is refused."
+    )]
+    async fn declare_data_artifact_shape(
+        &self,
+        Parameters(input): Parameters<tools::data_artifact_shapes::DeclareShapeInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::data_artifact_shapes::declare_shape(self, input).await
+    }
 }
 
 /// The two things the JWT middleware injects for an authenticated request: the
