@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { bounded, GaveUp } from './bounded';
+import { bounded, describeFailure, GaveUp } from './bounded';
 
 describe('a read the system stops waiting for', () => {
 	it('resolves normally when the read answers in time', async () => {
@@ -87,5 +87,34 @@ describe('a read the system stops waiting for', () => {
 	// still has to see the failure, or the region renders nothing and the server merely survives.
 	it('and every consumer still observes that rejection', async () => {
 		await expect(bounded(Promise.reject(new Error('503')), 'history', 50)).rejects.toThrow('503');
+	});
+});
+
+/**
+ * What a give-up becomes when it leaves the server — the half `GaveUp` could not reach on its own.
+ *
+ * `[found — 2026-08-21]` `GaveUp` carried a `label` and **nothing read it**, because nothing could:
+ * SvelteKit hands every rejected streamed promise to `handleError` and serialises whatever that
+ * returns, so `error instanceof GaveUp` in a client `{:catch}` is unreachable by construction. The
+ * fix is a *value* the client can branch on, and this is where the value is minted.
+ */
+describe('the give-up, described for a reader who cannot see the class', () => {
+	it('names which read the system stopped waiting for', () => {
+		expect(describeFailure(new GaveUp('history', 8000), 'Internal Error')).toEqual({
+			message: 'gave up waiting for history after 8000ms',
+			gaveUp: 'history',
+		});
+	});
+
+	// A real failure is not a give-up, and must not borrow its words. The sanitised message is
+	// SvelteKit's, and stays SvelteKit's — this hook adds a field, it does not open a leak.
+	it('leaves a real failure exactly as SvelteKit sanitised it', () => {
+		expect(describeFailure(new Error('503: postgres said no'), 'Internal Error')).toEqual({
+			message: 'Internal Error',
+		});
+	});
+
+	it('survives a rejection that is not an Error at all', () => {
+		expect(describeFailure('nope', 'Internal Error')).toEqual({ message: 'Internal Error' });
 	});
 });

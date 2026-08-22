@@ -13,11 +13,13 @@ import {
 } from '$lib/graph/model';
 import { buildReadout, type Readout } from '$lib/graph/readout';
 import type { GraphRefusal, GraphViewData } from '$lib/graph/view';
+import { describeFailure, GaveUp } from '$lib/server/bounded';
 import type { CogmapRegionRow } from '$lib/types/generated/cognitive_maps';
 import type { EventTrail } from '$lib/types/generated/element_trail';
 import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
 import type { QueryResponse } from '$lib/types/generated/query';
 import { resetAppContext, setPage } from '../../../test/app-context';
+import { sentenceOf } from '../../../test/sentence';
 import GraphPage from './GraphPage.svelte';
 
 vi.mock('$app/stores', () => import('../../../test/app-context'));
@@ -172,6 +174,33 @@ const painted = async (data: GraphViewData) => {
 	return rendered;
 };
 
+/**
+ * The sentence the rail's HISTORY region is saying, once it reaches the state named by `marker`.
+ *
+ * Scoped to the history section on every render: the excerpt is resolved-and-null in these tests, so
+ * a rail-wide assertion would be reading that region's words instead of this one's. It unmounts
+ * before returning, so two states can be compared without two pages being on screen at once.
+ */
+const historyOf = async (
+	trail: EventTrail | Promise<EventTrail> | Promise<never>,
+	marker: string,
+): Promise<string> => {
+	const { unmount } = await painted(
+		view({
+			selected: selected().id,
+			selectedExcerpt: Promise.resolve(null),
+			selectedTrail: trail as EventTrail | Promise<EventTrail>,
+		}),
+	);
+	const section = (await screen.findByTestId('node-rail')).querySelector('.history');
+	await vi.waitFor(() => {
+		expect(section?.querySelector(`[data-testid="${marker}"]`)).not.toBeNull();
+	});
+	const region = section?.querySelector(`[data-testid="${marker}"]`);
+	unmount();
+	return sentenceOf(region);
+};
+
 /** Rung 2, which replaces the canvas rather than joining it — so it waits on its own sentence. */
 const rungTwo = async (inScope: number) => {
 	const rendered = render(GraphPage, {
@@ -179,20 +208,6 @@ const rungTwo = async (inScope: number) => {
 	});
 	await screen.findByText(/A graph is not the right view for this yet/);
 	return rendered;
-};
-
-/**
- * The words a region says, with its `aria-hidden` marker glyph stripped out.
- *
- * Spec §3.3: the four states must differ by more than one channel, and the glyph is one of them —
- * so a comparison that keeps it would pass on the glyph alone while two states said the same
- * sentence. This reads what is left for the accessibility tree.
- */
-const sentenceOf = (el: Element | null | undefined): string => {
-	const clone = el?.cloneNode(true) as Element | undefined;
-	for (const decoration of clone?.querySelectorAll('[aria-hidden="true"]') ?? [])
-		decoration.remove();
-	return (clone?.textContent ?? '').replace(/\s+/g, ' ').trim();
 };
 
 /** The busiest node in the fixture, so its neighbour list is non-trivial. */
@@ -435,28 +450,8 @@ describe('the rail declares what is still arriving', () => {
 	});
 
 	it('C4: a trail that came back empty does not present like one that failed', async () => {
-		const node = selected();
 		const failed = Promise.reject(new Error('503'));
 		failed.catch(() => {});
-
-		// Scoped to the history section on both renders: the excerpt is resolved-and-null here, so a
-		// rail-wide assertion would be reading that region's words instead of this one's.
-		const historyOf = async (trail: EventTrail | Promise<EventTrail>, marker: string) => {
-			const { unmount } = await painted(
-				view({
-					selected: node.id,
-					selectedExcerpt: Promise.resolve(null),
-					selectedTrail: trail,
-				}),
-			);
-			const section = (await screen.findByTestId('node-rail')).querySelector('.history');
-			await vi.waitFor(() => {
-				expect(section?.querySelector(`[data-testid="${marker}"]`)).not.toBeNull();
-			});
-			const region = section?.querySelector(`[data-testid="${marker}"]`);
-			unmount();
-			return sentenceOf(region);
-		};
 
 		const empty = await historyOf({ events: [] } as unknown as EventTrail, 'region-empty');
 		const broken = await historyOf(failed, 'region-failed');
@@ -467,6 +462,36 @@ describe('the rail declares what is still arriving', () => {
 		// row count, which differs on its own and would keep this green with identical wording.
 		expect(empty).not.toBe('');
 		expect(empty).not.toBe(broken);
+	});
+
+	/**
+	 * The refusal reaching a reader — the wiring half of spec §5.4.
+	 *
+	 * Both rejections are minted by the **production** hook rather than hand-written here, and that
+	 * is the point rather than tidiness: `GaveUp` is a class, a class does not survive serialisation,
+	 * and a test that rejected with the instance would be asserting a discriminator the browser never
+	 * receives. What is thrown here is what `handleError` hands the client runtime.
+	 *
+	 * That the hook's output really does travel is a separate claim, and it is witnessed in
+	 * `bounded.test.ts` against SvelteKit's own serialiser — not here, where both halves share a
+	 * process.
+	 */
+	it('C4: a trail the system gave up on does not present like one that failed', async () => {
+		const stoppedFor = Promise.reject(
+			describeFailure(new GaveUp('history', 8000), 'Internal Error'),
+		);
+		stoppedFor.catch(() => {});
+		const failed = Promise.reject(describeFailure(new Error('503'), 'Internal Error'));
+		failed.catch(() => {});
+
+		const stopped = await historyOf(stoppedFor, 'region-gave-up');
+		const broken = await historyOf(failed, 'region-failed');
+
+		// It says which read, and it does not say what a failure says.
+		expect(stopped.toLowerCase()).toContain('history');
+		expect(stopped).not.toBe(broken);
+		// And it is not the perpetual skeleton either: a give-up is over.
+		expect(stopped).not.toBe('');
 	});
 });
 

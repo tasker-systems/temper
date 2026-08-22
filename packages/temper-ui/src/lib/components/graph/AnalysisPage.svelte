@@ -32,6 +32,7 @@
 		reportMetrics,
 	} from '$lib/graph/analysis';
 	import type { AnalysisViewData } from '$lib/graph/view';
+	import { regionStateFor } from '$lib/region';
 	import { graphAnalysisHref, graphHref, resourceHref } from '$lib/vault-url';
 
 	let { data }: { data: AnalysisViewData } = $props();
@@ -213,12 +214,12 @@
 					</div>
 				{/if}
 			</section>
-		{:catch}
-			<!-- The third state, and never the second one held open: nothing here says "arriving". The
-			     measurements are not late, they were not read — and this page keeps saying which place
-			     it was measuring, because that never depended on the read. -->
+		{:catch error}
+			<!-- Never the second state held open: nothing here says "arriving". The measurements are
+			     not late — they were not read, or the system stopped waiting for them — and this page
+			     keeps saying which place it was measuring, because that never depended on the read. -->
 			<div class="region-slot">
-				<RegionState state="failed" label="measurements" />
+				<RegionState state={regionStateFor(error)} label="measurements" />
 			</div>
 		{/await}
 	{/if}

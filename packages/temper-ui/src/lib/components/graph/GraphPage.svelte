@@ -14,6 +14,7 @@
 	import { page } from '$app/stores';
 	import RegionState from '$lib/components/RegionState.svelte';
 	import type { GraphViewData } from '$lib/graph/view';
+	import { regionStateFor } from '$lib/region';
 	import BoundLine from './BoundLine.svelte';
 	import GraphA11yList from './GraphA11yList.svelte';
 	import GraphCanvas from './GraphCanvas.svelte';
@@ -187,12 +188,13 @@
 					<BoundLine {bound} />
 				{/if}
 			{/if}
-		{:catch}
-			<!-- The third state, and never the second one held open: nothing here says "arriving".
-			     The marks are not late, they were not read. -->
+		{:catch error}
+			<!-- Never the second state held open: nothing here says "arriving". The marks are not late
+			     — either they were not read, or the system stopped waiting for them, and
+			     `regionStateFor` is what tells those two apart on this side of the boundary. -->
 			<div class="instrument">
 				<div class="stage region">
-					<RegionState state="failed" label="graph" />
+					<RegionState state={regionStateFor(error)} label="graph" />
 				</div>
 			</div>
 		{/await}

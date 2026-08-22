@@ -4,11 +4,13 @@ import { render, screen } from '@testing-library/svelte';
 import { describe, expect, it, vi } from 'vitest';
 import { type AnalysedRegion, analyseShape } from '$lib/graph/analysis';
 import type { AnalysisViewData } from '$lib/graph/view';
+import { describeFailure, GaveUp } from '$lib/server/bounded';
 import type {
 	CogmapAnalyticsRow,
 	CogmapRegionMetricsRow,
 	CogmapRegionRow,
 } from '$lib/types/generated/cognitive_maps';
+import { sentenceOf } from '../../../test/sentence';
 import AnalysisPage from './AnalysisPage.svelte';
 
 /**
@@ -124,20 +126,6 @@ const painted = async (data: AnalysisViewData) => {
 		expect(rendered.container.querySelector('.groupings')).not.toBeNull();
 	});
 	return rendered;
-};
-
-/**
- * The words a region says, with its `aria-hidden` marker glyph stripped out.
- *
- * Spec §3.3: the four states must differ by more than one channel, and the glyph is one of them —
- * so a comparison that keeps it would pass on the glyph alone while two states said the same
- * sentence. This reads what is left for the accessibility tree.
- */
-const sentenceOf = (el: Element | null | undefined): string => {
-	const clone = el?.cloneNode(true) as Element | undefined;
-	for (const decoration of clone?.querySelectorAll('[aria-hidden="true"]') ?? [])
-		decoration.remove();
-	return (clone?.textContent ?? '').replace(/\s+/g, ' ').trim();
 };
 
 describe('the page declares what it is, before it shows anything', () => {
@@ -392,6 +380,46 @@ describe('the page declares what its own read is doing', () => {
 		expect(container.querySelector('[data-testid="region-arriving"]')).toBeNull();
 		// And the page still says which place it was measuring — that never depended on the read.
 		expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(fixture.cogmap.name);
+	});
+
+	/**
+	 * The refusal on the second call site, and a different shape from the rail's: a page-level region
+	 * rather than one panel of several.
+	 *
+	 * The rejection is what `handleError` hands the client runtime, not a `GaveUp` instance — the
+	 * class does not survive serialisation, so a test that threw the instance would be asserting a
+	 * discriminator the browser never receives. That the hook's output really travels is witnessed in
+	 * `src/hooks.server.test.ts`, against SvelteKit's own serialiser.
+	 */
+	const stopped = (): Promise<AnalysedRegion[]> => {
+		const p = Promise.reject(describeFailure(new GaveUp('measurements', 8000), 'Internal Error'));
+		p.catch(() => {});
+		return p as Promise<AnalysedRegion[]>;
+	};
+
+	it('C4: measurements the system gave up on do not present like ones that failed', async () => {
+		const gaveUp = render(AnalysisPage, { data: cogmapView({ regions: stopped() }) });
+		await vi.waitFor(() => {
+			expect(gaveUp.container.querySelector('[data-testid="region-gave-up"]')).not.toBeNull();
+		});
+		const stoppedWords = sentenceOf(
+			gaveUp.container.querySelector('[data-testid="region-gave-up"]'),
+		);
+		// Read BEFORE unmounting: a detached container answers `null` to everything, which would make
+		// this the inert assertion the README warns about rather than the perpetual-skeleton check.
+		const stillArriving = gaveUp.container.querySelector('[data-testid="region-arriving"]');
+		gaveUp.unmount();
+
+		const failed = render(AnalysisPage, { data: cogmapView({ regions: broken() }) });
+		await vi.waitFor(() => {
+			expect(failed.container.querySelector('[data-testid="region-failed"]')).not.toBeNull();
+		});
+		const failedWords = sentenceOf(failed.container.querySelector('[data-testid="region-failed"]'));
+
+		// It names the read, it is not the failure's sentence, and it is not the skeleton either.
+		expect(stoppedWords.toLowerCase()).toContain('measurements');
+		expect(stoppedWords).not.toBe(failedWords);
+		expect(stillArriving).toBeNull();
 	});
 
 	it('C4: a failed read does not present like a place with nothing measured', async () => {

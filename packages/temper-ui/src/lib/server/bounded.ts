@@ -107,3 +107,28 @@ export function derive<T, U>(p: Promise<T>, f: (v: T) => U | Promise<U>): Promis
 	next.catch(() => {});
 	return next;
 }
+
+/**
+ * What a rejected read becomes on its way to the browser — the give-up's **other half**.
+ *
+ * `[found — 2026-08-21]` `GaveUp` carried a `label` and nothing read it, and nothing could:
+ * SvelteKit runs every rejected streamed promise through `handleError` and serialises what that
+ * returns, so the instance is gone by the time a `{:catch}` sees anything. Without a hook the
+ * default sanitises both a give-up and a 503 to the same `{ message: 'Internal Error' }`, and the
+ * two regions render identically — the mechanism spec §5.4 describes with no reader at all.
+ *
+ * So the class is converted to a **value** here, at the only point that still holds the class. It
+ * lives beside {@link GaveUp} rather than in `hooks.server.ts` for the same reason {@link bounded}'s
+ * catch does: the knowledge of what a `GaveUp` is stays in one file, and a test can reach it without
+ * dragging the whole request pipeline in.
+ *
+ * `message` is SvelteKit's own sanitised text for anything else and stays that way — this adds a
+ * field, it does not open a leak. A give-up's message is substituted because it describes only the
+ * bound and the region's name, both of which are already the app's own words.
+ *
+ * Read back by `regionStateFor` in `$lib/region`, which is client-safe precisely because it needs
+ * the value and not the class.
+ */
+export function describeFailure(error: unknown, message: string): App.Error {
+	return error instanceof GaveUp ? { message: error.message, gaveUp: error.label } : { message };
+}

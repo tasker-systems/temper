@@ -8,6 +8,7 @@
 	import RegionState from '$lib/components/RegionState.svelte';
 	import { mergeProperties } from '$lib/properties';
 	import { docTypeHue } from '$lib/graph/palette';
+	import { regionStateFor } from '$lib/region';
 
 	let { data }: { data: PageData } = $props();
 
@@ -61,8 +62,8 @@
 				{:else}
 					<MarkdownRenderer {markdown} />
 				{/if}
-			{:catch}
-				<RegionState state="failed" label="document" />
+			{:catch error}
+				<RegionState state={regionStateFor(error)} label="document" />
 			{/await}
 		</div>
 	</div>
@@ -78,16 +79,16 @@
 			<div class="rail-region"><RegionState state="arriving" label="history" /></div>
 		{:then trail}
 			<EventHistory {trail} />
-		{:catch}
-			<div class="rail-region"><RegionState state="failed" label="history" /></div>
+		{:catch error}
+			<div class="rail-region"><RegionState state={regionStateFor(error)} label="history" /></div>
 		{/await}
 
 		{#await data.edges}
 			<div class="rail-region"><RegionState state="arriving" label="connections" /></div>
 		{:then edges}
 			<EdgeList {edges} />
-		{:catch}
-			<div class="rail-region"><RegionState state="failed" label="connections" /></div>
+		{:catch error}
+			<div class="rail-region"><RegionState state={regionStateFor(error)} label="connections" /></div>
 		{/await}
 	</aside>
 </div>

@@ -16,6 +16,7 @@
 	import { summarizeEvent } from '$lib/graph/eventSummary';
 	import { atlasNeighbors } from '$lib/graph/neighbors';
 	import { docTypeHue } from '$lib/graph/palette';
+	import { regionStateFor } from '$lib/region';
 	import { relativeTime } from '$lib/graph/relativeTime';
 	import { trailModel } from '$lib/graph/trail';
 	import type { GraphModel, GraphNode } from '$lib/graph/model';
@@ -97,9 +98,11 @@
 					<!-- The read answered, and the answer is that this resource has no body. -->
 					<RegionState state="empty" label="excerpt" />
 				{/if}
-			{:catch}
-				<!-- Not `empty`. Nothing was read, so nothing may be claimed about the material. -->
-				<RegionState state="failed" label="excerpt" />
+			{:catch error}
+				<!-- Not `empty`. Nothing was read, so nothing may be claimed about the material — and
+				     `regionStateFor` separates a read that FAILED from one the system stopped waiting
+				     for, which are two different things to have not read it for. -->
+				<RegionState state={regionStateFor(error)} label="excerpt" />
 			{/await}
 		</section>
 	{/if}
@@ -169,9 +172,9 @@
 				{:else}
 					<RegionState state="empty" label="history" />
 				{/if}
-			{:catch}
+			{:catch error}
 				<div class="label">HISTORY</div>
-				<RegionState state="failed" label="history" />
+				<RegionState state={regionStateFor(error)} label="history" />
 			{/await}
 		</section>
 	{/if}
