@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT r.id, array_agg(m.member_id ORDER BY m.member_id) AS members FROM kb_cogmap_regions r JOIN kb_cogmap_region_members m ON m.region_id = r.id AND m.member_table = 'kb_resources' WHERE r.home_anchor_table=$1 AND r.home_anchor_id=$2 AND r.lens_id=$3 AND NOT r.is_folded GROUP BY r.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "members",
+        "type_info": "UuidArray"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "d451376942f3df59d97d0809eb10da2d0bca7aaa1dcf9ac55d3225d3959b93bf"
+}

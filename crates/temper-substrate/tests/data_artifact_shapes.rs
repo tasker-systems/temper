@@ -23,8 +23,11 @@
 
 mod common;
 
+use temper_core::types::home::HomeAnchor;
 use temper_substrate::events::{fire, EventContext, Fired, SeedAction};
-use temper_substrate::ids::{CogmapId, ContextId, DataArtifactId, EntityId, ProfileId, ResourceId};
+use temper_substrate::ids::{
+    CogmapId, ContextId, DataArtifactId, EntityId, ProfileId, ResourceId, ShapeId,
+};
 use temper_substrate::payloads::{
     AnchorRef, ArtifactIntent, EnforcementMode, KindOwner, ShapeState,
 };
@@ -868,5 +871,75 @@ async fn an_artifact_with_no_shape_reports_never_declared(pool: sqlx::PgPool) {
         read_state,
         ShapeState::NeverDeclared,
         "read path with no shape in force must report NeverDeclared"
+    );
+}
+
+// ── Beat C: registry enumeration reads, visibility-gated (Task 5) ─────────────────────────────
+
+/// A principal who cannot read the home context sees zero shapes from `shapes_for_home`, and
+/// `shape_by_id` returns `None` for a shape id in that context. The owner sees both. This is the
+/// visibility gate's bite probe: remove the `anchor_readable_by_profile` predicate from the SQL
+/// and the stranger sees the shape — this assertion fails.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn shape_reads_gate_on_home_visibility(pool: sqlx::PgPool) {
+    let (emitter, home, _resource, owner) = world(&pool, "gate-home").await;
+    let kind = "measurement";
+    let schema = string_value_schema();
+
+    let shape_id = declare(
+        &pool,
+        emitter,
+        AnchorRef::context(home),
+        None,
+        kind,
+        &schema,
+        EnforcementMode::Advisory,
+    )
+    .await;
+
+    // A stranger — a profile with no grants, no team membership, and no ownership of the home
+    // context — cannot read it. `anchor_readable_by_profile` returns false for this profile.
+    let stranger = ProfileId::from(common::insert_profile(&pool, "shape-gate-stranger").await);
+
+    // The owner sees the shape via `shapes_for_home`.
+    let owner_shapes =
+        temper_substrate::readback::shapes_for_home(&pool, owner, HomeAnchor::Context(home))
+            .await
+            .unwrap();
+    assert_eq!(
+        owner_shapes.len(),
+        1,
+        "the owner should see one live shape in their own context"
+    );
+    assert_eq!(owner_shapes[0].shape_id.uuid(), shape_id);
+
+    // The stranger sees zero shapes — the visibility gate filters them out.
+    let stranger_shapes =
+        temper_substrate::readback::shapes_for_home(&pool, stranger, HomeAnchor::Context(home))
+            .await
+            .unwrap();
+    assert!(
+        stranger_shapes.is_empty(),
+        "a stranger who cannot read the home context must see zero shapes from shapes_for_home"
+    );
+
+    // The owner sees the shape via `shape_by_id`.
+    let owner_shape =
+        temper_substrate::readback::shape_by_id(&pool, owner, ShapeId::from(shape_id))
+            .await
+            .unwrap();
+    assert!(
+        owner_shape.is_some(),
+        "the owner should see the shape by id in their own context"
+    );
+
+    // The stranger sees nothing — `shape_by_id` returns `None` (fail closed).
+    let stranger_shape =
+        temper_substrate::readback::shape_by_id(&pool, stranger, ShapeId::from(shape_id))
+            .await
+            .unwrap();
+    assert!(
+        stranger_shape.is_none(),
+        "a stranger who cannot read the home context must get None from shape_by_id — fail closed"
     );
 }

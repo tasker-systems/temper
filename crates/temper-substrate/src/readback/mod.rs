@@ -71,7 +71,7 @@ use uuid::Uuid;
 
 use crate::ids::{
     BlockId, CogmapId, ContextId, DataArtifactId, EdgeId, EntityId, LensId, ProfileId, RegionId,
-    ResourceId,
+    ResourceId, ShapeId,
 };
 use crate::keys::{is_managed_property_key, MANAGED_PROPERTY_KEYS};
 use temper_core::types::managed_meta::ManagedMeta;
@@ -2308,6 +2308,140 @@ pub async fn artifact_by_id(
             is_folded: r.is_folded,
             created: r.created,
             content: r.content,
+        })
+    })
+    .transpose()
+}
+
+// ── Data artifact shape reads (Beat C, Task 5) ────────────────────────────────────────────────
+//
+// Two read surfaces over `kb_data_artifact_shapes`, gated through `anchor_readable_by_profile` in
+// the SQL (migration `20260822000030`). A shape is homed polymorphically over
+// (kb_contexts, kb_cogmaps); a principal who cannot read the home anchor sees zero shapes —
+// fail closed, never an error. The gate is the same container visibility spine
+// edges_visible_to / anchor_shape / cogmap_analytics use.
+
+/// One declared shape, as returned by [`shapes_for_home`] and [`shape_by_id`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct RetrievedShape {
+    pub shape_id: ShapeId,
+    pub home_anchor: HomeAnchor,
+    pub kind_owner: crate::payloads::KindOwner,
+    pub artifact_kind: String,
+    pub schema: serde_json::Value,
+    pub enforcement: crate::payloads::EnforcementMode,
+    pub shape_version: i32,
+    pub is_folded: bool,
+    pub created: DateTime<Utc>,
+}
+
+/// Parse the SQL `enforcement` text into the typed enum. The CHECK constraint on the column makes
+/// any other value impossible from committed data, so an unexpected value is a genuine fault.
+fn parse_enforcement(s: &str) -> Result<crate::payloads::EnforcementMode> {
+    Ok(match s {
+        "advisory" => crate::payloads::EnforcementMode::Advisory,
+        "enforcing" => crate::payloads::EnforcementMode::Enforcing,
+        other => anyhow::bail!("unrecognized enforcement from database: {other}"),
+    })
+}
+
+/// All live (non-folded) shapes for one home anchor. A principal who cannot read the home gets
+/// zero rows — the visibility gate (`anchor_readable_by_profile`) is inside the SQL, so an
+/// unreadable anchor yields an empty set, never an error. Folded shapes are excluded; this is the
+/// enumeration of shapes in force, not the revision history.
+pub async fn shapes_for_home(
+    pool: &PgPool,
+    principal: ProfileId,
+    anchor: HomeAnchor,
+) -> Result<Vec<RetrievedShape>> {
+    let rows = sqlx::query!(
+        r#"SELECT shape_id            AS "shape_id!",
+                  home_anchor_table   AS "home_anchor_table!",
+                  home_anchor_id      AS "home_anchor_id!",
+                  kind_owner_table    AS "kind_owner_table!",
+                  kind_owner_id       AS "kind_owner_id!",
+                  artifact_kind       AS "artifact_kind!",
+                  schema              AS "schema!",
+                  enforcement         AS "enforcement!",
+                  shape_version       AS "shape_version!",
+                  is_folded           AS "is_folded!",
+                  created             AS "created!"
+             FROM shapes_for_home($1, $2, $3)"#,
+        principal.uuid(),
+        anchor.table(),
+        anchor.uuid(),
+    )
+    .fetch_all(pool)
+    .await?;
+
+    rows.into_iter()
+        .map(|r| {
+            Ok(RetrievedShape {
+                shape_id: ShapeId::from(r.shape_id),
+                home_anchor: HomeAnchor::from_parts(&r.home_anchor_table, r.home_anchor_id)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "unrecognized home_anchor_table from database: {}",
+                            r.home_anchor_table
+                        )
+                    })?,
+                kind_owner: parse_kind_owner(&r.kind_owner_table, r.kind_owner_id)?,
+                artifact_kind: r.artifact_kind,
+                schema: r.schema,
+                enforcement: parse_enforcement(&r.enforcement)?,
+                shape_version: r.shape_version,
+                is_folded: r.is_folded,
+                created: r.created,
+            })
+        })
+        .collect()
+}
+
+/// A single shape by id. Never trusts the caller — even if the caller knows the shape id, the
+/// owning home anchor must be readable to the profile or the shape is absent (fail closed,
+/// returned as `Ok(None)`). Includes folded shapes: a caller that knows a shape id may
+/// legitimately need to inspect a folded prior version (audit/history).
+pub async fn shape_by_id(
+    pool: &PgPool,
+    principal: ProfileId,
+    shape_id: ShapeId,
+) -> Result<Option<RetrievedShape>> {
+    let row = sqlx::query!(
+        r#"SELECT shape_id            AS "shape_id!",
+                  home_anchor_table   AS "home_anchor_table!",
+                  home_anchor_id      AS "home_anchor_id!",
+                  kind_owner_table    AS "kind_owner_table!",
+                  kind_owner_id       AS "kind_owner_id!",
+                  artifact_kind       AS "artifact_kind!",
+                  schema              AS "schema!",
+                  enforcement         AS "enforcement!",
+                  shape_version       AS "shape_version!",
+                  is_folded           AS "is_folded!",
+                  created             AS "created!"
+             FROM shape_by_id($1, $2)"#,
+        principal.uuid(),
+        shape_id.uuid(),
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    row.map(|r| {
+        Ok(RetrievedShape {
+            shape_id: ShapeId::from(r.shape_id),
+            home_anchor: HomeAnchor::from_parts(&r.home_anchor_table, r.home_anchor_id)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "unrecognized home_anchor_table from database: {}",
+                        r.home_anchor_table
+                    )
+                })?,
+            kind_owner: parse_kind_owner(&r.kind_owner_table, r.kind_owner_id)?,
+            artifact_kind: r.artifact_kind,
+            schema: r.schema,
+            enforcement: parse_enforcement(&r.enforcement)?,
+            shape_version: r.shape_version,
+            is_folded: r.is_folded,
+            created: r.created,
         })
     })
     .transpose()
