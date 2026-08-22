@@ -114,7 +114,7 @@ one gate per location and no way to assert the set is complete.
 
 ### `docs/cognitive-maps/` retires; temperkb.io is the source
 
-`[decided — 2026-08-19, Pete]` The SvelteKit site owns the cognitive-maps documentation. The
+`[provisional — 2026-08-19, judgement call]` The SvelteKit site owns the cognitive-maps documentation. The
 twelve markdown files are removed from the tree; history preserves them, matching how
 `site-ia.md` folded `theory-ia-proposal.md` — absent from default projection, reachable in git.
 
@@ -233,7 +233,7 @@ Steps 2–4 are mechanical and fast. Steps 5 and 7 carry the writing and the jud
 
 ## Resolved during design
 
-All three questions this document opened were answered `[2026-08-19, Pete]`.
+All three questions this document opened were answered `[provisional — 2026-08-19, judgement call]`.
 
 1. **`docs/cognitive-maps/` retires** — temperkb.io is the source. See the section above.
 
@@ -249,7 +249,7 @@ All three questions this document opened were answered `[2026-08-19, Pete]`.
      published, and that configuration is cloud-side; no Apidog file exists in the repo. Whether
      a committed Apidog config is the better practice is an open build question — see Deferred.
 
-3. **The sibling directory is `internal/`.** `[decided — 2026-08-19, Pete]`
+3. **The sibling directory is `internal/`.** `[provisional — 2026-08-19, judgement call]`
 
    **This fights the tooling, and the fight has to be won in the skills, not by convention.**
    Superpowers' `brainstorming` and `writing-plans` skills both hard-code

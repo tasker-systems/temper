@@ -6,7 +6,7 @@ Task: [The rendering approach](./01a02655-3b83-7c13-a2fd-b67166b06c44). Supersed
 
 **Phase 1 is the rendering approach. Phase 2 is the reads themselves** — the anchor fan-out, the
 composition, the re-fetch on panel open — and nothing here changes a single API call.
-`[ruled — 2026-08-21, Pete]` *"Both, perceived first."*
+`[provisional — 2026-08-21, judgement call]` *"Both, perceived first."*
 
 ---
 
@@ -76,7 +76,7 @@ per read and gives up SSR for that data.
 
 ## 3. The contract — **EXTEND**, authorized by the register's clauses
 
-`[ruled — 2026-08-21, Pete]` The evidence standard is **a behavioural contract witnessed in
+`[provisional — 2026-08-21, judgement call]` The evidence standard is **a behavioural contract witnessed in
 component tests**, not numbers. Numbers are Phase 2 and arrive after deploy.
 
 ### 3.1 There is no time bound, and that is the design
@@ -206,7 +206,7 @@ will bite on the first route converted.
 The register's refusal face allows the system to **decline to keep waiting**, which is well-formed
 rather than a failure: the reader is told the system gave up.
 
-This is the **only** place a number is required. `[ruled — 2026-08-21, Pete]` **8 seconds** —
+This is the **only** place a number is required. `[provisional — 2026-08-21, judgement call]` **8 seconds** —
 *"we have to bound it somewhere."*
 
 The register still specifies no duration and deliberately never will: a budget is a build decision,

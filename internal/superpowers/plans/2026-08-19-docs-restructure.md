@@ -340,7 +340,7 @@ description all hardcoded the old path and move with it."
 
 ### Task 5: Retire `docs/cognitive-maps/`
 
-`[decided — 2026-08-19, Pete]` temperkb.io is the source. All twelve files have live, richer Svelte counterparts; the flip described in `site-ia.md` was executed against the Svelte pages, not the markdown.
+`[provisional — 2026-08-19, judgement call]` temperkb.io is the source. All twelve files have live, richer Svelte counterparts; the flip described in `site-ia.md` was executed against the Svelte pages, not the markdown.
 
 **Files:**
 - Delete: `docs/cognitive-maps/` (12 markdown files)

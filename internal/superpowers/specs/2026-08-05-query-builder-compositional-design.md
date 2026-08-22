@@ -76,7 +76,7 @@ type that shipped nine days ago costs two regenerated snapshots and a ts-rs run.
 
 ## 2. A composition is a named DAG
 
-`[decided — 2026-08-05, Pete]` `Composition.stages` becomes a set of **named nodes**, each declaring
+`[provisional — 2026-08-05, judgement call]` `Composition.stages` becomes a set of **named nodes**, each declaring
 its inputs as **references** rather than literal ids. The incumbent `bounds: Option<IdSet>` survives
 as one input variant — the caller-supplied case — joined by an upstream-stage reference.
 
@@ -101,7 +101,7 @@ Three properties are what the type buys, and each is what a test pins:
 
 ### Why a DAG rather than a linear list
 
-`[decided — 2026-08-05, Pete]` The rule this contract runs on is *"where return shapes are
+`[provisional — 2026-08-05, judgement call]` The rule this contract runs on is *"where return shapes are
 commensurate they can drive a sub-selection downstream."* By that same rule, two acts producing the
 same `IdKind` are combinable — so a linear list makes the one operation the rule most obviously
 licenses the one it cannot express.
@@ -114,7 +114,7 @@ acyclic even though what it operates on is neither.
 
 ## 3. The response is per-arm, and hydration is declared
 
-`[decided — 2026-08-05, Pete]`
+`[provisional — 2026-08-05, judgement call]`
 
 ### Why per-arm follows from the frame rather than from taste
 
@@ -170,7 +170,7 @@ projection is one join per returned kind, inside the same statement.
 
 ### Returned stages are declared, not inferred
 
-`[decided — 2026-08-05, Pete]` `OutcomeDeclaration` gains `returns` — the stages whose rows are
+`[provisional — 2026-08-05, judgement call]` `OutcomeDeclaration` gains `returns` — the stages whose rows are
 hydrated — with an optional per-stage field list defaulting to the kind's projection.
 
 Inferring from out-degree zero was rejected for a specific failure, not for taste: it makes returning
@@ -202,7 +202,7 @@ they are orthogonal.
 
 ### A row may name its parents; it may not embed them
 
-`[decided — 2026-08-05, Pete]` Three things are easy to collapse into one and must not be, because
+`[provisional — 2026-08-05, judgement call]` Three things are easy to collapse into one and must not be, because
 two of them are the point of a knowledge-graph surface and the third is a rebuild of GraphQL.
 
 1. **Edge-filtered traversal as a stage — IN, and it is the primary case.** `follow-from` admitting
@@ -310,7 +310,7 @@ stays for that case and is not the shape callers should reach for at the end of 
 
 ## 4. The stage contract is kind-parametric
 
-`[decided — 2026-08-05, Pete]` **Every stage fragment emits `(id, kind, quantity)`**, where
+`[provisional — 2026-08-05, judgement call]` **Every stage fragment emits `(id, kind, quantity)`**, where
 `quantity` is a nullable `double precision` — nullable because `orders_by` is `Option<ActQuantity>`
 `[verified — act.rs:262]` and an act that orders nothing has none to emit.
 
@@ -395,7 +395,7 @@ migrations/20260804000020_profile_reachable_teams_write_gates.sql]`.
 
 **This is dynamic SQL, so `sqlx::query!()` compile-time checking does not apply**, and the `.sqlx`
 cache discipline assumes static statements.
-`[decided — 2026-08-05, Pete: this trade is inherent to any builder-shaped approach, and is paid for
+`[provisional — 2026-08-05, judgement call: this trade is inherent to any builder-shaped approach, and is paid for
 with tests rather than avoided.]`
 
 **It is not unprecedented, and the precedent comes with an instruction the plan must obey.**
@@ -448,7 +448,7 @@ position. Those are the two properties the harness exists to hold.
 
 ## 7. Sequencing
 
-`[decided — 2026-08-05, Pete]` **The builder is demonstrable end-to-end before phase 1 lands.** Phase
+`[provisional — 2026-08-05, judgement call]` **The builder is demonstrable end-to-end before phase 1 lands.** Phase
 1 rewrites the FTS and vector arms and retires `unified_search`, but `search_graph_expand` and
 `wayfind_region_scores` survive untouched — they are the two mechanics it orphans from every door.
 So the executor can compile and run real compositions over `survey` and `follow-from` with **no
@@ -560,7 +560,7 @@ phase inherits as an obligation, below.
 
 ## 9. GraphQL — a deferred second door, and why the ordering is the argument
 
-`[decided — 2026-08-05, Pete]` Raised in design as a serious alternative — *"what if we did GraphQL
+`[provisional — 2026-08-05, judgement call]` Raised in design as a serious alternative — *"what if we did GraphQL
 but with more steps"* — and **deferred rather than refused**. Recorded in full because the same
 instinct will recur, and it deserves an answer rather than a rediscovery.
 
@@ -616,7 +616,7 @@ compiles; it does not iterate.
 
 ### There is no expression language, and that is a strengthening
 
-`[decided — 2026-08-05, Pete]` Not "v1 may not need jaq" — **the design has no place for one, and
+`[provisional — 2026-08-05, judgement call]` Not "v1 may not need jaq" — **the design has no place for one, and
 adding one would be contrary to it.**
 
 Every narrowing axis already has a typed slot: bounds are stage references or caller id sets; terms
@@ -683,7 +683,7 @@ plan is precisely a rate-shaped exposure, and the generative harness measures **
 **`ActRefusal` composing with `temper_principal::Refusal`** — carried open from contract §5.1, and
 still not answered here.
 
-**The `ResourceFilter` overlap — named, and deliberately not resolved here** `[2026-08-05, Pete]`.
+**The `ResourceFilter` overlap — named, and deliberately not resolved here** `[provisional — 2026-08-05, judgement call]`.
 §12 admits an open property predicate while `ResourceFilter` keeps typed slots for `doc_type`,
 `stage` and `status` whose whole purpose is closed-vocabulary refusal. A caller can therefore address
 one of those keys through the open predicate and receive a confident empty where the slot would have
@@ -718,7 +718,7 @@ sentence.
 
 ## 12. Properties are queryable — open keys, closed operators
 
-`[added — 2026-08-05, Pete]` A scope addition taken during plan authoring. It **grows the surface and
+`[provisional — 2026-08-05, judgement call]` A scope addition taken during plan authoring. It **grows the surface and
 does not change its shape**: a property predicate is one more typed narrowing slot alongside
 `ResourceFilter` and `EdgeFilter`, validated statically and compiled into the same statement.
 
@@ -763,7 +763,7 @@ answers as a row-existence check.
 
 ### The subject is carried by the predicate, and its vocabulary is open
 
-`[decided — 2026-08-05, Pete]` A predicate names what it addresses:
+`[provisional — 2026-08-05, judgement call]` A predicate names what it addresses:
 
 ```
 PropertyPredicate { subject: PropertySubject, key: String, op: PropertyOp }
@@ -790,7 +790,7 @@ is identical for both subjects, so admitting `edge` costs a variant and no mecha
 
 ### Content-block properties are addressable but not queryable
 
-`[decided — 2026-08-05, Pete]` `kb_content_blocks` is the third owner in the data (`block_role`, 37
+`[provisional — 2026-08-05, judgement call]` `kb_content_blocks` is the third owner in the data (`block_role`, 37
 rows) and is **deliberately excluded**. Block-level properties exist so that provenance can attach to
 *part* of a resource or claim rather than the whole of it — addressability, which is a different
 affordance from being a queryable subject. Naming the exclusion so its absence reads as a decision.
@@ -817,7 +817,7 @@ type-unstable key.
 **`weight` is real and phase-2.** `facet` is the only weighted key — **342 of its 1,233 rows carry
 `weight <> 1.0`** `[measured on prod — 2026-08-05]`. Contract §4.1.2 declared a richer facet
 predicate "not undertaken… nothing in the search family needs it"; that is now superseded in
-direction, since a caller does. `[decided — 2026-08-05, Pete: build it, but it may be a later phase
+direction, since a caller does. `[provisional — 2026-08-05, judgement call: build it, but it may be a later phase
 so long as the design admits it.]` The design admits it by making `PropertyOp` an enum with room for
 `weight_at_least`; **no index serves it today**, so whether it needs one is a measurement that
 belongs with its build and not before.

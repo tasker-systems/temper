@@ -12,7 +12,7 @@ which is where the investigation started and which this spec outgrew.
 ## 1. The thesis
 
 > **A composition grounds you. It does not navigate you.**
-> `[ruled — 2026-08-20, Pete]`
+> `[provisional — 2026-08-20, judgement call]`
 
 Asking a question sets a space. Moving around inside that space afterwards is a different act with
 different needs, and today the surface has only the first one. Every movement re-runs a composition,
@@ -66,7 +66,7 @@ state does not want one.**
 ### 2.3 The rejected fix, and why it was rejected
 
 A goal-seeded walk was measured and looked excellent — 65 goals → 50 walked, 56 drawn, **1
-unconnected**. It was rejected `[ruled — 2026-08-20, Pete]`:
+unconnected**. It was rejected `[provisional — 2026-08-20, judgement call]`:
 
 > *"even I … have contexts that are not workflow-oriented contexts, they are massive document
 > corpuses — so default assuming goals is not the right choice."*
@@ -148,7 +148,7 @@ Three constraints on the degree computation, each with a reason:
 3. **Both endpoints `kb_resources`** — `kb_edges` may target `kb_cogmaps`, which are not drawable
    resource marks.
 
-**`[ruled — 2026-08-20, Pete]` A reuses the incumbent node shape.** `graph_atlas_nodes_visible(p_profile, p_ids)`
+**`[provisional — 2026-08-20, judgement call]` A reuses the incumbent node shape.** `graph_atlas_nodes_visible(p_profile, p_ids)`
 already returns the whole payload — `id, title, doc_type, home, degree, first_chunk, stage`. A is
 therefore a **ranking function returning ids**, then the incumbent for hydration. One node shape
 across every graph read, and no second place for it to drift.
@@ -185,7 +185,7 @@ It is already visibility-scoped (`resources_visible_to(p_profile)`, both endpoin
 excludes folded edges, already restricts to `kb_resources` on both ends, and **is bound to no anchor
 at all.** B is therefore a service function and a handler over an existing fragment, not new SQL.
 
-**`[ruled — 2026-08-20, Pete]` The directed chain is retired; one walk body survives.**
+**`[provisional — 2026-08-20, judgement call]` The directed chain is retired; one walk body survives.**
 
 `graph_traverse` walks **forward only** — base arm matches `e.source_id = ANY(p_seed_ids)`, recursive
 arm joins `e.source_id = w.target_id` — while the composition's `__temper_ungated_follow_from` is
@@ -232,7 +232,7 @@ depth 1 it returns 2672.
 three in §3 and `graph_traverse` in §5.2. The pattern is now established well enough to be a rule:
 *before specifying a new graph read, print the live function list.*
 
-`[ruled — 2026-08-21, Pete]` The body moves to **`graph_induced_edges`** — a frame-neutral name, since
+`[provisional — 2026-08-21, judgement call]` The body moves to **`graph_induced_edges`** — a frame-neutral name, since
 it was never context-specific and chunk E deletes the context door that is currently its only caller.
 The old name survives as a **delegating wrapper**, which is what keeps the migration `additive`
 rather than a shape-breaking rename, and is deleted with the endpoint in E. A test pins the two
@@ -264,7 +264,7 @@ and a reader has no way to reconcile that but to doubt themselves.
 Today the successor does not hit this — `model.ts` recomputes degree client-side over the drawn edge
 set. **The moment A and B feed `AtlasNode` through, two degrees coexist under one name.**
 
-**`[ruled — 2026-08-20, Pete]` Only one degree ever reaches the screen, and it is the derived one.**
+**`[provisional — 2026-08-20, judgement call]` Only one degree ever reaches the screen, and it is the derived one.**
 
 The corpus degree is a **ranking input for A** and does not need to be sent to the client at all.
 What the reader sees stays what they see today: a count derived from the edges actually returned,
@@ -274,7 +274,7 @@ with two field names** — there is never a second quantity on screen to disagre
 The corpus figure still appears in **A's distribution report** (§5.1), which is a build-time
 measurement feeding the choice of K, not a rendered number.
 
-**`[narrowed — 2026-08-21, Pete]` The corpus figure may reach the screen inside a sentence that
+**`[provisional — 2026-08-21, judgement call]` The corpus figure may reach the screen inside a sentence that
 states its relationship to the drawn one.** A bare second number beside a mark stays forbidden —
 that is the shape this ruling was pointed at. What forced the narrowing is that the ruling as
 written makes the entry read's band undescribable: measured on production, **every** node in it
@@ -284,13 +284,13 @@ why. See
 
 ## 6. The fallback ladder
 
-`[ruled — 2026-08-20, Pete]` — *"a kind of lower-density-down-to-empty-state fallback"*. Three rungs.
+`[provisional — 2026-08-20, judgement call]` — *"a kind of lower-density-down-to-empty-state fallback"*. Three rungs.
 Fewer than the five an earlier draft carried, because degree degrades on what the corpus *contains*
 rather than on what the reader was supposed to have done.
 
 1. **Most-connected, then traversable.** The entry read seeds the canvas.
 2. **Too little structure to be a graph** — no edges at all, or below a threshold. The
-   document-corpus case from §2.3. `[ruled — 2026-08-20, Pete]` **The surface says so and sends the
+   document-corpus case from §2.3. `[provisional — 2026-08-20, judgement call]` **The surface says so and sends the
    reader somewhere better**: it names what cannot be rendered as a graph and points at the vault's
    list view, which is the right instrument for a corpus with no relationships.
 3. **Nothing readable** — the existing refusal, unchanged.
@@ -387,7 +387,7 @@ Assessed against the register as it stands after the `[2026-08-20]` amendment.
 ## 10. Open questions — rulings needed before build
 
 1. ~~**K, and how it interacts with twelve anchors.**~~ **DIRECTION RULED, VALUE STILL OPEN**
-   `[2026-08-20, Pete]` — *"agreed with the direction but also agreed that we will have to
+   `[provisional — 2026-08-20, judgement call]` — *"agreed with the direction but also agreed that we will have to
    investigate to be sure."* Visibility-scoping dissolves the union-arity problem, but not how many
    marks a first screen carries. **K is a parameter in A, not a constant**; A must report the degree
    distribution, and K (with rung 2's threshold) is fixed in C from real numbers, following
@@ -451,7 +451,7 @@ corpus. No selection-side fix reaches them at a drawable size, which is why the 
 telling. See
 [The band is where the hubs go](./2026-08-21-hub-stranding-is-a-telling-failure-design.md) §2.
 
-2. ~~**The traversal URL grammar.**~~ **RULED** `[2026-08-20, Pete]`:
+2. ~~**The traversal URL grammar.**~~ **RULED** `[provisional — 2026-08-20, judgement call]`:
 
    ```
    /graph/@me?q=<grounding question>&from=<node-ids>&depth=<n>
@@ -469,11 +469,11 @@ telling. See
    **No edge id ever appears in a URL.** An edge is not a place; you navigate to nodes.
    `AtlasEdge.id` earns its keep in selection and trails, not in addressing a view.
 3. ~~**Does `?q=` still redraw on every change, or ground once and hand off?**~~ **RULED — hand off**
-   `[2026-08-20, Pete]`: *"asking a question and our query composition frame helps set the space, but
+   `[provisional — 2026-08-20, judgement call]`: *"asking a question and our query composition frame helps set the space, but
    then you traverse the graph as normal without a question locking you in."* Not open; recorded
    here so it is not re-argued. The consequence is that the answered state stops re-running a
    composition per interaction, which is most of the latency the reader ranked second-most-jarring.
-4. ~~**Whether the recency page survives at all**~~ **RULED — it does not** `[2026-08-20, Pete]`:
+4. ~~**Whether the recency page survives at all**~~ **RULED — it does not** `[provisional — 2026-08-20, judgement call]`:
    *"a corpus with no edges or under some reasonable threshold should probably just say so — say
    what is not really renderable and indicate that the vault list view is better than the graph one
    for this."* Rung 2 became a declaration plus a door, not a degraded drawing. See §6.
@@ -495,7 +495,7 @@ telling. See
 
 ## 12. Build order, and the true new-SQL surface
 
-`[settled — 2026-08-20, Pete]` Grounding shrank this considerably. **Two new SQL functions, not a
+`[provisional — 2026-08-20, judgement call]` Grounding shrank this considerably. **Two new SQL functions, not a
 new act framework.**
 
 | New SQL | Serves |

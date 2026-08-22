@@ -20,7 +20,7 @@ incommensurable quantities](./019fbd21-ba77-7b83-b8d3-454d74bb8c7d) · T1's audi
 
 ## AMENDED `[2026-08-04]` — a composition is ONE SQL statement, and that decides several things here
 
-`[decided — 2026-08-04, Pete]` Recorded in full as decision
+`[provisional — 2026-08-04, judgement call]` Recorded in full as decision
 `019fcd13-4e65-7213-ac6f-20c3c8ccfce1`. A composition is **compiled into a single SQL statement and
 executed once** — a `TemperQueryBuilder` transforms the plan into one query whose stages are CTEs.
 It is *not* a DSL governing chained request-response cycles. Consequences that land on this
@@ -102,7 +102,7 @@ makes it *untypeable* rather than merely warned about.
 
 ### 1.1 The goal constellation
 
-Four registers circle this subject. `[decided — 2026-08-03, Pete]` **This frame register is the
+Four registers circle this subject. `[provisional — 2026-08-03, judgement call]` **This frame register is the
 newest and the one the others bend toward** — aligned, related, and in some cases subsumed. Recorded
 here because a sibling session that finds two registers describing one field needs to know which
 governs.
@@ -379,7 +379,7 @@ inferred from which act ran. `bounds` is an `IdSet` for the same reason on the w
 
 ### 4.1.1 Bounds are two layers, and a term is never reinterpreted
 
-`[decided — 2026-08-03, Pete]` There are **two layers of bound**: an **act-level** bound inside a
+`[provisional — 2026-08-03, judgement call]` There are **two layers of bound**: an **act-level** bound inside a
 stage, and a **composition-level** bound over the whole result set. Each may carry its own terms.
 
 `BoundTerm` is a **closed vocabulary in which each term has exactly one meaning** — `limit` means
@@ -464,7 +464,7 @@ Two base details that fall straight out of the audit:
 
 ### 4.1.2 Filters — the predicate layer
 
-`[decided — 2026-08-03, Pete]` Bounds are membership and terms are magnitude; **neither can narrow
+`[provisional — 2026-08-03, judgement call]` Bounds are membership and terms are magnitude; **neither can narrow
 by what a thing *is***. Everything in the corpus carries `kb_properties` — `doc_type`, `tags`,
 `facet` `[verified — 2026-08-03]` — and every edge carries both an `edge_kind` and a `label`. An act
 that subselects on any of those needs to be able to say so, or `filters-compose-to-narrow` (goal
@@ -653,7 +653,7 @@ never a leak; an empty scope is an honest empty-scope signal, not an error.
 
 ### 5.2 AMENDED `[2026-08-04]` — `withheld` discloses existence, so it is not always available
 
-`[decided — 2026-08-04, Pete]` Full reasoning in decision
+`[provisional — 2026-08-04, judgement call]` Full reasoning in decision
 `019fcd13-4e65-7213-ac6f-20c3c8ccfce1`, which also settles that a composition compiles to **one SQL
 statement**.
 
@@ -678,7 +678,7 @@ why.
 
 ### 5.1 AMENDED `[2026-08-03, T2 build]` — the two names this section chose were taken
 
-`[decided — 2026-08-03, Pete]` Both `Disposition` and `Refusal` already name **different** concepts
+`[provisional — 2026-08-03, judgement call]` Both `Disposition` and `Refusal` already name **different** concepts
 in this workspace. The concepts here are genuinely distinct from those — this is a naming collision,
 not a duplicated definition — so the resolution is to rename, and to say what the relationship to
 each incumbent is rather than leave two same-named types for the next reader to disambiguate.
@@ -720,7 +720,7 @@ Stated rather than assumed, because it decides the growth path:
 
 - The **`act` discriminator is open** — clients must tolerate an unknown act.
 - The **`disposition` enum is closed** — clients must handle all four exhaustively.
-- **`RefusalReason` is open** `[decided — 2026-08-04, Pete]`. This section ruled on the two above
+- **`RefusalReason` is open** `[provisional — 2026-08-04, judgement call]`. This section ruled on the two above
   and **never ruled on refusals**, so T2 shipped it closed by default — an undecided axis settled
   by omission. Corrected: the growth this contract wants includes *new ways to decline*, and
   `ExpressionNotPushdownable` was already the first. Closed would make every future reason a
@@ -894,7 +894,7 @@ four families requires a mixed-kind set.
 [The graph surface shows the reader's own material](./019fbaac-96e2-7620-ace2-667a0f8ff000) exists to
 **replace wholesale** — its Exercise status records that the successor surface does not exist and
 every clause is uncovered — and that goal is **held back pending this contract work**
-`[decided — 2026-08-03, Pete: do not carry the Atlas wire shapes forward]`. So no `Territory → IdSet`
+`[provisional — 2026-08-03, judgement call: do not carry the Atlas wire shapes forward]`. So no `Territory → IdSet`
 mapping should be built, and this contract takes no dependency on those shapes.
 
 **The dependency runs the other way, and that is the point.** This contract's `IdSet` is a candidate

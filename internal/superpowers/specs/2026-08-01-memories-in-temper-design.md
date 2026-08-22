@@ -1,6 +1,6 @@
 # Memories live in Temper; MEMORY.md becomes a generated projection
 
-`[decided — 2026-08-01, Pete]` · Design for moving Claude Code's per-project memory files into
+`[provisional — 2026-08-01, judgement call]` · Design for moving Claude Code's per-project memory files into
 Temper resources, leaving `MEMORY.md` as an emitted index rather than an authored one.
 
 ## The problem, stated precisely
@@ -224,7 +224,7 @@ enough will pass the search and land twice. The residue is real and is named her
 claimed closed — a reconciler that silently merged on similarity would be worse, because it would
 destroy one of two accounts that a human might have wanted to compare.
 
-> **RETIRED — `[decided — 2026-08-02, Pete]`.** The two paragraphs above describe a mechanism that
+> **RETIRED — `[provisional — 2026-08-02, judgement call]`.** The two paragraphs above describe a mechanism that
 > no longer exists. The pre-write search, `--collision-limit` and the per-collision prompt were
 > deleted; `migrate` now confirms the batch once and states at the prompt that it detects nothing.
 >

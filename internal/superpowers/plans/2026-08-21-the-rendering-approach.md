@@ -275,7 +275,7 @@ git commit -m "feat(ui): four states, four appearances — the region vocabulary
 Closes the declared hole in `working-and-stopped-are-distinguishable`. Without it, **a read that
 never answers presents as arriving forever**, which is that clause's exact failure mode.
 
-> **The duration is ruled.** `[ruled — 2026-08-21, Pete]` **8 seconds**, on the reasoning that
+> **The duration is ruled.** `[provisional — 2026-08-21, judgement call]` **8 seconds**, on the reasoning that
 > *"we have to bound it somewhere."* The register still specifies none and never will — a budget is
 > a build decision, not an invariant — so this changes no clause. `ms` stays a parameter.
 

@@ -14,7 +14,7 @@
 
 A discipline for stating outcomes so their rigor survives decomposition, shipped as a temper skill.
 
-**Purpose — the four things it exists to give confidence about** [decided — Pete, 2026-07-27]:
+**Purpose — the four things it exists to give confidence about** [provisional — 2026-07-27, judgement call]:
 
 1. We have the necessary **priors**.
 2. We have the **grounding** to begin and complete.
@@ -23,7 +23,7 @@ A discipline for stating outcomes so their rigor survives decomposition, shipped
 
 **It does not decide whether a goal is worth pursuing.** Cost, churn and abandonment belong to people,
 or to an agent in an explicit meta-goal frame — never to a clause inside the goal.
-[decided — Pete, 2026-07-27]
+[provisional — 2026-07-27, judgement call]
 
 ## State of play — what exists, what does not
 
@@ -54,7 +54,7 @@ measurement that refutes a confident claim — then folded back manually. Things
 
 ## What we agreed to build, and what we did not
 
-**In scope** [decided — Pete, 2026-07-26]: the discipline as a skill · the project taxonomy · the
+**In scope** [provisional — 2026-07-26, judgement call]: the discipline as a skill · the project taxonomy · the
 citation relation and its two checks.
 
 **Out of scope, deliberately**:
@@ -126,7 +126,7 @@ element had a slot for.]
 
 ## I.2 Clauses are invariants; witnesses are statements about mechanism
 
-**The load-bearing distinction, and it was paid for.** [decided — Pete, 2026-07-27]
+**The load-bearing distinction, and it was paid for.** [provisional — 2026-07-27, judgement call]
 
 | | States | Authored | Governed by |
 |---|---|---|---|
@@ -223,7 +223,7 @@ as a refusal the system could not express. It is not a refusal at all — it is 
 strongly negative one. The auditor's role is to say whether an assertion holds up under scrutiny of its
 evidence; *"I cannot assess this"* means *"this is incommunicable, or I cannot evaluate where you
 derived it"*, which is worse than *"plausible but underwarranted."* Forking on it would have argued for
-building a refusal the system correctly does not have. [decided — Pete, 2026-07-27]
+building a refusal the system correctly does not have. [provisional — 2026-07-27, judgement call]
 
 ## I.5 Verification modes
 
@@ -250,7 +250,7 @@ claim does not, and this spec makes no framework decision.** [decided]
 
 > Criteria that describe the interiority of a thing are framed within the priors that situate them, but
 > they cannot reach beyond or up into the frame of their priors to mutate them. That is an **enclosure
-> of responsibility error**. [decided — Pete, 2026-07-27]
+> of responsibility error**. [provisional — 2026-07-27, judgement call]
 
 A goal's clauses may say what must be true and what must never become true **for this goal to have been
 achieved well**. They may not say whether pursuing it was right, whether its cost is justified, or
@@ -285,7 +285,7 @@ write a register produces exactly the spec-fall it exists to escape.
 
 ## II.1 What it is, and why the word matters
 
-**Taxonomy, not ontology** [decided — Pete, 2026-07-27]. Ontology addresses being and is-ness; taxonomy
+**Taxonomy, not ontology** [provisional — 2026-07-27, judgement call]. Ontology addresses being and is-ness; taxonomy
 addresses categorisation, labelling, speciation. An information domain is accurately operationalised as
 a taxonomy. Calling it an ontology would imply the categories describe reality rather than our
 labelling of it.
@@ -423,7 +423,7 @@ caught it on first run.
 > neither is complete. The divergence is not a rare slip; it is what happens whenever a register is
 > authored after its tasks.
 
-~~**Resolution: the citation becomes a facet on the `advances` edge**~~ [decided — Pete, 2026-07-26]
+~~**Resolution: the citation becomes a facet on the `advances` edge**~~ [provisional — 2026-07-26, judgement call]
 — **superseded on the carrier, 2026-07-27.** The half that survives is the *shape*: the citation
 becomes a **facet on an edge**, a `kb_properties` row with `owner_table = 'kb_edges'`; the link is the
 edge and the clause qualifies the link. The half that is withdrawn is **which edge**.
@@ -482,14 +482,14 @@ constraint into **open design space**. Edges were always intended to carry facet
 never built.
 
 **So this goal takes on a precondition**: expand the read and write surfaces for edge-owned properties,
-across MCP, API and CLI. [decided — Pete, 2026-07-26] Task `019fa03a-913b-7141-a173-1c804d9b7ccd`.
+across MCP, API and CLI. [provisional — 2026-07-26, judgement call] Task `019fa03a-913b-7141-a173-1c804d9b7ccd`.
 
 Until it lands, `open_meta` holds, and **any query over goal membership must read the citation, not the
 edge** — a query built on `--goal` silently under-reports.
 
 ## III.4 A task either *witnesses* a clause or *enables* one
 
-[decided — Pete, 2026-07-26]
+[provisional — 2026-07-26, judgement call]
 
 - **`witnesses`** — this task is the evidence. Subject to the bite requirement and to the rule that no
   witness precedes its mechanism.
@@ -566,8 +566,7 @@ rewrites. That is the correct move given what it was handed.
 **The shape it has been missing is the project taxonomy.** A commands table is not wrong — it is **one
 category of prior**, in a document that never named its categories.
 
-**And a durability argument explains the rewriting better than shape does** [decided — Pete,
-2026-07-27]: a file under `~/.claude/skills/temper/guidance/` is per-machine, unversioned and invisible
+**And a durability argument explains the rewriting better than shape does** [provisional — 2026-07-27, judgement call]: a file under `~/.claude/skills/temper/guidance/` is per-machine, unversioned and invisible
 to the team — structurally a scratch file. As `domain` resources it is versioned, superseded and
 team-contributable. That is the difference between a thing that gets **rewritten** and a thing that gets
 **amended**.
@@ -578,7 +577,7 @@ team-contributable. That is the difference between a thing that gets **rewritten
 ## V.2 The read surface — `temper warmup`, redesigned
 
 **`warmup` is the incumbent** — *"Context primer for new sessions"* — so no second command is built. **It
-is not fit for purpose as designed** [decided — Pete, 2026-07-27]. Three reasons:
+is not fit for purpose as designed** [provisional — 2026-07-27, judgement call]. Three reasons:
 
 1. **It primes on narrative recency.** [observed — it emits `last_session_content`, the whole previous
    note capped at 500 lines, and carries no goals, no clauses, no in-force state, no scars, no
@@ -593,7 +592,7 @@ is not fit for purpose as designed** [decided — Pete, 2026-07-27]. Three reaso
 **What it grounds in instead**: **guidance, goals, and tasks** — standing state.
 
 **`last_session_content` is dropped, not shrunk.** What survives is `recent_sessions` — **titles and
-dates only**, with the count **configurable**. [decided — Pete, 2026-07-27]
+dates only**, with the count **configurable**. [provisional — 2026-07-27, judgement call]
 
 **Why titles rather than bodies, and it is not a compromise**: a title is a **pointer**; a body is a
 **claim**. Pointers let a reader recognise which arc is theirs and go read it deliberately. A body
@@ -614,8 +613,7 @@ OpenAPI presence, and no consumer of the shape was found.]
 - **The summary-statement discipline folds in** at loop step 7 rather than shipping separately — already
   filed as task `019f9aa5-ec66-7230-812d-4c14b5d7ed58`.
 
-**Built 2026-07-27. The routing split is decided here rather than above** [decided — Pete,
-2026-07-27]. `outcome-registers.md` is ~230 lines that only a goal-authoring session needs, so loading
+**Built 2026-07-27. The routing split is decided here rather than above** [provisional — 2026-07-27, judgement call]. `outcome-registers.md` is ~230 lines that only a goal-authoring session needs, so loading
 it on every task start would be a standing tax on work that authors no goal. It is reached **on
 demand** from the routing table, while the four rules always in force — clauses name no mechanism ·
 witnesses are authored during the build · coverage is never inferred from absence · the discipline
@@ -649,7 +647,7 @@ session actually closes, rather than in the on-demand file. That task stays open
 Step 4 is where the coverage and bite checks are actually taken.
 
 **Correction, 2026-07-27: step 2 now depends on step 0, and the earlier claim that it did not was
-wrong** [decided — Pete, 2026-07-27]. This document previously said *"Steps 1 and 2 are independent.
+wrong** [provisional — 2026-07-27, judgement call]. This document previously said *"Steps 1 and 2 are independent.
 Step 0 is not on the critical path for guidance-in-temper — it serves the citation-as-edge-facet work
 only."*
 
@@ -678,7 +676,7 @@ production were minted by `relationship_asserted`; none by `resource_created`/`r
 `relates_to: [...]` writes a property and no edge, while `edge assert --label relates_to` writes an
 edge and no property — 372 properties against 940 edges, with nothing tying them.
 
-**Three naming decisions** [decided — Pete, 2026-07-27]:
+**Three naming decisions** [provisional — 2026-07-27, judgement call]:
 
 - **The register's enabling relation gets a new edge label.** An `enables` label already exists in
   production — 6 `leads_to` edges, newest 2026-07-16, predating this convention. The register's
