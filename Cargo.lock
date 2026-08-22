@@ -6259,6 +6259,7 @@ dependencies = [
  "sqlx",
  "temper-core",
  "temper-services",
+ "temper-substrate",
  "temper-telemetry",
  "temper-workflow",
  "tokio",
