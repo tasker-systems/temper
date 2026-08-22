@@ -19,11 +19,13 @@ mod authz;
 pub mod backend;
 pub mod broker;
 pub mod config;
+pub mod cors;
 pub mod error;
 pub mod link_provider;
 pub mod oauth_client;
 pub mod services;
 pub mod state;
+pub mod transport;
 
 /// Test-only fixture helpers for the D11 admission model (approved standing / governance seeding).
 /// Gated on `test-db` so it is absent from production builds; reachable from both the inline

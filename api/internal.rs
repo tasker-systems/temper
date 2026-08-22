@@ -49,7 +49,8 @@ async fn main() -> Result<(), vercel_runtime::Error> {
 
     let service = ServiceBuilder::new().layer(VercelLayer::new()).service(app);
 
-    tracing::info!("temper-cloud: Vercel internal function initialized");
+    // Named for the service this binary claims above — see the note in `api/axum.rs`.
+    tracing::info!("temper-internal: Vercel function initialized");
 
     vercel_runtime::run(service).await
 }
