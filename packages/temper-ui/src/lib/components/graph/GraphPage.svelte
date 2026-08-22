@@ -441,10 +441,25 @@
 		grid-template-columns: minmax(0, 1fr) 2.25rem;
 	}
 	/*
-	 * `[noted — 2026-08-22]` This rule is INERT wherever it would matter: `.instrument.with-panel` is
-	 * (0,2,0) and this is (0,1,0), and a media query adds no specificity — so a panel-bearing layout
-	 * keeps two columns at every width. Left as found rather than repaired here; the floor above is
-	 * what this arc was ruled to build, and nothing in it depends on this rule ever firing.
+	 * `[noted — 2026-08-22]` **This rule has never fired on a screen where it would change anything**,
+	 * and the floor above is built on that. Read off the compiled output rather than reasoned about:
+	 *
+	 *   .instrument.with-panel.svelte-1rk7uio { grid-template-columns:minmax(0,1fr) 20rem }  (0,3,0)
+	 *   @media(max-width:900px){ .instrument.svelte-1rk7uio { grid-template-columns:1fr } }  (0,2,0)
+	 *
+	 * A media query contributes no specificity, so the panel-bearing rule wins at every width and the
+	 * stack applies only where there is no second track to collapse — where both say the same thing.
+	 *
+	 * **State the dependency in the direction it actually runs.** It is not that nothing depends on
+	 * this firing; it is that `readoutMustYield` depends on it NOT firing. That function has no lower
+	 * bound, so below the breakpoint it still collapses *Why these* to a strip — correct only while
+	 * the layout stays two-column here. Repair the specificity and the readout moves to its own row,
+	 * where it takes no width from the canvas and yielding buys nothing: the floor would then cost
+	 * the reader a panel that was never in the canvas's way.
+	 *
+	 * So the two cannot be settled independently, and whoever fixes this must give `readoutMustYield`
+	 * its lower bound in the same change. Left here because the repair ships a stacked form nobody
+	 * has ever seen — and on this surface, nothing is judged except by looking.
 	 */
 	@media (max-width: 900px) {
 		.instrument {
