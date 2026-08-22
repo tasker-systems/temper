@@ -12,6 +12,7 @@
 	 */
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
+	import RegionState from '$lib/components/RegionState.svelte';
 	import type { GraphViewData } from '$lib/graph/view';
 	import BoundLine from './BoundLine.svelte';
 	import GraphA11yList from './GraphA11yList.svelte';
@@ -32,9 +33,28 @@
 		asked = data.question ?? '';
 	});
 
-	const selectedNode = $derived(
-		data.selected ? (data.model.nodes.find((n) => n.id === data.selected) ?? null) : null,
-	);
+	/**
+	 * **One read, one arrival.** The canvas, the panel beside it and the bound line are three views
+	 * of a single streamed read, so they are awaited together — three arriving markers for one read
+	 * would tell the reader those regions could disagree about whether it answered, and they cannot.
+	 * `selected` joins them because the rail is resolved against the model and cannot precede it.
+	 *
+	 * The `.catch()` is spec §5.3's *other* catch, at the one place this page creates a promise that
+	 * did not come through `bounded`: `Promise.all` is a new promise, and during SSR the `{#await}`
+	 * below renders its pending branch without subscribing to it. `.catch()` consumes nothing, so
+	 * `{:catch}` still sees the failure.
+	 */
+	const answer = $derived.by(() => {
+		const all = Promise.all([
+			data.model,
+			data.selected,
+			data.readout,
+			data.bound,
+			data.tooLittleStructure,
+		]);
+		all.catch(() => {});
+		return all;
+	});
 
 	// `q` PUSHES: asking a different question is a step the reader can walk back out of, and Back
 	// must walk their path rather than leave the site. `sel` REPLACES: a selection is ephemeral
@@ -88,64 +108,94 @@
 					{data.refusal.named === 1 ? 'its' : 'their'} place.
 				</p>
 				<p><a href={`/graph/${data.owner}`}>See everything you can read →</a></p>
-			{:else if data.refusal.kind === 'too-little-structure'}
-				<!-- Rung 2. NOT a refusal in the reader's terms and it must not read like one: they
-				     have material, it simply has no relationships to draw. So the screen says which
-				     instrument is the right one and hands them the door to it, rather than showing
-				     an empty canvas and letting them conclude they have nothing. -->
-				<h2>A graph is not the right view for this yet</h2>
-				<p>
-					You can read {data.refusal.inScope}
-					{data.refusal.inScope === 1 ? 'resource' : 'resources'} here, but nothing is linked to
-					anything else — so there is no shape to draw. The list view is the better instrument
-					until things start connecting.
-				</p>
-				<p><a href={`/vault/${data.owner}`}>Browse them as a list →</a></p>
 			{:else}
 				<h2>There is nothing here yet</h2>
 				<p>Once you have a place with work in it, this is where its shape appears.</p>
 			{/if}
 		</div>
 	{:else}
-		<div class="instrument">
-			<div class="stage">
-				<GraphA11yList model={data.model} url={$page.url} />
-				<GraphCanvas
-					model={data.model}
-					selected={data.selected}
-					onSelect={select}
-					{emptyMessage}
-				/>
-				{#if selectedNode}
-					<NodeRail
-						node={selectedNode}
-						model={data.model}
-						excerpt={data.selectedExcerpt}
-						trail={data.selectedTrail}
-					/>
-				{/if}
+		<!--
+			Everything above this line — the ask form, the borrowed-charter line, the refusal and the
+			page chrome — renders OUTSIDE every await. That is C1 for this route, and it is
+			structural rather than a promise anyone has to keep: none of it reads `data.model`.
+		-->
+		{#await answer}
+			<div class="instrument">
+				<div class="stage region">
+					<RegionState state="arriving" label="graph" />
+				</div>
 			</div>
+		{:then [model, selected, readout, bound, tooLittle]}
+			{#if tooLittle}
+				<!-- Rung 2. NOT a refusal in the reader's terms and it must not read like one: they
+				     have material, it simply has no relationships to draw. So the screen says which
+				     instrument is the right one and hands them the door to it, rather than showing
+				     an empty canvas and letting them conclude they have nothing.
 
-			<!--
-				Rendered on a traversal too, where `readout` is null. Until D2 the condition was
-				`{#if data.readout}` alone, which is composition-only — so a hop got §7.2's
-				"disappear", explicitly named there as the second-best of three because it "loses the
-				reader's route back to how they got here."
-			-->
-			{#if data.readout || data.bound?.traversed}
-				<WhyThese
-					readout={data.readout}
-					question={data.question}
-					owner={data.owner}
-					places={data.placesAsked}
-					backHref={data.bound?.traversed ? withoutGraphWalk($page.url) : null}
-				/>
+				     It renders HERE, inside the read, because it is a verdict about the answer that
+				     came back rather than about the address the reader arrived on. -->
+				<div class="refusal" role="status">
+					<h2>A graph is not the right view for this yet</h2>
+					<p>
+						You can read {tooLittle.inScope}
+						{tooLittle.inScope === 1 ? 'resource' : 'resources'} here, but nothing is linked to
+						anything else — so there is no shape to draw. The list view is the better instrument
+						until things start connecting.
+					</p>
+					<p><a href={`/vault/${data.owner}`}>Browse them as a list →</a></p>
+				</div>
+			{:else}
+				<!-- Resolved against what was DRAWN, on the client as on the server: a `sel` this
+				     answer does not contain opens nothing. -->
+				{@const node = selected ? (model.nodes.find((n) => n.id === selected) ?? null) : null}
+				<div class="instrument">
+					<div class="stage">
+						<GraphA11yList {model} url={$page.url} />
+						<GraphCanvas {model} {selected} onSelect={select} {emptyMessage} />
+						{#if node}
+							<NodeRail
+								{node}
+								{model}
+								excerpt={data.selectedExcerpt}
+								trail={data.selectedTrail}
+							/>
+						{/if}
+					</div>
+
+					<!--
+						Rendered on a traversal too, where `readout` is null. Until D2 the condition was
+						`{#if data.readout}` alone, which is composition-only — so a hop got §7.2's
+						"disappear", explicitly named there as the second-best of three because it "loses the
+						reader's route back to how they got here."
+
+						Both halves are read from the SETTLED values the await unwrapped. `{#if data.readout}`
+						over a promise is always true, which would render this panel unconditionally and pass
+						every test in this file.
+					-->
+					{#if readout || bound?.traversed}
+						<WhyThese
+							{readout}
+							question={data.question}
+							owner={data.owner}
+							places={data.placesAsked}
+							backHref={bound?.traversed ? withoutGraphWalk($page.url) : null}
+						/>
+					{/if}
+				</div>
+
+				{#if bound}
+					<BoundLine {bound} />
+				{/if}
 			{/if}
-		</div>
-
-		{#if data.bound}
-			<BoundLine bound={data.bound} />
-		{/if}
+		{:catch}
+			<!-- The third state, and never the second one held open: nothing here says "arriving".
+			     The marks are not late, they were not read. -->
+			<div class="instrument">
+				<div class="stage region">
+					<RegionState state="failed" label="graph" />
+				</div>
+			</div>
+		{/await}
 	{/if}
 </div>
 
@@ -209,6 +259,12 @@
 		min-width: 0;
 		min-height: 0;
 		overflow: hidden;
+	}
+	/* The stage while the read is in flight, or after it failed. The region keeps its own
+	   appearance; this only gives it the room the canvas would have had. */
+	.stage.region {
+		align-items: flex-start;
+		padding: 24px 14px;
 	}
 	.refusal {
 		display: grid;

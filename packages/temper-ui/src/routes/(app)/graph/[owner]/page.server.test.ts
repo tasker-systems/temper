@@ -24,6 +24,10 @@ const readSeedResources = vi.fn();
  * Rejects by default, and that is the guard rather than an oversight: any test that takes the
  * composition branch by accident fails loudly instead of quietly answering. The routing tests below
  * assert on `mock.calls` rather than on a return value, so nothing needs it to resolve.
+ *
+ * `[amended — 2026-08-21]` Since the read streams, that rejection no longer comes out of `load` — it
+ * comes out of `data.model`, `data.bound` and `data.readout`. So the loud failure is now a test that
+ * awaits one of those, or one of the `mock.calls` assertions; the guard is the same, one field down.
  */
 const runComposition = vi.fn(() =>
 	Promise.reject(new Error('this read must not run a composition')),
@@ -127,7 +131,7 @@ describe('the entry read resolves a selection, like every other read', () => {
 	it('opens the rail on a mark the reader clicked — it opened nothing, for every node', async () => {
 		const data = await run(`?sel=${NODE}`);
 
-		expect(data.selected).toBe(NODE);
+		expect(await data.selected).toBe(NODE);
 		expect(readResourceBody).toHaveBeenCalledWith('tok', NODE);
 		expect(readTrail).toHaveBeenCalledWith('tok', 'node', NODE);
 	});
@@ -138,21 +142,41 @@ describe('the entry read resolves a selection, like every other read', () => {
 		const data = await run(`?sel=${NODE}`);
 
 		expect(readEntry).toHaveBeenCalledOnce();
-		expect(data.readout).toBeNull();
+		expect(await data.readout).toBeNull();
 		expect(data.question).toBeNull();
 	});
 
+	/**
+	 * `[amended — 2026-08-21]` The claim is unchanged and the spelling of one half of it is not.
+	 *
+	 * `selectedExcerpt`'s outer `null` means *no read was started*, and that used to cover this case
+	 * too, because the selection was resolved against a settled model. It is now resolved in a
+	 * `.then()`, so whether a named `sel` was drawn is knowable only after the model answers — and
+	 * the outer null, which the load must spell before it knows, cannot say it any more.
+	 *
+	 * What must NOT happen is a value standing in for the read: resolving to `null` would say *this
+	 * resource has no body*, a claim about the reader's material that no read verified (spec §5.2).
+	 * So it rejects, saying only that nothing was read. Nothing consumes it — the rail is gated on
+	 * `selected`, which is null — and the load-bearing halves are the two below it: no read ran.
+	 */
 	it('resolves against what was DRAWN — a sel this read does not contain opens nothing', async () => {
 		// The rule the composition branch already had, now held by every read rather than one.
 		const data = await run('?sel=019fffff-ffff-7fff-bfff-ffffffffffff');
 
-		expect(data.selected).toBeNull();
-		expect(data.selectedExcerpt).toBeNull();
+		expect(await data.selected).toBeNull();
+		await expect(data.selectedExcerpt).rejects.toThrow(/not in the answer/);
 		expect(readResourceBody).not.toHaveBeenCalled();
+		expect(readTrail).not.toHaveBeenCalled();
 	});
 
 	it('and no sel at all reads nothing — the rail costs a reader who did not open it nothing', async () => {
-		expect((await run()).selected).toBeNull();
+		const data = await run();
+
+		expect(await data.selected).toBeNull();
+		// Knowable from the ADDRESS, so it is still spelled as the outer null rather than chained
+		// off the model: a reader who opened no rail waits for nothing.
+		expect(data.selectedExcerpt).toBeNull();
+		expect(data.selectedTrail).toBeNull();
 		expect(readResourceBody).not.toHaveBeenCalled();
 		expect(readTrail).not.toHaveBeenCalled();
 	});
@@ -205,8 +229,8 @@ describe('a failed side-read degrades the rail, never the screen', () => {
 		const data = await run(`?sel=${NODE}`);
 
 		await expect(data.selectedTrail).rejects.toThrow('502');
-		expect(data.selected).toBe(NODE);
-		expect((data.model as { nodes: unknown[] }).nodes).toHaveLength(2);
+		expect(await data.selected).toBe(NODE);
+		expect((await (data.model as Promise<{ nodes: unknown[] }>)).nodes).toHaveLength(2);
 	});
 
 	it('a body that will not read is a rejection, never an empty excerpt', async () => {
@@ -215,7 +239,7 @@ describe('a failed side-read degrades the rail, never the screen', () => {
 		const data = await run(`?sel=${NODE}`);
 
 		await expect(data.selectedExcerpt).rejects.toThrow('503');
-		expect(data.selected).toBe(NODE);
+		expect(await data.selected).toBe(NODE);
 	});
 
 	/**
@@ -229,7 +253,7 @@ describe('a failed side-read degrades the rail, never the screen', () => {
 
 		const data = await run(`?sel=${NODE}`);
 
-		expect(data.selected).toBe(NODE);
+		expect(await data.selected).toBe(NODE);
 		expect(data.selectedExcerpt).toBeInstanceOf(Promise);
 		expect(data.selectedTrail).toBeInstanceOf(Promise);
 	});
@@ -251,7 +275,7 @@ describe('the three-way split — which read an address gets', () => {
 		expect(readTraversal).toHaveBeenCalledOnce();
 		expect(runComposition).not.toHaveBeenCalled();
 		expect(readEntry).not.toHaveBeenCalled();
-		expect(data.readout).toBeNull();
+		expect(await data.readout).toBeNull();
 	});
 
 	it('still traverses when a question is in the address — `q` no longer decides the answer', async () => {
@@ -269,7 +293,7 @@ describe('the three-way split — which read an address gets', () => {
 		expect(data.question).toBe('what am I working on');
 		// No composition ran, so there is no reasoning to report — and the panel that renders from
 		// `question` is provenance, not an explanation of these marks.
-		expect(data.readout).toBeNull();
+		expect(await data.readout).toBeNull();
 	});
 
 	it('walks the depth the address names, clamped to what the service will actually walk', async () => {
@@ -284,7 +308,7 @@ describe('the three-way split — which read an address gets', () => {
 		await run(`?from=${NODE}`);
 
 		expect(readTraversal).toHaveBeenCalledWith('tok', [NODE], 1);
-		expect((await run(`?from=${NODE}`)).bound).toMatchObject({ traversed: { depth: 1 } });
+		expect(await (await run(`?from=${NODE}`)).bound).toMatchObject({ traversed: { depth: 1 } });
 	});
 
 	it('an address with neither still gets the ENTRY read', async () => {
@@ -295,14 +319,23 @@ describe('the three-way split — which read an address gets', () => {
 		expect(runComposition).not.toHaveBeenCalled();
 	});
 
+	/**
+	 * `[amended — 2026-08-21]` The claim is unchanged; where the rejection surfaces is not.
+	 *
+	 * The composition read is streamed now, so **the load no longer rejects when that read does** —
+	 * the page frame is drawn either way, and the failure travels on the fields to the region that
+	 * renders it. That is the change this task is for, so the assertion moved onto the field rather
+	 * than being dropped: the branch was taken, and the failure still reaches the page as a failure.
+	 */
 	it('a question with no `from` still gets the COMPOSITION', async () => {
 		// Asserted on the call rather than the result: the mock rejects, which is what makes every
 		// other test in this block a real guard rather than a hopeful one.
-		await expect(run('?q=what+am+I+working+on')).rejects.toThrow();
+		const data = await run('?q=what+am+I+working+on');
 
 		expect(runComposition).toHaveBeenCalledOnce();
 		expect(readTraversal).not.toHaveBeenCalled();
 		expect(readEntry).not.toHaveBeenCalled();
+		await expect(data.model).rejects.toThrow('this read must not run a composition');
 	});
 
 	it('resolves a selection on a traversal too, because no read may decide that for itself', async () => {
@@ -310,18 +343,79 @@ describe('the three-way split — which read an address gets', () => {
 		// when that fix landed, and `GraphRead` is why this one could not forget it.
 		const data = await run(`?from=other-node&sel=${NODE}`);
 
-		expect(data.selected).toBe(NODE);
+		expect(await data.selected).toBe(NODE);
 		expect(readResourceBody).toHaveBeenCalledWith('tok', NODE);
+	});
+
+	/**
+	 * Spec §6's route-level guard, and C1 stated at the one place it can actually regress: *someone
+	 * adds an `await` and quietly restores blocking*. Every other test in this file would stay
+	 * green, because they all await the fields anyway.
+	 *
+	 * The read never settles, so a load that waits for it never returns — the assertion cannot be
+	 * satisfied by a fast read.
+	 */
+	it('C1: returns the page scaffold with the model still in flight', async () => {
+		readEntry.mockReturnValue(new Promise(() => {})); // never settles
+
+		const data = await run();
+
+		expect(data.model).toBeInstanceOf(Promise);
+		expect(data.question).not.toBeInstanceOf(Promise); // the scaffold is a value
+	});
+
+	/**
+	 * The other half of the same contract, and the load-bearing one: **a refusal is the answer, not
+	 * a delay.** It is decided from the address and from what the reader can see, above every read,
+	 * so it renders with the page chrome rather than behind a loading marker.
+	 */
+	it('a refusal is settled, and no read runs behind it', async () => {
+		const data = await run('?in=ctx:@me/not-a-place');
+
+		expect(data.refusal).toEqual({ kind: 'no-place-resolved', named: 1 });
+		expect(data.refusal).not.toBeInstanceOf(Promise);
+		expect(readEntry).not.toHaveBeenCalled();
+		expect(readTraversal).not.toHaveBeenCalled();
+		expect(runComposition).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * Rung 2 is the OTHER kind of refusal, and the split between the two is what this pins.
+	 *
+	 * `eligible === 0` is a number the entry read reports, so this verdict cannot precede that read
+	 * — it is about the answer that came back, not about the address the reader arrived on. It
+	 * therefore streams, and `refusal` stays null: putting it there would have meant awaiting the
+	 * entry read to decide the page frame, which is the blocking this route was changed to stop.
+	 */
+	it('rung 2 arrives with the answer, and `refusal` says nothing about it', async () => {
+		readEntry.mockResolvedValue({
+			...ENTRY,
+			nodes: [],
+			edges: [],
+			bounds: { drawn: 0, eligible: 0, in_scope: 42, truncated: false },
+		});
+
+		const data = await run();
+
+		expect(data.refusal).toBeNull();
+		expect(await data.tooLittleStructure).toEqual({
+			kind: 'too-little-structure',
+			inScope: 42,
+		});
+	});
+
+	it('and an answer with structure reaches no such verdict', async () => {
+		expect(await (await run()).tooLittleStructure).toBeNull();
 	});
 
 	it('declares its bounds from the marks it drew, not from the seeds it asked for', async () => {
 		// A seed the reader cannot read is not returned, so `from` counts what is on SCREEN. The
 		// walked fixture contains `NODE`, so hopping from it counts one; hopping from something the
 		// response does not contain counts none, and the line says so rather than going quiet.
-		expect((await run(`?from=${NODE}`)).bound).toMatchObject({
+		expect(await (await run(`?from=${NODE}`)).bound).toMatchObject({
 			traversed: { drawn: 2, from: 1, depth: 1 },
 		});
-		expect((await run('?from=019fffff-ffff-7fff-bfff-ffffffffffff')).bound).toMatchObject({
+		expect(await (await run('?from=019fffff-ffff-7fff-bfff-ffffffffffff')).bound).toMatchObject({
 			traversed: { drawn: 2, from: 0, depth: 1 },
 		});
 	});
