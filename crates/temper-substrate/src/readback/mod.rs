@@ -2111,12 +2111,16 @@ fn parse_intent(s: &str) -> Result<crate::payloads::ArtifactIntent> {
     })
 }
 
-/// Parse the SQL `shape_state` text into the typed enum. Today only `'never_declared'` is emitted
-/// (no registry exists); when the registry lands, new variants will be added here alongside the
-/// SQL literals.
-fn parse_shape_state(s: &str) -> Result<crate::payloads::ShapeState> {
+/// Parse the SQL `shape_state` text into the typed enum. The CHECK constraint and the service-edge
+/// refusal make any other value impossible from committed data, so an unexpected value here is a
+/// genuine fault (not a user error) and is returned as `anyhow::Error` — a `""` or `NULL` is a
+/// decode error, not a silent "looks fine" (see `ShapeState`'s doc comment).
+pub fn parse_shape_state(s: &str) -> Result<crate::payloads::ShapeState> {
     Ok(match s {
         "never_declared" => crate::payloads::ShapeState::NeverDeclared,
+        "declared_satisfied" => crate::payloads::ShapeState::DeclaredSatisfied,
+        "declared_not_satisfied" => crate::payloads::ShapeState::DeclaredNotSatisfied,
+        "declared_not_yet_checked" => crate::payloads::ShapeState::DeclaredNotYetChecked,
         other => anyhow::bail!("unrecognized shape_state from database: {other}"),
     })
 }

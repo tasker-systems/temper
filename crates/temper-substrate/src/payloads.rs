@@ -649,11 +649,16 @@ pub enum ShapeState {
     /// No shape has been declared for this artifact's family. The artifact is useful and
     /// first-class; this state is not a degradation.
     NeverDeclared,
-    // Future variants, when the shape registry lands:
-    //   DeclaredSatisfied — a shape is in force and the artifact conforms.
-    //   DeclaredNotSatisfied — a shape is in force and the artifact does not conform.
-    //   DeclaredNotYetChecked — a shape was registered but the validation sweep has not reached
-    //     this artifact.
+    /// A shape is in force for the artifact's family and the artifact conforms to it.
+    DeclaredSatisfied,
+    /// A shape is in force for the artifact's family and the artifact does not conform. In
+    /// `advisory` mode the commit succeeds and is recorded as non-conforming; in `enforcing`
+    /// mode the commit is refused and no artifact row is written.
+    DeclaredNotSatisfied,
+    /// A shape was registered for the artifact's family but the validation sweep has not yet
+    /// reached this artifact. The reader is told "not yet checked" rather than shown an empty
+    /// verdict field — `unchecked-never-reads-as-checked` gets no purchase here.
+    DeclaredNotYetChecked,
 }
 
 /// The closed enforcement vocabulary (spec §6). A shape is `advisory` by default: a non-conforming

@@ -196,6 +196,49 @@ fn string_value_schema() -> serde_json::Value {
 
 // ── witnesses ─────────────────────────────────────────────────────────────────────────────────
 
+/// `parse_shape_state` round-trips all four SQL literals to their typed variants, and an unknown
+/// literal (including `""`) still returns `Err` — the `bail!` default is load-bearing: a `""` or
+/// `NULL` is a decode error, not a silent "looks fine" (see `ShapeState`'s doc comment).
+#[test]
+fn parse_shape_state_round_trips_all_four_literals() {
+    use temper_substrate::payloads::ShapeState;
+    use temper_substrate::readback::parse_shape_state;
+
+    assert_eq!(
+        parse_shape_state("never_declared").unwrap(),
+        ShapeState::NeverDeclared,
+    );
+    assert_eq!(
+        parse_shape_state("declared_satisfied").unwrap(),
+        ShapeState::DeclaredSatisfied,
+    );
+    assert_eq!(
+        parse_shape_state("declared_not_satisfied").unwrap(),
+        ShapeState::DeclaredNotSatisfied,
+    );
+    assert_eq!(
+        parse_shape_state("declared_not_yet_checked").unwrap(),
+        ShapeState::DeclaredNotYetChecked,
+    );
+}
+
+/// The `bail!` default is load-bearing and must survive: an unknown literal (including `""` and
+/// `NULL`-as-empty-string) is a decode error, not a silent "looks fine."
+#[test]
+fn parse_shape_state_rejects_unknown_literals() {
+    use temper_substrate::readback::parse_shape_state;
+
+    assert!(parse_shape_state("").is_err(), "empty string must error");
+    assert!(
+        parse_shape_state("bogus").is_err(),
+        "unknown literal must error"
+    );
+    assert!(
+        parse_shape_state("NeverDeclared").is_err(),
+        "case mismatch must error — the SQL literals are snake_case"
+    );
+}
+
 /// Declare for `(home, owner, kind)`; `_data_artifact_shape_in_force` returns it for a resource
 /// homed there.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]

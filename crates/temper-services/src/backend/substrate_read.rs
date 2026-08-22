@@ -1567,6 +1567,15 @@ pub async fn list_artifacts(
                 temper_substrate::payloads::ShapeState::NeverDeclared => {
                     "never_declared".to_owned()
                 }
+                temper_substrate::payloads::ShapeState::DeclaredSatisfied => {
+                    "declared_satisfied".to_owned()
+                }
+                temper_substrate::payloads::ShapeState::DeclaredNotSatisfied => {
+                    "declared_not_satisfied".to_owned()
+                }
+                temper_substrate::payloads::ShapeState::DeclaredNotYetChecked => {
+                    "declared_not_yet_checked".to_owned()
+                }
             },
             is_folded: a.is_folded,
             created: a.created,
@@ -1640,6 +1649,15 @@ pub async fn get_artifact(
             shape_state: match a.shape_state {
                 temper_substrate::payloads::ShapeState::NeverDeclared => {
                     "never_declared".to_owned()
+                }
+                temper_substrate::payloads::ShapeState::DeclaredSatisfied => {
+                    "declared_satisfied".to_owned()
+                }
+                temper_substrate::payloads::ShapeState::DeclaredNotSatisfied => {
+                    "declared_not_satisfied".to_owned()
+                }
+                temper_substrate::payloads::ShapeState::DeclaredNotYetChecked => {
+                    "declared_not_yet_checked".to_owned()
                 }
             },
             is_folded: a.is_folded,
