@@ -123,7 +123,7 @@ beforeEach(() => {
 	readTraversal.mockResolvedValue(WALKED);
 	readSeedResources.mockResolvedValue([]);
 	runComposition.mockRejectedValue(new Error('this read must not run a composition'));
-	readResourceBody.mockResolvedValue(null);
+	readResourceBody.mockResolvedValue('');
 	readTrail.mockResolvedValue({ events: [] });
 });
 
@@ -204,9 +204,12 @@ describe('the excerpt slot never receives a whole document', () => {
 	});
 
 	it('says nothing when the body read reports nothing, rather than an empty panel', async () => {
-		// A resource with no body — the read ANSWERED, and `null` is its answer. Distinct from the
-		// read failing, which rejects; see the block below.
-		readResourceBody.mockResolvedValue(null);
+		// A resource with no body — the read ANSWERED, and an EMPTY STRING is its answer.
+		// `[corrected — 2026-08-21]` This mocked `null`, which the wire cannot produce: `markdown` is
+		// `String` in Rust and `string` in the generated type, so a body-less resource sends `''`.
+		// `excerptOf` is what turns that into the `empty` state. Distinct from the read failing,
+		// which rejects; see the block below.
+		readResourceBody.mockResolvedValue('');
 		expect(await (await run(`?sel=${NODE}`)).selectedExcerpt).toBeNull();
 	});
 });

@@ -53,8 +53,16 @@ export interface GraphViewData {
 	 * reader can see, above the read. A refusal that arrived behind a loading marker would be a
 	 * delay dressed as an answer. Rung 2 is the opposite kind of verdict and streams; see
 	 * {@link GraphViewData.tooLittleStructure}.
+	 *
+	 * **`Exclude`d rather than merely not-assigned, and the reason is what it renders.** When rung 2
+	 * moved to its own field, `GraphPage`'s refusal block lost its rung-2 branch — so a value that
+	 * still type-checked here would fall through to *"There is nothing here yet"*, told to a reader
+	 * who **has** material and is being denied the sentence that says so. That is the exact reading
+	 * `the-unstructured-reader-is-never-worse-off` exists to prevent, and it would have been a
+	 * silent fallthrough rather than an error. Unrepresentable beats untested — the same argument
+	 * `GraphRead`'s subtraction type makes in the load.
 	 */
-	refusal: GraphRefusal | null;
+	refusal: Exclude<GraphRefusal, { kind: 'too-little-structure' }> | null;
 	/**
 	 * The answer's marks — **streamed**, so the ask box, the borrowed-charter line and the page
 	 * chrome paint before the graph is read (spec §3.2, C1).

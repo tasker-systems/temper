@@ -10,7 +10,7 @@ import {
 	type GraphModel,
 } from '$lib/graph/model';
 import { buildReadout, disclosedRegionIds } from '$lib/graph/readout';
-import type { GraphRefusal, GraphViewData } from '$lib/graph/view';
+import type { GraphViewData } from '$lib/graph/view';
 import { ApiError } from '$lib/server/api';
 import { bounded, derive } from '$lib/server/bounded';
 import {
@@ -56,6 +56,14 @@ import type { PageServerLoad } from './$types';
  * was that **clicking any mark on the screen every reader meets first wrote `?sel=` into the URL
  * and opened nothing**, for every node, for as long as that read has existed. No test could fail:
  * the rail's tests all run on the composition fixture.
+ *
+ * `[corrected — 2026-08-21]` An earlier draft of this comment said the defect *"shipped and nothing
+ * objected, for months."* **It did not.** `readEntry` first appears in `5f23f787`, the same day it
+ * was fixed, and this route is four weeks old (`bc8ed6f0`, 2026-07-24). The defect lasted hours. The
+ * correction matters because the false number was the most persuasive sentence here, and it was
+ * being quoted onward as grounds for deferring other work — a claim in a comment gets repeated
+ * without being rechecked, which is exactly what a comment is for and exactly why a wrong one is
+ * worse than none. What the type buys does not need the exaggeration: no test could have caught it.
  *
  * A third read is already designed (chunk D2's traversal). Adding the three lines to the entry
  * branch would have closed the instance and left the next branch free to forget it again.
@@ -214,7 +222,11 @@ async function readFor(token: string, address: GraphAddress): Promise<GraphRead>
 	// refusal is settled, so it renders with the page chrome, and the four streamed fields are
 	// already-resolved promises rather than nulls. An outer null on any of them would be a fourth
 	// state on a field that already carries three.
-	const empty = (refusal: GraphRefusal): GraphRead => ({
+	// The parameter is the NARROWED union, not `GraphRefusal`: rung 2 travels on
+	// `tooLittleStructure` and this helper is the pre-read exit, so a rung-2 value reaching here
+	// would be a verdict about an answer no read produced. Widening it back is how the two would
+	// silently rejoin — see `GraphViewData.refusal`.
+	const empty = (refusal: GraphViewData['refusal']): GraphRead => ({
 		question: address.question,
 		borrowedFrom: null,
 		refusal,

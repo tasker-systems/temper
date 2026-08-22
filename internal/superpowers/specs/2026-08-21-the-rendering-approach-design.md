@@ -248,12 +248,37 @@ rows are the reason this section exists.
 
 | Clause | Phase 1's effect |
 |---|---|
-| `every-act-is-acknowledged` | **Covered.** C5 on every route, C1 wherever there is a scaffold |
+| `every-act-is-acknowledged` | **Covered for navigations, NOT for form actions** — see §7.1. C5 on every route, C1 wherever there is a scaffold |
 | `arriving-and-settled-are-distinguishable` | **Covered.** C2, and it must carry words rather than only a shimmer |
 | `no-two-region-states-present-alike` | **Covered, with a stated weakness.** C4 plus the more-than-one-channel requirement. §3.3 names exactly how the test is weaker than the clause |
 | `responsiveness-is-never-bought-with-a-false-claim` | **Preserved structurally, and cheaply.** Phase 1 renders only what a read actually returned — there is no optimistic path to go wrong, because none is built. Worth stating rather than assuming: it is preserved by the *absence* of a mechanism, so anything later that adds one puts this clause back in play |
 | `working-and-stopped-are-distinguishable` | **PARTIAL, and this is a declared hole.** C3 distinguishes a read that **failed**. A read that simply **never answers** is stopped without failing, and nothing in C1–C5 catches it — only the refusal in §5.4 does, and that is a recommendation Pete has not ruled. **Until a bound exists, a hung read presents as arriving forever**, which is the clause's exact failure |
 | `acting-on-a-part-does-not-discard-the-whole` | **NOT COVERED by Phase 1, declared rather than left silent.** Streaming changes what a load *returns*; it does not stop a navigation from re-rendering the page around it. Opening a panel still re-runs the whole load and redraws the canvas the reader was looking at. That is §4's deferral, and it means **one of the register's four positive clauses gets nothing from this phase** |
+
+### 7.1 `[found in review — 2026-08-21]` The first row conflated *routes* with *acts*
+
+It read *"Covered. C5 on every route."* Every route is true and is not the claim the clause makes.
+
+`$navigating` is set only inside SvelteKit's `navigate()` (`client.js:1639`). A **form action**
+submitted with `use:enhance` does not go through it — it applies its result and invalidates — so
+`navigating` stays `null` and `NavProgress` never appears. The two submissions at
+`admin/access/+page.svelte:74,81` — **approve** and **reject** an access request — are acts by any
+reading, they are consequential, and they get **no acknowledgement at all**.
+
+The row now says navigations rather than acts. Closing it means acknowledging a submission, which is
+a different mechanism from `navigating` and is not built here.
+
+### 7.2 `[found in review — 2026-08-21]` Streamed regions are absent from the SSR HTML
+
+A streamed region renders only its **pending** branch into the server's HTML, by construction — the
+value has not arrived when the document is written. So the graph canvas, `GraphA11yList` and the
+resource page's markdown body are no longer server-rendered, and **with JavaScript disabled they
+never resolve**.
+
+These are authenticated application routes, so search indexing is moot and the register excludes
+unauthenticated readers. It is recorded because §4 treats a no-JS fallback as a cost worth naming
+when weighing shallow routing, and §9 named no such cost for streaming — an asymmetry that would let
+a reader conclude streaming had none.
 
 **The second of those is the honest cost of deferring shallow routing**, and it should be read
 alongside §4 rather than separately: the deferral is defensible, and it leaves a clause with no

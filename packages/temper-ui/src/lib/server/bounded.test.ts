@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { bounded, describeFailure, GaveUp } from './bounded';
+import { bounded, derive, describeFailure, GaveUp } from './bounded';
 
 describe('a read the system stops waiting for', () => {
 	it('resolves normally when the read answers in time', async () => {
@@ -87,6 +87,44 @@ describe('a read the system stops waiting for', () => {
 	// still has to see the failure, or the region renders nothing and the server merely survives.
 	it('and every consumer still observes that rejection', async () => {
 		await expect(bounded(Promise.reject(new Error('503')), 'history', 50)).rejects.toThrow('503');
+	});
+});
+
+/**
+ * `derive` carries the same invariant as `bounded` and had **no test of its own** — coverage was
+ * incidental, through two loads that happen to leave a derived rejection unconsumed.
+ *
+ * Incidental coverage is the shape this whole change keeps finding: it holds until someone edits the
+ * thing that was accidentally exercising it, and then it reports green while the guarantee is gone.
+ * `derive` guards eleven streamed fields across the two graph loads, so its own failure mode is a
+ * server that crashes on a read nobody was subscribed to.
+ */
+describe('a promise derived from a bounded one', () => {
+	it('does not crash the process when nobody subscribed to it', async () => {
+		const fired: unknown[] = [];
+		const onUnhandled = (reason: unknown) => fired.push(reason);
+		process.on('unhandledRejection', onUnhandled);
+		try {
+			// The production shape: derived off a read, handed to `{#await}`, unconsumed until
+			// SvelteKit serializes it.
+			void derive(bounded(Promise.reject(new Error('503')), 'history', 50), (v) => v);
+
+			await new Promise((r) => setTimeout(r, 20));
+			await new Promise((r) => setImmediate(r));
+
+			expect(fired).toEqual([]);
+		} finally {
+			process.off('unhandledRejection', onUnhandled);
+		}
+	});
+
+	// Marked handled, not consumed — the template's `{:catch}` still has to see it.
+	it('and every consumer still observes the rejection', async () => {
+		await expect(derive(Promise.reject(new Error('503')), (v) => v)).rejects.toThrow('503');
+	});
+
+	it('passes a value through the transform', async () => {
+		await expect(derive(Promise.resolve(2), (v) => v * 21)).resolves.toBe(42);
 	});
 });
 
