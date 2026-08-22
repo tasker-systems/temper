@@ -5,6 +5,7 @@
 	import PropertySet from '$lib/components/vault/PropertySet.svelte';
 	import EventHistory from '$lib/components/vault/EventHistory.svelte';
 	import EdgeList from '$lib/components/vault/EdgeList.svelte';
+	import RegionState from '$lib/components/RegionState.svelte';
 	import { mergeProperties } from '$lib/properties';
 	import { docTypeHue } from '$lib/graph/palette';
 
@@ -37,14 +38,57 @@
 
 		<PropertySet {rows} />
 
+		<!--
+			Everything above this point is the scaffold and renders from `data.resource`, which the
+			load awaited. Nothing below it can delay any of it — that is C1, and it is structural
+			rather than timed: hand the page a promise that never settles and the frame, the title,
+			the chip and the properties are all still there.
+
+			`document`, not `excerpt`: `data.content` is the whole markdown body of this resource, so
+			"Excerpt unavailable" would be a false statement about what failed. (`excerpt` is the
+			graph rail's word, for the thing that really is one.)
+
+			The body is the one region with no component of its own to hold the verdict, so the
+			emptiness test lives here. `MarkdownRenderer` renders `''` for a falsy input, which is a
+			silent region — exactly what the vocabulary exists to prevent.
+		-->
 		<div class="body">
-			<MarkdownRenderer markdown={data.content} />
+			{#await data.content}
+				<RegionState state="arriving" label="document" />
+			{:then markdown}
+				{#if markdown.trim() === ''}
+					<RegionState state="empty" label="document" />
+				{:else}
+					<MarkdownRenderer {markdown} />
+				{/if}
+			{:catch}
+				<RegionState state="failed" label="document" />
+			{/await}
 		</div>
 	</div>
 
+	<!--
+		The rail's two regions arrive independently of the body and of each other. Neither `{:then}`
+		branch tests for emptiness: each component owns that verdict, because each derives it from
+		the value in a way the page cannot see (`EventHistory` filters through `trailModel`). Two
+		predicates in two places are two predicates that can disagree.
+	-->
 	<aside class="rail">
-		<EventHistory trail={data.trail} />
-		<EdgeList edges={data.edges} />
+		{#await data.trail}
+			<div class="rail-region"><RegionState state="arriving" label="history" /></div>
+		{:then trail}
+			<EventHistory {trail} />
+		{:catch}
+			<div class="rail-region"><RegionState state="failed" label="history" /></div>
+		{/await}
+
+		{#await data.edges}
+			<div class="rail-region"><RegionState state="arriving" label="connections" /></div>
+		{:then edges}
+			<EdgeList {edges} />
+		{:catch}
+			<div class="rail-region"><RegionState state="failed" label="connections" /></div>
+		{/await}
 	</aside>
 </div>
 
@@ -83,6 +127,10 @@
 	.rail {
 		background: var(--color-quiet-card);
 		border-left: 1px solid color-mix(in srgb, var(--hue) 22%, transparent);
+	}
+	/* The rail's sections carry their own padding; a bare region needs the same gutter. */
+	.rail-region {
+		padding: 12px 14px;
 	}
 
 	@media (max-width: 900px) {
