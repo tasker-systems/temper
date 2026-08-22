@@ -5,6 +5,36 @@ import { runInThisContext } from 'node:vm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { regionStateFor } from '$lib/region';
 import { GaveUp } from '$lib/server/bounded';
+
+/**
+ * `$lib/server/oidc` resolves its config **at module scope** (`oidc.ts:47`), so importing
+ * `hooks.server.ts` at all throws `OIDC issuer not configured` wherever that env is absent — which
+ * is every CI run on a pull request, since a fork-visible workflow gets no secrets. `[found in CI —
+ * 2026-08-22]` It passed locally only because a `.env` happened to be on disk; reproduced by moving
+ * that file aside.
+ *
+ * The mock stands in for a **module-load side effect**, not for anything under test. `handleError`
+ * does not touch OIDC — it reads an error and returns a shape — so importing the app's real hook,
+ * which is the whole point of this file, is preserved exactly.
+ */
+vi.mock('$lib/server/oidc', () => ({
+	REFRESH_THRESHOLD_SECONDS: 60,
+	refreshAccessToken: () => Promise.reject(new Error('not used by handleError')),
+}));
+
+/**
+ * The same thing one module over: `session.ts:49` derives its key from `SESSION_SECRET` at module
+ * scope, via `$env/static/private`. Also unrelated to `handleError`, and also fatal at import.
+ *
+ * Both were found by moving `.env` aside and running this file — not by reading the import graph.
+ * Mocking one and shipping would have failed CI a second time on the next module down.
+ */
+vi.mock('$lib/server/session', () => ({
+	readSession: () => Promise.resolve(null),
+	writeSession: () => Promise.resolve(),
+	clearSession: () => {},
+}));
+
 import { handleError } from './hooks.server';
 
 /**
@@ -102,11 +132,22 @@ describe('the give-up, across the boundary a class cannot cross', () => {
 		};
 		Object.assign(globalThis, { __sveltekit_dev: collect, __sveltekit_probe: collect });
 
+		// Kit wraps each chunk in a bare `<script>` (bare because `script_needs_nonce: false` above).
+		// Unwrapped by exact string bounds rather than by regex, deliberately: `[found by CodeQL —
+		// 2026-08-22]` a tag-shaped regex here trips `js/bad-tag-filter` at high severity, and the
+		// scanner is right to be suspicious of the *shape* even though this is not sanitisation —
+		// the input is a chunk this test just asked kit to emit. Exact bounds say that plainly, and
+		// the assertion below means a kit change to the wrapper fails loudly rather than executing
+		// tag text as source.
+		const OPEN = '<script>';
+		const CLOSE = '</script>';
 		for await (const chunk of chunks ?? []) {
+			const trimmed = chunk.trim();
+			expect(trimmed.startsWith(OPEN) && trimmed.endsWith(CLOSE)).toBe(true);
 			// Executed, not pattern-matched: a chunk whose text contains "gaveUp" is not evidence that
 			// a browser would decode one. `runInThisContext` is the nearest node has to an inline
 			// `<script>` — same globals, no module scope.
-			runInThisContext(chunk.replace(/^<script>/, '').replace(/<\/script>\n?$/, ''));
+			runInThisContext(trimmed.slice(OPEN.length, -CLOSE.length));
 		}
 		return received;
 	};
