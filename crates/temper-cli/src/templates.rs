@@ -97,3 +97,10 @@ pub struct SessionLifecycleTemplate<'a> {
 pub struct OutcomeRegistersTemplate<'a> {
     pub surface: &'a str,
 }
+
+/// The data-artifact discipline. Shared prose; the CLI/MCP command examples diverge by surface.
+#[derive(Template)]
+#[template(path = "shared/data-artifacts.md")]
+pub struct DataArtifactsTemplate<'a> {
+    pub surface: &'a str,
+}
