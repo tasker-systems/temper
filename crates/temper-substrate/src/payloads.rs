@@ -592,6 +592,21 @@ pub enum KindOwner {
     Team(Uuid),
 }
 
+impl KindOwner {
+    pub fn owner_table(&self) -> &'static str {
+        match self {
+            KindOwner::Profile(_) => "kb_profiles",
+            KindOwner::Team(_) => "kb_teams",
+        }
+    }
+
+    pub fn owner_id(&self) -> Uuid {
+        match self {
+            KindOwner::Profile(id) | KindOwner::Team(id) => *id,
+        }
+    }
+}
+
 /// Commit one data artifact to a resource (spec: resource-owned data artifacts, 2026-08-20).
 ///
 /// **The body is NOT here, and that is the design.** The payload carries `content_hash`; the bytes

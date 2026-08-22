@@ -23,9 +23,11 @@
 
 mod common;
 
-use temper_substrate::events::EventContext;
-use temper_substrate::ids::{CogmapId, ContextId, EntityId, ProfileId, ResourceId};
-use temper_substrate::payloads::{AnchorRef, EnforcementMode, KindOwner};
+use temper_substrate::events::{fire, EventContext, Fired, SeedAction};
+use temper_substrate::ids::{CogmapId, ContextId, DataArtifactId, EntityId, ProfileId, ResourceId};
+use temper_substrate::payloads::{
+    AnchorRef, ArtifactIntent, EnforcementMode, KindOwner, ShapeState,
+};
 use temper_substrate::scenario::bootseed;
 use temper_substrate::writes::{self, CreateParams, DeclareShapeParams};
 use uuid::Uuid;
@@ -192,6 +194,78 @@ fn string_value_schema() -> serde_json::Value {
         },
         "required": ["value"]
     })
+}
+
+/// Commit one data artifact via `fire()` and return the artifact id + conformance verdict.
+async fn commit(
+    pool: &sqlx::PgPool,
+    resource: ResourceId,
+    kind: &str,
+    content: &serde_json::Value,
+    emitter: EntityId,
+) -> (DataArtifactId, ShapeState) {
+    let mut tx = pool.begin().await.unwrap();
+    let fired = fire(
+        &mut tx,
+        SeedAction::DataArtifactCommit {
+            resource,
+            kind,
+            kind_owner: None,
+            intent: ArtifactIntent::Current,
+            precedence: 0.0,
+            content,
+            supersedes: &[],
+            emitter,
+        },
+    )
+    .await
+    .unwrap();
+    let (id, shape_state) = match fired {
+        Fired::DataArtifact {
+            artifact,
+            shape_state,
+        } => (artifact, shape_state),
+        other => panic!("expected Fired::DataArtifact, got {other:?}"),
+    };
+    tx.commit().await.unwrap();
+    (id, shape_state)
+}
+
+/// Attempt to commit; expect a refusal (error). Returns the error message.
+async fn commit_err(
+    pool: &sqlx::PgPool,
+    resource: ResourceId,
+    kind: &str,
+    content: &serde_json::Value,
+    emitter: EntityId,
+) -> String {
+    let mut tx = pool.begin().await.unwrap();
+    let result = fire(
+        &mut tx,
+        SeedAction::DataArtifactCommit {
+            resource,
+            kind,
+            kind_owner: None,
+            intent: ArtifactIntent::Current,
+            precedence: 0.0,
+            content,
+            supersedes: &[],
+            emitter,
+        },
+    )
+    .await;
+    let err = result.expect_err("commit should have been refused");
+    tx.rollback().await.ok();
+    err.to_string()
+}
+
+/// Count artifact rows for a resource (to verify no row was written on refusal).
+async fn artifact_count(pool: &sqlx::PgPool, resource: ResourceId) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM kb_data_artifacts WHERE resource_id=$1")
+        .bind(resource.uuid())
+        .fetch_one(pool)
+        .await
+        .unwrap()
 }
 
 // ── witnesses ─────────────────────────────────────────────────────────────────────────────────
@@ -408,4 +482,130 @@ async fn declaring_twice_folds_the_prior_and_bumps_the_version(pool: sqlx::PgPoo
     assert_eq!(in_force.0, second);
     assert_eq!(in_force.1, 2);
     assert_eq!(in_force.2, "enforcing");
+}
+
+// ── Beat B: commit-time conformance verdict (Task 3) ─────────────────────────────────────────
+
+/// A conforming commit under an advisory shape records `DeclaredSatisfied` synchronously.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_conforming_commit_records_declared_satisfied(pool: sqlx::PgPool) {
+    let (emitter, home, resource, _owner) = world(&pool, "conform-ok").await;
+    let kind = "measurement";
+    let schema = string_value_schema();
+
+    declare(
+        &pool,
+        emitter,
+        AnchorRef::context(home),
+        None,
+        kind,
+        &schema,
+        EnforcementMode::Advisory,
+    )
+    .await;
+
+    let conforming = serde_json::json!({"value": "42"});
+    let (_id, shape_state) = commit(&pool, resource, kind, &conforming, emitter).await;
+
+    assert_eq!(
+        shape_state,
+        ShapeState::DeclaredSatisfied,
+        "a conforming commit must record DeclaredSatisfied synchronously"
+    );
+}
+
+/// **The posture's bite probe.** An advisory shape records non-conformance WITHOUT refusing —
+/// the commit succeeds, the artifact is retrievable, and the verdict is `DeclaredNotSatisfied`.
+/// If this ever refuses, ruling 4 has been lost.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_advisory_shape_records_non_conformance_without_refusing(pool: sqlx::PgPool) {
+    let (emitter, home, resource, _owner) = world(&pool, "advisory-bite").await;
+    let kind = "measurement";
+    let schema = string_value_schema();
+
+    declare(
+        &pool,
+        emitter,
+        AnchorRef::context(home),
+        None,
+        kind,
+        &schema,
+        EnforcementMode::Advisory,
+    )
+    .await;
+
+    // Non-conforming: `value` is a number, not a string.
+    let non_conforming = serde_json::json!({"value": 42});
+    let (id, shape_state) = commit(&pool, resource, kind, &non_conforming, emitter).await;
+
+    assert_eq!(
+        shape_state,
+        ShapeState::DeclaredNotSatisfied,
+        "advisory non-conformance must record DeclaredNotSatisfied, not refuse"
+    );
+
+    // The artifact IS retrievable — the commit succeeded.
+    let row: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM kb_data_artifacts WHERE id=$1 AND NOT is_folded")
+            .bind(id.uuid())
+            .fetch_optional(&pool)
+            .await
+            .unwrap();
+    assert!(
+        row.is_some(),
+        "the artifact row must exist under advisory non-conformance — the commit succeeded"
+    );
+}
+
+/// An enforcing shape refuses a non-conforming commit, carries the validation failure, and writes
+/// NO artifact row.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_enforcing_shape_refuses_and_says_what_failed(pool: sqlx::PgPool) {
+    let (emitter, home, resource, _owner) = world(&pool, "enforcing-refuse").await;
+    let kind = "measurement";
+    let schema = string_value_schema();
+
+    declare(
+        &pool,
+        emitter,
+        AnchorRef::context(home),
+        None,
+        kind,
+        &schema,
+        EnforcementMode::Enforcing,
+    )
+    .await;
+
+    let non_conforming = serde_json::json!({"value": 42});
+    let err = commit_err(&pool, resource, kind, &non_conforming, emitter).await;
+
+    assert!(
+        err.contains("does not conform"),
+        "the refusal must say the content does not conform, got: {err}"
+    );
+
+    // No artifact row was written.
+    let count = artifact_count(&pool, resource).await;
+    assert_eq!(
+        count, 0,
+        "no artifact row must be written when an enforcing shape refuses"
+    );
+}
+
+/// A commit with no shape in force stays `NeverDeclared` — persistence never requires a prior
+/// declaration.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_commit_with_no_shape_in_force_stays_never_declared(pool: sqlx::PgPool) {
+    let (emitter, _home, resource, _owner) = world(&pool, "no-shape").await;
+    let kind = "measurement";
+
+    // No shape declared — just commit.
+    let content = serde_json::json!({"value": "42"});
+    let (_id, shape_state) = commit(&pool, resource, kind, &content, emitter).await;
+
+    assert_eq!(
+        shape_state,
+        ShapeState::NeverDeclared,
+        "a commit with no shape in force must stay NeverDeclared"
+    );
 }

@@ -44,10 +44,5 @@ sha2 = "0.10"
 # dependency is in place before the validation code lands.
 jsonschema = "0.45"
 
-[package.metadata.cargo-machete]
-# jsonschema is used by Task 3 (Beat B, commit-time conformance validation); it is unused in
-# Task 1's substrate-only scope, so machete would flag it without this ignore.
-ignored = ["jsonschema"]
-
 # (No dev-dependencies: the WS6 chunk-3 parity tests that dev-depended on temper-api/temper-core were
 # retired with synthesis at the endgame collapse.)

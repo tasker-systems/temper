@@ -567,9 +567,15 @@ pub enum Fired {
     /// The telos resource id a `CharterSet` fire replaced the charter on.
     Charter(ResourceId),
     Invocation(InvocationId),
-    /// The artifact row a `DataArtifactCommit` fire produced. Singular — one commit, one artifact
-    /// (unlike `Facet`, where a multi-valued key mints a row per inner key).
-    DataArtifact(DataArtifactId),
+    /// The artifact row a `DataArtifactCommit` fire produced, and the conformance verdict
+    /// computed at commit time. Singular — one commit, one artifact (unlike `Facet`, where a
+    /// multi-valued key mints a row per inner key). The `shape_state` is `NeverDeclared` when no
+    /// shape governs the artifact's family; `DeclaredSatisfied` or `DeclaredNotSatisfied` when a
+    /// shape is in force and the content was validated against it in Rust.
+    DataArtifact {
+        artifact: DataArtifactId,
+        shape_state: payloads::ShapeState,
+    },
     /// The shape row a `ShapeDeclare` fire produced. Singular — one declaration, one shape row
     /// (assert/fold: a prior row is folded, not superseded in place).
     Shape(ShapeId),
@@ -579,7 +585,18 @@ impl Fired {
     /// Extract the artifact id a `DataArtifactCommit` fire produced.
     pub fn data_artifact(self) -> Result<DataArtifactId> {
         match self {
-            Fired::DataArtifact(id) => Ok(id),
+            Fired::DataArtifact { artifact, .. } => Ok(artifact),
+            other => anyhow::bail!("expected Fired::DataArtifact, got {other:?}"),
+        }
+    }
+
+    /// Extract the artifact id and conformance verdict a `DataArtifactCommit` fire produced.
+    pub fn data_artifact_verdict(self) -> Result<(DataArtifactId, payloads::ShapeState)> {
+        match self {
+            Fired::DataArtifact {
+                artifact,
+                shape_state,
+            } => Ok((artifact, shape_state)),
             other => anyhow::bail!("expected Fired::DataArtifact, got {other:?}"),
         }
     }
@@ -940,6 +957,75 @@ pub async fn fire_with(
             let raw = serde_json::to_string(content)?;
             let digest = crate::content::sha256_hex(&raw);
 
+            // ── Commit-time conformance verdict (spec §7.1, §7.2) ─────────────────────
+            //
+            // The shape in force is resolved through SQL — Rust never re-derives the namespace
+            // or the home. When the caller omits kind_owner, the SQL resolver
+            // _data_artifact_kind_owner fills it in (the same function data_artifact_commit's
+            // wrapper uses), so Rust calls it here within the same transaction. Then
+            // _data_artifact_shape_in_force resolves the home via _data_artifact_anchor and
+            // looks up the live shape for (home, kind_owner, kind).
+            //
+            // If a shape is in force, the content is validated against its JSON Schema in Rust
+            // (spec §7.2: there is no in-database validator). Under `enforcing` + non-conformance
+            // the commit is refused and no artifact row is written. Under `advisory` the commit
+            // succeeds and the verdict is DeclaredNotSatisfied. When no shape is in force the
+            // verdict stays NeverDeclared — persistence never requires a prior declaration.
+            let (ko_table, ko_id) = match kind_owner {
+                Some(ref ko) => (ko.owner_table().to_string(), ko.owner_id()),
+                None => {
+                    let row = sqlx::query!(
+                        "SELECT owner_table, owner_id FROM _data_artifact_kind_owner($1)",
+                        resource.uuid(),
+                    )
+                    .fetch_one(&mut *conn)
+                    .await?;
+                    (
+                        row.owner_table
+                            .context("_data_artifact_kind_owner returned null owner_table")?,
+                        row.owner_id
+                            .context("_data_artifact_kind_owner returned null owner_id")?,
+                    )
+                }
+            };
+
+            let shape = sqlx::query!(
+                "SELECT shape_id, shape_version, schema, enforcement \
+                 FROM _data_artifact_shape_in_force($1,$2,$3,$4)",
+                resource.uuid(),
+                ko_table.as_str(),
+                ko_id,
+                kind,
+            )
+            .fetch_optional(&mut *conn)
+            .await?;
+
+            let shape_state = match shape {
+                None => payloads::ShapeState::NeverDeclared,
+                Some(row) => {
+                    let schema = row.schema.context("shape in force returned null schema")?;
+                    let enforcement = row.enforcement.as_deref().unwrap_or("advisory");
+                    let validator = jsonschema::validator_for(&schema)
+                        .map_err(|e| anyhow::anyhow!("failed to compile shape schema: {e}"))?;
+                    let errors: Vec<_> = validator.iter_errors(content).collect();
+                    if errors.is_empty() {
+                        payloads::ShapeState::DeclaredSatisfied
+                    } else if enforcement == "enforcing" {
+                        let detail = errors
+                            .iter()
+                            .map(|e| format!("{}: {}", e.instance_path(), e))
+                            .collect::<Vec<_>>()
+                            .join("; ");
+                        anyhow::bail!(
+                            "data_artifact_commit: content does not conform to the enforcing \
+                             shape in force for this family — {detail}"
+                        );
+                    } else {
+                        payloads::ShapeState::DeclaredNotSatisfied
+                    }
+                }
+            };
+
             let payload = payloads::DataArtifactCommitted {
                 artifact_id: DataArtifactId::from(Uuid::now_v7()),
                 resource_id: resource,
@@ -986,12 +1072,14 @@ pub async fn fire_with(
             .await?
             .context("data_artifact_commit returned null")?;
             debug_assert_eq!(ids.len(), 1, "one commit mints exactly one artifact");
-            Ok(Fired::DataArtifact(
-                ids.first()
+            Ok(Fired::DataArtifact {
+                artifact: ids
+                    .first()
                     .copied()
                     .map(DataArtifactId::from)
                     .unwrap_or(artifact_id),
-            ))
+                shape_state,
+            })
         }
 
         SeedAction::ShapeDeclare {
