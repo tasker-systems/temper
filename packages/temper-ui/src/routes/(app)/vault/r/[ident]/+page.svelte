@@ -73,22 +73,48 @@
 		branch tests for emptiness: each component owns that verdict, because each derives it from
 		the value in a way the page cannot see (`EventHistory` filters through `trailModel`). Two
 		predicates in two places are two predicates that can disagree.
+
+		`NodeRail.svelte:84-86` states the rule the other two branches used to break here — "The
+		label sits OUTSIDE the await, and that is the rule rather than a layout preference" — and a
+		region that vanishes while it is arriving cannot tell the reader that it is arriving. Both
+		branches rendered a bare `RegionState`, so the heading was missing for exactly the two
+		states that most need naming.
+
+		`railHeading` is the settled components' heading minus its count, which is the one part of
+		it a read that has not answered cannot know. It is a snippet rather than four literals
+		because four spellings of one heading are four spellings that can drift.
 	-->
+	{#snippet railHeading(text: string)}
+		<div class="label">{text}</div>
+	{/snippet}
+
 	<aside class="rail">
 		{#await data.trail}
-			<div class="rail-region"><RegionState state="arriving" label="history" /></div>
+			<div class="rail-region">
+				{@render railHeading('History')}
+				<RegionState state="arriving" label="history" />
+			</div>
 		{:then trail}
 			<EventHistory {trail} />
 		{:catch error}
-			<div class="rail-region"><RegionState state={regionStateFor(error)} label="history" /></div>
+			<div class="rail-region">
+				{@render railHeading('History')}
+				<RegionState state={regionStateFor(error)} label="history" />
+			</div>
 		{/await}
 
 		{#await data.edges}
-			<div class="rail-region"><RegionState state="arriving" label="connections" /></div>
+			<div class="rail-region">
+				{@render railHeading('Connections')}
+				<RegionState state="arriving" label="connections" />
+			</div>
 		{:then edges}
 			<EdgeList {edges} />
 		{:catch error}
-			<div class="rail-region"><RegionState state={regionStateFor(error)} label="connections" /></div>
+			<div class="rail-region">
+				{@render railHeading('Connections')}
+				<RegionState state={regionStateFor(error)} label="connections" />
+			</div>
 		{/await}
 	</aside>
 </div>
@@ -132,6 +158,16 @@
 	/* The rail's sections carry their own padding; a bare region needs the same gutter. */
 	.rail-region {
 		padding: 12px 14px;
+	}
+	/* Same treatment as `EventHistory`'s and `EdgeList`'s own heading, so a region's label does not
+	   change appearance depending on whether its read has answered. */
+	.rail-region .label {
+		font-family: var(--font-mono);
+		font-size: 9px;
+		letter-spacing: var(--track-label);
+		text-transform: uppercase;
+		color: var(--color-quiet-dim);
+		margin-bottom: 6px;
 	}
 
 	@media (max-width: 900px) {

@@ -56,7 +56,18 @@ describe('the four-state vocabulary', () => {
 
 	// C4 — the differential test. It asserts the states are pairwise unlike, without asserting what
 	// any of them looks like, so it survives a redesign of all of them.
-	it('C4: no two states present alike', () => {
+	/**
+	 * `[renamed — 2026-08-21]` This was called *"C4: no two states present alike"*, which is the
+	 * clause — and it does not check the clause. Each state carries its own `data-testid` and class,
+	 * so the markup differs **by construction** and this assertion cannot fail while that is true.
+	 * A probe proved it: giving `empty` the failure's exact sentence left this green and took only
+	 * the words test below red.
+	 *
+	 * Kept, because it does pin something real — that no state was left rendering another's markup —
+	 * but named for what it pins. The clause is carried by the two tests under it. An assertion whose
+	 * NAME claims a clause is how a suite comes to read as covering one it never touched.
+	 */
+	it('every state renders distinct markup', () => {
 		expect(new Set(STATES.map(html)).size).toBe(STATES.length);
 	});
 

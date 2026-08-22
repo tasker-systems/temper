@@ -21,9 +21,17 @@
 <section>
 	<div class="label">History · {rows.length}</div>
 	<!--
-		The emptiness verdict stays HERE rather than in the page: `rows` is `trail` put through
-		`trailModel`, so a trail carrying events that all filter out is still empty and only this
-		component knows it. Deciding it in the page would give two predicates that can disagree.
+		The emptiness verdict stays HERE rather than in the page, because the count beside it comes
+		from the same `rows`: one derivation decides both what this heading says and whether the
+		region is empty, so they cannot disagree. Deciding emptiness in the page would be a second
+		predicate over the same data, and two predicates drift.
+
+		`[corrected — 2026-08-21]` This comment used to justify itself by saying `trailModel` filters,
+		so a trail whose events all filter out would still be empty. **It does not filter** —
+		`trail.ts:23` reverses and maps 1:1, so `rows.length === trail.events.length` always, and that
+		state is unreachable. The rule survives its wrong reason; the reason is replaced rather than
+		quietly dropped, because it is the kind of claim that gets built on.
+
 		The words come from `RegionState` so this region cannot drift away from every other one.
 	-->
 	{#if rows.length === 0}
