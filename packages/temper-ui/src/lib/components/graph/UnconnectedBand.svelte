@@ -27,6 +27,21 @@
 	 * Three fields per row, and that is the ruling's list: title, doc type, elsewhere-count. Where a
 	 * resource *lives* is deliberately not a fourth — the rail a row opens carries it, and so does
 	 * the accessibility list beside the canvas, which is every node rather than this subset.
+	 *
+	 * `[ruled — 2026-08-22, Pete]` **This list reads as ranked, and that is fine. Do not re-open it.**
+	 * Observed on production: the rows descend by corpus connectivity, 87 down to 11 — monotonic
+	 * across all 26. **Nothing here sorts them.** They are rendered in the order `parts.unconnected`
+	 * arrives, and the entry read returns its nodes top-K by degree, so the band inherits that order;
+	 * §2.3's *unranked-everything is the design* is untouched in the code.
+	 *
+	 * What changed is the **medium, not the data**. As a row of identical dots the order was
+	 * unreadable; as a list it is the first thing a reader takes in. The list did not create a
+	 * ranking — it exposed one that was always there and could not previously be read.
+	 *
+	 * It is fine **because every row states its own figure**, so the order is *self-evidencing*
+	 * rather than an implied claim: a reader can see why the first row is first and check it against
+	 * the next. That is what would change the answer if this is ever revisited — rows losing their
+	 * own counts is what turns a visible order back into a claim nobody can verify.
 	 */
 	import type { GraphNode } from '$lib/graph/model';
 	import { describeNodeLinks, describeUnconnected } from '$lib/graph/presentation';
