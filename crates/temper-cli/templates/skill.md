@@ -26,6 +26,8 @@ upfront; read only what the current task requires.
   including you, in the main loop. Inject verbatim into plan-writing/implementing subagents.
 - `outcome-registers.md` — Stating an outcome so its rigor survives decomposition. Read when
   **authoring or amending a goal or sub-goal**, not to start a task
+- `data-artifacts.md` — **Before storing structured data**: when to commit a data artifact vs.
+  writing into a resource body, the selection vocabulary, and shape state
 - `session-lifecycle.md` — Session start/end patterns, drift detection, checkpoints
 - `session-wrap.md` — **Ending a session**: what the note must hold, and how to write the
   handoff preamble the next session starts from. The mechanics stay in `session-lifecycle.md`
@@ -188,6 +190,7 @@ authoring or amending a goal or sub-goal.
 | `session start [--context @me/<ctx>]` | On Session Start |
 | `session wrap` | Read `session-wrap.md`, then follow *Session End* in `session-lifecycle.md` |
 | Authoring or amending a goal or sub-goal, or deciding whether a criterion belongs on one | Read `outcome-registers.md` |
+| Storing structured data (JSON, YAML, measurements, query plans) a later session must retrieve whole | Read `data-artifacts.md` |
 | Anything touching a cognitive map (read/author a map, telos, nodes/edges, regions) | Read `cognitive-maps.md` |
 | Block-level / segmented / attributable writes (per-block provenance/sources, citation-grade docs, `annotate`, `ingest_*` lifecycle) | Read `reference.md` → *Block-Grain Ingest & Attribution* |
 | Asking a question of the knowledge base — deciding between `temper search` and `temper query`, writing or debugging a composition | Read `querying.md` |
