@@ -1,5 +1,4 @@
 use axum::Router;
-use tower_http::cors::{Any, CorsLayer};
 use tower_http::decompression::RequestDecompressionLayer;
 use utoipa::OpenApi;
 use utoipa_axum::router::OpenApiRouter;
@@ -565,7 +564,7 @@ pub fn create_internal_app(state: AppState) -> Router {
 /// tracing, CORS) and bind `state`. Shared by [`create_app`] and
 /// [`create_internal_app`] so both surfaces observe and trace requests identically.
 fn apply_transport_layers(app: Router<AppState>, state: AppState) -> Router {
-    let cors = cors_layer(&state);
+    let cors = temper_services::cors::cors_layer(&state.config);
 
     app.fallback(fallback_handler)
         .layer(RequestDecompressionLayer::new())
@@ -628,26 +627,4 @@ async fn fallback_handler(req: axum::extract::Request) -> axum::response::Respon
         format!("No route matches {method} {path}"),
     );
     (axum::http::StatusCode::NOT_FOUND, axum::Json(body)).into_response()
-}
-
-fn cors_layer(state: &AppState) -> CorsLayer {
-    if state.config.cors_origins.is_empty() {
-        // No origins configured — deny all cross-origin requests.
-        // Use CORS_ORIGINS=* for permissive mode in development.
-        CorsLayer::new()
-    } else if state.config.cors_origins.len() == 1 && state.config.cors_origins[0] == "*" {
-        CorsLayer::permissive()
-    } else {
-        CorsLayer::new()
-            .allow_origin(
-                state
-                    .config
-                    .cors_origins
-                    .iter()
-                    .filter_map(|o| o.parse().ok())
-                    .collect::<Vec<_>>(),
-            )
-            .allow_methods(Any)
-            .allow_headers(Any)
-    }
 }

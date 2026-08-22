@@ -6263,7 +6263,7 @@ dependencies = [
  "temper-workflow",
  "tokio",
  "toml 0.8.23",
- "tower-http",
+ "tower",
  "tracing",
  "uuid",
 ]
@@ -6320,6 +6320,7 @@ dependencies = [
  "temper-workflow",
  "thiserror 2.0.18",
  "tokio",
+ "tower-http",
  "tracing",
  "tracing-subscriber",
  "trybuild",

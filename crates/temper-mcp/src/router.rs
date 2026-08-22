@@ -9,7 +9,6 @@ use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
 };
 use std::sync::Arc;
-use tower_http::cors::CorsLayer;
 
 use temper_services::state::AppState;
 
@@ -26,6 +25,10 @@ pub struct McpAppState {
 }
 
 pub fn build_router(api_state: AppState, mcp_config: McpConfig) -> Router {
+    // Taken before `api_state` is moved into the service factory below. `AppState::config` is an
+    // `Arc`, so this is a refcount bump rather than a copy of the configuration.
+    let cors_config = api_state.config.clone();
+
     let shared = Arc::new(McpAppState {
         api_state: api_state.clone(),
         mcp_config,
@@ -95,7 +98,13 @@ pub fn build_router(api_state: AppState, mcp_config: McpConfig) -> Router {
         // that middleware only validates the JWT, and a validated token is not yet a profile. Same
         // deferred-field pattern temper-api uses in its auth middleware, one seam further in.
         .layer(axum::middleware::from_fn(root_span))
-        .layer(CorsLayer::permissive())
+        // The same cross-origin policy the HTTP surfaces apply, from the same configured value.
+        // This was `CorsLayer::permissive()` — a literal, so `CORS_ORIGINS` was parsed into
+        // `ApiConfig`, carried here inside `AppState`, and then dropped at the one layer that
+        // acts. Tightening the allowlist changed nothing on the agent-facing door and nothing
+        // reported that. `temper_services::cors` now owns the policy so there is one place it
+        // can be read from and no second stack to forget.
+        .layer(temper_services::cors::cors_layer(&cors_config))
 }
 
 /// The `mcp_request` root span, and the end of its life.
