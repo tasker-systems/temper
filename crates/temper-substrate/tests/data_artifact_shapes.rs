@@ -609,3 +609,264 @@ async fn a_commit_with_no_shape_in_force_stays_never_declared(pool: sqlx::PgPool
         "a commit with no shape in force must stay NeverDeclared"
     );
 }
+
+// ── Beat C: verdict read-model and the staleness triple (Task 4) ──────────────
+
+/// Read `shape_state` from the SQL read function `artifacts_for_resource` for the first live
+/// artifact of `resource`, or `None` when the resource has no live artifacts.
+async fn read_shape_state(
+    pool: &sqlx::PgPool,
+    principal: ProfileId,
+    resource: ResourceId,
+) -> Option<ShapeState> {
+    let retrieved = temper_substrate::readback::artifacts_for_resource(
+        pool, principal, resource, None, None, false,
+    )
+    .await
+    .unwrap();
+    retrieved.first().map(|a| a.shape_state)
+}
+
+/// Fold the shape (re-declare) so `shape_version` bumps; the old verdict row still exists but the
+/// artifact reports `DeclaredNotYetChecked` because the staleness triple no longer matches.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_stale_verdict_reads_as_not_yet_checked(pool: sqlx::PgPool) {
+    let (emitter, home, resource, owner) = world(&pool, "stale-verdict").await;
+    let kind = "measurement";
+    let schema_v1 = string_value_schema();
+    let schema_v2 = serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+            "value": { "type": "string" },
+            "unit": { "type": "string" }
+        },
+        "required": ["value", "unit"]
+    });
+
+    // Declare v1, commit a conforming artifact — verdict is DeclaredSatisfied.
+    declare(
+        &pool,
+        emitter,
+        AnchorRef::context(home),
+        None,
+        kind,
+        &schema_v1,
+        EnforcementMode::Advisory,
+    )
+    .await;
+
+    let conforming = serde_json::json!({"value": "42"});
+    let (artifact_id, shape_state) = commit(&pool, resource, kind, &conforming, emitter).await;
+    assert_eq!(
+        shape_state,
+        ShapeState::DeclaredSatisfied,
+        "commit under v1 shape should be satisfied"
+    );
+
+    // The read path must also report DeclaredSatisfied — the verdict row matches the triple.
+    let read_state = read_shape_state(&pool, owner, resource)
+        .await
+        .expect("artifact should be visible");
+    assert_eq!(
+        read_state,
+        ShapeState::DeclaredSatisfied,
+        "read path should report DeclaredSatisfied when the verdict triple matches"
+    );
+
+    // Fold the shape (re-declare → version bumps to 2). The old verdict row still exists
+    // (artifact_id is PK, not touched) but its shape_version=1 no longer matches the live v2.
+    declare(
+        &pool,
+        emitter,
+        AnchorRef::context(home),
+        None,
+        kind,
+        &schema_v2,
+        EnforcementMode::Advisory,
+    )
+    .await;
+
+    // The verdict row still exists — it was not deleted.
+    let verdict_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_data_artifact_verdicts WHERE artifact_id=$1")
+            .bind(artifact_id.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        verdict_count, 1,
+        "the old verdict row must still exist — staleness is by triple mismatch, not deletion"
+    );
+
+    // But the read path reports DeclaredNotYetChecked — the triple no longer matches.
+    let read_state = read_shape_state(&pool, owner, resource)
+        .await
+        .expect("artifact should still be visible");
+    assert_eq!(
+        read_state,
+        ShapeState::DeclaredNotYetChecked,
+        "a stale verdict (shape_version mismatch) must read as DeclaredNotYetChecked"
+    );
+
+    // Now upsert a verdict with the CORRECT (shape_id, shape_version) for the live v2 shape
+    // but a WRONG content_hash. The content_hash leg of the triple must catch this: the
+    // read path should still report DeclaredNotYetChecked. Drop content_hash from the triple
+    // and this assertion fails — the wrong verdict would be trusted as DeclaredSatisfied.
+    let live_shape = shape_in_force(&pool, resource, "kb_profiles", owner.uuid(), kind)
+        .await
+        .expect("a live shape should be in force after the fold");
+    sqlx::query!(
+        "SELECT data_artifact_verdict_upsert($1,$2,$3,$4,$5,$6)",
+        artifact_id.uuid(),
+        live_shape.0,
+        live_shape.1,
+        "deadbeef0000000000000000000000000000000000000000000000000000dead",
+        true,
+        None::<serde_json::Value>,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let read_state = read_shape_state(&pool, owner, resource)
+        .await
+        .expect("artifact should still be visible");
+    assert_eq!(
+        read_state,
+        ShapeState::DeclaredNotYetChecked,
+        "a verdict with a wrong content_hash must read as DeclaredNotYetChecked — \
+         the content_hash leg of the staleness triple is load-bearing"
+    );
+}
+
+/// `resource_rehome` to a context with no shape for this family; the artifact reports
+/// `DeclaredNotYetChecked` (a shape was declared in the old home, but none is in force in the
+/// new home). The verdict row is not deleted — staleness is by triple mismatch, not deletion.
+///
+/// Wait — re-reading the plan: "to a context with a different shape". If there's NO shape in the
+/// new home, the artifact should report `NeverDeclared` (no shape in force at all). The test should
+/// rehome to a context that HAS a different shape, so the `shape_id` changes and the verdict
+/// becomes stale. Let me re-read the plan assertion:
+///
+/// > `resource_rehome` to a context with a different shape; artifacts report
+/// > `DeclaredNotYetChecked` without any verdict row being deleted
+///
+/// So we need a different shape in the new home — not no shape. The shape_id changes, so the
+/// triple mismatches and the verdict reads as stale.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn rehoming_a_resource_invalidates_its_verdicts(pool: sqlx::PgPool) {
+    let (emitter, home_a, resource, owner) = world(&pool, "rehome-a").await;
+    let kind = "measurement";
+    let schema = string_value_schema();
+
+    // Declare a shape in home_a.
+    let shape_a = declare(
+        &pool,
+        emitter,
+        AnchorRef::context(home_a),
+        None,
+        kind,
+        &schema,
+        EnforcementMode::Advisory,
+    )
+    .await;
+
+    // Commit a conforming artifact — verdict is DeclaredSatisfied.
+    let conforming = serde_json::json!({"value": "42"});
+    let (artifact_id, shape_state) = commit(&pool, resource, kind, &conforming, emitter).await;
+    assert_eq!(shape_state, ShapeState::DeclaredSatisfied);
+
+    // Create a second context (home_b) and declare a different shape there. A resource must
+    // exist in home_b for the wrapper's kind_owner defaulting to resolve.
+    let home_b = ContextId::from(
+        common::insert_context(&pool, "kb_profiles", owner.uuid(), "rehome-b", "rehome-b")
+            .await
+            .unwrap(),
+    );
+    let _dummy = make_resource(
+        &pool,
+        owner,
+        emitter,
+        AnchorRef::context(home_b),
+        "rehome-dummy",
+    )
+    .await;
+    let shape_b = declare(
+        &pool,
+        emitter,
+        AnchorRef::context(home_b),
+        None,
+        kind,
+        &schema,
+        EnforcementMode::Advisory,
+    )
+    .await;
+    assert_ne!(shape_a, shape_b, "the two shapes must be different");
+
+    // Rehome the resource to home_b.
+    let mut tx = pool.begin().await.unwrap();
+    fire(
+        &mut tx,
+        SeedAction::ResourceRehome {
+            resource,
+            home: AnchorRef::context(home_b),
+            emitter,
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    // The verdict row still exists — it was not deleted.
+    let verdict_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_data_artifact_verdicts WHERE artifact_id=$1")
+            .bind(artifact_id.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        verdict_count, 1,
+        "the verdict row must still exist after rehome — staleness is by triple mismatch"
+    );
+
+    // The read path reports DeclaredNotYetChecked — shape_id changed (now shape_b governs),
+    // so the stored verdict (against shape_a) is stale.
+    let read_state = read_shape_state(&pool, owner, resource)
+        .await
+        .expect("artifact should still be visible after rehome");
+    assert_eq!(
+        read_state,
+        ShapeState::DeclaredNotYetChecked,
+        "after rehome to a different shape, the verdict is stale and must read as \
+         DeclaredNotYetChecked"
+    );
+}
+
+/// An artifact whose family has no shape declared reports `NeverDeclared` — the existing behaviour,
+/// guarded as a regression.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_artifact_with_no_shape_reports_never_declared(pool: sqlx::PgPool) {
+    let (emitter, _home, resource, owner) = world(&pool, "no-shape-read").await;
+    let kind = "measurement";
+
+    // No shape declared — just commit.
+    let content = serde_json::json!({"value": "42"});
+    let (_id, shape_state) = commit(&pool, resource, kind, &content, emitter).await;
+
+    assert_eq!(
+        shape_state,
+        ShapeState::NeverDeclared,
+        "commit-time verdict with no shape must be NeverDeclared"
+    );
+
+    // The read path must also report NeverDeclared.
+    let read_state = read_shape_state(&pool, owner, resource)
+        .await
+        .expect("artifact should be visible");
+    assert_eq!(
+        read_state,
+        ShapeState::NeverDeclared,
+        "read path with no shape in force must report NeverDeclared"
+    );
+}

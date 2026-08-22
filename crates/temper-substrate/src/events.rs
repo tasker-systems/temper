@@ -1000,12 +1000,15 @@ pub async fn fire_with(
             .fetch_optional(&mut *conn)
             .await?;
 
-            let shape_state = match shape {
+            let shape_state = match &shape {
                 None => payloads::ShapeState::NeverDeclared,
                 Some(row) => {
-                    let schema = row.schema.context("shape in force returned null schema")?;
+                    let schema = row
+                        .schema
+                        .as_ref()
+                        .context("shape in force returned null schema")?;
                     let enforcement = row.enforcement.as_deref().unwrap_or("advisory");
-                    let validator = jsonschema::validator_for(&schema)
+                    let validator = jsonschema::validator_for(schema)
                         .map_err(|e| anyhow::anyhow!("failed to compile shape schema: {e}"))?;
                     let errors: Vec<_> = validator.iter_errors(content).collect();
                     if errors.is_empty() {
@@ -1072,12 +1075,58 @@ pub async fn fire_with(
             .await?
             .context("data_artifact_commit returned null")?;
             debug_assert_eq!(ids.len(), 1, "one commit mints exactly one artifact");
+            let artifact_uuid = ids.first().copied().unwrap_or(artifact_id.uuid());
+
+            // Persist the verdict so the read path can match it against the staleness triple
+            // (spec §7.5). Only when a shape is in force — NeverDeclared means no shape governs
+            // the family, so there is nothing to record. The verdict row's (shape_id,
+            // shape_version, content_hash) are written here so _data_artifact_shape_state can
+            // match against them on the read side.
+            if let Some(ref row) = shape {
+                let satisfied = shape_state == payloads::ShapeState::DeclaredSatisfied;
+                let detail = if satisfied {
+                    None
+                } else {
+                    // Record what failed so the read side can surface it without re-validating.
+                    let schema = row
+                        .schema
+                        .as_ref()
+                        .context("shape in force returned null schema")?;
+                    let validator = jsonschema::validator_for(schema).map_err(|e| {
+                        anyhow::anyhow!("failed to compile shape schema for detail: {e}")
+                    })?;
+                    let errors: Vec<_> = validator.iter_errors(content).collect();
+                    if errors.is_empty() {
+                        None
+                    } else {
+                        Some(serde_json::Value::Array(
+                            errors
+                                .iter()
+                                .map(|e| {
+                                    serde_json::json!({
+                                        "path": e.instance_path().to_string(),
+                                        "message": e.to_string(),
+                                    })
+                                })
+                                .collect(),
+                        ))
+                    }
+                };
+                sqlx::query!(
+                    "SELECT data_artifact_verdict_upsert($1,$2,$3,$4,$5,$6)",
+                    artifact_uuid,
+                    row.shape_id,
+                    row.shape_version,
+                    digest,
+                    satisfied,
+                    detail,
+                )
+                .execute(&mut *conn)
+                .await?;
+            }
+
             Ok(Fired::DataArtifact {
-                artifact: ids
-                    .first()
-                    .copied()
-                    .map(DataArtifactId::from)
-                    .unwrap_or(artifact_id),
+                artifact: DataArtifactId::from(artifact_uuid),
                 shape_state,
             })
         }
