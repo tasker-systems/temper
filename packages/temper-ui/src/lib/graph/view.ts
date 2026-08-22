@@ -32,6 +32,10 @@ export type GraphRefusal =
 	 * An earlier draft had this rung fall back to drawing the recency page — 200 dots and hope. It
 	 * was rejected: dots a reader cannot use are not more honest than a sentence, and this is the
 	 * reading that respects `the-unstructured-reader-is-never-worse-off`.
+	 *
+	 * `[2026-08-21]` **This member never travels on {@link GraphViewData.refusal}.** It is a verdict
+	 * about the answer that came back rather than about the address, so it arrives with the read on
+	 * {@link GraphViewData.tooLittleStructure} — see that field for why the two are separate.
 	 */
 	| { kind: 'too-little-structure'; inScope: number };
 
@@ -40,10 +44,64 @@ export interface GraphViewData {
 	question: string | null;
 	/** The map whose charter supplied the question, when the reader supplied none. */
 	borrowedFrom: { id: string; name: string; telosResourceId: string } | null;
-	refusal: GraphRefusal | null;
-	model: GraphModel;
-	bound: BoundDeclaration | null;
-	readout: Readout | null;
+	/**
+	 * The refusal a reader is given **before any read runs**, so it renders as an answer rather than
+	 * as a delay.
+	 *
+	 * Settled, and that is the contract rather than an oversight: both members that can land here —
+	 * `no-place-resolved` and `nothing-to-ask` — are decided from the address and from what the
+	 * reader can see, above the read. A refusal that arrived behind a loading marker would be a
+	 * delay dressed as an answer. Rung 2 is the opposite kind of verdict and streams; see
+	 * {@link GraphViewData.tooLittleStructure}.
+	 *
+	 * **`Exclude`d rather than merely not-assigned, and the reason is what it renders.** When rung 2
+	 * moved to its own field, `GraphPage`'s refusal block lost its rung-2 branch — so a value that
+	 * still type-checked here would fall through to *"There is nothing here yet"*, told to a reader
+	 * who **has** material and is being denied the sentence that says so. That is the exact reading
+	 * `the-unstructured-reader-is-never-worse-off` exists to prevent, and it would have been a
+	 * silent fallthrough rather than an error. Unrepresentable beats untested — the same argument
+	 * `GraphRead`'s subtraction type makes in the load.
+	 */
+	refusal: Exclude<GraphRefusal, { kind: 'too-little-structure' }> | null;
+	/**
+	 * The answer's marks — **streamed**, so the ask box, the borrowed-charter line and the page
+	 * chrome paint before the graph is read (spec §3.2, C1).
+	 *
+	 * Unconditionally a promise, on every branch including the refusals — where it resolves to an
+	 * empty model because no read ran. An outer `null` would add a state to a field that already has
+	 * three (arriving, drawn, failed) and nothing would be able to say which of them it meant.
+	 */
+	model: Promise<GraphModel>;
+	/**
+	 * The bound line's declaration — streamed, and derived from the **same read** as {@link
+	 * GraphViewData.model}.
+	 *
+	 * The inner `null` keeps the meaning it always had: *this answer declared no bounds*, which is
+	 * true of the refusal paths and is a fact about the answer rather than a read that failed.
+	 */
+	bound: Promise<BoundDeclaration | null>;
+	/**
+	 * The reasoning panel's contents — streamed, from the same read as the two above.
+	 *
+	 * The inner `null` means *no composition ran*, which is the honest state of the entry read and
+	 * of a traversal. It is derived from the read rather than resolved outright so that the three
+	 * fields cannot disagree about whether that read answered at all: the canvas, the bound line and
+	 * *Why these* are three views of one read, and they arrive together because they do.
+	 */
+	readout: Promise<Readout | null>;
+	/**
+	 * Rung 2 — *there is material here, and too little structure to draw it as a graph*.
+	 *
+	 * **Streamed, where {@link GraphViewData.refusal} is settled, and the split is the point.** The
+	 * two differ in *when they are knowable*. The addressed refusals are decided before any read, so
+	 * they must render immediately. This one is the entry read's verdict about the answer it just
+	 * produced — `eligible === 0` is a number that read reports — so it cannot precede the read, and
+	 * it arrives in place of the canvas it replaces.
+	 *
+	 * `null` on every branch that ran a composition or a walk: neither read has this axis, so
+	 * neither can reach this verdict, and a promise resolving to `null` says exactly that.
+	 */
+	tooLittleStructure: Promise<Extract<GraphRefusal, { kind: 'too-little-structure' }> | null>;
 	/**
 	 * The places this answer was drawn from, named.
 	 *
@@ -53,9 +111,41 @@ export interface GraphViewData {
 	 * available means the reader can get there without being told a URL.
 	 */
 	placesAsked: NamedPlace[];
-	selected: string | null;
-	selectedExcerpt: string | null;
-	selectedTrail: EventTrail | null;
+	/**
+	 * The node the rail opens on, **resolved against the model** — and therefore streamed with it.
+	 *
+	 * `[2026-08-21]` It used to be settled, and it could be while the model was: the load resolved
+	 * `?sel=` against `read.model` before returning. Once the model streams, the only way to keep
+	 * this a value is to await the model — which is the exact blocking this page exists to stop. So
+	 * the resolution moved into a `.then()`; **what it resolves against did not change.** A `sel`
+	 * naming something this answer does not contain still opens nothing.
+	 *
+	 * `GraphRead`'s subtraction type is untouched by this, and that guarantee is the reason to say
+	 * so: a read branch that tries to decide `selected` is still an excess property and still fails
+	 * to compile, exactly as when the field held a string.
+	 */
+	selected: Promise<string | null>;
+	/**
+	 * The selected resource's first paragraph — **streamed**, so the rail frame paints without it.
+	 *
+	 * Three states, three representations, and keeping them apart is the whole point (spec §5.2):
+	 *
+	 * - the **outer `null`** means *nothing is selected* — no read was started;
+	 * - a **`null` inside** the promise means *this resource genuinely has no body*;
+	 * - a **rejection** means *the read failed*, and the region says so rather than claiming
+	 *   there is nothing here.
+	 *
+	 * The third used to be spelt as the second, on both this field and `selectedTrail`, which is
+	 * exactly the conflation spec §5.1 recorded.
+	 *
+	 * `[2026-08-21]` The outer null is now decided from the **address** — `?sel=` absent — which is
+	 * the case it was always about and the only one knowable without reading. A `sel` that is named
+	 * but not drawn cannot be spelled that way any more, because whether it is drawn is knowable
+	 * only after the model answers; it rejects instead, and the load says why.
+	 */
+	selectedExcerpt: Promise<string | null> | null;
+	/** The selected node's history — streamed, on the same three-way rule as `selectedExcerpt`. */
+	selectedTrail: Promise<EventTrail> | null;
 }
 
 export type AnalysisRefusal =
@@ -91,17 +181,49 @@ export interface AnalysisViewData {
 	alsoNamed: NamedPlace[];
 	/** Every place the reader could measure — the index, and the no-`in` entry. */
 	choices: NamedPlace[];
-	refusal: AnalysisRefusal | null;
-	regions: AnalysedRegion[];
-	/** False when the analytics-tier read did not answer: the five scalars are UNKNOWN, not absent. */
-	metricsAvailable: boolean;
 	/**
-	 * The map-level picture. Null for a context (which has no charter and no regulation set) and
-	 * for a map whose analytics read was declined — the page tells those two apart.
+	 * The refusal a reader is given **before any read runs**, so it renders as an answer rather than
+	 * as a delay — the same contract {@link GraphViewData.refusal} states, and for the same reason.
+	 *
+	 * Both members are decided from the address and from what the reader can see, above the read.
+	 * Unlike the graph door, this route has no read-derived verdict to split out: nothing here is a
+	 * conclusion about the measurements that came back.
 	 */
-	map: {
+	refusal: AnalysisRefusal | null;
+	/**
+	 * The place's groupings — **streamed**, so the declaration, the title and the also-named line
+	 * paint before anything is measured (spec §3.2, C1).
+	 *
+	 * Unconditionally a promise, on every branch including the index and the refusals — where it
+	 * resolves to an empty list because no read ran. An outer `null` would add a state to a field
+	 * that already has three (arriving, measured, failed) and nothing would be able to say which of
+	 * them it meant.
+	 */
+	regions: Promise<AnalysedRegion[]>;
+	/**
+	 * False when the analytics-tier read did not answer: the five scalars are UNKNOWN, not absent.
+	 *
+	 * Streamed, and derived from the **same read** as {@link AnalysisViewData.regions} — the table
+	 * and the caption above it are two views of one read and cannot disagree about whether it
+	 * answered. `true` on the branches that read nothing, which is the honest reading of *no metrics
+	 * read was declined*.
+	 */
+	metricsAvailable: Promise<boolean>;
+	/**
+	 * The map-level picture — streamed, from the same read as the two above.
+	 *
+	 * The inner `null` keeps both meanings it has always carried, and the page tells them apart by
+	 * `place.kind`: a **context**, which genuinely has neither a charter nor a regulation set, and a
+	 * **map whose analytics read was declined** by `readAnchorAnalysis`'s own `.catch(() => null)`.
+	 *
+	 * `[2026-08-21]` Streaming adds the third state that was missing. *The read failed* used to be
+	 * indistinguishable from the second — the whole load rejected, or would have had to degrade —
+	 * and it is now a **rejection**, rendered as a named failure. That is exactly the conflation
+	 * spec §5.1 catalogued: a failed read must never be spelled as an absence.
+	 */
+	map: Promise<{
 		telos: { id: string; title: string | null };
 		staleness: CogmapStaleness;
 		regulation: CogmapRegulationRow[];
-	} | null;
+	} | null>;
 }

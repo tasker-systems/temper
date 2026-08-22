@@ -1,0 +1,427 @@
+import { render } from '@testing-library/svelte';
+import { describe, expect, it, vi } from 'vitest';
+import { describeFailure, GaveUp, GIVE_UP_AFTER_MS } from '$lib/server/bounded';
+import type { ElementEvent, EventTrail } from '$lib/types/generated/element_trail';
+import type { GraphEdgeRow } from '$lib/types/generated/graph';
+import { makeRow } from '../../../../../test/fixtures';
+import { sentenceOf } from '../../../../../test/sentence';
+import Page from './+page.svelte';
+import type { PageData } from './$types';
+
+/**
+ * The route with the highest defect density and, until this file, no component test at all.
+ *
+ * Two of the four defects this branch fixes were live HERE — a failed trail read degrading to
+ * `null` and a failed edges read degrading to `[]`, each of which rendered exactly like a resource
+ * that genuinely had no history and no connections. That pair is spec §5.1's *failed vs empty*,
+ * and it is what the C4 block below exists for.
+ *
+ * `page.server.test.ts` beside this file witnesses the other half — that the load hands the
+ * template promises rather than values. Neither can see what the other sees.
+ */
+
+/** Never settles, so anything that waits for it never paints. That is C1, stated structurally. */
+const pending = <T>(): Promise<T> => new Promise<T>(() => {});
+
+/**
+ * Rejects, with spec §5.3's **other** catch attached — the one that keeps an unhandled rejection
+ * from taking the process down, which is a different mechanism from the `{:catch}` that renders
+ * the failure. Having one does not give you the other.
+ */
+const broken = <T>(): Promise<T> => {
+	const p = Promise.reject<T>(new Error('503'));
+	p.catch(() => {});
+	return p;
+};
+
+/**
+ * A read the system stopped waiting for, in the shape one really arrives in.
+ *
+ * Minted by the production hook rather than hand-written, and **never** as a `GaveUp` instance:
+ * `$lib/region`'s own comment says why — a prototype does not survive SvelteKit serialising a
+ * rejected streamed promise, so `error instanceof GaveUp` in a client `{:catch}` is unreachable by
+ * construction. A test that rejected with the instance would exercise a path production never
+ * takes, and `regionStateFor` would answer `failed` for it.
+ */
+const gaveUpOn = <T>(label: string): Promise<T> => {
+	const p = Promise.reject<T>(
+		describeFailure(new GaveUp(label, GIVE_UP_AFTER_MS), 'Internal Error'),
+	);
+	p.catch(() => {});
+	return p;
+};
+
+const event = (n: number): ElementEvent => ({
+	event_id: `ev-${n}`,
+	kind: 'resource.updated',
+	actor_entity_id: 'ent-1',
+	actor_name: 'Pete',
+	occurred_at: '2026-08-20T10:00:00Z',
+	confidence: null,
+	payload: {},
+});
+
+const trailOf = (count: number): EventTrail => ({
+	element_kind: 'node',
+	element_id: 'res-1',
+	events: Array.from({ length: count }, (_, i) => event(i)),
+});
+
+const edge = (n: number): GraphEdgeRow => ({
+	edge_id: `edge-${n}`,
+	peer_resource_id: `peer-${n}`,
+	peer_title: `A peer ${n}`,
+	peer_slug: `peer-${n}`,
+	edge_kind: 'near',
+	polarity: 'forward',
+	label: 'relates to',
+	direction: 'out',
+	weight: 0.5,
+	created: '2026-08-20T10:00:00Z',
+});
+
+/**
+ * The four fields this page reads, cast to `PageData` at the one place it is handed over.
+ *
+ * `PageData` also carries the `(app)` layout's `user`, `profile`, `entitlements` and nav rows,
+ * none of which this component touches. Spelling those out here would pin this file to the
+ * layout's shape rather than to the page's — and `Pick` keeps the four that matter typed by the
+ * real load rather than by a hand-written double.
+ */
+type Fill = Partial<Pick<PageData, 'content' | 'trail' | 'edges'>>;
+
+const RESOURCE = makeRow({
+	title: 'The rendering approach',
+	doc_type_name: 'design',
+	context_name: 'Temper',
+	managed_meta: {
+		'temper-stage': 'design',
+		'temper-mode': null,
+		'temper-effort': null,
+		'temper-status': null,
+		'temper-seq': null,
+		'temper-branch': null,
+		'temper-pr': null,
+		'temper-llm-model': null,
+		'temper-llm-run': null,
+		'temper-provenance': null,
+	},
+	open_meta: { owner: 'Pete', priority: 'high' },
+});
+
+/** `doc_type` + `temper-stage` + `owner` + `priority` — see `mergeProperties`. */
+const PROPERTY_ROWS = 4;
+
+const data = (fill: Fill = {}): PageData =>
+	({
+		resource: RESOURCE,
+		content: fill.content ?? Promise.resolve('# A body\n\nWith a paragraph in it.'),
+		trail: fill.trail ?? Promise.resolve(trailOf(2)),
+		edges: fill.edges ?? Promise.resolve([edge(1)]),
+	}) as PageData;
+
+/**
+ * The three regions, each scoped to the element that holds it.
+ *
+ * Scoped rather than page-wide because every assertion below is about ONE region: a page-wide
+ * `querySelector('[data-testid="region-failed"]')` cannot tell the reader's history from their
+ * connections, and C3's whole content is that a failed region names itself.
+ *
+ * The rail's two are addressed by position because the page renders them in order and neither
+ * carries a test id — history first, connections second, in all four states.
+ */
+const documentRegion = (c: HTMLElement): Element | null => c.querySelector('.body');
+const historyRegion = (c: HTMLElement): Element | null =>
+	c.querySelector('.rail')?.children[0] ?? null;
+const connectionsRegion = (c: HTMLElement): Element | null =>
+	c.querySelector('.rail')?.children[1] ?? null;
+
+type Scope = (c: HTMLElement) => Element | null;
+
+const REGIONS: [name: string, scope: Scope, key: keyof Fill][] = [
+	['document', documentRegion, 'content'],
+	['history', historyRegion, 'trail'],
+	['connections', connectionsRegion, 'edges'],
+];
+
+/**
+ * The sentence one region is saying once it reaches `testid`, with the decorative glyph stripped.
+ *
+ * Two things it is careful about, and both come from spec §3.3. It reads the **RegionState's own
+ * element** rather than the region around it: `EventHistory` and `EdgeList` put a count in their
+ * heading, which differs between empty and failed on its own and would keep a differential green
+ * on identical wording. And it compares the **sentence** rather than `textContent`, because the
+ * marker glyph is one of the four channels the states differ on — a raw comparison is satisfied by
+ * `⊘` vs `⚠` alone, which is the defect the probe already caught once.
+ *
+ * It unmounts before returning, so two states are never on screen at the same time.
+ */
+const wordsOf = async (fill: Fill, scope: Scope, testid: string): Promise<string> => {
+	const { container, unmount } = render(Page, { data: data(fill) });
+	const marker = () => scope(container)?.querySelector(`[data-testid="${testid}"]`) ?? null;
+	await vi.waitFor(() => {
+		expect(marker()).not.toBeNull();
+	});
+	const words = sentenceOf(marker());
+	unmount();
+	return words;
+};
+
+describe('C1: the scaffold does not depend on the fill', () => {
+	it('paints the masthead, the doc type, the title and the home chip with all three reads in flight', () => {
+		const { container } = render(Page, {
+			data: data({ content: pending(), trail: pending(), edges: pending() }),
+		});
+
+		expect(container.querySelector('.masthead')).not.toBeNull();
+		expect(container.querySelector('.eyebrow')?.textContent).toBe('design');
+		expect(container.querySelector('.title')?.textContent).toBe('The rendering approach');
+		expect(container.querySelector('.chip')?.textContent).toContain('Temper');
+	});
+
+	it('paints every property row with all three reads in flight', () => {
+		const { container } = render(Page, {
+			data: data({ content: pending(), trail: pending(), edges: pending() }),
+		});
+		const keys = [...container.querySelectorAll('.props dt')].map((dt) => dt.textContent);
+
+		expect(container.querySelectorAll('.props .row')).toHaveLength(PROPERTY_ROWS);
+		expect(keys).toEqual(['doc_type', 'temper-stage', 'owner', 'priority']);
+	});
+
+	it('shows an arriving marker in each of the three regions, and nowhere else', () => {
+		const { container } = render(Page, {
+			data: data({ content: pending(), trail: pending(), edges: pending() }),
+		});
+
+		for (const [name, scope] of REGIONS) {
+			expect(
+				scope(container)?.querySelector('[data-testid="region-arriving"]'),
+				`${name} is not declaring itself`,
+			).not.toBeNull();
+		}
+		expect(container.querySelectorAll('[data-testid="region-arriving"]')).toHaveLength(
+			REGIONS.length,
+		);
+	});
+});
+
+describe('C2: an arriving region declares itself in words', () => {
+	it.each([
+		['document', documentRegion, 'Loading document…'],
+		['history', historyRegion, 'Loading history…'],
+		['connections', connectionsRegion, 'Loading connections…'],
+	] as [
+		string,
+		Scope,
+		string,
+	][])('the arriving %s region carries a sentence, not a bare shimmer', (_name, scope, sentence) => {
+		const { container } = render(Page, {
+			data: data({ content: pending(), trail: pending(), edges: pending() }),
+		});
+
+		// The words that reach the accessibility tree, with the decorative marker removed. An
+		// animation with no text is silent to everything except an eye on the pixels.
+		expect(sentenceOf(scope(container)?.querySelector('[data-testid="region-arriving"]'))).toBe(
+			sentence,
+		);
+	});
+});
+
+describe('C3: a failure is a third state, not a stuck second one', () => {
+	it.each(REGIONS)('a failed %s read names that region', async (name, scope, key) => {
+		const words = await wordsOf({ [key]: broken() }, scope, 'region-failed');
+
+		// A failed region says WHAT failed. "Something went wrong" leaves the rest of the page
+		// untrustworthy because the reader cannot tell which part of it is still true.
+		expect(words.toLowerCase()).toContain(name);
+		expect(words.toLowerCase()).not.toContain('something went wrong');
+	});
+
+	it.each(
+		REGIONS,
+	)('a failed %s read drops the arriving marker — the perpetual skeleton', async (_name, scope, key) => {
+		const { container } = render(Page, { data: data({ [key]: broken() }) });
+		await vi.waitFor(() => {
+			expect(scope(container)?.querySelector('[data-testid="region-failed"]')).not.toBeNull();
+		});
+
+		// A read that will not resolve must stop presenting as one that has not resolved YET.
+		expect(scope(container)?.querySelector('[data-testid="region-arriving"]')).toBeNull();
+	});
+
+	it('a failed history read leaves the document and the connections arriving on their own', async () => {
+		const { container } = render(Page, {
+			data: data({ content: pending(), trail: broken(), edges: pending() }),
+		});
+		await vi.waitFor(() => {
+			expect(
+				historyRegion(container)?.querySelector('[data-testid="region-failed"]'),
+			).not.toBeNull();
+		});
+
+		// Three reads, three regions: one failing says nothing about the other two, and the
+		// scaffold is not taken down with it.
+		expect(
+			documentRegion(container)?.querySelector('[data-testid="region-arriving"]'),
+		).not.toBeNull();
+		expect(
+			connectionsRegion(container)?.querySelector('[data-testid="region-arriving"]'),
+		).not.toBeNull();
+		expect(container.querySelector('.title')?.textContent).toBe('The rendering approach');
+	});
+});
+
+/**
+ * C4 — the pair that was live on this route, in two of its three regions.
+ *
+ * `empty` asserts *there is nothing here*, which is a claim about the reader's own material.
+ * A failed read has verified no such thing. Rendering them alike is the register's negative face
+ * failing, and it is what the load's `null` / `[]` degradations used to do.
+ */
+describe('C4: an empty region does not present like a failed one', () => {
+	it.each(
+		REGIONS,
+	)('%s: what came back empty says something different from what did not come back', async (_name, scope, key) => {
+		const emptyValue: Fill = {
+			content: Promise.resolve(''),
+			trail: Promise.resolve(trailOf(0)),
+			edges: Promise.resolve([]),
+		};
+
+		const empty = await wordsOf({ [key]: emptyValue[key] }, scope, 'region-empty');
+		const failed = await wordsOf({ [key]: broken() }, scope, 'region-failed');
+
+		expect(empty).not.toBe('');
+		expect(failed).not.toBe('');
+		expect(empty).not.toBe(failed);
+	});
+});
+
+/**
+ * The refusal (spec §5.4) reaching a reader on this route.
+ *
+ * `bounded` wraps all three of this load's reads, so a give-up is what any of them presents as
+ * after 8 seconds — and it is not a fault. It must not borrow the failure's words.
+ */
+describe('a read the system stopped waiting for is not a read that failed', () => {
+	it('the give-up names the region it stopped waiting for', async () => {
+		const stopped = await wordsOf({ trail: gaveUpOn('history') }, historyRegion, 'region-gave-up');
+
+		expect(stopped.toLowerCase()).toContain('history');
+		expect(stopped.toLowerCase()).toContain('stopped waiting');
+	});
+
+	it('the give-up does not present like a plain failure', async () => {
+		const stopped = await wordsOf({ trail: gaveUpOn('history') }, historyRegion, 'region-gave-up');
+		const failed = await wordsOf({ trail: broken() }, historyRegion, 'region-failed');
+
+		expect(stopped).not.toBe('');
+		expect(stopped).not.toBe(failed);
+	});
+});
+
+/**
+ * The two rail components' own emptiness verdicts.
+ *
+ * Neither `{:then}` branch in the page tests for emptiness — each component owns that verdict —
+ * so these witness the components through the page rather than in isolation, which is the wiring
+ * this file is for.
+ */
+describe('the rail states its emptiness rather than rendering nothing', () => {
+	it('EdgeList: a resource with no connections says so', async () => {
+		const { container } = render(Page, { data: data({ edges: Promise.resolve([]) }) });
+		const region = () => connectionsRegion(container);
+		await vi.waitFor(() => {
+			expect(region()?.querySelector('[data-testid="region-empty"]')).not.toBeNull();
+		});
+
+		// It used to render NOTHING here — an absence that says nothing, and one a failed read
+		// degrading to `[]` produced identically.
+		expect(region()?.querySelector('.edge')).toBeNull();
+		expect(sentenceOf(region()?.querySelector('[data-testid="region-empty"]'))).toBe(
+			'No connections.',
+		);
+	});
+
+	it('EventHistory: a resource with no history says so, in the shared vocabulary', async () => {
+		const { container } = render(Page, { data: data({ trail: Promise.resolve(trailOf(0)) }) });
+		const region = () => historyRegion(container);
+		await vi.waitFor(() => {
+			expect(region()?.querySelector('[data-testid="region-empty"]')).not.toBeNull();
+		});
+
+		// The verdict is `EventHistory`'s, not the page's: the heading carrying the count is the
+		// component's own, so the emptiness marker beside it came from `trailModel(trail).length`
+		// rather than from a second predicate in the template.
+		//
+		// **What this cannot witness**, recorded rather than banked: `trailModel` currently filters
+		// nothing — it reverses and maps 1:1 — so a trail whose events all filter out is not a
+		// reachable state today. If it ever gains a filter, this is the assertion that already
+		// covers it, because the count and the verdict come from the same call.
+		expect(region()?.querySelector('.label')?.textContent).toBe('History · 0');
+		expect(sentenceOf(region()?.querySelector('[data-testid="region-empty"]'))).toBe('No history.');
+	});
+
+	it('EventHistory: a trail that carries events renders them and no emptiness verdict', async () => {
+		const { container } = render(Page, { data: data({ trail: Promise.resolve(trailOf(2)) }) });
+		const region = () => historyRegion(container);
+		await vi.waitFor(() => {
+			expect(region()?.querySelector('.event')).not.toBeNull();
+		});
+
+		expect(region()?.querySelectorAll('.event')).toHaveLength(2);
+		expect(region()?.querySelector('[data-testid="region-empty"]')).toBeNull();
+		expect(region()?.querySelector('.label')?.textContent).toBe('History · 2');
+	});
+});
+
+/**
+ * `NodeRail.svelte:84-86` states this as a rule rather than a layout preference: *"The label sits
+ * OUTSIDE the await."* Two sibling surfaces, one stated rule, and until now it was applied on one
+ * of them — this rail dropped its heading for exactly the two states that most need naming.
+ *
+ * A region that vanishes while it is arriving cannot say that it is arriving.
+ */
+describe('a rail region keeps its heading in every state', () => {
+	/** Each state, with the selector that says the region has reached it. */
+	const stateOf = (key: 'trail' | 'edges'): [state: string, fill: Fill, settledOn: string][] => {
+		const present: Fill =
+			key === 'trail'
+				? { trail: Promise.resolve(trailOf(2)) }
+				: { edges: Promise.resolve([edge(1)]) };
+		const empty: Fill =
+			key === 'trail' ? { trail: Promise.resolve(trailOf(0)) } : { edges: Promise.resolve([]) };
+		return [
+			['arriving', { [key]: pending() }, '[data-testid="region-arriving"]'],
+			['present', present, key === 'trail' ? '.event' : '.edge'],
+			['empty', empty, '[data-testid="region-empty"]'],
+			['failed', { [key]: broken() }, '[data-testid="region-failed"]'],
+		];
+	};
+
+	it.each([
+		['history', historyRegion, 'trail', 'History'],
+		['connections', connectionsRegion, 'edges', 'Connections'],
+	] as [
+		string,
+		Scope,
+		'trail' | 'edges',
+		string,
+	][])('the %s heading is present while arriving, present, empty and failed', async (_name, scope, key, heading) => {
+		for (const [state, fill, settledOn] of stateOf(key)) {
+			const { container, unmount } = render(Page, { data: data(fill) });
+			await vi.waitFor(() => {
+				expect(scope(container)?.querySelector(settledOn), `${state} never settled`).not.toBeNull();
+			});
+
+			// `?? '(no heading at all)'` so the red reads as the defect rather than as a type
+			// complaint about `undefined` — the absence IS what this test is about.
+			expect(
+				scope(container)?.querySelector('.label')?.textContent ?? '(no heading at all)',
+				`the ${state} region must still name itself`,
+			).toContain(heading);
+			unmount();
+		}
+	});
+});

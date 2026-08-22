@@ -10,9 +10,9 @@
  * import { goto, resetAppContext, setPage } from '../../test/app-context';
  * ```
  *
- * Only `page`, `goto` and `invalidateAll` are stubbed — the three the vault and nav
- * components actually reach for. Add another when a component needs it, rather than
- * pre-building a full SvelteKit double.
+ * Only `page`, `navigating`, `goto` and `invalidateAll` are stubbed — the four the vault,
+ * nav and layout components actually reach for. Add another when a component needs it,
+ * rather than pre-building a full SvelteKit double.
  */
 import { vi } from 'vitest';
 
@@ -42,6 +42,33 @@ export const page = {
 	},
 };
 
+/**
+ * The `$navigating` fields the components under test read. SvelteKit's own `Navigation` is a
+ * discriminated union over five navigation types; a component that only asks *is a navigation
+ * happening, and where to* needs neither the union nor `from`.
+ */
+export interface TestNavigation {
+	to?: { url: URL };
+}
+
+let navigation: TestNavigation | null = null;
+const navSubscribers = new Set<(value: TestNavigation | null) => void>();
+
+/**
+ * `$navigating`, same hand-rolled shape as `page` above and for the same reason: `setNavigating`
+ * is the control surface, so the store itself only has to be subscribable. `null` is idle —
+ * SvelteKit's own value between navigations.
+ */
+export const navigating = {
+	subscribe(run: (value: TestNavigation | null) => void): () => void {
+		navSubscribers.add(run);
+		run(navigation);
+		return () => {
+			navSubscribers.delete(run);
+		};
+	},
+};
+
 export const goto = vi.fn((_url: string | URL): Promise<void> => Promise.resolve());
 export const invalidateAll = vi.fn((): Promise<void> => Promise.resolve());
 
@@ -53,6 +80,16 @@ export const invalidateAll = vi.fn((): Promise<void> => Promise.resolve());
 export function setPage(href: string, params: Record<string, string> = {}): void {
 	current = { url: new URL(href, ORIGIN), params };
 	for (const notify of subscribers) notify(current);
+}
+
+/**
+ * Point the navigating store at `target`, notifying anything already mounted. `null` puts the
+ * app back at rest — nothing here runs SvelteKit's router, so a test says when a navigation is
+ * in flight and when it has landed.
+ */
+export function setNavigating(target: TestNavigation | null): void {
+	navigation = target;
+	for (const notify of navSubscribers) notify(navigation);
 }
 
 /**
@@ -73,4 +110,5 @@ export function resetAppContext(): void {
 	goto.mockClear();
 	invalidateAll.mockClear();
 	setPage('/');
+	setNavigating(null);
 }

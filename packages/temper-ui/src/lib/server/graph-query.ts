@@ -158,13 +158,24 @@ export async function readAnchorRegions(
  * `body` because *"a page of reconstructed bodies is unbounded"*, and this surface would be asking
  * for up to two hundred of them.
  *
- * Returns `null` rather than throwing: a rail that cannot show an excerpt still shows the
- * resource, and a body read failing is not a reason to fail the page.
+ * **It resolves to a string, never to `null`.** `[corrected — 2026-08-21]` This returned
+ * `Promise<string | null>` under a comment claiming *"`content.markdown` is nullable on the wire"*.
+ * It is not: `crates/temper-workflow/src/types/resource.rs:426` is `pub markdown: String` and the
+ * generated `src/lib/types/generated/resource.ts:18` is `markdown: string`. The `| null` was left
+ * behind when the `.catch(() => null)` below was deleted, and it made the type say a failure could
+ * still arrive as a value — the very reading this amendment removed. A resource with **no body**
+ * arrives as an empty string, and `excerptOf` is what turns that into the `empty` state.
+ *
+ * **A failure rejects.** `[amended — 2026-08-21, spec §5.2]` This used to `.catch(() => null)`, on
+ * the reasoning that a rail which cannot show an excerpt still shows the resource. That reasoning
+ * is right and survives; its *target* was wrong. Degrading to `null` here made a failed read
+ * indistinguishable from a resource with no body — spec §5.1 names this as one of the live
+ * instances — and it did so inside the reader, where the caller has no way to tell them apart
+ * again. The caller streams this promise and renders the rejection as a **named failure**, which
+ * is the degradation the policy actually asks for.
  */
-export const readResourceBody = (token: string, id: string): Promise<string | null> =>
-	apiGet<ContentResponse>(`/api/resources/${id}/content`, token)
-		.then((r) => r.markdown)
-		.catch(() => null);
+export const readResourceBody = (token: string, id: string): Promise<string> =>
+	apiGet<ContentResponse>(`/api/resources/${id}/content`, token).then((r) => r.markdown);
 
 /**
  * Every anchor the reader can read — the input to `readableAnchors`.

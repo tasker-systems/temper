@@ -1,0 +1,183 @@
+<script lang="ts">
+	/**
+	 * The region vocabulary — **the single place** arriving, empty, gave-up and failed are given
+	 * their appearance and their words.
+	 *
+	 * `no-two-region-states-present-alike` is a negative-face clause: it is about states never
+	 * presenting alike *anywhere*. If each page spells its own pending and failed markup, they drift
+	 * page by page and the clause is enforced by nobody. One component means the states are defined
+	 * once and every consumer inherits the distinction whether or not it was thinking about it.
+	 *
+	 * **The states differ by more than one channel**, deliberately. Spec §3.3: a test asserting two
+	 * renders differ is satisfied by a single character or one pixel of colour, while the clause is
+	 * about what a *reader* can resolve — a grey "no history" beside a grey "history unavailable" at
+	 * 11px passes the test and fails the clause. So each state carries its own **sentence**, its own
+	 * **marker glyph**, its own **colour** and its own **border treatment**. Removing any one of
+	 * those still leaves them resolvable.
+	 *
+	 * Three rules the words obey, and all three come from the register:
+	 *
+	 * - **A pending region carries text**, never a bare shimmer, so it reaches the accessibility
+	 *   tree rather than being a silent animation.
+	 * - **A failed region names what failed** — "history unavailable", never "something went wrong" —
+	 *   and says that nothing was read, which is exactly what separates it from `empty`. `empty`
+	 *   asserts *there is nothing here*; that is a claim about the reader's material, and a failed
+	 *   read has verified no such thing.
+	 * - **A give-up names what the system stopped waiting for.** Spec §5.4's refusal is well-formed
+	 *   rather than a fault, so it does not borrow the failure's words: *"We stopped waiting for
+	 *   history"*, never a bare *"timeout"*, which describes the mechanism and names nothing the
+	 *   reader was waiting for.
+	 *
+	 * `label` names the region ("history", "excerpt", "connections") and is composed into all four
+	 * sentences, so a consumer cannot word its arrival, its refusal and its failure out of step with
+	 * each other.
+	 *
+	 * **ARIA role is the one channel that cannot be four-way distinct**, and it is said here rather
+	 * than left to be discovered: there are two live-region roles. `arriving` and `gave-up` share
+	 * `role="status"` because neither is a fault — one is not finished, the other is a decision the
+	 * system made and owns. `failed` keeps `role="alert"`. The other four channels carry the
+	 * distinction between the two that share.
+	 *
+	 * **The fifth state, `present`, is deliberately not here.** A region that has its content does
+	 * not need this component to describe it — the consumer renders its own markup in the `{:then}`
+	 * branch. An earlier draft took `children` for that; it was removed because no consumer needs
+	 * it and passing both would have silently dropped the state's words.
+	 *
+	 * A `{:catch}` does not choose between `gave-up` and `failed` by hand — six call sites spelling
+	 * one predicate is the drift this component exists to prevent. `regionStateFor` in `$lib/region`
+	 * reads the discriminator; see `App.Error` for why it is a value rather than a class.
+	 */
+	let {
+		state,
+		label,
+	}: {
+		state: 'arriving' | 'empty' | 'gave-up' | 'failed';
+		label: string;
+	} = $props();
+
+	// Only the failure opens its sentence with the label, so only it needs the capital.
+	const named = $derived(label.charAt(0).toUpperCase() + label.slice(1));
+</script>
+
+{#if state === 'arriving'}
+	<!-- `role="status"` announces politely: an arrival is not an interruption. -->
+	<p class="region arriving" data-testid="region-arriving" role="status">
+		<span class="marker" aria-hidden="true">◌</span>
+		<span class="words">Loading {label}…</span>
+	</p>
+{:else if state === 'empty'}
+	<p class="region empty" data-testid="region-empty">
+		<span class="marker" aria-hidden="true">—</span>
+		<span class="words">No {label}.</span>
+	</p>
+{:else if state === 'gave-up'}
+	<!--
+		`role="status"` and not `alert`: the system declining to keep waiting is a decision it owns,
+		not a fault it suffered. The sentence names the read rather than the mechanism — "timeout"
+		alone would say what happened to the system and nothing about what the reader is missing.
+	-->
+	<p class="region gave-up" data-testid="region-gave-up" role="status">
+		<span class="marker" aria-hidden="true">⊘</span>
+		<span class="words">
+			We stopped waiting for {label}<span class="detail"> — it did not answer in time.</span>
+		</span>
+	</p>
+{:else}
+	<!-- `role="alert"` because a failure is not merely a later arrival; it will not resolve. -->
+	<p class="region failed" data-testid="region-failed" role="alert">
+		<span class="marker" aria-hidden="true">⚠</span>
+		<span class="words">
+			{named} unavailable<span class="detail"> — nothing here was read.</span>
+		</span>
+	</p>
+{/if}
+
+<style>
+	/*
+	 * Scoped `<style>` rather than Tailwind utilities, and the reason is the clause: these
+	 * appearances have to be un-overridable from a consumer. A utility string in the class
+	 * attribute of each call site is precisely the drift this component exists to prevent, and the
+	 * graph components — the first consumers — are on a hard-coded palette rather than the app's
+	 * Tailwind tokens, so a Tailwind spelling would read wrong in half the places it lands.
+	 */
+	.region {
+		display: flex;
+		align-items: baseline;
+		gap: 8px;
+		margin: 0;
+		padding: 7px 9px;
+		border-left: 2px solid;
+		border-radius: 0 5px 5px 0;
+		font-size: 12.5px;
+		line-height: 1.5;
+	}
+	.marker {
+		flex: none;
+		font: 11px/1.4 ui-monospace, Menlo, monospace;
+	}
+
+	/* Arriving — dashed edge, cool blue, a pulsing ring. Unfinished, and says so three ways. */
+	.arriving {
+		border-left-style: dashed;
+		border-left-color: rgba(143, 182, 232, 0.55);
+		background: rgba(143, 182, 232, 0.05);
+		color: #8fb6e8;
+	}
+	.arriving .marker {
+		animation: pulse 1.1s ease-in-out infinite;
+	}
+
+	/* Empty — the quietest of the three. A settled fact about the reader's material, not a fault. */
+	.empty {
+		border-left-color: rgba(255, 255, 255, 0.12);
+		background: rgba(255, 255, 255, 0.02);
+		color: #79828f;
+		font-style: italic;
+	}
+
+	/*
+	 * Gave up — violet, dotted, and neither of the two it sits between. Orange beside orange at
+	 * 12.5px is the one-channel trap spec §3.3 names, so the refusal takes a hue nothing else uses
+	 * rather than a lighter shade of the failure. Dotted, because the wait was broken off rather
+	 * than never started (dashed, arriving) or finished (solid).
+	 */
+	.gave-up {
+		border-left-style: dotted;
+		border-left-color: #8f7cc0;
+		background: rgba(143, 124, 192, 0.07);
+		color: #b9a6de;
+	}
+	.gave-up .detail {
+		color: #9081b3;
+	}
+
+	/* Failed — warm, solid, heavier. Nothing about it reads as still in flight. */
+	.failed {
+		border-left-color: #c07a4a;
+		background: rgba(192, 122, 74, 0.08);
+		color: #e0a377;
+		font-weight: 600;
+	}
+	.failed .detail {
+		font-weight: 400;
+		color: #b58b6a;
+	}
+
+	@keyframes pulse {
+		0%,
+		100% {
+			opacity: 0.35;
+		}
+		50% {
+			opacity: 1;
+		}
+	}
+
+	/* The pulse is the one channel that is motion; a reader who has turned motion off still has the
+	   others. */
+	@media (prefers-reduced-motion: reduce) {
+		.arriving .marker {
+			animation: none;
+		}
+	}
+</style>
