@@ -81,49 +81,37 @@ export function nodeMeta(
 export const nodeRadius = (degree: number): number => 7 + Math.min(9, degree * 0.6);
 
 /**
- * The unconnected field — where nodes that this answer connects to nothing are drawn.
+ * The unconnected band — the nodes this answer connects to nothing.
  *
  * `[ruled — 2026-08-20, Pete]` Measured on the flagship question after Beat 0.5: **80 of 155 nodes
- * have degree zero**. Nothing collides and nothing is hidden, so the layout witness passes — and a
- * reader looking at 80 identical scattered discs may still not find the screen legible, which is
- * what §7 reserved a decision for. The decision is: **draw all of them, in a declared place, and
- * say what the place is.**
+ * have degree zero**. They were first drawn as a captioned band of marks beneath the connected
+ * core, on the reasoning that every one of them should still be on the canvas.
  *
- * Three things it deliberately is not:
+ * `[ruled — 2026-08-22, Pete]` **The marks are gone; the caption stays and opens a list.** The band
+ * borrowed the canvas's mark vocabulary and dropped its semantics — on the canvas a mark's position
+ * carries meaning, because a force layout puts related things near each other, and in a row it
+ * carries none. A reader who has just learned to read position reads the row the same way and gets
+ * a claim that is not there, which is `no-derived-thing-poses-as-authored` in the register's own
+ * terms: an aggregate borrowing the visual grammar of the things it summarizes.
  *
- * - **Not a new mark.** These are `.node-chip` like every other node. The canvas's whole vocabulary
- *   is `{node, edge}` and `GraphPage.component.test.ts` fails if a third mark class appears — which
- *   is currently what covers `navigation-never-silently-changes-kind`. A separate mark for
- *   "unconnected" would also be false: unconnected is a fact about this answer, not about the
- *   resource.
- * - **Not a ranking.** {@link packField} places in the order it is given and nothing more. §2.3
- *   ruled unranked-everything is the design and that its failure mode is a measurement rather than
- *   a licence to rank; making the field legible must not smuggle one in.
- * - **Not a bound.** Every node is still drawn. When the box genuinely cannot hold them,
- *   {@link packField} returns the remainder and the caption states it, because
- *   `legibility-is-never-bought-with-silent-omission` is exactly the clause a quiet truncation
- *   would break.
+ * The ruling applies a precedent already set one rung up, rather than arguing it again: *"dots a
+ * reader cannot use are not more honest than a sentence."* So the band is now a sentence and a
+ * disclosure that opens a list — title, doc type, and how many things each connects to elsewhere.
+ *
+ * Two things that did NOT change, and one that did:
+ *
+ * - **Still not a ranking.** The list is rendered in the order the answer returned. §2.3 ruled
+ *   unranked-everything is the design and that its failure mode is a measurement rather than a
+ *   licence to rank.
+ * - **Still not a bound.** Every member is in the list. What went away with the marks is the
+ *   packing that could not fit them all — so `legibility-is-never-bought-with-silent-omission` is
+ *   now satisfied by construction rather than by a caption clause reporting a remainder.
+ * - **The caption is load-bearing and must not be dropped.** It is what closed
+ *   [degree 87 draws zero links](./01a024d3-2a16-78b1-9e7e-a0e98bd87e0e): *"each connects to 11 to
+ *   87 things elsewhere in your corpus"* is the sentence that stopped the screen saying `0 links`
+ *   about the most connected material the reader has. The per-row figure states the same fact per
+ *   item and REINFORCES it; it never replaces it.
  */
-
-/** Where the field is drawn, in the canvas's own coordinates. */
-export interface FieldBox {
-	x: number;
-	y: number;
-	width: number;
-	height: number;
-}
-
-export interface Placed {
-	id: string;
-	x: number;
-	y: number;
-}
-
-export interface PackedField {
-	placed: Placed[];
-	/** How many did not fit at the tightest spacing. Stated by the caption, never swallowed. */
-	undrawn: number;
-}
 
 /**
  * Split the answer's nodes by whether anything in **this answer** connects them.
@@ -140,51 +128,8 @@ export function partitionByConnection<T extends { degree: number }>(
 	};
 }
 
-/** Widest and tightest centre-to-centre spacing the field will use before it starts leaving marks out. */
-const IDEAL_PITCH = 26;
-const MIN_PITCH = 14;
-
 /**
- * Place ids row-major in a box, tightening the spacing until they fit.
- *
- * Deterministic and order-preserving: same ids and same box give the same coordinates, and the
- * order handed in is the order drawn. Spacing shrinks from {@link IDEAL_PITCH} toward
- * {@link MIN_PITCH} rather than the box growing, because the field shares a canvas with the
- * connected core and must not push it off screen.
- */
-export function packField(ids: string[], box: FieldBox): PackedField {
-	if (ids.length === 0) return { placed: [], undrawn: 0 };
-
-	const fits = (pitch: number) => {
-		const cols = Math.max(1, Math.floor(box.width / pitch));
-		const rows = Math.max(1, Math.floor(box.height / pitch));
-		return { cols, rows, capacity: cols * rows };
-	};
-
-	// Widest spacing that holds them all; the tightest one if none does.
-	let pitch = MIN_PITCH;
-	for (let p = IDEAL_PITCH; p >= MIN_PITCH; p -= 2) {
-		if (fits(p).capacity >= ids.length) {
-			pitch = p;
-			break;
-		}
-	}
-
-	const { cols, capacity } = fits(pitch);
-	const drawn = ids.slice(0, capacity);
-
-	return {
-		placed: drawn.map((id, i) => ({
-			id,
-			x: box.x + (Math.floor(i % cols) + 0.5) * pitch,
-			y: box.y + (Math.floor(i / cols) + 0.5) * pitch,
-		})),
-		undrawn: ids.length - drawn.length,
-	};
-}
-
-/**
- * What the field is, said without a machine word in it.
+ * What the band is, said without a machine word in it.
  *
  * `no-internal-vocabulary-is-load-bearing`: not *"80 degree-zero nodes"* — *"80 of these are not
  * connected to anything else in this answer."* The reader learns a fact about their own material
@@ -203,12 +148,16 @@ export function packField(ids: string[], box: FieldBox): PackedField {
  *   sentence, byte for byte, because borrowing the other one would put a claim on that screen which
  *   its own read never measured. That is this surface's own defect, one screen over.
  *
+ * `[amended — 2026-08-22]` **The `undrawn` clause is gone with the marks it counted.** It read
+ * *"N of them are not drawn"*, and it existed because the band's box could run out of room. The
+ * band is a list now and every member is in it, so there is no remainder to report — the clause
+ * would have had no true value to take.
+ *
  * @see internal/superpowers/specs/2026-08-21-hub-stranding-is-a-telling-failure-design.md §5.2
  */
 export function describeUnconnected(
 	unconnected: number,
 	total: number,
-	undrawn: number,
 	corpusDegrees: (number | null)[],
 ): string | null {
 	if (unconnected === 0) return null;
@@ -216,13 +165,11 @@ export function describeUnconnected(
 	const verb = unconnected === 1 ? 'is' : 'are';
 	const elsewhere = corpusElsewhere(unconnected, corpusDegrees);
 
-	const lead = elsewhere
+	return elsewhere
 		? `${unconnected} of these ${total} ${verb} not connected to anything else drawn here — ` +
-			`but ${unconnected === 1 ? 'it connects' : 'each connects'} to ${elsewhere} ` +
-			`elsewhere in your corpus.`
+				`but ${unconnected === 1 ? 'it connects' : 'each connects'} to ${elsewhere} ` +
+				`elsewhere in your corpus.`
 		: `${unconnected} of these ${total} ${verb} not connected to anything else in this answer.`;
-
-	return undrawn > 0 ? `${lead} ${undrawn} of them are not drawn.` : lead;
 }
 
 /**

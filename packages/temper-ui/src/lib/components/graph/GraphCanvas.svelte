@@ -15,12 +15,14 @@
 	 * and hue still carries doc-type, exactly as they do on every other screen in the app — so the
 	 * arm is a fourth channel on one mark, never a second mark.
 	 *
-	 * `[ruled — 2026-08-20, Pete]` **The unconnected field.** Measured post-Beat-0.5, 80 of the
-	 * flagship answer's 155 nodes have degree zero. They used to settle through the same force pass
-	 * as everything else and read as a scatter of identical discs. They are now drawn in a declared
-	 * band beneath the connected core, captioned in the reader's own words. Every one of them is
-	 * still drawn, still hoverable, still the same `.node-chip` mark — the field is a *place on the
-	 * canvas*, not a new kind of thing, and `presentation.ts` carries why.
+	 * `[ruled — 2026-08-22, Pete]` **Nothing unconnected is drawn here any more.** Post-Beat-0.5, 80
+	 * of the flagship answer's 155 nodes have degree zero; they were first given a declared band of
+	 * marks beneath the connected core. That band borrowed this canvas's grammar and dropped its
+	 * semantics — position here means something, position in a row means nothing — so it is now a
+	 * caption and a disclosure list in `UnconnectedBand.svelte`, beneath the drawing rather than in it.
+	 *
+	 * What this canvas draws is therefore exactly **what this answer connected**, and the core has the
+	 * whole height back. A row of that list opens the same rail a mark's click opened.
 	 *
 	 * @see internal/superpowers/specs/2026-08-20-graph-successor-surface-design.md §3, §7
 	 */
@@ -32,15 +34,14 @@
 	import type { GraphModel } from '$lib/graph/model';
 	import {
 		armsDistinguish,
-		describeUnconnected,
 		nodeMeta,
 		nodeRadius,
-		packField,
 		partitionByConnection,
 	} from '$lib/graph/presentation';
 	import Edge from '$lib/components/graph/marks/Edge.svelte';
 	import NodeChip from '$lib/components/graph/marks/NodeChip.svelte';
 	import NodeHoverCard from '$lib/components/graph/marks/NodeHoverCard.svelte';
+	import UnconnectedBand from './UnconnectedBand.svelte';
 
 	interface Props {
 		model: GraphModel;
@@ -55,15 +56,10 @@
 	const H = 620;
 	const MIN_ZOOM = 0.3;
 	const MAX_ZOOM = 4;
-	/** Height the field claims when there is anything to put in it, caption included. */
-	const FIELD_H = 132;
-	const FIELD_PAD = 24;
-	const CAPTION_H = 30;
 
+	// What this answer connected is drawn here; what it did not is listed beneath. The core therefore
+	// has the whole canvas on every answer, which is what it had before the band was ever drawn in it.
 	const parts = $derived(partitionByConnection(model.nodes));
-	// The core keeps the whole canvas when nothing is unconnected, so a fully-connected answer is
-	// laid out exactly as it was before the field existed.
-	const coreH = $derived(parts.unconnected.length > 0 ? H - FIELD_H : H);
 
 	// Where this read stood holds the core; what it reached from there rings it. Keyed on the ARM
 	// rather than on `home`, because on this surface both homes are ordinary — a reader whose
@@ -78,36 +74,9 @@
 	const graph = $derived(
 		forceNeighborhood({ nodes: parts.connected, edges: model.edges }, [], {
 			width: W,
-			height: coreH,
+			height: H,
 			coreOf: (n) => !reached(n.id),
 		}),
-	);
-
-	const field = $derived(
-		packField(
-			// The order the answer returned them in. Placing these is a legibility act and must not
-			// become a ranking — §2.3 ruled unranked-everything is the design.
-			parts.unconnected.map((n) => n.id),
-			{
-				x: FIELD_PAD,
-				y: coreH + CAPTION_H,
-				width: W - 2 * FIELD_PAD,
-				height: FIELD_H - CAPTION_H - 8,
-			},
-		),
-	);
-
-	// The band's corpus figures are handed over rather than reached for: the caption must be TOLD
-	// what this read measured. `buildGraph` reports `null` for all of them and gets the
-	// answer-scoped sentence; `buildEntryGraph` reports real ones and gets the sentence that says
-	// what its marks ARE connected to. Neither borrows the other's claim.
-	const caption = $derived(
-		describeUnconnected(
-			parts.unconnected.length,
-			model.nodes.length,
-			field.undrawn,
-			parts.unconnected.map((n) => n.corpusDegree),
-		),
 	);
 
 	// The ring encodes a contrast between arms. Where every mark shares one — which is every entry
@@ -118,14 +87,14 @@
 	const nodeById = $derived(new Map(model.nodes.map((n) => [n.id, n])));
 
 	/**
-	 * Every mark on the canvas, from both placements, in one list.
+	 * Every mark on the canvas — which is now every node this answer **connected**, and only those.
 	 *
-	 * One list rather than two loops is the point: the field is a set of coordinates, not a second
-	 * kind of mark, and everything downstream — captions, the selected-node fallback, the DOM class
-	 * the vocabulary test counts — cannot tell the two apart because there is nothing to tell.
+	 * Kept as its own list rather than read off `graph.nodes` at each use because label placement, the
+	 * selected-node fallback and the hover card all ask it the same question, and one shape for one
+	 * question is what kept the band from ever becoming a second kind of mark while it existed.
 	 */
-	const marks = $derived([
-		...graph.nodes.map((n) => ({
+	const marks = $derived(
+		graph.nodes.map((n) => ({
 			id: n.id,
 			x: n.x,
 			y: n.y,
@@ -134,19 +103,7 @@
 			docType: n.docType,
 			home: n.home,
 		})),
-		...field.placed.map((p) => {
-			const n = nodeById.get(p.id)!;
-			return {
-				id: p.id,
-				x: p.x,
-				y: p.y,
-				degree: 0,
-				title: n.title,
-				docType: n.doc_type,
-				home: n.home,
-			};
-		}),
-	]);
+	);
 
 	// G2 — captions are placed so none lands on another caption or on another node's mark.
 	// Every node is still drawn and still hoverable; what is bounded is the always-on label.
@@ -166,11 +123,24 @@
 	);
 	const labelled = $derived(new Set(labels.map((l) => l.id)));
 
-	const ariaLabel = $derived(
-		caption
-			? `Your resources and the edges between them. ${caption}`
-			: 'Your resources and the edges between them',
-	);
+	/**
+	 * The band's sentence is no longer folded into this label, and that is a repair rather than a
+	 * loss: it is real text in the document now, under a `<summary>` a reader can open, instead of a
+	 * string smuggled into the label of an `<svg role="img">` that reports nothing inside itself.
+	 */
+	const ariaLabel = 'Your resources and the edges between them';
+
+	/**
+	 * What the canvas says when this answer connected nothing.
+	 *
+	 * Distinct from `emptyMessage`, which says the reader has nothing here — a different and much
+	 * worse claim. `no-reader-is-left-to-blame-themselves`: a blank rectangle above a caption, with
+	 * no sentence in it, invites exactly the wrong conclusion. The entry read cannot reach this,
+	 * because rung 2 replaces the whole canvas when nothing is eligible; a composition answer has no
+	 * such rung and can.
+	 */
+	const nothingConnected =
+		'Nothing here is connected to anything else, so there is no shape to draw — they are all listed below.';
 
 	let hoveredEdge = $state<number | null>(null);
 	let svgEl: SVGSVGElement | undefined = $state();
@@ -202,8 +172,13 @@
 			</marker>
 		</defs>
 		<g bind:this={viewportEl}>
-			{#if model.nodes.length === 0}
-				<text x={W / 2} y={H / 2} text-anchor="middle" fill="#7d8496" font-size="14">{emptyMessage}</text>
+			{#if marks.length === 0}
+				<!-- Two different facts, two different sentences: nothing came back at all, versus this
+				     answer came back and connected none of it. The second used to be unreachable, because
+				     the band drew those marks here. -->
+				<text x={W / 2} y={H / 2} text-anchor="middle" fill="#7d8496" font-size="14"
+					>{model.nodes.length === 0 ? emptyMessage : nothingConnected}</text
+				>
 			{:else}
 				<!-- Edges first, so a mark is never hidden under a stroke. Keyed on the four fields
 				     that identify the row, which is also the key the model deduped on. -->
@@ -223,27 +198,6 @@
 						/>
 					</g>
 				{/each}
-
-				{#if caption}
-					<!-- Chrome, not a mark: a rule and a sentence. Deliberately NOT wrapped in a
-					     classed <g> — the canvas's mark vocabulary is two, and saying what a
-					     region of the canvas is must not spend a third entry in it. -->
-					<line
-						x1={FIELD_PAD}
-						y1={coreH + 10}
-						x2={W - FIELD_PAD}
-						y2={coreH + 10}
-						stroke="#333a49"
-						stroke-width="1"
-					/>
-					<text
-						data-testid="unconnected-caption"
-						x={FIELD_PAD}
-						y={coreH + 26}
-						font-size="11"
-						fill="#8b94a5">{caption}</text
-					>
-				{/if}
 
 				{#each marks as n (n.id)}
 					{@const node = nodeById.get(n.id)}
@@ -281,8 +235,9 @@
 
 				{#if selected && labelled.has(selected) === false}
 					<!-- A selected node the collision pass could not caption still gets one: the
-					     reader has explicitly asked which this is. This reaches into the field too,
-					     which is exactly why the two placements share one list. -->
+					     reader has explicitly asked which this is. A selection made from the list
+					     beneath finds no mark here at all, and gets no caption rather than a
+					     fabricated position — the rail is what answers for it. -->
 					{@const s = marks.find((n) => n.id === selected)}
 					{#if s}
 						<text
@@ -325,11 +280,18 @@
 			{/if}
 		</g>
 	</svg>
+
+	<!-- Beneath the drawing, never in it. The list makes no spatial claim, which is the whole of
+	     what the row of marks it replaces got wrong. -->
+	<UnconnectedBand nodes={parts.unconnected} total={model.nodes.length} {onSelect} {selected} />
 </div>
 
 <style>
 	.graph-canvas {
 		display: flex;
+		/* Column, so the band sits under the drawing rather than beside it. The svg takes what is
+		   left after the band has asked for what it needs. */
+		flex-direction: column;
 		width: 100%;
 		height: 100%;
 		min-height: 0;

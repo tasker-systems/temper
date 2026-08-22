@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { render, screen } from '@testing-library/svelte';
+import { fireEvent, render, screen } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type BoundDeclaration, declareBounds, declareTraversalBounds } from '$lib/graph/bound';
 import type { GraphPlan } from '$lib/graph/composition';
@@ -18,7 +18,7 @@ import type { CogmapRegionRow } from '$lib/types/generated/cognitive_maps';
 import type { EventTrail } from '$lib/types/generated/element_trail';
 import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
 import type { QueryResponse } from '$lib/types/generated/query';
-import { resetAppContext, setPage } from '../../../test/app-context';
+import { goto, gotoTarget, resetAppContext, setPage } from '../../../test/app-context';
 import { sentenceOf } from '../../../test/sentence';
 import GraphPage from './GraphPage.svelte';
 
@@ -219,11 +219,17 @@ beforeEach(() => {
 });
 
 describe('the surface renders the reader’s own material', () => {
-	it('draws one mark per node and one per deduped edge, and nothing else', async () => {
+	it('draws one mark per CONNECTED node and one per deduped edge, and nothing else', async () => {
 		const { container } = await painted(view());
 		const model = flagship;
 
-		expect(container.querySelectorAll('.node-chip')).toHaveLength(model.nodes.length);
+		// `[amended — 2026-08-22]` This read `model.nodes.length` while every node was drawn,
+		// including the ones this answer connects to nothing. Those are now a list beneath the
+		// canvas rather than a row of marks under it, so the canvas holds exactly what it drew
+		// edges for. The vocabulary assertion below is untouched and is the one that never moved.
+		const connected = model.nodes.filter((n) => n.degree > 0).length;
+
+		expect(container.querySelectorAll('.node-chip')).toHaveLength(connected);
 		expect(container.querySelectorAll('.edge')).toHaveLength(model.edges.length);
 		// The whole vocabulary. A third mark class appearing here is the failure the clause names.
 		const markClasses = new Set(
@@ -665,7 +671,21 @@ describe('a read that cannot change the marks does not take them down', () => {
 	});
 });
 
-describe('the unconnected field is declared rather than scattered', () => {
+/**
+ * `[ruled — 2026-08-22, Pete]` *"a bar of lined up dots just does not work visually … the visual
+ * disjoint between a force graph and a row of dot-like-resources really clashes."*
+ *
+ * The band used to be a row of `.node-chip` marks beneath the canvas. Position on the canvas
+ * carries meaning — a force layout puts related things near each other — and position in a row
+ * carries none, so the row borrowed the grammar and dropped the semantics. That is
+ * `no-derived-thing-poses-as-authored` in the register's own words: *"aggregates that borrow the
+ * visual grammar of the things they summarize."*
+ *
+ * The repair applies a precedent this surface already set at rung 2 — *"dots a reader cannot use
+ * are not more honest than a sentence"* — rather than arguing it again. **The caption stays**,
+ * because it is what closed *degree 87 draws zero links*, and the row of marks becomes a list.
+ */
+describe('the unconnected band is a sentence and a list, not a row of marks', () => {
 	it('the fixture has an unconnected population — but NOT the real one, and says which', async () => {
 		// **This file cannot witness the ratio the ruling was made on.** The capture's trim rule
 		// keeps every survey hit a via entry references, which keeps the CONNECTED hits by
@@ -674,7 +694,7 @@ describe('the unconnected field is declared rather than scattered', () => {
 		// `_trimmed.degree_zero_NOT_witnessable`. Same species as the 101-edge collapse that block
 		// already names: a trim preserving one property destroyed another.
 		//
-		// What IS witnessable here is that the field exists, is populated, and is captioned truly.
+		// What IS witnessable here is that the band exists, is populated, and is captioned truly.
 		// The population itself is asserted against the wire, not against this file.
 		const model = flagship;
 		const zero = model.nodes.filter((n) => n.degree === 0);
@@ -692,22 +712,61 @@ describe('the unconnected field is declared rather than scattered', () => {
 		expect(caption).toBe(
 			`${zero} of these ${model.nodes.length} are not connected to anything else in this answer.`,
 		);
-		// no-internal-vocabulary-is-load-bearing reaches the canvas chrome too.
+		// no-internal-vocabulary-is-load-bearing reaches the band's chrome too.
 		for (const word of ['degree', 'orphan', 'node']) {
 			expect(caption.toLowerCase()).not.toContain(word);
 		}
 	});
 
-	it('still draws every one of them — the field is a place, not a bound', async () => {
+	it('draws a mark for what this answer CONNECTED, and for nothing else', async () => {
+		// The bite. This assertion read `toHaveLength(model.nodes.length)` while the band was a row
+		// of marks, and it is the one that has to change direction: a mark for a node this answer
+		// connects to nothing is exactly the false claim the ruling removes.
 		const { container } = await painted(view());
-		const model = flagship;
+		const connected = flagship.nodes.filter((n) => n.degree > 0).length;
 
-		expect(container.querySelectorAll('.node-chip')).toHaveLength(model.nodes.length);
+		expect(connected).toBeLessThan(flagship.nodes.length);
+		expect(container.querySelectorAll('.node-chip')).toHaveLength(connected);
 	});
 
-	it('adds no mark class — the field costs nothing from a vocabulary of two', async () => {
+	it('and no mark-shaped element sits beneath the canvas at all', async () => {
+		// Stated separately from the count, because a future band could satisfy the count and still
+		// draw discs of its own. Nothing outside the canvas may be a mark.
+		const { container } = await painted(view());
+		const band = container.querySelector('[data-testid="unconnected-band"]') as HTMLElement;
+
+		expect(band).not.toBeNull();
+		expect(band.querySelectorAll('svg, circle, rect, .node-chip')).toHaveLength(0);
+	});
+
+	it('every one of them is in the list, and no connected node is', async () => {
+		const { container } = await painted(view());
+		const unconnected = flagship.nodes.filter((n) => n.degree === 0);
+		const rows = [...container.querySelectorAll('[data-testid="unconnected-list"] li')];
+
+		expect(rows).toHaveLength(unconnected.length);
+		const listed = rows.map((r) => r.querySelector('.title')?.textContent);
+		for (const n of unconnected) expect(listed).toContain(n.title);
+	});
+
+	it('a row opens that node’s rail, exactly as clicking its mark did', async () => {
+		// The marks this list replaces were interactive — hoverable, and clickable into the rail.
+		// A list that only displayed names would be a regression wearing the shape of a fix.
+		const { container } = await painted(view());
+		const first = flagship.nodes.find((n) => n.degree === 0)!;
+		const row = container.querySelector(
+			'[data-testid="unconnected-list"] li button',
+		) as HTMLElement;
+
+		await fireEvent.click(row);
+
+		expect(goto).toHaveBeenCalled();
+		expect(gotoTarget().searchParams.get('sel')).toBe(first.id);
+	});
+
+	it('adds no mark class — the band costs nothing from a vocabulary of two', async () => {
 		// The guard above already asserts this for the page as a whole; this one names WHY it is
-		// re-asserted here, so a future field that reaches for a third mark fails on purpose.
+		// re-asserted here, so a future band that reaches for a third mark fails on purpose.
 		const { container } = await painted(view());
 		const markClasses = new Set(
 			[...container.querySelectorAll('svg g[class]')]
@@ -718,11 +777,29 @@ describe('the unconnected field is declared rather than scattered', () => {
 		expect([...markClasses].sort()).toEqual(['edge', 'node-chip']);
 	});
 
-	it('a fully connected answer gets no caption and no field at all', async () => {
+	it('a fully connected answer gets no caption and no list at all', async () => {
 		await painted(
 			view({ model: { ...flagship, nodes: flagship.nodes.filter((n) => n.degree > 0) } }),
 		);
 		expect(screen.queryByTestId('unconnected-caption')).toBeNull();
+		expect(screen.queryByTestId('unconnected-band')).toBeNull();
+	});
+
+	it('an answer that connected NOTHING says so on the canvas rather than going blank', async () => {
+		// With the marks gone, a composition answer whose nodes are all unconnected draws an empty
+		// rectangle. Rung 2 cannot catch it — that verdict is the entry read's, keyed on `eligible`
+		// — so the canvas has to say which of the two facts this is. A blank canvas above a caption
+		// is `no-reader-is-left-to-blame-themselves` waiting to happen.
+		await painted(
+			view({
+				model: { ...flagship, nodes: flagship.nodes.filter((n) => n.degree === 0), edges: [] },
+			}),
+		);
+
+		expect(
+			screen.getByText(/Nothing here is connected to anything else, so there is no shape to draw/),
+		).not.toBeNull();
+		expect(screen.getByTestId('unconnected-band')).not.toBeNull();
 	});
 });
 
@@ -808,6 +885,22 @@ describe('the entry read tells the truth about its band', () => {
 		}
 	});
 
+	it('each band row states its own elsewhere-count, not the caption’s range', async () => {
+		// `[ruled — 2026-08-22, Pete]` The per-row figure states per item what the caption states
+		// as a range, and that is REINFORCEMENT — never a replacement that lets the caption go.
+		// The composition read reports no corpus figures at all and a row there may not manufacture
+		// one; that arm is asserted in `presentation.test.ts`.
+		const { container } = await painted(entryView());
+		const rows = [...container.querySelectorAll('[data-testid="unconnected-list"] li')];
+
+		expect(rows).toHaveLength(1);
+		expect(rows[0].querySelector('.title')?.textContent).toBe('Maintenance');
+		expect(rows[0].querySelector('.kind')?.textContent).toBe('goal');
+		expect(rows[0].querySelector('.elsewhere')?.textContent).toBe(
+			'0 drawn here · 87 in your corpus',
+		);
+	});
+
 	it('the accessibility list stops asserting 0 links about a hub', async () => {
 		await painted(entryView());
 
@@ -862,11 +955,14 @@ describe('the entry read tells the truth about its band', () => {
 
 		expect(new Set(entryModel.nodes.map((n) => n.arm)).size).toBe(1);
 		expect(container.querySelectorAll('.arm-ring')).toHaveLength(0);
-		// The marks themselves are untouched — what was withdrawn is an encoding, not a node.
-		expect(container.querySelectorAll('.node-chip')).toHaveLength(entryModel.nodes.length);
+		// The marks themselves are untouched — what was withdrawn is an encoding, not a node. Two
+		// of this model's three nodes are connected; the stranded hub is in the band's list.
+		expect(container.querySelectorAll('.node-chip')).toHaveLength(
+			entryModel.nodes.filter((n) => n.degree > 0).length,
+		);
 	});
 
-	it('and the field is still a place, not a bound — every mark is drawn', async () => {
+	it('and the band costs no third mark on the entry read either', async () => {
 		const { container } = await painted(entryView());
 		const markClasses = new Set(
 			[...container.querySelectorAll('svg g[class]')]
@@ -970,9 +1066,12 @@ describe('the ring is withdrawn only where it distinguishes nothing', () => {
 		// canvas whatever the declaration says — it would pass on a screen ringing everything.
 		// This is the figure #741 shipped, stated independently, so a wrong declaration moves it.
 		const model = flagship;
-		const notWalk = model.nodes.filter((n) => n.arm !== 'walk').length;
+		// Over the marks the canvas DRAWS, which is now the connected ones — the band's members
+		// are listed rather than drawn, so they carry no ring to count.
+		const notWalk = model.nodes.filter((n) => n.arm !== 'walk' && n.degree > 0).length;
 
 		const { container } = await painted(view());
+		expect(notWalk).toBeGreaterThan(0);
 		expect(container.querySelectorAll('.arm-ring')).toHaveLength(notWalk);
 	});
 

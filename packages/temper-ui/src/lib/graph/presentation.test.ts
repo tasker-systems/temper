@@ -7,7 +7,6 @@ import {
 	describeUnconnected,
 	nodeMeta,
 	nodeRadius,
-	packField,
 	partitionByConnection,
 	whereOf,
 } from './presentation';
@@ -156,10 +155,7 @@ describe('a mark is sized on deduped degree', () => {
 	});
 });
 
-describe('the unconnected field — degree-zero nodes are declared, not scattered', () => {
-	const nodes = (n: number, degree = 0) =>
-		Array.from({ length: n }, (_, i) => ({ id: `n${i}`, degree }));
-
+describe('the unconnected band — degree-zero nodes are declared, not drawn', () => {
 	test('the partition is on whether THIS answer connects the node', () => {
 		const { connected, unconnected } = partitionByConnection([
 			{ id: 'a', degree: 2 },
@@ -171,87 +167,54 @@ describe('the unconnected field — degree-zero nodes are declared, not scattere
 		expect(unconnected.map((n) => n.id)).toEqual(['b']);
 	});
 
-	test('the field preserves the order it was given — no new ranking is introduced', () => {
-		// §2.3 ruled unranked-everything is the design and that its failure is a measurement, not a
-		// reason to pre-emptively rank. Placing these is a legibility act; it must not become one.
-		const { placed } = packField(['z', 'a', 'm'], { x: 0, y: 0, width: 400, height: 200 });
+	test('the partition is exhaustive and order-preserving — the list may not rank', () => {
+		// `[ruled — 2026-08-22, Pete]` The band's row of marks became a list, and `packField` went
+		// with it: there is no box to run out of, so there is nothing left to pack or to truncate.
+		// §2.3's rule survives the change of medium — the members are rendered in the order the
+		// answer returned them, and placing them must never become a ranking.
+		const given = [
+			{ id: 'z', degree: 0 },
+			{ id: 'a', degree: 3 },
+			{ id: 'm', degree: 0 },
+			{ id: 'b', degree: 0 },
+		];
+		const { connected, unconnected } = partitionByConnection(given);
 
-		expect(placed.map((p) => p.id)).toEqual(['z', 'a', 'm']);
-	});
-
-	test('it packs row-major and stays inside its box', () => {
-		const box = { x: 20, y: 500, width: 400, height: 100 };
-		const { placed, undrawn } = packField(
-			nodes(24).map((n) => n.id),
-			box,
-		);
-
-		expect(undrawn).toBe(0);
-		for (const p of placed) {
-			expect(p.x).toBeGreaterThanOrEqual(box.x);
-			expect(p.x).toBeLessThanOrEqual(box.x + box.width);
-			expect(p.y).toBeGreaterThanOrEqual(box.y);
-			expect(p.y).toBeLessThanOrEqual(box.y + box.height);
-		}
-		// Row-major: the second node is to the RIGHT of the first, not below it.
-		expect(placed[1].y).toBe(placed[0].y);
-		expect(placed[1].x).toBeGreaterThan(placed[0].x);
-	});
-
-	test('the measured real case fits whole', () => {
-		// 80 of 155 nodes at degree zero on the flagship question, post Beat 0.5.
-		const { placed, undrawn } = packField(
-			nodes(80).map((n) => n.id),
-			{ x: 0, y: 0, width: 1040, height: 120 },
-		);
-
-		expect(placed).toHaveLength(80);
-		expect(undrawn).toBe(0);
-	});
-
-	test('it is deterministic — the same input places identically twice', () => {
-		const box = { x: 0, y: 0, width: 500, height: 90 };
-		const ids = nodes(37).map((n) => n.id);
-
-		expect(packField(ids, box)).toEqual(packField(ids, box));
-	});
-
-	test('a field too small to hold them all reports the remainder rather than dropping it silently', () => {
-		// legibility-is-never-bought-with-silent-omission. The caption then has to say so.
-		const { placed, undrawn } = packField(
-			nodes(500).map((n) => n.id),
-			{ x: 0, y: 0, width: 100, height: 40 },
-		);
-
-		expect(placed.length).toBeGreaterThan(0);
-		expect(placed.length + undrawn).toBe(500);
-		expect(undrawn).toBeGreaterThan(0);
+		expect(unconnected.map((n) => n.id)).toEqual(['z', 'm', 'b']);
+		expect(connected.length + unconnected.length).toBe(given.length);
 	});
 });
 
-describe('the field says what it is, in the reader’s words', () => {
+describe('the band says what it is, in the reader’s words', () => {
 	test('nothing unconnected means no caption at all', () => {
-		expect(describeUnconnected(0, 155, 0, [])).toBeNull();
+		expect(describeUnconnected(0, 155, [])).toBeNull();
 	});
 
 	test('it states the count against the whole answer', () => {
-		expect(describeUnconnected(80, 155, 0, [])).toBe(
+		expect(describeUnconnected(80, 155, [])).toBe(
 			'80 of these 155 are not connected to anything else in this answer.',
 		);
 	});
 
 	test('one reads as one', () => {
-		expect(describeUnconnected(1, 12, 0, [])).toBe(
+		expect(describeUnconnected(1, 12, [])).toBe(
 			'1 of these 12 is not connected to anything else in this answer.',
 		);
 	});
 
-	test('an undrawn remainder is added rather than left implicit', () => {
-		expect(describeUnconnected(500, 600, 120, [])).toContain('120 of them are not drawn');
+	test('there is no remainder clause left to add — every member is in the list', () => {
+		// `[amended — 2026-08-22]` The sentence used to carry *"N of them are not drawn"*, because
+		// the band's box could run out of room. A list has no box, so the clause has no true value
+		// left to take, and `legibility-is-never-bought-with-silent-omission` is satisfied by the
+		// medium rather than by a caveat. A caption still counting an omission would be counting
+		// one that cannot happen.
+		expect(describeUnconnected(500, 600, [])).toBe(
+			'500 of these 600 are not connected to anything else in this answer.',
+		);
 	});
 
 	test('it never names a machine concept', () => {
-		const s = describeUnconnected(80, 155, 3, [])!;
+		const s = describeUnconnected(80, 155, [])!;
 		for (const word of ['degree', 'node', 'orphan', 'edge', 'graph']) {
 			expect(s.toLowerCase()).not.toContain(word);
 		}
@@ -272,35 +235,33 @@ describe('the band on the ENTRY read is the hub band, and the caption says so', 
 		const band = [87, 81, 59, 46, ...Array(21).fill(20), 11];
 		expect(band).toHaveLength(26);
 
-		expect(describeUnconnected(26, 130, 0, band)).toBe(
+		expect(describeUnconnected(26, 130, band)).toBe(
 			'26 of these 130 are not connected to anything else drawn here — but each connects to 11 to 87 things elsewhere in your corpus.',
 		);
 	});
 
 	test('one reads as one, and one number reads as one number', () => {
-		expect(describeUnconnected(1, 130, 0, [87])).toBe(
+		expect(describeUnconnected(1, 130, [87])).toBe(
 			'1 of these 130 is not connected to anything else drawn here — but it connects to 87 things elsewhere in your corpus.',
 		);
 	});
 
 	test('a band whose members all report the same figure does not say "between"', () => {
-		expect(describeUnconnected(3, 40, 0, [11, 11, 11])).toBe(
+		expect(describeUnconnected(3, 40, [11, 11, 11])).toBe(
 			'3 of these 40 are not connected to anything else drawn here — but each connects to 11 things elsewhere in your corpus.',
 		);
 	});
 
 	test('it names no machine concept either', () => {
-		const s = describeUnconnected(26, 130, 0, [87, 11])!;
+		const s = describeUnconnected(26, 130, [87, 11])!;
 		for (const word of ['degree', 'node', 'orphan', 'edge', 'graph']) {
 			expect(s.toLowerCase()).not.toContain(word);
 		}
 	});
 
-	test('an undrawn remainder is still added rather than left implicit', () => {
-		// legibility-is-never-bought-with-silent-omission does not lapse because the lead sentence
-		// changed. This arm is the one that keeps a truncated field declared.
-		expect(describeUnconnected(500, 600, 120, Array(500).fill(9))).toContain(
-			'120 of them are not drawn',
+	test('the corpus arm carries no remainder clause either', () => {
+		expect(describeUnconnected(500, 600, Array(500).fill(9))).toBe(
+			'500 of these 600 are not connected to anything else drawn here — but each connects to 9 things elsewhere in your corpus.',
 		);
 	});
 });
@@ -315,13 +276,13 @@ describe('the two reads do not say the same sentence', () => {
 	 * @see internal/superpowers/specs/2026-08-21-hub-stranding-is-a-telling-failure-design.md §5.2
 	 */
 	test('no evidence keeps the answer-scoped sentence, byte for byte', () => {
-		expect(describeUnconnected(80, 155, 0, [])).toBe(
+		expect(describeUnconnected(80, 155, [])).toBe(
 			'80 of these 155 are not connected to anything else in this answer.',
 		);
 	});
 
 	test('all-null evidence is no evidence, not zero connections', () => {
-		expect(describeUnconnected(3, 40, 0, [null, null, null])).toBe(
+		expect(describeUnconnected(3, 40, [null, null, null])).toBe(
 			'3 of these 40 are not connected to anything else in this answer.',
 		);
 	});
@@ -329,13 +290,13 @@ describe('the two reads do not say the same sentence', () => {
 	test('PARTIAL evidence claims nothing — the weaker sentence wins', () => {
 		// A mixed model cannot arise from either builder today. It falls back anyway, because the
 		// direction to fail in is the one that claims less than it can prove.
-		expect(describeUnconnected(3, 40, 0, [87, null, 11])).toBe(
+		expect(describeUnconnected(3, 40, [87, null, 11])).toBe(
 			'3 of these 40 are not connected to anything else in this answer.',
 		);
 	});
 
 	test('a figure list shorter than the band is not evidence about the band', () => {
-		expect(describeUnconnected(26, 130, 0, [87])).toBe(
+		expect(describeUnconnected(26, 130, [87])).toBe(
 			'26 of these 130 are not connected to anything else in this answer.',
 		);
 	});
@@ -343,7 +304,7 @@ describe('the two reads do not say the same sentence', () => {
 	test('a reported ZERO is honest and takes the plain sentence', () => {
 		// A read that reports corpus degree 0 has said something true: this really is connected to
 		// nothing. There is no "elsewhere" to point at.
-		expect(describeUnconnected(2, 40, 0, [0, 0])).toBe(
+		expect(describeUnconnected(2, 40, [0, 0])).toBe(
 			'2 of these 40 are not connected to anything else in this answer.',
 		);
 	});
