@@ -46,6 +46,7 @@ chacha20poly1305 = "0.10"
 # url-encoded path segment (`github/acme` → `github%2Facme`).
 percent-encoding = "2"
 utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
+jsonschema = "0.45"
 
 [features]
 test-db = []

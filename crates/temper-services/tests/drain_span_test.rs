@@ -28,7 +28,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::ContextId;
-use temper_core::types::workflow_job::{DispatchType, Persona, RegionJobPayload};
+use temper_core::types::workflow_job::{AnchorJobPayload, DispatchType, Persona};
 use temper_services::services::drain_span::{DRAIN_DISPATCH_FIELDS, DRAIN_JOB_FIELDS};
 use temper_services::services::{region_service, workflow_job_service};
 
@@ -114,7 +114,7 @@ async fn a_drained_job_reports_its_queue_wait_on_its_own_span(pool: PgPool) {
         anchor,
         Persona::Region.as_str(),
         DispatchType::Materialize.as_str(),
-        RegionJobPayload { emitter },
+        AnchorJobPayload { emitter },
     )
     .await
     .expect("enqueue");

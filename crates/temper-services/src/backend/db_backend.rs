@@ -39,7 +39,7 @@ use temper_core::types::reconcile::{
 };
 use temper_core::types::resource_view::{ResourceSection, ResourceView, SectionSet};
 use temper_core::types::steward::AdvanceWatermarkAck;
-use temper_core::types::workflow_job::{DispatchType, Persona, RegionJobPayload};
+use temper_core::types::workflow_job::{AnchorJobPayload, DispatchType, Persona};
 use temper_substrate::payloads::AnchorRef;
 use temper_workflow::operations::{
     AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick, Backend,
@@ -1500,7 +1500,7 @@ impl DbBackend {
     /// leaves the regions stale until the next write re-drives them. Same posture, and the same
     /// reasoning, as the embed-backfill enqueue beside it.
     async fn queue_region_clocks(&self, anchor: HomeAnchor, emitter: EntityId) {
-        let payload = RegionJobPayload {
+        let payload = AnchorJobPayload {
             emitter: emitter.uuid(),
         };
         match crate::services::workflow_job_service::enqueue_anchor(

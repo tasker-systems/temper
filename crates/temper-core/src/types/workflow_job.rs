@@ -82,6 +82,11 @@ pub enum Persona {
     /// `Auditor` is one: single-flight keys on `(scope, persona, dispatch_type)`, and a region job
     /// must be able to be in flight over a cogmap that already has a steward or auditor job.
     Region,
+    /// Shape reconciliation (data-artifact shape registry, spec §7.3). Like `Region`, a
+    /// non-agent server-side worker sharing the anchor-scoped queue. A DISTINCT persona for the
+    /// same single-flight reason: a reconcile job must be able to be in flight over an anchor
+    /// that already has a region job.
+    Shape,
 }
 
 impl Persona {
@@ -92,6 +97,7 @@ impl Persona {
             Persona::Embed => "embed",
             Persona::Auditor => "auditor",
             Persona::Region => "region",
+            Persona::Shape => "shape",
         }
     }
 }
@@ -114,6 +120,10 @@ pub enum DispatchType {
     /// salience job and a formation job contend for the same anchor row — reintroducing, between
     /// two jobs, the serialization this move exists to remove.
     Materialize,
+    /// One shape-reconciliation pass over a single anchor (spec §7.3). Declaring a shape enqueues
+    /// a reconcile job; the worker verdicts pre-existing artifacts by running `jsonschema`
+    /// validation against the shape in force.
+    ShapeReconcile,
 }
 
 impl DispatchType {
@@ -124,6 +134,7 @@ impl DispatchType {
             DispatchType::Embed => "embed",
             DispatchType::CitationAudit => "citation-audit",
             DispatchType::Materialize => "materialize",
+            DispatchType::ShapeReconcile => "shape-reconcile",
         }
     }
 }
@@ -212,7 +223,7 @@ pub struct ClaimedEmbedJob {
     pub attempts: i32,
 }
 
-/// The payload a region-clock job carries: who occasioned the settling.
+/// The payload an anchor-keyed job carries: who occasioned the work.
 ///
 /// Once the tick leaves the request path the write no longer emits the `region_materialized` /
 /// `salience_refreshed` events itself, so the emitter has to travel with the job or attribution is
@@ -226,16 +237,20 @@ pub struct ClaimedEmbedJob {
 /// occasioned by many acts, the ledger records one of them, and the events that drove it remain
 /// individually attributed in `kb_events`. It is a narrowing of *which act gets named*, never a loss
 /// of the trail.
+///
+/// Renamed from `RegionJobPayload` when the `Shape` persona was added: both personas carry the same
+/// single `emitter` field, and a type called `RegionJobPayload` for a shape job is a lie.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RegionJobPayload {
-    /// The entity whose write occasioned this settling — `kb_entities.id`, the same emitter the
+pub struct AnchorJobPayload {
+    /// The entity whose write occasioned this work — `kb_entities.id`, the same emitter the
     /// inline tick used to pass straight through to the clocks.
     pub emitter: Uuid,
 }
 
 /// An anchor-keyed job claimed for dispatch — the anchor twin of [`ClaimedJob`] and
 /// [`ClaimedEmbedJob`]. The `Region` worker claims one of these per anchor whose region clocks are
-/// due (goal 019fc46c).
+/// due (goal 019fc46c); the `Shape` worker claims one per anchor whose artifacts need reconciliation
+/// (spec §7.3).
 ///
 /// The scope is a typed [`HomeAnchor`], not the raw `(cogmap_id, context_id)` pair the SQL returns:
 /// the pair's "exactly one is non-null" invariant is enforced by `ck_workflow_jobs_one_scope` in the
@@ -247,7 +262,7 @@ pub struct ClaimedAnchorJob {
     pub id: Uuid,
     /// The anchor whose region clocks this claimed run ticks.
     pub anchor: HomeAnchor,
-    /// The entity to attribute this settling's events to — see [`RegionJobPayload`].
+    /// The entity to attribute this work's events to — see [`AnchorJobPayload`].
     pub emitter: Uuid,
     /// How many times this job has now been claimed (1 on first dispatch).
     pub attempts: i32,

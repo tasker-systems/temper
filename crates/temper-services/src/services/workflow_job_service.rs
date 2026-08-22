@@ -10,7 +10,7 @@ use temper_core::types::auditor::{AuditJobPayload, ClaimedAuditJob};
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{CogmapId, ContextId, CorrelationId, ProfileId};
 use temper_core::types::workflow_job::{
-    ClaimedAnchorJob, ClaimedEmbedJob, ClaimedJob, RegionJobPayload,
+    AnchorJobPayload, ClaimedAnchorJob, ClaimedEmbedJob, ClaimedJob,
 };
 
 /// Enqueue a payload-less job for `(cogmap, persona, dispatch_type)`. Returns `Some(id)` when a new
@@ -293,7 +293,7 @@ pub async fn enqueue_anchor(
     anchor: HomeAnchor,
     persona: &str,
     dispatch_type: &str,
-    payload: RegionJobPayload,
+    payload: AnchorJobPayload,
 ) -> ApiResult<Option<Uuid>> {
     // Exactly one of the pair is non-null — `ck_workflow_jobs_one_scope` enforces it, and
     // `HomeAnchor` being a closed two-variant enum is what makes this total rather than defaulted.
@@ -360,9 +360,9 @@ pub async fn claim_anchor(
             // A payload that will not deserialize escalates rather than defaulting to a system
             // emitter: silently re-attributing a settling to nobody is worse than not running it,
             // and the reaper will re-drive the job once the lease expires.
-            let payload: RegionJobPayload = serde_json::from_value(r.payload).map_err(|e| {
+            let payload: AnchorJobPayload = serde_json::from_value(r.payload).map_err(|e| {
                 ApiError::Internal(format!(
-                    "workflow job {} carries an unreadable region payload: {e}",
+                    "workflow job {} carries an unreadable anchor payload: {e}",
                     r.id
                 ))
             })?;
