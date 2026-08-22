@@ -253,7 +253,27 @@ rows are the reason this section exists.
 | `no-two-region-states-present-alike` | **Covered, with a stated weakness.** C4 plus the more-than-one-channel requirement. §3.3 names exactly how the test is weaker than the clause |
 | `responsiveness-is-never-bought-with-a-false-claim` | **Preserved structurally, and cheaply.** Phase 1 renders only what a read actually returned — there is no optimistic path to go wrong, because none is built. Worth stating rather than assuming: it is preserved by the *absence* of a mechanism, so anything later that adds one puts this clause back in play |
 | `working-and-stopped-are-distinguishable` | **PARTIAL, and this is a declared hole.** C3 distinguishes a read that **failed**. A read that simply **never answers** is stopped without failing, and nothing in C1–C5 catches it — only the refusal in §5.4 does, and that is a recommendation Pete has not ruled. **Until a bound exists, a hung read presents as arriving forever**, which is the clause's exact failure |
-| `acting-on-a-part-does-not-discard-the-whole` | **NOT COVERED by Phase 1, declared rather than left silent.** Streaming changes what a load *returns*; it does not stop a navigation from re-rendering the page around it. Opening a panel still re-runs the whole load and redraws the canvas the reader was looking at. That is §4's deferral, and it means **one of the register's four positive clauses gets nothing from this phase** |
+| `acting-on-a-part-does-not-discard-the-whole` | **PARTIAL, and it very nearly went backwards — see §7.3.** Opening a panel still re-runs the whole load; what changed is that the marks the reader is looking at now survive it. The clause's *visible* failure is closed on the graph canvas; the wasteful re-read behind it is untouched and is §4's deferral |
+
+### 7.3 `[found in review — 2026-08-21]` Streaming made this clause worse before it made it better
+
+The row above used to read *"NOT COVERED… redraws the canvas the reader was looking at."* That
+sentence described the behaviour **before** streaming, and streaming changed it: because the load now
+returns before the read answers, `data` updated and the `{#await}` fell back to its pending branch.
+Measured: **50 marks replaced by "Loading graph…"**, then redrawn. A redraw is not a blank-out, and
+the spec had come to disagree with the code in the direction that flatters the work.
+
+**Fixed rather than redeclared.** The marks are held across a navigation that cannot change them —
+the key is the address with `sel` removed, since `q`/`in`/`from`/`depth` decide the read and `sel`
+decides none of it — so the incoming model is the *same* model and keeping the marks discards
+nothing. A changed question takes them down, because marks left under a question the reader has
+replaced would be the false claim `responsiveness-is-never-bought-with-a-false-claim` names. The
+arriving words still show, over the canvas rather than instead of it.
+
+**The lesson is the shape, not the instance.** A deferral was recorded, the mechanism that made it
+worse shipped, and the record kept describing the old behaviour — so the remainder read as *stable*
+when it had grown. A declared remainder is a claim about current behaviour and goes stale like any
+other.
 
 ### 7.1 `[found in review — 2026-08-21]` The first row conflated *routes* with *acts*
 

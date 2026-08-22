@@ -82,6 +82,14 @@ type GraphRead = Omit<GraphViewData, 'owner' | 'selected' | 'selectedExcerpt' | 
  * rules out. Nothing was read, and this says only that.
  */
 class NotInThisAnswer extends Error {
+	/**
+	 * Not a fault, so `handleError` does not log it. `[found in review — 2026-08-21]` Every rejected
+	 * streamed promise reaches that hook, so without this a stale `?sel=` — a bookmark, a shared
+	 * link — wrote two errors to the server log on every page load, for a branch that is working
+	 * exactly as designed. Log noise of that shape is not harmless: it is what a real error hides in.
+	 */
+	readonly expected = true;
+
 	constructor(label: string) {
 		super(`no ${label} read ran: this selection is not in the answer`);
 		this.name = 'NotInThisAnswer';

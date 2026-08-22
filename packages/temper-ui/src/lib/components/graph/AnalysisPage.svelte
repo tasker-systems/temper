@@ -160,6 +160,18 @@
 
 			<section class="groupings" aria-labelledby="groupings-h">
 				<h2 id="groupings-h">How its work has been grouped</h2>
+				<!--
+					`[reviewed — 2026-08-21]` This is the one settled-empty state that does NOT route
+					through `RegionState`, and that is deliberate. `describeGroupingCount(0)` says
+					"This place has no groupings yet." — which is what a reader needs here and is more
+					specific than the shared vocabulary's "No measurements." Swapping it for the generic
+					wording would satisfy a consistency argument by making the page say less.
+
+					The clause it has to meet is that no two states present alike, and it does: this
+					sentence and the `{:catch}`'s "Measurements unavailable — nothing here was read"
+					share no words. What `RegionState` protects against is drift between the ARRIVING
+					and FAILED spellings across surfaces, and both of those still come from it.
+				-->
 				<p class="lead" data-testid="grouping-count">{describeGroupingCount(regions.length)}</p>
 
 				{#if !metricsAvailable}

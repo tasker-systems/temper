@@ -57,8 +57,14 @@ import type { ProfileWithEntitlements } from '$lib/types';
  * 404, where SvelteKit logged the line alone because a missing route is routing, not a fault.
  */
 export const handleError: HandleServerError = ({ error, message, status, event }) => {
+	// A rejection a branch raises ON PURPOSE is not a fault and is not logged. Every rejected
+	// streamed promise arrives here, including ones that mean "no read ran" rather than "a read
+	// failed" — and logging those buries the real entries under traffic-proportional noise. The
+	// flag is duck-typed rather than an imported class so a load can mark its own expected
+	// rejections without this file learning about every one of them.
+	const expected = (error as { expected?: boolean } | null)?.expected === true;
 	const where = `[${status}] ${event.request.method} ${event.url.pathname}`;
-	if (status === 404) console.error(where);
+	if (status === 404 || expected) console.error(where);
 	else console.error(where, error);
 
 	return describeFailure(error, message);
