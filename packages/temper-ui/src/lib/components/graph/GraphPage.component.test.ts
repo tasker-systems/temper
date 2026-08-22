@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fireEvent, render, screen } from '@testing-library/svelte';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type BoundDeclaration, declareBounds, declareTraversalBounds } from '$lib/graph/bound';
 import type { GraphPlan } from '$lib/graph/composition';
 import {
@@ -1291,5 +1291,137 @@ describe('the right column exists only when something is in it', () => {
 
 		expect(container.querySelector('.why')).not.toBeNull();
 		expect(instrument(container)?.classList.contains('with-panel')).toBe(true);
+	});
+});
+
+/**
+ * `[ruled — 2026-08-22, Pete]` **The canvas gets a floor, and the readout yields first.**
+ *
+ * The finding that reframed it: `min-width: 0` appears three times in `GraphPage.svelte`, so **the
+ * canvas is the only thing that ever yields and it yields without limit**, while the rail is a
+ * fixed `22rem` and the readout track a fixed `20rem`. Never "two panels is one too many" —
+ * nothing declared what the canvas needs.
+ *
+ * **What this file can and cannot witness.** jsdom computes no layout and `ResizeObserver` is a
+ * no-op stub (`src/test/README.md`), so nothing here may claim a canvas is legible or correctly
+ * sized. What the floor MEANS is asserted in `instrument.test.ts`, where it is a value. What is
+ * asserted here is the wiring: given a reported width, which branch renders, and whether the
+ * reader can undo it. The stub is replaced for this block with one that reports a width on demand.
+ */
+describe('the canvas has a floor, and Why these is what yields to it', () => {
+	interface Observer {
+		cb: (entries: { contentRect: { width: number } }[]) => void;
+	}
+	let observers: Observer[] = [];
+
+	beforeEach(() => {
+		observers = [];
+		vi.stubGlobal(
+			'ResizeObserver',
+			class {
+				constructor(cb: Observer['cb']) {
+					observers.push({ cb });
+				}
+				observe() {}
+				unobserve() {}
+				disconnect() {}
+			},
+		);
+	});
+	afterEach(() => vi.unstubAllGlobals());
+
+	/** Render with a node selected — the rail being open is half of what makes the canvas yield. */
+	const withRail = () => painted(view({ selected: selected().id }));
+
+	/** What the surface reports it is. The floor is decided from this and nothing else. */
+	const reports = async (width: number) => {
+		for (const o of observers) o.cb([{ contentRect: { width } }]);
+		await vi.waitFor(() => expect(observers.length).toBeGreaterThan(0));
+	};
+
+	const instrument = (c: HTMLElement) => c.querySelector('.instrument');
+
+	it('above the floor, all three are on screen and nothing has moved', async () => {
+		const { container } = await withRail();
+		await reports(2000);
+
+		await vi.waitFor(() => {
+			expect(container.querySelector('.why')).not.toBeNull();
+			expect(container.querySelector('[data-testid="readout-strip"]')).toBeNull();
+			expect(instrument(container)?.classList.contains('readout-collapsed')).toBe(false);
+		});
+		expect(container.querySelector('[data-testid="node-rail"]')).not.toBeNull();
+	});
+
+	it('below it, with both open, the readout becomes a strip and the rail stays', async () => {
+		// 1280px is the screen the ruling was made on: *"at 1280px it is ~610px and a 130-node
+		// force layout is a smudge."* The rail is the reader's own material and never yields.
+		const { container } = await withRail();
+		await reports(1280);
+
+		await vi.waitFor(() => {
+			expect(container.querySelector('[data-testid="readout-strip"]')).not.toBeNull();
+		});
+		expect(container.querySelector('.why')).toBeNull();
+		expect(instrument(container)?.classList.contains('readout-collapsed')).toBe(true);
+		expect(container.querySelector('[data-testid="node-rail"]')).not.toBeNull();
+	});
+
+	it('and the strip reopens it — a collapse the reader cannot reverse is the clause failing', async () => {
+		const { container } = await withRail();
+		await reports(1280);
+
+		const strip = (await screen.findByTestId('readout-strip')) as HTMLElement;
+		expect(strip.getAttribute('aria-expanded')).toBe('false');
+		expect(strip.tagName).toBe('BUTTON');
+
+		await fireEvent.click(strip);
+
+		await vi.waitFor(() => expect(container.querySelector('.why')).not.toBeNull());
+		expect(container.querySelector('[data-testid="readout-strip"]')).toBeNull();
+		// The width has not changed. The reader outranked the floor, which is what makes it a floor
+		// rather than a lock.
+		expect(instrument(container)?.classList.contains('readout-collapsed')).toBe(false);
+	});
+
+	it('with no rail open, the same width changes nothing', async () => {
+		// The ruling orders three things competing for one row. With two, there is no competition,
+		// and a readout that vanished on a narrow screen nobody had asked anything about would be
+		// this arc undoing the one it followed.
+		const { container } = await painted(view());
+		await reports(1280);
+
+		await vi.waitFor(() => expect(container.querySelector('.node-chip')).not.toBeNull());
+		expect(container.querySelector('.why')).not.toBeNull();
+		expect(container.querySelector('[data-testid="readout-strip"]')).toBeNull();
+	});
+
+	it('the rail and the readout are never rendered into the same slot', async () => {
+		// Explicitly ruled OUT — tabbed, stacked or swapped. They are different KINDS, and this
+		// page's own docstring is the argument: *"everything in the canvas is their own material,
+		// and everything a machine decided is in the panel beside it."* One slot holding both
+		// flattens the distinction the surface is built on. Checked at both widths, because a
+		// collapse that rehomed the readout inside `.stage` would pass at one of them.
+		const { container } = await withRail();
+		const stage = container.querySelector('.stage') as HTMLElement;
+
+		expect(stage.querySelector('[data-testid="node-rail"]')).not.toBeNull();
+		expect(stage.querySelector('.why')).toBeNull();
+
+		await reports(1280);
+		await vi.waitFor(() => {
+			expect(container.querySelector('[data-testid="readout-strip"]')).not.toBeNull();
+		});
+		expect(stage.querySelector('[data-testid="readout-strip"]')).toBeNull();
+		expect(stage.querySelector('[data-testid="node-rail"]')).not.toBeNull();
+	});
+
+	it('an unmeasured surface renders the panel — the server never ships a collapsed one', async () => {
+		// No `reports()` call: this is the state every reader is served before the first
+		// observation, and on the server, where effects do not run at all.
+		const { container } = await withRail();
+
+		expect(container.querySelector('.why')).not.toBeNull();
+		expect(container.querySelector('[data-testid="readout-strip"]')).toBeNull();
 	});
 });
