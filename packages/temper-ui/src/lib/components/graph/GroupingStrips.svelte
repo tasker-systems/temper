@@ -52,6 +52,11 @@
 		max: number | null;
 		median: number | null;
 		constant: boolean;
+		/** The median's REAL place on this axis, `0`–`1`. Not the middle of the strip. */
+		medianAt: number | null;
+		/** The median coincides with a bound, so the bound's own label carries it. */
+		medianAtStart: boolean;
+		medianAtEnd: boolean;
 		range: string;
 		nulls: string | null;
 		/** Set when the axis is `log1p`-spaced, so the reader is told distance is not difference. */
@@ -87,6 +92,9 @@
 				nulls: describeNulls(d),
 				compressed: axis ? describeAxis(axis) : null,
 				concentrated: describeConcentration(regions, spec.key),
+				medianAt: axis ? positionOn(axis.median, axis) : null,
+				medianAtStart: axis ? positionOn(axis.median, axis) < 0.08 : false,
+				medianAtEnd: axis ? positionOn(axis.median, axis) > 0.92 : false,
 			};
 			// A quantity with no spread is not a distribution. Plotting 501 marks on one point would
 			// draw a picture of nothing and invite a reader to look for structure in it.
@@ -166,6 +174,7 @@
 					{strip.constant ? describeConstant(distributionOf(regions, strip.spec.key)) : strip.range}
 				</p>
 			{:else}
+				<div class="plot">
 				<svg
 					viewBox={`0 0 ${W} ${H}`}
 					preserveAspectRatio="none"
@@ -175,6 +184,19 @@
 					onpointerleave={() => (active = null)}
 				>
 					<line class="axis" x1={PAD} y1={H - 2} x2={W - PAD} y2={H - 2} />
+					<!-- The median, ticked WHERE IT IS. It used to be a label in the middle of the row
+					     beneath, which put "median 0" at the centre of a strip whose median sits hard
+					     against the left end — a label claiming a position it did not have, on every
+					     strip, by up to half the width. -->
+					{#if strip.medianAt !== null}
+						<line
+							class="median-tick"
+							x1={PAD + strip.medianAt * (W - PAD * 2)}
+							y1={4}
+							x2={PAD + strip.medianAt * (W - PAD * 2)}
+							y2={H - 2}
+						/>
+					{/if}
 					{#each strip.marks as m (m.region.regionId + m.region.lensId)}
 						<circle
 							class="mark"
@@ -185,10 +207,22 @@
 						/>
 					{/each}
 				</svg>
+				</div>
+				<!-- The median rides at its own position. When it lands ON a bound it is not drawn a
+				     second time — it IS that bound's value, and two labels stacked on one point would
+				     read as two facts. The end label says so instead. -->
 				<div class="scale">
-					<span>{formatValue(strip.min)}</span>
-					<span class="mid">median {formatValue(strip.median)}</span>
-					<span>{formatValue(strip.max)}</span>
+					<span class:is-median={strip.medianAtStart}
+						>{formatValue(strip.min)}{strip.medianAtStart ? ' · median' : ''}</span
+					>
+					{#if strip.medianAt !== null && !strip.medianAtStart && !strip.medianAtEnd}
+						<span class="median-label" style={`left:${strip.medianAt * 100}%`}
+							>median {formatValue(strip.median)}</span
+						>
+					{/if}
+					<span class:is-median={strip.medianAtEnd}
+						>{strip.medianAtEnd ? 'median · ' : ''}{formatValue(strip.max)}</span
+					>
 				</div>
 			{/if}
 
@@ -299,8 +333,28 @@
 		display: block;
 		width: 100%;
 		height: 44px;
-		margin-top: 4px;
 		touch-action: none;
+	}
+	.plot {
+		position: relative;
+		margin-top: 4px;
+	}
+	.median-tick {
+		stroke: #545c6b;
+		stroke-width: 1;
+		stroke-dasharray: 2 2;
+		vector-effect: non-scaling-stroke;
+	}
+	.median-label {
+		position: absolute;
+		top: 0;
+		transform: translateX(-50%);
+		padding: 0 4px;
+		color: #6f7886;
+		font-size: 11px;
+		font-variant-numeric: tabular-nums;
+		white-space: nowrap;
+		pointer-events: none;
 	}
 	.axis {
 		stroke: #2b3140;
@@ -319,14 +373,15 @@
 		vector-effect: non-scaling-stroke;
 	}
 	.scale {
+		position: relative;
 		display: flex;
 		justify-content: space-between;
 		color: #6f7886;
 		font-size: 11px;
 		font-variant-numeric: tabular-nums;
 	}
-	.scale .mid {
-		color: #545c6b;
+	.scale .is-median {
+		color: #8b94a5;
 	}
 	.flat,
 	.nulls {

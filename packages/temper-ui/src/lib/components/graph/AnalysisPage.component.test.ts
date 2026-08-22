@@ -495,10 +495,40 @@ describe('the groupings are marks on their own axes, not only rows in a table', 
 		const { container } = await painted(contextView());
 		const scales = [...container.querySelectorAll('[data-testid="grouping-strips"] .scale')];
 		expect(scales.length).toBeGreaterThan(0);
-		for (const s of scales) {
-			expect(s.textContent).toMatch(/median/);
-			expect(s.textContent).not.toMatch(/%/);
-		}
+		for (const s of scales) expect(s.textContent).not.toMatch(/%/);
+	});
+
+	it('the median is ticked WHERE IT IS, not in the middle of the strip', async () => {
+		// `[found by looking, 2026-08-22]` The median started as the centre item of a
+		// space-between row, so every strip printed it at 50% of the width whatever its value.
+		// Measured on this fixture: `centrality` and `reference_standing` both said "median 0" at
+		// the halfway mark while the real median sits hard against the left end — a label claiming
+		// a position it does not have, wrong on all six strips, by up to half the width.
+		//
+		// No test could have caught it: jsdom computes no layout, so this asserts the DECLARED
+		// position rather than the rendered one, which is the most a test here may claim.
+		const { container } = await painted(contextView());
+		const labels = [...container.querySelectorAll('[data-testid="grouping-strips"] .median-label')];
+		expect(labels.length).toBeGreaterThan(0);
+
+		const lefts = labels.map((l) => (l as HTMLElement).style.left);
+		for (const left of lefts) expect(left).toMatch(/%$/);
+		// The bug's signature is every strip agreeing on one position. A median that genuinely sat
+		// at the same place on all six would be a coincidence worth failing on and looking at.
+		expect(new Set(lefts).size).toBeGreaterThan(1);
+		expect(lefts.every((l) => l === '50%')).toBe(false);
+	});
+
+	it('a median that lands ON a bound is said once, by that bound', async () => {
+		// `centrality` and `reference_standing` both have a median of 0, which IS their minimum.
+		// A floating "median 0" stacked on the "0" end label would read as two facts about two
+		// places; it is one fact about one.
+		const { container } = await painted(contextView());
+		const ends = [
+			...container.querySelectorAll('[data-testid="grouping-strips"] .scale .is-median'),
+		];
+		expect(ends.length).toBeGreaterThan(0);
+		for (const e of ends) expect(e.textContent).toMatch(/median/);
 	});
 
 	it('each quantity says what it tells you AND what it does not', async () => {
