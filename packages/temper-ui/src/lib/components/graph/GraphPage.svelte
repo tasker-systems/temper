@@ -34,6 +34,30 @@
 		asked = data.question ?? '';
 	});
 
+	/** The five settled values one read produces, in the order the `{#await}` below unwraps them. */
+	type Answer = [
+		Awaited<GraphViewData['model']>,
+		Awaited<GraphViewData['selected']>,
+		Awaited<GraphViewData['readout']>,
+		Awaited<GraphViewData['bound']>,
+		Awaited<GraphViewData['tooLittleStructure']>,
+	];
+
+	/**
+	 * One arrival of the answer, **with the address it answers for stamped on it.**
+	 *
+	 * The two rail reads travel here rather than being read off `data` at the point of use, so a
+	 * generation swaps whole. Held apart, the rail could show the node the canvas has drawn beside a
+	 * paragraph read for a different one — which is the same species of false claim as the marks
+	 * this block exists to keep.
+	 */
+	interface Arrival {
+		key: string;
+		answer: Promise<Answer>;
+		excerpt: GraphViewData['selectedExcerpt'];
+		trail: GraphViewData['selectedTrail'];
+	}
+
 	/**
 	 * **One read, one arrival.** The canvas, the panel beside it and the bound line are three views
 	 * of a single streamed read, so they are awaited together — three arriving markers for one read
@@ -44,9 +68,18 @@
 	 * did not come through `bounded`: `Promise.all` is a new promise, and during SSR the `{#await}`
 	 * below renders its pending branch without subscribing to it. `.catch()` consumes nothing, so
 	 * `{:catch}` still sees the failure.
+	 *
+	 * `key` is **the whole address with the selection taken off**, built by the one function that
+	 * owns that param. It is what the load's read actually depends on: `q`, `in`, `from` and `depth`
+	 * all decide which read runs and what it returns, and `sel` decides none of them —
+	 * `withGraphSelection` "rewrites the URL in place … so `q`, `in` and `from` travel untouched".
+	 * The URL is the only complete source for it: `data` cannot express `from`, so a key read off
+	 * `data.question` and `data.placesAsked` would call a hop the same answer as the screen it
+	 * hopped from. Both are captured in ONE derived so they can only change together, which is how
+	 * SvelteKit lands `page.url` and `data` — a key stamped in a later tick would belong to neither.
 	 */
-	const answer = $derived.by(() => {
-		const all = Promise.all([
+	const arriving = $derived.by((): Arrival => {
+		const all: Promise<Answer> = Promise.all([
 			data.model,
 			data.selected,
 			data.readout,
@@ -54,7 +87,55 @@
 			data.tooLittleStructure,
 		]);
 		all.catch(() => {});
-		return all;
+		return {
+			key: withGraphSelection($page.url, null),
+			answer: all,
+			excerpt: data.selectedExcerpt,
+			trail: data.selectedTrail,
+		};
+	});
+
+	/**
+	 * The last arrival that SETTLED — written here, never read here, so this cannot re-trigger
+	 * itself. `$state.raw` because an arrival is replaced whole and nothing inside it is mutated.
+	 *
+	 * It stays `null` through SSR, where effects do not run: the server therefore awaits the
+	 * incoming promise exactly as it always did, and renders the pending branch.
+	 */
+	let landed = $state.raw<Arrival | null>(null);
+
+	/**
+	 * **The marks the reader is looking at, when a new read cannot change them.**
+	 *
+	 * Non-null only while all three hold: something has landed, it answers for the same address as
+	 * the read now in flight, and that read has not landed yet. Then the `{#await}` below is handed
+	 * the promise it is *already* showing — so it never re-enters its pending branch, and the canvas
+	 * is not rebuilt at all. When the key differs this is null and the marks come down, because the
+	 * incoming read is a different answer and marks left under it would be a false claim.
+	 *
+	 * Note what this is NOT: it is not a stale-while-revalidate window. Nothing here decides to show
+	 * an older answer than the one available — the older answer and the newer one are the same
+	 * model, because `sel` cannot reach the read.
+	 */
+	const held = $derived(
+		landed !== null && landed.key === arriving.key && landed.answer !== arriving.answer
+			? landed
+			: null,
+	);
+	const answer = $derived(held?.answer ?? arriving.answer);
+
+	$effect(() => {
+		const arrival = arriving;
+		let live = true;
+		// Settled either way. A read that FAILED must take the held marks down and say so, exactly
+		// as a first read that fails does — `{:catch}` is reached by handing it the rejected promise.
+		const land = () => {
+			if (live) landed = arrival;
+		};
+		arrival.answer.then(land, land);
+		return () => {
+			live = false;
+		};
 	});
 
 	// `q` PUSHES: asking a different question is a step the reader can walk back out of, and Back
@@ -154,12 +235,29 @@
 						<GraphA11yList {model} url={$page.url} />
 						<GraphCanvas {model} {selected} onSelect={select} {emptyMessage} />
 						{#if node}
+							<!-- From the SAME arrival as `model`, so the rail cannot describe a node
+							     beside a paragraph read for a different one. -->
 							<NodeRail
 								{node}
 								{model}
-								excerpt={data.selectedExcerpt}
-								trail={data.selectedTrail}
+								excerpt={held ? held.excerpt : data.selectedExcerpt}
+								trail={held ? held.trail : data.selectedTrail}
 							/>
+						{/if}
+
+						{#if held}
+							<!-- The marks stayed, and the reader is still told a read is in flight —
+							     "keep the marks" is not "hide that anything is loading". Same region
+							     vocabulary as the pending branch, because it is the same state: this
+							     read has not answered. It sits over the canvas rather than replacing
+							     it, which is the whole difference.
+
+							     Only here, over the marks. Rung 2 replaces the canvas, and nothing on
+							     that screen is clickable, so the one navigation that reaches this
+							     without changing the key cannot start from it. -->
+							<div class="updating">
+								<RegionState state="arriving" label="graph" />
+							</div>
 						{/if}
 					</div>
 
@@ -267,6 +365,16 @@
 	.stage.region {
 		align-items: flex-start;
 		padding: 24px 14px;
+	}
+	/* The same region, over marks that are staying. Placed rather than laid out, so keeping the
+	   canvas costs it no room and nothing on it moves when the new read lands. */
+	.updating {
+		position: absolute;
+		top: 10px;
+		left: 12px;
+		z-index: 1;
+		background: rgba(20, 23, 29, 0.92);
+		border-radius: 0 5px 5px 0;
 	}
 	.refusal {
 		display: grid;

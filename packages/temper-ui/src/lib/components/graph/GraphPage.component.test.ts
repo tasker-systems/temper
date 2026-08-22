@@ -586,6 +586,84 @@ describe('the page declares what its own read is doing', () => {
 		expect(screen.queryByTestId('region-arriving')).toBeNull();
 	});
 });
+/**
+ * The line between the two navigations that look alike, and the defect that came of missing it.
+ *
+ * **Opening a panel changes `sel` and nothing else.** `withGraphSelection` rewrites that one param
+ * in place, so the read the load starts asks the same question of the same places from the same
+ * seeds — the model coming back is the one already drawn. Taking the marks down for it is not
+ * caution about staleness; it is discarding an answer the page is already holding, and the reader
+ * watches fifty marks become "Loading graph…" and then the same fifty marks.
+ *
+ * **Changing `q`, `in` or `from` is the opposite claim.** That read is a DIFFERENT answer, and marks
+ * left standing under a question the reader has replaced are a false one. Both cases are witnessed
+ * here, because a fix that simply keeps marks across everything passes the first and fails the
+ * reader on the second.
+ *
+ * Each case drives BOTH halves of the navigation in one batch — the address the click built, then
+ * the load's answer to it — because that is how SvelteKit lands them, and a page that read them a
+ * tick apart would be reading a key that belongs to neither.
+ */
+describe('a read that cannot change the marks does not take them down', () => {
+	/** Never settles — where a fresh navigation's model sits the moment `data` arrives. */
+	const pending = () => new Promise<GraphModel>(() => {});
+
+	/** Draw the marks and hand back how many landed, so "still there" is a number and not a guess. */
+	const drawn = async (container: HTMLElement): Promise<number> => {
+		await vi.waitFor(() => {
+			expect(container.querySelectorAll('.node-chip').length).toBeGreaterThan(0);
+		});
+		return container.querySelectorAll('.node-chip').length;
+	};
+
+	it('keeps every mark across a `?sel=` navigation, and still says a read is in flight', async () => {
+		const node = selected();
+		const { container, rerender } = render(GraphPage, { data: view() });
+		const before = await drawn(container);
+
+		setPage(`/graph/@me?q=what+keeps+a+surface+honest&sel=${node.id}`, { owner: '@me' });
+		await rerender({ data: view({ model: pending(), selected: node.id }) });
+
+		expect(container.querySelectorAll('.node-chip')).toHaveLength(before);
+		// C1 still holds: keeping the marks is not licence to hide the read. The region says in
+		// words that something is happening, or the reader is left to wonder whether the click did.
+		expect(sentenceOf(container.querySelector('[data-testid="region-arriving"]'))).toBe(
+			'Loading graph…',
+		);
+	});
+
+	it('gives them up when the QUESTION changed, because that answer is a different one', async () => {
+		const { container, rerender } = render(GraphPage, { data: view() });
+		await drawn(container);
+
+		setPage('/graph/@me?q=what+else+is+in+here', { owner: '@me' });
+		await rerender({ data: view({ question: 'what else is in here', model: pending() }) });
+
+		// These marks answer a question the reader replaced. Holding them would not be
+		// responsiveness — it would be the surface claiming they are an answer to what was asked.
+		expect(container.querySelectorAll('.node-chip')).toHaveLength(0);
+		expect(sentenceOf(container.querySelector('[data-testid="region-arriving"]'))).toBe(
+			'Loading graph…',
+		);
+	});
+
+	it('hands the held marks over when the new read lands, and stops saying it is updating', async () => {
+		const node = selected();
+		const { container, rerender } = render(GraphPage, { data: view() });
+		await drawn(container);
+
+		// The same answer re-read, drawn from fewer marks — so "the new one arrived" is witnessable
+		// rather than indistinguishable from "the old one was never replaced".
+		const fewer: GraphModel = { ...flagship, nodes: flagship.nodes.slice(0, 3), edges: [] };
+		setPage(`/graph/@me?q=what+keeps+a+surface+honest&sel=${node.id}`, { owner: '@me' });
+		await rerender({ data: view({ model: fewer, selected: node.id }) });
+
+		await vi.waitFor(() => {
+			expect(container.querySelectorAll('.node-chip')).toHaveLength(3);
+		});
+		expect(container.querySelector('[data-testid="region-arriving"]')).toBeNull();
+	});
+});
 
 describe('the unconnected field is declared rather than scattered', () => {
 	it('the fixture has an unconnected population — but NOT the real one, and says which', async () => {
