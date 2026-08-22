@@ -16,7 +16,7 @@ use crate::affinity::EdgeKind;
 use crate::content::PreparedBlock;
 use crate::ids::{
     BlockId, ChunkId, CogmapId, ContextId, DataArtifactId, EdgeId, EntityId, EventId, InvocationId,
-    LensId, ProfileId, PropertyId, RegionId, ResourceId,
+    LensId, ProfileId, PropertyId, RegionId, ResourceId, ShapeId,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -654,6 +654,59 @@ pub enum ShapeState {
     //   DeclaredNotSatisfied — a shape is in force and the artifact does not conform.
     //   DeclaredNotYetChecked — a shape was registered but the validation sweep has not reached
     //     this artifact.
+}
+
+/// The closed enforcement vocabulary (spec §6). A shape is `advisory` by default: a non-conforming
+/// commit is recorded, never refused. An `enforcing` shape refuses a non-conforming commit and the
+/// refusal carries what failed. The SQL CHECK constraint and the wrapper's refusal both name this
+/// set; keep the `serde` renames pinned to the CHECK.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum EnforcementMode {
+    /// Default. A non-conforming commit succeeds and is recorded as non-conforming.
+    Advisory,
+    /// A non-conforming commit is refused, and the refusal carries what failed.
+    Enforcing,
+}
+
+/// Declare a shape for a data-artifact family within one home (spec: data-artifact shape registry,
+/// 2026-08-21, §3–§4).
+///
+/// The shape is **homed polymorphically** over `(kb_contexts, kb_cogmaps)` and **keyed per home**,
+/// not per owner: a shape declared in a context you cannot read must not verdict your data. The
+/// `(home_anchor, kind_owner, artifact_kind)` triple is unique among non-folded rows, so the
+/// shape in force is singular per family per home. Amending a shape folds the prior row and inserts
+/// a new one; `shape_version` is the chain depth (assert/fold, the same revision pattern
+/// `kb_data_artifacts` keeps).
+///
+/// The `schema` is a JSON Schema (draft 2020-12) validated Rust-side — there is no in-database
+/// validator. `enforcement` carries the closed vocabulary the register closes over.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct ShapeDeclared {
+    /// Identity-as-input: minted by the caller and carried here so replay reproduces the same row
+    /// id. `kb_data_artifact_shapes.id` deliberately has no DEFAULT for this reason.
+    pub shape_id: ShapeId,
+    /// The home the shape is declared in — polymorphic over `(kb_contexts, kb_cogmaps)`. A shape
+    /// never verdicts data its declarer cannot read, because the home bounds the reach.
+    pub home_anchor: AnchorRef,
+    /// The namespace half of the family name, `(kind_owner, artifact_kind)`. Resolved by the SQL
+    /// wrapper from the home when the caller names none (the same defaulting
+    /// `_data_artifact_kind_owner` already does for commits), so replay never re-derives a
+    /// namespace.
+    pub kind_owner: KindOwner,
+    /// The bare family name, qualified by `kind_owner`. Carries no implication that a shape has been
+    /// registered — persistence never requires a prior declaration.
+    pub artifact_kind: String,
+    /// The JSON Schema (draft 2020-12) governing this family. Validated Rust-side.
+    pub schema: serde_json::Value,
+    /// Whether a non-conforming commit is refused (`enforcing`) or merely recorded (`advisory`).
+    pub enforcement: EnforcementMode,
+    /// The chain depth of the assert/fold lineage — 1 for the first declaration, N for the Nth
+    /// amendment. A verdict recorded against a folded version stops matching, and the artifact
+    /// reads as unchecked until reconciled.
+    pub shape_version: i64,
 }
 
 /// Set a **single-valued** property (WS6 4c): the projection folds prior active rows for
@@ -1299,8 +1352,8 @@ pub struct SubscriptionDeliveryDisposed {
     pub decided_by_invocation_id: Option<Uuid>,
 }
 
-/// The 23 typed event names — the registry-stamping and snapshot surfaces iterate this.
-pub const TYPED_EVENT_NAMES: [&str; 23] = [
+/// The 24 typed event names — the registry-stamping and snapshot surfaces iterate this.
+pub const TYPED_EVENT_NAMES: [&str; 24] = [
     "cogmap_seeded",
     "resource_created",
     "relationship_asserted",
@@ -1324,6 +1377,7 @@ pub const TYPED_EVENT_NAMES: [&str; 23] = [
     "principal_governance_changed",
     "subscription_delivery_disposed",
     "data_artifact_committed",
+    "shape_declared",
 ];
 
 /// FOREIGN event names — registered permissive (NULL `payload_schema`) because their body is a

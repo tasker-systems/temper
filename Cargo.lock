@@ -6335,6 +6335,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "jsonschema",
  "schemars",
  "serde",
  "serde_json",

@@ -184,6 +184,12 @@ define_id!(
 );
 
 define_id!(
+    /// A `kb_data_artifact_shapes.id` value — one declared JSON Schema governing a data-artifact
+    /// family within a single home (spec: data-artifact shape registry, 2026-08-21).
+    ShapeId
+);
+
+define_id!(
     /// A `kb_properties.id` value — a facet/doc_type/block_role assertion.
     PropertyId
 );
