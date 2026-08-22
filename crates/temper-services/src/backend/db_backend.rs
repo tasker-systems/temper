@@ -1529,6 +1529,40 @@ impl DbBackend {
         }
     }
 
+    /// Enqueue a shape-reconcile job for a home anchor after a `resource_rehome`. The staleness
+    /// triple (`shape_id`, `shape_version`, `content_hash`) already makes rehomed artifacts read
+    /// as `DeclaredNotYetChecked` — this enqueue is what moves them to a real verdict.
+    ///
+    /// **Never fails the write**, exactly as [`Self::queue_region_clocks`] does not — the resource
+    /// has already been rehomed. A failed enqueue is logged and swallowed; artifacts stay
+    /// unchecked until the next declare or manual sweep triggers reconciliation.
+    async fn queue_shape_reconcile(&self, anchor: HomeAnchor, emitter: EntityId) {
+        let payload = AnchorJobPayload {
+            emitter: emitter.uuid(),
+        };
+        match crate::services::workflow_job_service::enqueue_anchor(
+            &self.pool,
+            anchor,
+            Persona::Shape.as_str(),
+            DispatchType::ShapeReconcile.as_str(),
+            payload,
+        )
+        .await
+        {
+            Ok(queued) => tracing::debug!(
+                anchor = %anchor.uuid(),
+                job_id = ?queued,
+                coalesced = queued.is_none(),
+                "shape reconcile queued after rehome"
+            ),
+            Err(e) => tracing::warn!(
+                anchor = %anchor.uuid(),
+                error = %e,
+                "failed to queue shape reconcile after rehome; artifacts stay unchecked until the next declare or sweep"
+            ),
+        }
+    }
+
     /// Tick the evidential-standing memo after a resource write (Set 3, Phase B) or a citation-audit
     /// write (Set 5, spec §4.3 — which CONFORMs to this policy verbatim). Recomputes the
     /// touched finding's standing components and UPSERTs its `kb_resource_standing` memo row via the
@@ -2130,6 +2164,15 @@ impl Backend for DbBackend {
                 error = %e,
                 "could not resolve home anchor; region clocks not ticked"
             ),
+        }
+
+        // If this update rehomed the resource, enqueue a shape-reconcile job for the destination
+        // home. The staleness triple already makes rehomed artifacts read as
+        // `DeclaredNotYetChecked`; this enqueue is what moves them to a real verdict. Same
+        // self-healing posture as the region clocks above — never fails the write.
+        if let Some(dest) = rehome_to {
+            self.queue_shape_reconcile(HomeAnchor::Context(dest), emitter)
+                .await;
         }
 
         // Set 3 — refresh the revised finding's evidential-standing memo (same self-healing posture as
