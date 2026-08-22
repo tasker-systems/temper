@@ -260,7 +260,7 @@ Ordered by value-per-cost. None of this is implemented by this spike.
    > Keying on `(owner, key)` dissolves it by construction: the lookup is caller-scoped, so a foreign
    > key is absent from your namespace — you mint fresh, nothing to adjudicate, and nonexistent vs
    > hidden stay indistinguishable exactly as for a read. **This is the argument the spike's original
-   > "reuse resource-id vs dedicated key" open question under-weighted** `[decided — 2026-08-02, Pete]`.
+   > "reuse resource-id vs dedicated key" open question under-weighted** `[provisional — 2026-08-02, judgement call]`.
    > Implemented on the idempotency-key branch (PR #620): migration `20260802000010`, an atomic
    > claim-then-mint in `create_resource_impl`, and a `same-key-different-owner → mints-fresh` test
    > that pins the no-oracle property.

@@ -20,7 +20,7 @@ queryable — open keys, closed operators."* This document does not re-open §12
 - **`[verified — 2026-08-14]`** — read first-hand against the working tree at `98071084`, quoted
   with `file:line`.
 - **`[measured on prod — 2026-08-14]`** — a read-only query against `temper-cloud` (Neon, PG17).
-- **`[decided — 2026-08-14, Pete]`** — ruled in session.
+- **`[provisional — 2026-08-14, judgement call]`** — ruled in session.
 
 ---
 
@@ -56,7 +56,7 @@ Sorted by what each convention **does**:
 | **Shape declaration** | all nine | **No** — normalization, which is what a view does |
 | **Ordered scalar** | `date` (`^[0-9]{4}-[0-9]{2}-[0-9]{2}$`) | **Yes — and it is the only one** |
 
-`[decided — 2026-08-14, Pete]` **The established conventions do not encode filter semantics.** They
+`[provisional — 2026-08-14, judgement call]` **The established conventions do not encode filter semantics.** They
 declare shape and search membership. The single exception is `date`, whose ISO-8601 pattern exists
 precisely so lexicographic comparison works — and that is a missing **operator**, not a per-key
 convention. It is named in §8 and not solved here.
@@ -85,7 +85,7 @@ Three value shapes, and **the three named fields are one instance each**:
 `PropertyOp::Contains`' asymmetry note is about `[verified — filter.rs:133-151]`.
 
 **`doc_type` is structurally unremarkable.** It is the largest string key and nothing more. That is
-the empirical form of *"our current cases are just special cases"* `[decided — 2026-08-14, Pete]`.
+the empirical form of *"our current cases are just special cases"* `[provisional — 2026-08-14, judgement call]`.
 
 ### 2.2 A live consequence: `ResourceFilter.status` does not mean `status`
 
@@ -166,7 +166,7 @@ jobs §2 separates are separated in the projector.
 
 ### 5.1 The rule this establishes — convergence by declaration
 
-`[decided — 2026-08-14, Pete]`
+`[provisional — 2026-08-14, judgement call]`
 
 > **Binding edge properties to the same shapes as resource properties is not a speculative seam. It
 > is writing down a standard the write path already implements, before the undeclared half drifts —
@@ -268,7 +268,7 @@ path**, duplicated across readers because it was never given a home.
 left per-reader. Not ruled. The zero-live-instances fact (§4) means nothing is currently wrong, and
 the decision is cheap in every direction today.
 
-`[RULED — 2026-08-15, Pete]` **At write, and it is ONE tag.** `tags: "concept design"` stores as
+`[provisional — 2026-08-15, judgement call]` **At write, and it is ONE tag.** `tags: "concept design"` stores as
 `["concept design"]`. Shipped in `20260815000030`: `_property_value_normalized`, called by both
 projectors, with the ruling recorded on the migration and on `kb_property_elements`' `COMMENT`
 rather than implied by them.
@@ -389,7 +389,7 @@ here would bundle two decisions that can be taken apart.
   for a different reason (*"a row-existence check on the `property_key` btree"*), so the two
   operators of one closed set legitimately read two different relations. Recorded on the view's
   `COMMENT`, because the predicate that would get this wrong is not written yet.
-- **The `Contains` GRAIN is ruled: WHOLE VALUE, on both halves** `[decided — 2026-08-15, Pete;
+- **The `Contains` GRAIN is ruled: WHOLE VALUE, on both halves** `[provisional — 2026-08-15, judgement call;
   20260815000040]`. `ResourceFilter::properties` reads `kb_resource_properties` — the owner-scoped
   sibling of `kb_edge_properties`, value exposed whole — and deliberately **not**
   `kb_property_elements`. The two grains disagree in exactly two cells and in opposite directions,

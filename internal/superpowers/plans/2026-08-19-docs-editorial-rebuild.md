@@ -351,7 +351,7 @@ It is intentional, and the code says so at `crates/temper-services/src/auth/mod.
 `/api/invitations/accept` sits on the auth-only router. **`request-access` does not either**: it
 moves `denied → requested`, which is still not `approved`.
 
-`[decided — 2026-08-19, Pete]` **The docs state this plainly as a step.** The users door stops
+`[provisional — 2026-08-19, judgement call]` **The docs state this plainly as a step.** The users door stops
 promising that install + connector is "enough to run `temper warmup`".
 
 ### The minimum sequence
@@ -449,7 +449,7 @@ is the only path to shared authorship.** (`migrations/20260712000010_context_rea
 
 ## Appendix D — live falsehoods folded into the beats
 
-`[decided — 2026-08-19, Pete]` No third truth-fix PR; these ride the rewrite of their pages.
+`[provisional — 2026-08-19, judgement call]` No third truth-fix PR; these ride the rewrite of their pages.
 **Named here because folding them in is exactly how they get lost.** Each is verified.
 
 | page | claim | truth | lands in |

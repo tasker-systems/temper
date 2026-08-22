@@ -17,7 +17,7 @@ Constraints.
 
 ## The cut: B is TWO PRs
 
-`[decided — 2026-08-13, Pete]`, from a three-option prompt carrying the touch list for each. B was
+`[provisional — 2026-08-13, judgement call]`, from a three-option prompt carrying the touch list for each. B was
 ratified as one PR; the grounding pass below found two scope items its spec section does not
 mention, and the second is load-bearing rather than cosmetic.
 
@@ -41,8 +41,8 @@ because a placement nobody ruled hardened into a test name and steered three ses
 
 | # | Decision | Rests on | Status |
 |---|---|---|---|
-| 1 | B is cut into **B1 (API) + B2 (CLI)** | Pete, three-option prompt carrying each touch list | **decided** `[2026-08-13, Pete]` |
-| 2 | `ErrorDetail.details` becomes a `oneOf`; a new `ApiError` arm carries `Vec<PlanRefusal>` | Pete, re-confirmed in prose after being flagged — spec §B | **decided** `[2026-08-13, Pete]` |
+| 1 | B is cut into **B1 (API) + B2 (CLI)** | Pete, three-option prompt carrying each touch list | **decided** `[provisional — 2026-08-13, judgement call]` |
+| 2 | `ErrorDetail.details` becomes a `oneOf`; a new `ApiError` arm carries `Vec<PlanRefusal>` | Pete, re-confirmed in prose after being flagged — spec §B | **decided** `[provisional — 2026-08-13, judgement call]` |
 | 3 | `POST /api/query` sits in `gated_routes()` — `require_auth` + `require_system_access` | Spec §B; every content-touching route does, with two whole-project exceptions | **decided**, spec |
 | 4 | `internal/api/query.openapi.yaml` is still **not** edited; **D** owns it | Standing ruling, held by A and A2 | **decided**, standing |
 | 5 | The handler calls `prepare`, and does **not** assemble the pipeline itself | A2 decision 9 — the order has one home | **derived** from A2 |

@@ -20,7 +20,7 @@ cancel Tasks 7–9.
 **PROCEED.** Tasks 7–9 (the gated-wrapper / ungated-core split, the single emitter, the tripwire) are
 not cancelled. Spec §7's fallback does not apply.
 
-Taken under **ship-as-measurement** `[decided — 2026-08-08, Pete]`: select the highest-confidence
+Taken under **ship-as-measurement** `[provisional — 2026-08-08, judgement call]`: select the highest-confidence
 option, state what would falsify it, ship, and iterate if the falsifier fires — rather than blocking
 on a representative corpus we do not have. The falsifier is named below and is specific enough to act
 on.

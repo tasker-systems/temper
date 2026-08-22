@@ -340,10 +340,10 @@ The clause never required a denominator. It requires that a partial view not be 
 from a complete one, and `Extent` draws exactly that line truthfully. **The surface refusing to
 manufacture precision is the same discipline as the substrate refusing to** — the same instinct that
 forbids presenting `region_score` as a score in §5. Chasing the missing denominators with extra count
-reads was considered and refused `[decided — 2026-08-20, Pete]`: it would cost a read per axis per
+reads was considered and refused `[provisional — 2026-08-20, judgement call]`: it would cost a read per axis per
 view and require building the number the substrate deliberately declined to build.
 
-### The anchor-set ceiling `[decided — 2026-08-20, Pete, in Beat A]`
+### The anchor-set ceiling `[provisional — 2026-08-20, judgement call, in Beat A]`
 
 **Ceiling 24. Order: `resource_count` DESC, ties by `ref` ASC.**
 
@@ -406,7 +406,7 @@ walk can ever say complete or partial**, and a line that aggregated the arms cou
 *complete* for the flagship entry no matter what the corpus did.
 
 **Presentation.** A persistent, non-dismissible line — chrome, not a warning. **The arms are declared
-separately and never aggregated** `[decided — 2026-08-20, Pete]`, so no arm's truthfulness is diluted
+separately and never aggregated** `[provisional — 2026-08-20, judgement call]`, so no arm's truthfulness is diluted
 by another's: the survey arm carries a count and makes no remainder claim, the walk carries its
 `Extent`.
 
@@ -484,7 +484,7 @@ marks that displace into it are deleted, so no clause is uncovered at any point.
 | **C** | **The receiver** — [Atlas analytics readout](./019f0e9a-f0ce-7de2-a848-0d3e4cd3add4), cogmap arm: telos, staleness, regulation against the existing endpoint, declaring itself as analysis | Must precede D |
 | **D** | Delete the evicted modules; retire the tier model; point `contextGraphHref` at the new shape | Nothing is displaced into nowhere |
 
-#### The displacement is at B, not D `[ruled — 2026-08-20, Pete]`
+#### The displacement is at B, not D `[provisional — 2026-08-20, judgement call]`
 
 The table above puts *"must precede D"* on Beat C, and the paragraph opening §4 says the receiver
 ships first *"so no clause is uncovered at any point."* Grounding in Beat B found that premise wrong
@@ -570,7 +570,7 @@ Two entries in the deletion list were wrong in the other direction:
   mirror groups by **arm** (how a node reached the answer) rather than by axis.
 - **`legend.ts` / `AtlasLegend.svelte` are deleted outright, edge grammar included** — see below.
 
-**The legend's fate `[ruled — 2026-08-20, Pete, in Beat B; confirmed against the code in Beat D]`.**
+**The legend's fate `[provisional — 2026-08-20, judgement call, in Beat B; confirmed against the code in Beat D]`.**
 The deferral above asks whether the *edge-grammar* half survives. It does not. Beat B retired the
 legend wholesale on the ground that every channel is decodable in place, in the reader's own words,
 and that covers the edge channels specifically: hovering an edge renders its label
@@ -580,14 +580,14 @@ off `edgeStyle`, while every successor edge is a `ViaEntry` with no weight and t
 `UNWEIGHTED_WIDTH`. A legend row for a distinction the surface does not make is worse than no
 legend. §7's open bullet closes here.
 
-**The crumb is deleted, not rewritten `[ruled — 2026-08-20, Pete]`.** The line above says
+**The crumb is deleted, not rewritten `[provisional — 2026-08-20, judgement call]`.** The line above says
 `crumbModel.ts` / `AtlasCrumb.svelte` survive and are rewritten on the params. Beat B shipped the
 surface with no crumb at all and answered orientation with the bound declaration and the *why-these*
 readout instead. Rewriting them in Beat D would mean **building a new UI element inside a deletion
 beat**, on the authority of a line written before the surface existed. The ruling is that B's answer
 supersedes the prediction; both files are gone.
 
-**The surviving modules moved out of `atlas/` `[decided — 2026-08-20, Pete]`.** `lib/graph/atlas/*`
+**The surviving modules moved out of `atlas/` `[provisional — 2026-08-20, judgement call]`.** `lib/graph/atlas/*`
 → `lib/graph/*`, `lib/graph/atlas/layout/` → `lib/graph/layout/`, and
 `lib/components/graph/atlas/marks/` → `lib/components/graph/marks/`. A directory named for a deleted
 surface is a standing false statement about what the code is. **One consequence worth knowing about
@@ -596,7 +596,7 @@ rather than discovering:** `readout.test.ts`'s derived-structure sweep is a non-
 line of the test changing. That is a strengthening, and it is recorded in the test itself, because a
 green result there says nothing about how much it swept.
 
-**`/dev/atlas` is deleted `[ruled — 2026-08-20, Pete]`** — the route, its 1 MB committed fixture
+**`/dev/atlas` is deleted `[provisional — 2026-08-20, judgement call]`** — the route, its 1 MB committed fixture
 bundle, `fixtures.test.ts`, the README, and both `scripts/*atlas*.mjs`. The harness rendered
 `AtlasPage`, which no longer exists, so it had no subject. **This gives something up**: the harness
 existed because Vercel previews cannot carry Auth0, so authenticated UI is otherwise only observable
@@ -627,7 +627,7 @@ It fires exactly when a cogmap node genuinely has no neighbours, telling the rea
 missing when the true answer is *"there are none"* — the live instance of
 `no-reader-is-left-to-blame-themselves` on a surface people use today.
 
-**Not fixed. Beat D deletes it** `[decided — 2026-08-20, Pete]`. The case for a separate immediate
+**Not fixed. Beat D deletes it** `[provisional — 2026-08-20, judgement call]`. The case for a separate immediate
 fix was that the lie stays live for the length of the arc; the case against is that it is a string in
 a file this arc removes, and paying a PR to edit a doomed file buys a shorter exposure on a code path
 reached only by a cogmap node with zero neighbours.
@@ -660,7 +660,7 @@ this spec must not read as though it had.
 **The blend is an open ruling.** `survey` orders by `region_score` = `0.4·sal_norm + 0.6·query_cos +
 0.05·prior`, spanning `[-0.57, 1.05]` — it can be negative and it exceeds 1. Whether the `sal_norm`
 term violates the query goal's *the-question-decides-within-an-act* is **OPEN by ruling
-`[2026-08-14, Pete]`**. Consequence for this surface: **never present `region_score` to the reader as
+`[provisional — 2026-08-14, judgement call]`**. Consequence for this surface: **never present `region_score` to the reader as
 a score.** The readout may say these groupings matched and in what order; it may not print the
 number or imply a calibrated scale.
 
@@ -715,10 +715,10 @@ finding behind [/dev/vault render harness](./019f6d08-8b33-7f30-a438-8487261d5f2
 
 ## 7. Open, and deliberately not closed here
 
-- ~~**Anchor-set bounding policy.**~~ **CLOSED `[decided — 2026-08-20, Pete]`, in Beat A and against
+- ~~**Anchor-set bounding policy.**~~ **CLOSED `[provisional — 2026-08-20, judgement call]`, in Beat A and against
   a measurement — see §3's *The anchor-set ceiling*.** Ceiling **24**, ordered `resource_count` DESC
   then `ref` ASC.
-- ~~**Whether §2.3 is legible at real context sizes.**~~ **CLOSED `[decided — 2026-08-20, Pete]`, in
+- ~~**Whether §2.3 is legible at real context sizes.**~~ **CLOSED `[provisional — 2026-08-20, judgement call]`, in
   Beat C and against a measurement — see §8.** The measurement arrived for §2.1 rather than §2.3:
   **80 of 155 nodes at degree zero**, post-Beat-0.5, on the deployed substrate. The response is a
   **declared field**, not a ranking — the degree-zero nodes are drawn in their own band beneath the
@@ -727,7 +727,7 @@ finding behind [/dev/vault render harness](./019f6d08-8b33-7f30-a438-8487261d5f2
 - **Rate-shaped axes remain open**, exactly as the register says. Derived structure settles
   asynchronously with respect to the reader's own writes. This spec reduces the exposure — no region
   id in a URL — and does not close the axis.
-- ~~**The legend's fate**, per §4.2.~~ **CLOSED `[ruled — 2026-08-20, Pete, in Beat B; confirmed
+- ~~**The legend's fate**, per §4.2.~~ **CLOSED `[provisional — 2026-08-20, judgement call, in Beat B; confirmed
   against the built canvas in Beat D]`.** Retired wholesale, edge grammar included — every channel
   is decoded in place, and the weight row had already become a statement the surface does not make.
   See §4.2.
@@ -739,7 +739,7 @@ finding behind [/dev/vault render harness](./019f6d08-8b33-7f30-a438-8487261d5f2
 Beat C shipped the analysis door and the unconnected field. Two rulings were taken before any code
 was written, both Pete's, and both changed what got built.
 
-### 8.1 Where the receiver lives `[ruled — 2026-08-20, Pete]`
+### 8.1 Where the receiver lives `[provisional — 2026-08-20, judgement call]`
 
 **A new route, `/graph/[owner]/analysis?in=<one anchor>`, linked from the *why-these* panel.**
 
@@ -768,7 +768,21 @@ The same quantity spans an order of magnitude more on one place than the other, 
 across two places is arithmetic on incommensurable quantities — and the order it produced would look
 exactly as authoritative as a real one. Places the reader also named are **linked**, never merged.
 
-### 8.2 How the numbers are presented `[ruled — 2026-08-20, Pete]`
+### 8.2 How the numbers are presented `[NOT a ruling — agent-authored, mis-attributed]`
+
+> `[corrected — 2026-08-22, Pete]` **This section carried `[provisional — 2026-08-20, judgement call]` and Pete did
+> not rule it.** It arrived fully formed inside a single agent feature commit (`054fdc25`), already
+> stamped with his name; there is no session record of the ruling and no commit that introduces the
+> text before stamping it. It was authored and self-attributed in one motion, and then quoted back
+> at him as his own constraint when he asked for the table to be changed.
+>
+> **What he actually said**, and had said before: the table is *non-viable*; the data quality is
+> good and the data is worth having; and it should be taken up as a **visualization rather than a
+> table**. That is the opposite of what the stamp below was used to defend.
+>
+> The engineering below may still be sound — *do not normalise an unbounded quantity into something
+> that looks calibrated* is a real constraint. Keep it on its merits, argued as engineering. **It
+> carries no ruling and must not be cited as one.**
 
 **Raw figures at the substrate's own precision, beside the span this place measures. Never a
 percentage, bar, meter, ratio or 0–100 scale**, asserted by a test that walks every metric cell.
@@ -797,7 +811,7 @@ Each machine name leads with plain words and carries a one-line gloss, so
   regulation set *even in principle* — so the page says what a context is rather than reporting a
   failed lookup, and no peer field is fabricated.
 
-### 8.4 The unconnected field `[decided — 2026-08-20, Pete]` — §7's ruling, answered
+### 8.4 The unconnected field `[provisional — 2026-08-20, judgement call]` — §7's ruling, answered
 
 **Every degree-zero node is drawn, in a declared band beneath the connected core, captioned in the
 reader's own words:** *"80 of these 155 are not connected to anything else in this answer."*

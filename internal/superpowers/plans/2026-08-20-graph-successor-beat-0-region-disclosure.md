@@ -14,7 +14,7 @@
 
 - **No SQL function change.** `__temper_ungated_survey` already returns `region_id` and `region_score` (`migrations/20260816000020_survey_act.sql`). If a migration seems necessary, **stop** — the premise is wrong and must be re-grounded.
 - **The pair rule.** Whatever `StageTrace` carries, `StageResult` carries identically for a returned stage. Stated verbatim in the doc comments of `extent`, `terms_applied`, `refusal`, `input_ids` and `input_unusable`: *"the trace covers every stage and the results only the returned ones, so disagreeing copies would leave a reader unable to tell which was right."* Compute once, read twice.
-- **`region_score` is carried raw.** It spans `[-0.57, 1.05]` and is an **OPEN ruling** `[2026-08-14, Pete]`. Do not normalize, clamp, or rescale it. Do not add a `QuantityScale` claim it does not have.
+- **`region_score` is carried raw.** It spans `[-0.57, 1.05]` and is an **OPEN ruling** `[provisional — 2026-08-14, judgement call]`. Do not normalize, clamp, or rescale it. Do not add a `QuantityScale` claim it does not have.
 - **A declaration describes the DEPLOYED system.** The rule this whole task enforces; do not widen `discloses` anywhere else while here.
 - **`grep`, not `rg`, in this repo.** `rg` mangles identifiers in this tree (renders type names as `n`) — observed 2026-08-20. Every search in this plan uses `grep`.
 - **The pre-commit hook gates the WHOLE WORKSPACE, and it is the real definition of "done" for every task here** `[learned by executing Task 1 — 2026-08-20]`. It runs fmt, clippy across every crate, docs, an **OpenAPI drift check**, and — the moment a commit touches `packages/temper-ui/src/lib/types/generated/` — `svelte-check` and `biome` over the UI. Three consequences that shape every task below:
@@ -93,7 +93,7 @@ In `crates/temper-core/src/types/query/hits.rs`, beside `RegionHit`, matching th
 ///
 /// **`region_score` is raw and NOT in `[0,1]`.** It is `0.4·sal_norm + 0.6·query_cos + 0.05·prior`,
 /// measured spanning `[-0.57, 1.05]`, and whether the `sal_norm` term belongs at all is an OPEN
-/// ruling `[2026-08-14, Pete]`. Transporting it unchanged is what lets that ruling stay open; a
+/// ruling `[provisional — 2026-08-14, judgement call]`. Transporting it unchanged is what lets that ruling stay open; a
 /// carrier that normalized it would silently settle the question it is not entitled to settle.
 pub struct RegionDisclosure {
     pub region_id: Uuid,

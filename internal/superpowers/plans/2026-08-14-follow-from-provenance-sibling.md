@@ -12,7 +12,7 @@ a step is EXTEND or AMEND, the spec section authorizing it is named.
 
 ## 0. The four rulings this plan is built on
 
-Taken `[2026-08-14, Pete]` before any code. Each is recorded in the spec at the section it settles;
+Taken `[provisional — 2026-08-14, judgement call]` before any code. Each is recorded in the spec at the section it settles;
 they are listed here only so no step has to be read against a stale draft.
 
 | ruling | consequence for this plan |
@@ -215,7 +215,7 @@ Two things landed that this plan did not predict:
 
 ---
 
-### B0 — widen the stage input **`[ruled — 2026-08-14, Pete]`, blocks B**
+### B0 — widen the stage input **`[provisional — 2026-08-14, judgement call]`, blocks B**
 
 **Filed as its own task:** [A stage carries one set](./01a001fd-956c-79b2-acf2-664272f54dbd)
 
