@@ -1159,3 +1159,38 @@ describe('a traversed view', () => {
 		);
 	});
 });
+
+/**
+ * `[observed on production — 2026-08-22, Pete]` *"on the open of the page we now have a blank right
+ * pane because nothing was asked, but that feels like a strange choice."*
+ *
+ * **Pre-existing, not a consequence of streaming** — `.instrument`'s second track and the
+ * `{#if readout || bound?.traversed}` guard on the panel are byte-identical before this arc
+ * (`git show c5dfeab4~1`). The track was unconditional; the thing that fills it never was. On the
+ * entry read there is no readout, so the column sat empty — and because the rail opens *inside*
+ * `.stage`, it appeared to the LEFT of that dead space, which is what made it read as a mistake
+ * rather than as spare room.
+ *
+ * **What this can and cannot witness.** jsdom does not resolve a scoped `<style>` into a computed
+ * grid, so this asserts the CLASS that selects the track rather than the track itself. That is
+ * weaker than the property, and it is named here rather than left for a reader to assume: the class
+ * is the only place the second column is turned on, so the two move together — but a test that
+ * renamed the class and forgot the CSS would still pass.
+ */
+describe('the right column exists only when something is in it', () => {
+	const instrument = (container: HTMLElement) => container.querySelector('.instrument');
+
+	it('a read with no readout reserves no column for one', async () => {
+		const { container } = await painted(view({ readout: null, bound: null, question: '' }));
+
+		expect(container.querySelector('.why')).toBeNull();
+		expect(instrument(container)?.classList.contains('with-panel')).toBe(false);
+	});
+
+	it('and a composition that HAS a readout still gets one', async () => {
+		const { container } = await painted(view());
+
+		expect(container.querySelector('.why')).not.toBeNull();
+		expect(instrument(container)?.classList.contains('with-panel')).toBe(true);
+	});
+});
