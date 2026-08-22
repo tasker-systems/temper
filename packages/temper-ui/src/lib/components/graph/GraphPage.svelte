@@ -15,6 +15,7 @@
 	import RegionState from '$lib/components/RegionState.svelte';
 	import type { GraphViewData } from '$lib/graph/view';
 	import { regionStateFor } from '$lib/region';
+	import { readoutMustYield } from '$lib/graph/instrument';
 	import BoundLine from './BoundLine.svelte';
 	import GraphA11yList from './GraphA11yList.svelte';
 	import GraphCanvas from './GraphCanvas.svelte';
@@ -147,6 +148,49 @@
 	}
 	const select = (id: string) => goto(withGraphSelection($page.url, id), { replaceState: true });
 
+	/**
+	 * **The width the canvas, the rail and the readout are competing over.**
+	 *
+	 * Measured off this element rather than off the viewport, and that is the ruling's own reason:
+	 * *"the constraint is that element's width, and the sidebar means the viewport is not it."*
+	 * `.graph-page` is a one-column grid with no padding, so its inline size IS `.instrument`'s.
+	 *
+	 * A container query would have been the CSS-native way to ask this, and it cannot answer it:
+	 * the collapse must be **reversible by the reader**, and no CSS condition can be overridden by a
+	 * click. So the size question is asked in script, where the reader's answer can outrank it. `0`
+	 * until the first observation — `readoutMustYield` treats that as *not measured*, never as
+	 * *infinitely narrow*.
+	 */
+	let surfaceEl: HTMLElement | undefined = $state();
+	let surfaceWidth = $state(0);
+	$effect(() => {
+		const el = surfaceEl;
+		if (!el || typeof ResizeObserver === 'undefined') return;
+		const ro = new ResizeObserver((entries) => {
+			for (const entry of entries) surfaceWidth = entry.contentRect.width;
+		});
+		ro.observe(el);
+		return () => ro.disconnect();
+	});
+
+	/**
+	 * The reader's override of the floor — *"a collapse the reader cannot reverse is
+	 * `displaced-structure-remains-reachable` failing."*
+	 *
+	 * It only ever OPENS: the floor decides the default and this outranks it in one direction, so a
+	 * reader can never end up with the panel gone at a width where nothing asked it to go.
+	 *
+	 * It lasts as long as the selection that made the canvas yield. Keyed on `sel` because that is
+	 * the one param the rail's presence is written into — `withGraphSelection` owns it — and a
+	 * different node is a different situation.
+	 */
+	let readoutForcedOpen = $state(false);
+	const sel = $derived($page.url.searchParams.get('sel'));
+	$effect(() => {
+		sel;
+		readoutForcedOpen = false;
+	});
+
 	const emptyMessage = $derived(
 		data.question
 			? 'Nothing in the places you asked about answers this yet.'
@@ -154,7 +198,7 @@
 	);
 </script>
 
-<div class="graph-page">
+<div class="graph-page" bind:this={surfaceEl}>
 	<form class="ask" onsubmit={ask}>
 		<label class="sr-only" for="graph-question">Ask about your work</label>
 		<input
@@ -230,7 +274,16 @@
 				<!-- Resolved against what was DRAWN, on the client as on the server: a `sel` this
 				     answer does not contain opens nothing. -->
 				{@const node = selected ? (model.nodes.find((n) => n.id === selected) ?? null) : null}
-				<div class="instrument" class:with-panel={readout || bound?.traversed}>
+				<!--
+					The floor, resolved for THIS answer. `node` is what tells the layout the rail is
+					open — the rail lives inside `.stage`, so no selector above it could otherwise
+					know — and the reader's override outranks the measurement in one direction only.
+				-->
+				{@const panel = !!(readout || bound?.traversed)}
+				{@const collapsed =
+					!readoutForcedOpen &&
+					readoutMustYield({ surfaceWidth, railOpen: node !== null, readoutPresent: panel })}
+				<div class="instrument" class:with-panel={panel} class:readout-collapsed={collapsed}>
 					<div class="stage">
 						<GraphA11yList {model} url={$page.url} />
 						<GraphCanvas {model} {selected} onSelect={select} {emptyMessage} />
@@ -271,14 +324,31 @@
 						over a promise is always true, which would render this panel unconditionally and pass
 						every test in this file.
 					-->
-					{#if readout || bound?.traversed}
-						<WhyThese
-							{readout}
-							question={data.question}
-							owner={data.owner}
-							places={data.placesAsked}
-							backHref={bound?.traversed ? withoutGraphWalk($page.url) : null}
-						/>
+					{#if panel}
+						{#if collapsed}
+							<!--
+								A strip, not a disappearance. A real button: labelled with the heading it
+								reopens, reachable by keyboard, and it says which state it is in.
+								`displaced-structure-remains-reachable` is the whole difference between
+								yielding and losing.
+							-->
+							<button
+								class="readout-strip"
+								data-testid="readout-strip"
+								aria-expanded="false"
+								onclick={() => (readoutForcedOpen = true)}
+							>
+								{readout ? 'Why these' : 'Where you started'}
+							</button>
+						{:else}
+							<WhyThese
+								{readout}
+								question={data.question}
+								owner={data.owner}
+								places={data.placesAsked}
+								backHref={bound?.traversed ? withoutGraphWalk($page.url) : null}
+							/>
+						{/if}
 					{/if}
 				</div>
 
@@ -358,10 +428,68 @@
 	.instrument.with-panel {
 		grid-template-columns: minmax(0, 1fr) 20rem;
 	}
+	/*
+	 * **The floor, spent.** `[ruled — 2026-08-22, Pete]` The canvas yields last and the readout
+	 * yields first, so below the floor the second track becomes the width of a strip and the canvas
+	 * takes back the rest. WHICH widths those are is `instrument.ts`'s to say — the floor is one
+	 * named constant there, and CSS could not have held it: a container query condition may not read
+	 * a custom property, so a rule expressed here would have had to hard-code the sum instead.
+	 *
+	 * At every width where all three fit, nothing changes. This is a floor, not a redesign.
+	 */
+	.instrument.readout-collapsed {
+		grid-template-columns: minmax(0, 1fr) 2.25rem;
+	}
+	/*
+	 * `[noted — 2026-08-22]` **This rule has never fired on a screen where it would change anything**,
+	 * and the floor above is built on that. Read off the compiled output rather than reasoned about:
+	 *
+	 *   .instrument.with-panel.svelte-1rk7uio { grid-template-columns:minmax(0,1fr) 20rem }  (0,3,0)
+	 *   @media(max-width:900px){ .instrument.svelte-1rk7uio { grid-template-columns:1fr } }  (0,2,0)
+	 *
+	 * A media query contributes no specificity, so the panel-bearing rule wins at every width and the
+	 * stack applies only where there is no second track to collapse — where both say the same thing.
+	 *
+	 * **State the dependency in the direction it actually runs.** It is not that nothing depends on
+	 * this firing; it is that `readoutMustYield` depends on it NOT firing. That function has no lower
+	 * bound, so below the breakpoint it still collapses *Why these* to a strip — correct only while
+	 * the layout stays two-column here. Repair the specificity and the readout moves to its own row,
+	 * where it takes no width from the canvas and yielding buys nothing: the floor would then cost
+	 * the reader a panel that was never in the canvas's way.
+	 *
+	 * So the two cannot be settled independently, and whoever fixes this must give `readoutMustYield`
+	 * its lower bound in the same change. Left here because the repair ships a stacked form nobody
+	 * has ever seen — and on this surface, nothing is judged except by looking.
+	 */
 	@media (max-width: 900px) {
 		.instrument {
 			grid-template-columns: 1fr;
 		}
+	}
+	/* The readout, yielded. Vertical, because a label has to survive a 2.25rem column. */
+	.readout-strip {
+		display: flex;
+		align-items: center;
+		justify-content: flex-start;
+		gap: 8px;
+		padding: 14px 0;
+		border: 0;
+		border-left: 1px solid rgba(255, 255, 255, 0.07);
+		background: rgba(255, 255, 255, 0.015);
+		color: #6f7886;
+		cursor: pointer;
+		writing-mode: vertical-rl;
+		font:
+			9px/1 ui-monospace,
+			Menlo,
+			monospace;
+		letter-spacing: 0.18em;
+		text-transform: uppercase;
+	}
+	.readout-strip:hover,
+	.readout-strip:focus-visible {
+		color: #c3cbd6;
+		background: rgba(255, 255, 255, 0.045);
 	}
 	.stage {
 		position: relative;
