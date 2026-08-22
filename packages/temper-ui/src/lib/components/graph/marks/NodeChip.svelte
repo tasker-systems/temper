@@ -1,8 +1,17 @@
 <script lang="ts">
+	/**
+	 * A single mark. **It no longer draws its own hover card**, and that is a paint-order fix
+	 * rather than a refactor.
+	 *
+	 * `[found on production — 2026-08-22]` The card used to render inside this component's `<g>`,
+	 * which is inside the canvas's node loop — so every mark drawn after it painted over it.
+	 * **SVG has no `z-index`; stacking is document order**, which is why the symptom was reported
+	 * for years as a z-index problem and why setting one never helped. The canvas draws the card
+	 * once, after every mark; this component only reports that the pointer is over it.
+	 */
 	import { docTypeHue, CANVAS_BG } from '$lib/graph/palette';
 	import { truncateLabel } from '$lib/graph/labels';
 	import { nodeMarkShape } from '$lib/graph/marks';
-	import NodeHoverCard from './NodeHoverCard.svelte';
 
 	interface Props {
 		x: number;
@@ -24,12 +33,15 @@
 		anchored?: boolean;
 		/** Visual-only doc-type filter dimming (Task 8) — never affects the read. */
 		dim?: boolean;
-		/** Edge count for the hover card (N2); undefined nodes just skip the count. */
-		edges?: number;
-		/** Server-derived excerpt snippet for the hover card (N2); null when absent. */
-		excerpt?: string | null;
-		/** Node metadata rows for the hover card (N2) — where it lives, its stage, when it moved. */
-		meta?: { label: string; value: string }[];
+		/**
+		 * Whether the pointer is over this mark — **owned by the canvas**, not by this component.
+		 *
+		 * One source of truth: the canvas needs it to decide which card to draw last, and this
+		 * component needs it to suppress its own small label. Two copies of the same fact, updated
+		 * from the same two events, is the drift worth avoiding.
+		 */
+		hovered?: boolean;
+		onHover?: (hovered: boolean) => void;
 		onEnter?: () => void;
 	}
 	let {
@@ -42,16 +54,14 @@
 		ringed = false,
 		anchored = false,
 		dim = false,
-		edges = 0,
-		excerpt = null,
-		meta = [],
+		hovered = false,
+		onHover,
 		onEnter
 	}: Props = $props();
 
 	const color = $derived(docTypeHue(docType));
 	const shape = $derived(nodeMarkShape(home));
 	const style = $derived(`${onEnter ? 'cursor:pointer;' : ''}opacity:${dim ? 0.15 : 1};`);
-	let hovered = $state(false);
 	// The small anchored label is a lightweight always-on cue; the hover card
 	// (N2) is richer and takes over the moment the pointer is over the node,
 	// anchored or not.
@@ -66,8 +76,8 @@
 	aria-label={title}
 	onclick={onEnter}
 	onkeydown={(e) => e.key === 'Enter' && onEnter?.()}
-	onmouseenter={() => (hovered = true)}
-	onmouseleave={() => (hovered = false)}
+	onmouseenter={() => onHover?.(true)}
+	onmouseleave={() => onHover?.(false)}
 	{style}
 >
 	{#if ringed}
@@ -97,7 +107,4 @@
 		<text x={x} y={y + r + 13} text-anchor="middle" fill="#c7d0da" font-size="10">{truncateLabel(title, 22)}</text>
 	{/if}
 	<circle class="focus-ring" cx={x} cy={y} r={r + 4} stroke-width="2" />
-	{#if hovered}
-		<NodeHoverCard {x} {y} {r} {title} {docType} {edges} {excerpt} {meta} />
-	{/if}
 </g>

@@ -230,7 +230,7 @@
 				<!-- Resolved against what was DRAWN, on the client as on the server: a `sel` this
 				     answer does not contain opens nothing. -->
 				{@const node = selected ? (model.nodes.find((n) => n.id === selected) ?? null) : null}
-				<div class="instrument">
+				<div class="instrument" class:with-panel={readout || bound?.traversed}>
 					<div class="stage">
 						<GraphA11yList {model} url={$page.url} />
 						<GraphCanvas {model} {selected} onSelect={select} {emptyMessage} />
@@ -342,11 +342,21 @@
 		color: #9aa3b0;
 		font-size: 12.5px;
 	}
+	/*
+	 * **One column by default; the second exists only when something fills it.**
+	 * `[found on production — 2026-08-22]` This was an unconditional `minmax(0, 1fr) 20rem` while
+	 * the panel that occupies it renders only on a composition or a traversal — so an entry read
+	 * reserved 20rem of nothing, and the rail (which opens inside `.stage`) sat to the LEFT of that
+	 * dead space rather than in it. Pre-dates streaming; streaming only gave a reason to look.
+	 */
 	.instrument {
 		display: grid;
-		grid-template-columns: minmax(0, 1fr) 20rem;
+		grid-template-columns: minmax(0, 1fr);
 		min-height: 0;
 		min-width: 0;
+	}
+	.instrument.with-panel {
+		grid-template-columns: minmax(0, 1fr) 20rem;
 	}
 	@media (max-width: 900px) {
 		.instrument {

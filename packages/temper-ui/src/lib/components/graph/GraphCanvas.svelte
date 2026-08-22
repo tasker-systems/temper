@@ -40,6 +40,7 @@
 	} from '$lib/graph/presentation';
 	import Edge from '$lib/components/graph/marks/Edge.svelte';
 	import NodeChip from '$lib/components/graph/marks/NodeChip.svelte';
+	import NodeHoverCard from '$lib/components/graph/marks/NodeHoverCard.svelte';
 
 	interface Props {
 		model: GraphModel;
@@ -173,6 +174,11 @@
 
 	let hoveredEdge = $state<number | null>(null);
 	let svgEl: SVGSVGElement | undefined = $state();
+	/**
+	 * Which mark the pointer is over. Owned HERE because the card it opens must be drawn after
+	 * every mark, and only this component draws every mark.
+	 */
+	let hoveredId = $state<string | null>(null);
 	let viewportEl: SVGGElement | undefined = $state();
 	let camera: Camera | undefined;
 
@@ -251,9 +257,8 @@
 							home={n.home}
 							ringed={rings && !reached(n.id)}
 							anchored={false}
-							edges={n.degree}
-							excerpt={node.excerpt}
-							meta={nodeMeta(node, legend.get(node.arm))}
+							hovered={hoveredId === n.id}
+							onHover={(over) => (hoveredId = over ? n.id : hoveredId === n.id ? null : hoveredId)}
 							onEnter={() => onSelect(n.id)}
 						/>
 					{/if}
@@ -287,6 +292,34 @@
 							font-size="10"
 							fill="#e6edf5">{s.title.length > 28 ? `${s.title.slice(0, 27)}…` : s.title}</text
 						>
+					{/if}
+				{/if}
+
+				<!--
+					**The hover card is drawn LAST, and that is the whole fix.** `[found on production —
+					2026-08-22]` It used to render inside its own `NodeChip`'s `<g>`, inside the loop
+					above, so every mark after it painted over it — a card opened on an early mark was
+					buried under most of the graph, one opened on the last mark looked fine.
+
+					SVG has no `z-index`: stacking is document order. That is why the symptom was
+					reported for years as a z-index problem and why setting one never changed anything —
+					the property being adjusted is not one SVG reads. The captions block directly above
+					already states this rule for labels; the card was the one thing breaking it.
+				-->
+				{#if hoveredId !== null}
+					{@const h = marks.find((n) => n.id === hoveredId)}
+					{@const hn = h ? nodeById.get(h.id) : undefined}
+					{#if h && hn}
+						<NodeHoverCard
+							x={h.x}
+							y={h.y}
+							r={nodeRadius(h.degree)}
+							title={h.title}
+							docType={h.docType}
+							edges={h.degree}
+							excerpt={hn.excerpt}
+							meta={nodeMeta(hn, legend.get(hn.arm))}
+						/>
 					{/if}
 				{/if}
 			{/if}
