@@ -12,6 +12,7 @@ import {
 import { buildReadout, disclosedRegionIds } from '$lib/graph/readout';
 import type { GraphRefusal, GraphViewData } from '$lib/graph/view';
 import { ApiError } from '$lib/server/api';
+import { bounded } from '$lib/server/bounded';
 import {
 	readAnchorRegions,
 	readAnchorSources,
@@ -22,7 +23,6 @@ import {
 	runComposition,
 } from '$lib/server/graph-query';
 import { readTrail } from '$lib/server/graph-reads';
-import type { EventTrail } from '$lib/types/generated/element_trail';
 import type { ResourceView } from '$lib/types/generated/resource_view';
 import { type GraphAddress, parseGraphAddress } from '$lib/vault-url';
 import type { PageServerLoad } from './$types';
@@ -74,27 +74,48 @@ type GraphRead = Omit<GraphViewData, 'owner' | 'selected' | 'selectedExcerpt' | 
  * `AtlasNode` projection with `resource: null`, and neither `/api/resources/{id}/content` nor the
  * element trail needs a row. Nothing is synthesised to stand in for the missing one.
  *
- * A failed trail read degrades to `null` — the rail simply carries no history — while a failed body
- * read is already `null` inside {@link readResourceBody}. Neither is allowed to take down a screen
- * whose marks are all drawn and correct.
+ * **The selection is settled; its two reads are STREAMED.** Everything the rail shows apart from
+ * the excerpt and the history comes from `model.nodes`, which the page already holds — so this
+ * function returns before either read answers and the rail frame paints fully populated with two
+ * regions declaring themselves as arriving.
+ *
+ * The degradation policy is unchanged and still right: *a failed side-read must never take down a
+ * screen whose marks are all drawn.* What changed is what it degrades **to**.
+ * `[amended — 2026-08-21, spec §5.2]` Both reads used to degrade to `null` — the trail through a
+ * `.catch()` here, the body inside {@link readResourceBody} — and `null` asserts *there is nothing
+ * here*, which is a claim about the reader's material that a failed read has verified nothing
+ * about. A rejection now travels to the template, where `{:catch}` renders it as a **named
+ * failure**: *history unavailable*, distinct from *no history*.
+ *
+ * {@link bounded} supplies both the give-up (spec §5.4 — a read that never answers presents as
+ * arriving forever, which is the exact failure of `working-and-stopped-are-distinguishable`) and
+ * the `.catch()` attached at creation that keeps an unawaited rejection from crashing the server.
+ * That catch is a *different mechanism* from the template's `{:catch}`; spec §5.3 says so, and
+ * having one does not give you the other.
  */
-async function resolveSelection(
+function resolveSelection(
 	token: string,
 	model: GraphModel,
 	selection: string | null,
-): Promise<Pick<GraphViewData, 'selected' | 'selectedExcerpt' | 'selectedTrail'>> {
+): Pick<GraphViewData, 'selected' | 'selectedExcerpt' | 'selectedTrail'> {
 	const node = selection ? (model.nodes.find((n) => n.id === selection) ?? null) : null;
+	// No selection, so no read to wait on. A plain `null` rather than a resolved promise: the outer
+	// null on these two fields means *nothing is selected*, which is a different fact from a read
+	// that answered with nothing.
 	if (!node) return { selected: null, selectedExcerpt: null, selectedTrail: null };
 
-	const [selectedExcerpt, selectedTrail] = await Promise.all([
+	return {
+		selected: node.id,
 		// 600 rather than the 280 the canvas uses: the rail has the room, and this is the one
 		// targeted body read on the screen. `excerptOf` takes the markdown directly — it never
 		// needed a row, and asking for one is what used to force a branch that handed the WHOLE
 		// document to this slot whenever a node had no row behind it.
-		readResourceBody(token, node.id).then((md) => excerptOf(md, 600)),
-		readTrail(token, 'node', node.id).catch((): EventTrail | null => null),
-	]);
-	return { selected: node.id, selectedExcerpt, selectedTrail };
+		selectedExcerpt: bounded(
+			readResourceBody(token, node.id).then((md) => excerptOf(md, 600)),
+			'excerpt',
+		),
+		selectedTrail: bounded(readTrail(token, 'node', node.id), 'history'),
+	};
 }
 
 /** Which of the reader's own rows a `from` seed no longer resolving refers to. */
@@ -135,7 +156,7 @@ export const load: PageServerLoad = async (event): Promise<GraphViewData> => {
 	return {
 		owner: event.params.owner,
 		...read,
-		...(await resolveSelection(token, read.model, address.selection)),
+		...resolveSelection(token, read.model, address.selection),
 	};
 };
 

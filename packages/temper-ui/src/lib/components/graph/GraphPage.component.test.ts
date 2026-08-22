@@ -8,6 +8,7 @@ import { buildEntryGraph, buildGraph, buildTraversal, COMPOSITION_ARMS } from '$
 import { buildReadout } from '$lib/graph/readout';
 import type { GraphViewData } from '$lib/graph/view';
 import type { CogmapRegionRow } from '$lib/types/generated/cognitive_maps';
+import type { EventTrail } from '$lib/types/generated/element_trail';
 import type { AtlasSubgraph } from '$lib/types/generated/graph_atlas';
 import type { QueryResponse } from '$lib/types/generated/query';
 import { resetAppContext, setPage } from '../../../test/app-context';
@@ -50,27 +51,64 @@ const armHeadings = (container: HTMLElement): (string | null)[] =>
 		(h) => h.textContent,
 	);
 
-const view = (over: Partial<GraphViewData> = {}): GraphViewData => ({
-	owner: '@me',
-	question: 'what keeps a surface honest about what it left out?',
-	borrowedFrom: null,
-	refusal: null,
-	model: buildGraph({ response: fixture.response, plan, seeds: [] }),
-	bound: declareBounds(fixture.response, plan, null),
-	readout: buildReadout(fixture.response, { rows: fixture.shape_rows, complete: true }),
-	placesAsked: [
-		{ kind: 'context', ref: '@me/temper', title: '@me/temper' },
-		{
-			kind: 'cogmap',
-			ref: '019f2391-e001-7933-b88a-28fb92e56ac1',
-			title: 'Temper — self-cognition',
-		},
-	],
-	selected: null,
-	selectedExcerpt: null,
-	selectedTrail: null,
-	...over,
-});
+/**
+ * Overrides in their **settled** form, for the two fields the load now streams.
+ *
+ * A test that only cares about content keeps writing `selectedExcerpt: 'A first paragraph.'` and
+ * this builder wraps it; a test that cares about the *state* of the read passes a promise through
+ * untouched — never-settling for arriving, rejected for failed. `null` stays `null`, because on
+ * these two fields the outer null means **nothing is selected**, which is decided before any read
+ * runs. See `GraphViewData`'s comment for the three-way distinction.
+ */
+type ViewOverrides = Partial<Omit<GraphViewData, 'selectedExcerpt' | 'selectedTrail'>> & {
+	selectedExcerpt?: string | null | Promise<string | null>;
+	selectedTrail?: EventTrail | null | Promise<EventTrail>;
+};
+
+const streamed = <T>(v: T | null | undefined | Promise<T>): Promise<T> | null =>
+	v === null || v === undefined ? null : v instanceof Promise ? v : Promise.resolve(v);
+
+const view = (over: ViewOverrides = {}): GraphViewData => {
+	const { selectedExcerpt, selectedTrail, ...settled } = over;
+	return {
+		owner: '@me',
+		question: 'what keeps a surface honest about what it left out?',
+		borrowedFrom: null,
+		refusal: null,
+		model: buildGraph({ response: fixture.response, plan, seeds: [] }),
+		bound: declareBounds(fixture.response, plan, null),
+		readout: buildReadout(fixture.response, { rows: fixture.shape_rows, complete: true }),
+		placesAsked: [
+			{ kind: 'context', ref: '@me/temper', title: '@me/temper' },
+			{
+				kind: 'cogmap',
+				ref: '019f2391-e001-7933-b88a-28fb92e56ac1',
+				title: 'Temper — self-cognition',
+			},
+		],
+		selected: null,
+		...settled,
+		selectedExcerpt: streamed(selectedExcerpt),
+		selectedTrail: streamed(selectedTrail),
+	};
+};
+
+/**
+ * The words a region says, with its `aria-hidden` marker glyph stripped out.
+ *
+ * Spec §3.3: the four states must differ by more than one channel, and the glyph is one of them —
+ * so a comparison that keeps it would pass on the glyph alone while two states said the same
+ * sentence. This reads what is left for the accessibility tree.
+ */
+const sentenceOf = (el: Element | null | undefined): string => {
+	const clone = el?.cloneNode(true) as Element | undefined;
+	for (const decoration of clone?.querySelectorAll('[aria-hidden="true"]') ?? [])
+		decoration.remove();
+	return (clone?.textContent ?? '').replace(/\s+/g, ' ').trim();
+};
+
+/** The busiest node in the fixture, so its neighbour list is non-trivial. */
+const selected = () => view().model.nodes.reduce((a, b) => (b.degree > a.degree ? b : a));
 
 beforeEach(() => {
 	resetAppContext();
@@ -225,21 +263,17 @@ describe('a refusal is a refusal, never a widened answer', () => {
 });
 
 describe('the rail opens on a node — and only on a node', () => {
-	const selected = () => {
-		const model = view().model;
-		// The busiest node, so its neighbour list is non-trivial.
-		return model.nodes.reduce((a, b) => (b.degree > a.degree ? b : a));
-	};
-
-	it('shows the resource, where it lives, and how it was reached', () => {
+	it('shows the resource, where it lives, and how it was reached', async () => {
 		const node = selected();
 		render(GraphPage, { data: view({ selected: node.id, selectedExcerpt: 'A first paragraph.' }) });
 		const rail = screen.getByTestId('node-rail');
 
 		expect(rail.textContent).toContain(node.title);
-		expect(rail.textContent).toContain('A first paragraph.');
 		expect(rail.textContent).toContain('IN');
 		expect(rail.textContent).toContain('HOW');
+		// The excerpt is streamed, so it lands a microtask later than the frame around it — which is
+		// C1 stated from the other side.
+		expect(await screen.findByText('A first paragraph.')).toBeTruthy();
 	});
 
 	it('lists neighbours from the graph on screen, with no second read', () => {
@@ -263,6 +297,98 @@ describe('the rail opens on a node — and only on a node', () => {
 		render(GraphPage, { data: view({ selected: 'not-in-this-answer' }) });
 
 		expect(screen.queryByTestId('node-rail')).toBeNull();
+	});
+});
+
+/**
+ * C1 and C3, on the panel the goal's first reports were filed against.
+ *
+ * The rail is the case streaming was chosen for: everything it shows except the excerpt and the
+ * history comes from `model.nodes`, which is already in `data`. So the frame paints fully populated
+ * with exactly two regions arriving, and the contract is that the frame does not wait for them.
+ *
+ * Spec §5.1 recorded the defect these replace — `trail ? trailModel(trail) : []` collapsed a failed
+ * read and a genuinely empty one onto the same rendering, so the third test here is the one that
+ * matters most: it is the *failed vs empty* pair the register's negative face had missed.
+ */
+describe('the rail declares what is still arriving', () => {
+	/** Never settles, so a frame that waits for it never paints. */
+	const pending = () => new Promise<never>(() => {});
+
+	it('C1: the rail frame and title paint while its reads are still in flight', () => {
+		const node = selected();
+		const { container } = render(GraphPage, {
+			data: view({ selected: node.id, selectedExcerpt: pending(), selectedTrail: pending() }),
+		});
+		const rail = container.querySelector('[data-testid="node-rail"]');
+
+		expect(rail).not.toBeNull();
+		// Both from the model, already held — no read stands between the reader and either.
+		expect(rail?.textContent).toContain(node.title);
+		expect(rail?.textContent).toContain(`NEIGHBORS · ${node.degree}`);
+		expect(rail?.querySelector('[data-testid="region-arriving"]')).not.toBeNull();
+	});
+
+	it('C3: a failed trail read says so, and does NOT read as still arriving', async () => {
+		const node = selected();
+		const failed = Promise.reject(new Error('503'));
+		// The global constraint (spec §5.3), in the test too: the `{:catch}` that renders the failure
+		// is a different mechanism from the `.catch()` that keeps an unhandled rejection from
+		// crashing the process, and having one does not give you the other.
+		failed.catch(() => {});
+
+		const { container } = render(GraphPage, {
+			data: view({
+				selected: node.id,
+				selectedExcerpt: Promise.resolve(null),
+				selectedTrail: failed,
+			}),
+		});
+		const rail = await screen.findByTestId('node-rail');
+
+		await vi.waitFor(() => {
+			expect(rail.querySelector('[data-testid="region-failed"]')).not.toBeNull();
+		});
+		// The perpetual-skeleton bug, asserted directly: a read that will not resolve must stop
+		// presenting as one that has not resolved YET.
+		expect(rail.querySelector('[data-testid="region-arriving"]')).toBeNull();
+		expect(rail.textContent?.toLowerCase()).toContain('history');
+		expect(container.querySelectorAll('.node-chip').length).toBeGreaterThan(0);
+	});
+
+	it('C4: a trail that came back empty does not present like one that failed', async () => {
+		const node = selected();
+		const failed = Promise.reject(new Error('503'));
+		failed.catch(() => {});
+
+		// Scoped to the history section on both renders: the excerpt is resolved-and-null here, so a
+		// rail-wide assertion would be reading that region's words instead of this one's.
+		const historyOf = async (trail: EventTrail | Promise<EventTrail>, marker: string) => {
+			const { unmount } = render(GraphPage, {
+				data: view({
+					selected: node.id,
+					selectedExcerpt: Promise.resolve(null),
+					selectedTrail: trail,
+				}),
+			});
+			const section = (await screen.findByTestId('node-rail')).querySelector('.history');
+			await vi.waitFor(() => {
+				expect(section?.querySelector(`[data-testid="${marker}"]`)).not.toBeNull();
+			});
+			const region = section?.querySelector(`[data-testid="${marker}"]`);
+			unmount();
+			return sentenceOf(region);
+		};
+
+		const empty = await historyOf({ events: [] } as unknown as EventTrail, 'region-empty');
+		const broken = await historyOf(failed, 'region-failed');
+
+		// Differential, per spec §3.3: a difference in the SENTENCE, with the decorative glyph
+		// stripped, so neither a redesign of either state nor a one-channel difference satisfies it.
+		// Asserted on the sentence rather than on the section because the section also carries the
+		// row count, which differs on its own and would keep this green with identical wording.
+		expect(empty).not.toBe('');
+		expect(empty).not.toBe(broken);
 	});
 });
 

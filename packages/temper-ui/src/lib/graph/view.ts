@@ -53,9 +53,29 @@ export interface GraphViewData {
 	 * available means the reader can get there without being told a URL.
 	 */
 	placesAsked: NamedPlace[];
+	/**
+	 * The node the rail opens on, resolved against the model **before** any read runs.
+	 *
+	 * Settled, deliberately, and not streamed: it is the scaffold. It is also what `GraphRead`'s
+	 * subtraction type in the load keeps every read from deciding for itself.
+	 */
 	selected: string | null;
-	selectedExcerpt: string | null;
-	selectedTrail: EventTrail | null;
+	/**
+	 * The selected resource's first paragraph — **streamed**, so the rail frame paints without it.
+	 *
+	 * Three states, three representations, and keeping them apart is the whole point (spec §5.2):
+	 *
+	 * - the **outer `null`** means *nothing is selected* — no read was started;
+	 * - a **`null` inside** the promise means *this resource genuinely has no body*;
+	 * - a **rejection** means *the read failed*, and the region says so rather than claiming
+	 *   there is nothing here.
+	 *
+	 * The third used to be spelt as the second, on both this field and `selectedTrail`, which is
+	 * exactly the conflation spec §5.1 recorded.
+	 */
+	selectedExcerpt: Promise<string | null> | null;
+	/** The selected node's history — streamed, on the same three-way rule as `selectedExcerpt`. */
+	selectedTrail: Promise<EventTrail> | null;
 }
 
 export type AnalysisRefusal =

@@ -171,7 +171,8 @@ describe('the excerpt slot never receives a whole document', () => {
 		const body = `${'alpha '.repeat(400)}\n\nA second paragraph nobody asked for.`;
 		readResourceBody.mockResolvedValue(body);
 
-		const excerpt = (await run(`?sel=${NODE}`)).selectedExcerpt as string;
+		// Streamed now, so the load hands back the promise and the awaiting happens here.
+		const excerpt = (await (await run(`?sel=${NODE}`)).selectedExcerpt) as string;
 
 		expect(excerpt.length).toBeLessThanOrEqual(601);
 		expect(excerpt).not.toContain('A second paragraph');
@@ -179,20 +180,58 @@ describe('the excerpt slot never receives a whole document', () => {
 	});
 
 	it('says nothing when the body read reports nothing, rather than an empty panel', async () => {
+		// A resource with no body — the read ANSWERED, and `null` is its answer. Distinct from the
+		// read failing, which rejects; see the block below.
 		readResourceBody.mockResolvedValue(null);
-		expect((await run(`?sel=${NODE}`)).selectedExcerpt).toBeNull();
+		expect(await (await run(`?sel=${NODE}`)).selectedExcerpt).toBeNull();
 	});
 });
 
 describe('a failed side-read degrades the rail, never the screen', () => {
-	it('a trail that will not read leaves the marks drawn and the history absent', async () => {
+	/**
+	 * `[amended — 2026-08-21, spec §5.2]` This test used to assert `expect(data.selectedTrail)
+	 * .toBeNull()`, and **that assertion witnessed the defect** rather than a contract: degrading a
+	 * failed read to `null` made it indistinguishable from a resource with genuinely no history,
+	 * which is the conflation spec §5.1 recorded against this very panel.
+	 *
+	 * The claim around it is right and stays — *a failed side-read must never take down a screen
+	 * whose marks are all drawn*. Only its target changed. The rejection now travels to the rail,
+	 * which renders it as a named failure, so what this test witnesses is that the failure **is
+	 * still a failure** by the time the page has it, and that the drawn screen is untouched.
+	 */
+	it('a trail that will not read reaches the rail as a failure, with the marks still drawn', async () => {
 		readTrail.mockRejectedValue(new Error('502'));
 
 		const data = await run(`?sel=${NODE}`);
 
-		expect(data.selectedTrail).toBeNull();
+		await expect(data.selectedTrail).rejects.toThrow('502');
 		expect(data.selected).toBe(NODE);
 		expect((data.model as { nodes: unknown[] }).nodes).toHaveLength(2);
+	});
+
+	it('a body that will not read is a rejection, never an empty excerpt', async () => {
+		readResourceBody.mockRejectedValue(new Error('503'));
+
+		const data = await run(`?sel=${NODE}`);
+
+		await expect(data.selectedExcerpt).rejects.toThrow('503');
+		expect(data.selected).toBe(NODE);
+	});
+
+	/**
+	 * Spec §6's cheap route-level guard, and it catches the regression most likely to actually
+	 * happen: *someone adds an `await` and quietly restores blocking*. Nothing else in this file
+	 * would notice.
+	 */
+	it('hands back promises the page has not waited for', async () => {
+		readResourceBody.mockReturnValue(new Promise(() => {}));
+		readTrail.mockReturnValue(new Promise(() => {}));
+
+		const data = await run(`?sel=${NODE}`);
+
+		expect(data.selected).toBe(NODE);
+		expect(data.selectedExcerpt).toBeInstanceOf(Promise);
+		expect(data.selectedTrail).toBeInstanceOf(Promise);
 	});
 });
 

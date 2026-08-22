@@ -158,13 +158,19 @@ export async function readAnchorRegions(
  * `body` because *"a page of reconstructed bodies is unbounded"*, and this surface would be asking
  * for up to two hundred of them.
  *
- * Returns `null` rather than throwing: a rail that cannot show an excerpt still shows the
- * resource, and a body read failing is not a reason to fail the page.
+ * `null` means the resource **has no body** — `content.markdown` is nullable on the wire — and
+ * nothing else.
+ *
+ * **A failure rejects.** `[amended — 2026-08-21, spec §5.2]` This used to `.catch(() => null)`, on
+ * the reasoning that a rail which cannot show an excerpt still shows the resource. That reasoning
+ * is right and survives; its *target* was wrong. Degrading to `null` here made a failed read
+ * indistinguishable from a resource with no body — spec §5.1 names this as one of the live
+ * instances — and it did so inside the reader, where the caller has no way to tell them apart
+ * again. The caller streams this promise and renders the rejection as a **named failure**, which
+ * is the degradation the policy actually asks for.
  */
 export const readResourceBody = (token: string, id: string): Promise<string | null> =>
-	apiGet<ContentResponse>(`/api/resources/${id}/content`, token)
-		.then((r) => r.markdown)
-		.catch(() => null);
+	apiGet<ContentResponse>(`/api/resources/${id}/content`, token).then((r) => r.markdown);
 
 /**
  * Every anchor the reader can read — the input to `readableAnchors`.
