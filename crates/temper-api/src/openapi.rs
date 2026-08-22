@@ -164,6 +164,9 @@ use temper_workflow::types::resource::{
         // these are only ever reached transitively through `SlackDisconnectResponse`.
         temper_core::types::slack::SlackDisconnectedPrincipal,
         temper_core::types::slack::IdpRevocation,
+        temper_core::types::data_artifact_shape::ShapeView,
+        temper_core::types::data_artifact_shape::ShapeDeclareRequest,
+        temper_core::types::data_artifact_shape::EnforcementMode,
     )),
     modifiers(&SecurityAddon),
     tags(

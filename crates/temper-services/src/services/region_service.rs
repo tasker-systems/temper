@@ -33,7 +33,7 @@ use crate::backend::region_clocks;
 use crate::error::ApiResult;
 use crate::services::drain_span::{self, JobOutcome};
 use crate::services::workflow_job_service;
-use temper_core::types::workflow_job::{ClaimedAnchorJob, DispatchType, Persona, RegionJobPayload};
+use temper_core::types::workflow_job::{AnchorJobPayload, ClaimedAnchorJob, DispatchType, Persona};
 
 /// Wall-clock ceiling for one drain invocation, in seconds. Sits well under the `api/internal`
 /// function's `maxDuration: 300` so a claimed job that runs long still leaves room to complete and
@@ -127,7 +127,7 @@ async fn run_region_job(
             job.anchor,
             persona,
             dispatch,
-            RegionJobPayload {
+            AnchorJobPayload {
                 emitter: job.emitter,
             },
         )

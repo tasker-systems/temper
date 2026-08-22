@@ -2,6 +2,7 @@ pub mod admin_ledger;
 pub mod citation_audits;
 pub mod cognitive_maps;
 pub mod contexts;
+pub mod data_artifact_shapes;
 pub mod data_artifacts;
 pub mod doc_types;
 pub mod facets;

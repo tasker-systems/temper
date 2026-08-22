@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ShapeDeclared",
+  "description": "Declare a shape for a data-artifact family within one home (spec: data-artifact shape registry,\n2026-08-21, §3–§4).\n\nThe shape is **homed polymorphically** over `(kb_contexts, kb_cogmaps)` and **keyed per home**,\nnot per owner: a shape declared in a context you cannot read must not verdict your data. The\n`(home_anchor, kind_owner, artifact_kind)` triple is unique among non-folded rows, so the\nshape in force is singular per family per home. Amending a shape folds the prior row and inserts\na new one; `shape_version` is the chain depth (assert/fold, the same revision pattern\n`kb_data_artifacts` keeps).\n\nThe `schema` is a JSON Schema (draft 2020-12) validated Rust-side — there is no in-database\nvalidator. `enforcement` carries the closed vocabulary the register closes over.",
+  "type": "object",
+  "properties": {
+    "artifact_kind": {
+      "description": "The bare family name, qualified by `kind_owner`. Carries no implication that a shape has been\nregistered — persistence never requires a prior declaration.",
+      "type": "string"
+    },
+    "enforcement": {
+      "description": "Whether a non-conforming commit is refused (`enforcing`) or merely recorded (`advisory`).",
+      "$ref": "#/$defs/EnforcementMode"
+    },
+    "home_anchor": {
+      "description": "The home the shape is declared in — polymorphic over `(kb_contexts, kb_cogmaps)`. A shape\nnever verdicts data its declarer cannot read, because the home bounds the reach.",
+      "$ref": "#/$defs/AnchorRef"
+    },
+    "kind_owner": {
+      "description": "The namespace half of the family name, `(kind_owner, artifact_kind)`. Resolved by the SQL\nwrapper from the home when the caller names none (the same defaulting\n`_data_artifact_kind_owner` already does for commits), so replay never re-derives a\nnamespace.",
+      "$ref": "#/$defs/KindOwner"
+    },
+    "schema": {
+      "description": "The JSON Schema (draft 2020-12) governing this family. Validated Rust-side."
+    },
+    "shape_id": {
+      "description": "Identity-as-input: minted by the caller and carried here so replay reproduces the same row\nid. `kb_data_artifact_shapes.id` deliberately has no DEFAULT for this reason.",
+      "$ref": "#/$defs/ShapeId"
+    },
+    "shape_version": {
+      "description": "The chain depth of the assert/fold lineage — 1 for the first declaration, N for the Nth\namendment. A verdict recorded against a folded version stops matching, and the artifact\nreads as unchecked until reconciled.",
+      "type": "integer",
+      "format": "int32"
+    }
+  },
+  "required": [
+    "shape_id",
+    "home_anchor",
+    "kind_owner",
+    "artifact_kind",
+    "schema",
+    "enforcement",
+    "shape_version"
+  ],
+  "$defs": {
+    "AnchorRef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "table": {
+          "$ref": "#/$defs/AnchorTable"
+        }
+      },
+      "required": [
+        "table",
+        "id"
+      ]
+    },
+    "AnchorTable": {
+      "description": "A polymorphic anchor/endpoint reference. Serializes table names exactly as the DDL spells them.",
+      "type": "string",
+      "enum": [
+        "kb_contexts",
+        "kb_cogmaps",
+        "kb_resources",
+        "kb_edges",
+        "kb_content_blocks",
+        "kb_teams",
+        "kb_profiles",
+        "kb_connections",
+        "kb_machine_clients",
+        "kb_events"
+      ]
+    },
+    "EnforcementMode": {
+      "description": "The closed enforcement vocabulary (spec §6). A shape is `advisory` by default: a non-conforming\ncommit is recorded, never refused. An `enforcing` shape refuses a non-conforming commit and the\nrefusal carries what failed. The SQL CHECK constraint and the wrapper's refusal both name this\nset; keep the `serde` renames pinned to the CHECK.",
+      "oneOf": [
+        {
+          "description": "Default. A non-conforming commit succeeds and is recorded as non-conforming.",
+          "type": "string",
+          "const": "advisory"
+        },
+        {
+          "description": "A non-conforming commit is refused, and the refusal carries what failed.",
+          "type": "string",
+          "const": "enforcing"
+        }
+      ]
+    },
+    "KindOwner": {
+      "description": "The owner whose namespace a family name lives in. A bare `\"query-plan\"` is never a complete\nreference; the pair `(kind_owner, artifact_kind)` is.\n\nRegistering a shape for a family validates the existing backlog and records a conformance\nverdict against every artifact of that family — so under a flat namespace one tenant's\nregistration would stamp verdicts on another tenant's data, which it cannot even read.\nQualification makes that impossible by construction rather than by a resolution rule.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kb_profiles": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kb_profiles"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kb_teams": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kb_teams"
+          ]
+        }
+      ]
+    },
+    "ShapeId": {
+      "description": "A `kb_data_artifact_shapes.id` value — one declared JSON Schema governing a data-artifact\nfamily within a single home (spec: data-artifact shape registry, 2026-08-21).",
+      "type": "string",
+      "format": "uuid"
+    }
+  }
+}

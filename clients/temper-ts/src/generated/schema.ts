@@ -559,6 +559,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/contexts/{id}/shapes": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List live shapes declared for a context home.
+         * @description Visibility-gated: the caller only sees shapes whose home anchor they can read.
+         *     Returns an empty set (never an error) for an unreadable context.
+         */
+        get: operations["list_shapes"];
+        put?: never;
+        /**
+         * Declare a shape for a data-artifact family within a context home.
+         * @description Authority-gated: the caller must have authoring authority over the context
+         *     (`context_authorable_by_profile`). The service layer applies the gate before
+         *     any write — a caller who cannot author the home is refused with 403.
+         */
+        post: operations["declare_shape"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/contexts/{id}/teams": {
         parameters: {
             query?: never;
@@ -1547,6 +1577,30 @@ export interface paths {
          * @description Answers in two arms: exact (full-text) and wide (vector). Each arm carries its own diagnostics in the response body, beside the hits they describe.
          */
         post: operations["search"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/shapes/{shape_id}": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a single shape by ID.
+         * @description Visibility-gated: returns 404 if the shape does not exist or its owning home
+         *     anchor is not readable to the caller. Includes folded shapes (audit/history).
+         */
+        get: operations["get_shape"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3368,6 +3422,17 @@ export interface components {
              */
             redriven: number;
         };
+        /**
+         * @description Whether a non-conforming commit is refused or merely recorded.
+         *
+         *     The closed vocabulary the register closes over (spec §6): `advisory` (default) or `enforcing`.
+         *     Mirrors `temper_substrate::payloads::EnforcementMode` in a temper-core-native shape so the wire
+         *     type does not depend on the substrate crate, with the full derive stack the wire surfaces require.
+         *     `schemars(inline)` is required for MCP tool inputs (the same fix applied to `ConfidenceBand` and
+         *     the graph enums — a `$ref` into `$defs` reaches the Anthropic tool-use layer with no type signal).
+         * @enum {string}
+         */
+        EnforcementMode: "advisory" | "enforcing";
         /**
          * @description Entitlements included in the profile response — tells the client
          *     what this profile is allowed to do at the system level.
@@ -5936,6 +6001,60 @@ export interface components {
             resource_id: string;
         };
         /**
+         * @description Request body for declaring a shape — the write surface.
+         *
+         *     The home anchor is resolved by the handler from the URL path (API) or tool input (MCP), not
+         *     carried in this body — the same split `ArtifactCommitRequest` uses for the resource id. `kind`
+         *     is the bare family name, qualified by `kind_owner` (or defaulted from the home).
+         */
+        ShapeDeclareRequest: components["schemas"]["ActInput"] & {
+            /** @description Whether a non-conforming commit is refused (`enforcing`) or merely recorded (`advisory`). */
+            enforcement: components["schemas"]["EnforcementMode"];
+            /** @description The bare family name, qualified by `kind_owner` (or defaulted from the home). */
+            kind: string;
+            kind_owner?: null | components["schemas"]["KindOwnerInput"];
+            /** @description The JSON Schema (draft 2020-12) governing this family. Validated Rust-side. */
+            schema: unknown;
+        };
+        /**
+         * Format: uuid
+         * @description A `kb_data_artifact_shapes.id` value — one declared JSON Schema governing a data-artifact
+         *     family within a single home (spec: data-artifact shape registry, 2026-08-21).
+         */
+        ShapeId: string;
+        /**
+         * @description One declared shape, as returned by the API and MCP surfaces.
+         *
+         *     This is the readback `RetrievedShape` projected onto a wire shape: `HomeAnchor` and `KindOwner`
+         *     are rendered as their `(table, id)` scalar pairs (the same split `ArtifactView` uses for
+         *     `kind_owner_table`/`kind_owner_id`) so a consumer that does not share the Rust types still gets a
+         *     self-describing response.
+         */
+        ShapeView: {
+            artifact_kind: string;
+            /** Format: date-time */
+            created: string;
+            /** @description `"advisory"` or `"enforcing"`. */
+            enforcement: components["schemas"]["EnforcementMode"];
+            /** Format: uuid */
+            home_anchor_id: string;
+            /** @description `"kb_contexts"` or `"kb_cogmaps"` — the home anchor discriminant. */
+            home_anchor_table: string;
+            is_folded: boolean;
+            /** Format: uuid */
+            kind_owner_id: string;
+            /** @description `"kb_profiles"` or `"kb_teams"` — the namespace half of the family name. */
+            kind_owner_table: string;
+            /** @description The JSON Schema (draft 2020-12) governing this family. */
+            schema: unknown;
+            shape_id: components["schemas"]["ShapeId"];
+            /**
+             * Format: int32
+             * @description The chain depth of the assert/fold lineage — 1 for the first declaration, N for the Nth.
+             */
+            shape_version: number;
+        };
+        /**
          * @description Result of sharing a context into a team. `shared` is `false` when the share already
          *     existed (idempotent no-op).
          */
@@ -8064,6 +8183,98 @@ export interface operations {
             };
             /** @description Unauthorized */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    list_shapes: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Context ID (the shape's home anchor) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Live shapes declared for this context */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShapeView"][];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    declare_shape: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Context ID (the shape's home anchor) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ShapeDeclareRequest"];
+            };
+        };
+        responses: {
+            /** @description Declared shape */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShapeView"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No authoring authority over the home context */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Context not found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10854,6 +11065,50 @@ export interface operations {
             };
             /** @description Unauthorized */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    get_shape: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Shape ID */
+                shape_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The shape with its schema and enforcement mode */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShapeView"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not found or not visible */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

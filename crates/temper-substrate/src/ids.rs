@@ -11,5 +11,5 @@
 
 pub use temper_core::types::ids::{
     BlockId, ChunkId, CogmapId, ContextId, CorrelationId, DataArtifactId, EdgeId, EntityId,
-    EventId, InvocationId, LensId, ProfileId, PropertyId, RegionId, ResourceId,
+    EventId, InvocationId, LensId, ProfileId, PropertyId, RegionId, ResourceId, ShapeId,
 };

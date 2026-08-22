@@ -1,0 +1,43 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT shape_id, shape_version, schema, enforcement FROM _data_artifact_shape_in_force($1,$2,$3,$4)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "shape_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "shape_version",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "schema",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 3,
+        "name": "enforcement",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "230808e18eff5897697f9cdaa2ebef5a183e7a924b48741ad7bca677b8556b5e"
+}

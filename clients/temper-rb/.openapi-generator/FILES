@@ -3,6 +3,7 @@ lib/temper/generated/api/access_api.rb
 lib/temper/generated/api/auditor_api.rb
 lib/temper/generated/api/cognitive_maps_api.rb
 lib/temper/generated/api/contexts_api.rb
+lib/temper/generated/api/data_artifact_shapes_api.rb
 lib/temper/generated/api/data_artifacts_api.rb
 lib/temper/generated/api/events_api.rb
 lib/temper/generated/api/facets_api.rb
@@ -110,6 +111,7 @@ lib/temper/generated/models/edge_kind.rb
 lib/temper/generated/models/element_event.rb
 lib/temper/generated/models/element_kind.rb
 lib/temper/generated/models/embed_dispatch_summary.rb
+lib/temper/generated/models/enforcement_mode.rb
 lib/temper/generated/models/entitlements.rb
 lib/temper/generated/models/entry_bounds.rb
 lib/temper/generated/models/error_body.rb
@@ -260,6 +262,8 @@ lib/temper/generated/models/search_scope_info.rb
 lib/temper/generated/models/segment_info.rb
 lib/temper/generated/models/segmented_begin.rb
 lib/temper/generated/models/segmented_begin_response.rb
+lib/temper/generated/models/shape_declare_request.rb
+lib/temper/generated/models/shape_view.rb
 lib/temper/generated/models/share_context_outcome.rb
 lib/temper/generated/models/share_context_request.rb
 lib/temper/generated/models/slack_disconnect_request.rb

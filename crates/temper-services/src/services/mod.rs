@@ -27,6 +27,7 @@ pub mod reassign_service;
 pub mod region_service;
 pub mod resource_service;
 pub mod saml_provisioning_service;
+pub mod shape_service;
 pub mod slack_disconnect_service;
 pub mod slack_grant_vault_service;
 pub mod slack_link_service;

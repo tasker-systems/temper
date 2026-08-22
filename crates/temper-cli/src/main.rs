@@ -2,8 +2,8 @@ use clap::Parser;
 use temper_cli::cli::{
     AdminAction, AdminConnectionAction, AdminMachineAction, AdminRequestsAction, AdminSamlAction,
     AdminSlackAction, AdminSubscriptionAction, AuthAction, Cli, CogmapCmd, Commands, ConfigAction,
-    ContextAction, DataArtifactAction, InvocationCmd, MemoryAction, ResourceAction, SkillAction,
-    SlackAction, StewardCmd, TeamAction,
+    ContextAction, DataArtifactAction, InvocationCmd, MemoryAction, ResourceAction, SchemaAction,
+    SkillAction, SlackAction, StewardCmd, TeamAction,
 };
 use temper_cli::commands;
 use temper_cli::format::OutputFormat;
@@ -446,6 +446,60 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         format: output_format,
                     },
                 ),
+                DataArtifactAction::Schema { action } => match action {
+                    SchemaAction::List { context } => {
+                        temper_cli::actions::runtime::with_client(|client| {
+                            Box::pin(async move {
+                                temper_cli::commands::data_artifact::schema_list_remote(
+                                    client,
+                                    &context,
+                                    output_format,
+                                )
+                                .await
+                            })
+                        })
+                    }
+                    SchemaAction::Show { r#ref } => {
+                        temper_cli::actions::runtime::with_client(|client| {
+                            Box::pin(async move {
+                                temper_cli::commands::data_artifact::schema_show_remote(
+                                    client,
+                                    &r#ref,
+                                    output_format,
+                                )
+                                .await
+                            })
+                        })
+                    }
+                    SchemaAction::Declare {
+                        r#ref,
+                        kind,
+                        enforcement,
+                        content,
+                        act,
+                    } => temper_cli::actions::runtime::with_client(|client| {
+                        Box::pin(async move {
+                            let wire_enforcement = match enforcement {
+                                temper_cli::cli::CliEnforcementMode::Advisory => {
+                                    temper_core::types::data_artifact_shape::EnforcementMode::Advisory
+                                }
+                                temper_cli::cli::CliEnforcementMode::Enforcing => {
+                                    temper_core::types::data_artifact_shape::EnforcementMode::Enforcing
+                                }
+                            };
+                            temper_cli::commands::data_artifact::schema_declare_remote(
+                                client,
+                                &r#ref,
+                                &kind,
+                                wire_enforcement,
+                                content.as_deref(),
+                                act.into_act_input()?,
+                                output_format,
+                            )
+                            .await
+                        })
+                    }),
+                },
             }
         }
         Commands::Context { action } => match action {
