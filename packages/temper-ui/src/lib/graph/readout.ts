@@ -79,9 +79,14 @@ export interface Readout {
  *
  * **One flat set, not one per anchor.** A region id is a uuid and is globally unique, so which
  * anchor's shape read produced the row does not matter to a lookup — and both anchor kinds answer
- * the same read (`anchor_shape_select`, `Vec<CogmapRegionRow>`, at
+ * the same read (`anchor_shape_select`, `AnchorShape`, at
  * `/api/cognitive-maps/{id}/shape` and `/api/contexts/{id}/shape`), which is
  * `cross-kind-relationship-is-reachable` holding one layer down.
+ *
+ * **`rows` is the unwrapped `regions`, and this type deliberately stops there.** That read now
+ * answers an anchor-level envelope (`population`, `emptiness`, `materialized_at`);
+ * `readAnchorRegions` drops it, because those facts are per-anchor and this set is flat by design,
+ * and because naming a grouping needs `region_id`, `label` and `member_count` and nothing else.
  *
  * `complete` is false when any of those reads did not answer. It degrades every unfound id to
  * `unchecked` rather than `re-derived` — conservative in the one direction that matters, since the

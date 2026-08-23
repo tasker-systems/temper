@@ -1433,14 +1433,11 @@
         ],
         "responses": {
           "200": {
-            "description": "Materialized regions (surface tier)",
+            "description": "Materialized regions (surface tier), wrapped in an envelope whose `emptiness` names why an empty answer is empty",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/CogmapRegionRow"
-                  }
+                  "$ref": "#/components/schemas/AnchorShape"
                 }
               }
             }
@@ -2080,14 +2077,11 @@
         ],
         "responses": {
           "200": {
-            "description": "The context's materialized regions (surface tier), most salient first",
+            "description": "The context's materialized regions (surface tier), most salient first, wrapped in an envelope whose `emptiness` names why an empty answer is empty",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/CogmapRegionRow"
-                  }
+                  "$ref": "#/components/schemas/AnchorShape"
                 }
               }
             }
@@ -8305,6 +8299,47 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "AnchorShape": {
+        "type": "object",
+        "description": "An anchor's materialized regions, with the anchor-level facts that let an empty answer say why\nit is empty. Returned by `anchor_shape` for EITHER anchor kind.\n\n`population` is the region count this principal can see across **all** lenses, member-gated —\nso under a `lens` filter it is strictly greater than `regions.len()`, and equal to it otherwise.\nIt is a denominator, not a restatement of the row count.",
+        "required": [
+          "regions",
+          "population"
+        ],
+        "properties": {
+          "emptiness": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ShapeEmptiness",
+                "description": "Why `regions` is empty; `None` when it is not."
+              }
+            ]
+          },
+          "materialized_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the anchor was last clustered. `None` means never — or that the caller cannot read it."
+          },
+          "population": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Visible regions in this anchor across ALL lenses. `0` for a caller who cannot read it."
+          },
+          "regions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CogmapRegionRow"
+            },
+            "description": "The regions themselves, most salient first — narrowed by `lens` when one was supplied."
           }
         }
       },
@@ -14611,6 +14646,16 @@
           }
         ],
         "description": "Request body for declaring a shape — the write surface.\n\nThe home anchor is resolved by the handler from the URL path (API) or tool input (MCP), not\ncarried in this body — the same split `ArtifactCommitRequest` uses for the resource id. `kind`\nis the bare family name, qualified by `kind_owner` (or defaulted from the home)."
+      },
+      "ShapeEmptiness": {
+        "type": "string",
+        "description": "Why a shape read came back with no regions. Absent (`None`) when the read returned rows.\n\n`UnreadableOrAbsent` is deliberately ONE arm for two situations — a caller who cannot read the\nanchor and an anchor that does not exist must stay indistinguishable, or the envelope becomes an\nexistence oracle. It discloses neither the population nor the clock. The other three arms are\nonly ever reached by a caller who passed the anchor gate, for whom \"this anchor exists\" is not a\ndisclosure.",
+        "enum": [
+          "lens_narrowed",
+          "nothing_visible",
+          "never_clustered",
+          "unreadable_or_absent"
+        ]
       },
       "ShapeId": {
         "type": "string",

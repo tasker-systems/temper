@@ -2098,6 +2098,29 @@ export interface components {
             reasoning?: string | null;
         };
         /**
+         * @description An anchor's materialized regions, with the anchor-level facts that let an empty answer say why
+         *     it is empty. Returned by `anchor_shape` for EITHER anchor kind.
+         *
+         *     `population` is the region count this principal can see across **all** lenses, member-gated —
+         *     so under a `lens` filter it is strictly greater than `regions.len()`, and equal to it otherwise.
+         *     It is a denominator, not a restatement of the row count.
+         */
+        AnchorShape: {
+            emptiness?: null | components["schemas"]["ShapeEmptiness"];
+            /**
+             * Format: date-time
+             * @description When the anchor was last clustered. `None` means never — or that the caller cannot read it.
+             */
+            materialized_at?: string | null;
+            /**
+             * Format: int32
+             * @description Visible regions in this anchor across ALL lenses. `0` for a caller who cannot read it.
+             */
+            population: number;
+            /** @description The regions themselves, most salient first — narrowed by `lens` when one was supplied. */
+            regions: components["schemas"]["CogmapRegionRow"][];
+        };
+        /**
          * @description Append one segment to an in-progress (segmented-begin'd) resource —
          *     `POST /api/resources/{id}/blocks`.
          */
@@ -6017,6 +6040,17 @@ export interface components {
             schema: unknown;
         };
         /**
+         * @description Why a shape read came back with no regions. Absent (`None`) when the read returned rows.
+         *
+         *     `UnreadableOrAbsent` is deliberately ONE arm for two situations — a caller who cannot read the
+         *     anchor and an anchor that does not exist must stay indistinguishable, or the envelope becomes an
+         *     existence oracle. It discloses neither the population nor the clock. The other three arms are
+         *     only ever reached by a caller who passed the anchor gate, for whom "this anchor exists" is not a
+         *     disclosure.
+         * @enum {string}
+         */
+        ShapeEmptiness: "lens_narrowed" | "nothing_visible" | "never_clustered" | "unreadable_or_absent";
+        /**
          * Format: uuid
          * @description A `kb_data_artifact_shapes.id` value — one declared JSON Schema governing a data-artifact
          *     family within a single home (spec: data-artifact shape registry, 2026-08-21).
@@ -7781,13 +7815,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Materialized regions (surface tier) */
+            /** @description Materialized regions (surface tier), wrapped in an envelope whose `emptiness` names why an empty answer is empty */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CogmapRegionRow"][];
+                    "application/json": components["schemas"]["AnchorShape"];
                 };
             };
             /** @description Unauthorized */
@@ -8172,13 +8206,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The context's materialized regions (surface tier), most salient first */
+            /** @description The context's materialized regions (surface tier), most salient first, wrapped in an envelope whose `emptiness` names why an empty answer is empty */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CogmapRegionRow"][];
+                    "application/json": components["schemas"]["AnchorShape"];
                 };
             };
             /** @description Unauthorized */

@@ -14,6 +14,7 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use temper_core::types::cognitive_maps::ShapeEmptiness;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::ProfileId;
 use temper_services::backend::substrate_read::{anchor_region_metrics_select, anchor_shape_select};
@@ -81,6 +82,52 @@ async fn grant_context_read(pool: &PgPool, context: Uuid, profile: Uuid) {
     .expect("grant context read");
 }
 
+/// A SECOND context owned by an existing profile. `create_test_profile_with_context` mints exactly
+/// one (slug `temper`) and the slug is unique per owner, so a sibling context — the thing a reader
+/// can read but a *grantee on another context* cannot — has to be inserted here.
+async fn insert_owned_context(pool: &PgPool, owner: Uuid, slug: &str) -> Uuid {
+    sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
+         VALUES ('kb_profiles', $1, $2, $2) RETURNING id",
+    )
+    .bind(owner)
+    .bind(slug)
+    .fetch_one(pool)
+    .await
+    .expect("insert a second owned context")
+}
+
+/// Stamp the FORMATION watermark the envelope's clock reads. A fixture context is born with
+/// `shape_materialized_event_id` NULL, so it reports `never_clustered` until this runs — and the
+/// emptiness precedence checks the clock BEFORE the row count
+/// (`migrations/20260823000010_anchor_shape_envelope.sql:90-92`), which is exactly why a test that
+/// means to prove `nothing_visible` must materialize first or it proves `never_clustered` instead.
+async fn mark_context_materialized(pool: &PgPool, context: Uuid) {
+    let event: Uuid = sqlx::query_scalar("SELECT id FROM kb_events ORDER BY occurred_at LIMIT 1")
+        .fetch_one(pool)
+        .await
+        .expect("migrations seed at least one event");
+    sqlx::query("UPDATE kb_contexts SET shape_materialized_event_id = $2 WHERE id = $1")
+        .bind(context)
+        .bind(event)
+        .execute(pool)
+        .await
+        .expect("stamp the context's shape watermark");
+}
+
+/// The id of a boot-seeded GLOBAL lens (`cogmap_id IS NULL`). Two exist — `workflow-default`
+/// (`migrations/20260712000050_workflow_default_lens.sql:107`) and `telos-default` — which is what
+/// makes a two-lens fixture possible without minting one.
+async fn global_lens(pool: &PgPool, name: &str) -> Uuid {
+    sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM kb_cogmap_lenses WHERE name = $1 AND cogmap_id IS NULL",
+    )
+    .bind(name)
+    .fetch_one(pool)
+    .await
+    .expect("the global lens is seeded by migration")
+}
+
 /// The owner of a context sees its regions — the read the arc exists to deliver, and which returned
 /// nothing (structurally) before T8.
 ///
@@ -104,7 +151,8 @@ async fn owner_sees_the_contexts_regions(pool: PgPool) {
         None,
     )
     .await
-    .expect("context shape read must be Ok");
+    .expect("context shape read must be Ok")
+    .regions;
 
     assert_eq!(rows.len(), 1, "the context's one region surfaces: {rows:?}");
     assert_eq!(rows[0].label.as_deref(), Some("region-a"));
@@ -137,7 +185,8 @@ async fn context_read_grant_grants_the_orientation_read(pool: PgPool) {
     // cannot distinguish "not readable" from "no regions" (no existence oracle).
     let before = anchor_shape_select(&pool, ProfileId::from(stranger), anchor, None)
         .await
-        .expect("a denied read is empty, never an error");
+        .expect("a denied read is empty, never an error")
+        .regions;
     assert!(
         before.is_empty(),
         "a stranger must not see the context's regions: {before:?}"
@@ -148,7 +197,8 @@ async fn context_read_grant_grants_the_orientation_read(pool: PgPool) {
     // After the grant: the same call, the same principal, now returns the regions.
     let after = anchor_shape_select(&pool, ProfileId::from(stranger), anchor, None)
         .await
-        .expect("granted read must be Ok");
+        .expect("granted read must be Ok")
+        .regions;
     assert_eq!(
         after.len(),
         1,
@@ -197,7 +247,8 @@ async fn regions_sort_most_salient_first_and_nulls_do_not_lead(pool: PgPool) {
         None,
     )
     .await
-    .expect("context shape read must be Ok");
+    .expect("context shape read must be Ok")
+    .regions;
 
     let labels: Vec<_> = rows.iter().filter_map(|r| r.label.as_deref()).collect();
     assert_eq!(
@@ -210,10 +261,16 @@ async fn regions_sort_most_salient_first_and_nulls_do_not_lead(pool: PgPool) {
 /// A context the caller cannot read yields empty, never an error — the same leak-safe shape the cogmap
 /// reads have. (A random UUID stands in for "a context that exists but is not yours": both are denied
 /// identically, which is the point — the caller learns nothing about existence.)
+///
+/// The envelope keeps that promise rather than weakening it. `unreadable_or_absent` is ONE arm for
+/// both situations, and it reports neither the population nor the clock — so what the caller now
+/// learns is that they are in {denied, absent}, which is strictly narrower than the `[]` they used to
+/// get and which they already knew. A `population: 0` here would still be a fact about a context they
+/// have no read on, so the assertions below pin both fields, not just the row count.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn unreadable_context_is_empty_not_error(pool: PgPool) {
     let profile = common::fixtures::create_test_profile(&pool, "nobody@example.com").await;
-    let rows = anchor_shape_select(
+    let shape = anchor_shape_select(
         &pool,
         ProfileId::from(profile),
         HomeAnchor::Context(Uuid::now_v7().into()),
@@ -221,7 +278,21 @@ async fn unreadable_context_is_empty_not_error(pool: PgPool) {
     )
     .await
     .expect("non-readable context is empty, not an error");
-    assert!(rows.is_empty());
+
+    assert!(shape.regions.is_empty());
+    assert_eq!(
+        shape.emptiness,
+        Some(ShapeEmptiness::UnreadableOrAbsent),
+        "deny and absent collapse into one arm: {shape:?}"
+    );
+    assert_eq!(
+        shape.population, 0,
+        "the arm must not disclose the size of a context the caller cannot read"
+    );
+    assert!(
+        shape.materialized_at.is_none(),
+        "...nor its clock, which would confirm the context exists and has been clustered"
+    );
 }
 
 // ── The label fallback (T8 follow-up, migration 20260713000020) ──────────────
@@ -293,7 +364,8 @@ async fn an_unlabelled_region_is_named_by_its_most_affine_member(pool: PgPool) {
         None,
     )
     .await
-    .expect("shape read must be Ok");
+    .expect("shape read must be Ok")
+    .regions;
 
     assert_eq!(
         rows[0].label.as_deref(),
@@ -343,7 +415,8 @@ async fn an_invisible_member_can_never_become_the_regions_name(pool: PgPool) {
         None,
     )
     .await
-    .expect("shape read must be Ok");
+    .expect("shape read must be Ok")
+    .regions;
 
     let label = rows[0].label.as_deref();
     assert_ne!(
@@ -372,6 +445,13 @@ async fn an_invisible_member_can_never_become_the_regions_name(pool: PgPool) {
 /// read hides a region while the metrics read still answers for it, the metrics door becomes an
 /// existence oracle for exactly the regions the shape door refuses to show — and hands over its
 /// centrality and cohesion besides. Both doors drop it, or neither is closed.
+///
+/// This is also the canonical `nothing_visible` case: the anchor HAS been clustered and does hold a
+/// region, and the caller still gets nothing — which before the envelope was byte-identical to an
+/// anchor that had never clustered at all. The context is materialized here on purpose; without that
+/// stamp the emptiness precedence answers `never_clustered` first
+/// (`migrations/20260823000010_anchor_shape_envelope.sql:90-92`) and the arm this test names would
+/// never be reached.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_region_with_no_visible_members_is_returned_by_neither_door(pool: PgPool) {
     let (profile, context) =
@@ -386,6 +466,7 @@ async fn a_region_with_no_visible_members_is_returned_by_neither_door(pool: PgPo
     let secret_b = insert_resource(&pool, stranger_context, stranger, "secret two").await;
     add_member(&pool, region, secret_a, 0.9).await;
     add_member(&pool, region, secret_b, 0.4).await;
+    mark_context_materialized(&pool, context).await;
 
     let anchor = HomeAnchor::Context(context.into());
 
@@ -393,8 +474,23 @@ async fn a_region_with_no_visible_members_is_returned_by_neither_door(pool: PgPo
         .await
         .expect("shape read must be Ok");
     assert!(
-        shape.is_empty(),
+        shape.regions.is_empty(),
         "a region with no visible members must not surface in the shape read: {shape:?}"
+    );
+    assert_eq!(
+        shape.emptiness,
+        Some(ShapeEmptiness::NothingVisible),
+        "clustered, and holding a region — the emptiness is about REACH, not about formation: \
+         {shape:?}"
+    );
+    assert_eq!(
+        shape.population, 0,
+        "the denominator is member-gated too: a region the caller can see nothing in is not counted"
+    );
+    assert!(
+        shape.materialized_at.is_some(),
+        "the clock IS disclosed to a caller who passed the anchor gate — that is what separates this \
+         arm from unreadable_or_absent"
     );
 
     let metrics = anchor_region_metrics_select(&pool, ProfileId::from(profile), anchor, None)
@@ -435,10 +531,143 @@ async fn a_soft_deleted_member_is_not_counted(pool: PgPool) {
         None,
     )
     .await
-    .expect("shape read must be Ok");
+    .expect("shape read must be Ok")
+    .regions;
 
     assert_eq!(
         rows[0].member_count, 1,
         "the deleted member is not counted — even for the owner, who could see it when it existed"
+    );
+}
+
+// ── The anchor-level envelope (migration 20260823000010) ─────────────────────
+//
+// Before it, `[]` was the whole answer, and four different situations produced identical bytes. The
+// two tests below cover the pair the read could not separate, and the field that makes `population`
+// a denominator rather than a restatement of `regions.len()`.
+
+/// THE PAIR THE OLD READ COULD NOT SEPARATE. Both contexts answer with zero regions; only the
+/// envelope says why. `never_clustered` has never been materialized — there is nothing to see
+/// because nothing was ever formed. `clustered` has been materialized and holds a region — there is
+/// nothing to see because this caller can reach none of its members. The CLI help text asserted the
+/// first cause for both (`crates/temper-cli/src/cli.rs:1079`), which is the claim this ends.
+///
+/// Both contexts are owned by the SAME reader, so the anchor gate answers identically for each and
+/// the only variables are formation and reach.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_never_clustered_context_is_distinguishable_from_one_with_nothing_visible(pool: PgPool) {
+    let (reader, never_clustered) =
+        common::fixtures::create_test_profile_with_context(&pool, "reader@example.com").await;
+    let (stranger, stranger_context) =
+        common::fixtures::create_test_profile_with_context(&pool, "stranger@example.com").await;
+
+    let clustered = insert_owned_context(&pool, reader, "clustered").await;
+    let region = insert_context_region(&pool, clustered, 0.9, Some(0.5), "all-invisible").await;
+    let secret = insert_resource(&pool, stranger_context, stranger, "not yours").await;
+    add_member(&pool, region, secret, 0.9).await;
+    mark_context_materialized(&pool, clustered).await;
+
+    let a = anchor_shape_select(
+        &pool,
+        ProfileId::from(reader),
+        HomeAnchor::Context(never_clustered.into()),
+        None,
+    )
+    .await
+    .expect("a readable context read must be Ok");
+    let b = anchor_shape_select(
+        &pool,
+        ProfileId::from(reader),
+        HomeAnchor::Context(clustered.into()),
+        None,
+    )
+    .await
+    .expect("a readable context read must be Ok");
+
+    assert!(
+        a.regions.is_empty() && b.regions.is_empty(),
+        "both are empty — exactly as they were before the envelope: {a:?} / {b:?}"
+    );
+    assert_eq!(a.emptiness, Some(ShapeEmptiness::NeverClustered));
+    assert_eq!(b.emptiness, Some(ShapeEmptiness::NothingVisible));
+    assert_ne!(
+        a.emptiness, b.emptiness,
+        "the two byte-identical answers now differ — this is the whole point of the task"
+    );
+    assert!(
+        a.materialized_at.is_none() && b.materialized_at.is_some(),
+        "and the clock agrees with the arm each one named: {a:?} / {b:?}"
+    );
+}
+
+/// The task's first acceptance criterion: two principals with different reach receive different
+/// populations.
+///
+/// Asserted UNDER A LENS on purpose. Without one, `population` equals `regions.len()` and the
+/// criterion is met by the row count alone — which is the premise the design's §2.1 records as
+/// unsupported by disk. Under a lens the two callers are handed the SAME single row, so the rows
+/// cannot be what differs; only the all-lens denominator can be. Reach decides it.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn population_is_member_gated_across_two_principals(pool: PgPool) {
+    let (owner, context) =
+        common::fixtures::create_test_profile_with_context(&pool, "owner@example.com").await;
+    let grantee = common::fixtures::create_test_profile(&pool, "grantee@example.com").await;
+    grant_context_read(&pool, context, grantee).await;
+    mark_context_materialized(&pool, context).await;
+
+    let lens_a = global_lens(&pool, "workflow-default").await;
+    let lens_b = global_lens(&pool, "telos-default").await;
+
+    // Region under lens A, holding a resource homed in the shared context — visible to BOTH: the
+    // context READ grant is what makes the context's own resources visible to the grantee.
+    let shared_region = insert_context_region(&pool, context, 0.9, Some(0.5), "shared").await;
+    let shared_member = insert_resource(&pool, context, owner, "in the granted context").await;
+    add_member(&pool, shared_region, shared_member, 0.9).await;
+
+    // Region under lens B, holding a resource homed in a SECOND context of the owner's. The grant
+    // covers one context, not the owner's whole reach, so this member is invisible to the grantee —
+    // and the region therefore falls out of THEIR denominator, though not out of the owner's.
+    let private = insert_owned_context(&pool, owner, "private").await;
+    let private_region = insert_context_region(&pool, context, 0.4, Some(0.5), "private").await;
+    // `insert_context_region` always writes the workflow-default lens; the second region is moved to
+    // the other global lens here rather than by forking the helper (the same in-test UPDATE the
+    // label-fallback cases use to reshape a seeded region).
+    sqlx::query("UPDATE kb_cogmap_regions SET lens_id = $2 WHERE id = $1")
+        .bind(private_region)
+        .bind(lens_b)
+        .execute(&pool)
+        .await
+        .expect("move the second region under the other global lens");
+    let private_member = insert_resource(&pool, private, owner, "not in the granted context").await;
+    add_member(&pool, private_region, private_member, 0.9).await;
+
+    let anchor = HomeAnchor::Context(context.into());
+    let wide = anchor_shape_select(&pool, ProfileId::from(owner), anchor, Some(lens_a))
+        .await
+        .expect("owner read must be Ok");
+    let narrow = anchor_shape_select(&pool, ProfileId::from(grantee), anchor, Some(lens_a))
+        .await
+        .expect("grantee read must be Ok");
+
+    assert_eq!(
+        (wide.regions.len(), narrow.regions.len()),
+        (1, 1),
+        "the lens narrows both callers to the same single row: {wide:?} / {narrow:?}"
+    );
+    assert_eq!(
+        wide.population, 2,
+        "the owner reaches a member in each region, so both count: {wide:?}"
+    );
+    assert_eq!(
+        narrow.population, 1,
+        "the grantee reaches a member in only one of them: {narrow:?}"
+    );
+    assert!(
+        wide.population > narrow.population,
+        "reach decides the denominator, not just the rows"
+    );
+    assert_eq!(
+        wide.emptiness, None,
+        "a non-empty row set carries no emptiness at all"
     );
 }

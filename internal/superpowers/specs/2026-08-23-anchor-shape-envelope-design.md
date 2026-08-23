@@ -208,16 +208,23 @@ The `LEFT JOIN ... ON true` is what makes the empty case able to speak: an ancho
 yields exactly one row, with `region_id` NULL. Rust reads the envelope from the first row and drops
 the NULL-region sentinel.
 
-**`emptiness` precedence, evaluated in this order:**
+**`emptiness` precedence, evaluated in this order** `[rule 1 added 2026-08-23, during Task 4]`**:**
 
-1. not readable → `unreadable_or_absent`
-2. `shape_materialized_event_id IS NULL` → `never_clustered`
-3. `population = 0` → `nothing_visible`
-4. rows under `p_lens` = 0 → `lens_narrowed` (reachable only when `p_lens IS NOT NULL`)
-5. otherwise → `NULL`
+1. rows returned under `p_lens` > 0 → `NULL`
+2. not readable → `unreadable_or_absent`
+3. `shape_materialized_event_id IS NULL` → `never_clustered`
+4. `population = 0` → `nothing_visible`
+5. otherwise → `lens_narrowed`
 
-Order matters: rule 2 must precede rule 3, or a never-clustered anchor reports `nothing_visible` and
-the distinction the task exists to draw is lost.
+Order matters in two places. **Rule 1 guards the field's own contract.** Without it, a readable
+anchor holding visible regions that was never materialized returns rows *and* `never_clustered` — a
+named cause attached to a non-empty answer, contradicting the column's documented meaning (*"why
+`regions` is empty; `None` when it is not"*). Suppressing it there loses nothing: `materialized_at`
+is NULL for exactly that anchor, and that is the field which is actually about the clock. An
+unreadable anchor never reaches rule 1, having no rows.
+
+**Rule 3 must precede rule 4**, or a never-clustered anchor reports `nothing_visible` and the
+distinction this whole task exists to draw collapses back into the bug.
 
 ### 4.3 The `cogmap` self-read arm is preserved, as it was argued
 

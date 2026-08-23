@@ -4,6 +4,32 @@ import type { RegionId } from "./RegionId";
 import type { ResourceId } from "./ResourceId";
 
 /**
+ * An anchor's materialized regions, with the anchor-level facts that let an empty answer say why
+ * it is empty. Returned by `anchor_shape` for EITHER anchor kind.
+ *
+ * `population` is the region count this principal can see across **all** lenses, member-gated —
+ * so under a `lens` filter it is strictly greater than `regions.len()`, and equal to it otherwise.
+ * It is a denominator, not a restatement of the row count.
+ */
+export type AnchorShape = { 
+/**
+ * The regions themselves, most salient first — narrowed by `lens` when one was supplied.
+ */
+regions: Array<CogmapRegionRow>, 
+/**
+ * Visible regions in this anchor across ALL lenses. `0` for a caller who cannot read it.
+ */
+population: number, 
+/**
+ * Why `regions` is empty; `None` when it is not.
+ */
+emptiness: ShapeEmptiness | null, 
+/**
+ * When the anchor was last clustered. `None` means never — or that the caller cannot read it.
+ */
+materialized_at: string | null, };
+
+/**
  * The result of binding a cognitive map to a team. `bound` is `false` when the
  * binding already existed (idempotent no-op) — the clean mirror of genesis's
  * `created` flag.
@@ -268,6 +294,17 @@ export type RevokeCapabilityRequest = { subject_table: string, subject_id: strin
  * The result of a revoke. `revoked` is `false` when no matching grant existed (idempotent no-op).
  */
 export type RevokeOutcome = { revoked: boolean, };
+
+/**
+ * Why a shape read came back with no regions. Absent (`None`) when the read returned rows.
+ *
+ * `UnreadableOrAbsent` is deliberately ONE arm for two situations — a caller who cannot read the
+ * anchor and an anchor that does not exist must stay indistinguishable, or the envelope becomes an
+ * existence oracle. It discloses neither the population nor the clock. The other three arms are
+ * only ever reached by a caller who passed the anchor gate, for whom "this anchor exists" is not a
+ * disclosure.
+ */
+export type ShapeEmptiness = "lens_narrowed" | "nothing_visible" | "never_clustered" | "unreadable_or_absent";
 
 /**
  * The result of unbinding a cognitive map from a team. `unbound` is `false` when

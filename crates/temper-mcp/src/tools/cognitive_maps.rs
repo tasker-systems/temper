@@ -50,7 +50,7 @@ pub async fn cogmap_shape(
         None => None,
     };
 
-    let rows = temper_services::backend::substrate_read::anchor_shape_select(
+    let shape = temper_services::backend::substrate_read::anchor_shape_select(
         &svc.api_state.pool,
         ProfileId::from(profile.id),
         HomeAnchor::Cogmap(CogmapId::from(cogmap_id)),
@@ -59,7 +59,10 @@ pub async fn cogmap_shape(
     .await
     .map_err(|e| rmcp::ErrorData::internal_error(format!("cogmap_shape failed: {e}"), None))?;
 
-    let text = serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string());
+    // The payload is the `AnchorShape` OBJECT, not a bare array — so the fallback is `{}`. Handing
+    // an agent `[]` where the schema promises an object is the silent contract lie this read exists
+    // to end.
+    let text = serde_json::to_string_pretty(&shape).unwrap_or_else(|_| "{}".to_string());
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         text,
     )]))
@@ -623,7 +626,7 @@ pub async fn context_shape(
     let profile_id = ProfileId::from(profile.id);
     let anchor = context_anchor(svc, profile_id, &input.context).await?;
 
-    let rows = temper_services::backend::substrate_read::anchor_shape_select(
+    let shape = temper_services::backend::substrate_read::anchor_shape_select(
         &svc.api_state.pool,
         profile_id,
         anchor,
@@ -632,7 +635,8 @@ pub async fn context_shape(
     .await
     .map_err(|e| rmcp::ErrorData::internal_error(format!("context_shape failed: {e}"), None))?;
 
-    let text = serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string());
+    // Object, not array — see the note in `cogmap_shape`; the fallback must match the schema.
+    let text = serde_json::to_string_pretty(&shape).unwrap_or_else(|_| "{}".to_string());
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         text,
     )]))

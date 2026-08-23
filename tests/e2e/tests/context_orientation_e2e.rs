@@ -129,7 +129,13 @@ async fn grant_context_read(pool: &sqlx::PgPool, context: Uuid, profile: Uuid) {
     .expect("grant context read");
 }
 
-/// GET the shape route with `token`, asserting 200, and return the parsed rows.
+/// GET the shape route with `token`, asserting 200, and return the parsed region rows.
+///
+/// Since migration `20260823000010` the route answers with an `AnchorShape` OBJECT, not a bare
+/// array — the wire break the envelope forced. The unwrap happens here so the cases below keep
+/// asserting about regions; that the body really is an object is asserted on the way through, since
+/// a `.get("regions")` on an array would silently yield `None` and every case would then pass on an
+/// empty list.
 async fn get_shape(app: &common::E2eTestApp, token: &str, context: Uuid) -> Vec<serde_json::Value> {
     let resp = app
         .reqwest_client
@@ -141,9 +147,17 @@ async fn get_shape(app: &common::E2eTestApp, token: &str, context: Uuid) -> Vec<
     assert_eq!(
         resp.status(),
         StatusCode::OK,
-        "the shape read is always 200 — a denied principal gets an empty list, not an error"
+        "the shape read is always 200 — a denied principal gets an empty envelope, not an error"
     );
-    resp.json().await.expect("shape json parse")
+    let envelope: serde_json::Value = resp.json().await.expect("shape json parse");
+    assert!(
+        envelope.is_object(),
+        "the shape route answers with an envelope object, not an array: {envelope}"
+    );
+    envelope["regions"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the envelope always carries a `regions` array: {envelope}"))
+        .clone()
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]

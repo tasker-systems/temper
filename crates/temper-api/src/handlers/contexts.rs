@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
 use crate::middleware::surface::RequestSurface;
-use temper_core::types::cognitive_maps::{CogmapRegionMetricsRow, CogmapRegionRow};
+use temper_core::types::cognitive_maps::{AnchorShape, CogmapRegionMetricsRow};
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, ProfileId};
 use temper_core::types::materialize::{MaterializeAck, MaterializeRequest};
@@ -222,7 +222,9 @@ pub async fn rename(
 // context's region exactly as well (the `cogmap_*` naming goes away at M3, not the shape).
 //
 // Every gate lives in the SQL (`anchor_readable_by_profile` → `context_readable_by_profile`), so a
-// caller who cannot read the context gets an empty list rather than a 403 — no existence oracle.
+// caller who cannot read the context gets `emptiness: unreadable_or_absent` rather than a 403 — an
+// arm that collapses "denied" and "does not exist" and discloses neither the population nor the
+// clock, so it is still no existence oracle.
 
 /// Query params for the context shape / region-metrics reads.
 #[derive(Debug, Deserialize)]
@@ -243,7 +245,7 @@ pub struct ContextShapeQuery {
     ),
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "The context's materialized regions (surface tier), most salient first", body = Vec<CogmapRegionRow>),
+        (status = 200, description = "The context's materialized regions (surface tier), most salient first, wrapped in an envelope whose `emptiness` names why an empty answer is empty", body = AnchorShape),
         (status = 401, description = "Unauthorized", body = temper_services::error::ErrorBody),
     )
 )]
@@ -252,7 +254,7 @@ pub async fn shape(
     auth: AuthUser,
     Path(context_id): Path<Uuid>,
     Query(q): Query<ContextShapeQuery>,
-) -> ApiResult<Json<Vec<CogmapRegionRow>>> {
+) -> ApiResult<Json<AnchorShape>> {
     temper_services::backend::substrate_read::anchor_shape_select(
         &state.pool,
         ProfileId::from(auth.0.profile().id),

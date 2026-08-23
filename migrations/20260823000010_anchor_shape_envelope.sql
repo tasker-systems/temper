@@ -87,15 +87,25 @@ LANGUAGE sql STABLE AS $$
             CASE WHEN g.readable THEN (SELECT count(*)::int FROM regs) ELSE 0 END AS population,
             CASE WHEN g.readable THEN (SELECT k.materialized_at FROM clock k) ELSE NULL END
                 AS materialized_at,
-            -- Precedence is load-bearing. Rule 2 MUST precede rule 3, or a never-clustered anchor
+            -- Precedence is load-bearing, in two places.
+            --
+            -- The FIRST arm guards the field's own contract: `emptiness` explains an EMPTY row set
+            -- and nothing else. Without it, a readable anchor that holds visible regions but was
+            -- never materialized returns rows AND 'never_clustered' -- a named cause attached to a
+            -- non-empty answer, which contradicts the column's documented meaning. That fact is not
+            -- lost by suppressing it here: `materialized_at` is NULL for exactly that anchor, which
+            -- is the field that is actually about the clock. (An unreadable anchor never reaches
+            -- this arm -- it has no rows.)
+            --
+            -- Then 'never_clustered' MUST precede 'nothing_visible', or a never-clustered anchor
             -- reports 'nothing_visible' and the distinction this function exists to draw is lost.
             CASE
+                WHEN (SELECT count(*) FROM regs rr
+                       WHERE p_lens IS NULL OR rr.lens_id = p_lens) > 0 THEN NULL
                 WHEN NOT g.readable                        THEN 'unreadable_or_absent'
                 WHEN (SELECT k.eid FROM clock k) IS NULL   THEN 'never_clustered'
                 WHEN (SELECT count(*) FROM regs) = 0       THEN 'nothing_visible'
-                WHEN (SELECT count(*) FROM regs rr
-                       WHERE p_lens IS NULL OR rr.lens_id = p_lens) = 0 THEN 'lens_narrowed'
-                ELSE NULL
+                ELSE 'lens_narrowed'
             END AS emptiness
         FROM gate g
     )

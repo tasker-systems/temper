@@ -13,7 +13,7 @@ import {
 	listGroupings,
 } from './readout';
 
-/** One row as `anchor_shape_select` answers, for either anchor kind. */
+/** One row as `anchor_shape_select`'s `regions` carries it, for either anchor kind. */
 const region = (o: {
 	id: string;
 	label?: string | null;

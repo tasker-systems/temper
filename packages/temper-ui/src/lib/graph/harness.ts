@@ -43,6 +43,11 @@ export interface CompositionScenario {
 	surveyStages: string[];
 	walkStage: string;
 	response: QueryResponse;
+	/**
+	 * The region ROWS, not the shape envelope. The door answers an `AnchorShape`;
+	 * `capture-graph-fixtures.ts` takes `.regions` at capture time, exactly where
+	 * `readAnchorRegions` takes it at load time, so this field feeds `RegionLookup.rows` unchanged.
+	 */
 	shape_rows: CogmapRegionRow[];
 }
 
@@ -204,6 +209,7 @@ export function viewFor(bundle: HarnessBundle, name: string): GraphViewData {
 export interface AnalysisScenario {
 	name?: string;
 	ref?: string;
+	/** The region ROWS — `AnchorShape.regions`, as `readAnchorAnalysis` hands them to the door. */
 	shape: CogmapRegionRow[];
 	region_metrics: CogmapRegionMetricsRow[] | null;
 	analytics?: CogmapAnalyticsRow | null;

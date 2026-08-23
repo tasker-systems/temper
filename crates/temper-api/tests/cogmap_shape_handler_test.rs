@@ -1,7 +1,8 @@
 #![cfg(feature = "test-db")]
 //! `substrate_read::cogmap_shape_select` — the api-side service-direct wrapper over the
 //! `readback::cogmap_shape` binding. Proves the readable path returns Ok against the root-joined L0
-//! map, and that a non-readable map yields an empty (not errored) result.
+//! map, and that a non-readable map yields an empty (not errored) result — an empty `regions` inside
+//! the anchor-level envelope, since migration `20260823000010`, rather than a bare empty array.
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -25,7 +26,8 @@ async fn l0_shape_is_readable_and_returns_ok(pool: PgPool) {
         None,
     )
     .await
-    .expect("readable L0 shape read must be Ok");
+    .expect("readable L0 shape read must be Ok")
+    .regions;
     assert!(
         rows.is_empty(),
         "L0 has no materialized regions yet: {rows:?}"
@@ -43,6 +45,7 @@ async fn unknown_cogmap_is_empty_not_error(pool: PgPool) {
         None,
     )
     .await
-    .expect("non-readable map is empty, not an error");
+    .expect("non-readable map is empty, not an error")
+    .regions;
     assert!(rows.is_empty());
 }

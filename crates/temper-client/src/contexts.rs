@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::context_ref::ContextOwnerRef;
-use temper_core::types::cognitive_maps::{CogmapRegionMetricsRow, CogmapRegionRow};
+use temper_core::types::cognitive_maps::{AnchorShape, CogmapRegionMetricsRow};
 use temper_core::types::context::{
     ContextCreateRequest, ContextRow, ContextRowWithCounts, ReassignContextOutcome,
     ReassignContextRequest, RenameContextOutcome, RenameContextRequest, ShareContextOutcome,
@@ -133,13 +133,14 @@ impl<'a> ContextClient<'a> {
 
 impl ContextClient<'_> {
     /// GET `/api/contexts/{id}/shape[?lens=]` — the context's materialized regions (surface tier),
-    /// most salient first. Empty if the caller cannot read the context (gate is in the SQL — no
-    /// existence oracle), which is also what an un-materialized context returns.
-    pub async fn shape(
-        &self,
-        context_id: Uuid,
-        lens: Option<Uuid>,
-    ) -> Result<Vec<CogmapRegionRow>> {
+    /// most salient first, wrapped in an [`AnchorShape`] envelope.
+    ///
+    /// An empty answer is no longer mute: `emptiness` names the cause. A caller who cannot read the
+    /// context gets `emptiness: unreadable_or_absent` with `population: 0` and no clock — the gate
+    /// is in the SQL and stays a 200, so this is still no existence oracle. An un-materialized
+    /// context is `never_clustered`, one whose regions are all invisible is `nothing_visible`, and a
+    /// `lens` that matched nothing is `lens_narrowed` — four cases that were one bare `[]` before.
+    pub async fn shape(&self, context_id: Uuid, lens: Option<Uuid>) -> Result<AnchorShape> {
         let token = self.http.resolve_token()?;
         let path = context_shape_path(context_id, lens);
         let req = self.http.get(&path);

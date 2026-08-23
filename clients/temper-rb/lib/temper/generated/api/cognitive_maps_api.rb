@@ -853,7 +853,7 @@ module Temper::Generated
     # @param [Hash] opts the optional parameters
     # @option opts [String] :lens Optional lens filter; omit for all lenses
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Array<CogmapRegionRow>]
+    # @return [AnchorShape]
     def shape(id, opts = {})
       data, _status_code, _headers = shape_with_http_info(id, opts)
       data
@@ -864,7 +864,7 @@ module Temper::Generated
     # @param [Hash] opts the optional parameters
     # @option opts [String] :lens Optional lens filter; omit for all lenses
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Array<(Array<CogmapRegionRow>, Integer, Hash)>] Array<CogmapRegionRow> data, response status code and response headers
+    # @return [Array<(AnchorShape, Integer, Hash)>] AnchorShape data, response status code and response headers
     def shape_with_http_info(id, opts = {})
       if @api_client.config.debugging
         @api_client.config.logger.debug 'Calling API: CognitiveMapsApi.shape ...'
@@ -897,7 +897,7 @@ module Temper::Generated
       post_body = opts[:debug_body]
 
       # return_type
-      return_type = opts[:debug_return_type] || 'Array<CogmapRegionRow>'
+      return_type = opts[:debug_return_type] || 'AnchorShape'
 
       # auth_names
       auth_names = opts[:debug_auth_names] || ['bearer_auth']

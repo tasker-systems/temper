@@ -198,12 +198,16 @@ LANGUAGE sql STABLE AS $$
             -- Precedence is load-bearing. Rule 2 MUST precede rule 3, or a never-clustered anchor
             -- reports 'nothing_visible' and the distinction this function exists to draw is lost.
             CASE
+                -- Rule 1 guards the field's contract: `emptiness` explains an EMPTY row set and
+                -- nothing else. Without it a readable, never-materialized anchor holding visible
+                -- regions returns rows AND 'never_clustered'. Nothing is lost -- materialized_at
+                -- is NULL for that anchor, and that is the field about the clock.
+                WHEN (SELECT count(*) FROM regs rr
+                       WHERE p_lens IS NULL OR rr.lens_id = p_lens) > 0 THEN NULL
                 WHEN NOT g.readable                        THEN 'unreadable_or_absent'
                 WHEN (SELECT k.eid FROM clock k) IS NULL   THEN 'never_clustered'
                 WHEN (SELECT count(*) FROM regs) = 0       THEN 'nothing_visible'
-                WHEN (SELECT count(*) FROM regs rr
-                       WHERE p_lens IS NULL OR rr.lens_id = p_lens) = 0 THEN 'lens_narrowed'
-                ELSE NULL
+                ELSE 'lens_narrowed'
             END AS emptiness
         FROM gate g
     )
@@ -725,7 +729,7 @@ Expected: `openapi-check`, `openapi-rb-drift`, `openapi-ts-drift`, `ts-rs-drift`
 
 - [ ] **Step 2: Unwrap `.regions` at the two apiGet sites**
 
-In `graph-query.ts`, both `apiGet<CogmapRegionRow[]>(anchorShapePath(...))` calls become `apiGet<AnchorShape>(...)`. The multi-anchor site at `:141-143` returns `{ rows, complete }` — take `.regions` from each response. The comment at `:106` says both doors *"return `Vec<CogmapRegionRow>`"*; that is now false — correct it.
+In `graph-query.ts`, both `apiGet<CogmapRegionRow[]>(anchorShapePath(...))` calls become `apiGet<AnchorShape>(...)`. The multi-anchor site at `:141-143` returns `{ rows, complete }` — take `.regions` from each response. **Two** prose comments assert *"both return `Vec<CogmapRegionRow>`"* and both go false: `graph-query.ts:106` and `readout.ts:82`. Correct both — they are the kind of comment a later reader trusts precisely because it is specific.
 
 `readout.ts`'s `RegionLookup { rows: CogmapRegionRow[] }` (`:90-96`) can stay as-is: it is fed from `graph-query.ts`, so the unwrap happens upstream. Prefer that over rippling the envelope through the readout layer, which does not use it.
 

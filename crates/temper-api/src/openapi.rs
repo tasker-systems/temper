@@ -100,6 +100,8 @@ use temper_workflow::types::resource::{
         temper_core::types::reconcile::CreateCogmapRequest,
         temper_core::types::reconcile::CreateCogmapOutcome,
         temper_core::types::cognitive_maps::CogmapRegionRow,
+        temper_core::types::cognitive_maps::AnchorShape,
+        temper_core::types::cognitive_maps::ShapeEmptiness,
         temper_core::types::materialize::MaterializeDelta,
         temper_core::types::materialize::MaterializeRequest,
         temper_core::types::materialize::MaterializeAck,

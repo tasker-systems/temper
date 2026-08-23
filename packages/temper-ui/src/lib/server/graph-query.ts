@@ -1,5 +1,6 @@
 import type { Anchor } from '$lib/graph/composition';
 import type {
+	AnchorShape,
 	CogmapAnalyticsRow,
 	CogmapRegionMetricsRow,
 	CogmapRegionRow,
@@ -103,7 +104,9 @@ export const readSeedResources = (token: string, ids: string[]): Promise<Resourc
  *
  * **Both anchor kinds answer the same read**, and that is not a coincidence to be tidied away:
  * `/api/contexts/{id}/shape` and `/api/cognitive-maps/{id}/shape` are two doors onto one
- * `anchor_shape_select(principal, HomeAnchor, lens)` and both return `Vec<CogmapRegionRow>`. So
+ * `anchor_shape_select(principal, HomeAnchor, lens)` and both return `AnchorShape` — the region
+ * rows inside an anchor-level envelope (`population`, `emptiness`, `materialized_at`) that lets an
+ * empty answer say WHY it is empty rather than arriving as a byte-identical `[]`. So
  * `cross-kind-relationship-is-reachable` holds a layer below the composition too, and the readout
  * needs no per-kind branch to name what it drew on. **Contexts genuinely have regions** — measured,
  * `@me/temper` holds 499 — so resolving only cogmaps would render every context-anchored grouping
@@ -134,17 +137,23 @@ const anchorShapePath = (anchor: Anchor): string =>
  * gone, so a rejection degrades the whole lookup to incomplete rather than propagating as a page
  * error. One anchor being unreadable is not a reason to refuse the reader their graph, and it is
  * not evidence that anything was re-derived either.
+ *
+ * **The envelope is unwrapped here, not carried.** Each door answers an `AnchorShape`; this lookup
+ * exists to NAME a disclosed region id, and `nameOf` matches on `region_id` alone. Per-anchor
+ * `population` / `emptiness` / `materialized_at` would have to be re-associated with the anchors
+ * they came from to say anything, and the one flat set below is deliberately not keyed that way —
+ * so they are dropped at the door rather than threaded through a readout that has no use for them.
  */
 export async function readAnchorRegions(
 	token: string,
 	anchors: Anchor[],
 ): Promise<{ rows: CogmapRegionRow[]; complete: boolean }> {
 	const reads = await Promise.allSettled(
-		anchors.map((a) => apiGet<CogmapRegionRow[]>(anchorShapePath(a), token)),
+		anchors.map((a) => apiGet<AnchorShape>(anchorShapePath(a), token)),
 	);
 
 	return {
-		rows: reads.flatMap((r) => (r.status === 'fulfilled' ? r.value : [])),
+		rows: reads.flatMap((r) => (r.status === 'fulfilled' ? r.value.regions : [])),
 		complete: reads.every((r) => r.status === 'fulfilled'),
 	};
 }
@@ -218,9 +227,10 @@ const anchorMetricsPath = (anchor: Anchor): string =>
  *
  * Three different failure postures, and the differences are the point:
  *
- * - **`shape` throws.** It is the row set; without it there is no page, and an empty list is
+ * - **`shape` throws.** It is the row set; without it there is no page, and an empty envelope is
  *   already the honest answer for a place the caller cannot read (the API refuses to be an
- *   existence oracle).
+ *   existence oracle — a denied caller gets `emptiness: 'unreadable_or_absent'` with
+ *   `population: 0` on a 200, never a 403; `substrate_read.rs:1308-1312`).
  * - **`metrics` degrades to `null`.** That is *unknown*, not *absent* — captioning 501 groupings
  *   "not computed" on a read that never answered would be a claim about the substrate made on
  *   evidence the surface does not have.
@@ -238,7 +248,7 @@ export async function readAnchorAnalysis(
 	telos: ResourceView | null;
 }> {
 	const [shape, metrics, analytics] = await Promise.all([
-		apiGet<CogmapRegionRow[]>(anchorShapePath(anchor), token),
+		apiGet<AnchorShape>(anchorShapePath(anchor), token),
 		apiGet<CogmapRegionMetricsRow[]>(anchorMetricsPath(anchor), token).catch(() => null),
 		anchor.kind === 'cogmap'
 			? apiGet<CogmapAnalyticsRow>(`/api/cognitive-maps/${anchor.id}/analytics`, token).catch(
@@ -256,5 +266,8 @@ export async function readAnchorAnalysis(
 			)
 		: null;
 
-	return { shape, metrics, analytics, telos };
+	// The envelope is unwrapped at the door, for the same reason `readAnchorRegions` unwraps it:
+	// `analyseShape` joins region rows to their analytics-tier siblings and reads none of the
+	// anchor-level fields, so carrying them would widen `AnalysisViewData` for nothing.
+	return { shape: shape.regions, metrics, analytics, telos };
 }

@@ -19,8 +19,8 @@ use temper_services::services::{access_service, cogmap_service, materialize_serv
 use temper_services::state::AppState;
 
 use temper_core::types::cognitive_maps::{
-    BindTeamOutcome, BindTeamRequest, CogmapAnalyticsRow, CogmapDetail, CogmapGrantBody,
-    CogmapRegionMetricsRow, CogmapRegionRow, CogmapRevokeBody, CogmapRow, GrantCapabilityRequest,
+    AnchorShape, BindTeamOutcome, BindTeamRequest, CogmapAnalyticsRow, CogmapDetail,
+    CogmapGrantBody, CogmapRegionMetricsRow, CogmapRevokeBody, CogmapRow, GrantCapabilityRequest,
     GrantOutcome, RevokeCapabilityRequest, RevokeOutcome, UnbindTeamOutcome,
 };
 use temper_core::types::home::HomeAnchor;
@@ -184,7 +184,7 @@ pub async fn show(
     ),
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "Materialized regions (surface tier)", body = Vec<CogmapRegionRow>),
+        (status = 200, description = "Materialized regions (surface tier), wrapped in an envelope whose `emptiness` names why an empty answer is empty", body = AnchorShape),
         (status = 401, description = "Unauthorized", body = temper_services::error::ErrorBody),
     )
 )]
@@ -193,7 +193,7 @@ pub async fn shape(
     auth: AuthUser,
     Path(cogmap_id): Path<Uuid>,
     Query(q): Query<ShapeQuery>,
-) -> ApiResult<Json<Vec<CogmapRegionRow>>> {
+) -> ApiResult<Json<AnchorShape>> {
     temper_services::backend::substrate_read::anchor_shape_select(
         &state.pool,
         ProfileId::from(auth.0.profile().id),
