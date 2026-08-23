@@ -1034,10 +1034,27 @@ pub struct CogmapShapeRow {
     pub member_count: i32,
 }
 
+/// An anchor's surface tier plus the anchor-level envelope, as returned by `anchor_shape`.
+/// Substrate-local; `temper-services` maps this to the `AnchorShape` wire type.
+///
+/// `emptiness` is the SQL function's raw discriminant (`"never_clustered"`, `"nothing_visible"`,
+/// `"lens_narrowed"`, `"unreadable_or_absent"`) or `None` when the row set is non-empty. The
+/// substrate tier deliberately does not know the wire enum — the mapping, and the error on an
+/// unrecognized arm, live at the service boundary where drift between SQL and Rust must surface.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnchorShapeReadback {
+    pub population: i32,
+    pub emptiness: Option<String>,
+    pub materialized_at: Option<DateTime<Utc>>,
+    pub regions: Vec<CogmapShapeRow>,
+}
+
 /// The surface-tier read of an anchor's materialized regions — a context OR a cogmap (spec §3.7,
-/// T8; SQL `anchor_shape`). The access gate is INSIDE the SQL: a principal who cannot read the
-/// anchor gets zero rows (never an error). Folded regions are excluded by the function;
-/// `lens_id = None` returns all lenses, `Some(l)` narrows to that lens. Rows come back most-salient
+/// T8; SQL `anchor_shape`) — plus the anchor-level envelope that says why an empty answer is empty.
+/// The access gate is INSIDE the SQL: a principal who cannot read the anchor gets no regions
+/// (never an error), and an envelope that discloses neither the population nor the clock. Folded
+/// regions are excluded by the function; `lens_id = None` returns all lenses, `Some(l)` narrows the
+/// ROWS to that lens while `population` stays the all-lens denominator. Rows come back most-salient
 /// first.
 ///
 /// Anchor-generic because the region table is keyed on the anchor pair, not on the vestigial
@@ -1046,22 +1063,26 @@ pub struct CogmapShapeRow {
 ///
 /// The SQL is unqualified and self-gating; see the module-level note. Read-only.
 ///
-/// Every column of a set-returning function reads as nullable to sqlx, so the `!` overrides carry
-/// the function's own contract: `region_id`/`lens_id`/`salience`/`member_count` are always present
-/// on a returned row, while `content_cohesion` and `label` are genuinely optional and stay `Option`.
+/// Every column of a set-returning function reads as nullable to sqlx, so the `!` override on
+/// `population` carries the function's own contract. `region_id` gets NO override: it is genuinely
+/// nullable now — an empty or unreadable anchor yields exactly one row with a NULL `region_id`,
+/// carrying the envelope. Dropping that sentinel is this function's job.
 pub async fn anchor_shape(
     pool: &PgPool,
     anchor: HomeAnchor,
     principal: ProfileId,
     lens_id: Option<LensId>,
-) -> Result<Vec<CogmapShapeRow>> {
+) -> Result<AnchorShapeReadback> {
     let rows = sqlx::query!(
-        r#"SELECT region_id     AS "region_id!",
-                  lens_id       AS "lens_id!",
-                  salience      AS "salience!",
+        r#"SELECT population      AS "population!",
+                  emptiness,
+                  materialized_at,
+                  region_id,
+                  lens_id,
+                  salience,
                   content_cohesion,
                   label,
-                  member_count  AS "member_count!"
+                  member_count
              FROM anchor_shape($1, $2, 'profile', $3, $4)"#,
         anchor.table(),
         anchor.uuid(),
@@ -1071,17 +1092,37 @@ pub async fn anchor_shape(
     .fetch_all(pool)
     .await?;
 
-    Ok(rows
-        .into_iter()
-        .map(|r| CogmapShapeRow {
-            region_id: RegionId::from(r.region_id),
-            lens_id: LensId::from(r.lens_id),
-            salience: r.salience,
-            content_cohesion: r.content_cohesion,
-            label: r.label,
-            member_count: r.member_count,
+    // The function guarantees at least one row: an empty anchor yields the envelope with a NULL
+    // region_id. An empty `rows` here would mean the guarantee was broken, so read the envelope
+    // defensively rather than indexing.
+    let head = rows.first();
+    let population = head.map(|r| r.population).unwrap_or(0);
+    let emptiness = head.and_then(|r| r.emptiness.clone());
+    let materialized_at = head.and_then(|r| r.materialized_at);
+
+    let regions = rows
+        .iter()
+        .filter_map(|r| {
+            // Drop the sentinel. When region_id is present the function guarantees lens_id,
+            // salience and member_count are too.
+            let region_id = r.region_id?;
+            Some(CogmapShapeRow {
+                region_id: RegionId::from(region_id),
+                lens_id: LensId::from(r.lens_id.expect("lens_id accompanies region_id")),
+                salience: r.salience.expect("salience accompanies region_id"),
+                content_cohesion: r.content_cohesion,
+                label: r.label.clone(),
+                member_count: r.member_count.expect("member_count accompanies region_id"),
+            })
         })
-        .collect())
+        .collect();
+
+    Ok(AnchorShapeReadback {
+        population,
+        emptiness,
+        materialized_at,
+        regions,
+    })
 }
 
 /// One finding's evidential-standing shape, as returned by `resource_standing_shape` (Set 5,

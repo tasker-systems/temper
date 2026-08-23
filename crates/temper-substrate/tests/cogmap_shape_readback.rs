@@ -165,7 +165,8 @@ async fn cogmap_shape_surfaces_unfolded_regions_and_gates_by_readability(pool: P
         None,
     )
     .await
-    .expect("readable read");
+    .expect("readable read")
+    .regions;
     assert_eq!(
         rows.len(),
         1,
@@ -187,7 +188,8 @@ async fn cogmap_shape_surfaces_unfolded_regions_and_gates_by_readability(pool: P
         None,
     )
     .await
-    .expect("gate denial is empty, not an error");
+    .expect("gate denial is empty, not an error")
+    .regions;
     assert!(
         denied.is_empty(),
         "non-member must see no regions: {denied:?}"
@@ -202,7 +204,8 @@ async fn cogmap_shape_surfaces_unfolded_regions_and_gates_by_readability(pool: P
         Some(LensId::from(other_lens)),
     )
     .await
-    .expect("lens-filtered read");
+    .expect("lens-filtered read")
+    .regions;
     assert!(
         filtered.is_empty(),
         "wrong lens yields no regions: {filtered:?}"
@@ -286,7 +289,8 @@ async fn the_member_count_is_over_visible_members_only(pool: PgPool) {
         None,
     )
     .await
-    .expect("readable read");
+    .expect("readable read")
+    .regions;
 
     assert_eq!(rows.len(), 1, "the region surfaces: {rows:?}");
     assert_eq!(

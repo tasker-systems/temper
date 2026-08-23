@@ -1311,7 +1311,8 @@ pub async fn anchor_shape_select(
 ) -> ApiResult<Vec<CogmapRegionRow>> {
     let rows = readback::anchor_shape(pool, anchor, profile_id, lens_id.map(LensId::from))
         .await
-        .map_err(api_err)?;
+        .map_err(api_err)?
+        .regions;
     Ok(rows
         .into_iter()
         .map(|r| CogmapRegionRow {

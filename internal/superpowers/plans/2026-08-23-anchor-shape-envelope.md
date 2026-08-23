@@ -60,6 +60,7 @@ instructions to the subagent.
 - **`cargo make check` does not run temper-ui.** `cd packages/temper-ui && bun run check` is separate and required (Task 5).
 - **ts-rs drift clears only after a COMMIT**, not at `git add`.
 - **Migration numbering:** `20260823*`, above `origin/main`'s highest (`20260822000030`). **Never edit an applied migration** — if the local DB has already applied `20260823000010`, reset the Docker volume rather than renumbering.
+- **EVERY migration must call `declare_migration(<version>, 'additive'|'shape-breaking', '<why>')`** at its end, or the `audit-migration-declarations` tripwire fails `cargo make check`. *"Silence is not a classification."* Both migrations in this plan are **`shape-breaking`** — `20260823000010` changes a return type AND starts guaranteeing a sentinel row; `20260823000020` changes a function signature. Double any single quote inside the reason string. Pattern: `migrations/20260822000030_data_artifact_shape_reads.sql:95-99`.
 - **Redirect cargo output to a file** (`> out.txt 2>&1`), never `2>&1 | tail`.
 
 ---
