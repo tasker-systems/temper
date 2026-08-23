@@ -256,18 +256,35 @@ else
     fetch_err=""
     base_ref=""
 
+    # WHERE TO FETCH FROM, and why there is more than one candidate.
+    #   `[observed — 2026-08-23, PR #765]` The reason temper-ui and temper-mention could not
+    #   fetch is not a transient and not credentials:
+    #
+    #     fatal: 'origin' does not appear to be a git repository
+    #
+    #   Their build clones simply HAVE NO `origin` REMOTE. steward-agent's did, against the
+    #   same repo and commit, which is why the three disagreed. Retrying a deterministic
+    #   failure is pointless, so the second candidate is a different REMOTE rather than a
+    #   second attempt at the same one: the repository's own HTTPS URL, rebuilt from the
+    #   VERCEL_GIT_* variables. temper is a PUBLIC repo, so an unauthenticated fetch of it
+    #   succeeds; on a private repo or a fork it will not, and the chain below continues.
+    #
     # An explicit refspec, rather than the bare `origin main` form the first version used.
     # The bare form writes FETCH_HEAD only; naming the destination gives a stable ref that
-    # survives a second fetch and can be tested for afterwards.
-    attempt=1
-    while [ "${attempt}" -le 2 ]; do
-      if fetch_err="$(git fetch --no-tags --depth="${FETCH_DEPTH}" origin \
+    # survives a later fetch and can be tested for afterwards.
+    remotes="origin"
+    if [ -n "${VERCEL_GIT_REPO_OWNER:-}" ] && [ -n "${VERCEL_GIT_REPO_SLUG:-}" ]; then
+      remotes="${remotes} https://github.com/${VERCEL_GIT_REPO_OWNER}/${VERCEL_GIT_REPO_SLUG}.git"
+    fi
+
+    for remote in ${remotes}; do
+      if fetch_err="$(git fetch --no-tags --depth="${FETCH_DEPTH}" "${remote}" \
             "+refs/heads/${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}" 2>&1)"; then
         base_ref="refs/remotes/origin/${DEFAULT_BRANCH}"
+        echo "note: fetched ${DEFAULT_BRANCH} from ${remote}"
         break
       fi
-      echo "note: fetch attempt ${attempt} for ${DEFAULT_BRANCH} failed: ${fetch_err}"
-      attempt=$((attempt + 1))
+      echo "note: could not fetch ${DEFAULT_BRANCH} from ${remote}: ${fetch_err}"
     done
 
     # The clone may already carry the ref even when fetching it failed — Vercel's clone

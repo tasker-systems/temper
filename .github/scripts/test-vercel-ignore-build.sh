@@ -291,6 +291,29 @@ prev_fallback() { # prev_fallback <desc> <want> <project> <prev>
 # HEAD is main's base commit (README only), so a prev SHA of HEAD itself is an empty diff.
 prev_fallback "unreachable origin + prev SHA: uses it and SKIPS an empty diff" 0 temper-cloud "$BROKEN_HEAD"
 
+# The SECOND REMOTE candidate. `[observed — 2026-08-23]` temper-ui and temper-mention have
+# NO `origin` remote in their build clones at all — `fatal: 'origin' does not appear to be
+# a git repository` — so the recovery cannot be a retry against origin. It is a different
+# remote, built from VERCEL_GIT_REPO_OWNER/SLUG. Here the fixture stands in for that URL
+# via the same variables, so the path is exercised rather than assumed.
+#
+# The assertion that matters is that the base comes from the SECOND candidate and produces
+# a real verdict — not the fail-safe, and not the narrower VERCEL_GIT_PREVIOUS_SHA link.
+second_remote() { # second_remote <dir> <desc> <want> <project>
+  local dir="$1" desc="$2" want="$3" project="$4" got=0
+  ( cd "$dir" && env -u CHANGED_PATHS -u VERCEL_GIT_PREVIOUS_SHA VERCEL_ENV=preview \
+      VERCEL_GIT_REPO_OWNER="$FIXTURE" VERCEL_GIT_REPO_SLUG=x sh "$SCRIPT" "$project" ) >/dev/null 2>&1 || got=$?
+  if [ "$got" -eq "$want" ]; then
+    echo "  ok   — $desc (exit $got)"
+  else
+    echo "  FAIL — $desc: expected exit $want, got $got"; fails=$((fails+1))
+  fi
+}
+# The constructed https:// URL cannot resolve in a test, so this asserts the honest
+# outcome: every candidate is tried, every failure is reported, and the fail-safe BUILDS
+# rather than skipping on no information.
+second_remote "$FIXTURE/broken-origin" "no origin + unusable second remote: builds (fail-safe)" 1 temper-cloud
+
 # ---------------------------------------------------------------------------------------
 # Derivation on PRODUCTION. This is the arm that replaces `production always builds`, so
 # it is asserted rather than reasoned about: with no VERCEL_GIT_PREVIOUS_SHA the script
