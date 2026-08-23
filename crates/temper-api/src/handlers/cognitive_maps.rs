@@ -234,7 +234,7 @@ pub async fn materialize_delta(
     let delta = materialize_service::materialize_delta(
         &state.pool,
         ProfileId::from(auth.0.profile().id),
-        CogmapId::from(cogmap_id),
+        HomeAnchor::Cogmap(CogmapId::from(cogmap_id)),
         q.threshold,
     )
     .await?;

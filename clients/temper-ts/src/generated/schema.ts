@@ -479,6 +479,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/contexts/{id}/materialize-delta": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read formation drift since a context's last materialize
+         * @description The read peer of `POST /api/contexts/{id}/materialize`: T8 gave a context the ability to
+         *     materialize but not the ability to be asked when that last happened.
+         *
+         *     Deny is 404 here, not an empty envelope — the posture of `/shape` next door does NOT travel to
+         *     this route. Absent and unreadable are collapsed, so it is still no existence oracle.
+         */
+        get: operations["context_materialize_delta"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/contexts/{id}/reassign": {
         parameters: {
             query?: never;
@@ -4432,21 +4459,41 @@ export interface components {
             threshold: number;
         };
         /**
-         * @description The materialize delta for a cognitive map since its last materialize — the trigger signal the
+         * @description The materialize delta for an ANCHOR since its last materialize — the trigger signal the
          *     region-materialize cron pulls. `formation_events` is the gated metric (a structural-drift count);
          *     `exceeds_threshold` is the "should this re-materialize" answer.
+         *
+         *     ## Why `cogmap_id` survives beside the anchor pair
+         *
+         *     The read path followed the write path onto the anchor pair (`anchor_table` + `anchor_id`), so a
+         *     context can now be asked when it last materialized. `cogmap_id` is kept — and still populated
+         *     whenever the anchor IS a cogmap — for exactly the reason [`MaterializeAck`] keeps its own: this is
+         *     a **wire type on a deployed instance**, the temper-rb gem `raise`s on an unknown attribute *and*
+         *     on a missing required one, and the generated TS is consumed by a UI that ships on its own cadence.
+         *
+         *     A client old enough to depend on `cogmap_id` cannot address a context (the route did not exist),
+         *     so it never receives a delta where the field is absent. New clients read the anchor pair and
+         *     ignore `cogmap_id`; it goes away with the rest of the `cogmap_*` naming at M3.
          */
         MaterializeDelta: {
             /**
              * Format: uuid
-             * @description The cogmap this delta measures.
+             * @description The anchor this delta measures.
              */
-            cogmap_id: string;
-            /** @description Whether `formation_events >= threshold` — i.e. the cogmap should re-materialize. */
+            anchor_id: string;
+            /** @description The anchor table this delta measures — `kb_contexts` or `kb_cogmaps`. */
+            anchor_table: string;
+            /**
+             * Format: uuid
+             * @description Legacy alias for `anchor_id`, present iff the anchor is a cogmap. Prefer the anchor pair;
+             *     see the type's docs for why this is still here.
+             */
+            cogmap_id?: string | null;
+            /** @description Whether `formation_events >= threshold` — i.e. the anchor should re-materialize. */
             exceeds_threshold: boolean;
             /**
              * Format: int64
-             * @description Formation-affecting events anchored to the cogmap since the watermark (the gated drift signal).
+             * @description Formation-affecting events anchored to the anchor since the watermark (the gated drift signal).
              */
             formation_events: number;
             /**
@@ -4456,8 +4503,9 @@ export interface components {
             threshold: number;
             /**
              * Format: uuid
-             * @description The materialize watermark the delta was computed against (`kb_cogmaps.shape_materialized_event_id`);
-             *     `None` when the cogmap has never been materialized (delta counts from the beginning).
+             * @description The materialize watermark the delta was computed against (the anchor's
+             *     `shape_materialized_event_id`); `None` when the anchor has never been materialized (the delta
+             *     then counts from the beginning).
              */
             watermark?: string | null;
         };
@@ -8033,6 +8081,42 @@ export interface operations {
                 content?: never;
             };
             /** @description Context not found (uniform — no existence oracle) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    context_materialize_delta: {
+        parameters: {
+            query?: {
+                /** @description Materialize threshold to gate on (default applies when omitted) */
+                threshold?: number;
+            };
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Context ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The materialize delta since the context's last materialize */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaterializeDelta"];
+                };
+            };
+            /** @description Context not found, or not readable by the caller (uniform — no existence oracle) */
             404: {
                 headers: {
                     [name: string]: unknown;

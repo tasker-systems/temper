@@ -1805,6 +1805,74 @@
         "x-apidog-folder": "Reference/API Reference/Contexts"
       }
     },
+    "/api/contexts/{id}/materialize-delta": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Contexts"
+        ],
+        "summary": "Read formation drift since a context's last materialize",
+        "description": "The read peer of `POST /api/contexts/{id}/materialize`: T8 gave a context the ability to\nmaterialize but not the ability to be asked when that last happened.\n\nDeny is 404 here, not an empty envelope — the posture of `/shape` next door does NOT travel to\nthis route. Absent and unreadable are collapsed, so it is still no existence oracle.",
+        "operationId": "context_materialize_delta",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Context ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "threshold",
+            "in": "query",
+            "description": "Materialize threshold to gate on (default applies when omitted)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The materialize delta since the context's last materialize",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterializeDelta"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Context not found, or not readable by the caller (uniform — no existence oracle)"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Contexts"
+      }
+    },
     "/api/contexts/{id}/reassign": {
       "parameters": [
         {
@@ -11987,27 +12055,40 @@
       },
       "MaterializeDelta": {
         "type": "object",
-        "description": "The materialize delta for a cognitive map since its last materialize — the trigger signal the\nregion-materialize cron pulls. `formation_events` is the gated metric (a structural-drift count);\n`exceeds_threshold` is the \"should this re-materialize\" answer.",
+        "description": "The materialize delta for an ANCHOR since its last materialize — the trigger signal the\nregion-materialize cron pulls. `formation_events` is the gated metric (a structural-drift count);\n`exceeds_threshold` is the \"should this re-materialize\" answer.\n\n## Why `cogmap_id` survives beside the anchor pair\n\nThe read path followed the write path onto the anchor pair (`anchor_table` + `anchor_id`), so a\ncontext can now be asked when it last materialized. `cogmap_id` is kept — and still populated\nwhenever the anchor IS a cogmap — for exactly the reason [`MaterializeAck`] keeps its own: this is\na **wire type on a deployed instance**, the temper-rb gem `raise`s on an unknown attribute *and*\non a missing required one, and the generated TS is consumed by a UI that ships on its own cadence.\n\nA client old enough to depend on `cogmap_id` cannot address a context (the route did not exist),\nso it never receives a delta where the field is absent. New clients read the anchor pair and\nignore `cogmap_id`; it goes away with the rest of the `cogmap_*` naming at M3.",
         "required": [
-          "cogmap_id",
+          "anchor_table",
+          "anchor_id",
           "formation_events",
           "threshold",
           "exceeds_threshold"
         ],
         "properties": {
-          "cogmap_id": {
+          "anchor_id": {
             "type": "string",
             "format": "uuid",
-            "description": "The cogmap this delta measures."
+            "description": "The anchor this delta measures."
+          },
+          "anchor_table": {
+            "type": "string",
+            "description": "The anchor table this delta measures — `kb_contexts` or `kb_cogmaps`."
+          },
+          "cogmap_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Legacy alias for `anchor_id`, present iff the anchor is a cogmap. Prefer the anchor pair;\nsee the type's docs for why this is still here."
           },
           "exceeds_threshold": {
             "type": "boolean",
-            "description": "Whether `formation_events >= threshold` — i.e. the cogmap should re-materialize."
+            "description": "Whether `formation_events >= threshold` — i.e. the anchor should re-materialize."
           },
           "formation_events": {
             "type": "integer",
             "format": "int64",
-            "description": "Formation-affecting events anchored to the cogmap since the watermark (the gated drift signal)."
+            "description": "Formation-affecting events anchored to the anchor since the watermark (the gated drift signal)."
           },
           "threshold": {
             "type": "integer",
@@ -12020,7 +12101,7 @@
               "null"
             ],
             "format": "uuid",
-            "description": "The materialize watermark the delta was computed against (`kb_cogmaps.shape_materialized_event_id`);\n`None` when the cogmap has never been materialized (delta counts from the beginning)."
+            "description": "The materialize watermark the delta was computed against (the anchor's\n`shape_materialized_event_id`); `None` when the anchor has never been materialized (the delta\nthen counts from the beginning)."
           }
         }
       },

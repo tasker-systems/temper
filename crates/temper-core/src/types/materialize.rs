@@ -45,27 +45,68 @@ pub fn default_lens_for(anchor: crate::types::home::HomeAnchor) -> &'static str 
     }
 }
 
-/// The materialize delta for a cognitive map since its last materialize — the trigger signal the
+/// The materialize delta for an ANCHOR since its last materialize — the trigger signal the
 /// region-materialize cron pulls. `formation_events` is the gated metric (a structural-drift count);
 /// `exceeds_threshold` is the "should this re-materialize" answer.
+///
+/// ## Why `cogmap_id` survives beside the anchor pair
+///
+/// The read path followed the write path onto the anchor pair (`anchor_table` + `anchor_id`), so a
+/// context can now be asked when it last materialized. `cogmap_id` is kept — and still populated
+/// whenever the anchor IS a cogmap — for exactly the reason [`MaterializeAck`] keeps its own: this is
+/// a **wire type on a deployed instance**, the temper-rb gem `raise`s on an unknown attribute *and*
+/// on a missing required one, and the generated TS is consumed by a UI that ships on its own cadence.
+///
+/// A client old enough to depend on `cogmap_id` cannot address a context (the route did not exist),
+/// so it never receives a delta where the field is absent. New clients read the anchor pair and
+/// ignore `cogmap_id`; it goes away with the rest of the `cogmap_*` naming at M3.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "materialize.ts"))]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MaterializeDelta {
-    /// The cogmap this delta measures.
-    pub cogmap_id: Uuid,
-    /// The materialize watermark the delta was computed against (`kb_cogmaps.shape_materialized_event_id`);
-    /// `None` when the cogmap has never been materialized (delta counts from the beginning).
+    /// The anchor table this delta measures — `kb_contexts` or `kb_cogmaps`.
+    pub anchor_table: String,
+    /// The anchor this delta measures.
+    pub anchor_id: Uuid,
+    /// Legacy alias for `anchor_id`, present iff the anchor is a cogmap. Prefer the anchor pair;
+    /// see the type's docs for why this is still here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cogmap_id: Option<Uuid>,
+    /// The materialize watermark the delta was computed against (the anchor's
+    /// `shape_materialized_event_id`); `None` when the anchor has never been materialized (the delta
+    /// then counts from the beginning).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub watermark: Option<Uuid>,
-    /// Formation-affecting events anchored to the cogmap since the watermark (the gated drift signal).
+    /// Formation-affecting events anchored to the anchor since the watermark (the gated drift signal).
     pub formation_events: i64,
     /// The threshold `formation_events` was compared against (the caller's, or the default).
     pub threshold: i64,
-    /// Whether `formation_events >= threshold` — i.e. the cogmap should re-materialize.
+    /// Whether `formation_events >= threshold` — i.e. the anchor should re-materialize.
     pub exceeds_threshold: bool,
+}
+
+impl MaterializeDelta {
+    /// Build a delta for `anchor`, filling the anchor pair and the legacy `cogmap_id` from one source
+    /// so the two can never disagree, and deriving `exceeds_threshold` from the pair it compares —
+    /// the same single-source discipline [`MaterializeAck::new`] applies.
+    pub fn new(
+        anchor: crate::types::home::HomeAnchor,
+        watermark: Option<Uuid>,
+        formation_events: i64,
+        threshold: i64,
+    ) -> Self {
+        Self {
+            anchor_table: anchor.table().to_owned(),
+            anchor_id: anchor.uuid(),
+            cogmap_id: anchor.cogmap_id().map(|m| m.uuid()),
+            watermark,
+            formation_events,
+            threshold,
+            exceeds_threshold: formation_events >= threshold,
+        }
+    }
 }
 
 /// MCP tool params for `cogmap_materialize_delta` — read the materialize delta for a cogmap.

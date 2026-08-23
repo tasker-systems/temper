@@ -61,7 +61,11 @@ async fn materialize_delta_read_surface_round_trips_through_real_server(pool: sq
         .materialize_delta(L0_COGMAP, None)
         .await
         .expect("materialize-delta read should succeed against L0 with root-team read access");
-    assert_eq!(delta.cogmap_id, L0_COGMAP);
+    // The delta is anchor-addressed now; `cogmap_id` survives as the legacy alias, populated iff
+    // the anchor is a cogmap (see `MaterializeDelta`'s docs for why it is still on the wire).
+    assert_eq!(delta.anchor_table, "kb_cogmaps");
+    assert_eq!(delta.anchor_id, L0_COGMAP);
+    assert_eq!(delta.cogmap_id, Some(L0_COGMAP));
     assert_eq!(delta.threshold, DEFAULT_MATERIALIZE_THRESHOLD);
     assert!(delta.formation_events >= 0);
 

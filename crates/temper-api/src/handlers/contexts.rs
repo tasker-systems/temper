@@ -9,7 +9,7 @@ use crate::middleware::surface::RequestSurface;
 use temper_core::types::cognitive_maps::{AnchorShape, CogmapRegionMetricsRow};
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, ProfileId};
-use temper_core::types::materialize::{MaterializeAck, MaterializeRequest};
+use temper_core::types::materialize::{MaterializeAck, MaterializeDelta, MaterializeRequest};
 use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult};
 use temper_services::services::context_service::{
@@ -17,6 +17,7 @@ use temper_services::services::context_service::{
     ReassignContextRequest, RenameContextOutcome, RenameContextRequest, ShareContextOutcome,
     ShareContextRequest, UnshareContextOutcome,
 };
+use temper_services::services::materialize_service;
 use temper_services::state::AppState;
 use temper_workflow::operations::{Backend, MaterializeOnThreshold};
 
@@ -217,9 +218,10 @@ pub async fn rename(
 // ─────────────────────────────────────────────────────────────────────────────
 // Context orientation reads (spec §3.7, T8) — the region-level view of a context.
 //
-// The peer of `/api/cognitive-maps/{id}/{shape,region-metrics,materialize}`, and deliberately the
-// SAME wire types: a region row carries nothing cogmap-specific, so `CogmapRegionRow` describes a
-// context's region exactly as well (the `cogmap_*` naming goes away at M3, not the shape).
+// The peer of `/api/cognitive-maps/{id}/{shape,region-metrics,materialize,materialize-delta}`, and
+// deliberately the SAME wire types: a region row carries nothing cogmap-specific, so
+// `CogmapRegionRow` describes a context's region exactly as well (the `cogmap_*` naming goes away at
+// M3, not the shape).
 //
 // Every gate lives in the SQL (`anchor_readable_by_profile` → `context_readable_by_profile`), so a
 // caller who cannot read the context gets `emptiness: unreadable_or_absent` rather than a 403 — an
@@ -295,6 +297,52 @@ pub async fn region_metrics(
     )
     .await
     .map(Json)
+}
+
+/// Query params for the context materialize-delta read. `threshold` is optional (omit → the
+/// service default).
+#[derive(Debug, Deserialize)]
+pub struct ContextMaterializeDeltaQuery {
+    /// Materialize threshold to gate on; the service default applies when omitted.
+    pub threshold: Option<i64>,
+}
+
+/// Read formation drift since a context's last materialize
+///
+/// The read peer of `POST /api/contexts/{id}/materialize`: T8 gave a context the ability to
+/// materialize but not the ability to be asked when that last happened.
+///
+/// Deny is 404 here, not an empty envelope — the posture of `/shape` next door does NOT travel to
+/// this route. Absent and unreadable are collapsed, so it is still no existence oracle.
+#[utoipa::path(
+    get,
+    operation_id = "context_materialize_delta",
+    path = "/api/contexts/{id}/materialize-delta",
+    tag = "Contexts",
+    params(
+        ("id" = Uuid, Path, description = "Context ID"),
+        ("threshold" = Option<i64>, Query, description = "Materialize threshold to gate on (default applies when omitted)"),
+    ),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The materialize delta since the context's last materialize", body = MaterializeDelta),
+        (status = 404, description = "Context not found, or not readable by the caller (uniform — no existence oracle)"),
+    )
+)]
+pub async fn materialize_delta(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(context_id): Path<Uuid>,
+    Query(q): Query<ContextMaterializeDeltaQuery>,
+) -> ApiResult<Json<MaterializeDelta>> {
+    let delta = materialize_service::materialize_delta(
+        &state.pool,
+        ProfileId::from(auth.0.profile().id),
+        HomeAnchor::Context(ContextId::from(context_id)),
+        q.threshold,
+    )
+    .await?;
+    Ok(Json(delta))
 }
 
 /// Materialize a context's regions

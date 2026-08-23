@@ -329,7 +329,7 @@ pub async fn cogmap_materialize_delta(
     let delta = materialize_service::materialize_delta(
         &svc.api_state.pool,
         ProfileId::from(profile.id),
-        CogmapId::from(cogmap),
+        HomeAnchor::Cogmap(CogmapId::from(cogmap)),
         input.threshold,
     )
     .await

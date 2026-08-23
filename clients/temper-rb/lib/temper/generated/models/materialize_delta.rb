@@ -14,26 +14,34 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # The materialize delta for a cognitive map since its last materialize — the trigger signal the region-materialize cron pulls. `formation_events` is the gated metric (a structural-drift count); `exceeds_threshold` is the \"should this re-materialize\" answer.
+  # The materialize delta for an ANCHOR since its last materialize — the trigger signal the region-materialize cron pulls. `formation_events` is the gated metric (a structural-drift count); `exceeds_threshold` is the \"should this re-materialize\" answer.  ## Why `cogmap_id` survives beside the anchor pair  The read path followed the write path onto the anchor pair (`anchor_table` + `anchor_id`), so a context can now be asked when it last materialized. `cogmap_id` is kept — and still populated whenever the anchor IS a cogmap — for exactly the reason [`MaterializeAck`] keeps its own: this is a **wire type on a deployed instance**, the temper-rb gem `raise`s on an unknown attribute *and* on a missing required one, and the generated TS is consumed by a UI that ships on its own cadence.  A client old enough to depend on `cogmap_id` cannot address a context (the route did not exist), so it never receives a delta where the field is absent. New clients read the anchor pair and ignore `cogmap_id`; it goes away with the rest of the `cogmap_*` naming at M3.
   class MaterializeDelta < ApiModelBase
-    # The cogmap this delta measures.
+    # The anchor this delta measures.
+    attr_accessor :anchor_id
+
+    # The anchor table this delta measures — `kb_contexts` or `kb_cogmaps`.
+    attr_accessor :anchor_table
+
+    # Legacy alias for `anchor_id`, present iff the anchor is a cogmap. Prefer the anchor pair; see the type's docs for why this is still here.
     attr_accessor :cogmap_id
 
-    # Whether `formation_events >= threshold` — i.e. the cogmap should re-materialize.
+    # Whether `formation_events >= threshold` — i.e. the anchor should re-materialize.
     attr_accessor :exceeds_threshold
 
-    # Formation-affecting events anchored to the cogmap since the watermark (the gated drift signal).
+    # Formation-affecting events anchored to the anchor since the watermark (the gated drift signal).
     attr_accessor :formation_events
 
     # The threshold `formation_events` was compared against (the caller's, or the default).
     attr_accessor :threshold
 
-    # The materialize watermark the delta was computed against (`kb_cogmaps.shape_materialized_event_id`); `None` when the cogmap has never been materialized (delta counts from the beginning).
+    # The materialize watermark the delta was computed against (the anchor's `shape_materialized_event_id`); `None` when the anchor has never been materialized (the delta then counts from the beginning).
     attr_accessor :watermark
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
+        :'anchor_id' => :'anchor_id',
+        :'anchor_table' => :'anchor_table',
         :'cogmap_id' => :'cogmap_id',
         :'exceeds_threshold' => :'exceeds_threshold',
         :'formation_events' => :'formation_events',
@@ -55,6 +63,8 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
+        :'anchor_id' => :'String',
+        :'anchor_table' => :'String',
         :'cogmap_id' => :'String',
         :'exceeds_threshold' => :'Boolean',
         :'formation_events' => :'Integer',
@@ -66,6 +76,7 @@ module Temper::Generated
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
+        :'cogmap_id',
         :'watermark'
       ])
     end
@@ -86,10 +97,20 @@ module Temper::Generated
         h[k.to_sym] = v
       }
 
+      if attributes.key?(:'anchor_id')
+        self.anchor_id = attributes[:'anchor_id']
+      else
+        self.anchor_id = nil
+      end
+
+      if attributes.key?(:'anchor_table')
+        self.anchor_table = attributes[:'anchor_table']
+      else
+        self.anchor_table = nil
+      end
+
       if attributes.key?(:'cogmap_id')
         self.cogmap_id = attributes[:'cogmap_id']
-      else
-        self.cogmap_id = nil
       end
 
       if attributes.key?(:'exceeds_threshold')
@@ -120,8 +141,12 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
-      if @cogmap_id.nil?
-        invalid_properties.push('invalid value for "cogmap_id", cogmap_id cannot be nil.')
+      if @anchor_id.nil?
+        invalid_properties.push('invalid value for "anchor_id", anchor_id cannot be nil.')
+      end
+
+      if @anchor_table.nil?
+        invalid_properties.push('invalid value for "anchor_table", anchor_table cannot be nil.')
       end
 
       if @exceeds_threshold.nil?
@@ -143,7 +168,8 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
-      return false if @cogmap_id.nil?
+      return false if @anchor_id.nil?
+      return false if @anchor_table.nil?
       return false if @exceeds_threshold.nil?
       return false if @formation_events.nil?
       return false if @threshold.nil?
@@ -151,13 +177,23 @@ module Temper::Generated
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] cogmap_id Value to be assigned
-    def cogmap_id=(cogmap_id)
-      if cogmap_id.nil?
-        fail ArgumentError, 'cogmap_id cannot be nil'
+    # @param [Object] anchor_id Value to be assigned
+    def anchor_id=(anchor_id)
+      if anchor_id.nil?
+        fail ArgumentError, 'anchor_id cannot be nil'
       end
 
-      @cogmap_id = cogmap_id
+      @anchor_id = anchor_id
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] anchor_table Value to be assigned
+    def anchor_table=(anchor_table)
+      if anchor_table.nil?
+        fail ArgumentError, 'anchor_table cannot be nil'
+      end
+
+      @anchor_table = anchor_table
     end
 
     # Custom attribute writer method with validation
@@ -195,6 +231,8 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
+          anchor_id == o.anchor_id &&
+          anchor_table == o.anchor_table &&
           cogmap_id == o.cogmap_id &&
           exceeds_threshold == o.exceeds_threshold &&
           formation_events == o.formation_events &&
@@ -211,7 +249,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [cogmap_id, exceeds_threshold, formation_events, threshold, watermark].hash
+      [anchor_id, anchor_table, cogmap_id, exceeds_threshold, formation_events, threshold, watermark].hash
     end
 
     # Builds the object from hash

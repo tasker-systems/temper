@@ -671,3 +671,154 @@ async fn population_is_member_gated_across_two_principals(pool: PgPool) {
         "a non-empty row set carries no emptiness at all"
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// The clock (`anchor_staleness`, migrations/20260823000020) — the same generalization as the reads
+// above, applied to the staleness aggregate. `cogmap_staleness` keyed its regions arm on
+// `kb_cogmap_regions.cogmap_id` (20260624000002:540), the FK that is NULL for every context region,
+// so it was structurally blind to them in exactly the way the orientation reads were before T8.
+// ---------------------------------------------------------------------------------------------
+
+/// Mint an event that occurred strictly AFTER the fixture's watermark, and point one region's
+/// `last_event_id` at it — the "touched since it materialized" half of the witness below.
+///
+/// The timestamp is explicit (`now() + interval '1 day'`) rather than the column default:
+/// `mark_context_materialized` stamps a migration-seeded event whose `occurred_at` is only
+/// microseconds behind the test's own clock, and the assertion turns on
+/// `latest_touch > materialized_at` being unambiguously true rather than on two stamps that tie.
+async fn touch_region_with_a_later_event(pool: &PgPool, profile: Uuid, region: Uuid) {
+    // A fresh emitter entity, as `common::seed_genesis_event` does: `kb_events.emitter_entity_id`
+    // is NOT NULL and the entity name is unique, so it is suffixed with the id.
+    let entity = Uuid::now_v7();
+    sqlx::query("INSERT INTO kb_entities (id, profile_id, name) VALUES ($1, $2, $3)")
+        .bind(entity)
+        .bind(profile)
+        .bind(format!("toucher-{entity}@web"))
+        .execute(pool)
+        .await
+        .expect("insert the touching emitter entity");
+
+    let event: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_events (event_type_id, emitter_entity_id, occurred_at) \
+         SELECT (SELECT id FROM kb_event_types WHERE name = 'relationship_asserted'), $1, \
+                now() + interval '1 day' \
+         RETURNING id",
+    )
+    .bind(entity)
+    .fetch_one(pool)
+    .await
+    .expect("mint an event later than the watermark");
+
+    sqlx::query("UPDATE kb_cogmap_regions SET last_event_id = $2 WHERE id = $1")
+        .bind(region)
+        .bind(event)
+        .execute(pool)
+        .await
+        .expect("advance the region's clock");
+}
+
+/// One `anchor_staleness` row over a context, as `(is_stale, has_materialized_at, has_latest_touch)`.
+///
+/// Runtime `query_scalar`/`query_as`, not the macro: the function is brand new, and a
+/// compile-time-checked call would demand a `.sqlx` cache entry that only `cargo sqlx prepare`
+/// against a migrated database can produce. `is_stale` is read as `Option<bool>` because
+/// `RETURNS TABLE` declares it nullable even though the `COALESCE` never yields NULL — a NULL here
+/// would itself be a finding, so it is unwrapped with a message rather than decoded into `bool`.
+async fn context_staleness(pool: &PgPool, context: Uuid) -> (bool, bool, bool) {
+    let (stale, has_mat, has_touch): (Option<bool>, bool, bool) = sqlx::query_as(
+        "SELECT s.is_stale, s.materialized_at IS NOT NULL, s.latest_touch IS NOT NULL \
+           FROM anchor_staleness('kb_contexts', $1) s",
+    )
+    .bind(context)
+    .fetch_one(pool)
+    .await
+    .expect("anchor_staleness yields exactly one row for a context that exists");
+
+    (
+        stale.expect("is_stale is a COALESCE and is never NULL"),
+        has_mat,
+        has_touch,
+    )
+}
+
+/// **The witness for the generalized clock**, and the only assertion in this arc that can tell the
+/// working function from the broken one.
+///
+/// The trap it exists to catch is silent. If `anchor_staleness`' regions arm is left keyed on
+/// `reg.cogmap_id` while the signature is generalized, a context does not error and does not return
+/// NULLs: `latest_touch` comes back NULL, `latest_touch > materialized_at` is therefore NULL, and
+/// the `COALESCE` falls through to `materialized_at IS NULL` — **false** for any context that has
+/// materialized even once. Every context would report `is_stale = false` forever and nothing would
+/// go red.
+///
+/// So a fixture that only materializes proves nothing: it reports `is_stale = false` under both the
+/// working and the broken function. This one materializes AND THEN touches a region with a later
+/// event, which is the only shape that separates them. The `has_touch` assertion on the fresh read
+/// is a second, independent discriminator: under the broken arm `latest_touch` is NULL there too.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_touched_context_reports_stale(pool: PgPool) {
+    let (profile, context) =
+        common::fixtures::create_test_profile_with_context(&pool, "clock@example.com").await;
+    let region = insert_context_region(&pool, context, 0.9, Some(0.5), "the region").await;
+    // `insert_context_region` stamps the region's clock with the earliest seeded event and
+    // `mark_context_materialized` stamps the watermark with the same one, so the context starts
+    // materialized-and-untouched: the two timestamps are equal and `>` is false.
+    mark_context_materialized(&pool, context).await;
+
+    let (stale, has_mat, has_touch) = context_staleness(&pool, context).await;
+    assert!(has_mat, "the context was just materialized");
+    assert!(
+        has_touch,
+        "latest_touch is NULL only if the regions arm cannot see this context's regions — i.e. it \
+         is still keyed on the vestigial cogmap_id instead of the anchor pair"
+    );
+    assert!(
+        !stale,
+        "nothing has touched the context since its watermark, so it is fresh"
+    );
+
+    touch_region_with_a_later_event(&pool, profile, region).await;
+
+    let (stale, has_mat, has_touch) = context_staleness(&pool, context).await;
+    assert!(has_mat && has_touch, "both clocks are still readable");
+    assert!(
+        stale,
+        "a context touched after materializing is stale — if this is false, the regions arm is \
+         still keyed on cogmap_id and every context is permanently, silently fresh"
+    );
+}
+
+/// A context that has never been materialized is stale — the `materialized_at IS NULL` limb of the
+/// `COALESCE`, carried over unchanged from `cogmap_staleness` (20260624000002:549).
+///
+/// Pins the limb the trap hides behind: it is the arm that answers when `latest_touch >
+/// materialized_at` is NULL, and it is the reason the broken function returns a plausible `false`
+/// rather than an obvious NULL.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_never_materialized_context_is_stale(pool: PgPool) {
+    let (_profile, context) =
+        common::fixtures::create_test_profile_with_context(&pool, "unclustered@example.com").await;
+    insert_context_region(&pool, context, 0.5, None, "the region").await;
+
+    let (stale, has_mat, _) = context_staleness(&pool, context).await;
+    assert!(!has_mat, "the fixture context carries no watermark yet");
+    assert!(stale, "never materialized reads as stale, not as fresh");
+}
+
+/// A context that does not exist yields ZERO rows, not a row of NULLs — the behaviour
+/// `cogmap_analytics` already depends on ("cogmap_staleness yields exactly one row",
+/// `migrations/20260628000001_cogmap_analytics_read_functions.sql:25-26`), which is what makes its
+/// gate in `WHERE` deny to an empty result rather than to a spurious row.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_absent_anchor_yields_no_row(pool: PgPool) {
+    let rows: Vec<i32> = sqlx::query_scalar("SELECT 1 FROM anchor_staleness('kb_contexts', $1)")
+        .bind(Uuid::now_v7())
+        .fetch_all(&pool)
+        .await
+        .expect("an absent anchor is not an error");
+
+    assert!(
+        rows.is_empty(),
+        "an anchor that does not exist has no clock to report: {rows:?}"
+    );
+}
