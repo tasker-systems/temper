@@ -13,12 +13,16 @@ use crate::format::OutputFormat;
 use crate::output;
 use uuid::Uuid;
 
-/// Resolve a list of caller-supplied refs to ids, preserving the caller's order.
+/// Resolve `--from` seeds to ids, preserving the caller's order.
+///
+/// Seeds are **resource** refs, which always carry a trailing uuid, so this needs no server —
+/// unlike `--in`, whose anchors may be `@owner/slug` context refs (see
+/// `actions::graph::resolve_anchors`).
 ///
 /// Order is preserved deliberately: `region composition` discards the caller's ordering by
 /// sorting before it truncates, and that is recorded as a defect. Neither read here truncates,
 /// but there is no reason to introduce the same shape.
-fn resolve_refs(refs: &[String]) -> Result<Vec<Uuid>> {
+fn resolve_seeds(refs: &[String]) -> Result<Vec<Uuid>> {
     refs.iter()
         .map(|r| temper_workflow::operations::parse_ref(r).map(|id| id.0))
         .collect()
@@ -27,16 +31,21 @@ fn resolve_refs(refs: &[String]) -> Result<Vec<Uuid>> {
 pub fn run(cmd: GraphCmd, fmt: OutputFormat) -> Result<()> {
     match cmd {
         GraphCmd::Entry { r#in, k } => {
-            let anchors = resolve_refs(&r#in)?;
+            // Anchors resolve inside the client closure: `--in` takes a context OR a cogmap ref,
+            // and the `@owner/slug` context form has no uuid to parse — only the server can
+            // resolve it. See `actions::graph::classify_anchor`.
             let entry = crate::actions::runtime::with_client(|client| {
-                Box::pin(async move { crate::actions::graph::entry_api(client, &anchors, k).await })
+                Box::pin(async move {
+                    let anchors = crate::actions::graph::resolve_anchors(client, &r#in).await?;
+                    crate::actions::graph::entry_api(client, &anchors, k).await
+                })
             })?;
             let rendered = crate::format::render(&entry, fmt)?;
             output::plain(rendered);
             Ok(())
         }
         GraphCmd::Traverse { from, depth } => {
-            let seeds = resolve_refs(&from)?;
+            let seeds = resolve_seeds(&from)?;
             // Before the wire, not after: the response has no bounds to report a clamp in.
             crate::actions::graph::validate_traverse_bounds(seeds.len(), depth)?;
             let subgraph = crate::actions::runtime::with_client(|client| {

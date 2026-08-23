@@ -92,8 +92,8 @@ pub use element_trail::{ElementEvent, ElementKind, EventTrail};
 pub use event::{EventQuery, EventResponse};
 pub use graph::{EdgeKind, Polarity};
 pub use graph_atlas::{
-    AtlasEdge, AtlasEntry, AtlasNode, AtlasSubgraph, EntryBounds, NodeHome, SliceRequest,
-    TRAVERSAL_DEPTH_RANGE, TRAVERSAL_MAX_SEEDS,
+    clamp_traversal_depth, AtlasEdge, AtlasEntry, AtlasNode, AtlasSubgraph, EntryBounds, NodeHome,
+    SliceRequest, TRAVERSAL_DEPTH_RANGE, TRAVERSAL_MAX_SEEDS,
 };
 pub use graph_home::{AtlasHome, HomeCogmap, HomeContext};
 pub use graph_territory::{Bridge, OrphanNode, Territory, TerritoryKind, TerritoryOverview};

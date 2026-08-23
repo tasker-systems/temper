@@ -9,8 +9,8 @@ use uuid::Uuid;
 use crate::error::{ApiError, ApiResult};
 use temper_core::types::graph::{EdgeKind, Polarity};
 use temper_core::types::graph_atlas::{
-    AtlasEdge, AtlasEntry, AtlasNode, AtlasSubgraph, EntryBounds, NodeHome, SliceRequest,
-    TRAVERSAL_MAX_SEEDS,
+    clamp_traversal_depth, AtlasEdge, AtlasEntry, AtlasNode, AtlasSubgraph, EntryBounds, NodeHome,
+    SliceRequest, TRAVERSAL_MAX_SEEDS,
 };
 use temper_core::types::graph_home::{AtlasHome, HomeCogmap, HomeContext};
 use temper_core::types::graph_territory::{
@@ -765,10 +765,12 @@ pub async fn traversal_slice(
         seeds
     };
 
-    // Clamped to the same 1..=3 the SQL enforces with `LEAST(p_depth, 3)`. Depth 0 is deliberately
-    // NOT reachable here: it is the induced-subgraph read chunk A uses, and asking a *traversal*
-    // to take no hops is a caller error, not a degenerate walk.
-    let depth = depth.clamp(1, 3);
+    // Clamped through the shared helper, not a local literal: the CLI refuses out-of-range depth
+    // up front, and a second copy here is how the two would come to disagree. The SQL enforces the
+    // same ceiling a third time with `LEAST(p_depth, 3)` — a pre-existing copy, not resolved here.
+    // Depth 0 is deliberately NOT reachable: it is the induced-subgraph read chunk A uses, and
+    // asking a *traversal* to take no hops is a caller error, not a degenerate walk.
+    let depth = clamp_traversal_depth(depth);
 
     // Same override reasoning as the entry read: every column but `label` is NOT NULL on `kb_edges`,
     // and the overrides exist only because a set-returning function types every column as nullable.

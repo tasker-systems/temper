@@ -8,7 +8,9 @@
 //! 400 seeds" from "walked 250 of them." Refusing locally is the only disclosure available without
 //! changing the wire type: nothing out of bounds is ever sent, so nothing is silently clamped.
 //!
-//! The bounds are read from `temper_core`, not restated here — one copy, shared with the service.
+//! The bounds are read from `temper_core`, not restated here. Depth goes further than a shared
+//! constant: the service clamps through `clamp_traversal_depth`, so the range this refuses on and
+//! the range the service enforces cannot come apart.
 
 use temper_core::error::TemperError;
 use temper_core::types::graph_atlas::{
@@ -44,6 +46,49 @@ pub fn validate_traverse_bounds(seed_count: usize, depth: Option<i32>) -> Result
         }
     }
     Ok(())
+}
+
+/// How one `--in` anchor must be resolved.
+///
+/// `--in` takes "a context or cogmap ref", and those two spell themselves differently. A cogmap ref
+/// is the decorated `slug-<uuid>` form every resource ref uses, resolvable locally. A context ref is
+/// `@me/slug` / `@handle/slug` / `+team-slug/slug`, which carries no uuid and needs the server.
+///
+/// Splitting the decision out keeps it pure and testable: the async resolution below is a thin
+/// dispatch over this, and the classification itself never needs a client.
+#[derive(Debug, PartialEq, Eq)]
+pub enum AnchorRef {
+    /// Already addressable — a bare UUID or a decorated `slug-<uuid>`.
+    Id(Uuid),
+    /// An owner-qualified context ref that only the server can resolve.
+    ContextRef(String),
+}
+
+/// Classify one anchor without touching the network.
+pub fn classify_anchor(raw: &str) -> AnchorRef {
+    match temper_workflow::operations::parse_ref(raw) {
+        Ok(parsed) => AnchorRef::Id(parsed.0),
+        // Not locally addressable. Deferred rather than refused here, so the error a caller reads
+        // comes from the resolver that actually looked.
+        Err(_) => AnchorRef::ContextRef(raw.to_string()),
+    }
+}
+
+/// Resolve `--in` anchors, reaching the server only for the refs that need it.
+pub async fn resolve_anchors(
+    client: &temper_client::TemperClient,
+    raw: &[String],
+) -> Result<Vec<Uuid>> {
+    let mut ids = Vec::with_capacity(raw.len());
+    for r in raw {
+        match classify_anchor(r) {
+            AnchorRef::Id(id) => ids.push(id),
+            AnchorRef::ContextRef(ctx) => ids.push(
+                crate::commands::context_cmd::resolve_context_id_for_read(client, &ctx).await?,
+            ),
+        }
+    }
+    Ok(ids)
 }
 
 /// Call the entry read for this principal, optionally confined to named anchors.
@@ -140,5 +185,63 @@ mod tests {
     fn the_range_the_cli_enforces_is_the_shared_one() {
         assert_eq!(*TRAVERSAL_DEPTH_RANGE.start(), 1);
         assert_eq!(*TRAVERSAL_DEPTH_RANGE.end(), 3);
+    }
+
+    const COGMAP: &str = "temper-self-cognition-019f2391-e001-7933-b88a-28fb92e56ac1";
+
+    #[test]
+    fn a_decorated_ref_is_resolved_locally() {
+        match classify_anchor(COGMAP) {
+            AnchorRef::Id(id) => assert_eq!(
+                id.to_string(),
+                "019f2391-e001-7933-b88a-28fb92e56ac1",
+                "the trailing uuid is the address"
+            ),
+            other => panic!("expected a local id, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_bare_uuid_is_resolved_locally() {
+        let raw = "019f2391-e001-7933-b88a-28fb92e56ac1";
+        assert_eq!(classify_anchor(raw), AnchorRef::Id(raw.parse().unwrap()));
+    }
+
+    /// The defect this cycle fixes. `--in @me/temper` is the form every other context-taking flag
+    /// accepts, and it was refused locally with "not a resource ref", which does not hint that an
+    /// `@me/` ref was ever the right thing to type.
+    #[test]
+    fn an_at_me_context_ref_is_deferred_to_the_server() {
+        assert_eq!(
+            classify_anchor("@me/temper"),
+            AnchorRef::ContextRef("@me/temper".to_string())
+        );
+    }
+
+    #[test]
+    fn a_handle_qualified_context_ref_is_deferred_to_the_server() {
+        assert_eq!(
+            classify_anchor("@j-cole-taylor/temper"),
+            AnchorRef::ContextRef("@j-cole-taylor/temper".to_string())
+        );
+    }
+
+    #[test]
+    fn a_team_qualified_context_ref_is_deferred_to_the_server() {
+        assert_eq!(
+            classify_anchor("+acme/roadmap"),
+            AnchorRef::ContextRef("+acme/roadmap".to_string())
+        );
+    }
+
+    /// Anything unrecognizable is deferred rather than refused here, so the error a caller reads
+    /// comes from the resolver that actually looked — "not found among the contexts you can see"
+    /// beats a local parse complaint that names the wrong grammar.
+    #[test]
+    fn an_unrecognizable_anchor_is_deferred_rather_than_refused_locally() {
+        assert_eq!(
+            classify_anchor("nonsense"),
+            AnchorRef::ContextRef("nonsense".to_string())
+        );
     }
 }
