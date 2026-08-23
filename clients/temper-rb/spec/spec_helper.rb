@@ -46,7 +46,10 @@ module Fixtures
       created: '2026-07-10T12:00:00Z',
       updated: '2026-07-10T12:00:00Z',
       slug: 'incidents',
-      owner_ref: '@j-cole-taylor'
+      owner_ref: '@j-cole-taylor',
+      # Whether the reader may author into this context. Required on the wire, so a
+      # fixture without it fails validation -- the same lesson `ref` carries above.
+      can_write: true
     }.merge(overrides)
   end
 
