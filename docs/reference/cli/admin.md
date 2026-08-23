@@ -2,10 +2,10 @@
 
 # `temper admin`
 
-Administer the instance (system settings, promote admins, review requests)
+Administer the deployment — system settings, principals, machine clients, connections, and subscriptions
 
 ```text
-Administer the instance (system settings, promote admins, review requests)
+Administer the deployment — system settings, principals, machine clients, connections, and subscriptions
 
 Usage: temper admin [OPTIONS] <COMMAND>
 

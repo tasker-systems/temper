@@ -24,6 +24,9 @@ function ctx(slug: string, ownerRef: string, count = 0): ContextRowWithCounts {
 		resource_count: count as unknown as bigint,
 		slug,
 		owner_ref: ownerRef,
+		// Not what these fixtures exercise — nav grouping is a read concern. `false` so a
+		// fixture never implies authority it does not test.
+		can_write: false,
 	};
 }
 

@@ -1,4 +1,9 @@
-//! `temper admin machine` — operator-only machine-principal registration.
+//! `temper admin machine` — machine-principal registration.
+//!
+//! **Not operator-only.** The gate is `MachineAuthority`
+//! (`temper-services/src/authz/machine.rs`): a system admin, **or** the owner of the machine's
+//! owning team — a teamless machine fails closed to admin-only. The `admin` grouping names the
+//! deployment *subject*, not an elevation bar.
 //!
 //! Thin commands: parse, resolve refs to ids, call the client, render. Reach
 //! (`--team`, `--cogmap`) is explicit and repeatable and is never inferred from

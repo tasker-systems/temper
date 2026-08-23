@@ -2,7 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
   "installCommand": "cd packages/temper-cloud && bun install",
-  "ignoreCommand": "sh scripts/vercel-ignore-build.sh",
+  "ignoreCommand": "sh \"$(git rev-parse --show-toplevel)/scripts/vercel-ignore-build.sh\" temper-cloud",
   "buildCommand": "sh scripts/vercel-build.sh",
   "build": {
     "env": {

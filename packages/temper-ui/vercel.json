@@ -1,5 +1,6 @@
 {
 	"installCommand": "bun install",
+	"ignoreCommand": "sh \"$(git rev-parse --show-toplevel)/scripts/vercel-ignore-build.sh\" temper-ui",
 	"redirects": [
 		{ "source": "/docs", "destination": "/using-temper", "permanent": true },
 		{ "source": "/docs/:path*", "destination": "/using-temper", "permanent": true },

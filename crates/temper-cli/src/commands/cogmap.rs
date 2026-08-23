@@ -1,9 +1,8 @@
-//! `temper cogmap reconcile` — operator command to reconcile a cognitive map's content to a
-//! committed manifest.
+//! `temper cogmap reconcile` — reconcile a cognitive map's content to a committed manifest.
 //!
 //! Reads the authored manifest, embeds each entry CLIENT-SIDE (`compute_body_chunks`), builds a
-//! pre-embedded `ReconcileCogmapRequest`, and PUTs it to `/api/cognitive-maps/{id}` (admin-gated,
-//! idempotent). Prints the run outcome (`created`/`updated`/`folded`/`unchanged`/`charter`).
+//! pre-embedded `ReconcileCogmapRequest`, and PUTs it to `/api/cognitive-maps/{id}` (idempotent).
+//! Prints the run outcome (`created`/`updated`/`folded`/`unchanged`/`charter`).
 //!
 //! The whole path needs the `embed` feature (it runs ONNX). A non-embed build still compiles and
 //! returns a clear "requires --features embed" error, mirroring `actions::search::embed_query`.

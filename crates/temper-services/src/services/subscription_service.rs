@@ -4,8 +4,10 @@
 //! Authorization is a **two-leg gate, composed from existing seams** — no new predicate is
 //! invented:
 //!
-//! 1. **The caller manages the authoring team.** `team_service::require_manage_on_team` —
-//!    owner or maintainer, composed with the system-admin path at the authority layer. The
+//! 1. **The caller manages the authoring team, or is a system admin.**
+//!    `crate::authz::SubscriptionAuthority` — `team_service::can_manage` (owner or maintainer)
+//!    composed with `access_service::is_system_admin`, at the authority layer where every other
+//!    scoped gate in this crate lives. The
 //!    authoring team is the team the caller names, NOT derived from the subscriber: `kb_cogmaps`
 //!    has no owner team (only `kb_team_cogmaps` links), and `kb_contexts.owner_table` can be
 //!    `kb_profiles` (no team). The caller names the team; the gate checks against it.
@@ -31,8 +33,9 @@ use temper_core::types::subscription::{
     CreateSubscriptionRequest, Subscription, SubscriptionSelector,
 };
 
+use crate::authz::{authorize, SubscriptionAuthority};
 use crate::error::{ApiError, ApiResult};
-use crate::services::{connection_service, team_service};
+use crate::services::connection_service;
 
 /// The admissible subscriber tables. Kept here, not in the migration's CHECK, so the service
 /// layer can match on them without re-parsing strings. The migration's CHECK is the
@@ -55,16 +58,22 @@ pub async fn get(pool: &PgPool, id: Uuid) -> ApiResult<Subscription> {
     .ok_or_else(|| ApiError::NotFound("subscription not found or not readable".to_string()))
 }
 
-/// [`get`], gated on the authoring team (the caller must manage it).
+/// [`get`], gated on the authoring team: the caller manages it, or is a system admin.
 pub async fn get_for_caller(pool: &PgPool, caller: ProfileId, id: Uuid) -> ApiResult<Subscription> {
     let sub = get(pool, id).await?;
-    team_service::require_manage_on_team(pool, sub.authoring_team_id, caller).await?;
+    authorize::<SubscriptionAuthority>(pool, caller, sub.authoring_team_id).await?;
     Ok(sub)
 }
 
 /// List subscriptions visible to `caller`, newest first. Revoked rows are hidden unless asked
 /// for. A system admin sees every row; a team manager sees only subscriptions whose authoring
 /// team they manage. Optional `connection_id` filter.
+///
+/// **Deliberately not a `SubscriptionAuthority` gate.** A `ScopedAuthority` answers "may this
+/// caller act on *this* subject"; a listing has no single subject to be scoped to — it is a
+/// visibility predicate over many authoring teams, evaluated in SQL. The two arms below are the
+/// same two the authority names, which is the point: this function and that type must agree, and
+/// they agree by being the same disjunction, not by sharing a call.
 pub async fn list(
     pool: &PgPool,
     caller: ProfileId,
@@ -128,14 +137,22 @@ pub async fn create(
         ));
     }
 
-    // Leg 1: the caller manages the authoring team. require_manage_on_team refuses a
-    // nonexistent team as Forbidden (role_on_team returns None for a team_id no row carries),
-    // so a bogus UUID is denied and never reaches the INSERT.
-    team_service::require_manage_on_team(pool, req.authoring_team_id, caller).await?;
+    // Leg 1: the caller manages the authoring team, or is a system admin. A nonexistent team
+    // resolves to the denial arm (role_on_team returns None for a team_id no row carries), so a
+    // bogus UUID is refused here and never reaches the INSERT.
+    let authorized =
+        authorize::<SubscriptionAuthority>(pool, caller, req.authoring_team_id).await?;
+    let authoring_team = authorized.subject();
 
     // Leg 2: the authoring team holds a read-reach grant on the connection. This is the
     // authorization surface B2 made possible; it does not create a parallel permission.
-    if !reach_grant_held(pool, req.connection_id, req.authoring_team_id).await? {
+    //
+    // **Leg 2 binds a system admin too.** The admin leg above widens WHO may declare on behalf of
+    // a team; it does not exempt the team from needing reach. An admin declaring a subscription
+    // against a connection the authoring team cannot reach would create a row that is inert by
+    // construction — the thing `refuse_inert_declaration` below exists to prevent from the other
+    // direction.
+    if !reach_grant_held(pool, req.connection_id, authoring_team).await? {
         return Err(ApiError::Forbidden);
     }
 
@@ -147,7 +164,7 @@ pub async fn create(
         pool,
         &req.subscriber_table,
         req.subscriber_id,
-        req.authoring_team_id,
+        authoring_team,
     )
     .await?;
 
@@ -171,7 +188,7 @@ pub async fn create(
            RETURNING id"#,
         req.subscriber_table,
         req.subscriber_id,
-        req.authoring_team_id,
+        authoring_team,
         req.connection_id,
         selector_json,
         *caller,
@@ -244,7 +261,7 @@ fn refuse_inert_declaration(
 pub async fn revoke(pool: &PgPool, caller: ProfileId, id: Uuid) -> ApiResult<Subscription> {
     // Auth before writes, keyed on the existing row's authoring team.
     let existing = get(pool, id).await?;
-    team_service::require_manage_on_team(pool, existing.authoring_team_id, caller).await?;
+    authorize::<SubscriptionAuthority>(pool, caller, existing.authoring_team_id).await?;
 
     sqlx::query!(
         r#"UPDATE kb_subscriptions
@@ -292,7 +309,7 @@ async fn validate_subscriber_link(
         "kb_teams" => {
             // The equality check in `create` already ensured authoring_team_id = subscriber_id.
             // A team row that exists is its own subscriber; a nonexistent team was already
-            // refused by require_manage_on_team. Nothing to do.
+            // refused by the SubscriptionAuthority gate. Nothing to do.
             Ok(())
         }
         "kb_contexts" => {
@@ -450,6 +467,30 @@ mod tests {
         .await
         .expect("seed team owner");
         team_id
+    }
+
+    /// Seed an approved, non-admin profile with its emitters. Used wherever a test needs a
+    /// principal who is admitted to the instance but holds no authority over the subject.
+    async fn seed_plain_profile(pool: &PgPool, label: &str) -> ProfileId {
+        let id = Uuid::now_v7();
+        let handle = format!("{label}-{id}");
+        sqlx::query!(
+            r#"INSERT INTO kb_profiles (id, handle, display_name)
+               VALUES ($1, $2, $3)"#,
+            id,
+            &handle,
+            &handle,
+        )
+        .execute(pool)
+        .await
+        .expect("seed profile");
+        let mut acquired = pool.acquire().await.expect("acquire");
+        crate::services::profile_service::provision_profile_entities(&mut acquired, id, &handle)
+            .await
+            .expect("provision emitters");
+        drop(acquired);
+        crate::test_support::approve(pool, id).await;
+        ProfileId::from(id)
     }
 
     /// Seed a second team and add `member` as a maintainer (manage-capable but not owner).
@@ -659,33 +700,122 @@ mod tests {
         grant_reach(&pool, admin, conn, team).await;
 
         // A stranger with no role on the team.
-        let stranger = ProfileId::from(Uuid::now_v7());
-        let stranger_handle = format!("stranger-{}", *stranger);
-        sqlx::query!(
-            r#"INSERT INTO kb_profiles (id, handle, display_name)
-               VALUES ($1, $2, $3)"#,
-            *stranger,
-            &stranger_handle,
-            &stranger_handle,
-        )
-        .execute(&pool)
-        .await
-        .expect("seed stranger profile");
-        let mut acquired = pool.acquire().await.expect("acquire");
-        crate::services::profile_service::provision_profile_entities(
-            &mut acquired,
-            *stranger,
-            &stranger_handle,
-        )
-        .await
-        .expect("provision stranger emitters");
-        drop(acquired);
-        crate::test_support::approve(&pool, *stranger).await;
+        let stranger = seed_plain_profile(&pool, "stranger").await;
 
         let err = create(&pool, stranger, &req("kb_teams", team, team, conn))
             .await
             .expect_err("should be forbidden");
         assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
+    }
+
+    /// A system admin may act on a subscription whose authoring team it does not manage.
+    ///
+    /// `list` has always admitted an admin; `create`/`get`/`revoke` did not, so an admin could see
+    /// every subscription in the instance and revoke none of them. The module doc has described the
+    /// gate as *"composed with the system-admin path at the authority layer"* since this file was
+    /// written — there was no authority layer, and no admin leg.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn system_admin_may_act_on_a_team_it_does_not_manage(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let outsider = seed_plain_profile(&pool, "team-owner").await;
+        let team = seed_team(&pool, outsider).await;
+        let conn = seed_connection(&pool, Some(team), admin).await;
+        grant_reach(&pool, admin, conn, team).await;
+
+        // The precondition this test turns on: the admin holds NO role on the authoring team. If
+        // the fixture ever grants one, the test would pass for a reason that has nothing to do
+        // with the admin leg.
+        assert!(
+            crate::services::team_service::role_on_team(&pool, team, admin)
+                .await
+                .expect("role lookup")
+                .is_none(),
+            "fixture invalid: the admin manages the authoring team, so this test cannot \
+             distinguish the admin leg from the manage leg"
+        );
+
+        let created = create(&pool, admin, &req("kb_teams", team, team, conn))
+            .await
+            .expect("admin creates on a team it does not manage");
+        let read = get_for_caller(&pool, admin, created.id)
+            .await
+            .expect("admin reads on a team it does not manage");
+        assert_eq!(read.id, created.id);
+        let revoked = revoke(&pool, admin, created.id)
+            .await
+            .expect("admin revokes on a team it does not manage");
+        assert!(revoked.revoked_at.is_some());
+        assert_eq!(revoked.revoked_by_profile_id, Some(*admin));
+    }
+
+    /// The admin leg widens WHO may declare for a team; it does not exempt the team from leg 2.
+    ///
+    /// `create_refused_without_reach_grant` looks like it covers this and does not: its caller is
+    /// the team's own owner, so it proves leg 2 binds a *manager*. This is the admin arm of the
+    /// same claim, and it is what makes the comment at the leg-2 call site true by test rather
+    /// than by assertion.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn the_admin_leg_does_not_exempt_the_authoring_team_from_reach(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let outsider = seed_plain_profile(&pool, "team-owner").await;
+        let team = seed_team(&pool, outsider).await;
+        let conn = seed_connection(&pool, Some(team), admin).await;
+        // NOTE: no grant_reach — the authoring team holds no reach on the connection.
+
+        assert!(
+            crate::services::team_service::role_on_team(&pool, team, admin)
+                .await
+                .expect("role lookup")
+                .is_none(),
+            "fixture invalid: the admin manages the authoring team, so leg 1 would admit it as a \
+             manager and this test would not be exercising the admin leg"
+        );
+
+        let err = create(&pool, admin, &req("kb_teams", team, team, conn))
+            .await
+            .expect_err("an admin still needs the team to hold reach");
+        assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
+    }
+
+    /// The other direction, on the same three acts. Widening a gate is only safe if the arm that
+    /// was already denied is still denied — an admin leg that admits everyone is not an admin leg.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_non_admin_who_does_not_manage_is_still_refused_all_three_acts(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let outsider = seed_plain_profile(&pool, "team-owner").await;
+        let team = seed_team(&pool, outsider).await;
+        let conn = seed_connection(&pool, Some(team), admin).await;
+        grant_reach(&pool, admin, conn, team).await;
+
+        let stranger = seed_plain_profile(&pool, "stranger").await;
+
+        // create
+        let err = create(&pool, stranger, &req("kb_teams", team, team, conn))
+            .await
+            .expect_err("stranger must not create");
+        assert!(matches!(err, ApiError::Forbidden), "create: got {err:?}");
+
+        // A real row to aim get/revoke at, authored by someone who may.
+        let created = create(&pool, outsider, &req("kb_teams", team, team, conn))
+            .await
+            .expect("the team owner may create");
+
+        let err = get_for_caller(&pool, stranger, created.id)
+            .await
+            .expect_err("stranger must not read");
+        assert!(matches!(err, ApiError::Forbidden), "get: got {err:?}");
+
+        let err = revoke(&pool, stranger, created.id)
+            .await
+            .expect_err("stranger must not revoke");
+        assert!(matches!(err, ApiError::Forbidden), "revoke: got {err:?}");
+
+        // And the refusal was real, not a silent no-op: the row is still live.
+        let still = get(&pool, created.id).await.expect("row still readable");
+        assert!(
+            still.revoked_at.is_none(),
+            "the refused revoke must not have taken effect"
+        );
     }
 
     #[sqlx::test(migrator = "crate::MIGRATOR")]

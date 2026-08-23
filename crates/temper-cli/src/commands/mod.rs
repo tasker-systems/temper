@@ -12,6 +12,7 @@ pub mod context_cmd;
 pub mod data_artifact;
 pub mod edge;
 pub mod facet;
+pub mod graph;
 pub mod init;
 pub mod invitations;
 pub mod invocation;

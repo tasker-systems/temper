@@ -13,7 +13,24 @@ slug: string,
  * The already-sigil'd owner addressable: `@<handle>` for profiles, `+<team-slug>` for teams.
  * Together with `slug`, forms the full decorated context ref `{owner_ref}/{slug}`.
  */
-owner_ref: string, };
+owner_ref: string, 
+/**
+ * Whether the reading principal may **author into** this context —
+ * `context_authorable_by_profile`, which is also the container-write cascade arm of
+ * `can_modify_resource`. Because that arm keys on the **home**, not the resource, this one
+ * boolean answers the cascade for every resource homed here, which is why authority is
+ * carried on the container read rather than on every response that carries a resource.
+ *
+ * **Read is strictly broader than this.** A `watcher`, and a read-only grant, reach the
+ * context and do not author it, so this must never be derived from visibility. See migration
+ * `20260712000010`'s `COMMENT ON FUNCTION`.
+ *
+ * **Not the whole write gate.** `can_modify_resource` also admits the resource's home owner
+ * and explicit per-resource grants. A surface deriving offerability from this must union it
+ * with the owner check (`ResourceView.owner_profile_id`) under the `is_active` floor, and
+ * accepts that a reader whose only authority is a per-resource grant is not covered.
+ */
+can_write: boolean, };
 
 /**
  * Context with resource count — used by the list endpoint.
@@ -27,7 +44,24 @@ slug: string,
  * The already-sigil'd owner addressable: `@<handle>` for profiles, `+<team-slug>` for teams.
  * Together with `slug`, forms the full decorated context ref `{owner_ref}/{slug}`.
  */
-owner_ref: string, };
+owner_ref: string, 
+/**
+ * Whether the reading principal may **author into** this context —
+ * `context_authorable_by_profile`, which is also the container-write cascade arm of
+ * `can_modify_resource`. Because that arm keys on the **home**, not the resource, this one
+ * boolean answers the cascade for every resource homed here, which is why authority is
+ * carried on the container read rather than on every response that carries a resource.
+ *
+ * **Read is strictly broader than this.** A `watcher`, and a read-only grant, reach the
+ * context and do not author it, so this must never be derived from visibility. See migration
+ * `20260712000010`'s `COMMENT ON FUNCTION`.
+ *
+ * **Not the whole write gate.** `can_modify_resource` also admits the resource's home owner
+ * and explicit per-resource grants. A surface deriving offerability from this must union it
+ * with the owner check (`ResourceView.owner_profile_id`) under the `is_active` floor, and
+ * accepts that a reader whose only authority is a per-resource grant is not covered.
+ */
+can_write: boolean, };
 
 /**
  * An explicit context read-grant that survives the ownership flip — inherited residual reach.

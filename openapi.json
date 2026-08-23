@@ -9870,9 +9870,14 @@
           "created",
           "updated",
           "slug",
-          "owner_ref"
+          "owner_ref",
+          "can_write"
         ],
         "properties": {
+          "can_write": {
+            "type": "boolean",
+            "description": "Whether the reading principal may **author into** this context —\n`context_authorable_by_profile`, which is also the container-write cascade arm of\n`can_modify_resource`. Because that arm keys on the **home**, not the resource, this one\nboolean answers the cascade for every resource homed here, which is why authority is\ncarried on the container read rather than on every response that carries a resource.\n\n**Read is strictly broader than this.** A `watcher`, and a read-only grant, reach the\ncontext and do not author it, so this must never be derived from visibility. See migration\n`20260712000010`'s `COMMENT ON FUNCTION`.\n\n**Not the whole write gate.** `can_modify_resource` also admits the resource's home owner\nand explicit per-resource grants. A surface deriving offerability from this must union it\nwith the owner check (`ResourceView.owner_profile_id`) under the `is_active` floor, and\naccepts that a reader whose only authority is a per-resource grant is not covered."
+          },
           "created": {
             "type": "string",
             "format": "date-time"
@@ -9916,9 +9921,14 @@
           "updated",
           "resource_count",
           "slug",
-          "owner_ref"
+          "owner_ref",
+          "can_write"
         ],
         "properties": {
+          "can_write": {
+            "type": "boolean",
+            "description": "Whether the reading principal may **author into** this context —\n`context_authorable_by_profile`, which is also the container-write cascade arm of\n`can_modify_resource`. Because that arm keys on the **home**, not the resource, this one\nboolean answers the cascade for every resource homed here, which is why authority is\ncarried on the container read rather than on every response that carries a resource.\n\n**Read is strictly broader than this.** A `watcher`, and a read-only grant, reach the\ncontext and do not author it, so this must never be derived from visibility. See migration\n`20260712000010`'s `COMMENT ON FUNCTION`.\n\n**Not the whole write gate.** `can_modify_resource` also admits the resource's home owner\nand explicit per-resource grants. A surface deriving offerability from this must union it\nwith the owner check (`ResourceView.owner_profile_id`) under the `is_active` floor, and\naccepts that a reader whose only authority is a per-resource grant is not covered."
+          },
           "created": {
             "type": "string",
             "format": "date-time"
@@ -16061,7 +16071,7 @@
     },
     {
       "name": "Cognitive Maps",
-      "description": "Cognitive-map content reconcile (admin-gated)"
+      "description": "Cognitive maps — genesis, reads (shape, metrics, analytics), content reconcile, materialize, team binding, and grants"
     },
     {
       "name": "Graph",

@@ -561,6 +561,54 @@ crates/temper-api/src/lib.rs" \
 
 # A sibling under scripts/ is NOT covered — inertness is proven per tree, never
 # inherited from a top-level directory name.
+# ---------------------------------------------------------------------------
+# internal/ — the process tree. Added to NON_PRODUCT_ROOTS because it is
+# overwhelmingly .md (already handled by the extension test) but NOT entirely:
+# `internal/registers/coverage.yaml` is a projection over a REMOTE knowledge
+# base, so it is committed on its own and often. Being .yaml it failed the
+# extension test, and cc280f98 — that one file, alone — therefore scoped as
+# full-ci and ran the entire pipeline.
+#
+# The .yaml case is the one that matters, so it is asserted directly rather
+# than through a .md that would pass for the wrong reason.
+# ---------------------------------------------------------------------------
+run_test "a register reprojection alone: whole pipeline skipped (cc280f98)" \
+    "internal/registers/coverage.yaml" \
+    "SKIP_ALL=true" \
+    "DOCS_ONLY=false" \
+    "NON_PRODUCT=true" \
+    "RUN_CODE_QUALITY=false" \
+    "RUN_TEST_RUST=false" \
+    "RUN_TEST_TYPESCRIPT=false"
+
+run_test "an internal spec alone: skipped, and reported as docs" \
+    "internal/superpowers/specs/2026-07-30-schema-binary-pairing-design.md" \
+    "SKIP_ALL=true" \
+    "DOCS_ONLY=true" \
+    "RUN_CODE_QUALITY=false" \
+    "RUN_TEST_RUST=false"
+
+# The load-bearing direction, asserted for this root as for every other: the
+# skip must be off the moment one real file joins the changeset.
+run_test "internal/ + a crate file: full CI" \
+    "internal/registers/coverage.yaml
+crates/temper-api/src/lib.rs" \
+    "SKIP_ALL=false" \
+    "RUN_CODE_QUALITY=true" \
+    "RUN_TEST_RUST=true"
+
+# internal/ must not shadow the docs/ gate. A change that moves a page out of
+# internal/ and into docs/ carries both paths, and docs/ is DOCS_GATED — so
+# code-quality is still invoked to reach check-docs-public-only.sh, which is
+# the gate that exists because internal security audits were once published.
+run_test "internal/ + docs/: still reaches the docs publish-safety gate" \
+    "internal/code-reviews/2026-07-18-audit.md
+docs/guides/getting-started.md" \
+    "SKIP_ALL=true" \
+    "RUN_CODE_QUALITY=true" \
+    "RUN_TEST_RUST=false" \
+    "RUN_TEST_TYPESCRIPT=false"
+
 run_test "a different scripts/ subtree is not non-product" \
     "scripts/install/install.sh" \
     "SKIP_ALL=false" \
