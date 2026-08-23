@@ -180,9 +180,22 @@ Create a **Native** application for the `temper` CLI:
 
 Create a second **Native** application for MCP clients (e.g. Claude Desktop):
 
-- Allowed callbacks: callback URLs for the MCP clients you support (e.g.
-  `https://claude.ai/api/mcp/auth_callback`,
-  `https://claude.com/api/mcp/auth_callback`, `http://localhost`).
+- Allowed callbacks:
+  - `https://claude.ai/api/mcp/auth_callback` — Claude Desktop (Connectors UI)
+  - `https://claude.com/api/mcp/auth_callback` — Claude Desktop (alternate)
+  - `http://localhost/mcp/oauth/callback` — CLI MCP clients via loopback proxy (opencode)
+  - `http://127.0.0.1/mcp/oauth/callback` — same, IPv4 loopback variant
+  - `http://localhost` — temper CLI relay (port-wildcard for `temper auth login`)
+  - `https://<instance>/api/auth/mcp-callback` — the loopback redirect proxy relay
+  - `https://<instance>/api/auth/cli-callback` — the temper CLI login relay
+
+  CLI MCP clients (opencode, Claude Code) use `http://127.0.0.1:<port>/callback` as
+  their redirect URI. Auth0's RFC 8252 loopback port-wildcard does not work on all
+  tenants, so Temper proxies loopback redirects through `https://<instance>/oauth/authorize`
+  → Auth0 → `https://<instance>/api/auth/mcp-callback` → `http://127.0.0.1:<port>/callback`.
+  The `http://localhost/mcp/oauth/callback` entry (no port) matches any port via Auth0's
+  Native app loopback wildcard when it works; the relay URL is the fallback when it doesn't.
+
 - This application's `client_id` becomes `MCP_CLIENT_ID` in your Vercel
   environment.
 

@@ -8,6 +8,7 @@
 # which run local OAuth callback servers on dynamic ports.
 redirect_uris = [
     "https://temperkb.io/api/auth/cli-callback",
+    "https://temperkb.io/api/auth/mcp-callback",
     "https://claude.ai/api/mcp/auth_callback",
     "https://claude.com/api/mcp/auth_callback",
 ]
