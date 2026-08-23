@@ -135,6 +135,22 @@ describe("auth0-proxy", () => {
       expect(res.status).toBe(400);
     });
 
+    it("returns 400 if the stashed redirect_uri is non-loopback (defense-in-depth)", async () => {
+      const { handleMcpCallback, encodeStashedState } = await import(
+        "../../src/oauth/auth0-proxy.js"
+      );
+      // Manually craft a token with an evil redirect_uri — the authorize proxy
+      // would never produce this, but this tests the relay's guard.
+      const stashed = encodeStashedState("https://evil.example.com/callback", "state");
+      const url = new URL("https://temperkb.io/api/auth/mcp-callback");
+      url.searchParams.set("code", "abc");
+      url.searchParams.set("state", stashed);
+
+      const res = handleMcpCallback(new Request(url.toString()));
+      expect(res.status).toBe(400);
+      expect(await res.text()).toContain("Invalid redirect_uri");
+    });
+
     it("returns 400 when code or state is missing", async () => {
       const { handleMcpCallback } = await import("../../src/oauth/auth0-proxy.js");
       const res = handleMcpCallback(

@@ -86,7 +86,7 @@ function sign(payload: string): string {
 }
 
 /** Encodes `{r, s, e}` into a signed `base64url(json).base64url(hmac)` token. */
-function encodeStashedState(redirectUri: string, oauthState: string): string {
+export function encodeStashedState(redirectUri: string, oauthState: string): string {
   const payload: StashedState = {
     r: redirectUri,
     s: oauthState,
@@ -208,6 +208,15 @@ export function handleMcpCallback(req: Request): Response {
     original = decodeStashedState(stashed);
   } catch {
     return badRequest("Invalid or expired state token");
+  }
+
+  // Defense-in-depth: even if the signing key were compromised, the relay must
+  // never redirect to a non-loopback URL. The authorize proxy only stashes
+  // loopback redirect_uris, so a valid token should always carry one — but this
+  // check ensures a forged or tampered token cannot turn the relay into an open
+  // redirect.
+  if (!isLoopbackRedirect(original.r)) {
+    return badRequest("Invalid redirect_uri in state token");
   }
 
   const target = new URL(original.r);
