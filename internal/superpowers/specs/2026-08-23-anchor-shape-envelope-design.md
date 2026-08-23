@@ -111,10 +111,15 @@ pub enum ShapeEmptiness {
 `DateTime<Utc>` matches `CogmapStaleness` (`cognitive_maps.rs:118-121`), which already carries
 `materialized_at: Option<DateTime<Utc>>` on the wire — so the clock needs no new representation.
 
-**Serde naming:** the enum serializes snake_case, so no `rename` attribute is needed. This matters —
-ts-rs discards an entire `#[serde(...)]` attribute when any part of it is unsupported, which once
-silently dropped a `rename` at `crates/temper-core/src/types/managed_meta.rs:49-55`. If a rename is
-ever wanted here it must go in its own attribute.
+**Serde naming `[corrected while planning]`:** serde does **not** snake_case enum variants by
+default — without an attribute, `NothingVisible` goes on the wire as `"NothingVisible"`. The enum
+carries `#[serde(rename_all = "snake_case")]` **as its own attribute, below the derives**, matching
+the house precedent for a ts-rs-exported wire enum at `crates/temper-core/src/types/api.rs:137-142`.
+
+Own-attribute placement is not cosmetic: ts-rs discards an entire `#[serde(...)]` attribute when any
+part of it is unsupported, which once silently dropped a `rename` at
+`crates/temper-core/src/types/managed_meta.rs:49-55`. Keeping `rename_all` alone in its attribute is
+what keeps a later addition from taking it down with it.
 
 ### 3.3 The five outcomes, and why the collapsed arm is not an oracle
 
