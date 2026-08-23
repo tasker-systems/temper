@@ -1,16 +1,17 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT principal_governance_set($1,true,NULL,'scenario load')",
+  "query": "SELECT context_authorable_by_profile($1, $2) AS \"can_write!\"",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "principal_governance_set",
+        "name": "can_write!",
         "type_info": "Bool"
       }
     ],
     "parameters": {
       "Left": [
+        "Uuid",
         "Uuid"
       ]
     },
@@ -18,5 +19,5 @@
       null
     ]
   },
-  "hash": "4f9d835d7e96275055ecbd35b04e96ab20cbd0b7b39c1bd03b2a32ab9f9c2fc5"
+  "hash": "1a9684478973260ea7372040d1e5830e0a0157e8276257462b2e33dd0df08a2c"
 }

@@ -163,6 +163,7 @@ pub async fn create_context(
 
     let row = temper_services::services::context_service::create(
         &svc.api_state.pool,
+        caller,
         &owner_table,
         owner_id,
         &input.name,

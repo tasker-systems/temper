@@ -22,6 +22,8 @@
 			resource_count: count as unknown as bigint,
 			slug: name,
 			owner_ref: ownerRef,
+			// The harness renders the read surface; authority is not its subject.
+			can_write: false,
 		};
 	}
 

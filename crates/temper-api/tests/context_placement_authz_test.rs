@@ -73,7 +73,7 @@ async fn team_owned_context(pool: &PgPool, slug: &str) -> (Uuid, Uuid, Uuid) {
     let owner_email = format!("{slug}-owner-{}@example.com", Uuid::new_v4());
     let owner = common::fixtures::create_test_profile(pool, &owner_email).await;
     let team_id = create_team(pool, owner, &format!("{slug}-team-{}", Uuid::new_v4())).await;
-    let ctx = context_service::create(pool, "kb_teams", team_id, "shared")
+    let ctx = context_service::create(pool, ProfileId::from(owner), "kb_teams", team_id, "shared")
         .await
         .expect("create team-owned context");
     (team_id, owner, *ctx.id)

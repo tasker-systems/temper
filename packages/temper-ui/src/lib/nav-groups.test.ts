@@ -23,6 +23,9 @@ function ctx(
 		resource_count: (opts.count ?? 0) as unknown as bigint,
 		slug,
 		owner_ref: ownerRef,
+		// Not what these fixtures exercise — nav grouping is a read concern. `false` so a
+		// fixture never implies authority it does not test.
+		can_write: false,
 	};
 }
 
