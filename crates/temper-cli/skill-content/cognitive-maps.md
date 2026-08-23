@@ -118,6 +118,19 @@ from — rides on `--sources` (and, with `--sources-as-edges`, `derived_from` ed
 on the CLI, or `cogmap_materialize` / `cogmap_materialize_delta` on the agent surface.
 Regions only exist *after* a materialize.
 
+**A `shape` read with no regions says why.** `cogmap shape` returns an envelope —
+`regions` plus `population`, `emptiness` and `materialized_at` — and when `regions` is empty,
+`emptiness` names which of four things happened: `never_clustered` (materialize it),
+`nothing_visible` (clustered, but no region holds a member you can read), `lens_narrowed`
+(your `--lens` excluded them all), or `unreadable_or_absent`. Do not read an empty list as
+"not materialized yet"; read the field.
+
+**`cogmap list`'s `region_count` and `shape`'s `population` count different things and will
+disagree.** `region_count` is every non-folded region on the map, ungated. `population` is
+the regions holding at least one member *you* can read, across all lenses. A `population`
+below `region_count` means regions exist whose contents are outside your reach — not that
+they are missing, and not that the map needs re-materializing.
+
 ### The node manifest — the single highest-leverage habit
 
 A **pass** is: open one invocation → loop `resource create` + `edge assert` from a small

@@ -382,6 +382,9 @@ fn lens_id_of(lens: Option<&str>) -> Result<Option<Uuid>> {
 }
 
 /// `temper context shape <context_ref> [--lens <ref>]` — the context's materialized regions.
+///
+/// What is rendered is the `AnchorShape` envelope, not a bare list: an empty `regions` carries an
+/// `emptiness` naming why it is empty, so the CLI never has to guess a cause on the caller's behalf.
 pub async fn shape_remote(
     client: &temper_client::TemperClient,
     context: &str,
@@ -390,12 +393,12 @@ pub async fn shape_remote(
 ) -> Result<()> {
     let context_id = resolve_context_id_for_read(client, context).await?;
     let lens_id = lens_id_of(lens)?;
-    let rows = client
+    let shape = client
         .contexts()
         .shape(context_id, lens_id)
         .await
         .map_err(crate::actions::runtime::client_err_to_temper)?;
-    let rendered = crate::format::render(&rows, fmt)?;
+    let rendered = crate::format::render(&shape, fmt)?;
     crate::output::plain(rendered);
     Ok(())
 }

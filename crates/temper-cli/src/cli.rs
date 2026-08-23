@@ -1076,7 +1076,10 @@ pub enum ContextAction {
     /// there, most salient first. The fastest way to see what a context is about without reading
     /// any single resource in it.
     ///
-    /// Empty means the context has not materialized regions yet — run `context materialize`.
+    /// An empty `regions` is not one situation, and `emptiness` names which: `never_clustered`
+    /// (nothing has been materialized yet — run `context materialize`), `nothing_visible`
+    /// (clustered, but no region holds anything you can read), `lens_narrowed` (your `--lens`
+    /// matched none of the `population` regions you can see here), or `unreadable_or_absent`.
     Shape {
         /// Context ref: a UUID or `@me/slug` / `+team-slug/slug`.
         context: String,

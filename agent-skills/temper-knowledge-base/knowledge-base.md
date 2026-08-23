@@ -94,15 +94,33 @@ the resource-ref parser is not used here.
 
 ### `context_read` (view: shape) — what the context is about
 
-The primary orientation read. Returns the context's materialized regions, most
-salient first, each with its salience, content cohesion, agent-authored label
-(if any), and member count. This is the fastest way to see the structure of a
+The primary orientation read. This is the fastest way to see the structure of a
 context before you commit tokens to reading its documents.
 
 ```
 Tool: context_read
 Input: { "view": "shape", "context": "@me/temper", "lens": "<optional lens ref>" }
 ```
+
+The reply is an **object, not an array**:
+
+- `regions` — the materialized regions, most salient first, each with its
+  salience, content cohesion, agent-authored label (if any), and member count.
+  Member counts are gated: they cover the members *you* can read, so two callers
+  can legitimately see different numbers for the same region.
+- `population` — how many regions you can see in this context across **all**
+  lenses. Under a `lens` it is the denominator `regions` was drawn from.
+- `emptiness` — `null` when `regions` has rows. When `regions` is empty it names
+  which of four things happened: `never_clustered` (nothing has been materialized
+  yet), `nothing_visible` (clustered, but no region holds anything you can read),
+  `lens_narrowed` (your `lens` excluded them all), or `unreadable_or_absent`
+  (you cannot read this context, or it does not exist — one answer on purpose).
+- `materialized_at` — when the context was last clustered. `null` means never,
+  or that you cannot read this context.
+
+**Read `emptiness` before concluding anything from an empty `regions`.** The
+four causes call for four different next moves, and only that field tells them
+apart.
 
 ### `context_read` (view: metrics) — the analytics tier
 

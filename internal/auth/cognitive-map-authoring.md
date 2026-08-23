@@ -64,7 +64,8 @@ context is a strictly stronger relationship. (Spec:
 | `facet_set` | `can_modify_resource(resource)` — incl. container cascade | `DbBackend::check_can_modify_next` |
 | `update_resource` / `delete_resource` | `can_modify_resource(resource)` — incl. container cascade | `DbBackend::check_can_modify_next` |
 | `advance_steward_watermark` | `cogmap_authorable_by_profile` (write grant) | `DbBackend` |
-| `materialize` / `materialize_delta` | `cogmap_authorable_by_profile` (write grant) | `DbBackend` |
+| `materialize` (run the clustering) | The **write** predicate for the anchor's kind — `cogmap_authorable_by_profile` for a cogmap, `context_authorable_by_profile` for a context — read off a lookup whose `WHERE` already carries `anchor_readable_by_profile` (absent-or-unreadable → uniform 404; readable-but-not-writable → 403) | `DbBackend::materialize_on_threshold` |
+| `materialize_delta` (ask how far the anchor has drifted) | `anchor_readable_by_profile` — a **READ** gate, anchor-generic (contexts as well as cogmaps); an anchor the caller cannot see is `NotFound`, never a leak | `materialize_service::materialize_delta` (service-direct read path, not `DbBackend`) |
 | `invocation_open` (self-attributed, `parent` = None) | `cogmap_authorable_by_profile` — **WRITE** (F2) | `DbBackend::check_cogmap_authorable` |
 | `invocation_open` (delegated, `parent` = Some) | `anchor_readable_by_profile` — **READ**; substrate enforces parent→originating lineage | `DbBackend::check_can_read_cogmap` |
 
