@@ -270,7 +270,7 @@ pub enum Commands {
         action: TeamAction,
     },
 
-    /// Administer the instance (system settings, promote admins, review requests)
+    /// Administer the deployment — system settings, principals, machine clients, connections, and subscriptions
     Admin {
         #[command(subcommand)]
         action: AdminAction,
@@ -343,7 +343,7 @@ pub enum Commands {
         action: EdgeAction,
     },
 
-    /// Operate on cognitive maps (admin-gated content reconcile)
+    /// Operate on cognitive maps (create, read, reconcile, materialize, bind, grant)
     Cogmap {
         #[command(subcommand)]
         cmd: CogmapCmd,
@@ -1770,7 +1770,7 @@ pub enum CogmapCmd {
     /// Reconcile a cognitive map's content to a committed manifest.
     ///
     /// Reads the authored manifest, embeds each entry client-side, and PUTs a pre-embedded
-    /// desired-state request to `/api/cognitive-maps/{id}` (admin-gated, idempotent).
+    /// desired-state request to `/api/cognitive-maps/{id}` (idempotent).
     Reconcile {
         /// Cognitive-map ref: a UUID or the decorated `slug-<uuid>` form
         r#ref: String,

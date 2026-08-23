@@ -181,6 +181,13 @@ jobs:
       - name: Security tripwire — handler-side authz drift
         run: bash .github/scripts/audit-handler-authz-drift.sh
 
+      # Two triggers over one baseline, and the second is the reason it exists: a claim-only
+      # baseline stays GREEN when a gate widens, which is how six of eight measured over-claims got
+      # in. Binding each claim file to the gate it describes is what makes the widening commit the
+      # one that re-reads the prose.
+      - name: Tripwire — elevation claims agree with the gate they describe
+        run: bash .github/scripts/audit-elevation-claims.sh
+
       # Unlike the three above, this one is not only a baseline tripwire: the pairwise-distinctness
       # of the gates' secrets is computed from the source, so UPDATE_BASELINE cannot silence it.
       - name: Security tripwire — internal signature gates use distinct secrets
@@ -357,6 +364,12 @@ jobs:
 
       - name: Guard test — audit-grant-sinks (SQL half)
         run: bash .github/scripts/test-audit-grant-sinks.sh
+
+      # Six probes. Two of them assert the guard stays GREEN — a comment rewrite above a gate, and a
+      # plain `//` note using elevation vocabulary. A tripwire that reds on prose churn gets
+      # re-baselined without being read, which is the same outcome as no tripwire by a slower route.
+      - name: Guard test — audit-elevation-claims (both triggers, both directions)
+        run: bash .github/scripts/test-audit-elevation-claims.sh
 
       - name: Guard test — audit-ungated-fragments
         run: bash .github/scripts/test-audit-ungated-fragments.sh

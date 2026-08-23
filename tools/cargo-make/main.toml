@@ -128,8 +128,9 @@ script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-ts-rs-drif
 description = "Run every .github/scripts/audit-*.sh tripwire, and fail if CI runs one this task does not"
 # These pin reviewed sets — grant write-sites, unauthenticated routes, handler-side authz calls,
 # signature-secret distinctness, credential types deriving Debug, ungated fragments, migration
-# declarations, sqlx macro exceptions, ignored tests, attestation subject paths, and unattributed
-# decision-voiced prose — against baselines a human approved.
+# declarations, sqlx macro exceptions, ignored tests, attestation subject paths, unattributed
+# decision-voiced prose, and elevation claims bound to the gate they describe — against baselines a
+# human approved.
 #
 # `[renamed from security-tripwires — 2026-08-15]` The name had stopped being true: half the set is
 # not security. `audit-unattributed-decisions` is prose hygiene and `audit-ignored-tests` is test

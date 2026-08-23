@@ -15935,7 +15935,7 @@
     },
     {
       "name": "Cognitive Maps",
-      "description": "Cognitive-map content reconcile (admin-gated)"
+      "description": "Cognitive maps — genesis, reads (shape, metrics, analytics), content reconcile, materialize, team binding, and grants"
     },
     {
       "name": "Graph",

@@ -25,13 +25,13 @@ Commands:
   auth           Authenticate with temper cloud
   slack          Manage the Slack account link
   team           Manage team membership and access
-  admin          Administer the instance (system settings, promote admins, review requests)
+  admin          Administer the deployment — system settings, principals, machine clients, connections, and subscriptions
   pull           Materialize a context's resources into the local read-only projection
   config         Manage temper global config
   query          Run a composed query — declared acts, piped, answered in one round trip
   search         Search the knowledge base
   edge           Assert or mutate a relationship between resources (writes go through the cloud API)
-  cogmap         Operate on cognitive maps (admin-gated content reconcile)
+  cogmap         Operate on cognitive maps (create, read, reconcile, materialize, bind, grant)
   invocation     Operate on agent-invocation envelopes (open / close / show / list)
   steward        Team-self-cognition steward ingest trigger (delta / advance-watermark)
   trail          Read the event trail (append-only history) of a graph element — a resource node or a relationship edge
@@ -65,13 +65,13 @@ Options:
 | [`temper auth`](./auth.md) | Authenticate with temper cloud |
 | [`temper slack`](./slack.md) | Manage the Slack account link |
 | [`temper team`](./team.md) | Manage team membership and access |
-| [`temper admin`](./admin.md) | Administer the instance (system settings, promote admins, review requests) |
+| [`temper admin`](./admin.md) | Administer the deployment — system settings, principals, machine clients, connections, and subscriptions |
 | [`temper pull`](./pull.md) | Materialize a context's resources into the local read-only projection |
 | [`temper config`](./config.md) | Manage temper global config |
 | [`temper query`](./query.md) | Run a composed query — declared acts, piped, answered in one round trip |
 | [`temper search`](./search.md) | Search the knowledge base |
 | [`temper edge`](./edge.md) | Assert or mutate a relationship between resources (writes go through the cloud API) |
-| [`temper cogmap`](./cogmap.md) | Operate on cognitive maps (admin-gated content reconcile) |
+| [`temper cogmap`](./cogmap.md) | Operate on cognitive maps (create, read, reconcile, materialize, bind, grant) |
 | [`temper invocation`](./invocation.md) | Operate on agent-invocation envelopes (open / close / show / list) |
 | [`temper steward`](./steward.md) | Team-self-cognition steward ingest trigger (delta / advance-watermark) |
 | [`temper trail`](./trail.md) | Read the event trail (append-only history) of a graph element — a resource node or a relationship edge. |
