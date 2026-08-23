@@ -2,12 +2,13 @@
 //!
 //! Region materialization is the substrate's pure function, NOT the steward's authored act (the
 //! determinism reframe): a separate cadence from the ingest→steward trigger. [`MaterializeDelta`] is
-//! the answer to "how many formation events have landed on this cogmap since it was last
+//! the answer to "how many formation events have landed on this ANCHOR since it was last
 //! materialized, and does that clear the threshold" — computed service-direct from
-//! `formation_touched_count_since(cogmap, shape_materialized_event_id)`. The trigger
-//! ([`MaterializeRequest`]) re-checks that gate and, only when it clears, invokes the existing
-//! incremental-materialize path; below threshold it is a safe no-op ([`MaterializeAck::materialized`]
-//! `= false`).
+//! `formation_touched_count_since(anchor, shape_materialized_event_id)`, which takes a
+//! [`crate::types::home::HomeAnchor`] and so serves a context exactly as it serves a cogmap.
+//! The trigger ([`MaterializeRequest`]) re-checks that gate and, only when it clears, invokes the
+//! existing incremental-materialize path; below threshold it is a safe no-op
+//! ([`MaterializeAck::materialized`] `= false`).
 //!
 //! Shared between `temper-api` (OpenAPI schema source), `temper-mcp` (tool params), and
 //! `temper-client` (typed request builder). Ids ride the wire as `Uuid`; both sides re-use these
@@ -18,9 +19,9 @@ use uuid::Uuid;
 
 /// Default materialize threshold when a caller omits one: the number of formation-affecting events
 /// (created resources, asserted/retyped/reweighted/folded edges, facets, block edits) that must
-/// accumulate on the cogmap since its last materialize before re-materialization is worth its cost. A
-/// calibratable starting point (mirrors the "tuning constants live in one place" discipline); the
-/// materialize cron may override it per map.
+/// accumulate on the ANCHOR — a context or a cogmap — since its last materialize before
+/// re-materialization is worth its cost. A calibratable starting point (mirrors the "tuning
+/// constants live in one place" discipline); the materialize cron may override it per anchor.
 pub const DEFAULT_MATERIALIZE_THRESHOLD: i64 = 5;
 
 /// The lens the materialize cron re-materializes: the canonical default region-producing lens seeded
@@ -54,8 +55,12 @@ pub fn default_lens_for(anchor: crate::types::home::HomeAnchor) -> &'static str 
 /// The read path followed the write path onto the anchor pair (`anchor_table` + `anchor_id`), so a
 /// context can now be asked when it last materialized. `cogmap_id` is kept — and still populated
 /// whenever the anchor IS a cogmap — for exactly the reason [`MaterializeAck`] keeps its own: this is
-/// a **wire type on a deployed instance**, the temper-rb gem `raise`s on an unknown attribute *and*
-/// on a missing required one, and the generated TS is consumed by a UI that ships on its own cadence.
+/// a **wire type on a deployed instance**, and *removing* a field from it is the breaking direction.
+/// A temper-rb client tolerates a field it has never heard of — `build_from_hash` walks the model's
+/// OWN `openapi_types`, so an unknown wire key is silently dropped — but not one it requires and
+/// does not receive: the missing key arrives at the generated `attr=` setter as `nil` and that
+/// setter raises. The generated TS is likewise consumed by a UI that ships on its own cadence.
+/// Adding to this type is therefore cheap; taking away is not.
 ///
 /// A client old enough to depend on `cogmap_id` cannot address a context (the route did not exist),
 /// so it never receives a delta where the field is absent. New clients read the anchor pair and
@@ -161,8 +166,10 @@ pub struct MaterializeRequest {
 ///
 /// T8 made this command anchor-addressed (a context materializes too), so the target is now
 /// `anchor_table` + `anchor_id`. `cogmap_id` is kept — and still populated whenever the anchor IS a
-/// cogmap — deliberately, because this is a **wire type on a deployed instance**: the temper-rb gem
-/// `raise`s on an unknown attribute *and* on a missing required one, and the generated TS is
+/// cogmap — deliberately, because this is a **wire type on a deployed instance** and *removal* is
+/// the breaking direction. A temper-rb client silently ignores a wire key it does not know
+/// (`build_from_hash` walks the model's own `openapi_types`), but a key it requires and does not
+/// receive reaches the generated `attr=` setter as `nil` and raises there; the generated TS is
 /// consumed by a UI that ships on its own cadence. Dropping `cogmap_id` would hard-fail an older
 /// client on the cogmap path it already uses.
 ///

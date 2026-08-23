@@ -1092,13 +1092,32 @@ pub async fn anchor_shape(
     .fetch_all(pool)
     .await?;
 
-    // The function guarantees at least one row: an empty anchor yields the envelope with a NULL
-    // region_id. An empty `rows` here would mean the guarantee was broken, so read the envelope
-    // defensively rather than indexing.
-    let head = rows.first();
-    let population = head.map(|r| r.population).unwrap_or(0);
-    let emptiness = head.and_then(|r| r.emptiness.clone());
-    let materialized_at = head.and_then(|r| r.materialized_at);
+    // The function guarantees at least one row: an empty or unreadable anchor yields the envelope
+    // with a NULL region_id, and that sentinel is the whole mechanism by which an empty answer
+    // states its cause. Zero rows means the guarantee is broken — a binary paired with a migration
+    // older than `20260823000010`, which is exactly the drift that migration declares itself
+    // shape-breaking over.
+    //
+    // Defaulting the envelope in that case (`population: 0`, `emptiness: None`, `regions: []`) would
+    // silently reconstruct the MUTE EMPTY ANSWER this whole read exists to abolish, and would do it
+    // only on the one path where the SQL and the binary disagree — the path least likely to be under
+    // test. So it is an error, named after the guarantee it broke, matching the posture
+    // `anchor_shape_select` already takes for an unrecognized `emptiness` arm
+    // (`temper-services/src/backend/substrate_read.rs`): SQL/Rust drift is a deploy-time bug to
+    // surface, never something to coerce into a plausible-looking answer. An error, not a panic —
+    // this is a read handler's return path.
+    let Some(head) = rows.first() else {
+        anyhow::bail!(
+            "anchor_shape({}, {}) returned zero rows — the function guarantees a sentinel envelope \
+             row even for an empty or unreadable anchor, so the migration and this binary have \
+             drifted (envelope added in 20260823000010)",
+            anchor.table(),
+            anchor.uuid(),
+        );
+    };
+    let population = head.population;
+    let emptiness = head.emptiness.clone();
+    let materialized_at = head.materialized_at;
 
     let regions = rows
         .iter()

@@ -1078,8 +1078,10 @@ pub enum ContextAction {
     ///
     /// An empty `regions` is not one situation, and `emptiness` names which: `never_clustered`
     /// (nothing has been materialized yet — run `context materialize`), `nothing_visible`
-    /// (clustered, but no region holds anything you can read), `lens_narrowed` (your `--lens`
-    /// matched none of the `population` regions you can see here), or `unreadable_or_absent`.
+    /// (materialized, but it formed no regions, or none of them holds anything you can read — the
+    /// two are one answer on purpose, so this is not by itself a permissions problem),
+    /// `lens_narrowed` (your `--lens` matched none of the `population` regions you can see here),
+    /// or `unreadable_or_absent`.
     Shape {
         /// Context ref: a UUID or `@me/slug` / `+team-slug/slug`.
         context: String,
@@ -1801,7 +1803,13 @@ pub enum CogmapCmd {
         #[arg(long)]
         id: Option<String>,
     },
-    /// Read a cognitive map's materialized regions (surface tier).
+    /// Read a cognitive map's materialized regions (surface tier), wrapped in an envelope —
+    /// `regions` plus `population`, `emptiness` and `materialized_at`. When `regions` is empty,
+    /// read `emptiness` rather than guessing: `never_clustered` (run `cogmap materialize`),
+    /// `nothing_visible` (materialized, but it formed no regions, or none of them holds a member
+    /// you can read — one answer for both, so this is not by itself a permissions problem),
+    /// `lens_narrowed` (your `--lens` excluded all `population` regions you can see), or
+    /// `unreadable_or_absent`.
     Shape {
         /// The cognitive map, by ref (UUID or `slug-<uuid>`).
         cogmap: String,

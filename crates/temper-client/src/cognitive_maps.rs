@@ -99,8 +99,10 @@ impl<'a> CognitiveMapClient<'a> {
     /// An empty answer is no longer mute: `emptiness` names the cause. A principal who cannot read
     /// the map gets `emptiness: unreadable_or_absent` with `population: 0` and no clock — the gate
     /// is in the SQL and stays a 200, so this is still no existence oracle. A map that has never
-    /// been materialized is `never_clustered`, one whose regions are all invisible is
-    /// `nothing_visible`, and a `lens` that matched nothing is `lens_narrowed`.
+    /// been materialized is `never_clustered`; a materialized one that yielded nothing readable —
+    /// whether it formed no regions or every region it formed is member-gated away, two causes the
+    /// gate keeps deliberately indistinguishable — is `nothing_visible`; and a `lens` that matched
+    /// nothing is `lens_narrowed`.
     pub async fn shape(&self, cogmap_id: Uuid, lens_id: Option<Uuid>) -> Result<AnchorShape> {
         let token = self.http.resolve_token()?;
         let path = shape_path(cogmap_id, lens_id);

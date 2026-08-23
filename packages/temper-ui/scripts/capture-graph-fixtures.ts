@@ -37,6 +37,7 @@
 import { buildGraphPlan, type Anchor } from '../src/lib/graph/composition';
 import { questionFor, readableAnchors } from '../src/lib/graph/entry';
 import { jsonBody } from '../src/lib/server/json-body';
+import type { AnchorShape } from '../src/lib/types/generated/cognitive_maps';
 
 const BASE = process.env.TEMPER_API_BASE ?? 'https://temperkb.io';
 const TOKEN = process.env.TEMPER_TOKEN ?? '';
@@ -81,16 +82,18 @@ const shapePath = (a: Anchor) =>
 	a.kind === 'cogmap' ? `/api/cognitive-maps/${a.id}/shape` : `/api/contexts/${a.id}/shape`;
 
 /**
- * Both doors answer an `AnchorShape` envelope, so the rows are at `.regions`.
+ * Both doors answer an `AnchorShape` envelope, so the rows are at `.regions`. The envelope type is
+ * the GENERATED one (`src/lib/types/generated/cognitive_maps`, ts-rs) — the same import
+ * `src/lib/server/graph-query.ts:4` takes — rather than a hand-written mirror: a local
+ * `{ regions: unknown[] }` would keep compiling after the Rust struct moved, which is exactly the
+ * drift the capture exists to rule out.
  *
  * `.regions` is taken here rather than stored whole, because the bundle's `shape_rows` field is
  * consumed as `RegionLookup.rows` by `harness.ts` — the same unwrap `readAnchorRegions` does, at
  * the same place, so the capture keeps standing for what the load actually hands the builders.
  */
-type ShapeEnvelope = { regions: unknown[] };
-
 async function shapeRows(anchors: Anchor[]): Promise<unknown[]> {
-	const reads = await Promise.allSettled(anchors.map((a) => get<ShapeEnvelope>(shapePath(a))));
+	const reads = await Promise.allSettled(anchors.map((a) => get<AnchorShape>(shapePath(a))));
 	return reads.flatMap((r) => (r.status === 'fulfilled' ? r.value.regions : []));
 }
 
@@ -121,7 +124,7 @@ const coldMap = coldMapRow ? readable.find((a) => a.id === coldMapRow.id) ?? nul
  */
 let coldContext: Anchor | null = null;
 for (const a of byMaterial.filter((x) => x.kind === 'context' && x.resourceCount > 0)) {
-	if ((await get<ShapeEnvelope>(shapePath(a))).regions.length === 0) {
+	if ((await get<AnchorShape>(shapePath(a))).regions.length === 0) {
 		coldContext = a;
 		break;
 	}

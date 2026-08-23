@@ -152,10 +152,10 @@ async fn charter_delivery_makes_telos_alignment_computable(pool: sqlx::PgPool) {
     // Non-zero centroid: all-0.1 vector.  All-zero would make <=> undefined (NaN/NULL).
     let region: Uuid = sqlx::query_scalar(
         "INSERT INTO kb_cogmap_regions
-           (cogmap_id, lens_id, centroid, salience, centrality, content_cohesion,
-            internal_tension, reference_standing, telos_alignment, label, member_count,
-            asserted_by_event_id, last_event_id, is_folded)
-         VALUES ($1, $2,
+           (cogmap_id, home_anchor_table, home_anchor_id, lens_id, centroid, salience, centrality,
+            content_cohesion, internal_tension, reference_standing, telos_alignment, label,
+            member_count, asserted_by_event_id, last_event_id, is_folded)
+         VALUES ($1, 'kb_cogmaps', $1, $2,
             array_fill(0.1::double precision, ARRAY[768])::vector,
             0.5, 4.0, 0.25, 1.5, 7.0, NULL, 'r', 2, $3, $3, false)
          RETURNING id",

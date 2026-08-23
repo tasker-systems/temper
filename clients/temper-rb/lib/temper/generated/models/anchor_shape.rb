@@ -14,7 +14,7 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # An anchor's materialized regions, with the anchor-level facts that let an empty answer say why it is empty. Returned by `anchor_shape` for EITHER anchor kind.  `population` is the region count this principal can see across **all** lenses, member-gated — so under a `lens` filter it is strictly greater than `regions.len()`, and equal to it otherwise. It is a denominator, not a restatement of the row count.
+  # An anchor's materialized regions, with the anchor-level facts that let an empty answer say why it is empty. Returned by `anchor_shape` for EITHER anchor kind.  `population` is the region count this principal can see across **all** lenses, member-gated, so it is always **`>= regions.len()`**. It is equal when no `lens` was supplied — and equally when one was, if every region this caller can see already sits under that lens, which is the ordinary case for an anchor that materializes a single lens. A `population` strictly above `regions.len()` is the lens-narrowed fraction: regions exist here that this read did not return. It is a denominator, not a restatement of the row count.
   class AnchorShape < ApiModelBase
     # Why `regions` is empty; `None` when it is not.
     attr_accessor :emptiness

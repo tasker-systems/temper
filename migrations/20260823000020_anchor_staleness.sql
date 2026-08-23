@@ -32,11 +32,20 @@
 --    reporting it, which is why that arm carries no `is_folded` predicate. Same for the regions arm.
 --
 -- 3. THE `mat` CTE reads `shape_materialized_event_id` from whichever table `p_anchor_table` names,
---    using the same UNION ALL shape as anchor_shape's `clock` CTE (20260823000010:74-85) rather
---    than inventing a second way to read one column from one of two anchor tables. As before, an
---    anchor that does not exist yields ZERO rows from `mat`, so the cross join yields zero rows and
---    the function returns nothing -- the behaviour `cogmap_analytics` already depends on
---    (20260628000001:25-26: "cogmap_staleness yields exactly one row").
+--    using the same UNION ALL shape as anchor_shape's `clock` CTE (20260823000010:74-84). The two
+--    are written once, together, and must stay identical: they read the SAME column off the SAME
+--    two tables, and a divergence between them would be a divergence between what a shape read
+--    calls "materialized" and what a staleness read compares against.
+--
+--    That is a match to its sibling, NOT to the house idiom. The incumbent way to dispatch on
+--    `p_anchor_table` in this schema is `CASE p_anchor_table WHEN 'kb_cogmaps' THEN (subquery)`
+--    (20260712000060:218, :262; 20260712000070:147). UNION ALL is chosen here over CASE because
+--    these two functions need the "anchor does not exist" case to produce ZERO rows rather than one
+--    NULL row: the empty arm of the UNION contributes nothing, so the cross join below yields
+--    nothing and the function returns nothing -- the behaviour `cogmap_analytics` already depends on
+--    (20260628000001:25-26: "cogmap_staleness yields exactly one row"). A scalar CASE always
+--    produces a value, so it cannot express that. Anywhere the anchor-existence distinction does not
+--    matter, prefer the CASE idiom.
 --
 -- No gate here, matching the incumbent: staleness is a clock reading, and the gate lives in the
 -- composers (cogmap_analytics, 20260628000001:77-78). Stale reads are allowed and LEGIBLE -- this

@@ -141,8 +141,9 @@ async fn insert_region(
 ) -> Uuid {
     sqlx::query_scalar(
         "INSERT INTO kb_cogmap_regions \
-             (cogmap_id, lens_id, centroid, salience, label, member_count, asserted_by_event_id, last_event_id) \
-         VALUES ($1, $2, $3::vector, 0.6, $4, 1, $5, $5) RETURNING id",
+             (cogmap_id, home_anchor_table, home_anchor_id, lens_id, centroid, salience, label, \
+              member_count, asserted_by_event_id, last_event_id) \
+         VALUES ($1, 'kb_cogmaps', $1, $2, $3::vector, 0.6, $4, 1, $5, $5) RETURNING id",
     )
     .bind(cogmap)
     .bind(lens)

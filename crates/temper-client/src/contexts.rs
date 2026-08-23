@@ -138,8 +138,10 @@ impl ContextClient<'_> {
     /// An empty answer is no longer mute: `emptiness` names the cause. A caller who cannot read the
     /// context gets `emptiness: unreadable_or_absent` with `population: 0` and no clock — the gate
     /// is in the SQL and stays a 200, so this is still no existence oracle. An un-materialized
-    /// context is `never_clustered`, one whose regions are all invisible is `nothing_visible`, and a
-    /// `lens` that matched nothing is `lens_narrowed` — four cases that were one bare `[]` before.
+    /// context is `never_clustered`; a materialized one that yielded nothing readable —
+    /// because it formed no regions, or because none of them holds a member this caller can read,
+    /// two causes the member gate keeps deliberately indistinguishable — is `nothing_visible`; and
+    /// a `lens` that matched nothing is `lens_narrowed`. Four cases that were one bare `[]` before.
     pub async fn shape(&self, context_id: Uuid, lens: Option<Uuid>) -> Result<AnchorShape> {
         let token = self.http.resolve_token()?;
         let path = context_shape_path(context_id, lens);

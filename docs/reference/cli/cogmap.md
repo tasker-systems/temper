@@ -14,7 +14,7 @@ Commands:
   show            Orient on one cognitive map: its charter (what it's for) and the resources it's built on (its foundational homed set, with the telos flagged)
   reconcile       Reconcile a cognitive map's content to a committed manifest
   create          Genesis (create) a new cognitive map from a committed manifest
-  shape           Read a cognitive map's materialized regions (surface tier)
+  shape           Read a cognitive map's materialized regions (surface tier), wrapped in an envelope — `regions` plus `population`, `emptiness` and `materialized_at`. When `regions` is empty, read `emptiness` rather than guessing: `never_clustered` (run `cogmap materialize`), `nothing_visible` (materialized, but it formed no regions, or none of them holds a member you can read — one answer for both, so this is not by itself a permissions problem), `lens_narrowed` (your `--lens` excluded all `population` regions you can see), or `unreadable_or_absent`
   region-metrics  Read a cognitive map's per-region analytics metrics
   analytics       Read a cognitive map's map-level analytics (telos, staleness, regulation)
   materialize     Re-materialize a cognitive map's regions when its event delta clears the threshold
@@ -161,7 +161,7 @@ Options:
 ### `temper cogmap shape`
 
 ```text
-Read a cognitive map's materialized regions (surface tier)
+Read a cognitive map's materialized regions (surface tier), wrapped in an envelope — `regions` plus `population`, `emptiness` and `materialized_at`. When `regions` is empty, read `emptiness` rather than guessing: `never_clustered` (run `cogmap materialize`), `nothing_visible` (materialized, but it formed no regions, or none of them holds a member you can read — one answer for both, so this is not by itself a permissions problem), `lens_narrowed` (your `--lens` excluded all `population` regions you can see), or `unreadable_or_absent`
 
 Usage: temper cogmap shape [OPTIONS] <COGMAP>
 

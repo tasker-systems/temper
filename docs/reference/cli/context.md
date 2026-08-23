@@ -198,7 +198,7 @@ Options:
 ```text
 Orient in a context by its REGIONS: the distilled, region-level view of everything homed there, most salient first. The fastest way to see what a context is about without reading any single resource in it.
 
-An empty `regions` is not one situation, and `emptiness` names which: `never_clustered` (nothing has been materialized yet — run `context materialize`), `nothing_visible` (clustered, but no region holds anything you can read), `lens_narrowed` (your `--lens` matched none of the `population` regions you can see here), or `unreadable_or_absent`.
+An empty `regions` is not one situation, and `emptiness` names which: `never_clustered` (nothing has been materialized yet — run `context materialize`), `nothing_visible` (materialized, but it formed no regions, or none of them holds anything you can read — the two are one answer on purpose, so this is not by itself a permissions problem), `lens_narrowed` (your `--lens` matched none of the `population` regions you can see here), or `unreadable_or_absent`.
 
 Usage: temper context shape [OPTIONS] <CONTEXT>
 

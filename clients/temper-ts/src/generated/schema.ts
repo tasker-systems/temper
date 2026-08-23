@@ -2128,8 +2128,11 @@ export interface components {
          * @description An anchor's materialized regions, with the anchor-level facts that let an empty answer say why
          *     it is empty. Returned by `anchor_shape` for EITHER anchor kind.
          *
-         *     `population` is the region count this principal can see across **all** lenses, member-gated —
-         *     so under a `lens` filter it is strictly greater than `regions.len()`, and equal to it otherwise.
+         *     `population` is the region count this principal can see across **all** lenses, member-gated, so
+         *     it is always **`>= regions.len()`**. It is equal when no `lens` was supplied — and equally when
+         *     one was, if every region this caller can see already sits under that lens, which is the ordinary
+         *     case for an anchor that materializes a single lens. A `population` strictly above
+         *     `regions.len()` is the lens-narrowed fraction: regions exist here that this read did not return.
          *     It is a denominator, not a restatement of the row count.
          */
         AnchorShape: {
@@ -4415,8 +4418,10 @@ export interface components {
          *
          *     T8 made this command anchor-addressed (a context materializes too), so the target is now
          *     `anchor_table` + `anchor_id`. `cogmap_id` is kept — and still populated whenever the anchor IS a
-         *     cogmap — deliberately, because this is a **wire type on a deployed instance**: the temper-rb gem
-         *     `raise`s on an unknown attribute *and* on a missing required one, and the generated TS is
+         *     cogmap — deliberately, because this is a **wire type on a deployed instance** and *removal* is
+         *     the breaking direction. A temper-rb client silently ignores a wire key it does not know
+         *     (`build_from_hash` walks the model's own `openapi_types`), but a key it requires and does not
+         *     receive reaches the generated `attr=` setter as `nil` and raises there; the generated TS is
          *     consumed by a UI that ships on its own cadence. Dropping `cogmap_id` would hard-fail an older
          *     client on the cogmap path it already uses.
          *
@@ -4468,8 +4473,12 @@ export interface components {
          *     The read path followed the write path onto the anchor pair (`anchor_table` + `anchor_id`), so a
          *     context can now be asked when it last materialized. `cogmap_id` is kept — and still populated
          *     whenever the anchor IS a cogmap — for exactly the reason [`MaterializeAck`] keeps its own: this is
-         *     a **wire type on a deployed instance**, the temper-rb gem `raise`s on an unknown attribute *and*
-         *     on a missing required one, and the generated TS is consumed by a UI that ships on its own cadence.
+         *     a **wire type on a deployed instance**, and *removing* a field from it is the breaking direction.
+         *     A temper-rb client tolerates a field it has never heard of — `build_from_hash` walks the model's
+         *     OWN `openapi_types`, so an unknown wire key is silently dropped — but not one it requires and
+         *     does not receive: the missing key arrives at the generated `attr=` setter as `nil` and that
+         *     setter raises. The generated TS is likewise consumed by a UI that ships on its own cadence.
+         *     Adding to this type is therefore cheap; taking away is not.
          *
          *     A client old enough to depend on `cogmap_id` cannot address a context (the route did not exist),
          *     so it never receives a delta where the field is absent. New clients read the anchor pair and

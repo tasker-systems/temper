@@ -112,7 +112,7 @@ The reply is an **object, not an array**:
   lenses. Under a `lens` it is the denominator `regions` was drawn from.
 - `emptiness` — `null` when `regions` has rows. When `regions` is empty it names
   which of four things happened: `never_clustered` (nothing has been materialized
-  yet), `nothing_visible` (clustered, but no region holds anything you can read),
+  yet), `nothing_visible` (it has materialized, but nothing came back),
   `lens_narrowed` (your `lens` excluded them all), or `unreadable_or_absent`
   (you cannot read this context, or it does not exist — one answer on purpose).
 - `materialized_at` — when the context was last clustered. `null` means never,
@@ -121,6 +121,16 @@ The reply is an **object, not an array**:
 **Read `emptiness` before concluding anything from an empty `regions`.** The
 four causes call for four different next moves, and only that field tells them
 apart.
+
+**`nothing_visible` is not a verdict about your access.** It covers two
+situations at once: the materialize formed no regions at all, and the
+materialize formed regions but none of them holds a resource *you* can read.
+You cannot tell which, by design — separating them would tell you that
+resources exist beyond your reach, and this API never reports how much you
+cannot see. So do not go hunting for a missing grant when you meet it. A first
+materialize of a small context stamps its watermark whether or not anything
+clustered, so a context that legitimately formed nothing reports the same arm.
+Add or check what the context holds, re-materialize, and read the field again.
 
 ### `context_read` (view: metrics) — the analytics tier
 

@@ -67,10 +67,13 @@ The denominator is genuinely missing on the **survey** path, which cuts to a fun
 runs on `wayfind_scope_ids` / `top_regions` / `__temper_ungated_survey`, not on `anchor_shape`. That
 is the sibling task's surface, not this one.
 
-**Ruling `[2026-08-23, Pete]`: `population` is carried, and defined as all-lenses.** Under a `lens`
-filter it is strictly greater than `regions.len()` and not derivable by the caller; without one it is
-equal. That makes it a real denominator on this door rather than a restatement, and gives the
-lens-narrowed read a fraction to report.
+**Ruling `[2026-08-23, Pete]`: `population` is carried, and defined as all-lenses.** It is always
+`>= regions.len()`. Without a `lens` the two are equal; with one, `population` is not derivable by
+the caller and may exceed the row count — though it need not, since an anchor whose visible regions
+all sit under the requested lens returns them all, and that is the ordinary case for an anchor
+materializing a single lens. Equality is therefore not evidence that no lens was applied. What the
+field buys is the case where it *does* exceed: a real denominator on this door rather than a
+restatement, and a fraction for the lens-narrowed read to report.
 
 ## 3. The shape of the answer
 
@@ -121,13 +124,13 @@ part of it is unsupported, which once silently dropped a `rename` at
 `crates/temper-core/src/types/managed_meta.rs:49-55`. Keeping `rename_all` alone in its attribute is
 what keeps a later addition from taking it down with it.
 
-### 3.3 The five outcomes, and why the collapsed arm is not an oracle
+### 3.3 The five outcomes, and why two arms deliberately collapse
 
 | Caller's situation | `regions` | `population` | `emptiness` | `materialized_at` |
 |---|---|---|---|---|
 | Readable, has visible regions | rows | > 0 | `null` | set |
 | Readable, clustered, a lens filtered everything out | `[]` | > 0 | `lens_narrowed` | set |
-| Readable, clustered, nothing visible to this caller | `[]` | 0 | `nothing_visible` | set |
+| Readable, clustered, nothing came back (see below) | `[]` | 0 | `nothing_visible` | set |
 | Readable, never clustered | `[]` | 0 | `never_clustered` | `null` |
 | Cannot read it, **or** it does not exist | `[]` | 0 | `unreadable_or_absent` | `null` |
 
@@ -141,6 +144,32 @@ This discloses nothing new. Today such a caller receives `[]`, which already mea
 it to {denied, absent} — two states the caller cannot separate and already knew they were in. The
 other three arms only ever reach a caller who passed `anchor_readable_by_profile`, for whom
 "this anchor exists" is not a disclosure.
+
+**`nothing_visible` carries two causes, and there will not be a fifth arm for them.** It is reached
+by a readable, clustered anchor whose `population` is 0, and that happens for two different reasons:
+the materialize formed **no regions at all**, or it formed regions and **every one of them is
+member-gated away from this caller**. The arm does not say which, and no future arm may.
+
+Splitting them is not a documentation nicety, it is a disclosure. "There are regions here, you just
+cannot see into any of them" is a statement about resources beyond the caller's reach, and the
+member gate exists to refuse exactly that class of statement —
+`migrations/20260713000050_region_visible_member_count.sql:137`: *"a caller is never told how many
+resources they cannot read."* A fifth variant would route around the gate rather than serve it, and
+would leak the same fact the `member_count` blur and the drop-a-region-with-no-visible-members rule
+(the `p_principal_kind = 'cogmap' OR seen.visible_members > 0` predicate in `anchor_shape`'s
+`regs` CTE) each spend a predicate to withhold. **Rejected, permanently, not deferred.**
+
+The formation cause is not exotic — it is routine, which is why this is written down. `materialize`
+stamps the watermark before it knows whether anything clustered, so a first materialize of a small
+anchor that forms nothing lands here immediately. The `cogmap` self-read arm makes the reachability
+unambiguous: that predicate's left disjunct exempts the self-read arm from the member gate entirely,
+so nothing can be hidden from it — and a zero-region anchor with a watermark still reports
+`nothing_visible` there, by the precedence in §4.2.
+
+The cost of the collapse is that the arm cannot be read as an access diagnosis, and every surface
+that names it must say so. That is what those doors are for: `ShapeEmptiness::NothingVisible`'s doc
+comment carries this argument, and the CLI, client and skill surfaces each carry the operational
+half — *check the materialize before suspecting a grant*.
 
 **`lens_narrowed` is a fourth arm added during design review `[ruled — 2026-08-23, Pete]`.** It falls
 out of §2.1's ruling: once `population` is all-lenses, a lens-filtered read can return `regions: []`
@@ -309,6 +338,9 @@ cannot ask when it last happened. T8 generalized the write path; the read path d
 - **`cogmap_shape` is not retired** — §4.4; that is M3's.
 - **No answer-quality claim.** Nothing here measures whether any answer got better; this task builds
   an instrument and witnesses nothing on its own, which is why it is filed `enables`.
+- **A fifth arm separating "formed no regions" from "formed regions you cannot see" is REJECTED, not
+  deferred** — §3.3. It is the one distinction the member gate exists to refuse, so it is not
+  something a later task may pick up.
 - **`cogmap_list_rows`' `region_count` is not reused and not fixed.** It is keyed on the vestigial
   `cogmap_id` column (`migrations/20260724000010_cogmap_list_rows.sql:46`), NULL for every context
   region, and is not member-gated. After this lands it will legitimately disagree with the envelope's

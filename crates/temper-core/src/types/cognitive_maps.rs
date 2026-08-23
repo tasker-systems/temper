@@ -79,7 +79,20 @@ pub enum ShapeEmptiness {
     /// The anchor has regions this caller could see, but a `lens` filter excluded all of them.
     /// `population` is > 0 — the caller is looking at a narrowed view, not an empty anchor.
     LensNarrowed,
-    /// The anchor has been clustered, but every region in it is invisible to this caller.
+    /// The anchor has been clustered, and no region of it is readable here — either because the
+    /// materialize formed no regions at all, or because every region it formed holds nothing this
+    /// caller can read.
+    ///
+    /// **Those two causes are one arm on purpose, and must stay one.** Separating them would answer
+    /// "are there regions here I cannot see?", which is precisely the question the member gate
+    /// refuses: `migrations/20260713000050_region_visible_member_count.sql:137` — *"a caller is
+    /// never told how many resources they cannot read."* A fifth variant would be that disclosure
+    /// with extra steps, so the formation cause and the access cause deliberately collapse.
+    ///
+    /// Practically: this arm is **not** evidence of a permissions problem. A first materialize of a
+    /// small anchor stamps the watermark whether or not anything clustered, so an anchor that
+    /// legitimately formed zero regions lands here beside a fully-gated one. Check the materialize
+    /// before chasing a grant.
     NothingVisible,
     /// The anchor has never been materialized. `materialized_at` is `None`.
     NeverClustered,
@@ -90,8 +103,11 @@ pub enum ShapeEmptiness {
 /// An anchor's materialized regions, with the anchor-level facts that let an empty answer say why
 /// it is empty. Returned by `anchor_shape` for EITHER anchor kind.
 ///
-/// `population` is the region count this principal can see across **all** lenses, member-gated —
-/// so under a `lens` filter it is strictly greater than `regions.len()`, and equal to it otherwise.
+/// `population` is the region count this principal can see across **all** lenses, member-gated, so
+/// it is always **`>= regions.len()`**. It is equal when no `lens` was supplied — and equally when
+/// one was, if every region this caller can see already sits under that lens, which is the ordinary
+/// case for an anchor that materializes a single lens. A `population` strictly above
+/// `regions.len()` is the lens-narrowed fraction: regions exist here that this read did not return.
 /// It is a denominator, not a restatement of the row count.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "cognitive_maps.ts"))]

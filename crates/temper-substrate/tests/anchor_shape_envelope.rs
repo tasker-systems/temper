@@ -423,3 +423,108 @@ async fn a_populated_read_carries_no_emptiness(pool: PgPool) {
         "without a lens filter the denominator equals the row count: {out:?}"
     );
 }
+
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_lens_narrowed_read_of_a_never_materialized_anchor_is_not_never_clustered(pool: PgPool) {
+    // The two conditions that used to collide: regions exist and are VISIBLE (so `population > 0`),
+    // and the anchor's `shape_materialized_event_id` is NULL. Deliberately NO `mark_materialized`.
+    //
+    // The clock arm used to be evaluated before the row-count arms, so it fired on the NULL
+    // watermark alone and returned `population: 1` alongside `never_clustered` — an anchor
+    // simultaneously non-empty and never-clustered. `ShapeEmptiness::LensNarrowed`'s own contract
+    // ("`population` is > 0 — the caller is looking at a narrowed view, not an empty anchor") is met
+    // here, and it is the arm that must fire: the caller's fix is to drop `--lens`, not to run
+    // `context materialize`.
+    let fx = fixture(&pool).await;
+
+    let region = insert_region(
+        &pool,
+        RegionSeed {
+            cogmap: fx.mine,
+            lens: fx.lens,
+            event: fx.event,
+            salience: 0.9,
+            member_count: 1,
+        },
+    )
+    .await;
+    let member = insert_cogmap_resource(&pool, fx.mine, fx.system, "a visible member").await;
+    add_member(&pool, region, member, 0.9).await;
+
+    let out = temper_substrate::readback::anchor_shape(
+        &pool,
+        anchor(fx.mine),
+        ProfileId::from(fx.reader),
+        Some(LensId::from(Uuid::now_v7())),
+    )
+    .await
+    .expect("lens-filtered read");
+
+    assert!(out.regions.is_empty(), "no region under that lens: {out:?}");
+    assert!(
+        out.population > 0,
+        "the anchor holds a visible region — it is the lens that is empty: {out:?}"
+    );
+    assert_eq!(
+        out.emptiness.as_deref(),
+        Some("lens_narrowed"),
+        "a non-empty population must never be reported as never_clustered: {out:?}"
+    );
+    // The clock fact is not lost by the arm that did not fire — it is carried by the field that is
+    // actually about the clock.
+    assert!(
+        out.materialized_at.is_none(),
+        "the anchor really was never materialized; that is `materialized_at`'s job to say: {out:?}"
+    );
+}
+
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn population_equals_the_row_count_when_the_lens_matches_every_region(pool: PgPool) {
+    // `population` is the ALL-LENS denominator, so under a lens filter it is >= the row count —
+    // NOT strictly greater. An anchor whose every region sits under the requested lens returns
+    // equality, and that is the ordinary case for an anchor with one lens. Pinned here so the
+    // relation is asserted by a test rather than restated in prose.
+    let fx = fixture(&pool).await;
+    mark_materialized(&pool, fx.mine, fx.event).await;
+
+    for (i, salience) in [0.9_f64, 0.7].iter().enumerate() {
+        let region = insert_region(
+            &pool,
+            RegionSeed {
+                cogmap: fx.mine,
+                lens: fx.lens,
+                event: fx.event,
+                salience: *salience,
+                member_count: 1,
+            },
+        )
+        .await;
+        let member =
+            insert_cogmap_resource(&pool, fx.mine, fx.system, &format!("member {i}")).await;
+        add_member(&pool, region, member, 0.9).await;
+    }
+
+    let out = temper_substrate::readback::anchor_shape(
+        &pool,
+        anchor(fx.mine),
+        ProfileId::from(fx.reader),
+        Some(LensId::from(fx.lens)),
+    )
+    .await
+    .expect("lens-filtered read");
+
+    assert_eq!(
+        out.regions.len(),
+        2,
+        "both regions are under that lens: {out:?}"
+    );
+    assert_eq!(
+        out.population as usize,
+        out.regions.len(),
+        "a lens matching every region leaves the denominator EQUAL to the row count: {out:?}"
+    );
+    assert_eq!(
+        out.emptiness, None,
+        "the row set is non-empty, so there is nothing to explain: {out:?}"
+    );
+}

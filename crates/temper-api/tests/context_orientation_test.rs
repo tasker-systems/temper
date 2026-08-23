@@ -822,3 +822,173 @@ async fn an_absent_anchor_yields_no_row(pool: PgPool) {
         "an anchor that does not exist has no clock to report: {rows:?}"
     );
 }
+
+/// A cogmap whose shape watermark is stamped, plus ONE region homed on it exactly as the production
+/// writer writes one — `cogmap_id` AND the anchor pair, set together in one INSERT
+/// (`crates/temper-substrate/src/write.rs:688-696`). Returns `(cogmap, region)`.
+///
+/// Setting both is the whole point of the fixture and not incidental detail. `kb_cogmap_regions` has
+/// no CHECK tying `cogmap_id` to `(home_anchor_table, home_anchor_id)`, so the equality the
+/// delegation rests on is convention and backfill only
+/// (`migrations/20260823000020_anchor_staleness.sql`, the comment above `cogmap_staleness`). A
+/// fixture that bound `cogmap_id` alone would construct a row the real system never produces, and
+/// the wrapper would answer `is_stale = false` on it forever.
+async fn insert_materialized_cogmap_with_region(pool: &PgPool, name: &str) -> (Uuid, Uuid) {
+    let telos: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_resources (title, origin_uri) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(format!("{name}-telos"))
+    .bind(format!("test://{name}-telos"))
+    .fetch_one(pool)
+    .await
+    .expect("insert the cogmap's telos resource");
+
+    // The same earliest seeded event serves as both the map's watermark and the region's birth
+    // clock, so the map starts materialized-and-untouched: the two stamps are equal and `>` is false.
+    let event: Uuid = sqlx::query_scalar("SELECT id FROM kb_events ORDER BY occurred_at LIMIT 1")
+        .fetch_one(pool)
+        .await
+        .expect("migrations seed at least one event");
+
+    let cogmap: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_cogmaps (name, telos_resource_id, shape_materialized_event_id) \
+         VALUES ($1, $2, $3) RETURNING id",
+    )
+    .bind(name)
+    .bind(telos)
+    .bind(event)
+    .fetch_one(pool)
+    .await
+    .expect("insert a materialized cogmap");
+
+    let lens = global_lens(pool, "telos-default").await;
+    let region: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_cogmap_regions
+           (cogmap_id, home_anchor_table, home_anchor_id, lens_id, centroid, salience, centrality,
+            content_cohesion, label, member_count, asserted_by_event_id, last_event_id, is_folded)
+         VALUES ($1, 'kb_cogmaps', $1, $2,
+                 array_fill(0::double precision, ARRAY[768])::vector, 0.7, 0.7, 0.5, 'the region',
+                 2, $3, $3, false)
+         RETURNING id",
+    )
+    .bind(cogmap)
+    .bind(lens)
+    .bind(event)
+    .fetch_one(pool)
+    .await
+    .expect("insert a cogmap-homed region carrying BOTH keys");
+
+    (cogmap, region)
+}
+
+/// One `cogmap_staleness` row — the DELEGATING wrapper, not `anchor_staleness` — as
+/// `(is_stale, has_materialized_at, has_latest_touch)`.
+///
+/// Deliberately calls the wrapper by its own name. That name is what `cogmap_analytics`
+/// (`migrations/20260628000001_cogmap_analytics_read_functions.sql:37`) and the scenario runner
+/// (`crates/temper-substrate/src/scenario/runner.rs:486`) call, so it is the surface whose answer
+/// must not move; calling `anchor_staleness('kb_cogmaps', …)` here would test the delegate and skip
+/// the delegation.
+async fn cogmap_staleness_row(pool: &PgPool, cogmap: Uuid) -> (bool, bool, bool) {
+    let (stale, has_mat, has_touch): (Option<bool>, bool, bool) = sqlx::query_as(
+        "SELECT s.is_stale, s.materialized_at IS NOT NULL, s.latest_touch IS NOT NULL \
+           FROM cogmap_staleness($1) s",
+    )
+    .bind(cogmap)
+    .fetch_one(pool)
+    .await
+    .expect("cogmap_staleness yields exactly one row for a cogmap that exists");
+
+    (
+        stale.expect("is_stale is a COALESCE and is never NULL"),
+        has_mat,
+        has_touch,
+    )
+}
+
+/// **The cogmap-side witness for the delegation**, mirroring `a_touched_context_reports_stale`.
+///
+/// `cogmap_staleness` no longer computes anything: it delegates to `anchor_staleness('kb_cogmaps',
+/// …)`, whose regions arm reads `(home_anchor_table, home_anchor_id)` where the incumbent read
+/// `reg.cogmap_id` (`migrations/20260823000020_anchor_staleness.sql`). The migration argues the
+/// answer is preserved because those two carry the same value for a cogmap region — "by backfill and
+/// convention, not by constraint". This pins that the preserved answer is the STALE one.
+///
+/// **Why it fails if the regions arm stops seeing the row.** This fixture homes exactly one region
+/// on the map and no edges at all, so the regions arm is the ONLY source of `latest_touch`. Lose it
+/// — by re-keying the arm, by a `NOT is_folded` predicate creeping in, or by a fixture that leaves
+/// the anchor pair NULL — and the failure is not an error: `latest_touch` comes back NULL,
+/// `latest_touch > materialized_at` is therefore NULL, and the `COALESCE`
+/// (`20260624000002:549`, carried over unchanged) falls through to `materialized_at IS NULL`, which
+/// is **false** for a map that has materialized once. So the post-touch `assert!(stale)` flips red,
+/// and `assert!(has_touch)` flips red independently of it — a map that has materialized and never
+/// been touched reports `is_stale = false` under BOTH the working and the broken arm, which is why
+/// this test touches before asserting rather than only materializing.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_touched_cogmap_reports_stale_through_the_delegating_wrapper(pool: PgPool) {
+    let (profile, _context) =
+        common::fixtures::create_test_profile_with_context(&pool, "mapclock@example.com").await;
+    let (cogmap, region) = insert_materialized_cogmap_with_region(&pool, "clock-map").await;
+
+    let (stale, has_mat, has_touch) = cogmap_staleness_row(&pool, cogmap).await;
+    assert!(has_mat, "the map was inserted with its watermark stamped");
+    assert!(
+        has_touch,
+        "latest_touch is NULL only if the regions arm cannot see this map's region — i.e. the arm \
+         and the row disagree about the key, which is the unconstrained equality the delegation \
+         rests on"
+    );
+    assert!(
+        !stale,
+        "nothing has touched the map since its watermark, so it is fresh"
+    );
+
+    touch_region_with_a_later_event(&pool, profile, region).await;
+
+    let (stale, has_mat, has_touch) = cogmap_staleness_row(&pool, cogmap).await;
+    assert!(has_mat && has_touch, "both clocks are still readable");
+    assert!(
+        stale,
+        "a cogmap touched after materializing is stale — if this is false, the delegation lost the \
+         region and every such map is permanently, silently fresh"
+    );
+
+    // The equivalence itself, stated as a differential rather than inferred: the wrapper's answer
+    // must equal what the pre-delegation body computed, whose regions arm was keyed on
+    // `reg.cogmap_id` (`20260624000002:538-541`). Both arms are reproduced here over the same row,
+    // so a divergence localises to the key and nothing else.
+    let agrees: Option<bool> = sqlx::query_scalar(
+        "SELECT new.is_stale IS NOT DISTINCT FROM old.is_stale
+               AND new.latest_touch IS NOT DISTINCT FROM old.latest_touch
+           FROM cogmap_staleness($1) new,
+                LATERAL (
+                  SELECT mat.materialized_at, t.latest_touch,
+                         COALESCE(t.latest_touch > mat.materialized_at,
+                                  mat.materialized_at IS NULL) AS is_stale
+                    FROM (SELECT ev.occurred_at AS materialized_at
+                            FROM kb_cogmaps m
+                            LEFT JOIN kb_events ev ON ev.id = m.shape_materialized_event_id
+                           WHERE m.id = $1) mat,
+                         (SELECT max(occurred_at) AS latest_touch FROM (
+                            SELECT ev.occurred_at FROM kb_cogmap_regions reg
+                              JOIN kb_events ev ON ev.id = reg.last_event_id
+                             WHERE reg.cogmap_id = $1
+                            UNION ALL
+                            SELECT ev.occurred_at FROM kb_edges e
+                              JOIN kb_events ev ON ev.id = e.last_event_id
+                             WHERE e.home_anchor_table = 'kb_cogmaps'
+                               AND e.home_anchor_id = $1) x) t
+                ) old",
+    )
+    .bind(cogmap)
+    .fetch_one(&pool)
+    .await
+    .expect("both arms answer over the same map");
+
+    assert_eq!(
+        agrees,
+        Some(true),
+        "the anchor-pair arm and the cogmap_id arm must agree for a region carrying both keys — \
+         disagreement means the delegation changed the answer for cogmaps"
+    );
+}

@@ -1,6 +1,6 @@
 #![cfg(feature = "test-db")]
-//! `substrate_read::cogmap_shape_select` — the api-side service-direct wrapper over the
-//! `readback::cogmap_shape` binding. Proves the readable path returns Ok against the root-joined L0
+//! `substrate_read::anchor_shape_select` — the api-side service-direct wrapper over the
+//! `readback::anchor_shape` binding. Proves the readable path returns Ok against the root-joined L0
 //! map, and that a non-readable map yields an empty (not errored) result — an empty `regions` inside
 //! the anchor-level envelope, since migration `20260823000010`, rather than a bare empty array.
 

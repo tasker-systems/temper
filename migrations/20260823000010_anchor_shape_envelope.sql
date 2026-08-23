@@ -87,25 +87,57 @@ LANGUAGE sql STABLE AS $$
             CASE WHEN g.readable THEN (SELECT count(*)::int FROM regs) ELSE 0 END AS population,
             CASE WHEN g.readable THEN (SELECT k.materialized_at FROM clock k) ELSE NULL END
                 AS materialized_at,
-            -- Precedence is load-bearing, in two places.
+            -- Precedence is load-bearing at EVERY step. Read the arms as one cascade, widest
+            -- suppression first, finest distinction last.
             --
-            -- The FIRST arm guards the field's own contract: `emptiness` explains an EMPTY row set
-            -- and nothing else. Without it, a readable anchor that holds visible regions but was
-            -- never materialized returns rows AND 'never_clustered' -- a named cause attached to a
-            -- non-empty answer, which contradicts the column's documented meaning. That fact is not
-            -- lost by suppressing it here: `materialized_at` is NULL for exactly that anchor, which
-            -- is the field that is actually about the clock. (An unreadable anchor never reaches
-            -- this arm -- it has no rows.)
+            -- ARM 1 (rows returned) guards the field's own contract: `emptiness` explains an EMPTY
+            -- row set and nothing else. Without it, a readable anchor that holds visible regions but
+            -- was never materialized returns rows AND 'never_clustered' -- a named cause attached to
+            -- a non-empty answer, which contradicts the column's documented meaning. That fact is
+            -- not lost by suppressing it here: `materialized_at` is NULL for exactly that anchor,
+            -- which is the field that is actually about the clock.
             --
-            -- Then 'never_clustered' MUST precede 'nothing_visible', or a never-clustered anchor
+            -- ARM 2 (deny) must outrank everything below it, because every arm below names a fact
+            -- about an anchor -- and a caller who fails the gate has been told nothing about this
+            -- one, not even that it exists. (Such a caller never reaches arm 1: `regs` is gated too,
+            -- so they have no rows.)
+            --
+            -- ARM 3 (population > 0) must outrank the CLOCK arm below it. The clock arm used to sit
+            -- here, and it was wrong: it fired for any readable anchor with a NULL watermark, WITHOUT
+            -- regard to whether the anchor was empty for this caller. A readable anchor holding
+            -- visible regions, never materialized, read under a lens matching none of them answered
+            -- `population: 1` alongside 'never_clustered' -- self-contradictory on its face, and it
+            -- sent the caller to `context materialize` when the fix was to drop the lens. Whenever
+            -- `population > 0` the anchor is NOT empty for this caller; they are looking at a
+            -- narrowed view, which is precisely what 'lens_narrowed' means, and the lens is then the
+            -- only cause arm 1 can have failed for. The clock fact is not lost here either, by the
+            -- same argument as arm 1: `materialized_at` is NULL for that anchor.
+            --
+            -- ARMS 4-5 are reached only when the anchor is GENUINELY empty for this caller. (There,
+            -- `count(*) FROM regs` = `population`: arm 2 has already established `readable`.) Within
+            -- that, 'never_clustered' MUST precede 'nothing_visible', or a never-clustered anchor
             -- reports 'nothing_visible' and the distinction this function exists to draw is lost.
             CASE
                 WHEN (SELECT count(*) FROM regs rr
                        WHERE p_lens IS NULL OR rr.lens_id = p_lens) > 0 THEN NULL
-                WHEN NOT g.readable                        THEN 'unreadable_or_absent'
+                -- `IS NOT TRUE`, not `NOT`: this must fail CLOSED on a NULL. `readable` is an
+                -- expression over a different function, so its two-valuedness is that function's
+                -- property, not this one's; under plain `NOT g.readable` a NULL makes the arm NULL,
+                -- the arm does not fire, and the caller falls through to an arm naming a fact about
+                -- an anchor they may not read. The three other consumers of `g.readable` already
+                -- fail closed on NULL -- `regs`' gate (a NULL WHERE rejects the row) and both
+                -- `CASE WHEN g.readable THEN ... ELSE` above (a NULL takes the ELSE). This one now
+                -- matches them, so the safety no longer rests on a property of another function.
+                WHEN g.readable IS NOT TRUE                THEN 'unreadable_or_absent'
+                WHEN (SELECT count(*) FROM regs) > 0       THEN 'lens_narrowed'
                 WHEN (SELECT k.eid FROM clock k) IS NULL   THEN 'never_clustered'
-                WHEN (SELECT count(*) FROM regs) = 0       THEN 'nothing_visible'
-                ELSE 'lens_narrowed'
+                -- 'nothing_visible' DELIBERATELY does not distinguish "this anchor formed zero
+                -- regions" from "it formed regions and you can see into none of them". That is not
+                -- an oversight to be repaired with a fifth arm: separating them would tell a caller
+                -- how many regions they cannot read, which is exactly what the member gate carried
+                -- over above (20260713000050:125) exists to forbid -- "a caller is never told how
+                -- many resources they cannot read" (20260713000050:137). DO NOT ADD AN ARM HERE.
+                ELSE 'nothing_visible'
             END AS emptiness
         FROM gate g
     )
