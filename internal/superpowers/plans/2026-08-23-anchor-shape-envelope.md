@@ -12,6 +12,42 @@
 
 **Task:** `01a02ebd-c153-7d22-acb6-d9fdec1b0f16` · **Goal:** `019fbdb9-f287-79c0-aab6-efa0b1de12c8`
 
+## Execution protocol — READ BEFORE DISPATCHING ANYTHING
+
+**Implementer subagents do NOT run `cargo`. At all.** No build, test, clippy, fmt, `cargo make`,
+or `sqlx prepare`. A cold `cargo nextest` / `cargo check` in this workspace takes 4–15 minutes
+against a 120-second Bash timeout, so an implementer times out, backgrounds the command, and then
+**can never observe it finish** — only the main loop is re-invoked on the notification. Subagents
+that do this park forever, burning 100k+ tokens across stop/resume cycles without ever committing.
+
+So the division is:
+
+- **Subagent:** reads the code, writes the implementation and the tests, reports what it wrote and
+  what it could not verify. Read-only shell only — `rg`, `grep`, `cat`, `sed -n`, `git log/diff`.
+- **Controller (main loop):** runs *every* gate — `cargo make check`, the test tiers, `cargo fmt`,
+  all `sqlx prepare` variants, `cargo make openapi` / `generate-ts-types`, `bun run check` — and
+  makes every commit.
+
+**Corollary the controller must hold: a subagent reporting DONE has compiled nothing.** Never treat
+"it compiles" from a subagent as evidence. `cargo check` ≠ clippy ≠ rustfmt ≠ rustdoc; each surfaces
+failures the previous one cannot.
+
+**`cargo fmt` is part of the controller's pre-commit gate, explicitly.** `cargo make check` runs
+`cargo fmt --check` and fails on any unformatted code; rustfmt reflows the multi-line call sites and
+assertions that hand-written plan code rarely matches, so this is a near-certain hit, not a maybe.
+
+**Review is consolidated, not per-task.** Each task ends at "implemented and reported" — do not chain
+a spec-review or code-quality subagent after any individual task. One holistic review runs after all
+eight land, where inconsistencies *between* tasks are visible and per-task reviews would have missed
+them anyway.
+
+The `cargo make` invocations written into the task steps below are the **controller's** gate list.
+They are correct task names (`check`, `test-db`, `test-artifacts`, `db-migrate` live in
+`tools/cargo-make/main.toml`, which the root `Makefile.toml:27` pulls in via `extend`). They are not
+instructions to the subagent.
+
+---
+
 ## Global Constraints
 
 - **The gate is in SQL. Rust applies none.** `anchor_shape_select` is a pure row mapping and handlers pass the profile straight through. A new field is computed inside the SQL or it is not gated.
