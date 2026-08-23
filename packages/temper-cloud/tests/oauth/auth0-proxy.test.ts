@@ -5,6 +5,7 @@ const ENV = {
   AUTH_ISSUER: "https://tenant.auth0.com/",
   AUTH_AUDIENCE: "https://api.temperkb.io",
   MCP_CLIENT_ID: "test-client-id",
+  MCP_PROXY_SECRET: "a".repeat(48),
 };
 
 describe("auth0-proxy", () => {

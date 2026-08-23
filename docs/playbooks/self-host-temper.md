@@ -223,6 +223,7 @@ in an agentic session.
 | API identifier (MCP) | `MCP_AUDIENCE` | Optional. If set, it **must equal** `AUTH_AUDIENCE` — it restates the one audience, it does not add a second one |
 | MCP app client_id | `MCP_CLIENT_ID` | The MCP native application's client_id |
 | Instance base URL | `MCP_BASE_URL` | `https://<instance>` — no trailing slash |
+| Proxy signing secret | `MCP_PROXY_SECRET` | Random string ≥ 32 chars (e.g. `openssl rand -base64 48`). Signs the state token in the Auth0 loopback redirect proxy. If unset, falls back to a deprecated non-secret derivation |
 
 ## Deploy to Vercel
 

@@ -48,16 +48,23 @@ function requireEnv(name: string): string {
 }
 
 /**
- * Derives the HMAC key from instance configuration. These env vars are all
- * required for Auth0 instances and are instance-specific, so the signed state
- * cannot be forged on one instance and replayed on another.
+ * Derives the HMAC key from a dedicated secret env var.
+ *
+ * `MCP_PROXY_SECRET` must be a random string of at least 32 bytes, generated
+ * once per instance (e.g. `openssl rand -base64 48`). It is never published in
+ * any metadata or DCR response, so only the server can sign or verify state
+ * tokens. Falls back to `AUTH_ISSUER` + `AUTH_AUDIENCE` for backward
+ * compatibility with instances that have not yet set `MCP_PROXY_SECRET`, but
+ * that fallback is deprecated and will be removed.
  */
 function signingKey(): string {
-  return [
-    requireEnv("MCP_BASE_URL"),
-    requireEnv("AUTH_AUDIENCE"),
-    requireEnv("MCP_CLIENT_ID"),
-  ].join("|");
+  const secret = process.env.MCP_PROXY_SECRET;
+  if (secret && secret.length >= 32) {
+    return secret;
+  }
+  // Deprecated fallback — public values, forgeable. Removed once all instances
+  // set MCP_PROXY_SECRET.
+  return [requireEnv("MCP_BASE_URL"), requireEnv("AUTH_AUDIENCE")].join("|");
 }
 
 /** The stashed data we carry through Auth0's `state` parameter. */
