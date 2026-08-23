@@ -248,6 +248,50 @@ expect_in "$FIXTURE/nogit" "no git checkout builds (preview)"    1 temper-cloud 
 expect_in "$FIXTURE/nogit" "no git checkout builds (production)" 1 temper-cloud VERCEL_ENV=production
 
 # ---------------------------------------------------------------------------------------
+# The PREVIEW FALLBACK CHAIN. This exists because the first deployment through this gate
+# found the bug it now guards: `[observed — 2026-08-23, PR #765]` three projects ran the
+# same script against the same commit and temper-ui and temper-mention both failed to
+# fetch main, printed `could not fetch main`, and defaulted to building — while
+# steward-agent resolved its changeset normally. The direction was safe; the gate was
+# inert. Nothing here was covered, which is why nothing caught it.
+#
+# The fixture makes the fetch fail for real by pointing origin at a path that does not
+# exist, rather than by mocking git.
+# ---------------------------------------------------------------------------------------
+echo "-- preview fallback when origin is unreachable"
+git clone -q "file://$FIXTURE/origin.git" "$FIXTURE/broken-origin" 2>/dev/null
+( cd "$FIXTURE/broken-origin" && git checkout -q main && git remote set-url origin "file://$FIXTURE/does-not-exist.git" )
+BROKEN_HEAD="$(cd "$FIXTURE/broken-origin" && git rev-parse HEAD)"
+
+# The remote-tracking ref must go too, or this fixture does not test what it claims: a
+# clone still carrying refs/remotes/origin/main HAS a usable base, and using it is the
+# correct answer rather than the fail-safe. (Caught by this suite on its first run — the
+# assertion was written expecting a build and got a well-founded skip. Recorded because it
+# is also the likeliest reason the real fix works: if Vercel's clone carries the ref, the
+# second link in the chain resolves where the fetch could not.)
+( cd "$FIXTURE/broken-origin" && git update-ref -d refs/remotes/origin/main 2>/dev/null || true )
+
+# With no usable base at all, the fail-safe must BUILD — never skip.
+expect_in "$FIXTURE/broken-origin" "unreachable origin + no ref + no prev SHA: builds (fail-safe)" \
+  1 temper-cloud VERCEL_ENV=preview
+
+# But given a real previous SHA it must USE it rather than defaulting to build. This is the
+# assertion that would have failed before the fix: the old script had no fallback, so an
+# unreachable origin meant "build" forever and the gate never actually ran.
+prev_fallback() { # prev_fallback <desc> <want> <project> <prev>
+  local desc="$1" want="$2" project="$3" prev="$4" got=0
+  ( cd "$FIXTURE/broken-origin" && env -u CHANGED_PATHS VERCEL_ENV=preview \
+      VERCEL_GIT_PREVIOUS_SHA="$prev" sh "$SCRIPT" "$project" ) >/dev/null 2>&1 || got=$?
+  if [ "$got" -eq "$want" ]; then
+    echo "  ok   — $desc (exit $got)"
+  else
+    echo "  FAIL — $desc: expected exit $want, got $got"; fails=$((fails+1))
+  fi
+}
+# HEAD is main's base commit (README only), so a prev SHA of HEAD itself is an empty diff.
+prev_fallback "unreachable origin + prev SHA: uses it and SKIPS an empty diff" 0 temper-cloud "$BROKEN_HEAD"
+
+# ---------------------------------------------------------------------------------------
 # Derivation on PRODUCTION. This is the arm that replaces `production always builds`, so
 # it is asserted rather than reasoned about: with no VERCEL_GIT_PREVIOUS_SHA the script
 # falls back to HEAD~1, and the verdict must still track whether the commit reached the

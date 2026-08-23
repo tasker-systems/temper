@@ -236,12 +236,67 @@ else
     fi
   else
     # Preview — validated above, so this arm is reached only for VERCEL_ENV=preview.
-    if ! git fetch --no-tags --depth="${FETCH_DEPTH}" origin "${DEFAULT_BRANCH}" >/dev/null 2>&1; then
-      echo "build: could not fetch ${DEFAULT_BRANCH} — cannot determine the changeset"
+    #
+    # THE FETCH IS NOT RELIABLE, AND THE FIRST VERSION OF THIS HID THAT.
+    #   `[observed — 2026-08-23, PR #765]` On the very first deployment through this gate,
+    #   three projects ran it against the SAME commit of the SAME repo and disagreed:
+    #   steward-agent resolved its changeset and named the two files that matched, while
+    #   temper-ui and temper-mention both printed `could not fetch main` and fell through
+    #   to building. Same clone line in all three logs, same branch, same SHA.
+    #
+    #   The failure direction was right — they built — but a gate that silently defaults to
+    #   "build" on every push is not a gate, it is the unguarded behaviour with extra steps,
+    #   which is precisely what this change exists to remove. And because the original
+    #   spelling sent git's stderr to /dev/null, the log said only THAT it failed and never
+    #   WHY. A skip is not a pass, and neither is a fail-safe: both have to say what they
+    #   did and what they could not establish.
+    #
+    # So: keep git's error and print it, try more than one way to reach the base, and only
+    # then fall back to building — loudly, with the reason attached.
+    fetch_err=""
+    base_ref=""
+
+    # An explicit refspec, rather than the bare `origin main` form the first version used.
+    # The bare form writes FETCH_HEAD only; naming the destination gives a stable ref that
+    # survives a second fetch and can be tested for afterwards.
+    attempt=1
+    while [ "${attempt}" -le 2 ]; do
+      if fetch_err="$(git fetch --no-tags --depth="${FETCH_DEPTH}" origin \
+            "+refs/heads/${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}" 2>&1)"; then
+        base_ref="refs/remotes/origin/${DEFAULT_BRANCH}"
+        break
+      fi
+      echo "note: fetch attempt ${attempt} for ${DEFAULT_BRANCH} failed: ${fetch_err}"
+      attempt=$((attempt + 1))
+    done
+
+    # The clone may already carry the ref even when fetching it failed — Vercel's clone
+    # configuration is not ours to rely on either way, so this is checked rather than
+    # assumed in both directions.
+    if [ -z "${base_ref}" ] && git rev-parse --verify -q "refs/remotes/origin/${DEFAULT_BRANCH}" >/dev/null 2>&1; then
+      base_ref="refs/remotes/origin/${DEFAULT_BRANCH}"
+      echo "note: fetch failed but origin/${DEFAULT_BRANCH} is already present — using it"
+    fi
+
+    # Last resort before giving up: the previous successful deployment of THIS project on
+    # THIS branch. It is a worse base than the merge base (it answers "since the last push
+    # that built" rather than "what this PR carries") but it is a real one, and a real base
+    # beats defaulting to build on every push.
+    if [ -z "${base_ref}" ] && [ -n "${VERCEL_GIT_PREVIOUS_SHA:-}" ] \
+       && git cat-file -e "${VERCEL_GIT_PREVIOUS_SHA}^{commit}" 2>/dev/null; then
+      base_ref="${VERCEL_GIT_PREVIOUS_SHA}"
+      echo "note: falling back to VERCEL_GIT_PREVIOUS_SHA — a narrower changeset than the PR's"
+    fi
+
+    if [ -z "${base_ref}" ]; then
+      echo "build: could not establish a base for ${DEFAULT_BRANCH} — cannot determine the changeset"
+      echo "       last git error: ${fetch_err:-<none>}"
+      echo "       THIS IS THE FAIL-SAFE, NOT A VERDICT: nothing about this changeset was"
+      echo "       checked. If this line is routine rather than rare, the gate is inert."
       exit 1
     fi
 
-    base="$(git merge-base FETCH_HEAD HEAD 2>/dev/null || true)"
+    base="$(git merge-base "${base_ref}" HEAD 2>/dev/null || true)"
     if [ -z "${base}" ]; then
       # Measured, not assumed: a real preview build reports
       # `no merge base with main within 200 commits` even though the fetch succeeded.
@@ -252,7 +307,7 @@ else
       # Comparing the two trees directly needs no ancestry, so it works regardless. It can
       # over-report — a change that landed on main but is not on this branch shows up as a
       # difference — and over-reporting BUILDS, which is the safe direction.
-      base="FETCH_HEAD"
+      base="${base_ref}"
       echo "note: no merge base (shallow clone) — comparing trees against ${DEFAULT_BRANCH} tip"
     fi
   fi
