@@ -2,10 +2,10 @@
 
 # `temper cogmap`
 
-Operate on cognitive maps (admin-gated content reconcile)
+Operate on cognitive maps (create, read, reconcile, materialize, bind, grant)
 
 ```text
-Operate on cognitive maps (admin-gated content reconcile)
+Operate on cognitive maps (create, read, reconcile, materialize, bind, grant)
 
 Usage: temper cogmap [OPTIONS] <COMMAND>
 
@@ -72,7 +72,7 @@ Options:
 ```text
 Reconcile a cognitive map's content to a committed manifest.
 
-Reads the authored manifest, embeds each entry client-side, and PUTs a pre-embedded desired-state request to `/api/cognitive-maps/{id}` (admin-gated, idempotent).
+Reads the authored manifest, embeds each entry client-side, and PUTs a pre-embedded desired-state request to `/api/cognitive-maps/{id}` (idempotent).
 
 Usage: temper cogmap reconcile [OPTIONS] --manifest <MANIFEST> <REF>
 

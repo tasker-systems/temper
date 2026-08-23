@@ -1,4 +1,8 @@
-//! `temper admin subscription` — operator-only subscription management.
+//! `temper admin subscription` — subscription management.
+//!
+//! **Not operator-only.** The gate is `SubscriptionAuthority`
+//! (`temper-services/src/authz/subscription.rs`): owner or maintainer of the authoring team, **or**
+//! a system admin. The `admin` grouping names the deployment *subject*, not an elevation bar.
 //!
 //! Thin commands: parse, resolve refs to ids, call the client, render. Mirrors
 //! `admin_connection.rs`.

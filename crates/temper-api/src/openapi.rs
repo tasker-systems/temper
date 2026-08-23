@@ -181,7 +181,7 @@ use temper_workflow::types::resource::{
         (name = "Facets", description = "Typed facet property writes (facet_set)"),
         (name = "Relationships", description = "Knowledge-graph relationship writes (assert/retype/reweight/fold)"),
         (name = "Contexts", description = "Contexts — named homes for resources, and who they are shared with"),
-        (name = "Cognitive Maps", description = "Cognitive-map content reconcile (admin-gated)"),
+        (name = "Cognitive Maps", description = "Cognitive maps — genesis, reads (shape, metrics, analytics), content reconcile, materialize, team binding, and grants"),
         (name = "Graph", description = "Knowledge graph traversal"),
         (name = "Search", description = "Semantic and keyword search"),
         (name = "Query", description = "Composed queries — declared acts, piped, one round trip"),
