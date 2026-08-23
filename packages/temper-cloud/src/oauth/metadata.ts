@@ -74,12 +74,17 @@ export function buildAuth0AsMetadata(cfg: {
   mcpAudience: string;
 }): Auth0AsMetadata {
   const auth0 = cfg.auth0Domain.replace(/\/+$/, "");
+  const base = cfg.base.replace(/\/+$/, "");
 
   return {
     issuer: `${auth0}/`,
-    authorization_endpoint: `${auth0}/authorize`,
-    token_endpoint: `${auth0}/oauth/token`,
-    registration_endpoint: `${cfg.base}/oauth/register`,
+    // Authorize and token endpoints are proxied through temperkb.io so loopback
+    // redirect_uris (http://127.0.0.1:<port>/callback) can be rewritten to the
+    // relay URL. Auth0's exact-match callback allowlist rejects loopback URLs
+    // with ports even for Native apps on some tenants. See auth0-proxy.ts.
+    authorization_endpoint: `${base}/oauth/authorize`,
+    token_endpoint: `${base}/oauth/token`,
+    registration_endpoint: `${base}/oauth/register`,
     scopes_supported: ["openid", "profile", "email", "offline_access"],
     response_types_supported: ["code"],
     // client_credentials (Stage 4a): lets M2M agent principals mint tokens via Auth0.

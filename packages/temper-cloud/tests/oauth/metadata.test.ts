@@ -51,7 +51,7 @@ describe("buildAsMetadata", () => {
 });
 
 describe("buildAuth0AsMetadata", () => {
-  it("matches the retired Rust MCP handler's output, plus the Stage-4a client_credentials grant", () => {
+  it("points authorize and token at the instance (proxied), not Auth0 directly", () => {
     const meta = buildAuth0AsMetadata({
       base: "https://temperkb.io",
       auth0Domain: "https://tenant.auth0.com/",
@@ -60,8 +60,8 @@ describe("buildAuth0AsMetadata", () => {
 
     expect(meta).toEqual({
       issuer: "https://tenant.auth0.com/",
-      authorization_endpoint: "https://tenant.auth0.com/authorize",
-      token_endpoint: "https://tenant.auth0.com/oauth/token",
+      authorization_endpoint: "https://temperkb.io/oauth/authorize",
+      token_endpoint: "https://temperkb.io/oauth/token",
       registration_endpoint: "https://temperkb.io/oauth/register",
       scopes_supported: ["openid", "profile", "email", "offline_access"],
       response_types_supported: ["code"],
@@ -78,31 +78,21 @@ describe("buildAuth0AsMetadata", () => {
       mcpAudience: "https://api.temperkb.io",
     });
     expect(meta.grant_types_supported).toContain("client_credentials");
-    // Existing grants remain.
     expect(meta.grant_types_supported).toContain("authorization_code");
     expect(meta.grant_types_supported).toContain("refresh_token");
   });
 
-  it("trims a trailing slash from auth0Domain before building endpoints", () => {
-    const meta = buildAuth0AsMetadata({
-      base: "https://temperkb.io",
-      auth0Domain: "https://tenant.auth0.com",
-      mcpAudience: "https://api.temperkb.io",
-    });
-
-    expect(meta.issuer).toBe("https://tenant.auth0.com/");
-    expect(meta.authorization_endpoint).toBe("https://tenant.auth0.com/authorize");
-    expect(meta.token_endpoint).toBe("https://tenant.auth0.com/oauth/token");
-  });
-
-  it("uses base raw (no slash trimming) for registration_endpoint", () => {
+  it("trims a trailing slash from both auth0Domain and base before building endpoints", () => {
     const meta = buildAuth0AsMetadata({
       base: "https://temperkb.io/",
       auth0Domain: "https://tenant.auth0.com",
       mcpAudience: "https://api.temperkb.io",
     });
 
-    expect(meta.registration_endpoint).toBe("https://temperkb.io//oauth/register");
+    expect(meta.issuer).toBe("https://tenant.auth0.com/");
+    expect(meta.authorization_endpoint).toBe("https://temperkb.io/oauth/authorize");
+    expect(meta.token_endpoint).toBe("https://temperkb.io/oauth/token");
+    expect(meta.registration_endpoint).toBe("https://temperkb.io/oauth/register");
   });
 });
 
