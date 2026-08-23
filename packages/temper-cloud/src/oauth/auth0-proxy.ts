@@ -85,7 +85,7 @@ function b64url(input: Buffer | string): string {
 // hash. The `payload` carries stashed OAuth state through the browser round-trip
 // and is verified (not compared) on return. bcrypt/Argon2 are one-way and cannot
 // recover the stashed data. See RFC 2104 / JWT HS256 for the standard pattern.
-// codeql[cs/password-hash-with-insufficient-computational-effort]: off
+// lgtm[js/insufficient-password-hash]
 function sign(payload: string): string {
   return b64url(createHmac("sha256", signingKey()).update(payload).digest());
 }
