@@ -1560,6 +1560,77 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/schema/doc-types": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /** List every document type this instance knows, with a schema summary for each. */
+        get: operations["list_doc_types"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/schema/doc-types/{name}": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Describe one document type: its JSON Schema, required fields, closed vocabularies, and
+         *     a filled-in example of the managed tier.
+         * @description `enum_fields` is the answer to *"which states does this kind of work carry?"* — a task's
+         *     stages, a goal's statuses — read from the doc-type's own schema rather than from any
+         *     list a surface keeps.
+         */
+        get: operations["describe_doc_type"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/schema/open-meta": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Describe the recognized conventions of the open (caller-defined) metadata tier.
+         * @description The tier stays open — this is guidance, not a closed vocabulary. Each property's
+         *     `description` states whether the key is FTS-indexed and at what weight; the discouraged
+         *     keys are surfaced separately because an open tier cannot express their absence.
+         */
+        get: operations["describe_open_meta"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/search": {
         parameters: {
             query?: never;
@@ -3173,6 +3244,11 @@ export interface components {
             /** @description Device-specific vault location */
             vault_path?: string | null;
         };
+        /** @description A discouraged open_meta key and the managed field that supersedes it. */
+        DiscouragedOpenMetaKey: {
+            key: string;
+            use_instead: string;
+        };
         /**
          * @description Request body for `POST /api/steward/dispatch`. Both optional — server defaults apply
          *     (`DEFAULT_STEWARD_INGEST_THRESHOLD`, `DEFAULT_STEWARD_DISPATCH_CAP`).
@@ -3210,6 +3286,43 @@ export interface components {
          * @enum {string}
          */
         Disposition: "completed" | "failed" | "abandoned";
+        /**
+         * @description Full description of one document type: its JSON Schema, the fields it requires, the
+         *     closed vocabularies its fields carry, and a filled-in example of the managed tier.
+         */
+        DocTypeDescription: {
+            /**
+             * @description Every field of this doc-type that carries a closed vocabulary, field name → values.
+             *     This is the answer to *"which states does this kind of work have?"*.
+             */
+            enum_fields: {
+                [key: string]: string[];
+            };
+            example_managed_meta: unknown;
+            name: string;
+            /**
+             * @description Doc-type-level required fields only (the base schema's are merged via `allOf` at
+             *     validation time).
+             */
+            required_fields: string[];
+            /**
+             * @description The doc-type's own JSON Schema. Deliberately **not** merged with the base schema —
+             *     [`schema_value`] says why, and [`base_schema_value`] is the other half for a caller
+             *     that wants the whole field surface.
+             */
+            schema: unknown;
+        };
+        /**
+         * @description Summary of a document type — the row shape of the doc-type list.
+         *
+         *     Doc-types are name-keyed in the substrate (no `kb_doc_types` table), so the summary
+         *     carries no UUID: callers address doc-types by name.
+         */
+        DocTypeSummary: {
+            has_schema: boolean;
+            name: string;
+            required_fields: string[];
+        };
         /**
          * @description One drifted cogmap in a sweep result — the map plus its ingest delta since its own watermark.
          *     Ordered most-drifted-first by the sweep (`steward_drift_sweep`).
@@ -4546,6 +4659,26 @@ export interface components {
             parent_cogmap?: string | null;
             /** @description Free-form trigger label (e.g. `manual`, `delegated`, `scheduled`). */
             trigger_kind: string;
+        };
+        /**
+         * @description The self-describing open_meta convention, returned by [`describe_open_meta`] and rendered by the
+         *     CLI `resource describe-open-meta` command, the MCP `describe_open_meta` tool, and
+         *     `GET /api/schema/open-meta`. All three surfaces share this type so the guidance can never drift
+         *     between them.
+         */
+        OpenMetaConvention: {
+            /**
+             * @description Discouraged bare keys — absent from `schema` because the tier is open, surfaced here so callers
+             *     can see them → the managed field that supersedes each.
+             */
+            discouraged_keys: components["schemas"]["DiscouragedOpenMetaKey"][];
+            /**
+             * @description The recognized-conventions JSON Schema. Self-describing: each property's `description` states
+             *     whether the key is FTS-indexed (and at what weight) or shape-only, and the schema `title`
+             *     carries the convention version. The tier stays open (`additionalProperties: true`), so this is
+             *     guidance, not a closed vocabulary.
+             */
+            schema: unknown;
         };
         /**
          * @description The ordering direction for [`PropertyOp::Compare`]. A closed sub-enum, the same shape as
@@ -11060,6 +11193,114 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    list_doc_types: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every known document type */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocTypeSummary"][];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    describe_doc_type: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Document type name (e.g. "task", "goal") */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The document type's schema, required fields and vocabularies */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocTypeDescription"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such document type */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    describe_open_meta: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Recognized open_meta conventions and discouraged keys */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OpenMetaConvention"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
         };
     };

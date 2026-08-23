@@ -483,6 +483,9 @@ pub fn open_meta_schema_value() -> Result<serde_json::Value> {
 }
 
 /// A discouraged open_meta key and the managed field that supersedes it.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "schema.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize)]
 pub struct DiscouragedOpenMetaKey {
     pub key: String,
@@ -490,8 +493,12 @@ pub struct DiscouragedOpenMetaKey {
 }
 
 /// The self-describing open_meta convention, returned by [`describe_open_meta`] and rendered by the
-/// CLI `resource describe-open-meta` command + the MCP `describe_open_meta` tool. Both surfaces share
-/// this type so the guidance can never drift between them.
+/// CLI `resource describe-open-meta` command, the MCP `describe_open_meta` tool, and
+/// `GET /api/schema/open-meta`. All three surfaces share this type so the guidance can never drift
+/// between them.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "schema.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize)]
 pub struct OpenMetaConvention {
     /// The recognized-conventions JSON Schema. Self-describing: each property's `description` states
@@ -518,6 +525,142 @@ pub fn describe_open_meta() -> Result<OpenMetaConvention> {
                 use_instead: (*managed).to_string(),
             })
             .collect(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Doc-type description — the vocabulary each kind of work carries
+// ---------------------------------------------------------------------------
+//
+// These types and their two builders live here, beside `describe_open_meta`, for the same
+// reason that one does: they are rendered by more than one door, and a door that held its
+// own copy of the derivation would drift from the others. They were `temper-mcp`-private
+// until the web surface needed to ask which states a kind of work carries — a question it
+// could otherwise only answer by restating the vocabulary itself.
+
+/// Summary of a document type — the row shape of the doc-type list.
+///
+/// Doc-types are name-keyed in the substrate (no `kb_doc_types` table), so the summary
+/// carries no UUID: callers address doc-types by name.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "schema.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Serialize)]
+pub struct DocTypeSummary {
+    pub name: String,
+    pub has_schema: bool,
+    pub required_fields: Vec<String>,
+}
+
+/// Full description of one document type: its JSON Schema, the fields it requires, the
+/// closed vocabularies its fields carry, and a filled-in example of the managed tier.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "schema.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Serialize)]
+pub struct DocTypeDescription {
+    pub name: String,
+    /// The doc-type's own JSON Schema. Deliberately **not** merged with the base schema —
+    /// [`schema_value`] says why, and [`base_schema_value`] is the other half for a caller
+    /// that wants the whole field surface.
+    pub schema: serde_json::Value,
+    /// Doc-type-level required fields only (the base schema's are merged via `allOf` at
+    /// validation time).
+    pub required_fields: Vec<String>,
+    /// Every field of this doc-type that carries a closed vocabulary, field name → values.
+    /// This is the answer to *"which states does this kind of work have?"*.
+    pub enum_fields: BTreeMap<String, Vec<String>>,
+    pub example_managed_meta: serde_json::Value,
+}
+
+/// Whether a field is excluded from [`DocTypeDescription::example_managed_meta`] because a
+/// caller never supplies it.
+///
+/// The incumbent [`SYSTEM_MANAGED_FIELDS`] set, **plus** `temper-title`. The addition is one
+/// name rather than a second copy of the whole list: `SYSTEM_MANAGED_FIELDS` answers
+/// *"cannot be updated via the CLI"*, and the title can be, so it is legitimately absent
+/// there while still being managed-tier identity (`kb_resources.title`) that no caller hands
+/// over as managed meta.
+///
+/// Today no doc-type schema declares `temper-title` in its own `required` array — only
+/// `temper-slug` and (for `task`) `temper-stage` appear there — so this exclusion never
+/// fires. It is a guard against a schema that starts to, not a live filter.
+fn excluded_from_managed_example(field: &str) -> bool {
+    SYSTEM_MANAGED_FIELDS.contains(&field) || field == "temper-title"
+}
+
+/// Build a [`DocTypeSummary`] for one doc-type name.
+///
+/// An unrecognized name is not an error here: it answers `has_schema: false` with no required
+/// fields, which is the open-tail behaviour the rest of this module takes.
+pub fn doc_type_summary(name: &str) -> DocTypeSummary {
+    let (has_schema, required) = match required_fields(name) {
+        Ok(fields) => (true, fields),
+        Err(_) => (false, Vec::new()),
+    };
+
+    DocTypeSummary {
+        name: name.to_string(),
+        has_schema,
+        required_fields: required,
+    }
+}
+
+/// Summarize every doc type the binary embeds a schema for, in [`crate::frontmatter::DocType::ALL`] order.
+///
+/// [`crate::frontmatter::DocType::ALL`] is the enumeration, not [`DOC_TYPE_NAMES`] — the two
+/// agree (asserted by `doc_type_names_and_doc_type_all_are_the_same_set`) but only one of
+/// them is compiler-checked against the variant list.
+pub fn list_doc_types() -> Vec<DocTypeSummary> {
+    crate::frontmatter::DocType::ALL
+        .iter()
+        .map(|dt| doc_type_summary(dt.as_str()))
+        .collect()
+}
+
+/// Describe one doc type in full — schema, required fields, closed vocabularies, example.
+///
+/// # Errors
+/// Returns [`TemperError::Config`] if `doc_type` is not a recognized doc-type name. Callers
+/// facing an external principal should render that as *not found* rather than as an internal
+/// fault: the name came from the caller.
+pub fn describe_doc_type(doc_type: &str) -> Result<DocTypeDescription> {
+    let schema = schema_value(doc_type)?;
+    let required = extract_required_fields(&schema);
+    let enum_fields = extract_enum_fields(&schema);
+
+    // The example is built from the doc-type's own required fields: the first enum value
+    // where there is a vocabulary, a typed placeholder where there is not.
+    let mut example = serde_json::Map::new();
+    if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
+        for field in &required {
+            if excluded_from_managed_example(field) {
+                continue;
+            }
+            let Some(prop) = props.get(field) else {
+                continue;
+            };
+            let value = if let Some(enum_vals) = prop.get("enum").and_then(|e| e.as_array()) {
+                enum_vals
+                    .iter()
+                    .find(|v| v.is_string())
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::Value::String("<value>".to_string()))
+            } else if prop.get("type").and_then(|t| t.as_str()) == Some("integer") {
+                serde_json::Value::Number(0.into())
+            } else {
+                serde_json::Value::String("<value>".to_string())
+            };
+            example.insert(field.clone(), value);
+        }
+    }
+
+    Ok(DocTypeDescription {
+        name: doc_type.to_string(),
+        schema,
+        required_fields: required,
+        enum_fields,
+        example_managed_meta: serde_json::Value::Object(example),
     })
 }
 
@@ -1225,6 +1368,251 @@ title: "Test task"
         assert!(
             issues.is_empty(),
             "temper-provisional-id should be a known field, got: {issues:?}"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Doc-type description tests
+    //
+    // Moved here with the derivation they cover, from
+    // `temper-mcp/src/tools/doc_types.rs`. They were never MCP-specific — MCP was
+    // just the only door that could ask.
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn doc_type_summary_includes_required_fields_for_task() {
+        let summary = doc_type_summary("task");
+        assert!(summary.has_schema);
+        assert!(
+            summary
+                .required_fields
+                .contains(&"temper-stage".to_string()),
+            "task required_fields should include temper-stage, got: {:?}",
+            summary.required_fields
+        );
+        assert!(
+            summary.required_fields.contains(&"temper-slug".to_string()),
+            "task required_fields should include temper-slug, got: {:?}",
+            summary.required_fields
+        );
+    }
+
+    #[test]
+    fn doc_type_summary_unknown_type_has_no_schema() {
+        let summary = doc_type_summary("widget");
+        assert!(!summary.has_schema);
+        assert!(summary.required_fields.is_empty());
+    }
+
+    #[test]
+    fn list_doc_types_covers_every_variant() {
+        let listed = list_doc_types();
+        assert_eq!(
+            listed.len(),
+            crate::frontmatter::DocType::ALL.len(),
+            "the list must cover every doc-type variant"
+        );
+        assert!(
+            listed.iter().all(|s| s.has_schema),
+            "every enumerated doc type embeds a schema: {:?}",
+            listed
+                .iter()
+                .filter(|s| !s.has_schema)
+                .map(|s| &s.name)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// [`DOC_TYPE_NAMES`] and [`crate::frontmatter::DocType::ALL`] are two copies of the
+    /// same set, and nothing asserted they agreed until this test.
+    ///
+    /// Only one of them is compiler-checked: adding a `DocType` variant forces
+    /// `schema_json()`'s match to be updated, but nothing forces the static string list.
+    /// A variant added without a `DOC_TYPE_NAMES` entry would silently vanish from the
+    /// generated agent skill's frontmatter reference — the one consumer that reads the
+    /// static list rather than the enum.
+    #[test]
+    fn doc_type_names_and_doc_type_all_are_the_same_set() {
+        let mut from_enum: Vec<&str> = crate::frontmatter::DocType::ALL
+            .iter()
+            .map(|dt| dt.as_str())
+            .collect();
+        from_enum.sort_unstable();
+
+        let mut from_static: Vec<&str> = DOC_TYPE_NAMES.to_vec();
+        from_static.sort_unstable();
+
+        assert_eq!(
+            from_enum, from_static,
+            "DOC_TYPE_NAMES has drifted from DocType::ALL — a doc type reachable through \
+             one is invisible through the other"
+        );
+    }
+
+    #[test]
+    fn describe_doc_type_task_returns_schema_and_example() {
+        let response = describe_doc_type("task").expect("task should be a known doc type");
+        assert_eq!(response.name, "task");
+
+        assert!(
+            response
+                .required_fields
+                .contains(&"temper-stage".to_string()),
+            "required_fields should contain temper-stage: {:?}",
+            response.required_fields
+        );
+
+        let stage_enums = response
+            .enum_fields
+            .get("temper-stage")
+            .expect("enum_fields should contain temper-stage");
+        assert!(
+            stage_enums.contains(&"backlog".to_string()),
+            "temper-stage enum should include backlog: {stage_enums:?}"
+        );
+
+        let example = response
+            .example_managed_meta
+            .as_object()
+            .expect("the example is a JSON object");
+        assert!(
+            example.contains_key("temper-stage"),
+            "example should contain temper-stage"
+        );
+        assert!(
+            !example.contains_key("temper-id"),
+            "example should not contain system field temper-id"
+        );
+        assert!(
+            !example.contains_key("temper-slug"),
+            "example should not contain system field temper-slug"
+        );
+        // Identity (temper-title) is a first-class field, never a managed key.
+        assert!(
+            !example.contains_key("temper-title"),
+            "example must not surface identity key temper-title as managed meta"
+        );
+
+        // temper-goal left the vocabulary (Phase 2): it is no longer a schema
+        // property. list-by-goal returns as an edge in follow-up 019f3d55.
+        let props = response
+            .schema
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .expect("task schema has properties");
+        assert!(
+            !props.contains_key("temper-goal"),
+            "temper-goal must be gone from the task schema properties"
+        );
+    }
+
+    #[test]
+    fn describe_doc_type_unknown_type_errors() {
+        let result = describe_doc_type("widget");
+        assert!(result.is_err(), "unknown doc type should return an error");
+    }
+
+    #[test]
+    fn describe_task_surfaces_managed_vocabulary() {
+        // A caller must be able to discover the managed vocabulary + its enum
+        // values before sending managed_meta — the closed vocabulary is only
+        // usable if it is discoverable.
+        let d = describe_doc_type("task").expect("task is a known doc type");
+        let props = d
+            .schema
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .expect("task schema has properties");
+        for key in ["temper-stage", "temper-mode", "temper-effort"] {
+            assert!(
+                props.contains_key(key),
+                "managed key {key} must be discoverable"
+            );
+        }
+        assert!(
+            d.enum_fields
+                .get("temper-stage")
+                .is_some_and(|v| v.contains(&"backlog".to_string())),
+            "temper-stage enum values must be discoverable, got: {:?}",
+            d.enum_fields.get("temper-stage")
+        );
+    }
+
+    /// The example handed to a caller must be something they could actually send.
+    ///
+    /// Moved here from `tests/e2e/tests/mcp_round_trip_test.rs`
+    /// (`mcp_describe_doc_type_returns_usable_example`), which called the derivation
+    /// directly with an unused `#[sqlx::test]` pool — it exercised no round trip and needed
+    /// no database. It runs in the Unit job now rather than only the Integration one.
+    #[test]
+    fn the_managed_example_a_caller_is_handed_validates() {
+        let response = describe_doc_type("task").expect("task is a known doc type");
+
+        // The example carries only the doc-type's own required fields, so the system
+        // fields the base schema requires are injected here to make a whole document.
+        let mut synthetic = response
+            .example_managed_meta
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
+        for (key, value) in [
+            ("temper-slug", "test-slug"),
+            ("temper-title", "Test Title"),
+            ("temper-context", "test-ctx"),
+            ("temper-type", "task"),
+            ("temper-id", "00000000-0000-0000-0000-000000000000"),
+            ("temper-created", "2000-01-01T00:00:00Z"),
+        ] {
+            synthetic.insert(key.to_owned(), serde_json::Value::String(value.to_owned()));
+        }
+
+        let yaml: serde_yaml::Value =
+            serde_yaml::to_value(serde_json::Value::Object(synthetic)).expect("JSON→YAML");
+        let issues = validate_frontmatter("task", &yaml).expect("schema load");
+
+        assert!(
+            issues.is_empty(),
+            "an example a caller is told to copy must validate: {issues:?}"
+        );
+    }
+
+    /// The two states this task exists to make reachable, named rather than sampled.
+    ///
+    /// `enum_fields` is what a surface reads to answer *"which states does this kind of
+    /// work carry?"*, and this pins the answer to the schema rather than to whatever the
+    /// derivation happens to return today: exact set equality, not `contains`.
+    #[test]
+    fn the_states_each_kind_of_work_carries_are_exactly_the_schemas() {
+        let task = describe_doc_type("task").expect("task is a known doc type");
+        assert_eq!(
+            task.enum_fields.get("temper-stage").map(Vec::as_slice),
+            Some(
+                ["backlog", "in-progress", "done", "cancelled"]
+                    .map(String::from)
+                    .as_slice()
+            ),
+            "task stages must be exactly the four the schema declares"
+        );
+
+        let goal = describe_doc_type("goal").expect("goal is a known doc type");
+        assert_eq!(
+            goal.enum_fields.get("temper-status").map(Vec::as_slice),
+            Some(
+                ["active", "completed", "paused", "cancelled"]
+                    .map(String::from)
+                    .as_slice()
+            ),
+            "goal statuses must be exactly the four the schema declares"
+        );
+
+        // The negative half: a state belonging to one kind is not offered on the other.
+        assert!(
+            !task.enum_fields.contains_key("temper-status"),
+            "a task carries no temper-status, so the vocabulary must not offer one"
+        );
+        assert!(
+            !goal.enum_fields.contains_key("temper-stage"),
+            "a goal carries no temper-stage, so the vocabulary must not offer one"
         );
     }
 }

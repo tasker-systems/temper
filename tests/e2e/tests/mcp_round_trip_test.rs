@@ -298,85 +298,23 @@ async fn mcp_ingest_persists_content_as_chunks(pool: sqlx::PgPool) {
 }
 
 // ---------------------------------------------------------------------------
-// Task 30: describe_doc_type returns usable example
+// Tasks 30 & 31: the doc-type derivation — MOVED, not retired
 // ---------------------------------------------------------------------------
-
-/// describe_doc_type_impl("task") returns schema, required fields, enum values,
-/// and an example_managed_meta that passes validation.
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn mcp_describe_doc_type_returns_usable_example(_pool: sqlx::PgPool) {
-    let response =
-        temper_mcp::tools::doc_types::describe_doc_type_impl("task").expect("task is a known type");
-
-    // required_fields contains temper-stage
-    assert!(
-        response
-            .required_fields
-            .contains(&"temper-stage".to_string()),
-        "required_fields should contain temper-stage: {:?}",
-        response.required_fields,
-    );
-
-    // enum_fields has temper-stage with backlog
-    let stage_enums = response
-        .enum_fields
-        .get("temper-stage")
-        .expect("enum_fields should contain temper-stage");
-    assert!(
-        stage_enums.contains(&"backlog".to_string()),
-        "temper-stage enum values should include backlog: {:?}",
-        stage_enums,
-    );
-
-    // example_managed_meta round-trips through validate_frontmatter as valid
-    // We need to build a full synthetic frontmatter (adding system fields) to validate.
-    let example = response.example_managed_meta.clone();
-    let mut synthetic = example.as_object().cloned().unwrap_or_default();
-    // Inject system-managed fields that the schema requires
-    synthetic.insert("temper-slug".to_owned(), serde_json::json!("test-slug"));
-    synthetic.insert("temper-title".to_owned(), serde_json::json!("Test Title"));
-    synthetic.insert("temper-context".to_owned(), serde_json::json!("test-ctx"));
-    synthetic.insert("temper-type".to_owned(), serde_json::json!("task"));
-    synthetic.insert(
-        "temper-id".to_owned(),
-        serde_json::json!("00000000-0000-0000-0000-000000000000"),
-    );
-    synthetic.insert(
-        "temper-created".to_owned(),
-        serde_json::json!("2000-01-01T00:00:00Z"),
-    );
-
-    let yaml_value: serde_yaml::Value = serde_yaml::to_value(serde_json::Value::Object(synthetic))
-        .expect("JSON to YAML conversion");
-
-    let issues =
-        temper_workflow::schema::validate_frontmatter("task", &yaml_value).expect("schema load");
-
-    assert!(
-        issues.is_empty(),
-        "example_managed_meta (with system fields) should validate without issues: {:?}",
-        issues,
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Task 31: list_doc_types summary includes required_fields
-// ---------------------------------------------------------------------------
-
-/// build_doc_type_summary for task has has_schema=true and required_fields with temper-stage.
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn mcp_list_doc_types_includes_required_fields(_pool: sqlx::PgPool) {
-    let summary = temper_mcp::tools::doc_types::build_doc_type_summary("task");
-
-    assert!(summary.has_schema, "task should have a schema");
-    assert!(
-        summary
-            .required_fields
-            .contains(&"temper-stage".to_string()),
-        "task required_fields should include temper-stage: {:?}",
-        summary.required_fields,
-    );
-}
+//
+// `mcp_describe_doc_type_returns_usable_example` and
+// `mcp_list_doc_types_includes_required_fields` lived here and are gone. Neither made an
+// MCP round trip: both called `temper_mcp::tools::doc_types`' impl functions directly with
+// an unused `#[sqlx::test]` pool, so they cost a database to assert something about an
+// embedded JSON schema.
+//
+// The derivation moved to `temper_workflow::schema` (it is rendered by three doors now, not
+// one), and its tests moved with it — including the example's round trip through
+// `validate_frontmatter`, as `the_managed_example_a_caller_is_handed_validates`. Coverage is
+// unchanged in substance and runs in the Unit job rather than only Integration.
+//
+// What is genuinely NOT covered here, and was not covered before either: the doc-type reads
+// over a real MCP transport. The tools are exercised by `temper-mcp`'s own suite and, since
+// this change, over HTTP by `temper-api`'s `schema_read_test.rs`.
 
 // ---------------------------------------------------------------------------
 // Task 32: update resource changes content and reindexes chunks
