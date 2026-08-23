@@ -1616,6 +1616,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 output_format,
             ),
         },
+        Commands::Graph { cmd } => commands::graph::run(cmd, output_format),
         Commands::Trail { kind, r#ref } => commands::trail::run(kind, &r#ref, output_format),
         Commands::Version {
             checksum,

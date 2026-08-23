@@ -10,6 +10,7 @@ use crate::error::{ApiError, ApiResult};
 use temper_core::types::graph::{EdgeKind, Polarity};
 use temper_core::types::graph_atlas::{
     AtlasEdge, AtlasEntry, AtlasNode, AtlasSubgraph, EntryBounds, NodeHome, SliceRequest,
+    TRAVERSAL_MAX_SEEDS,
 };
 use temper_core::types::graph_home::{AtlasHome, HomeCogmap, HomeContext};
 use temper_core::types::graph_territory::{
@@ -724,11 +725,6 @@ pub async fn entry_orientation_slice(
         bounds,
     })
 }
-
-/// Bound on how many seeds one traversal may walk from. Mirrors the context door's `MAX_SEEDS`,
-/// which this function absorbed — a hop from a large selection must not become a hairball.
-/// Clamped loudly: the drop is reported, never silent.
-const TRAVERSAL_MAX_SEEDS: usize = 250;
 
 /// The traversal read (spec §5.2) — **moving inside a space you have already been given.**
 ///

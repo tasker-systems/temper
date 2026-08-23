@@ -142,6 +142,23 @@ pub struct AtlasEntry {
     pub bounds: EntryBounds,
 }
 
+/// The traversal read's seed bound, and the depth range it accepts.
+///
+/// **These live here so the service and every door read one copy.** `resource_lineage` is the
+/// cautionary case: API and MCP each carry their own literal of the same clamp, which is two
+/// copies with nothing tying them. A caller that cannot see a bound cannot be refused for
+/// exceeding it — it gets silently clamped instead, and `AtlasSubgraph` has no bounds field to
+/// report that in.
+///
+/// The SQL enforces the depth ceiling a second time as `LEAST(p_depth, 3)`. That copy is
+/// pre-existing and is not resolved here.
+pub const TRAVERSAL_MAX_SEEDS: usize = 250;
+
+/// Inclusive depth range for a traversal. Depth 0 is deliberately excluded: it is the
+/// induced-subgraph read, and asking a *traversal* to take no hops is a caller error rather than
+/// a degenerate walk.
+pub const TRAVERSAL_DEPTH_RANGE: std::ops::RangeInclusive<i32> = 1..=3;
+
 /// R4 request: focus seeds (required, non-empty), BFS depth, and an optional
 /// edge-kind filter that constrains the *traversal* (induced subgraph).
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]

@@ -34,6 +34,7 @@ Commands:
   cogmap         Operate on cognitive maps (create, read, reconcile, materialize, bind, grant)
   invocation     Operate on agent-invocation envelopes (open / close / show / list)
   steward        Team-self-cognition steward ingest trigger (delta / advance-watermark)
+  graph          Walk the knowledge graph — orient with no question, or move from where you are
   trail          Read the event trail (append-only history) of a graph element — a resource node or a relationship edge
   version        Print the CLI version, optionally with the running binary's SHA-256 or an offline (or online) manifest verdict
   update         Self-update the CLI to the latest release (curl-script installs only)
@@ -74,6 +75,7 @@ Options:
 | [`temper cogmap`](./cogmap.md) | Operate on cognitive maps (create, read, reconcile, materialize, bind, grant) |
 | [`temper invocation`](./invocation.md) | Operate on agent-invocation envelopes (open / close / show / list) |
 | [`temper steward`](./steward.md) | Team-self-cognition steward ingest trigger (delta / advance-watermark) |
+| [`temper graph`](./graph.md) | Walk the knowledge graph — orient with no question, or move from where you are. |
 | [`temper trail`](./trail.md) | Read the event trail (append-only history) of a graph element — a resource node or a relationship edge. |
 | [`temper version`](./version.md) | Print the CLI version, optionally with the running binary's SHA-256 or an offline (or online) manifest verdict. |
 | [`temper update`](./update.md) | Self-update the CLI to the latest release (curl-script installs only). |

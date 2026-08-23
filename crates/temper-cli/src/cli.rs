@@ -361,6 +361,15 @@ pub enum Commands {
         cmd: StewardCmd,
     },
 
+    /// Walk the knowledge graph — orient with no question, or move from where you are.
+    ///
+    /// The CLI peer of the web graph surface's two reads. Both are access-gated: you see
+    /// your own reach and nothing beyond it.
+    Graph {
+        #[command(subcommand)]
+        cmd: GraphCmd,
+    },
+
     /// Read the event trail (append-only history) of a graph element — a resource
     /// node or a relationship edge.
     ///
@@ -2207,6 +2216,51 @@ pub enum EdgeAction {
     },
 }
 
+/// `temper graph <cmd>` — the graph read surface.
+#[derive(Subcommand)]
+pub enum GraphCmd {
+    /// Read what your work is built around — for a reader who has asked nothing.
+    ///
+    /// Ranks the resources you can see by how connected they are and returns the most
+    /// connected of them **plus every edge among them**, so nothing comes back pointing at
+    /// something that was not drawn. The response declares its own bounds, including how many
+    /// resources it did not draw for having no connections at all.
+    ///
+    /// Wraps `GET /api/graph/entry`.
+    Entry {
+        /// Confine the ranking to these places — a context or cogmap ref, repeatable.
+        ///
+        /// Omitted, the ranking runs across everything you can see. Named, it answers
+        /// "a place, and no question at all" — ranking within the place rather than across
+        /// the whole corpus.
+        #[arg(long = "in")]
+        r#in: Vec<String>,
+        /// How many marks to draw. Unset lets the service's ruled default stand; the service
+        /// caps it regardless and says so.
+        #[arg(short = 'k')]
+        k: Option<i32>,
+    },
+    /// Move from where you are — walk outward from resources you already have.
+    ///
+    /// Walks your whole visible corpus from the given seeds; it is deliberately not confined
+    /// to the result set of any earlier question. Each returned node carries its title, type,
+    /// degree and an excerpt, so a walk answers without a `resource show` per node.
+    ///
+    /// Wraps `GET /api/graph/traverse`.
+    Traverse {
+        /// Seed to hop from — a resource ref, repeatable. At least one is required.
+        #[arg(long = "from", required = true)]
+        from: Vec<String>,
+        /// Hops to walk (1..=3). Unset lets the service default it to 1.
+        ///
+        /// Out-of-range values are refused rather than clamped: the traversal response
+        /// carries no bounds, so a clamped walk would be indistinguishable from the one you
+        /// asked for.
+        #[arg(long)]
+        depth: Option<i32>,
+    },
+}
+
 #[cfg(test)]
 mod section_flag_tests {
     use super::*;
@@ -2868,5 +2922,93 @@ mod skill_content_verb_tests {
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod graph_command_tests {
+    use super::*;
+    use clap::Parser;
+
+    const A: &str = "alpha-019e84ab-26ba-7560-9d34-c60d74a9fbe2";
+    const B: &str = "beta-019e84ab-26ba-7560-9d34-c60d74a9fbe3";
+
+    #[test]
+    fn entry_parses_with_nothing_named() {
+        let cli = Cli::parse_from(["temper", "graph", "entry"]);
+        match cli.command {
+            Commands::Graph {
+                cmd: GraphCmd::Entry { r#in, k },
+            } => {
+                assert!(r#in.is_empty(), "no anchors means the whole visible corpus");
+                assert_eq!(k, None, "k unset lets the service's ruled default stand");
+            }
+            _ => panic!("expected graph entry"),
+        }
+    }
+
+    #[test]
+    fn entry_collects_repeated_anchors_and_k() {
+        let cli = Cli::parse_from(["temper", "graph", "entry", "--in", A, "--in", B, "-k", "40"]);
+        match cli.command {
+            Commands::Graph {
+                cmd: GraphCmd::Entry { r#in, k },
+            } => {
+                assert_eq!(r#in, vec![A.to_string(), B.to_string()]);
+                assert_eq!(k, Some(40));
+            }
+            _ => panic!("expected graph entry"),
+        }
+    }
+
+    #[test]
+    fn traverse_collects_repeated_seeds() {
+        let cli = Cli::parse_from(["temper", "graph", "traverse", "--from", A, "--from", B]);
+        match cli.command {
+            Commands::Graph {
+                cmd: GraphCmd::Traverse { from, depth },
+            } => {
+                assert_eq!(from, vec![A.to_string(), B.to_string()]);
+                assert_eq!(depth, None, "unset depth is omitted from the wire entirely");
+            }
+            _ => panic!("expected graph traverse"),
+        }
+    }
+
+    #[test]
+    fn traverse_takes_a_depth() {
+        let cli = Cli::parse_from(["temper", "graph", "traverse", "--from", A, "--depth", "2"]);
+        match cli.command {
+            Commands::Graph {
+                cmd: GraphCmd::Traverse { depth, .. },
+            } => assert_eq!(depth, Some(2)),
+            _ => panic!("expected graph traverse"),
+        }
+    }
+
+    /// Clap must NOT range-check `--depth`. The refusal is ours, in
+    /// `actions::graph::validate_traverse_bounds`, because only it can explain *why* an
+    /// out-of-range depth is refused rather than clamped. A clap `value_parser` range would
+    /// produce a terse message that names the bound and not the reason.
+    #[test]
+    fn an_out_of_range_depth_parses_so_our_refusal_is_the_one_the_caller_reads() {
+        let cli = Cli::parse_from(["temper", "graph", "traverse", "--from", A, "--depth", "9"]);
+        match cli.command {
+            Commands::Graph {
+                cmd: GraphCmd::Traverse { depth, .. },
+            } => assert_eq!(
+                depth,
+                Some(9),
+                "clap accepts it; the action layer refuses it"
+            ),
+            _ => panic!("expected graph traverse"),
+        }
+    }
+
+    /// `--from` is what makes a traversal a traversal; clap enforces its presence so the action
+    /// layer's empty-seed refusal is a belt-and-braces case rather than the only guard.
+    #[test]
+    fn traverse_without_seeds_is_rejected_by_clap() {
+        assert!(Cli::try_parse_from(["temper", "graph", "traverse"]).is_err());
     }
 }
