@@ -15,6 +15,7 @@ pub mod data_artifacts;
 pub mod error;
 pub mod events;
 pub mod facets;
+pub mod graph;
 pub mod http;
 pub mod ingest;
 pub mod invocations;
@@ -167,6 +168,11 @@ impl TemperClient {
     /// Events sub-client.
     pub fn events(&self) -> events::EventClient<'_> {
         events::EventClient::new(&self.http)
+    }
+
+    /// Graph read sub-client — the entry orientation slice and the traversal walk.
+    pub fn graph(&self) -> graph::GraphClient<'_> {
+        graph::GraphClient::new(&self.http)
     }
 
     /// Context CRUD sub-client.

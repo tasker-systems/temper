@@ -142,6 +142,34 @@ pub struct AtlasEntry {
     pub bounds: EntryBounds,
 }
 
+/// The traversal read's seed bound, and the depth range it accepts.
+///
+/// **These live here so the service and every door read one copy.** `resource_lineage` is the
+/// cautionary case: API and MCP each carry their own literal of the same clamp, which is two
+/// copies with nothing tying them. A caller that cannot see a bound cannot be refused for
+/// exceeding it — it gets silently clamped instead, and `AtlasSubgraph` has no bounds field to
+/// report that in.
+///
+/// The SQL enforces the depth ceiling a second time as `LEAST(p_depth, 3)`. That copy is
+/// pre-existing and is not resolved here.
+pub const TRAVERSAL_MAX_SEEDS: usize = 250;
+
+/// Inclusive depth range for a traversal. Depth 0 is deliberately excluded: it is the
+/// induced-subgraph read, and asking a *traversal* to take no hops is a caller error rather than
+/// a degenerate walk.
+pub const TRAVERSAL_DEPTH_RANGE: std::ops::RangeInclusive<i32> = 1..=3;
+
+/// Clamp a requested traversal depth into [`TRAVERSAL_DEPTH_RANGE`].
+///
+/// **Both the service and every door call this rather than restating the bounds.** The constants
+/// alone were not enough: the service kept its own `depth.clamp(1, 3)` literal, so widening the
+/// range would have made the CLI stop refusing depth 4 while the service silently clamped it back
+/// to 3 — the exact silent-clamp failure the CLI's refusal exists to prevent. A shared *function*
+/// makes that drift impossible in a way a shared *constant* did not.
+pub fn clamp_traversal_depth(depth: i32) -> i32 {
+    depth.clamp(*TRAVERSAL_DEPTH_RANGE.start(), *TRAVERSAL_DEPTH_RANGE.end())
+}
+
 /// R4 request: focus seeds (required, non-empty), BFS depth, and an optional
 /// edge-kind filter that constrains the *traversal* (induced subgraph).
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -183,5 +211,37 @@ mod tests {
         assert!(json.contains("\"home\":\"cogmap\""));
         assert!(!json.contains("doc_type")); // None is skipped
         assert!(!json.contains("excerpt")); // None is skipped
+    }
+
+    #[test]
+    fn a_depth_inside_the_range_is_returned_unchanged() {
+        assert_eq!(clamp_traversal_depth(1), 1);
+        assert_eq!(clamp_traversal_depth(2), 2);
+        assert_eq!(clamp_traversal_depth(3), 3);
+    }
+
+    #[test]
+    fn a_depth_below_the_floor_is_raised_to_it() {
+        assert_eq!(clamp_traversal_depth(0), *TRAVERSAL_DEPTH_RANGE.start());
+        assert_eq!(clamp_traversal_depth(-7), *TRAVERSAL_DEPTH_RANGE.start());
+    }
+
+    #[test]
+    fn a_depth_above_the_ceiling_is_lowered_to_it() {
+        assert_eq!(clamp_traversal_depth(4), *TRAVERSAL_DEPTH_RANGE.end());
+        assert_eq!(clamp_traversal_depth(999), *TRAVERSAL_DEPTH_RANGE.end());
+    }
+
+    /// The point of the helper: whatever the range says, the clamp agrees with it. Widen the
+    /// constant and this still holds — which is what makes the service and the CLI unable to
+    /// disagree.
+    #[test]
+    fn the_clamp_never_leaves_the_declared_range() {
+        for d in -3..=12 {
+            assert!(
+                TRAVERSAL_DEPTH_RANGE.contains(&clamp_traversal_depth(d)),
+                "clamp({d}) escaped the declared range"
+            );
+        }
     }
 }
