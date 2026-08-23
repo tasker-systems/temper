@@ -52,10 +52,9 @@ describe("auth0-proxy", () => {
       expect(loc.searchParams.get("code_challenge")).toBe("abc123");
       expect(loc.searchParams.get("resource")).toBe("https://api.temperkb.io");
 
-      // The state should be a signed token, not the original client state.
+      // The state should be an encrypted token, not the original client state.
       const stashed = loc.searchParams.get("state");
       expect(stashed).not.toBeNull();
-      expect(stashed).not.toBe("client-csrf-state");
       expect(stashed).not.toBe("client-csrf-state");
       expect(stashed).toContain(".");
     });

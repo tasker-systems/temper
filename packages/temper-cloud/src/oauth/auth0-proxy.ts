@@ -11,13 +11,14 @@
  *
  * 1. MCP client → `GET /oauth/authorize` (our proxy)
  *    - `redirect_uri=http://127.0.0.1:<port>/callback`
- *    - We stash the original `redirect_uri` + `state` in a signed token, then
- *      redirect to Auth0's `/authorize` with `redirect_uri` rewritten to our relay
- *      (`https://<base>/api/auth/mcp-callback`) and `state` set to the signed token.
+ *    - We stash the original `redirect_uri` + `state` in an AES-256-GCM encrypted
+ *      token, then redirect to Auth0's `/authorize` with `redirect_uri` rewritten
+ *      to our relay (`https://<base>/api/auth/mcp-callback`) and `state` set to
+ *      the encrypted token.
  *
  * 2. Auth0 → `GET /api/auth/mcp-callback` (our relay)
- *    - Auth0 redirects here with `?code=...&state=<signed_token>`.
- *    - We verify the signed token, extract the original `redirect_uri` + `state`,
+ *    - Auth0 redirects here with `?code=...&state=<encrypted_token>`.
+ *    - We decrypt the token, extract the original `redirect_uri` + `state`,
  *      and redirect the browser to `http://127.0.0.1:<port>/callback?code=...&state=...`.
  *
  * 3. MCP client → `POST /oauth/token` (our proxy)
@@ -29,17 +30,31 @@
  * step 1, and the client's `code_verifier` goes to Auth0 in step 3. We never see
  * or touch either.
  *
+ * The stashed state is encrypted (not just signed) with AES-256-GCM, so the
+ * redirect_uri and client state are not visible to the browser or any
+ * intermediary. The encryption key is derived from `MCP_PROXY_SECRET` via
+ * scrypt (memory-hard KDF).
+ *
  * This proxy only activates for Auth0-fronted instances (no `AS_ISSUER`). SAML
  * instances use the Temper AS (`endpoints.ts`) directly.
  */
 
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "node:crypto";
 
 /** The relay URL that Auth0 redirects to after login. */
 const RELAY_PATH = "/api/auth/mcp-callback";
 
-/** How long a signed state token is valid (10 minutes, matching PENDING_FLOW_TTL_SECONDS). */
+/** How long a stashed state token is valid (10 minutes, matching PENDING_FLOW_TTL_SECONDS). */
 const STATE_TTL_MS = 10 * 60 * 1000;
+
+/** AES-256-GCM key length in bytes. */
+const KEY_LEN = 32;
+
+/** AES-GCM IV length (96 bits, per NIST SP 800-38D). */
+const IV_LEN = 12;
+
+/** scrypt salt — static, not secret. Its purpose is domain separation. */
+const SCRYPT_SALT = "temper-mcp-proxy-v1";
 
 function requireEnv(name: string): string {
   const v = process.env[name];
@@ -48,23 +63,33 @@ function requireEnv(name: string): string {
 }
 
 /**
- * Derives the HMAC key from a dedicated secret env var.
+ * Derives the AES-256 key from `MCP_PROXY_SECRET` via scrypt (memory-hard KDF).
  *
- * `MCP_PROXY_SECRET` must be a random string of at least 32 bytes, generated
- * once per instance (e.g. `openssl rand -base64 48`). It is never published in
- * any metadata or DCR response, so only the server can sign or verify state
- * tokens. Falls back to `AUTH_ISSUER` + `AUTH_AUDIENCE` for backward
- * compatibility with instances that have not yet set `MCP_PROXY_SECRET`, but
- * that fallback is deprecated and will be removed.
+ * scrypt is intentionally computationally expensive, satisfying the password-hash
+ * effort requirement that CodeQL checks for. The derived key is cached per process
+ * so the KDF cost is paid once at cold start, not per request.
+ *
+ * Falls back to a deprecated non-secret derivation for instances that have not
+ * yet set `MCP_PROXY_SECRET`. That fallback will be removed.
  */
-function signingKey(): string {
+let cachedKey: Buffer | undefined;
+
+function deriveKey(): Buffer {
+  if (cachedKey) return cachedKey;
+
   const secret = process.env.MCP_PROXY_SECRET;
   if (secret && secret.length >= 32) {
-    return secret;
+    cachedKey = scryptSync(secret, SCRYPT_SALT, KEY_LEN);
+    return cachedKey;
   }
-  // Deprecated fallback — public values, forgeable. Removed once all instances
-  // set MCP_PROXY_SECRET.
-  return [requireEnv("MCP_BASE_URL"), requireEnv("AUTH_AUDIENCE")].join("|");
+  // Deprecated fallback — public values, not a real secret. Removed once all
+  // instances set MCP_PROXY_SECRET.
+  cachedKey = scryptSync(
+    [requireEnv("MCP_BASE_URL"), requireEnv("AUTH_AUDIENCE")].join("|"),
+    SCRYPT_SALT,
+    KEY_LEN,
+  );
+  return cachedKey;
 }
 
 /** The stashed data we carry through Auth0's `state` parameter. */
@@ -77,46 +102,58 @@ interface StashedState {
   e: number;
 }
 
-function b64url(input: Buffer | string): string {
-  return Buffer.from(input).toString("base64url");
+function b64url(input: Buffer): string {
+  return input.toString("base64url");
 }
 
-// CodeQL: this is an HMAC-SHA256 message authentication code, not a password
-// hash. The `payload` carries stashed OAuth state through the browser round-trip
-// and is verified (not compared) on return. bcrypt/Argon2 are one-way and cannot
-// recover the stashed data. See RFC 2104 / JWT HS256 for the standard pattern.
-// lgtm[js/insufficient-password-hash]
-function sign(payload: string): string {
-  return b64url(createHmac("sha256", signingKey()).update(payload).digest());
+function fromB64url(input: string): Buffer {
+  return Buffer.from(input, "base64url");
 }
 
-/** Encodes `{r, s, e}` into a signed `base64url(json).base64url(hmac)` token. */
+/**
+ * Encrypts `{r, s, e}` into an AES-256-GCM sealed token:
+ * `base64url(iv).base64url(ciphertext).base64url(authTag)`.
+ *
+ * Both confidentiality and integrity are provided by GCM — no separate HMAC needed.
+ */
 export function encodeStashedState(redirectUri: string, oauthState: string): string {
   const payload: StashedState = {
     r: redirectUri,
     s: oauthState,
     e: Date.now() + STATE_TTL_MS,
   };
-  const json = b64url(JSON.stringify(payload));
-  return `${json}.${sign(json)}`;
+
+  const iv = randomBytes(IV_LEN);
+  const cipher = createCipheriv("aes-256-gcm", deriveKey(), iv);
+  const plaintext = Buffer.from(JSON.stringify(payload), "utf8");
+  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+
+  return `${b64url(iv)}.${b64url(ciphertext)}.${b64url(authTag)}`;
 }
 
-/** Verifies the HMAC and expiry, returning the stashed state. Throws on failure. */
+/** Decrypts and validates the token, returning the stashed state. Throws on failure. */
 function decodeStashedState(token: string): StashedState {
-  const dot = token.indexOf(".");
-  if (dot <= 0) throw new Error("malformed state token");
+  const parts = token.split(".");
+  if (parts.length !== 3) throw new Error("malformed state token");
 
-  const jsonPart = token.slice(0, dot);
-  const sigPart = token.slice(dot + 1);
-  const expected = sign(jsonPart);
+  const iv = fromB64url(parts[0]);
+  const ciphertext = fromB64url(parts[1]);
+  const authTag = fromB64url(parts[2]);
 
-  const a = Buffer.from(sigPart);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length || !timingSafeEqual(a, b)) {
-    throw new Error("invalid state signature");
+  if (iv.length !== IV_LEN) throw new Error("malformed state token");
+
+  const decipher = createDecipheriv("aes-256-gcm", deriveKey(), iv);
+  decipher.setAuthTag(authTag);
+
+  let plaintext: Buffer;
+  try {
+    plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  } catch {
+    throw new Error("invalid or tampered state token");
   }
 
-  const payload = JSON.parse(Buffer.from(jsonPart, "base64url").toString("utf8")) as StashedState;
+  const payload = JSON.parse(plaintext.toString("utf8")) as StashedState;
   if (Date.now() > payload.e) throw new Error("expired state token");
   return payload;
 }
@@ -155,7 +192,7 @@ function isLoopbackRedirect(uri: string): boolean {
  * `GET /oauth/authorize` — Auth0 proxy entry point.
  *
  * If the client's `redirect_uri` is a loopback URL, rewrites it to the relay and
- * stashes the original in a signed `state` token. If it's already a non-loopback
+ * stashes the original in an encrypted `state` token. If it's already a non-loopback
  * URL (e.g. `https://claude.ai/api/mcp/auth_callback`), passes through to Auth0
  * unchanged — those work fine with Auth0's exact-match allowlist.
  */
@@ -191,7 +228,7 @@ export async function proxyAuthorize(req: Request): Promise<Response> {
 /**
  * `GET /api/auth/mcp-callback` — relay that Auth0 redirects to after login.
  *
- * Verifies the signed state token, extracts the original redirect_uri + state,
+ * Decrypts the state token, extracts the original redirect_uri + state,
  * and redirects the browser to the MCP client's local callback server with the
  * authorization code.
  */
@@ -215,7 +252,7 @@ export function handleMcpCallback(req: Request): Response {
     return badRequest("Invalid or expired state token");
   }
 
-  // Defense-in-depth: even if the signing key were compromised, the relay must
+  // Defense-in-depth: even if the encryption key were compromised, the relay must
   // never redirect to a non-loopback URL. The authorize proxy only stashes
   // loopback redirect_uris, so a valid token should always carry one — but this
   // check ensures a forged or tampered token cannot turn the relay into an open
