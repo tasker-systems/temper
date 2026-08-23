@@ -108,6 +108,23 @@ pub(crate) enum ConnectionAuthority {
     /// a `principal_id` that points at nothing.
     SystemAdmin,
     /// Owner of the connection's owning team, who also manages the receiving team.
+    ///
+    /// **The two bars are deliberately different, and this is the place that would be "simplified"
+    /// first.** The owning-team side is `TeamRole::Owner` only (through `MachineAuthority`); the
+    /// target-team side is `Owner | Maintainer` (through `require_manage_on_team`). It is not an
+    /// oversight and it is not symmetry waiting to happen:
+    ///
+    /// - `machine_authz`'s `MAX_MACHINE_TEAM_ROLE` argues that `can_manage` **is governance** and
+    ///   caps machine principals below it for exactly that reason. A connection is a machine
+    ///   principal wearing an integration's clothes, so the human who controls one is held to
+    ///   ownership rather than to the general manage bar.
+    /// - Conferring read-reach on a receiving team asks a weaker question — may you speak for that
+    ///   team — which is what `can_manage` answers everywhere else.
+    ///
+    /// Flattening the first into the second widens connection control in the permissive direction.
+    /// It was proposed and rejected on 2026-08-23; the sibling widening that WAS taken (a
+    /// system-admin leg on subscription writes) went the other way, closing a gap the docs already
+    /// promised rather than lowering a bar.
     OwnerAndTargetManager,
     /// Neither — failing closed on a teamless connection, on a caller who does not own the owning
     /// team, and on a receiving team the caller does not manage.
