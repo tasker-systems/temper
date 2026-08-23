@@ -31,6 +31,7 @@ mod context_admin;
 mod grant;
 mod machine;
 mod read_gates;
+mod subscription;
 mod two_sided;
 
 // Wired by Task 7: `DbBackend::record_citation_audit` derives the subject with `finding_of_block`
@@ -57,6 +58,7 @@ pub(crate) use connection::{ConnectionAuthority, ConnectionControlAuthority, Con
 pub(crate) use context_admin::ContextAdminAuthority;
 pub(crate) use grant::{wire_subject, BornSubject, GrantWarrant, RevokeWarrant};
 pub(crate) use read_gates::{ActorHistoryAuthority, TeamReadAuthority, ACTOR_HISTORY_REFUSAL};
+pub(crate) use subscription::SubscriptionAuthority;
 pub(crate) use two_sided::{TwoSidedAuthority, TwoSidedScope};
 
 use async_trait::async_trait;
@@ -200,24 +202,29 @@ pub(crate) async fn authorize<A: ScopedAuthority>(
 ///
 /// # This suite is a conjunction of three claims, and it closes only two of them
 ///
-/// * **(a) the nine voices are unchanged** — the nine tests below, one per `ScopedAuthority` impl,
-///   each authority named explicitly rather than reached through an enumeration that could silently
-///   cover eight. This is the conjunct the suite exists for, and it is the one that is probed: the
+/// * **(a) every voice is unchanged** — one test below per `ScopedAuthority` impl, each authority
+///   named explicitly rather than reached through an enumeration that could silently cover one
+///   fewer. **The count that used to live in this sentence is gone on purpose.** It said "nine",
+///   and `SubscriptionAuthority` made it false — which is the failure conjunct (b) predicts, landing
+///   in the prose rather than in the tests. The list below is the count; a number here is a second
+///   copy of it, and `.github/scripts/check-openapi-routes.sh` already carries the same scar
+///   (*"This comment used to say 'exactly nine'. The allowlist had grown to 22 by the time anyone
+///   noticed"*). This is the conjunct the suite exists for, and it is the one that is probed: the
 ///   bite probe temporarily overrides `denial_for` on `TeamReadAuthority` — whose `denial` is
 ///   `NotFound` — to return `Forbidden`, which must red `team_read_authority_denies_in_one_voice`
 ///   and must green again once the override is removed. A suite that passes only because a
 ///   defaulted method cannot differ is not yet evidence of anything.
-/// * **(b) a tenth authority cannot appear uncovered** — **NOT guarded here, deliberately.** A
-///   `covered.len() == 9` assertion guards the *removal* direction; the failure mode is someone
-///   *adding* a tenth impl and never touching this file, which no assertion inside a Rust test can
+/// * **(b) a NEW authority cannot appear uncovered** — **NOT guarded here, deliberately.** A
+///   `covered.len()` assertion guards the *removal* direction; the failure mode is someone
+///   *adding* an impl and never touching this file, which no assertion inside a Rust test can
 ///   see (the language cannot enumerate trait impls at runtime, and `include_str!` takes no dynamic
 ///   path, so a source scan's file list decays somewhere less visible than what it replaced). A
 ///   count assertion here would only *look* like coverage. Declared an uncovered remainder in
 ///   `internal/superpowers/plans/2026-07-30-context-rename.md` Part 5; if the guard is later wanted it
 ///   belongs in `.github/scripts/audit-*.sh`, which pins a reviewed *set* and `rg`s the directory,
 ///   so a new `authz/*.rs` is caught for free.
-/// * **(c) `ContextAdminAuthority` is the only divergent authority** — the tenth impl, and the
-///   deliberate two-dialect exception, so it is asserted *positively* in the last two tests instead
+/// * **(c) `ContextAdminAuthority` is the only divergent authority** — the deliberate two-dialect
+///   exception, so it is asserted *positively* in the last two tests instead
 ///   of being asserted voice-unchanged. Its behavioral guarantee is Task 11's, not this suite's; see
 ///   the comment on those tests.
 #[cfg(test)]
@@ -258,7 +265,7 @@ mod tests {
         );
     }
 
-    // ── (a) the nine voices, each authority named explicitly ──────────────────
+    // ── (a) the voices, each authority named explicitly ───────────────────────
 
     #[test]
     fn grant_authority_denies_in_one_voice() {
@@ -305,6 +312,11 @@ mod tests {
     }
 
     #[test]
+    fn subscription_authority_denies_in_one_voice() {
+        assert_one_voice("SubscriptionAuthority", SubscriptionAuthority::None);
+    }
+
+    #[test]
     fn team_read_authority_denies_in_one_voice() {
         assert_one_voice("TeamReadAuthority", TeamReadAuthority::None);
     }
@@ -314,7 +326,7 @@ mod tests {
         assert_one_voice("ActorHistoryAuthority", ActorHistoryAuthority::None);
     }
 
-    // ── (c) the tenth authority: the deliberate two-dialect exception ─────────
+    // ── (c) the deliberate two-dialect exception ──────────────────────────────
     //
     // `ContextAdminAuthority` is NOT asserted voice-unchanged, because diverging is the point: one
     // gate, two dialects. The two tests below assert each dialect positively, which is a claim about
