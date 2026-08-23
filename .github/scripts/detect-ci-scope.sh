@@ -202,6 +202,33 @@ fi
 #     reference from outside the directory is a provenance COMMENT in migration
 #     20260804000030 naming `queries.txt`.
 #
+#   internal/  — the process tree: specs, plans, code reviews, agent briefs, and
+#     the `registers/` projections. Overwhelmingly `.md`, which the extension
+#     test already handled — but NOT entirely, and the exception was the whole
+#     reason this root was added. `internal/registers/coverage.yaml` is a
+#     projection over a REMOTE knowledge base that moves when a register is
+#     edited elsewhere, so it is committed on its own, often. Being `.yaml` it
+#     failed the extension test, and a one-file reproject therefore scoped as
+#     `full-ci` and ran the ENTIRE 67-minute pipeline plus a production deploy of
+#     all four Vercel projects. Measured on cc280f98 (one file changed,
+#     `internal/registers/coverage.yaml`) — and 10 of the 40 non-merge commits
+#     before it were the same shape.
+#
+#     Inertness proven by grep, per the bar below, not by the directory name:
+#       * no `include_str!`/`include_bytes!` anywhere under `crates/` or `tests/`
+#         names `internal/`. The complete set of paths those macros reach outside
+#         their own crate is agent-skills/, migrations/, schema-artifact/,
+#         scripts/install/, scripts/migration-declaration-corpus.txt and VERSION.
+#       * inert to cargo (`members = ["crates/*", "tests/e2e"]`) and to bun (a
+#         two-entry `workspaces` list).
+#       * every reference from `.github/` and from `crates/` is a `#` or `//!`
+#         COMMENT citing a spec — no script reads a file under it.
+#       * the one gate that OWNS an artifact here,
+#         `check-register-coverage-drift.sh`, is wired into NO workflow: it is run
+#         locally, and it reads the remote rather than the tree. So there is no CI
+#         gate to keep reachable, which is what separates this root from `docs/`
+#         (see DOCS_GATED_ROOTS) rather than from `scripts/`.
+#
 # THE BAR FOR ADDING A ROOT HERE IS THE ONE `scripts/` ITSELF FAILS. Do not be
 # tempted to widen this to `^scripts/`: three files under it are `include_str!`d
 # into Rust (`install/install.sh`, `install/containment-corpus.txt`,
@@ -210,7 +237,7 @@ fi
 # vetoes. Inertness is a property of a specific tree, proven by grep, never of a
 # top-level directory name.
 # ---------------------------------------------------------------------------
-NON_PRODUCT_ROOTS='^scripts/wayfind-spike/'
+NON_PRODUCT_ROOTS='^scripts/wayfind-spike/|^internal/'
 
 # FAIL CLOSED on an empty pattern. `grep -vE ''` matches EVERY line, so an empty
 # NON_PRODUCT_ROOTS would strip the whole changed-file list, leave
