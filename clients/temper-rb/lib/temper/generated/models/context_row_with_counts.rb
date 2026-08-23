@@ -16,6 +16,9 @@ require 'time'
 module Temper::Generated
   # Context with resource count — used by the list endpoint.
   class ContextRowWithCounts < ApiModelBase
+    # Whether the reading principal may **author into** this context — `context_authorable_by_profile`, which is also the container-write cascade arm of `can_modify_resource`. Because that arm keys on the **home**, not the resource, this one boolean answers the cascade for every resource homed here, which is why authority is carried on the container read rather than on every response that carries a resource.  **Read is strictly broader than this.** A `watcher`, and a read-only grant, reach the context and do not author it, so this must never be derived from visibility. See migration `20260712000010`'s `COMMENT ON FUNCTION`.  **Not the whole write gate.** `can_modify_resource` also admits the resource's home owner and explicit per-resource grants. A surface deriving offerability from this must union it with the owner check (`ResourceView.owner_profile_id`) under the `is_active` floor, and accepts that a reader whose only authority is a per-resource grant is not covered.
+    attr_accessor :can_write
+
     attr_accessor :created
 
     # A `kb_contexts.id` value.
@@ -40,6 +43,7 @@ module Temper::Generated
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
+        :'can_write' => :'can_write',
         :'created' => :'created',
         :'id' => :'id',
         :'kb_owner_id' => :'kb_owner_id',
@@ -65,6 +69,7 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
+        :'can_write' => :'Boolean',
         :'created' => :'Time',
         :'id' => :'String',
         :'kb_owner_id' => :'String',
@@ -98,6 +103,12 @@ module Temper::Generated
         end
         h[k.to_sym] = v
       }
+
+      if attributes.key?(:'can_write')
+        self.can_write = attributes[:'can_write']
+      else
+        self.can_write = nil
+      end
 
       if attributes.key?(:'created')
         self.created = attributes[:'created']
@@ -159,6 +170,10 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
+      if @can_write.nil?
+        invalid_properties.push('invalid value for "can_write", can_write cannot be nil.')
+      end
+
       if @created.nil?
         invalid_properties.push('invalid value for "created", created cannot be nil.')
       end
@@ -202,6 +217,7 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
+      return false if @can_write.nil?
       return false if @created.nil?
       return false if @id.nil?
       return false if @kb_owner_id.nil?
@@ -212,6 +228,16 @@ module Temper::Generated
       return false if @slug.nil?
       return false if @updated.nil?
       true
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] can_write Value to be assigned
+    def can_write=(can_write)
+      if can_write.nil?
+        fail ArgumentError, 'can_write cannot be nil'
+      end
+
+      @can_write = can_write
     end
 
     # Custom attribute writer method with validation
@@ -309,6 +335,7 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
+          can_write == o.can_write &&
           created == o.created &&
           id == o.id &&
           kb_owner_id == o.kb_owner_id &&
@@ -329,7 +356,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [created, id, kb_owner_id, kb_owner_table, name, owner_ref, resource_count, slug, updated].hash
+      [can_write, created, id, kb_owner_id, kb_owner_table, name, owner_ref, resource_count, slug, updated].hash
     end
 
     # Builds the object from hash

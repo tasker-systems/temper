@@ -33,7 +33,7 @@ async fn create_for_owner(
     let (owner_table, owner_id) =
         context_service::resolve_create_owner(pool, ProfileId::from(caller), owner.as_ref())
             .await?;
-    context_service::create(pool, &owner_table, owner_id, name).await
+    context_service::create(pool, ProfileId::from(caller), &owner_table, owner_id, name).await
 }
 
 /// Create a root team owned by `owner`. Returns the team id.

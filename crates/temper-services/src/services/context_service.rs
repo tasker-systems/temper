@@ -43,6 +43,10 @@ pub async fn list_visible(
                  WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = c.owner_id)
                  ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)
                END AS "owner_ref!",
+               -- Computed INSIDE the visibility-gated query (the WHERE below), so a context the
+               -- caller cannot read is absent rather than present-and-false. Grouping is safe:
+               -- `c.id` is in GROUP BY, so a function of it is functionally determined.
+               context_authorable_by_profile($1, c.id) AS "can_write!",
                COUNT(rh.resource_id) AS "resource_count!"
           FROM kb_contexts c
           LEFT JOIN kb_resource_homes rh
@@ -77,7 +81,10 @@ pub async fn get_visible(
                CASE c.owner_table
                  WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = c.owner_id)
                  ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)
-               END AS "owner_ref!"
+               END AS "owner_ref!",
+               -- Inside the same visibility gate as the WHERE below: an unreadable context is the
+               -- one shared refusal, never a row saying `can_write: false`.
+               context_authorable_by_profile($1, c.id) AS "can_write!"
           FROM kb_contexts c
          WHERE c.id = $2
            AND context_visible_to($1, c.id)
@@ -421,6 +428,7 @@ pub async fn resolve_create_owner(
 /// [`rename`] would make rename a repair affordance for a hole `create` keeps digging.
 pub async fn create(
     pool: &PgPool,
+    profile_id: ProfileId,
     owner_table: &str,
     owner_id: uuid::Uuid,
     name: &str,
@@ -443,7 +451,12 @@ pub async fn create(
                   CASE owner_table
                     WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = owner_id)
                     ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = owner_id)
-                  END AS "owner_ref!"
+                  END AS "owner_ref!",
+                  -- Placeholder: the real value is computed in a SEPARATE statement below.
+                  -- `context_authorable_by_profile` is STABLE, so called here it would read the
+                  -- snapshot from BEFORE this INSERT and could not see the row being created —
+                  -- the personal-owned arm would answer `false` for the creator's own context.
+                  false AS "can_write!"
         "#,
         *id,
         owner_table,
@@ -454,7 +467,20 @@ pub async fn create(
     .fetch_one(pool)
     .await?;
 
-    Ok(row)
+    // Authority, in its own statement so it sees the committed row. Computed rather than assumed
+    // true: a team-owned context is created under a role gate that is not the same predicate as
+    // `context_authorable_by_profile`, so the creator of one is not guaranteed to author it, and a
+    // hardcoded `true` would make the one response that can disagree with the write gate the one
+    // response nobody checks.
+    let can_write: bool = sqlx::query_scalar!(
+        r#"SELECT context_authorable_by_profile($1, $2) AS "can_write!""#,
+        *profile_id,
+        *id,
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(ContextRow { can_write, ..row })
 }
 
 /// Assert both `context_id` and `team_id` exist before a `kb_team_contexts` write —
@@ -1669,7 +1695,7 @@ mod tests {
     async fn create_stores_a_canonical_name(pool: PgPool) {
         let alice = mk_profile_ent(&pool, "alice").await;
 
-        let row = create(&pool, "kb_profiles", *alice, "  Temper   KB \n")
+        let row = create(&pool, alice, "kb_profiles", *alice, "  Temper   KB \n")
             .await
             .unwrap();
         assert_eq!(row.name, "Temper KB");

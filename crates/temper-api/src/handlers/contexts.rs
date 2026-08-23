@@ -61,7 +61,8 @@ pub async fn create(
     let caller = ProfileId::from(auth.0.profile().id);
     let (owner_table, owner_id) =
         context_service::resolve_create_owner(&state.pool, caller, body.owner.as_ref()).await?;
-    let row = context_service::create(&state.pool, &owner_table, owner_id, &body.name).await?;
+    let row =
+        context_service::create(&state.pool, caller, &owner_table, owner_id, &body.name).await?;
     Ok((StatusCode::CREATED, Json(row)))
 }
 
