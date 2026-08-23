@@ -19,6 +19,28 @@ on:
 permissions:
   contents: read
 
+# Supersede in-flight PR runs; never supersede a run on main.
+#
+# WHY THE TWO HALVES DIFFER, AND WHY THIS IS NOT ONE SETTING
+#   A PR gets pushed to repeatedly, and every push started a fresh full pipeline while the
+#   previous one kept running to completion. Measured on PR #761: six pushes 3-5 minutes
+#   apart produced SIX complete runs (32608585885, 32608795218, 32608948684, 32609109218,
+#   32609251193, 32609474823), and only the last one's verdict gated anything. At ~67
+#   minutes of compute per run that is ~400 minutes to answer one question.
+#
+#   The post-merge run on main is the OPPOSITE case and must never be cancelled. It is the
+#   only thing that catches semantic merge skew — a PR that was green against its own base
+#   but is wrong against the main it landed on — and each merge commit's run is the only
+#   run that commit will ever get. Cancelling one because the next merge arrived would
+#   leave a commit on main with no verdict at all.
+#
+#   `cancel-in-progress` therefore reads the event rather than being a constant, and the
+#   group keys on the PR number so two PRs never contend, falling back to the ref for
+#   pushes so main has a group of its own.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # ==========================================================================
   # Stage 0: Detect change scope
