@@ -34,10 +34,10 @@ totals:
   witness_table_note: 'absence of a witness table is not a defect: a register whose mechanism is unbuilt
     has no witnesses to name, and giving it an empty table would read as ''checked, found nothing'' rather
     than ''nothing to check yet'''
-  clauses: 161
+  clauses: 160
   clauses_withdrawn: 2
-  witness_citations: 129
-  witness_citations_unresolved: 8
+  witness_citations: 132
+  witness_citations_unresolved: 5
 registers:
 - goal_id: 019f25d6-e1a9-7360-8a35-6bdf8ef53940
   goal_title: 'Teams in Temper: usable multi-user collaboration surface'
@@ -473,8 +473,12 @@ registers:
     - 01a00a66-c0d8-7162-a4a9-967732e792c1
   - name: a-surface-claims-the-elevation-its-gate-enforces
     interrogatable: true
+    citations_enables:
+    - 01a02e84-02b5-79e3-bd65-237b38536dce
   - name: widening-a-gate-touches-every-surface-that-describes-it
     interrogatable: true
+    citations_enables:
+    - 01a02e84-02b5-79e3-bd65-237b38536dce
   - name: no-scope-gap-is-first-found-by-a-caller
     interrogatable: true
   - name: no-consequential-write-lands-on-a-door-that-cannot-confirm-it
@@ -482,12 +486,14 @@ registers:
   - name: no-refusal-names-a-reason-the-gate-did-not-apply
     interrogatable: true
   advancing:
-    total: 4
+    total: 7
     citing_nothing:
     - 019f766a-3fb0-7621-a3e1-6b72fa2e60a4
     - 019f9bca-0def-7f31-95dd-65ffc2717e46
     - 019fa9e4-0860-7d90-8b20-55eada87c302
     - 01a00b15-30fa-7031-9b6d-f7fbfeb863a2
+    - 01a02e84-8521-75a1-bf2c-9c4db1cbc508
+    - 01a02e84-ef69-75f2-a950-d8e1c26d6ea3
 - goal_id: 019fa619-f331-72e2-9569-c68774f7a1da
   goal_title: Prose is a defect surface — a document that lies costs what a bug costs
   context: '@j-cole-taylor/temper'
@@ -864,16 +870,16 @@ registers:
     interrogatable: false
   - name: no-derived-thing-poses-as-authored
     interrogatable: false
+  - name: no-reader-is-left-to-blame-themselves
+    interrogatable: false
   - name: legibility-is-never-bought-with-silent-omission
     interrogatable: false
   - name: no-internal-vocabulary-is-load-bearing
     interrogatable: false
   - name: the-unstructured-reader-is-never-worse-off
     interrogatable: false
-  - name: no-reader-is-left-to-blame-themselves
-    interrogatable: false
   advancing:
-    total: 27
+    total: 31
     citing_nothing:
     - 019f0e9a-f0ce-7de2-a848-0d3e4cd3add4
     - 019f2fbe-f4ac-7e83-955e-c4dc885856f3
@@ -901,6 +907,10 @@ registers:
     - 01a02931-81e8-7001-a423-ef0422044472
     - 01a02931-c1b9-74a0-81fa-9fc219988951
     - 01a02a32-2554-7e61-a02b-4237cbe6342e
+    - 01a02a88-4939-7f43-9204-f6b35afe4a25
+    - 01a02abe-22d5-7e40-83a3-fc3dbbd3fafa
+    - 01a02baf-e5bd-7543-a200-a9a2dd9f4dfb
+    - 01a02bb0-5962-7832-95dc-69014d191595
 - goal_id: 019fbdb9-f287-79c0-aab6-efa0b1de12c8
   goal_title: Every question to Temper is answered by a situated act — acts compose by piping, no constant
     decides between them, and no composition flatters
@@ -916,9 +926,10 @@ registers:
       kind: function
       resolves: true
       found_in: crates/temper-core/src/types/query/registry.rs
-    - name: the_stranded_mechanic_declares_no_door_at_all
+    - name: the_survey_act_reaches_every_door
       kind: function
-      resolves: false
+      resolves: true
+      found_in: crates/temper-core/src/types/query/registry.rs
     - name: follow_from_takes_resource_seeds_and_a_resource_bound
       kind: function
       resolves: true
@@ -947,9 +958,10 @@ registers:
       kind: function
       resolves: true
       found_in: crates/temper-core/src/types/query/registry.rs
-    - name: the_search_family_declares_seven_acts_including_the_anti_act
+    - name: the_search_family_declares_eight_acts_including_the_anti_act
       kind: function
-      resolves: false
+      resolves: true
+      found_in: crates/temper-core/src/types/query/registry.rs
     - name: unbuilt_acts_name_no_serving_function_and_built_ones_do
       kind: function
       resolves: true
@@ -1091,20 +1103,23 @@ registers:
       kind: function
       resolves: true
       found_in: crates/temper-core/src/types/query/envelope.rs
-    - name: a_declared_doc_type_narrows_the_result_and_the_echo_reports_a_filter_that_ran
+    - name: a_selection_bounds_the_find_act_it_is_piped_into
       kind: function
-      resolves: false
+      resolves: true
+      found_in: crates/temper-services/tests/query_run_composition_test.rs
     - name: a_composition_posted_as_json_comes_back_hydrated
       kind: function
       resolves: true
       found_in: tests/e2e/tests/query_route_e2e.rs
     citations_witnesses:
     - 01a00670-e069-7dd2-a213-7b1cf4317d02
+    - 01a02ebe-a3d2-7ad2-81df-541924c00e36
     citations_enables:
     - 019fbddb-7185-7e02-8686-fb6c1d2b185e
     - 019fbddc-227f-7e41-8167-b9eb0db0a63e
     - 019fbddc-bf0b-74c3-b48f-c06c799dec04
     - 01a00745-8318-7b03-8378-a9693266e199
+    - 01a02ebd-c153-7d22-acb6-d9fdec1b0f16
   - name: refusal-is-distinct-and-declared
     interrogatable: true
     register_table:
@@ -1180,6 +1195,18 @@ registers:
       kind: function
       resolves: true
       found_in: crates/temper-core/src/types/query/registry.rs
+    - name: survey_returns_only_the_regions_that_cleared_the_cut
+      kind: function
+      resolves: true
+      found_in: crates/temper-substrate/tests/cogmap_wayfind_scope.rs
+    - name: an_unbuilt_act_is_refused_as_not_implemented
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/src/types/query/validate/mod.rs
+    - name: every_declared_reach_has_a_production_call_site
+      kind: function
+      resolves: true
+      found_in: crates/temper-core/tests/act_door_coverage_reachability.rs
     unclassified_tokens:
     - admit
   - name: no-silent-question-substitution
@@ -1255,6 +1282,9 @@ registers:
       found_in: crates/temper-substrate/tests/query_plan_compile.rs
     citations_witnesses:
     - 01a00670-e069-7dd2-a213-7b1cf4317d02
+    - 01a02ebe-a3d2-7ad2-81df-541924c00e36
+    citations_enables:
+    - 01a02ebd-c153-7d22-acb6-d9fdec1b0f16
   - name: the-answer-never-flatters
     interrogatable: true
     register_table:
@@ -1285,7 +1315,7 @@ registers:
     citations_witnesses:
     - 01a00670-e069-7dd2-a213-7b1cf4317d02
   advancing:
-    total: 42
+    total: 44
     citing_nothing:
     - 019fd214-add4-7ab3-8653-0a07727bbfe2
     - 019fd25e-95f0-7373-9a6e-0574deea5ab3
@@ -1661,13 +1691,14 @@ registers:
     unreadable: 'body does not parse as a register: no clause section found'
   clauses: []
   advancing:
-    total: 6
+    total: 7
     citing_nothing:
     - 01a024f0-ad08-7162-baa3-dc9278ea373c
     - 01a025c6-6830-7a51-80bc-8515fdc6aa81
     - 01a0263d-99c4-7762-8b33-34e6ae4e9492
     - 01a0265e-85e4-7450-b279-7fedbce59555
     - 01a02719-97d1-7d23-b429-78425f25aa1e
+    - 01a02a98-3c45-7301-bdec-fbee8ffb9144
   coverage_rows_naming_no_clause:
   - a-declined-act-teaches-its-vocabulary
   - data-visibility-never-exceeds-its-owners
@@ -1712,7 +1743,7 @@ registers:
     arriving is never mistaken for what is not there
   context: '@j-cole-taylor/temper'
   read:
-    clause_form: heading+table
+    clause_form: table
     witness_table: false
     unreadable: 'no coverage table declares a witness column, so no witness of this register is machine-readable
       here. This is the CORRECT state for a register whose mechanism is unbuilt: it has no witnesses to
@@ -1729,8 +1760,6 @@ registers:
   - name: no-two-region-states-present-alike
     interrogatable: false
   - name: responsiveness-is-never-bought-with-a-false-claim
-    interrogatable: false
-  - name: acting-on-a-part
     interrogatable: false
   advancing:
     total: 5
