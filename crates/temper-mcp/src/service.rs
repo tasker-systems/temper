@@ -379,7 +379,7 @@ impl TemperMcpService {
     // ── Context (consolidated 4→1 read, 5→1 write) ────────────────────
 
     #[tool(
-        description = "Read a context with a `view` discriminator. Views: `list` (all contexts available to you), `get` (one context by UUID — requires `id`), `shape` (the fastest orientation move; requires `context` ref — returns an OBJECT, not an array: `regions` most salient first, plus `population`, `emptiness` and `materialized_at`), `metrics` (per-region analytics: centrality, cohesion, tension, reference standing, telos alignment; requires `context` ref). The `context` field takes a context ref (`@me/<slug>`, `+<team>/<slug>`, or UUID); `lens` narrows `shape`/`metrics`. On `shape`, an empty `regions` is never mute — read `emptiness`: `never_clustered` (it has never been materialized — nothing here is broken, the regions simply do not exist yet), `nothing_visible` (it materialized but nothing came back — it may have formed no regions, or none may hold a resource you can read; the two are one answer on purpose, so do NOT conclude you lack access), `lens_narrowed` (your `lens` excluded all `population` regions), or `unreadable_or_absent`. `population` is your all-lens region count and is >= `regions.len()`, equal when nothing was narrowed away."
+        description = "Read a context with a `view` discriminator. Views: `list` (all contexts available to you), `get` (one context by UUID — requires `id`), `shape` (the fastest orientation move; requires `context` ref — returns an OBJECT, not an array: `regions` most salient first, plus `population`, `emptiness` and `materialized_at`), `metrics` (per-region analytics: centrality, cohesion, tension, reference standing, telos alignment; requires `context` ref). The `context` field takes a context ref (`@me/<slug>`, `+<team>/<slug>`, or UUID); `lens` narrows `shape`/`metrics`. On `shape`, an empty `regions` is never mute — read `emptiness`: `never_clustered` (it has never been materialized — nothing here is broken, the regions simply do not exist yet; run context_materialize), `nothing_visible` (it materialized but nothing came back — it may have formed no regions, or none may hold a resource you can read; the two are one answer on purpose, so do NOT conclude you lack access), `lens_narrowed` (your `lens` excluded all `population` regions), or `unreadable_or_absent`. `population` is your all-lens region count and is >= `regions.len()`, equal when nothing was narrowed away."
     )]
     async fn context_read(
         &self,
@@ -400,6 +400,18 @@ impl TemperMcpService {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
         tools::contexts::context_manage(self, input).await
+    }
+
+    #[tool(
+        description = "Re-materialize a CONTEXT's regions when its formation delta since the last materialize clears the threshold; a safe no-op below threshold (materialized: false). The context-addressed peer of cogmap_materialize — the substrate's deterministic region-formation cadence, not an authored act. Pass the context by ref (`@me/<slug>`, `+<team>/<slug>`, or UUID). Requires context-write: DIRECT membership with an authoring role."
+    )]
+    async fn context_materialize(
+        &self,
+        Parameters(input): Parameters<temper_core::types::materialize::ContextMaterializeInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::cognitive_maps::context_materialize(self, input).await
     }
 
     // ── Schema (consolidated 3→1 read) ─────────────────────────────────
@@ -788,6 +800,38 @@ mod tests {
             names.iter().any(|n| n == "context_manage"),
             "context_manage is not advertised; router has {names:?}"
         );
+    }
+
+    /// **The two anchor kinds materialize through PEER tools, and both must be advertised.**
+    ///
+    /// This is the assertion whose absence let a defect sit: `context_materialize` was fully
+    /// implemented in `tools::cognitive_maps` — profile gate, anchor resolution, the same
+    /// `MaterializeOnThreshold` command, even `origin: Surface::Mcp` — and was never registered.
+    /// It compiled, clippy was happy (it is `pub`, so not dead code), and `cargo make check`
+    /// passed, because nothing anywhere asserted it should be reachable.
+    ///
+    /// The consequence was a hole only visible by comparing doors: CLI and HTTP could materialize
+    /// either anchor kind, MCP could materialize only a cogmap. So an agent reading
+    /// `context_read(view: shape)` and getting `never_clustered` — a cause that names an action —
+    /// had no action available at its own door, while the same agent on a cogmap did.
+    ///
+    /// Asserted as a PAIR rather than as one more single-tool test, because the singular test is
+    /// what was missing: nobody omits a tool they are thinking about. The pairing is the invariant.
+    #[test]
+    fn both_anchor_kinds_can_be_materialized_through_the_router() {
+        let names: Vec<String> = TemperMcpService::tool_router()
+            .list_all()
+            .into_iter()
+            .map(|t| t.name.to_string())
+            .collect();
+
+        for peer in ["cogmap_materialize", "context_materialize"] {
+            assert!(
+                names.iter().any(|n| n == peer),
+                "{peer} is not advertised, so one anchor kind cannot be materialized from MCP \
+                 while the other can; router has {names:?}"
+            );
+        }
     }
 
     /// The MCP `search` tool takes the same type the API door does — which is what lets one test

@@ -115,7 +115,9 @@ from — rides on `--sources` (and, with `--sources-as-edges`, `derived_from` ed
 `managed_meta`. Neither belongs in a facet.
 
 **Materialize** (recompute regions) is `temper cogmap materialize <MAP> [--threshold N]`
-on the CLI, or `cogmap_materialize` / `cogmap_materialize_delta` on the agent surface.
+on the CLI, or `cogmap_materialize` / `cogmap_materialize_delta` on the agent surface. A
+CONTEXT materializes the same way: `temper context materialize`, or `context_materialize` on the
+agent surface — the peer tool, registered 2026-08-24 after sitting implemented-but-unregistered.
 Regions only exist *after* a materialize.
 
 **A `shape` read with no regions says why.** `cogmap shape` returns an envelope —

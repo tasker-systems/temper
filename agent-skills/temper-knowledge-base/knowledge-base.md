@@ -23,10 +23,18 @@ drilling into action parameters.
 `cogmap_list`, `context_read`, `describe_schema`, `invocation_read`,
 `facets_read`, `steward_ingest_delta`
 
-**Writes (12):** `create_resource`, `update_resource`, `update_resource_meta`,
-`delete_resource`, `annotate_resource`, `relationship`, `facet_set`,
-`record_citation_audit`, `invocation_manage`, `segmented_ingest`,
-`cogmap_create`, `cogmap_materialize`, `context_manage`, `steward_advance_watermark`
+**Writes (15 listed; the list is known to be incomplete — see the note):** `create_resource`,
+`update_resource`, `update_resource_meta`, `delete_resource`, `annotate_resource`,
+`relationship`, `facet_set`, `record_citation_audit`, `invocation_manage`,
+`segmented_ingest`, `cogmap_create`, `cogmap_materialize`, `context_materialize`,
+`context_manage`, `steward_advance_watermark`
+
+> `[2026-08-24]` The count read **12** beside a list of **14**, and the list omits at least
+> `commit_data_artifact` and `declare_data_artifact_shape`, both advertised by the router and both
+> writes. The number now describes the list; the list still does not describe the router. This file
+> is hand-written — `generate_agent_skill_files()` deliberately does not emit it — so no gate
+> re-derives its contents, and the tool-NAME half of that gap is covered only by tests in
+> temper-mcp. A full reconciliation against `tool_router()` is worth doing and has not been done.
 
 **Declared off-MCP (CLI door):** grants (`resource_grant`/`revoke`,
 `cogmap_grant`/`revoke`), `admin_ledger`, cogmap bind/unbind, team invitations,
