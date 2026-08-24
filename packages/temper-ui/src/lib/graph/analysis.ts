@@ -2,6 +2,7 @@ import type {
 	CogmapRegionMetricsRow,
 	CogmapRegionRow,
 	CogmapStaleness,
+	ShapeEmptiness,
 } from '$lib/types/generated/cognitive_maps';
 import { relativeTime } from './relativeTime';
 
@@ -376,9 +377,64 @@ export function describeRegulation(n: number): string {
 	return `${n} ${n === 1 ? 'concept regulates' : 'concepts regulate'} this map.`;
 }
 
-/** How many groupings this place publishes, and in whose order they are shown. */
-export function describeGroupingCount(n: number): string {
-	if (n === 0) return 'This place has no groupings yet.';
+/**
+ * Why an empty groupings list is empty, in the reader's own terms.
+ *
+ * **This is the sentence the whole task turns on.** An empty list is four different situations, and
+ * until the envelope crossed the door this page spelled all four *"This place has no groupings
+ * yet."* — a sentence whose *yet* asserts `never_clustered`. For a reader under `nothing_visible`
+ * it claimed nothing had been built when the place had in fact been clustered; under
+ * `unreadable_or_absent` it described a place they cannot read at all as though it were their own
+ * and merely young. The same claim-a-cause-you-cannot-know defect was fixed at the CLI door in
+ * `16a9e357`; this was its last unfixed instance, and the one door where the reader is a person.
+ *
+ * **`nothing_visible` deliberately does not separate its two causes, and this wording must not
+ * either.** It is reached both when the anchor formed no regions at all and when it formed regions
+ * holding nothing this reader can see. Splitting them would tell a caller how many resources they
+ * cannot read, which is precisely what the member gate forbids
+ * (`migrations/20260713000050_region_visible_member_count.sql:137`, *"a caller is never told how
+ * many resources they cannot read"*). So the sentence names **both** possibilities and then says
+ * outright that the reader must not read it as missing access — because a reader told only the
+ * second half would conclude exactly that, and a reader told only the first would be misinformed.
+ * The reasoning is recorded at the SQL arm and in
+ * `internal/superpowers/specs/2026-08-23-anchor-shape-envelope-design.md`. **Do not add a fifth
+ * case here.** The ambiguity reads like a gap and is load-bearing.
+ *
+ * **`lens_narrowed` cannot arrive at this door today**, and is spelled anyway. `readAnchorAnalysis`
+ * passes no `lens` — the lens is a clustering-time parameter — and with `p_lens IS NULL` the shape
+ * function's row filter and its `population` count range over the same set, so arm 3 can never fire
+ * (`migrations/20260823000010_anchor_shape_envelope.sql:126-131`). It is written rather than thrown
+ * to a default so the match stays exhaustive over {@link ShapeEmptiness}: the day a caller does
+ * pass a lens, `tsc` will already have been satisfied and the reader will already have a sentence.
+ */
+const describeEmptyShape = (emptiness: ShapeEmptiness | null): string => {
+	switch (emptiness) {
+		case 'never_clustered':
+			return 'This place has never been grouped. Nothing here is broken — groupings are built by a separate pass over a place, and this one has not had one yet.';
+		case 'nothing_visible':
+			return 'This place has been grouped, and nothing came back that you can read. It may have formed no groupings at all, or the groupings it formed may hold only work that is not yours to see. Those two arrive as one answer on purpose, so this is not evidence that you are missing access.';
+		case 'lens_narrowed':
+			return 'This place has groupings, and the view you asked for excludes every one of them. Widening the view will show them.';
+		case 'unreadable_or_absent':
+			return 'This place could not be read. Either it is not readable by you or it is not there — this page deliberately cannot tell you which.';
+		case null:
+			// The read said the set was non-empty while handing back no rows. The server does not
+			// produce this — `emptiness` is non-NULL exactly when the row set is empty — so rather
+			// than invent a cause for a state that should not exist, say only what is known.
+			return 'No groupings came back, and the read did not say why.';
+	}
+};
+
+/**
+ * How many groupings this place publishes, and in whose order they are shown — or, at zero, **why
+ * there are none**.
+ *
+ * `emptiness` is required rather than optional on purpose. Making it optional would leave the old
+ * one-argument call compiling and still asserting a cause it cannot know; requiring it makes `tsc`
+ * name every site that has to supply one. See {@link describeEmptyShape}.
+ */
+export function describeGroupingCount(n: number, emptiness: ShapeEmptiness | null): string {
+	if (n === 0) return describeEmptyShape(emptiness);
 	return `${n} ${n === 1 ? 'grouping' : 'groupings'}, in the order this place itself ranks them.`;
 }
 

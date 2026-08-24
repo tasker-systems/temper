@@ -56,6 +56,9 @@ export const load: PageServerLoad = async ({ locals, params, url }): Promise<Ana
 		refusal: null as AnalysisRefusal | null,
 		regions: Promise.resolve([]),
 		metricsAvailable: Promise.resolve(true),
+		// No read ran, so there is no cause to report. The page never asks: the groupings section
+		// renders only on the measured branch, below the index and both refusals.
+		emptiness: Promise.resolve(null),
 		map: Promise.resolve(null),
 	} satisfies AnalysisViewData;
 
@@ -92,6 +95,11 @@ export const load: PageServerLoad = async ({ locals, params, url }): Promise<Ana
 		alsoNamed: rest.map((a) => describeAnchor(a, cogmaps)),
 		regions: derive(analysed, (a) => a.regions),
 		metricsAvailable: derive(analysed, (a) => a.metricsAvailable),
+		// From `measured`, NOT from `analysed`: the cause is an anchor-level fact the read carried,
+		// and `analyseShape` is the metrics join over the rows. Deriving it from the join would make
+		// the cause look like a conclusion drawn from the rows, which is exactly backwards -- the
+		// rows are empty and the cause is the only thing that says why.
+		emptiness: derive(measured, ({ emptiness }) => emptiness),
 		// The inner null still covers the two situations the page tells apart: a context, which
 		// genuinely has neither a charter nor a regulation set, and a map whose analytics read was
 		// declined. The read FAILING is the third state, and it is a rejection — never spelled as

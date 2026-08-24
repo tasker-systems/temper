@@ -9,6 +9,7 @@ import type {
 	CogmapAnalyticsRow,
 	CogmapRegionMetricsRow,
 	CogmapRegionRow,
+	ShapeEmptiness,
 } from '$lib/types/generated/cognitive_maps';
 import { sentenceOf } from '../../../test/sentence';
 import AnalysisPage from './AnalysisPage.svelte';
@@ -49,10 +50,14 @@ const fixture = JSON.parse(
  */
 type AnalysisMap = Awaited<AnalysisViewData['map']>;
 
-type ViewOverrides = Partial<Omit<AnalysisViewData, 'regions' | 'metricsAvailable' | 'map'>> & {
+type ViewOverrides = Partial<
+	Omit<AnalysisViewData, 'regions' | 'metricsAvailable' | 'map' | 'emptiness'>
+> & {
 	regions?: AnalysedRegion[] | Promise<AnalysedRegion[]>;
 	metricsAvailable?: boolean | Promise<boolean>;
 	map?: AnalysisMap | Promise<AnalysisMap>;
+	/** Settled like the three above, so a test writes the cause rather than a promise of one. */
+	emptiness?: ShapeEmptiness | null | Promise<ShapeEmptiness | null>;
 };
 
 /**
@@ -74,18 +79,20 @@ const base: AnalysisViewData = {
 	refusal: null,
 	regions: Promise.resolve([]),
 	metricsAvailable: Promise.resolve(true),
+	emptiness: Promise.resolve(null),
 	map: Promise.resolve(null),
 };
 
 const view = (over: ViewOverrides = {}): AnalysisViewData => {
-	const { regions, metricsAvailable, map, ...settled } = over;
+	const { regions, metricsAvailable, map, emptiness, ...settled } = over;
 	return {
 		...base,
 		...settled,
 		regions: always(regions ?? []),
 		metricsAvailable: always(metricsAvailable ?? true),
-		// `=== undefined` rather than `??`, on the field where a caller passing `null` means it.
+		// `=== undefined` rather than `??`, on the two fields where a caller passing `null` means it.
 		map: always(map === undefined ? null : map),
+		emptiness: always(emptiness === undefined ? null : emptiness),
 	};
 };
 
@@ -238,9 +245,62 @@ describe('the displaced payload is here, whole', () => {
 
 	it('the count says whose order it is showing', async () => {
 		await painted(contextView());
-		expect(screen.getByTestId('grouping-count').textContent).toBe(
+		expect(screen.getByTestId('grouping-count').textContent?.trim()).toBe(
 			'501 groupings, in the order this place itself ranks them.',
 		);
+	});
+});
+
+/**
+ * The empty view, at the one door where the reader is a person.
+ *
+ * `[2026-08-24]` Until the envelope crossed this door the page spelled every empty read *"This
+ * place has no groupings yet."*, whose *yet* asserts `never_clustered`. These render through the
+ * real component rather than asserting on {@link describeGroupingCount} alone, because the unit
+ * test cannot see the wiring — the field has to reach the template from the same awaited read as
+ * the rows, and a page that computed the right sentence and rendered the old one would pass there.
+ */
+describe('an empty groupings list tells the person which cause they are in', () => {
+	it('renders the cause the read carried, not a cause it guessed', async () => {
+		const { container } = await painted(contextView({ regions: [], emptiness: 'nothing_visible' }));
+		const said = container.querySelector('[data-testid="grouping-count"]')?.textContent ?? '';
+
+		expect(said).toContain('has been grouped');
+		expect(said).toContain('not evidence that you are missing access');
+		// The defect, stated as the assertion that would have caught it.
+		expect(said).not.toContain('no groupings yet');
+	});
+
+	/** Queried through each render's own `container`, so two pages can be compared in one test. */
+	const emptyPageSays = async (emptiness: ShapeEmptiness) => {
+		const { container } = await painted(contextView({ regions: [], emptiness }));
+		return container.querySelector('[data-testid="grouping-count"]')?.textContent ?? '';
+	};
+
+	it('a never-clustered place and an unreadable one do not read alike', async () => {
+		const never = await emptyPageSays('never_clustered');
+		const denied = await emptyPageSays('unreadable_or_absent');
+
+		expect(never).not.toBe(denied);
+		expect(never).toContain('Nothing here is broken');
+		expect(denied).toContain('cannot tell you which');
+	});
+
+	/**
+	 * The cause is streamed from the SAME read as the rows, so it must not paint before them. If it
+	 * arrived on its own promise a reader could be told WHY the list is empty while the list is
+	 * still arriving — a cause attached to a row set nobody has seen yet.
+	 */
+	it('does not paint a cause while the rows are still arriving', () => {
+		const { container } = render(AnalysisPage, {
+			data: contextView({
+				regions: new Promise<AnalysedRegion[]>(() => {}),
+				emptiness: 'never_clustered',
+			}),
+		});
+
+		expect(container.querySelector('[data-testid="grouping-count"]')).toBeNull();
+		expect(container.querySelector('.groupings')).toBeNull();
 	});
 });
 

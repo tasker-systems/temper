@@ -61,9 +61,64 @@ beforeEach(() => {
 	readAnchorSources.mockResolvedValue([CONTEXTS, []]);
 	readAnchorAnalysis.mockResolvedValue({
 		shape: SHAPE,
+		// `null` because SHAPE is non-empty, which is what the read returns for a non-empty row set.
+		emptiness: null,
 		metrics: METRICS,
 		analytics: null,
 		telos: null,
+	});
+});
+
+/**
+ * The cause reaches the page from the SAME read as the rows.
+ *
+ * Asserted here rather than only in the component, because the component is handed an
+ * `AnalysisViewData` a test built: it cannot see whether the load ever wired the field to the read
+ * at all. A load that dropped `emptiness` on the floor — the state this route was in until
+ * 2026-08-24 — would leave every component test green.
+ */
+describe('an empty groupings list arrives with the cause the read gave it', () => {
+	it('hands back the cause the read carried', async () => {
+		readAnchorAnalysis.mockResolvedValue({
+			shape: [],
+			emptiness: 'nothing_visible',
+			metrics: null,
+			analytics: null,
+			telos: null,
+		});
+
+		const data = await run('?in=ctx:@me/temper');
+
+		await expect(data.regions).resolves.toEqual([]);
+		await expect(data.emptiness).resolves.toBe('nothing_visible');
+	});
+
+	/**
+	 * One read, not two. The cause and the rows must be two views of a single call — if the load
+	 * started a second read for the cause, the page could show a cause drawn from a different read
+	 * than the rows it explains.
+	 */
+	it('does not start a second read to learn the cause', async () => {
+		readAnchorAnalysis.mockResolvedValue({
+			shape: [],
+			emptiness: 'never_clustered',
+			metrics: null,
+			analytics: null,
+			telos: null,
+		});
+
+		const data = await run('?in=ctx:@me/temper');
+		await Promise.all([data.regions, data.emptiness, data.metricsAvailable, data.map]);
+
+		expect(readAnchorAnalysis).toHaveBeenCalledOnce();
+	});
+
+	/** The branches that run no read report no cause, rather than a cause nothing observed. */
+	it('the index reports no cause, because it ran no read', async () => {
+		const data = await run();
+
+		await expect(data.emptiness).resolves.toBeNull();
+		expect(readAnchorAnalysis).not.toHaveBeenCalled();
 	});
 });
 

@@ -49,7 +49,7 @@
 	 * `{:catch}` still sees the failure.
 	 */
 	const measurements = $derived.by(() => {
-		const all = Promise.all([data.regions, data.metricsAvailable, data.map]);
+		const all = Promise.all([data.regions, data.metricsAvailable, data.map, data.emptiness]);
 		all.catch(() => {});
 		return all;
 	});
@@ -127,7 +127,7 @@
 			<div class="region-slot">
 				<RegionState state="arriving" label="measurements" />
 			</div>
-		{:then [regions, metricsAvailable, map]}
+		{:then [regions, metricsAvailable, map, emptiness]}
 			{@const reports = reportMetrics(regions)}
 			{@const columns = reports.filter((r) => r.asColumn)}
 			<section class="map-level" aria-labelledby="map-level-h">
@@ -163,17 +163,23 @@
 				<h2 id="groupings-h">How its work has been grouped</h2>
 				<!--
 					`[reviewed — 2026-08-21]` This is the one settled-empty state that does NOT route
-					through `RegionState`, and that is deliberate. `describeGroupingCount(0)` says
-					"This place has no groupings yet." — which is what a reader needs here and is more
-					specific than the shared vocabulary's "No measurements." Swapping it for the generic
-					wording would satisfy a consistency argument by making the page say less.
+					through `RegionState`, and that is deliberate. It is more specific than the shared
+					vocabulary's "No measurements.", and swapping it for the generic wording would
+					satisfy a consistency argument by making the page say less.
 
-					The clause it has to meet is that no two states present alike, and it does: this
-					sentence and the `{:catch}`'s "Measurements unavailable — nothing here was read"
+					The clause it has to meet is that no two states present alike, and it does: these
+					sentences and the `{:catch}`'s "Measurements unavailable — nothing here was read"
 					share no words. What `RegionState` protects against is drift between the ARRIVING
 					and FAILED spellings across surfaces, and both of those still come from it.
+
+					`[2026-08-24]` The empty spelling was ONE sentence — "This place has no groupings
+					yet." — for all four causes, and its *yet* asserted `never_clustered` on a read
+					that may have meant any of them. It now takes the cause the read carried. This was
+					the last door still claiming a cause it could not know; `16a9e357` fixed the CLI.
 				-->
-				<p class="lead" data-testid="grouping-count">{describeGroupingCount(regions.length)}</p>
+				<p class="lead" data-testid="grouping-count">
+					{describeGroupingCount(regions.length, emptiness)}
+				</p>
 
 				{#if !metricsAvailable}
 					<p class="unavailable" role="status" data-testid="metrics-unavailable">

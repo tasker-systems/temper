@@ -64,6 +64,7 @@ const ANALYSIS_VIEW_KEYS = {
 	refusal: true,
 	regions: true,
 	metricsAvailable: true,
+	emptiness: true,
 	map: true,
 } satisfies Record<keyof AnalysisViewData, true>;
 

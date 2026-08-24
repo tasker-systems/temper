@@ -283,10 +283,90 @@ describe('what a context genuinely does not have is declared, not fabricated', (
 	});
 
 	test('the grouping count says whose order it is showing', () => {
-		expect(describeGroupingCount(406)).toBe(
+		expect(describeGroupingCount(406, null)).toBe(
 			'406 groupings, in the order this place itself ranks them.',
 		);
-		expect(describeGroupingCount(0)).toBe('This place has no groupings yet.');
+		expect(describeGroupingCount(1, null)).toBe(
+			'1 grouping, in the order this place itself ranks them.',
+		);
+	});
+});
+
+/**
+ * The four causes, and the one claim the page used to make for all of them.
+ *
+ * The bite these have to take is against the OLD behaviour: `describeGroupingCount(0)` returned
+ * "This place has no groupings yet." unconditionally, and its *yet* asserts `never_clustered`. So
+ * the falsifying assertion is not "each arm produces a string" — every arm did, before — it is that
+ * the three arms which are NOT `never_clustered` produce a sentence the never-clustered reader would
+ * not be shown, and vice versa. A test that only checked non-emptiness would have passed against the
+ * defect.
+ */
+describe('an empty groupings list says which of the four causes it is', () => {
+	const ARMS = [
+		'never_clustered',
+		'nothing_visible',
+		'lens_narrowed',
+		'unreadable_or_absent',
+	] as const;
+
+	test('no two causes are spelled alike — the defect was one sentence for all four', () => {
+		const said = ARMS.map((a) => describeGroupingCount(0, a));
+		expect(
+			new Set(said).size,
+			`four causes produced ${new Set(said).size} distinct sentences`,
+		).toBe(4);
+		// The exact sentence the defect produced must no longer be reachable from ANY arm.
+		expect(said).not.toContain('This place has no groupings yet.');
+	});
+
+	test('never_clustered says nothing is broken, because nothing is', () => {
+		const s = describeGroupingCount(0, 'never_clustered');
+		expect(s).toContain('never been grouped');
+		expect(s).toContain('Nothing here is broken');
+	});
+
+	/**
+	 * The load-bearing one. `nothing_visible` is reached BOTH when the anchor formed no regions and
+	 * when it formed regions holding nothing this reader can see, and separating those two is what
+	 * the member gate forbids (`20260713000050:137`). So this asserts the wording carries both
+	 * possibilities AND tells the reader not to conclude they lack access — a sentence naming only
+	 * the invisible-members half would be the disclosure the gate refuses, and one naming only the
+	 * no-regions half is the wording defect that was already fixed at the other doors.
+	 */
+	test('nothing_visible names both of its causes and forbids the access conclusion', () => {
+		const s = describeGroupingCount(0, 'nothing_visible');
+		expect(s, 'must allow "it formed no groupings"').toContain('no groupings at all');
+		expect(s, 'must allow "you cannot see into them"').toContain('not yours to see');
+		expect(s, 'must not let the reader conclude they lack access').toContain(
+			'not evidence that you are missing access',
+		);
+		// It must NOT claim the place was never grouped — it was.
+		expect(s).toContain('has been grouped');
+	});
+
+	test('unreadable_or_absent refuses to say which of the two it is', () => {
+		const s = describeGroupingCount(0, 'unreadable_or_absent');
+		expect(s).toContain('not readable by you or it is not there');
+		expect(s).toContain('cannot tell you which');
+	});
+
+	test('lens_narrowed points at the lens, not at the place', () => {
+		const s = describeGroupingCount(0, 'lens_narrowed');
+		expect(s).toContain('This place has groupings');
+		expect(s).toContain('Widening the view');
+	});
+
+	/**
+	 * `emptiness: null` on an empty set is a state the server does not produce — the SQL sets it
+	 * non-NULL exactly when the row set is empty — so the receiver must not invent a cause for it.
+	 */
+	test('no cause given is said as no cause given, never guessed at', () => {
+		const s = describeGroupingCount(0, null);
+		expect(s).toBe('No groupings came back, and the read did not say why.');
+		for (const claim of ['never been grouped', 'has been grouped', 'not readable by you']) {
+			expect(s, `must not assert "${claim}"`).not.toContain(claim);
+		}
 	});
 });
 

@@ -18,6 +18,7 @@ import type {
 	CogmapAnalyticsRow,
 	CogmapRegionMetricsRow,
 	CogmapRegionRow,
+	ShapeEmptiness,
 } from '$lib/types/generated/cognitive_maps';
 import type { AtlasEntry, AtlasSubgraph } from '$lib/types/generated/graph_atlas';
 import type { QueryResponse } from '$lib/types/generated/query';
@@ -211,6 +212,24 @@ export interface AnalysisScenario {
 	ref?: string;
 	/** The region ROWS — `AnchorShape.regions`, as `readAnchorAnalysis` hands them to the door. */
 	shape: CogmapRegionRow[];
+	/**
+	 * `AnchorShape.emptiness` — why `shape` is empty, when it is.
+	 *
+	 * **Optional, and absent from the committed bundle**, which was captured on 2026-08-20 against
+	 * the deployed API — before the shape read carried an envelope at all. So the one zero-row
+	 * scenario in it (`cogmap_never_materialized`) resolves to `null` here and `/dev/analysis`
+	 * renders the no-cause-given wording for it.
+	 *
+	 * That is deliberate rather than an omission waiting to be tidied. The obvious tidy is to write
+	 * `'never_clustered'` into the fixture — its `analytics.staleness.materialized_at` is `null`, so
+	 * the value would even be *right* — but the capture never observed an `emptiness`, and a fixture
+	 * that states what a read said when the read did not say it is a synthesized guarantee. The
+	 * other tidy, deriving the arm here from the captured fields, would put a second copy of
+	 * `anchor_shape`'s arm cascade in TypeScript, free to drift from the SQL that owns it. The
+	 * remainder is named instead: this bundle needs a re-capture to exercise the caused wordings on
+	 * `/dev/analysis`, and until it gets one the four sentences are covered by their own tests.
+	 */
+	emptiness?: ShapeEmptiness | null;
 	region_metrics: CogmapRegionMetricsRow[] | null;
 	analytics?: CogmapAnalyticsRow | null;
 }
@@ -255,6 +274,7 @@ export function analysisViewFor(bundle: AnalysisBundle, name: string): AnalysisV
 		refusal: null,
 		regions: settled(shape.regions),
 		metricsAvailable: settled(shape.metricsAvailable),
+		emptiness: settled(s.emptiness ?? null),
 		map: settled(
 			s.analytics
 				? {

@@ -5,6 +5,7 @@ import type {
 	CogmapRegionMetricsRow,
 	CogmapRegionRow,
 	CogmapRow,
+	ShapeEmptiness,
 } from '$lib/types/generated/cognitive_maps';
 import type { ContextRowWithCounts } from '$lib/types/generated/context';
 import type { AtlasEntry, AtlasSubgraph } from '$lib/types/generated/graph_atlas';
@@ -243,6 +244,7 @@ export async function readAnchorAnalysis(
 	anchor: Anchor,
 ): Promise<{
 	shape: CogmapRegionRow[];
+	emptiness: ShapeEmptiness | null;
 	metrics: CogmapRegionMetricsRow[] | null;
 	analytics: CogmapAnalyticsRow | null;
 	telos: ResourceView | null;
@@ -266,8 +268,27 @@ export async function readAnchorAnalysis(
 			)
 		: null;
 
-	// The envelope is unwrapped at the door, for the same reason `readAnchorRegions` unwraps it:
-	// `analyseShape` joins region rows to their analytics-tier siblings and reads none of the
-	// anchor-level fields, so carrying them would widen `AnalysisViewData` for nothing.
-	return { shape: shape.regions, metrics, analytics, telos };
+	// **`emptiness` is carried; the rest of the envelope is still dropped here.** This door is the
+	// one place a PERSON meets an empty region set, and until this field crossed it the page said
+	// "This place has no groupings yet." for all four causes -- asserting `never_clustered` on a
+	// read that may have meant any of them. That is the same claim-a-cause-you-cannot-know defect
+	// `16a9e357` fixed at the CLI door, and this is its last unfixed instance.
+	//
+	// **`population` is deliberately NOT carried, and the reason is arithmetic rather than taste.**
+	// It is the all-lens denominator, and this door passes no `lens` (see above -- the lens is a
+	// clustering-time parameter). With `p_lens IS NULL` the shape function's row filter and its
+	// `population` count range over the same `regs` set, so `population === shape.regions.length`
+	// on every read this door can make. Surfacing it would print the row count twice under two
+	// names. **`lens_narrowed` is unreachable here for the same reason**: arm 3 fires only when
+	// `regs` is non-empty while the lens-filtered rows are empty, which no NULL lens can produce
+	// (`migrations/20260823000010_anchor_shape_envelope.sql:126-131`). The receiver still spells
+	// that arm, because the type has four and an exhaustive match is what keeps a future
+	// lens-passing caller honest -- but it is labelled unreachable rather than left to look live.
+	//
+	// **`materialized_at` is not carried either.** The page already shows a clock for maps, from
+	// `analytics.staleness`; adding a second one from a different read would put two timestamps
+	// about one place on one page with nothing saying why they differ. It is also stamped at the
+	// materialize transaction's START rather than at the end of the clustering work, so it runs
+	// systematically early -- a skew worth fixing before it is put in front of a reader, not after.
+	return { shape: shape.regions, emptiness: shape.emptiness, metrics, analytics, telos };
 }
