@@ -177,9 +177,29 @@
 					that may have meant any of them. It now takes the cause the read carried. This was
 					the last door still claiming a cause it could not know; `16a9e357` fixed the CLI.
 				-->
-				<p class="lead" data-testid="grouping-count">
-					{describeGroupingCount(regions.length, emptiness)}
-				</p>
+				{#if regions.length === 0}
+					<!--
+						The empty spelling gets `.declared-absent` and `role="status"`, and neither is
+						cosmetic. `.lead` is sized for the one-line row count this used to be; these
+						sentences are declarations of the same species as `CONTEXT_HAS_NO_MAP_READOUT`,
+						which already uses that treatment. And this is the WHOLE content of the section
+						for a screen-reader user, arriving after a wait they were told about — the
+						`{#await}` pending branch's `RegionState` is `role="status"`, and it is torn down
+						when the read settles, so without this nothing is announced at all.
+
+						Stated honestly: this is a HALF fix for the announcement. The node is inserted
+						together with its text rather than mutated inside a region that already existed,
+						and AT behaviour there varies. The reliable shape is a live region mounted before
+						the await settles; that is a change to how this route streams, not to this line.
+					-->
+					<p class="lead declared-absent" data-testid="grouping-count" role="status">
+						{describeGroupingCount(0, emptiness)}
+					</p>
+				{:else}
+					<p class="lead" data-testid="grouping-count">
+						{describeGroupingCount(regions.length, emptiness)}
+					</p>
+				{/if}
 
 				{#if !metricsAvailable}
 					<p class="unavailable" role="status" data-testid="metrics-unavailable">

@@ -327,6 +327,37 @@ describe('an empty groupings list says which of the four causes it is', () => {
 	});
 
 	/**
+	 * This is the one cause with a real next move, and there is no in-app way to take it — so the
+	 * sentence has to send the reader outside the page or leave them waiting for something that will
+	 * never happen on its own. The CLI and MCP doors both name the command; withholding it from the
+	 * reader who cannot look it up in a Rust signature inverts the point of this work.
+	 */
+	test('never_clustered names the command, the permission and who to ask without it', () => {
+		const s = describeGroupingCount(0, 'never_clustered');
+		expect(s, 'must name the command').toContain('temper context materialize');
+		expect(s, 'must name the permission it needs').toContain('write access');
+		expect(s, 'must say what to do without that permission').toContain('ask whoever does');
+		// Agentless passive is what made the first draft unactionable: it named no actor at all.
+		expect(s).not.toContain('are built by a separate pass');
+	});
+
+	/**
+	 * `describeStaleness` renders on the SAME page for the SAME never-materialized anchor and spells
+	 * this event "worked out". A second verb for one event reads as a second thing that has not
+	 * happened, which is a comprehension regression rather than a wording preference.
+	 */
+	test("never_clustered shares describeStaleness's verb for the one event they both describe", () => {
+		expect(
+			describeStaleness({
+				materialized_at: null,
+				latest_touch: null,
+				is_stale: true,
+			}),
+		).toContain('worked out');
+		expect(describeGroupingCount(0, 'never_clustered')).toContain('worked out');
+	});
+
+	/**
 	 * The load-bearing one. `nothing_visible` is reached BOTH when the anchor formed no regions and
 	 * when it formed regions holding nothing this reader can see, and separating those two is what
 	 * the member gate forbids (`20260713000050:137`). So this asserts the wording carries both
@@ -349,6 +380,29 @@ describe('an empty groupings list says which of the four causes it is', () => {
 		const s = describeGroupingCount(0, 'unreadable_or_absent');
 		expect(s).toContain('not readable by you or it is not there');
 		expect(s).toContain('cannot tell you which');
+	});
+
+	/**
+	 * On this route the `<h1>` has already rendered the place's title, from the reader's own anchor
+	 * list. So a sentence claiming the page cannot say whether the place is there contradicts the
+	 * heading directly above it. Scoped to the measurements, it does not.
+	 */
+	test('unreadable_or_absent does not contradict the heading that already named the place', () => {
+		const s = describeGroupingCount(0, 'unreadable_or_absent');
+		expect(s).toContain('The measurements for this place');
+		expect(s, 'the page has already named the place in its h1').not.toMatch(
+			/^This place could not be read/,
+		);
+	});
+
+	/** The guard has to rest on something the reader can parse, not on how answers reach a page. */
+	test('nothing_visible grounds its guard in the page, not in the wire', () => {
+		const s = describeGroupingCount(0, 'nothing_visible');
+		expect(s).toContain('This page deliberately cannot tell you which');
+		expect(s, 'system-facing bridge the reader has no referent for').not.toContain(
+			'arrive as one answer',
+		);
+		expect(s, 'must offer the ask-for-access half of the next move').toContain('ask whoever runs');
 	});
 
 	test('lens_narrowed points at the lens, not at the place', () => {

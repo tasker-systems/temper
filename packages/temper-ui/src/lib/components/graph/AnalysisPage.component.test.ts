@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fireEvent, render, screen } from '@testing-library/svelte';
+import { tick } from 'svelte';
 import { describe, expect, it, vi } from 'vitest';
 import { type AnalysedRegion, analyseShape, METRICS } from '$lib/graph/analysis';
 import type { AnalysisViewData } from '$lib/graph/view';
@@ -245,7 +246,7 @@ describe('the displaced payload is here, whole', () => {
 
 	it('the count says whose order it is showing', async () => {
 		await painted(contextView());
-		expect(screen.getByTestId('grouping-count').textContent?.trim()).toBe(
+		expect(screen.getByTestId('grouping-count').textContent).toBe(
 			'501 groupings, in the order this place itself ranks them.',
 		);
 	});
@@ -290,14 +291,24 @@ describe('an empty groupings list tells the person which cause they are in', () 
 	 * The cause is streamed from the SAME read as the rows, so it must not paint before them. If it
 	 * arrived on its own promise a reader could be told WHY the list is empty while the list is
 	 * still arriving — a cause attached to a row set nobody has seen yet.
+	 *
+	 * **The flush is what makes this bite.** A first draft asserted synchronously, immediately after
+	 * `render`, and that could never fail: nothing promise-based has resolved at that point, so a
+	 * hoisted `{#await data.emptiness}` block above the real await would have passed it. Draining the
+	 * microtask queue lets `emptiness` — which settles now — paint if anything is wired to let it,
+	 * while `regions` never settles. Only then is a null assertion evidence of anything.
 	 */
-	it('does not paint a cause while the rows are still arriving', () => {
+	it('does not paint a cause while the rows are still arriving', async () => {
 		const { container } = render(AnalysisPage, {
 			data: contextView({
-				regions: new Promise<AnalysedRegion[]>(() => {}),
-				emptiness: 'never_clustered',
+				regions: new Promise<AnalysedRegion[]>(() => {}), // never settles
+				emptiness: 'never_clustered', // settles immediately
 			}),
 		});
+
+		// Drain: anything awaiting only `emptiness` has had every chance to render by now.
+		for (let i = 0; i < 8; i++) await Promise.resolve();
+		await tick();
 
 		expect(container.querySelector('[data-testid="grouping-count"]')).toBeNull();
 		expect(container.querySelector('.groupings')).toBeNull();

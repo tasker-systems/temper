@@ -400,6 +400,26 @@ export function describeRegulation(n: number): string {
  * `internal/superpowers/specs/2026-08-23-anchor-shape-envelope-design.md`. **Do not add a fifth
  * case here.** The ambiguity reads like a gap and is load-bearing.
  *
+ * **Each sentence names a next move, because the four causes differ in what to DO, not in tone.**
+ * `never_clustered` is the only one with an action, and it names the command, the permission it
+ * needs, and who to ask without it — the CLI and MCP doors already say *run `context materialize`*,
+ * and withholding it from the one reader who cannot look it up in a Rust signature inverts the whole
+ * point of this work. There is no in-app way to materialize, so the sentence says the exit is
+ * outside the page rather than leaving the reader to wait for something that will never happen.
+ *
+ * **One verb for one event.** `describeStaleness` already spells this event *"worked out"*, and it
+ * renders on the SAME page eight lines above this one for the same never-materialized anchor
+ * (pinned by `analysis.captured.test.ts`'s `cogmap_never_materialized` fixture). An earlier draft
+ * said *"groupings are built by a separate pass"* — a third noun and a third verb for one thing,
+ * which reads to a non-expert as two separate things that have each not happened.
+ *
+ * **`unreadable_or_absent` is about the MEASUREMENTS, not the place's existence.** On this route the
+ * `<h1>` has already rendered the place's title, from the reader's own anchor list — so a sentence
+ * claiming the page cannot say whether it is there contradicts the heading directly above it. The
+ * existence was never disclosed BY this arm (it came from the reader's own listing), so this is a
+ * page contradicting itself rather than a leak; the wording is scoped to what this read could not
+ * fetch.
+ *
  * **`lens_narrowed` cannot arrive at this door today**, and is spelled anyway. `readAnchorAnalysis`
  * passes no `lens` — the lens is a clustering-time parameter — and with `p_lens IS NULL` the shape
  * function's row filter and its `population` count range over the same set, so arm 3 can never fire
@@ -410,13 +430,13 @@ export function describeRegulation(n: number): string {
 const describeEmptyShape = (emptiness: ShapeEmptiness | null): string => {
 	switch (emptiness) {
 		case 'never_clustered':
-			return 'This place has never been grouped. Nothing here is broken — groupings are built by a separate pass over a place, and this one has not had one yet.';
+			return 'This place has never been grouped — its groupings have not been worked out yet. Nothing here is broken. Anyone with write access to the place can work them out with `temper context materialize` (or `temper cogmap materialize` for a map); if you do not have write access, ask whoever does.';
 		case 'nothing_visible':
-			return 'This place has been grouped, and nothing came back that you can read. It may have formed no groupings at all, or the groupings it formed may hold only work that is not yours to see. Those two arrive as one answer on purpose, so this is not evidence that you are missing access.';
+			return 'This place has been grouped, and nothing came back that you can read. It may have formed no groupings at all, or the groupings it formed may hold only work that is not yours to see. This page deliberately cannot tell you which, so it is not evidence that you are missing access — if you expected to find work here, ask whoever runs this place.';
 		case 'lens_narrowed':
-			return 'This place has groupings, and the view you asked for excludes every one of them. Widening the view will show them.';
+			return 'This place has groupings, and the view you have selected excludes every one of them. Widening the view — or clearing it altogether — will bring them back.';
 		case 'unreadable_or_absent':
-			return 'This place could not be read. Either it is not readable by you or it is not there — this page deliberately cannot tell you which.';
+			return 'The measurements for this place could not be read. Either they are not readable by you or it is not there any more — this page deliberately cannot tell you which, because saying which would answer the other. If you followed a link here, check it with whoever sent it.';
 		case null:
 			// The read said the set was non-empty while handing back no rows. The server does not
 			// produce this — `emptiness` is non-NULL exactly when the row set is empty — so rather
