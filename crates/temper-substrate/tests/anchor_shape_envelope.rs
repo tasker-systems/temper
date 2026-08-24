@@ -528,3 +528,56 @@ async fn population_equals_the_row_count_when_the_lens_matches_every_region(pool
         "the row set is non-empty, so there is nothing to explain: {out:?}"
     );
 }
+
+/// **The cogmap self-read arm must not admit a uuid no map carries.**
+///
+/// That disjunct is a tautology over two values the CALLER supplies — `p_principal_id =
+/// p_anchor_id` — so before the `EXISTS` on `kb_cogmaps` it verified nothing. That was harmless
+/// while this function returned a bare row set, because a fabricated uuid and a real-but-empty map
+/// both answered a byte-identical `[]`. The envelope changed it: the arm began answering
+/// `never_clustered`, a fact about an anchor, and for a materialized map it would have disclosed the
+/// clock — an existence-and-clock oracle over any uuid, from a gate that checked nothing.
+///
+/// Not reachable through `readback::anchor_shape`, which hardcodes `'profile'`, so this goes to the
+/// SQL directly — which is exactly the surface the hole was on. Runtime-checked `query_as` rather
+/// than the macro, so this needs no offline-cache entry.
+///
+/// Both halves matter: the fabrication must be refused, AND a real map reading itself must still be
+/// admitted. A gate that closed the first by breaking the second would pass a one-sided test.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_fabricated_cogmap_identity_is_refused_by_the_self_read_arm(pool: PgPool) {
+    let fx = fixture(&pool).await;
+
+    let invented = Uuid::from_u128(0xffff_ffff_ffff_4fff_8fff_ffff_ffff_ffffu128);
+    let (population, emptiness): (i32, Option<String>) = sqlx::query_as(
+        "SELECT population, emptiness \
+           FROM anchor_shape('kb_cogmaps', $1, 'cogmap', $1, NULL)",
+    )
+    .bind(invented)
+    .fetch_one(&pool)
+    .await
+    .expect("the sentinel row is returned even for an anchor that does not exist");
+
+    assert_eq!(
+        emptiness.as_deref(),
+        Some("unreadable_or_absent"),
+        "a uuid no kb_cogmaps row carries must disclose nothing, not answer a fact about an anchor",
+    );
+    assert_eq!(population, 0, "and it must disclose no population either");
+
+    // The legitimate path is unchanged: a real map reading its own shape still passes the gate.
+    let (_, mine): (i32, Option<String>) = sqlx::query_as(
+        "SELECT population, emptiness \
+           FROM anchor_shape('kb_cogmaps', $1, 'cogmap', $1, NULL)",
+    )
+    .bind(fx.mine)
+    .fetch_one(&pool)
+    .await
+    .expect("a real cogmap self-read");
+
+    assert_ne!(
+        mine.as_deref(),
+        Some("unreadable_or_absent"),
+        "the EXISTS must not lock a real map out of its own shape",
+    );
+}

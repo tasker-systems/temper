@@ -1119,22 +1119,41 @@ pub async fn anchor_shape(
     let emptiness = head.emptiness.clone();
     let materialized_at = head.materialized_at;
 
+    // Drop the sentinel — `region_id IS NULL` is exactly and only that row, because `region_id` is
+    // `kb_cogmap_regions.id`, a primary key. When it is present the function guarantees `lens_id`,
+    // `salience` and `member_count` are too (all three are NOT NULL in the canonical schema).
+    //
+    // **That guarantee is asserted with an error, not a panic**, and the distinction is the same one
+    // the comment above draws for the zero-row case. Before the envelope these three columns carried
+    // `AS "col!"` overrides, so a violated guarantee was a sqlx DECODE ERROR; converting them to
+    // `.expect()` while adding the sentinel quietly turned three error paths into panic paths — on a
+    // read handler's return path, in a stack that deliberately omits `CatchPanicLayer`
+    // (`temper-telemetry/src/request_span.rs`), so a panic aborts the request task rather than
+    // becoming a 500. The guarantee is a property of a schema that a non-additive migration may
+    // change; `?` costs nothing and keeps the failure the shape this function already chose.
     let regions = rows
         .iter()
-        .filter_map(|r| {
-            // Drop the sentinel. When region_id is present the function guarantees lens_id,
-            // salience and member_count are too.
-            let region_id = r.region_id?;
-            Some(CogmapShapeRow {
+        .filter_map(|r| r.region_id.map(|region_id| (r, region_id)))
+        .map(|(r, region_id)| {
+            let missing = |col: &str| {
+                anyhow::anyhow!(
+                    "anchor_shape({}, {}) returned region {region_id} with a NULL {col} — the \
+                     function guarantees it accompanies region_id, so the migration and this binary \
+                     have drifted",
+                    anchor.table(),
+                    anchor.uuid(),
+                )
+            };
+            Ok(CogmapShapeRow {
                 region_id: RegionId::from(region_id),
-                lens_id: LensId::from(r.lens_id.expect("lens_id accompanies region_id")),
-                salience: r.salience.expect("salience accompanies region_id"),
+                lens_id: LensId::from(r.lens_id.ok_or_else(|| missing("lens_id"))?),
+                salience: r.salience.ok_or_else(|| missing("salience"))?,
                 content_cohesion: r.content_cohesion,
                 label: r.label.clone(),
-                member_count: r.member_count.expect("member_count accompanies region_id"),
+                member_count: r.member_count.ok_or_else(|| missing("member_count"))?,
             })
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
 
     Ok(AnchorShapeReadback {
         population,
