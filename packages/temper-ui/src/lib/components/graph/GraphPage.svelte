@@ -229,9 +229,16 @@
 			{#if data.refusal.kind === 'no-place-resolved'}
 				<h2>Nothing to show for {data.refusal.named === 1 ? 'that place' : 'those places'}</h2>
 				<p>
+					<!--
+						`is not` / `are`. Unlike the analysis door's twin of this sentence, the ternary
+						here is a genuine number agreement, which is why the missing negation reads as
+						correct grammar: the plural is right because "None of the places" negates, and
+						the singular said "The place this link names IS available to you now" directly
+						under a comment promising that a place they cannot read is never hinted at.
+					-->
 					{data.refusal.named === 1 ? 'The place' : 'None of the places'} this link names
-					{data.refusal.named === 1 ? 'is' : 'are'} available to you now. Nothing was answered in
-					{data.refusal.named === 1 ? 'its' : 'their'} place.
+					{data.refusal.named === 1 ? 'is not' : 'are'} available to you now. Nothing was answered
+					in {data.refusal.named === 1 ? 'its' : 'their'} place.
 				</p>
 				<p><a href={`/graph/${data.owner}`}>See everything you can read →</a></p>
 			{:else}

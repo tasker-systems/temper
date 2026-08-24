@@ -365,6 +365,39 @@ describe('the door answers an address it cannot resolve, and one with no address
 		expect(screen.queryByRole('table')).toBeNull();
 	});
 
+	/**
+	 * **The singular refusal said the opposite of the truth.** The ternary carrying the verb had two
+	 * identical arms (`? 'is' : 'is'`), which is itself the tell: the plural reads correctly because
+	 * "None of the places" carries the negation, and the singular had none of its own. So a reader
+	 * following a shared link to one place never shared with them was told, in the only sentence
+	 * about their own access, that the place IS readable by them. `named === 1` is the common case.
+	 *
+	 * Asserted on the rendered sentence rather than the heading, because the heading was already
+	 * correct and already tested — the defect lived entirely in the paragraph below it.
+	 */
+	it('tells a reader who named ONE unreadable place that it is not readable by them', () => {
+		const { container } = render(AnalysisPage, {
+			data: view({ refusal: { kind: 'no-place-resolved', named: 1 } }),
+		});
+		const said = container.querySelector('.refusal p')?.textContent?.replace(/\s+/g, ' ') ?? '';
+
+		expect(said).toContain('The place named in this link is not readable by you');
+		expect(said, 'the inverted claim must be unreachable').not.toMatch(
+			/The place named in this link is readable by you/,
+		);
+		// The absent/unshared ambiguity is what keeps this from being an existence oracle.
+		expect(said).toContain('removed, or never shared with you');
+	});
+
+	it('still reads correctly in the plural, where the negation sits in the subject', () => {
+		const { container } = render(AnalysisPage, {
+			data: view({ refusal: { kind: 'no-place-resolved', named: 3 } }),
+		});
+		const said = container.querySelector('.refusal p')?.textContent?.replace(/\s+/g, ' ') ?? '';
+
+		expect(said).toContain('None of the places named in this link is readable by you');
+	});
+
 	it('no address at all offers the places the reader can read', () => {
 		const data = view({
 			choices: [

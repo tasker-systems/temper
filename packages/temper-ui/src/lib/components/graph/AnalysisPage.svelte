@@ -76,9 +76,16 @@
 					Nothing to measure for {data.refusal.named === 1 ? 'that place' : 'those places'}
 				</h1>
 				<p>
+					<!--
+						`is not` / `is`, NOT `is` / `is`. The plural carries its negation in "None of
+						the places"; the singular has none of its own, so with both arms spelling `is`
+						this read "The place named in this link IS readable by you, so there is nothing
+						here to measure" — the opposite of the truth, in the one sentence about the
+						reader's own access, on the commonest case (a link naming one place).
+					-->
 					{data.refusal.named === 1 ? 'The place' : 'None of the places'} named in this link
-					{data.refusal.named === 1 ? 'is' : 'is'} readable by you, so there is nothing here to
-					measure. It may have been removed, or never shared with you.
+					{data.refusal.named === 1 ? 'is not' : 'is'} readable by you, so there is nothing here
+					to measure. It may have been removed, or never shared with you.
 				</p>
 			{:else}
 				<h1>There is nothing here yet</h1>
