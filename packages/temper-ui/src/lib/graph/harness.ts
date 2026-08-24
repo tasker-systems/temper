@@ -82,7 +82,15 @@ export interface HarnessBundle {
 }
 
 /** The keys that are the bundle's own bookkeeping rather than a scenario. */
-const META_KEYS = new Set(['_captured', '_sanitized', '_anchors']);
+const META_KEYS = new Set([
+	'_captured',
+	'_sanitized',
+	'_anchors',
+	// Provenance for the `authored_*` scenarios: WRITTEN, not observed. A fixed set, so a new
+	// bookkeeping key that is not added here becomes a SCENARIO and fails the key-set guard loudly
+	// rather than quietly rendering as one.
+	'_authored',
+]);
 
 export const scenarioNames = (bundle: HarnessBundle): string[] =>
 	Object.keys(bundle).filter((k) => !META_KEYS.has(k));

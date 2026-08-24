@@ -25,6 +25,7 @@
 		METRICS_UNAVAILABLE,
 		describeConstant,
 		describeGroupingCount,
+		materializeCommandFor,
 		describeNulls,
 		describeRange,
 		describeRegulation,
@@ -238,9 +239,17 @@
 						shape a screen reader does not announce. The announcing is done by the live
 						region above the `{#await}`, which exists from first paint — see `announced`.
 					-->
-					<p class="lead declared-absent" data-testid="grouping-count">
+					<p class="lead empty-cause" data-testid="grouping-count">
 						{describeGroupingCount(0, emptiness, place)}
 					</p>
+					{#if materializeCommandFor(emptiness, place)}
+						<!-- A `<code>`, not prose. This is the one string on the page meant to be copied
+						     verbatim: it needs a monospaced face (so `-`, `l` and `1` stay distinct), no
+						     italics, and no punctuation glued to its ends. -->
+						<code class="command" data-testid="materialize-command"
+							>{materializeCommandFor(emptiness, place)}</code
+						>
+					{/if}
 				{:else}
 					<p class="lead" data-testid="grouping-count">
 						{describeGroupingCount(regions.length, emptiness, place)}
@@ -370,6 +379,26 @@
 	.declared-absent {
 		color: #8b94a5;
 		font-style: italic;
+	}
+	/*
+		Like `.declared-absent` in weight, but NOT italic. These sentences can carry a command's
+		lead-in, and an italic face makes a command line harder to read at exactly the moment the
+		reader is trying to copy one.
+	*/
+	.empty-cause {
+		color: #8b94a5;
+	}
+	.command {
+		display: inline-block;
+		margin-top: 8px;
+		padding: 6px 10px;
+		border: 1px solid #2b3140;
+		border-radius: 4px;
+		background: #11141c;
+		color: #cdd6e3;
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		font-size: 12.5px;
+		user-select: all;
 	}
 	.unavailable {
 		margin: 0;

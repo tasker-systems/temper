@@ -16,6 +16,7 @@ import {
 	distributionOf,
 	formatValue,
 	METRICS,
+	materializeCommandFor,
 	positionOn,
 	reportMetrics,
 } from './analysis';
@@ -335,13 +336,43 @@ describe('an empty groupings list says which of the four causes it is', () => {
 	 * never happen on its own. The CLI and MCP doors both name the command; withholding it from the
 	 * reader who cannot look it up in a Rust signature inverts the point of this work.
 	 */
-	test('never_clustered names the command, the permission and who to ask without it', () => {
+	test('never_clustered names the permission and who to ask without it', () => {
 		const s = describeGroupingCount(0, 'never_clustered', CTX);
-		expect(s, 'must name the command').toContain('temper context materialize');
 		expect(s, 'must name the permission it needs').toContain('write access');
 		expect(s, 'must say what to do without that permission').toContain('ask whoever does');
 		// Agentless passive is what made the first draft unactionable: it named no actor at all.
 		expect(s).not.toContain('are built by a separate pass');
+	});
+
+	/**
+	 * **The command is a bare command line, rendered by the page as a `<code>` beneath the sentence.**
+	 * An earlier draft interpolated it INTO the prose wrapped in backticks. It read correctly in the
+	 * source and rendered as literal backtick characters inside an italic paragraph — the one string
+	 * on the page meant to be copied verbatim, in the one treatment that makes a command hard to read.
+	 * `toBe` rather than `toContain` here on purpose: `toContain` is precisely what let the backticks
+	 * through, because they sat inside the expected substring.
+	 */
+	test('the command is bare — no markup, quoting or stray punctuation', () => {
+		for (const place of [CTX, MAP]) {
+			const cmd = materializeCommandFor('never_clustered', place) ?? '';
+			expect(cmd).toMatch(/^temper (context|cogmap) materialize [^`'"]*$/);
+			expect(cmd).not.toContain('`');
+			expect(cmd.trim()).toBe(cmd);
+		}
+	});
+
+	/** Only one arm has an action; the rest must offer no command line at all. */
+	test('offers no command for the three causes that have no action', () => {
+		for (const arm of ['nothing_visible', 'lens_narrowed', 'unreadable_or_absent'] as const) {
+			expect(materializeCommandFor(arm, CTX), arm).toBeNull();
+		}
+	});
+
+	test('the sentence itself carries neither the command nor its backticks', () => {
+		const said = describeGroupingCount(0, 'never_clustered', CTX);
+		expect(said).not.toContain('`');
+		expect(said).not.toContain('temper context materialize');
+		expect(said, 'must lead into the command rendered beneath it').toMatch(/by running:$/);
 	});
 
 	/**
@@ -350,13 +381,11 @@ describe('an empty groupings list says which of the four causes it is', () => {
 	 * handing back work it had already done.
 	 */
 	test('names the one command for this kind of place, with its ref', () => {
-		expect(describeGroupingCount(0, 'never_clustered', CTX)).toContain(
-			'`temper context materialize @me/temper`',
+		expect(materializeCommandFor('never_clustered', CTX)).toBe(
+			'temper context materialize @me/temper',
 		);
-		const onAMap = describeGroupingCount(0, 'never_clustered', MAP);
-		expect(onAMap).toContain('`temper cogmap materialize 019f2391-e001-7933-b88a-28fb92e56ac1`');
-		expect(onAMap, 'a map reader must not be shown the context command').not.toContain(
-			'temper context materialize',
+		expect(materializeCommandFor('never_clustered', MAP)).toBe(
+			'temper cogmap materialize 019f2391-e001-7933-b88a-28fb92e56ac1',
 		);
 	});
 
@@ -370,19 +399,17 @@ describe('an empty groupings list says which of the four causes it is', () => {
 	 */
 	test('an unsafe-looking ref drops the argument rather than rendering a wrong command', () => {
 		for (const ref of ['@me/a b', '@me/x;rm -rf /', '@me/$(whoami)', "@me/it's"]) {
-			const said = describeGroupingCount(0, 'never_clustered', { kind: 'context', ref });
-			expect(said, `${ref} must not reach the command line`).toContain(
-				'`temper context materialize`',
-			);
-			expect(said).not.toContain(ref);
+			const cmd = materializeCommandFor('never_clustered', { kind: 'context', ref });
+			expect(cmd, `${ref} must not reach the command line`).toBe('temper context materialize');
 		}
 	});
 
 	/** Outside the measured branch the page does not know the kind, so naming both is the honest form. */
-	test('with no place in hand it names both commands rather than guessing one', () => {
+	test('with no place in hand it describes the command rather than naming one', () => {
 		const said = describeGroupingCount(0, 'never_clustered', null);
-		expect(said).toContain('temper context materialize');
-		expect(said).toContain('temper cogmap materialize');
+		expect(said).toContain('the materialize command');
+		expect(said, 'still a whole sentence, with no command rendered beneath it').toMatch(/\.$/);
+		expect(materializeCommandFor('never_clustered', null)).toBeNull();
 	});
 
 	/**

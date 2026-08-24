@@ -447,20 +447,36 @@ export type PlaceRef = { kind: 'context' | 'cogmap'; ref: string } | null;
 const PASTE_SAFE_REF =
 	/^(?:[@+][a-z0-9][a-z0-9-]*\/[a-z0-9][a-z0-9-]*|[a-z0-9-]*[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/;
 
-/** The one command this reader needs, with its argument when that can be rendered safely. */
-const materializeCommand = (place: PlaceRef): string => {
-	// No place: the sentence is being rendered outside the measured branch, where the page does not
-	// know which kind it is talking about. Naming both is right there — it is the only honest form.
-	if (!place) return '`temper context materialize` (or `temper cogmap materialize` for a map)';
+/**
+ * The command this reader would run, as a bare command line — or `null` when there is none to give.
+ *
+ * **Returned separately from the sentence so the page can render it as a `<code>`.** An earlier
+ * draft interpolated it into the prose wrapped in backticks, which read correctly in the source and
+ * rendered as *literal backtick characters* in an italic paragraph: the one string on the page meant
+ * to be copied verbatim, set in the one treatment that makes a command hard to read, with stray
+ * punctuation glued to both ends. Nothing caught it — every assertion used `toContain`, and the
+ * backticks were inside the expected substring. It took looking at the page.
+ */
+export const materializeCommandFor = (
+	emptiness: ShapeEmptiness | null,
+	place: PlaceRef,
+): string | null => {
+	// Only one arm has an action, and only when the page knows which kind of place it is on.
+	if (emptiness !== 'never_clustered' || !place) return null;
 
 	const cmd = place.kind === 'cogmap' ? 'temper cogmap materialize' : 'temper context materialize';
-	return PASTE_SAFE_REF.test(place.ref) ? `\`${cmd} ${place.ref}\`` : `\`${cmd}\``;
+	return PASTE_SAFE_REF.test(place.ref) ? `${cmd} ${place.ref}` : cmd;
 };
 
 const describeEmptyShape = (emptiness: ShapeEmptiness | null, place: PlaceRef): string => {
 	switch (emptiness) {
 		case 'never_clustered':
-			return `This place has never been grouped — its groupings have not been worked out yet. Nothing here is broken. Anyone with write access to the place can work them out with ${materializeCommand(place)}; if you do not have write access, ask whoever does.`;
+			// The command is NOT in this sentence; the page renders it beneath, as a `<code>`. What
+			// stays here is the lead-in, and it has to read correctly whether or not one follows —
+			// `place: null` yields no command, and this still has to be a whole sentence there.
+			return place
+				? 'This place has never been grouped — its groupings have not been worked out yet. Nothing here is broken. If you do not have write access to the place, ask whoever does; anyone who has it can work them out by running:'
+				: 'This place has never been grouped — its groupings have not been worked out yet. Nothing here is broken. Anyone with write access to the place can work them out with the materialize command; if you do not have write access, ask whoever does.';
 		case 'nothing_visible':
 			return 'This place has been grouped, and nothing came back that you can read. It may have formed no groupings at all, or the groupings it formed may hold only work that is not yours to see. This page deliberately cannot tell you which, so it is not evidence that you are missing access — if you expected to find work here, ask whoever runs this place.';
 		case 'lens_narrowed':
