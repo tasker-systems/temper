@@ -25,6 +25,7 @@ pub mod query;
 pub mod reassign;
 pub mod region;
 pub mod resources;
+pub mod schema;
 pub mod search;
 pub mod segments;
 pub mod slack_disconnect;

@@ -187,8 +187,11 @@ async fn patch_accepts_empty_body_trio(pool: PgPool) {
     let (token, resource_id) = setup_profile_and_resource(&app).await;
 
     let req_body = json!({
+        // `temper-provenance` is base-declared, so a research carries it. This read
+        // `temper-stage` until the applicability gate landed: the field is arbitrary filler for
+        // "a managed-tier change", and a research does not carry a task's stage.
         "managed_meta": {
-            "temper-stage": "done"
+            "temper-provenance": "llm-discovered"
         }
         // no content, content_hash, or chunks_packed
     });

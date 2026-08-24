@@ -169,6 +169,14 @@ use temper_workflow::types::resource::{
         temper_core::types::data_artifact_shape::ShapeView,
         temper_core::types::data_artifact_shape::ShapeDeclareRequest,
         temper_core::types::data_artifact_shape::EnforcementMode,
+        // The schema-describe family. `DiscouragedOpenMetaKey` is registered explicitly for
+        // the same reason `ClaimedAuditJob` above is: `.routes()` collects schemas from
+        // request/response BODIES, and this one is only ever reached transitively through
+        // `OpenMetaConvention`.
+        temper_workflow::schema::DocTypeSummary,
+        temper_workflow::schema::DocTypeDescription,
+        temper_workflow::schema::OpenMetaConvention,
+        temper_workflow::schema::DiscouragedOpenMetaKey,
     )),
     modifiers(&SecurityAddon),
     tags(
@@ -185,6 +193,7 @@ use temper_workflow::types::resource::{
         (name = "Contexts", description = "Contexts — named homes for resources, and who they are shared with"),
         (name = "Cognitive Maps", description = "Cognitive maps — genesis, reads (shape, metrics, analytics), content reconcile, materialize, team binding, and grants"),
         (name = "Graph", description = "Knowledge graph traversal"),
+        (name = "Schema", description = "Document-type schemas — the vocabularies each kind of work carries, and the recognized conventions of the open metadata tier"),
         (name = "Search", description = "Semantic and keyword search"),
         (name = "Query", description = "Composed queries — declared acts, piped, one round trip"),
         (name = "Events", description = "Activity event log"),

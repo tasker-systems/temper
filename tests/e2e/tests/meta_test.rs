@@ -34,7 +34,9 @@ async fn update_meta_cascades_title(pool: sqlx::PgPool) {
         origin_uri: "test://e2e/meta-test".to_string(),
         context_ref: "@me/meta-test".to_string(),
         home_cogmap_id: None,
-        doc_type_name: "research".to_string(),
+        // A `task`, not a `research`: this test exercises a managed-tier change via
+        // `temper-stage`, and the applicability gate refuses a state its kind does not carry.
+        doc_type_name: "task".to_string(),
         content_hash: Some(
             "meta0test0000000000000000000000000000000000000000000000000000000".to_string(),
         ),
@@ -171,7 +173,9 @@ async fn meta_patch_preserves_chunks_and_body_hash(pool: sqlx::PgPool) {
         origin_uri: "test://e2e/meta-chunks".to_string(),
         context_ref: "@me/meta-chunks".to_string(),
         home_cogmap_id: None,
-        doc_type_name: "research".to_string(),
+        // A `task`, not a `research`: this test exercises a managed-tier change via
+        // `temper-stage`, and the applicability gate refuses a state its kind does not carry.
+        doc_type_name: "task".to_string(),
         content_hash: Some(
             "chunkpreserve0000000000000000000000000000000000000000000000000000".to_string(),
         ),
@@ -471,7 +475,9 @@ async fn get_meta_returns_current_meta_without_touching_chunks(pool: sqlx::PgPoo
         origin_uri: "test://e2e/meta-get".to_string(),
         context_ref: "@me/meta-get".to_string(),
         home_cogmap_id: None,
-        doc_type_name: "research".to_string(),
+        // A `task`, not a `research`: this test exercises a managed-tier change via
+        // `temper-stage`, and the applicability gate refuses a state its kind does not carry.
+        doc_type_name: "task".to_string(),
         content_hash: Some(format!("{:0>64}", "c")),
         content: "# Section A\n\nBody for A.\n\n# Section B\n\nBody for B.".to_string(),
         metadata: None,

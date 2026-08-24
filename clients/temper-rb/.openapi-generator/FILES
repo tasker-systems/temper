@@ -17,6 +17,7 @@ lib/temper/generated/api/profile_api.rb
 lib/temper/generated/api/query_api.rb
 lib/temper/generated/api/relationships_api.rb
 lib/temper/generated/api/resources_api.rb
+lib/temper/generated/api/schema_api.rb
 lib/temper/generated/api/search_api.rb
 lib/temper/generated/api/slack_link_api.rb
 lib/temper/generated/api/steward_api.rb
@@ -100,9 +101,12 @@ lib/temper/generated/models/deactivated.rb
 lib/temper/generated/models/delete_response.rb
 lib/temper/generated/models/denied.rb
 lib/temper/generated/models/device_overrides.rb
+lib/temper/generated/models/discouraged_open_meta_key.rb
 lib/temper/generated/models/dispatch_tick_request.rb
 lib/temper/generated/models/dispatch_tick_response.rb
 lib/temper/generated/models/disposition.rb
+lib/temper/generated/models/doc_type_description.rb
+lib/temper/generated/models/doc_type_summary.rb
 lib/temper/generated/models/drift_sweep_row.rb
 lib/temper/generated/models/edge_facet_row.rb
 lib/temper/generated/models/edge_facet_set_request.rb
@@ -182,6 +186,7 @@ lib/temper/generated/models/no_prior_standing.rb
 lib/temper/generated/models/no_standing.rb
 lib/temper/generated/models/node_home.rb
 lib/temper/generated/models/open_invocation_request.rb
+lib/temper/generated/models/open_meta_convention.rb
 lib/temper/generated/models/ord_op.rb
 lib/temper/generated/models/orphan_node.rb
 lib/temper/generated/models/outcome_declaration.rb

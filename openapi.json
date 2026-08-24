@@ -6830,6 +6830,188 @@
         "x-apidog-folder": "Reference/API Reference/Resources"
       }
     },
+    "/api/schema/doc-types": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Schema"
+        ],
+        "summary": "List every document type this instance knows, with a schema summary for each.",
+        "operationId": "list_doc_types",
+        "responses": {
+          "200": {
+            "description": "Every known document type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DocTypeSummary"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Schema"
+      }
+    },
+    "/api/schema/doc-types/{name}": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Schema"
+        ],
+        "summary": "Describe one document type: its JSON Schema, required fields, closed vocabularies, and\na filled-in example of the managed tier.",
+        "description": "`enum_fields` is the answer to *\"which states does this kind of work carry?\"* — a task's\nstages, a goal's statuses — read from the doc-type's own schema rather than from any\nlist a surface keeps.",
+        "operationId": "describe_doc_type",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Document type name (e.g. \"task\", \"goal\")",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The document type's schema, required fields and vocabularies",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocTypeDescription"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such document type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Schema"
+      }
+    },
+    "/api/schema/open-meta": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Schema"
+        ],
+        "summary": "Describe the recognized conventions of the open (caller-defined) metadata tier.",
+        "description": "The tier stays open — this is guidance, not a closed vocabulary. Each property's\n`description` states whether the key is FTS-indexed and at what weight; the discouraged\nkeys are surfaced separately because an open tier cannot express their absence.",
+        "operationId": "describe_open_meta",
+        "responses": {
+          "200": {
+            "description": "Recognized open_meta conventions and discouraged keys",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenMetaConvention"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Schema"
+      }
+    },
     "/api/search": {
       "parameters": [
         {
@@ -10121,6 +10303,22 @@
           }
         }
       },
+      "DiscouragedOpenMetaKey": {
+        "type": "object",
+        "description": "A discouraged open_meta key and the managed field that supersedes it.",
+        "required": [
+          "key",
+          "use_instead"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "use_instead": {
+            "type": "string"
+          }
+        }
+      },
       "DispatchTickRequest": {
         "type": "object",
         "description": "Request body for `POST /api/steward/dispatch`. Both optional — server defaults apply\n(`DEFAULT_STEWARD_INGEST_THRESHOLD`, `DEFAULT_STEWARD_DISPATCH_CAP`).",
@@ -10174,6 +10372,69 @@
           "failed",
           "abandoned"
         ]
+      },
+      "DocTypeDescription": {
+        "type": "object",
+        "description": "Full description of one document type: its JSON Schema, the fields it requires, the\nclosed vocabularies its fields carry, and a filled-in example of the managed tier.",
+        "required": [
+          "name",
+          "schema",
+          "required_fields",
+          "enum_fields",
+          "example_managed_meta"
+        ],
+        "properties": {
+          "enum_fields": {
+            "type": "object",
+            "description": "Every field of this doc-type that carries a closed vocabulary, field name → values.\nThis is the answer to *\"which states does this kind of work have?\"*.",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "example_managed_meta": {},
+          "name": {
+            "type": "string"
+          },
+          "required_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Doc-type-level required fields only (the base schema's are merged via `allOf` at\nvalidation time)."
+          },
+          "schema": {
+            "description": "The doc-type's own JSON Schema. Deliberately **not** merged with the base schema —\n[`schema_value`] says why, and [`base_schema_value`] is the other half for a caller\nthat wants the whole field surface."
+          }
+        }
+      },
+      "DocTypeSummary": {
+        "type": "object",
+        "description": "Summary of a document type — the row shape of the doc-type list.\n\nDoc-types are name-keyed in the substrate (no `kb_doc_types` table), so the summary\ncarries no UUID: callers address doc-types by name.",
+        "required": [
+          "name",
+          "has_schema",
+          "required_fields"
+        ],
+        "properties": {
+          "has_schema": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "required_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
       },
       "DriftSweepRow": {
         "type": "object",
@@ -12234,6 +12495,26 @@
           "trigger_kind": {
             "type": "string",
             "description": "Free-form trigger label (e.g. `manual`, `delegated`, `scheduled`)."
+          }
+        }
+      },
+      "OpenMetaConvention": {
+        "type": "object",
+        "description": "The self-describing open_meta convention, returned by [`describe_open_meta`] and rendered by the\nCLI `resource describe-open-meta` command, the MCP `describe_open_meta` tool, and\n`GET /api/schema/open-meta`. All three surfaces share this type so the guidance can never drift\nbetween them.",
+        "required": [
+          "schema",
+          "discouraged_keys"
+        ],
+        "properties": {
+          "discouraged_keys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DiscouragedOpenMetaKey"
+            },
+            "description": "Discouraged bare keys — absent from `schema` because the tier is open, surfaced here so callers\ncan see them → the managed field that supersedes each."
+          },
+          "schema": {
+            "description": "The recognized-conventions JSON Schema. Self-describing: each property's `description` states\nwhether the key is FTS-indexed (and at what weight) or shape-only, and the schema `title`\ncarries the convention version. The tier stays open (`additionalProperties: true`), so this is\nguidance, not a closed vocabulary."
           }
         }
       },
@@ -16076,6 +16357,10 @@
     {
       "name": "Graph",
       "description": "Knowledge graph traversal"
+    },
+    {
+      "name": "Schema",
+      "description": "Document-type schemas — the vocabularies each kind of work carries, and the recognized conventions of the open metadata tier"
     },
     {
       "name": "Search",
