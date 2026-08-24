@@ -309,3 +309,100 @@ async fn a_bare_string_tags_value_comes_back_as_a_one_element_array(pool: PgPool
          the normalization is wider than the one that was ruled"
     );
 }
+
+/// **A write answers with the tier it changed.**
+///
+/// The write path's readback (`db_backend::native_resource_view`) is shared by
+/// `create_resource`, `update_resource` and `annotate_resource`, and it asked for **no
+/// sections** — while `show_resource`, which answers in the same `ResourceView`, asks for
+/// `open-meta`. The managed tier is not a section (it is always present on a view), so a
+/// managed-tier change came back verified from storage; the open tier **is** a section, so a
+/// change to a caller's own descriptions came back with `open_meta: None` — the tier it had
+/// just written, absent from its own answer.
+///
+/// That asymmetry is not a section-semantics question, it is a divergence between two doors
+/// answering in one type: `None` means *not requested*, and the write door was the only one
+/// not requesting it. A caller could not tell "you have no open tier" from "I did not look".
+///
+/// The reason the old shape gave was historical — the row type it replaced carried neither
+/// tier — and that type no longer exists. `section_open_meta_absent_omits_open_meta`
+/// (`resource_view_sections_test.rs`) still pins *not requested ⇒ absent* on
+/// `show_view_select`, which this does not touch; what changes is only what the write door
+/// asks for.
+///
+/// Asserted on BOTH commands, because they are separate call sites into one helper and a
+/// change that fixed only one would leave the doors disagreeing again.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_write_answers_with_the_open_tier_it_changed(pool: PgPool) {
+    let (profile, context) = seed_profile_with_context(&pool, "write-readback@example.com").await;
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
+
+    let created = backend
+        .create_resource(CreateResource {
+            idempotency_key: None,
+            slug: "zz-write-readback".to_string(),
+            doctype: "research".to_string(),
+            home: HomeAnchor::Context(ContextId::from(context)),
+            title: "ZZ write readback".to_string(),
+            body: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: Some(serde_json::json!({"descriptor": "at-create"})),
+            goal: None,
+            origin_uri: Some("test://write-readback".to_string()),
+            chunks_packed: None,
+            content_hash: None,
+            act: ActContext::default(),
+            origin: Surface::Mcp,
+        })
+        .await
+        .expect("create")
+        .value;
+
+    assert_eq!(
+        created
+            .open_meta
+            .as_ref()
+            .and_then(|m| m.get("descriptor"))
+            .cloned(),
+        Some(serde_json::json!("at-create")),
+        "create wrote the open tier, so its own answer must carry it — not a second read's"
+    );
+
+    let updated = backend
+        .update_resource(UpdateResource {
+            resource: created.id,
+            title: None,
+            slug: None,
+            body: None,
+            managed_meta: None,
+            open_meta: Some(serde_json::json!({"descriptor": "at-update"})),
+            open_meta_add: None,
+            goal: None,
+            move_to: None,
+            context_ref: None,
+            act: ActContext::default(),
+            origin: Surface::Mcp,
+        })
+        .await
+        .expect("update")
+        .value;
+
+    assert_eq!(
+        updated
+            .open_meta
+            .as_ref()
+            .and_then(|m| m.get("descriptor"))
+            .cloned(),
+        Some(serde_json::json!("at-update")),
+        "update wrote the open tier, so its own answer must carry what NOW obtains \
+         — the state read back from storage, not the one that was requested"
+    );
+
+    // The managed tier is not a section and was already present; assert it is still there, so
+    // a change that made the open tier arrive by displacing the managed one would fail here
+    // rather than pass as an improvement.
+    assert_eq!(
+        updated.doc_type_name, "research",
+        "the always-present half of the view survives the added section"
+    );
+}

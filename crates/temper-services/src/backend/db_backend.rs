@@ -495,11 +495,60 @@ fn validate_open_meta_shape(open_meta: Option<&serde_json::Value>) -> Result<(),
 /// identity does not depend on whether it was just written or merely looked at. Visibility is gated
 /// inside that readback (WS2 — `resources_visible_to`).
 ///
-/// Asks for **no sections**: the row shape this replaced on `create`/`update`/`annotate` carried
-/// neither meta tier nor the body, and `managed_meta` is not a section — it is always present.
-/// `show_resource` asks for `open-meta` on top, because the detail shape it replaced carried both
-/// tiers.
+/// Asks for **`open-meta`, and only that** — the same section set `show_resource` asks for, so a
+/// write and a read of one resource answer with the same filled shape.
+///
+/// It asked for **nothing** until this change, on a reason that had outlived its subject: the row
+/// type it replaced on `create`/`update`/`annotate` carried neither meta tier, and that type is
+/// gone. The managed tier survived the omission because it is not a section — it is always present
+/// on a view — so a managed-tier write came back verified from storage. The open tier **is** a
+/// section, so a write that changed a caller's own descriptions came back with `open_meta: None`:
+/// the tier it had just written, absent from its own answer, and indistinguishable from a resource
+/// that has no open tier at all.
+///
+/// That was not the section vocabulary working as designed. `None` means *not requested*
+/// (`section_open_meta_absent_omits_open_meta` pins that on `show_view_select`, which this does not
+/// touch), and the write door did not ask.
+///
+/// **It is NOT the only door that still does not ask, and an earlier version of this comment
+/// claimed it was.** `temper-mcp`'s resource-browse URI (`temper-mcp/src/resources.rs`) serializes
+/// a whole [`ResourceView`] built with `SectionSet::default()`, and unlike a list caller it has no
+/// parameter with which to ask — so the same hardcoded no-ask survives on that read door.
+/// `temper-mcp`'s write tools separately discard this readback and re-read, so they do not benefit
+/// from the fix either. Both are outside this change and neither is fixed by it; the sentence is
+/// here because the claim was made and was false.
+///
+/// **The body stays unasked.** It has its own door (`GET /api/resources/{id}/content`), its
+/// reconstruction is 2-3 statements, and a write that echoed the whole document back would make
+/// every write pay for a read nobody asked for. The open tier costs one batched statement
+/// (`readback::meta_batch`) per call — which is what a write owes the caller for the tier it just
+/// changed, and is why the update path's PRE-write read uses
+/// [`native_resource_identity`] instead: that call reads its own current row to resolve the
+/// effective doc type, never looks at `open_meta`, and would otherwise pay the batch twice.
 async fn native_resource_view(
+    pool: &PgPool,
+    principal: ProfileId,
+    new_id: ResourceId,
+) -> Result<ResourceView, TemperError> {
+    let sections: SectionSet = [ResourceSection::OpenMeta].into_iter().collect();
+    crate::backend::substrate_read::show_view_select(pool, principal, new_id, &sections)
+        .await
+        .map_err(TemperError::from)
+}
+
+/// The update path's read of its **own current row**, before it writes — not a readback.
+///
+/// Split from [`native_resource_view`] rather than sharing it, because the two want different
+/// things and only look alike. A readback answers the caller and therefore owes them the tier the
+/// write touched; this one exists to resolve the effective doc type and the identity fields the
+/// validation pipeline needs, reads `open_meta` nowhere, and is followed by a readback that fetches
+/// it properly. Sharing the helper made every update pay `readback::meta_batch` twice and discard
+/// the first result — a cost the readback's own doc comment then described as "one batched
+/// statement", which was true per call and wrong per update.
+///
+/// `SectionSet::default()` asks for no sections. The managed tier is not a section — it is always
+/// present on a view — so everything this caller reads is still here.
+async fn native_resource_identity(
     pool: &PgPool,
     principal: ProfileId,
     new_id: ResourceId,
@@ -1988,7 +2037,8 @@ impl Backend for DbBackend {
             // carries no doc_type/context, so take the EFFECTIVE values from the current row
             // (already visibility-gated via `check_can_modify_next`).
             let current =
-                native_resource_view(&self.pool, self.profile_id, ResourceId::from(new_id)).await?;
+                native_resource_identity(&self.pool, self.profile_id, ResourceId::from(new_id))
+                    .await?;
             // A type change arrives as `temper-type` in managed_meta (the PUT /meta path) or
             // `move_to.type_to` (the file-move path); else the doc type is unchanged.
             let effective_doc_type = incoming

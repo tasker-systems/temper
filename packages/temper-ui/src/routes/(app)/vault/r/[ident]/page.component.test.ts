@@ -88,7 +88,9 @@ const edge = (n: number): GraphEdgeRow => ({
  * layout's shape rather than to the page's — and `Pick` keeps the four that matter typed by the
  * real load rather than by a hand-written double.
  */
-type Fill = Partial<Pick<PageData, 'content' | 'trail' | 'edges'>>;
+type Fill = Partial<
+	Pick<PageData, 'content' | 'trail' | 'edges' | 'mayChange' | 'stateVocabulary'>
+>;
 
 const RESOURCE = makeRow({
 	title: 'The rendering approach',
@@ -118,6 +120,11 @@ const data = (fill: Fill = {}): PageData =>
 		content: fill.content ?? Promise.resolve('# A body\n\nWith a paragraph in it.'),
 		trail: fill.trail ?? Promise.resolve(trailOf(2)),
 		edges: fill.edges ?? Promise.resolve([edge(1)]),
+		// The default is the shape a reader WITHOUT change authority gets: nothing offered,
+		// and no vocabulary asked for. Every pre-existing assertion in this file is about that
+		// reader, so the write arm must leave all of them standing.
+		mayChange: fill.mayChange ?? false,
+		stateVocabulary: fill.stateVocabulary ?? null,
 	}) as PageData;
 
 /**
@@ -157,7 +164,7 @@ const REGIONS: [name: string, scope: Scope, key: keyof Fill][] = [
  * It unmounts before returning, so two states are never on screen at the same time.
  */
 const wordsOf = async (fill: Fill, scope: Scope, testid: string): Promise<string> => {
-	const { container, unmount } = render(Page, { data: data(fill) });
+	const { container, unmount } = render(Page, { data: data(fill), form: null });
 	const marker = () => scope(container)?.querySelector(`[data-testid="${testid}"]`) ?? null;
 	await vi.waitFor(() => {
 		expect(marker()).not.toBeNull();
@@ -171,6 +178,7 @@ describe('C1: the scaffold does not depend on the fill', () => {
 	it('paints the masthead, the doc type, the title and the home chip with all three reads in flight', () => {
 		const { container } = render(Page, {
 			data: data({ content: pending(), trail: pending(), edges: pending() }),
+			form: null,
 		});
 
 		expect(container.querySelector('.masthead')).not.toBeNull();
@@ -182,6 +190,7 @@ describe('C1: the scaffold does not depend on the fill', () => {
 	it('paints every property row with all three reads in flight', () => {
 		const { container } = render(Page, {
 			data: data({ content: pending(), trail: pending(), edges: pending() }),
+			form: null,
 		});
 		const keys = [...container.querySelectorAll('.props dt')].map((dt) => dt.textContent);
 
@@ -192,6 +201,7 @@ describe('C1: the scaffold does not depend on the fill', () => {
 	it('shows an arriving marker in each of the three regions, and nowhere else', () => {
 		const { container } = render(Page, {
 			data: data({ content: pending(), trail: pending(), edges: pending() }),
+			form: null,
 		});
 
 		for (const [name, scope] of REGIONS) {
@@ -218,6 +228,7 @@ describe('C2: an arriving region declares itself in words', () => {
 	][])('the arriving %s region carries a sentence, not a bare shimmer', (_name, scope, sentence) => {
 		const { container } = render(Page, {
 			data: data({ content: pending(), trail: pending(), edges: pending() }),
+			form: null,
 		});
 
 		// The words that reach the accessibility tree, with the decorative marker removed. An
@@ -241,7 +252,7 @@ describe('C3: a failure is a third state, not a stuck second one', () => {
 	it.each(
 		REGIONS,
 	)('a failed %s read drops the arriving marker — the perpetual skeleton', async (_name, scope, key) => {
-		const { container } = render(Page, { data: data({ [key]: broken() }) });
+		const { container } = render(Page, { data: data({ [key]: broken() }), form: null });
 		await vi.waitFor(() => {
 			expect(scope(container)?.querySelector('[data-testid="region-failed"]')).not.toBeNull();
 		});
@@ -253,6 +264,7 @@ describe('C3: a failure is a third state, not a stuck second one', () => {
 	it('a failed history read leaves the document and the connections arriving on their own', async () => {
 		const { container } = render(Page, {
 			data: data({ content: pending(), trail: broken(), edges: pending() }),
+			form: null,
 		});
 		await vi.waitFor(() => {
 			expect(
@@ -330,7 +342,7 @@ describe('a read the system stopped waiting for is not a read that failed', () =
  */
 describe('the rail states its emptiness rather than rendering nothing', () => {
 	it('EdgeList: a resource with no connections says so', async () => {
-		const { container } = render(Page, { data: data({ edges: Promise.resolve([]) }) });
+		const { container } = render(Page, { data: data({ edges: Promise.resolve([]) }), form: null });
 		const region = () => connectionsRegion(container);
 		await vi.waitFor(() => {
 			expect(region()?.querySelector('[data-testid="region-empty"]')).not.toBeNull();
@@ -345,7 +357,10 @@ describe('the rail states its emptiness rather than rendering nothing', () => {
 	});
 
 	it('EventHistory: a resource with no history says so, in the shared vocabulary', async () => {
-		const { container } = render(Page, { data: data({ trail: Promise.resolve(trailOf(0)) }) });
+		const { container } = render(Page, {
+			data: data({ trail: Promise.resolve(trailOf(0)) }),
+			form: null,
+		});
 		const region = () => historyRegion(container);
 		await vi.waitFor(() => {
 			expect(region()?.querySelector('[data-testid="region-empty"]')).not.toBeNull();
@@ -364,7 +379,10 @@ describe('the rail states its emptiness rather than rendering nothing', () => {
 	});
 
 	it('EventHistory: a trail that carries events renders them and no emptiness verdict', async () => {
-		const { container } = render(Page, { data: data({ trail: Promise.resolve(trailOf(2)) }) });
+		const { container } = render(Page, {
+			data: data({ trail: Promise.resolve(trailOf(2)) }),
+			form: null,
+		});
 		const region = () => historyRegion(container);
 		await vi.waitFor(() => {
 			expect(region()?.querySelector('.event')).not.toBeNull();
@@ -410,7 +428,7 @@ describe('a rail region keeps its heading in every state', () => {
 		string,
 	][])('the %s heading is present while arriving, present, empty and failed', async (_name, scope, key, heading) => {
 		for (const [state, fill, settledOn] of stateOf(key)) {
-			const { container, unmount } = render(Page, { data: data(fill) });
+			const { container, unmount } = render(Page, { data: data(fill), form: null });
 			await vi.waitFor(() => {
 				expect(scope(container)?.querySelector(settledOn), `${state} never settled`).not.toBeNull();
 			});
@@ -423,5 +441,332 @@ describe('a rail region keeps its heading in every state', () => {
 			).toContain(heading);
 			unmount();
 		}
+	});
+});
+
+/**
+ * The property table, offering a change.
+ *
+ * The load decides *whether* and *what* — `page.server.test.ts` witnesses that. What is here is
+ * what the reader can actually reach: the control's shape, and the acts that do and do not
+ * write.
+ */
+describe('a state the system defines is changed where it is read', () => {
+	const TASK_STATES = { 'temper-stage': ['backlog', 'design', 'done'] };
+
+	const stageCell = (container: HTMLElement) =>
+		[...container.querySelectorAll('.props .row')].find(
+			(row) => row.querySelector('dt')?.textContent === 'temper-stage',
+		);
+
+	it('offers no control at all to a reader who may not change this', async () => {
+		// The default fixture is that reader. The read view must be exactly what it was before
+		// this arm existed — no controls, no placeholder rows for states not held, and none of
+		// the arm's explanatory notes.
+		//
+		// The resource carries a STRUCTURED description on purpose. Without one, the assertion
+		// that no "not editable here" note appears cannot fail: `hasStructured` would be false
+		// for want of a structured row rather than for want of write authority, and the probe
+		// would pass against a version that leaked the note to every reader.
+		const readOnlyReader = makeRow({
+			title: 'The rendering approach',
+			doc_type_name: 'design',
+			open_meta: { owner: 'Pete', tags: ['a', 'b'] },
+		});
+		const { container } = render(Page, {
+			data: {
+				...data({ content: pending(), trail: pending(), edges: pending() }),
+				resource: readOnlyReader,
+			} as PageData,
+			form: null,
+		});
+		expect(container.querySelector('.props select')).toBeNull();
+		expect(container.querySelector('.props form')).toBeNull();
+		expect([...container.querySelectorAll('.props dt')].map((dt) => dt.textContent)).toContain(
+			'tags',
+		);
+		expect(container.querySelector('.props .unread')).toBeNull();
+	});
+
+	it('renders a refusal that belongs to no row against the table itself', async () => {
+		// `field` is a three-way address: a key names its row, `''` names the attach form, and
+		// `null` names the whole table (a submission carrying nothing to change). Only the first
+		// two were rendered by any test, so the third branch shipped unexercised.
+		const { container } = render(Page, {
+			data: data({
+				content: pending(),
+				trail: pending(),
+				edges: pending(),
+				mayChange: true,
+				stateVocabulary: {},
+			}),
+			form: { field: null, message: 'Nothing to change.' },
+		});
+		expect(container.querySelector('.props .row .err')).toBeNull();
+		expect(sentenceOf(container.querySelector('.props > .unread[role="alert"]'))).toBe(
+			'Nothing to change.',
+		);
+	});
+
+	it('offers exactly the states the work carries, and reaches them by POST', async () => {
+		const { container } = render(Page, {
+			data: data({
+				content: pending(),
+				trail: pending(),
+				edges: pending(),
+				mayChange: true,
+				stateVocabulary: TASK_STATES,
+			}),
+			form: null,
+		});
+
+		const cell = stageCell(container);
+		const select = cell?.querySelector('select') as HTMLSelectElement;
+		expect([...select.options].map((o) => o.value)).toEqual(['backlog', 'design', 'done']);
+		expect(select.value).toBe('design');
+
+		// `no-reading-act-becomes-a-changing-one` starts here: the change is a POST to a named
+		// action. Nothing about it is reachable by following a link or loading a URL.
+		const form = cell?.querySelector('form') as HTMLFormElement;
+		expect(form.getAttribute('method')?.toLowerCase()).toBe('post');
+		expect(form.getAttribute('action')).toBe('?/changeState');
+		expect(form.querySelector('input[name="field"]')?.getAttribute('value')).toBe('temper-stage');
+	});
+
+	it('does not write when the reader merely moves through the options', async () => {
+		// THE BITE for `no-reading-act-becomes-a-changing-one`, and it is not hypothetical: a
+		// `<select>` wired to submit on `change` fires per option as a keyboard reader arrows
+		// past, so looking at what the states ARE would write two of them into the ledger.
+		const submitted = vi.fn();
+		const original = HTMLFormElement.prototype.requestSubmit;
+		HTMLFormElement.prototype.requestSubmit = submitted;
+		try {
+			const { container } = render(Page, {
+				data: data({
+					content: pending(),
+					trail: pending(),
+					edges: pending(),
+					mayChange: true,
+					stateVocabulary: TASK_STATES,
+				}),
+				form: null,
+			});
+			const select = stageCell(container)?.querySelector('select') as HTMLSelectElement;
+			select.value = 'done';
+			select.dispatchEvent(new Event('change', { bubbles: true }));
+			select.dispatchEvent(new Event('input', { bubbles: true }));
+			expect(submitted).not.toHaveBeenCalled();
+		} finally {
+			HTMLFormElement.prototype.requestSubmit = original;
+		}
+	});
+
+	it('will not spend a write restating the value already stored', async () => {
+		const { container } = render(Page, {
+			data: data({
+				content: pending(),
+				trail: pending(),
+				edges: pending(),
+				mayChange: true,
+				stateVocabulary: TASK_STATES,
+			}),
+			form: null,
+		});
+		const cell = stageCell(container);
+		expect((cell?.querySelector('button') as HTMLButtonElement).disabled).toBe(true);
+	});
+
+	it('offers a state the work carries that this resource has not got', async () => {
+		const { container } = render(Page, {
+			data: data({
+				content: pending(),
+				trail: pending(),
+				edges: pending(),
+				mayChange: true,
+				stateVocabulary: { ...TASK_STATES, 'temper-mode': ['plan', 'build'] },
+			}),
+			form: null,
+		});
+		const keys = [...container.querySelectorAll('.props dt')].map((dt) => dt.textContent);
+		expect(keys).toContain('temper-mode');
+		// Unset, and it cannot be set back to nothing: no door retracts a managed property, so
+		// the placeholder is not a selectable value.
+		const mode = [...container.querySelectorAll('.props .row')].find(
+			(row) => row.querySelector('dt')?.textContent === 'temper-mode',
+		);
+		const placeholder = mode?.querySelector('option[value=""]') as HTMLOptionElement;
+		expect(placeholder.disabled).toBe(true);
+	});
+
+	it('says it could not check, rather than quietly offering nothing', async () => {
+		// `no-partial-view-reads-as-complete`. A reader who may change this resource and is
+		// shown no controls must be able to tell "this kind carries no states" from "nobody
+		// asked" — the two are the same silence otherwise.
+		const { container } = render(Page, {
+			data: data({
+				content: pending(),
+				trail: pending(),
+				edges: pending(),
+				mayChange: true,
+				stateVocabulary: null,
+			}),
+			form: null,
+		});
+		expect(container.querySelector('.props select')).toBeNull();
+		expect(sentenceOf(container.querySelector('.props .unread'))).toBe(
+			'Could not read which states this kind of work carries, so none are offered.',
+		);
+	});
+
+	it('shows a refusal beside the state it was refused for', async () => {
+		const { container } = render(Page, {
+			data: data({
+				content: pending(),
+				trail: pending(),
+				edges: pending(),
+				mayChange: true,
+				stateVocabulary: TASK_STATES,
+			}),
+			form: { field: 'temper-stage', message: 'You may not change this resource.' },
+		});
+		expect(sentenceOf(stageCell(container)?.querySelector('.err'))).toBe(
+			'You may not change this resource.',
+		);
+	});
+});
+
+/**
+ * The description arm, as the reader reaches it.
+ *
+ * The fixture's open tier is `{ owner: 'Pete', priority: 'high' }` — both single values, so
+ * both are offered. The structured case gets its own render.
+ */
+describe('a reader attaches and revises their own descriptions where they read them', () => {
+	const offering = {
+		content: pending<string>(),
+		trail: pending<never>(),
+		edges: pending<never>(),
+		mayChange: true,
+		stateVocabulary: {},
+	};
+
+	const cellFor = (container: HTMLElement, key: string) =>
+		[...container.querySelectorAll('.props .row')].find(
+			(row) => row.querySelector('dt')?.textContent === key,
+		);
+
+	it('offers no description control to a reader who may not change this', () => {
+		const { container } = render(Page, {
+			data: data({ content: pending(), trail: pending(), edges: pending() }),
+			form: null,
+		});
+		expect(container.querySelector('.props input[type="text"]')).toBeNull();
+		expect(container.querySelector('.attach')).toBeNull();
+	});
+
+	it('offers revision on a description, by POST to its own action', () => {
+		const { container } = render(Page, { data: data(offering), form: null });
+		const cell = cellFor(container, 'owner');
+		const input = cell?.querySelector('input[name="value"]') as HTMLInputElement;
+		expect(input.value).toBe('Pete');
+		const form = cell?.querySelector('form') as HTMLFormElement;
+		// A DIFFERENT action from the state arm. They share a storage layer and nothing else.
+		expect(form.getAttribute('action')).toBe('?/changeDescription');
+		expect(form.getAttribute('method')?.toLowerCase()).toBe('post');
+		expect((cell?.querySelector('button') as HTMLButtonElement).disabled).toBe(true);
+	});
+
+	it('offers attaching a description the system has no field for', () => {
+		const { container } = render(Page, { data: data(offering), form: null });
+		const attach = container.querySelector('.attach') as HTMLFormElement;
+		expect(attach.getAttribute('action')).toBe('?/attachDescription');
+		expect(attach.querySelector('input[name="name"]')).not.toBeNull();
+		expect(attach.querySelector('input[name="value"]')).not.toBeNull();
+	});
+
+	it('offers nothing on a structured description, and says so', () => {
+		// The register's exclusion, made visible. `tags` is the commonest open key there is; a
+		// reader who finds no control on it and no explanation reads it as a bug.
+		const withList = makeRow({
+			title: 'The rendering approach',
+			doc_type_name: 'design',
+			open_meta: { owner: 'Pete', tags: ['a', 'b'] },
+		});
+		const { container } = render(Page, {
+			data: { ...data(offering), resource: withList } as PageData,
+			form: null,
+		});
+		expect(cellFor(container, 'tags')?.querySelector('input')).toBeNull();
+		expect(cellFor(container, 'owner')?.querySelector('input')).not.toBeNull();
+		expect([...container.querySelectorAll('.props .unread')].map((p) => sentenceOf(p))).toContain(
+			'Descriptions holding lists or nested values are not editable here.',
+		);
+	});
+
+	it('never offers a free-text control on a state the system defines', () => {
+		// The rejected equivalence, at the surface: the state arm validates against a closed
+		// vocabulary and this one cannot, so free text must never reach a managed key.
+		//
+		// `temper-branch` is here on purpose. It is a managed key with NO enum — most of them
+		// are — so a version of this that only checked the validated key would pass while free
+		// text reached every unvalidated one. The reason free text is wrong here is that the key
+		// belongs to the system, not that this particular one happens to be checked.
+		const withUnvalidatedState = makeRow({
+			title: 'The rendering approach',
+			doc_type_name: 'task',
+			managed_meta: {
+				'temper-stage': 'design',
+				'temper-branch': 'jct/x',
+				'temper-mode': null,
+				'temper-effort': null,
+				'temper-status': null,
+				'temper-seq': null,
+				'temper-pr': null,
+				'temper-llm-model': null,
+				'temper-llm-run': null,
+				'temper-provenance': null,
+			},
+			open_meta: { owner: 'Pete' },
+		});
+		const { container } = render(Page, {
+			data: {
+				...data({ ...offering, stateVocabulary: { 'temper-stage': ['backlog', 'design'] } }),
+				resource: withUnvalidatedState,
+			} as PageData,
+			form: null,
+		});
+		const stage = cellFor(container, 'temper-stage');
+		expect(stage?.querySelector('select')).not.toBeNull();
+		expect(stage?.querySelector('input[type="text"]')).toBeNull();
+
+		// And not only the state that HAS a vocabulary. A managed key with no enum — most of
+		// them — must get no free-text box either: the reason free text is wrong here is that
+		// the key belongs to the system, not that this particular one happens to be validated.
+		const managedKeys = [...container.querySelectorAll('.props .row.is-managed')].map(
+			(row) => row.querySelector('dt')?.textContent,
+		);
+		expect(managedKeys).toContain('temper-branch');
+		for (const row of container.querySelectorAll('.props .row.is-managed')) {
+			expect(
+				row.querySelector('input[type="text"]'),
+				`${row.querySelector('dt')?.textContent} is a state, not a description`,
+			).toBeNull();
+		}
+		// The description beside them still gets one, so this is not passing by offering nothing.
+		expect(cellFor(container, 'owner')?.querySelector('input[type="text"]')).not.toBeNull();
+	});
+
+	it('shows an attach refusal at the attach form, not at a row', () => {
+		const { container } = render(Page, {
+			data: data(offering),
+			form: {
+				field: '',
+				message: '"temper-stage" is a name the system owns.',
+			},
+		});
+		expect(cellFor(container, 'owner')?.querySelector('.err')).toBeNull();
+		expect(sentenceOf(container.querySelector('.props > .err'))).toBe(
+			'"temper-stage" is a name the system owns.',
+		);
 	});
 });
