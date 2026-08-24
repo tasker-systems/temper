@@ -37,13 +37,32 @@ LANGUAGE sql STABLE AS $$
     ),
     gate AS (
         -- Always exactly one row (no FROM), which is what keeps `env` non-empty for an anchor that
-        -- is unreadable OR does not exist. Disjunction carried over from 20260713000050:126-132.
+        -- is unreadable OR does not exist. Disjunction carried over from 20260713000050:126-132,
+        -- with ONE addition: the EXISTS on the cogmap arm.
+        --
+        -- **Why the EXISTS is not decoration.** The cogmap self-read arm is a tautology over two
+        -- values the CALLER supplies — setting `p_principal_id = p_anchor_id` is free and proves
+        -- nothing. That was harmless while this function returned a bare row set, because a
+        -- fabricated uuid and a real-but-empty map both answered a byte-identical `[]`. The envelope
+        -- changed that: without this conjunct a caller passing 'cogmap' learns, for ANY uuid they
+        -- invent, whether a materialized map sits behind it and WHEN it was last materialized —
+        -- from a gate that verified nothing. Demonstrated on a local instance while reviewing this
+        -- migration: `anchor_shape('kb_cogmaps', <invented>, 'cogmap', <same>, NULL)` answered
+        -- `never_clustered`, where the profile arm on the same uuid correctly answered
+        -- `unreadable_or_absent`.
+        --
+        -- Not reachable from the application — every Rust call site hardcodes 'profile' — so this
+        -- closes direct-SQL residue rather than a live leak. It is here because the COMMENT and the
+        -- ledger reason below claim "no existence oracle" WITHOUT qualification, and a safety claim
+        -- that is true of one arm and false of another is the kind of prose that outlives the person
+        -- who knew the difference. Cheaper to make the claim true than to footnote it.
         SELECT (
             (p_principal_kind = 'profile'
                  AND anchor_readable_by_profile(p_principal_id, p_anchor_table, p_anchor_id))
             OR (p_principal_kind = 'cogmap'
                  AND p_anchor_table = 'kb_cogmaps'
-                 AND p_principal_id = p_anchor_id)
+                 AND p_principal_id = p_anchor_id
+                 AND EXISTS (SELECT 1 FROM kb_cogmaps m WHERE m.id = p_anchor_id))
         ) AS readable
     ),
     regs AS (
@@ -132,11 +151,26 @@ LANGUAGE sql STABLE AS $$
                 WHEN (SELECT count(*) FROM regs) > 0       THEN 'lens_narrowed'
                 WHEN (SELECT k.eid FROM clock k) IS NULL   THEN 'never_clustered'
                 -- 'nothing_visible' DELIBERATELY does not distinguish "this anchor formed zero
-                -- regions" from "it formed regions and you can see into none of them". That is not
-                -- an oversight to be repaired with a fifth arm: separating them would tell a caller
-                -- how many regions they cannot read, which is exactly what the member gate carried
-                -- over above (20260713000050:125) exists to forbid -- "a caller is never told how
-                -- many resources they cannot read" (20260713000050:137). DO NOT ADD AN ARM HERE.
+                -- regions" from "it formed regions and you can see into none of them".
+                -- DO NOT ADD AN ARM HERE.
+                --
+                -- **The reason, stated correctly.** An earlier draft justified this by "separating
+                -- them would tell a caller how many regions they cannot read". That is the right
+                -- rule (20260713000050:137) cited for a state a PROFILE principal cannot reach: a
+                -- readable anchor's regions are built by the materialize projection from that
+                -- anchor's own homes (temper-substrate/src/substrate.rs, kb_resource_homes), and
+                -- resources_visible_to admits every resource homed in a readable anchor
+                -- (20260807000010:192-222). So "regions holding members another tenant hid from
+                -- you" is not a row the writer can produce.
+                --
+                -- What IS reachable, and what this arm actually protects, is STALE membership:
+                -- members soft-deleted (invisible on every axis, 20260807000010:224) or rehomed
+                -- away, leaving ghost regions whose visible_members is 0. Measured on prod and
+                -- recorded at substrate.rs -- 40 of 40 dead-but-homed resources were still region
+                -- members, six regions had no live member at all. Separating the two causes would
+                -- therefore disclose that regions exist here whose members are deleted or moved --
+                -- still a fact about resources the caller may not read, still forbidden, but by a
+                -- different route than the one first written down.
                 ELSE 'nothing_visible'
             END AS emptiness
         FROM gate g
@@ -149,7 +183,7 @@ LANGUAGE sql STABLE AS $$
 $$;
 
 COMMENT ON FUNCTION anchor_shape(text, uuid, text, uuid, uuid) IS
-'Surface-tier read of an anchor''s materialized regions plus an anchor-level envelope, for EITHER anchor kind. Returns AT LEAST ONE ROW always: an empty or unreadable anchor yields a single row with region_id NULL, carrying the envelope. `population` is the member-gated region count across ALL lenses (a real denominator under a lens filter); `emptiness` names why the row set is empty (unreadable_or_absent / never_clustered / nothing_visible / lens_narrowed, NULL when non-empty); `materialized_at` is the shape watermark, NULL when never clustered. Deny and absent collapse into ONE arm and disclose neither population nor clock — no existence oracle. The gate is inside the SQL. The member gate, label fallback and cogmap self-read exemption are carried unchanged from 20260713000050.';
+'Surface-tier read of an anchor''s materialized regions plus an anchor-level envelope, for EITHER anchor kind. Returns AT LEAST ONE ROW always: an empty or unreadable anchor yields a single row with region_id NULL, carrying the envelope. `population` is the member-gated region count across ALL lenses (a real denominator under a lens filter); `emptiness` names why the row set is empty (unreadable_or_absent / never_clustered / nothing_visible / lens_narrowed, NULL when non-empty); `materialized_at` is the shape watermark, NULL when never clustered. Deny and absent collapse into ONE arm and disclose neither population nor clock — no existence oracle, and that now holds on BOTH gate arms: the cogmap self-read disjunct carries an EXISTS on kb_cogmaps, without which a caller naming itself as the anchor could learn from any invented uuid whether a materialized map sat behind it, and when. The gate is inside the SQL. The member gate, label fallback and cogmap self-read exemption are carried unchanged from 20260713000050.';
 
 -- The wrapper is dead (no SQL or Rust caller reaches it), but DROPping anchor_shape strands it, and
 -- a non-additive migration should not also be a silent removal. Pinned to the six original columns
@@ -167,5 +201,5 @@ $$;
 SELECT declare_migration(
     20260823000010,
     'shape-breaking',
-    'The shape read gains an anchor-level envelope (task 01a02ebd-c153-7d22-acb6-d9fdec1b0f16). anchor_shape is DROPped and re-CREATEd with three envelope columns prepended (population, emptiness, materialized_at) and now returns AT LEAST ONE ROW always -- an empty or unreadable anchor yields a single row with region_id NULL, which is the mechanism that lets an empty answer state its cause. Shape-breaking on both counts: the return type changes, so a binary paired with the prior migration selects columns that no longer exist in that order; and the guaranteed sentinel row means an old binary reading region_id AS "region_id!" would hit a NULL it declared impossible. population is the member-gated region count across ALL lenses, so it is a real denominator under a lens filter rather than a restatement of the row count -- the regs CTE deliberately omits p_lens for exactly this reason. Deny and absent collapse into one emptiness arm disclosing neither population nor clock, so the envelope is not an existence oracle. The member gate, label fallback and cogmap self-read exemption are carried over unchanged from 20260713000050. cogmap_shape is re-CREATEd pinned to its six original columns: it has no callers, but dropping anchor_shape strands it, and a non-additive migration should not also be a silent removal -- retiring that name belongs to M3. Design: internal/superpowers/specs/2026-08-23-anchor-shape-envelope-design.md.'
+    'The shape read gains an anchor-level envelope (task 01a02ebd-c153-7d22-acb6-d9fdec1b0f16). anchor_shape is DROPped and re-CREATEd with three envelope columns prepended (population, emptiness, materialized_at) and now returns AT LEAST ONE ROW always -- an empty or unreadable anchor yields a single row with region_id NULL, which is the mechanism that lets an empty answer state its cause. Shape-breaking, and the mechanism is the SENTINEL rather than the column list: an old binary reading region_id AS "region_id!" hits a NULL it declared impossible, which is a decode error on every empty-or-denied read -- including the deliberate 200-with-no-rows deny path. An earlier draft of this reason also claimed such a binary would select "columns that no longer exist in that order"; that is false, and it is corrected here rather than left standing in an append-only ledger. The prior caller named all six columns explicitly and sqlx indexes its own select list, so ordering is irrelevant and all six columns still exist. The verdict was right and the reasoning was not, which is the shape of the 2026-07-30 misclassification DEPLOYING.md records as wrong in its reasoning rather than in its vocabulary. This migration also adds an EXISTS to the cogmap self-read gate arm: that disjunct is a tautology over two caller-supplied values, harmless while the function returned a bare row set and an existence-and-clock oracle once it returned an envelope. population is the member-gated region count across ALL lenses, so it is a real denominator under a lens filter rather than a restatement of the row count -- the regs CTE deliberately omits p_lens for exactly this reason. Deny and absent collapse into one emptiness arm disclosing neither population nor clock, so the envelope is not an existence oracle. The member gate, label fallback and cogmap self-read exemption are carried over unchanged from 20260713000050. cogmap_shape is re-CREATEd pinned to its six original columns: it has no callers, but dropping anchor_shape strands it, and a non-additive migration should not also be a silent removal -- retiring that name belongs to M3. Design: internal/superpowers/specs/2026-08-23-anchor-shape-envelope-design.md.'
 );
