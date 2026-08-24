@@ -1,10 +1,17 @@
 #![cfg(feature = "test-db")]
 //! Region materialize-on-threshold surface end-to-end (T4b): drives the REAL Axum server (in-process),
-//! real Postgres, real JWT auth, through the production `temper-client` cognitive-maps sub-client
-//! (`app.client.cognitive_maps()`), NOT raw reqwest. This is the wiring proof that pairs with the
-//! service-level unit tests (`temper_services::services::materialize_service::tests`): the direct-call
-//! tests prove the count/threshold/auth logic; this proves the route → handler → client →
-//! serialization actually connect.
+//! real Postgres, real JWT auth, through the production `temper-client` sub-clients
+//! (`app.client.cognitive_maps()` / `app.client.contexts()`), NOT raw reqwest. This is the wiring proof
+//! that pairs with the service-level unit tests
+//! (`temper_services::services::materialize_service::tests`): the direct-call tests prove the
+//! count/threshold/auth logic; this proves the route → handler → client → serialization actually
+//! connect.
+//!
+//! The delta read is anchor-generic, so BOTH of its arms are proven here — `/api/cognitive-maps/{id}/
+//! materialize-delta` and its context peer `/api/contexts/{id}/materialize-delta`. The context arm's
+//! deny posture (404, collapsing absent with unreadable) is proven where the gate lives, in
+//! `materialize_service::tests::unreadable_context_is_not_found`; what only an e2e can prove is that
+//! the route is registered, the client builds the right URL, and the typed body round-trips.
 //!
 //! The delta read gates on `anchor_readable_by_profile(profile,'kb_cogmaps',L0)`: root-team membership
 //! satisfies it (same gate the invocation + steward e2e rely on). `enable_invite_only` makes the
@@ -90,6 +97,63 @@ async fn materialize_delta_read_surface_round_trips_through_real_server(pool: sq
         .materialize_delta(unreadable, None)
         .await;
     assert!(err.is_err(), "unreadable/absent cogmap → error, not a leak");
+}
+
+/// The CONTEXT arm of the same read reaches the service through the production `ContextClient` and
+/// round-trips a typed `MaterializeDelta` addressed by the context anchor pair — with the legacy
+/// `cogmap_id` alias ABSENT, which is the wire-level tell that this is not a cogmap delta.
+///
+/// The context is created through the real API and owned by the caller, so
+/// `anchor_readable_by_profile(profile,'kb_contexts',ctx)` — which delegates to
+/// `context_readable_by_profile` (migration `20260713000010`) — admits the read.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn context_materialize_delta_read_surface_round_trips_through_real_server(
+    pool: sqlx::PgPool,
+) {
+    let app = common::setup(pool.clone()).await;
+
+    let principal = provision_profile(&app, &app.token).await;
+    common::approve(&app.pool, principal).await;
+
+    let context = app
+        .client
+        .contexts()
+        .create("materialize-delta-e2e", None)
+        .await
+        .expect("the caller creates their own context");
+    let context_id = *context.id;
+
+    // Default threshold: the typed delta round-trips, addressed by the CONTEXT anchor pair.
+    let delta = app
+        .client
+        .contexts()
+        .materialize_delta(context_id, None)
+        .await
+        .expect("materialize-delta read should succeed against a context the caller owns");
+    assert_eq!(delta.anchor_table, "kb_contexts");
+    assert_eq!(delta.anchor_id, context_id);
+    assert_eq!(
+        delta.cogmap_id, None,
+        "`cogmap_id` is populated iff the anchor is a cogmap — a context delta carrying one is a bug"
+    );
+    assert_eq!(delta.threshold, DEFAULT_MATERIALIZE_THRESHOLD);
+    assert!(delta.formation_events >= 0);
+
+    // An explicit, very high threshold round-trips and is not exceeded.
+    let with_threshold = app
+        .client
+        .contexts()
+        .materialize_delta(context_id, Some(1_000_000))
+        .await
+        .expect("materialize-delta with explicit threshold should succeed");
+    assert_eq!(with_threshold.anchor_table, "kb_contexts");
+    assert_eq!(with_threshold.anchor_id, context_id);
+    assert_eq!(with_threshold.cogmap_id, None);
+    assert_eq!(with_threshold.threshold, 1_000_000);
+    assert!(
+        !with_threshold.exceeds_threshold,
+        "a freshly created context's formation events are far below 1e6"
+    );
 }
 
 /// The materialize (trigger) route is wired and reaches the backend: triggering a cogmap the principal
