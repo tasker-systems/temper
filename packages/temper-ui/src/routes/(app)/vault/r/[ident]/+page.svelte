@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { PageData } from './$types';
+	import type { ActionData, PageData } from './$types';
 	import MarkdownRenderer from '$lib/components/MarkdownRenderer.svelte';
 	import HomeChip from '$lib/components/vault/HomeChip.svelte';
 	import PropertySet from '$lib/components/vault/PropertySet.svelte';
@@ -10,18 +10,33 @@
 	import { docTypeHue } from '$lib/graph/palette';
 	import { regionStateFor } from '$lib/region';
 
-	let { data }: { data: PageData } = $props();
+	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	// One --hue on the root tints masthead, rules, chips, toggles and rail.
 	// An unknown doc type falls back to FALLBACK_HUE — no branching needed.
 	let hue = $derived(docTypeHue(data.resource.doc_type_name));
 
+	// `stateVocabulary` is `null` both when the reader may not change this resource and when
+	// the read that says which states its kind carries did not answer — `mergeProperties` offers
+	// nothing for either, which is the honest response to both.
 	let rows = $derived(
 		mergeProperties(
 			data.resource.managed_meta as Record<string, unknown> | null | undefined,
 			data.resource.open_meta as Record<string, unknown> | null | undefined,
-			data.resource.doc_type_name
+			data.resource.doc_type_name,
+			data.stateVocabulary
 		)
+	);
+
+	// Only a degradation when the reader could otherwise have been offered something. A reader
+	// without change authority was never going to see a control, so there is nothing to explain.
+	let vocabularyUnread = $derived(data.mayChange && data.stateVocabulary === null);
+
+	// A `fail()` from the action arrives with `{ field, message }`; a success arrives with
+	// `{ field }` alone and needs no rendering — `load` has re-run and the table already shows
+	// the state that now obtains.
+	let refusal = $derived(
+		form && typeof form.message === 'string' ? { field: form.field, message: form.message } : null
 	);
 </script>
 
@@ -37,7 +52,7 @@
 			<HomeChip row={data.resource} />
 		</div>
 
-		<PropertySet {rows} />
+		<PropertySet {rows} {vocabularyUnread} {refusal} />
 
 		<!--
 			Everything above this point is the scaffold and renders from `data.resource`, which the

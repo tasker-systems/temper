@@ -8,6 +8,19 @@ export interface PropertyRow {
 	key: string;
 	value: unknown;
 	managed: boolean;
+	/**
+	 * The closed vocabulary this state may be changed to, when the surface is offering the
+	 * change. Absent means **no control is offered** — either the reader may not change this
+	 * resource, or the field carries no vocabulary, or none could be read.
+	 *
+	 * Never assembled here. It comes from `DocTypeDescription.enum_fields`
+	 * (`GET /api/schema/doc-types/{name}`), derived from the doc-type's own schema.
+	 *
+	 * A row with `choices` and `value: null` is a state the work carries and this resource
+	 * does not currently hold — offered so the reader can set it. It is the one place a
+	 * null-valued row survives.
+	 */
+	choices?: readonly string[];
 }
 
 /**
@@ -57,19 +70,39 @@ const UNRANKED = MANAGED_KEY_ORDER.length;
  *
  * Null-valued keys are dropped — the substrate never stores a null property value, so a
  * null here means "absent", not "set to nothing". (`ManagedMeta` serializes its unset
- * fields away, but the generated TS types them `T | null`, so both spellings arrive.)
+ * fields away, but the generated TS types them `T | null`, so both spellings arrive.) The one
+ * exception is a state the work carries and this resource has not got: see `choices`.
+ *
+ * `enumFields` is `DocTypeDescription.enum_fields` — which values each field of this kind of
+ * work takes, read from its own schema. Pass `null` to offer nothing: that is the shape for a
+ * reader who may not change this resource, for a doc type with no schema, and for a read that
+ * failed. Only the last is a degradation, and offering nothing is the honest response to all
+ * three.
  */
 export function mergeProperties(
 	managed: Record<string, unknown> | null | undefined,
 	open: Record<string, unknown> | null | undefined,
 	docType: string,
+	enumFields: Readonly<Record<string, readonly string[]>> | null = null,
 ): PropertyRow[] {
 	const managedRows: PropertyRow[] = [];
 	const openRows: PropertyRow[] = [];
+	const offered = new Set(Object.keys(enumFields ?? {}));
 
 	for (const [key, value] of Object.entries(managed ?? {})) {
 		if (value === null || value === undefined) continue;
-		managedRows.push({ key, value, managed: true });
+		const choices = enumFields?.[key];
+		managedRows.push(
+			choices ? { key, value, managed: true, choices } : { key, value, managed: true },
+		);
+		offered.delete(key);
+	}
+	// "No more, no FEWER." A state the kind of work carries but this resource does not hold
+	// yet is still one of its states; decorating only the rows that already exist would
+	// present a subset, and leave the reader unable to set what is missing.
+	for (const key of offered) {
+		// biome-ignore lint/style/noNonNullAssertion: `offered` is keyed from `enumFields`.
+		managedRows.push({ key, value: null, managed: true, choices: enumFields![key] });
 	}
 	for (const [key, value] of Object.entries(open ?? {})) {
 		if (value === null || value === undefined) continue;

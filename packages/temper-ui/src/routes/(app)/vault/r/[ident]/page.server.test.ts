@@ -13,24 +13,46 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const apiGet = vi.fn();
 const readTrail = vi.fn();
 const readResourceEdges = vi.fn();
+const apiPatch = vi.fn();
+
+/**
+ * The `ApiError` the module under test does `instanceof` against — the SAME class object, so a
+ * rejection minted here is recognized there. A hand-rolled `{status}` object is not: the load
+ * distinguishes a 404 (this kind carries no states) from any other failure (nobody knows), and
+ * that branch is only reachable through the real prototype.
+ */
+class ApiErrorStub extends Error {
+	status = 500;
+}
 
 vi.mock('$lib/server/api', () => ({
 	apiGet: (...a: unknown[]) => apiGet(...a),
-	ApiError: class extends Error {
-		status = 500;
-	},
+	apiPatch: (...a: unknown[]) => apiPatch(...a),
+	ApiError: ApiErrorStub,
 }));
 vi.mock('$lib/server/graph-reads', () => ({
 	readTrail: (...a: unknown[]) => readTrail(...a),
 	readResourceEdges: (...a: unknown[]) => readResourceEdges(...a),
 }));
 
-const { load } = await import('./+page.server');
+const { load, actions } = await import('./+page.server');
 
-const run = () =>
+/**
+ * The `(app)` layout's data, which this load reads through `parent()` for the authority union.
+ * `contexts` and `profile` are already loaded there, which is why offerability costs no read.
+ */
+const VIEWER = 'p-viewer';
+const CTX = 'ctx-1';
+
+const run = (parentData: Record<string, unknown> = {}) =>
 	(load as (e: unknown) => Promise<Record<string, unknown>>)({
 		locals: { accessToken: 'tok' },
 		params: { ident: 'r1' },
+		parent: async () => ({
+			contexts: [{ id: CTX, can_write: false }],
+			profile: { id: VIEWER },
+			...parentData,
+		}),
 	});
 
 beforeEach(() => {
@@ -38,11 +60,19 @@ beforeEach(() => {
 	// Dispatch on the PATH rather than on call order. Streaming moved the three fill reads above
 	// the scaffold's `await` — that ordering is the change — so an order-keyed mock would hand the
 	// never-settling promise to the resource read and time out for the wrong reason.
-	apiGet.mockImplementation((path: string) =>
-		path.endsWith('/content')
-			? new Promise(() => {})
-			: Promise.resolve({ id: 'r1', title: 'A resource' }),
-	);
+	apiGet.mockImplementation((path: string) => {
+		if (path.endsWith('/content')) return new Promise(() => {});
+		if (path.includes('/api/schema/doc-types/'))
+			return Promise.resolve({ enum_fields: { 'temper-stage': ['backlog', 'done'] } });
+		return Promise.resolve({
+			id: 'r1',
+			title: 'A resource',
+			doc_type_name: 'task',
+			kb_context_id: CTX,
+			owner_profile_id: 'p-someone-else',
+			is_active: true,
+		});
+	});
 	readTrail.mockReturnValue(new Promise(() => {}));
 	readResourceEdges.mockReturnValue(new Promise(() => {}));
 });
@@ -99,5 +129,155 @@ describe('a streamed read that fails does not take the server down with it', () 
 		} finally {
 			process.off('unhandledRejection', onUnhandled);
 		}
+	});
+});
+
+/**
+ * Offerability, decided in the load — before anything is offered, never by attempting.
+ *
+ * These sit here rather than in the component test because the component cannot see them: it
+ * receives `mayChange`/`stateVocabulary` already decided. What is at stake is *how* they were
+ * decided, and the load is where that happens.
+ */
+describe('a change is offered only where the reader holds authority to make it', () => {
+	it('offers nothing to a reader who reaches the context but cannot author into it', async () => {
+		// THE BITE. This reader can see the resource — the read succeeded — and `can_write` is
+		// false. Reach is not change authority, and a surface deriving one from the other is the
+		// fail-open shape this arm exists to prevent.
+		const data = await run();
+		expect(data.mayChange).toBe(false);
+		expect(data.stateVocabulary).toBeNull();
+	});
+
+	it('does not even ASK for the vocabulary when nothing can be offered', async () => {
+		await run();
+		const asked = apiGet.mock.calls.map(([path]) => String(path));
+		expect(asked.some((p) => p.includes('/api/schema/doc-types/'))).toBe(false);
+	});
+
+	it('offers the states the work carries to a reader who may author into the context', async () => {
+		const data = await run({ contexts: [{ id: CTX, can_write: true }] });
+		expect(data.mayChange).toBe(true);
+		// Read, not restated: the vocabulary is whatever `enum_fields` answered for this kind.
+		expect(data.stateVocabulary).toEqual({ 'temper-stage': ['backlog', 'done'] });
+		const asked = apiGet.mock.calls.map(([path]) => String(path));
+		expect(asked).toContain('/api/schema/doc-types/task');
+	});
+
+	it('treats an unreadable context list as unknown rather than as permission', async () => {
+		const data = await run({ contexts: null });
+		expect(data.mayChange).toBe(false);
+	});
+
+	it('offers nothing, definitively, for a kind with no schema', async () => {
+		// A 404 is not a failure — it is the answer that this kind of work carries no states.
+		// Live resources sit on out-of-vocabulary doc types.
+		apiGet.mockImplementation((path: string) => {
+			if (path.endsWith('/content')) return new Promise(() => {});
+			if (path.includes('/api/schema/doc-types/')) {
+				const err = new Error('no such doc type') as Error & { status: number };
+				err.status = 404;
+				Object.setPrototypeOf(err, ApiErrorStub.prototype);
+				return Promise.reject(err);
+			}
+			return Promise.resolve({
+				id: 'r1',
+				title: 'A resource',
+				doc_type_name: 'kernel_landmark',
+				kb_context_id: CTX,
+				owner_profile_id: 'p-someone-else',
+				is_active: true,
+			});
+		});
+		const data = await run({ contexts: [{ id: CTX, can_write: true }] });
+		expect(data.mayChange).toBe(true);
+		expect(data.stateVocabulary).toEqual({});
+	});
+
+	it('distinguishes a vocabulary that could not be read from one that is empty', async () => {
+		// Both offer nothing. Only one of them is a degradation the reader should be able to
+		// see, so `null` and `{}` must not collapse into each other.
+		apiGet.mockImplementation((path: string) => {
+			if (path.endsWith('/content')) return new Promise(() => {});
+			if (path.includes('/api/schema/doc-types/')) return Promise.reject(new Error('503'));
+			return Promise.resolve({
+				id: 'r1',
+				title: 'A resource',
+				doc_type_name: 'task',
+				kb_context_id: CTX,
+				owner_profile_id: 'p-someone-else',
+				is_active: true,
+			});
+		});
+		const data = await run({ contexts: [{ id: CTX, can_write: true }] });
+		expect(data.mayChange).toBe(true);
+		expect(data.stateVocabulary).toBeNull();
+	});
+});
+
+/**
+ * The change itself.
+ *
+ * The API is the authority gate and the vocabulary gate — `can_modify_resource` answers 403
+ * before anything lands, `ManagedMeta`'s `deny_unknown_fields` refuses a key that is not a
+ * managed state, frontmatter validation refuses a value outside the field's enum, and the
+ * shared applicability gate refuses a state this kind of work does not carry. What is asserted
+ * here is what the SURFACE owes: that it sends only what was shown, and that a refusal reaches
+ * the reader instead of the page.
+ */
+const submit = (field: unknown, value: unknown) =>
+	(actions.changeState as (e: unknown) => Promise<unknown>)({
+		locals: { accessToken: 'tok' },
+		params: { ident: 'r1' },
+		request: {
+			formData: async () =>
+				new Map([
+					['field', field],
+					['value', value],
+				]) as unknown as FormData,
+		},
+	});
+
+describe('changing a state the system defines', () => {
+	it('sends exactly the one field asked for, and nothing else', async () => {
+		// `no-write-lands-outside-what-was-shown`. `managed_meta` is a partial merge, so a
+		// payload carrying a second key would silently restate it — and PATCH would accept that.
+		apiPatch.mockResolvedValue({ id: 'r1' });
+		await submit('temper-stage', 'done');
+		expect(apiPatch).toHaveBeenCalledTimes(1);
+		const [path, , body] = apiPatch.mock.calls[0];
+		expect(path).toBe('/api/resources/r1');
+		expect(body).toEqual({ managed_meta: { 'temper-stage': 'done' } });
+	});
+
+	it('hands a refusal back to the reader rather than throwing the page away', async () => {
+		const err = new ApiErrorStub('this kind of work does not carry that state');
+		err.status = 400;
+		apiPatch.mockRejectedValue(err);
+		const result = (await submit('temper-stage', 'nonsense')) as {
+			status: number;
+			data: { field: string; message: string };
+		};
+		expect(result.status).toBe(400);
+		expect(result.data).toEqual({
+			field: 'temper-stage',
+			message: 'this kind of work does not carry that state',
+		});
+	});
+
+	it('writes nothing when the form carries nothing to change', async () => {
+		apiPatch.mockResolvedValue({ id: 'r1' });
+		const result = (await submit('temper-stage', '')) as { status: number };
+		expect(result.status).toBe(400);
+		expect(apiPatch).not.toHaveBeenCalled();
+	});
+
+	it('no reading act becomes a changing one: the load writes nothing', async () => {
+		// The clause fails silently when it fails, so it is worth an assertion rather than an
+		// argument. Every load path here — including the one that reads the vocabulary — must
+		// leave the write door untouched.
+		apiPatch.mockResolvedValue({ id: 'r1' });
+		await run({ contexts: [{ id: CTX, can_write: true }] });
+		expect(apiPatch).not.toHaveBeenCalled();
 	});
 });

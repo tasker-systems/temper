@@ -1,8 +1,23 @@
 <script lang="ts">
 	import type { PropertyRow } from '$lib/properties';
 	import PropertyValue from './PropertyValue.svelte';
+	import StateControl from './StateControl.svelte';
 
-	let { rows }: { rows: PropertyRow[] } = $props();
+	let {
+		rows,
+		vocabularyUnread = false,
+		refusal = null,
+	}: {
+		rows: PropertyRow[];
+		/**
+		 * The reader may change this resource, and the read that says which states its kind of
+		 * work carries did not answer. Distinct from *this kind carries none*: both offer
+		 * nothing, and only one of them is a degradation the reader should be able to see.
+		 */
+		vocabularyUnread?: boolean;
+		/** The field whose last attempted change was refused, and what it was refused with. */
+		refusal?: { field: string | null; message: string } | null;
+	} = $props();
 
 	// The rule between the managed run and the open run. Managed keys always
 	// lead (mergeProperties guarantees the order), so this is the first open row.
@@ -18,10 +33,29 @@
 			{/if}
 			<div class="row" class:is-managed={row.managed}>
 				<dt>{row.key}</dt>
-				<dd><PropertyValue value={row.value} /></dd>
+				<dd>
+					{#if row.choices}
+						<StateControl
+							field={row.key}
+							current={typeof row.value === 'string' ? row.value : null}
+							choices={row.choices}
+							error={refusal?.field === row.key ? refusal.message : null}
+						/>
+					{:else}
+						<PropertyValue value={row.value} />
+					{/if}
+				</dd>
 			</div>
 		{/each}
 	</dl>
+	{#if vocabularyUnread}
+		<p class="unread" role="status">
+			Could not read which states this kind of work carries, so none are offered.
+		</p>
+	{/if}
+	{#if refusal && refusal.field === null}
+		<p class="unread" role="alert">{refusal.message}</p>
+	{/if}
 </div>
 
 <style>
@@ -60,6 +94,12 @@
 	/* Managed keys tint toward the doc-type hue; open keys stay neutral (spec D2). */
 	.row.is-managed dt {
 		color: color-mix(in srgb, var(--hue) 52%, var(--color-quiet-dim));
+	}
+	.unread {
+		font-family: var(--font-mono);
+		font-size: 10.5px;
+		color: var(--color-quiet-dim);
+		margin: 9px 0 0;
 	}
 	hr {
 		border: 0;

@@ -93,4 +93,74 @@ describe('mergeProperties', () => {
 		// managed run" from "at the head of the open run", so it is what this asserts.
 		expect(rows.map((r) => r.managed)).toEqual([true, true, true, true]);
 	});
+
+	describe('offered state controls', () => {
+		// `enumFields` is `DocTypeDescription.enum_fields`, read from
+		// `GET /api/schema/doc-types/{name}` — the doc-type's own schema, never a set this
+		// surface chose. It is passed as `null` whenever the reader may not change the
+		// resource, so a read-only view is byte-identical to what it was before this arm.
+		const TASK = {
+			'temper-stage': ['backlog', 'in-progress', 'done', 'cancelled'],
+			'temper-mode': ['plan', 'build'],
+			'temper-effort': ['small', 'medium', 'large'],
+		};
+
+		it('offers exactly the values the schema carries, on the field that carries them', () => {
+			const rows = mergeProperties({ 'temper-stage': 'backlog' }, null, 'task', TASK);
+			const stage = rows.find((r) => r.key === 'temper-stage');
+			expect(stage?.choices).toEqual(['backlog', 'in-progress', 'done', 'cancelled']);
+		});
+
+		it('offers nothing on a field with no closed vocabulary', () => {
+			// `temper-branch` is a managed key with no enum. A control here would be the
+			// surface inventing a vocabulary — no more, no fewer, and not a set it chose.
+			const rows = mergeProperties(
+				{ 'temper-stage': 'done', 'temper-branch': 'jct/x' },
+				{ alpha: 1 },
+				'task',
+				TASK,
+			);
+			expect(rows.find((r) => r.key === 'temper-branch')?.choices).toBeUndefined();
+			expect(rows.find((r) => r.key === 'alpha')?.choices).toBeUndefined();
+			expect(rows.find((r) => r.key === 'doc_type')?.choices).toBeUndefined();
+		});
+
+		it('offers a state the work carries but does not currently hold', () => {
+			// "no more, no FEWER". A task carries `temper-mode` whether or not this one has a
+			// value; a surface that only decorated existing rows would present a subset of the
+			// states the work carries, and the reader could never set the missing ones.
+			const rows = mergeProperties({ 'temper-stage': 'done' }, null, 'task', TASK);
+			const mode = rows.find((r) => r.key === 'temper-mode');
+			expect(mode).toEqual({
+				key: 'temper-mode',
+				value: null,
+				managed: true,
+				choices: ['plan', 'build'],
+			});
+			// It sits in the managed run at its editorial rank, not appended at the end.
+			expect(rows.map((r) => r.key)).toEqual([
+				'doc_type',
+				'temper-stage',
+				'temper-mode',
+				'temper-effort',
+			]);
+		});
+
+		it('offers nothing at all for a kind that carries no vocabulary', () => {
+			// Measured across all 14 embedded schemas: only `task` and `goal` declare an enum
+			// in their own properties. Twelve kinds get no control, and that is the clause
+			// holding rather than a gap.
+			const rows = mergeProperties({ 'temper-provenance': 'user-created' }, null, 'concept', {});
+			expect(rows.every((r) => r.choices === undefined)).toBe(true);
+			expect(rows.map((r) => r.key)).toEqual(['doc_type', 'temper-provenance']);
+		});
+
+		it('offers nothing when the vocabulary could not be read', () => {
+			// A 404 (out-of-vocabulary doc type) or a failed read arrives as null. An
+			// affordance must never be offered over an answer nobody got.
+			const rows = mergeProperties({ 'temper-stage': 'done' }, null, 'task', null);
+			expect(rows.every((r) => r.choices === undefined)).toBe(true);
+			expect(rows.map((r) => r.key)).toEqual(['doc_type', 'temper-stage']);
+		});
+	});
 });
