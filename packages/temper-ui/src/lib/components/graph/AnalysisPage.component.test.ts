@@ -298,6 +298,50 @@ describe('an empty groupings list tells the person which cause they are in', () 
 	 * microtask queue lets `emptiness` — which settles now — paint if anything is wired to let it,
 	 * while `regions` never settles. Only then is a null assertion evidence of anything.
 	 */
+	/**
+	 * **The region has to exist BEFORE the read settles, or it announces nothing.**
+	 *
+	 * This is the assertion that separates the real fix from the one it replaced. A `role="status"`
+	 * put on the settled paragraph looks right in a diff and is mounted together with its text,
+	 * which is the one shape assistive tech commonly ignores. So asserting "the sentence has
+	 * role=status" would have passed against the broken version; asserting "a live region was
+	 * already there, empty, while the read was in flight" does not.
+	 */
+	const pendingRegions = () => new Promise<AnalysedRegion[]>(() => {});
+
+	it('has an empty live region in the DOM while the read is still in flight', () => {
+		const { container } = render(AnalysisPage, {
+			data: contextView({ regions: pendingRegions(), emptiness: 'never_clustered' }),
+		});
+		const region = container.querySelector('[data-testid="measurement-announcement"]');
+
+		expect(region, 'the live region must exist before the read settles').not.toBeNull();
+		expect(region?.getAttribute('role')).toBe('status');
+		expect(region?.textContent).toBe('');
+	});
+
+	it('announces the cause into that same region once the read settles', async () => {
+		const { container } = await painted(contextView({ regions: [], emptiness: 'nothing_visible' }));
+
+		await vi.waitFor(() => {
+			const said =
+				container.querySelector('[data-testid="measurement-announcement"]')?.textContent ?? '';
+			expect(said).toContain('nothing came back that you can read');
+		});
+	});
+
+	/**
+	 * Exactly one announcer. The visible paragraph is purely visual now — two live regions carrying
+	 * the same sentence would read it twice.
+	 */
+	it('does not also mark the visible sentence as a live region', async () => {
+		const { container } = await painted(contextView({ regions: [], emptiness: 'never_clustered' }));
+
+		expect(
+			container.querySelector('[data-testid="grouping-count"]')?.getAttribute('role'),
+		).toBeNull();
+	});
+
 	it('does not paint a cause while the rows are still arriving', async () => {
 		const { container } = render(AnalysisPage, {
 			data: contextView({

@@ -54,6 +54,45 @@
 		return all;
 	});
 
+	/**
+	 * **The one live region on this route, and it is mounted before any read settles.**
+	 *
+	 * `RegionState state="arriving"` carries `role="status"`, and it works — on first paint it is
+	 * part of the initial content a screen reader reads. What did not work was the TRANSITION: when
+	 * `measurements` settles, Svelte tears that branch down, destroying the only live region, and
+	 * mounts fresh nodes in its place. A live region added to the DOM together with its text is
+	 * commonly not announced at all — the region has to already exist for a change inside it to be
+	 * a change. So the reader was told "Loading measurements…" and then told nothing, and the
+	 * `role="status"` first put on the settled paragraph was very likely announcing nothing either.
+	 *
+	 * This element exists from first paint, outside `{#await}`, and only its TEXT changes. That is
+	 * the shape that actually announces.
+	 *
+	 * **Scoped to the settled groupings outcome, deliberately.** The `{:catch}` branch already mounts
+	 * a `RegionState` that owns the failure wording for three surfaces; repeating that sentence here
+	 * would make two sources of truth for it. That node has the same fresh-mount weakness, and fixing
+	 * it is a change to `RegionState` itself — which `GraphPage` and `NodeRail` also render.
+	 */
+	let announced = $state('');
+
+	$effect(() => {
+		const read = measurements;
+		const place = data.place;
+		let live = true;
+
+		read.then(([regions, , , emptiness]) => {
+			// A late arrival from a superseded read must not narrate over the current one.
+			if (!live || !place) return;
+			announced = describeGroupingCount(regions.length, emptiness, place);
+		}).catch(() => {
+			// Owned by RegionState in `{:catch}`, per the note above.
+		});
+
+		return () => {
+			live = false;
+		};
+	});
+
 	const placeHref = $derived(
 		data.place
 			? graphHref(data.owner, { anchors: [{ kind: data.place.kind, ref: data.place.ref }] })
@@ -130,6 +169,10 @@
 
 			ONE await for both sections. They are two views of a single read, so they arrive together.
 		-->
+		<!-- Outside `{#await}` on purpose: see `announced`. Empty until the read settles, because
+		     the arriving sentence is already carried by the marker inside the await below. -->
+		<p class="sr-only" role="status" data-testid="measurement-announcement">{announced}</p>
+
 		{#await measurements}
 			<div class="region-slot">
 				<RegionState state="arriving" label="measurements" />
@@ -186,20 +229,16 @@
 				-->
 				{#if regions.length === 0}
 					<!--
-						The empty spelling gets `.declared-absent` and `role="status"`, and neither is
-						cosmetic. `.lead` is sized for the one-line row count this used to be; these
-						sentences are declarations of the same species as `CONTEXT_HAS_NO_MAP_READOUT`,
-						which already uses that treatment. And this is the WHOLE content of the section
-						for a screen-reader user, arriving after a wait they were told about — the
-						`{#await}` pending branch's `RegionState` is `role="status"`, and it is torn down
-						when the read settles, so without this nothing is announced at all.
+						`.declared-absent` rather than `.lead` alone: `.lead` is sized for the one-line
+						row count this used to be, and these sentences are declarations of the same
+						species as `CONTEXT_HAS_NO_MAP_READOUT`, which already uses that treatment.
 
-						Stated honestly: this is a HALF fix for the announcement. The node is inserted
-						together with its text rather than mutated inside a region that already existed,
-						and AT behaviour there varies. The reliable shape is a live region mounted before
-						the await settles; that is a change to how this route streams, not to this line.
+						No `role="status"` here, and that is the fix rather than its absence. This node
+						is mounted together with its text when the read settles, which is exactly the
+						shape a screen reader does not announce. The announcing is done by the live
+						region above the `{#await}`, which exists from first paint — see `announced`.
 					-->
-					<p class="lead declared-absent" data-testid="grouping-count" role="status">
+					<p class="lead declared-absent" data-testid="grouping-count">
 						{describeGroupingCount(0, emptiness, place)}
 					</p>
 				{:else}
@@ -283,6 +322,14 @@
 </div>
 
 <style>
+	.sr-only {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip: rect(0 0 0 0);
+		white-space: nowrap;
+	}
 	.analysis {
 		display: flex;
 		flex-direction: column;
