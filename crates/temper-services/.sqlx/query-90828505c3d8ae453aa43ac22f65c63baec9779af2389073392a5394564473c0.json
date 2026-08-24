@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT shape_materialized_event_id AS \"watermark: Uuid\"\n                  FROM kb_contexts\n                 WHERE id = $1\n                   AND anchor_readable_by_profile($2, 'kb_contexts', $1)\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "watermark: Uuid",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "90828505c3d8ae453aa43ac22f65c63baec9779af2389073392a5394564473c0"
+}

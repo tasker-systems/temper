@@ -328,6 +328,25 @@ describe('a refusal is a refusal, never a widened answer', () => {
 		expect(screen.getByText(/See everything you can read/)).toBeTruthy();
 	});
 
+	/**
+	 * The same inverted singular as the analysis door's twin of this sentence, spelled differently:
+	 * here the ternary IS a real number agreement (`? 'is' : 'are'`), which is why the missing
+	 * negation read as correct grammar and survived. It rendered "The place this link names is
+	 * available to you now" — directly under a comment promising that a place the reader cannot read
+	 * "is absent, never hinted at".
+	 */
+	it('tells a reader who named ONE unavailable place that it is not available to them', async () => {
+		const { container } = render(GraphPage, {
+			data: view({ refusal: { kind: 'no-place-resolved', named: 1 }, bound: null, readout: null }),
+		});
+		const said = container.querySelector('.refusal p')?.textContent?.replace(/\s+/g, ' ') ?? '';
+
+		expect(said).toContain('The place this link names is not available to you now');
+		expect(said, 'the inverted claim must be unreachable').not.toMatch(
+			/The place this link names is available to you now/,
+		);
+	});
+
 	it('draws no canvas at all, rather than an empty one that looks like an answer', async () => {
 		const { container } = render(GraphPage, {
 			data: view({ refusal: { kind: 'nothing-to-ask' }, bound: null, readout: null }),

@@ -16,6 +16,7 @@ import {
 	distributionOf,
 	formatValue,
 	METRICS,
+	materializeCommandFor,
 	positionOn,
 	reportMetrics,
 } from './analysis';
@@ -283,10 +284,226 @@ describe('what a context genuinely does not have is declared, not fabricated', (
 	});
 
 	test('the grouping count says whose order it is showing', () => {
-		expect(describeGroupingCount(406)).toBe(
+		expect(describeGroupingCount(406, null, CTX)).toBe(
 			'406 groupings, in the order this place itself ranks them.',
 		);
-		expect(describeGroupingCount(0)).toBe('This place has no groupings yet.');
+		expect(describeGroupingCount(1, null, CTX)).toBe(
+			'1 grouping, in the order this place itself ranks them.',
+		);
+	});
+});
+
+/**
+ * The four causes, and the one claim the page used to make for all of them.
+ *
+ * The bite these have to take is against the OLD behaviour: `describeGroupingCount(0)` returned
+ * "This place has no groupings yet." unconditionally, and its *yet* asserts `never_clustered`. So
+ * the falsifying assertion is not "each arm produces a string" — every arm did, before — it is that
+ * the three arms which are NOT `never_clustered` produce a sentence the never-clustered reader would
+ * not be shown, and vice versa. A test that only checked non-emptiness would have passed against the
+ * defect.
+ */
+const CTX = { kind: 'context', ref: '@me/temper' } as const;
+const MAP = { kind: 'cogmap', ref: '019f2391-e001-7933-b88a-28fb92e56ac1' } as const;
+
+describe('an empty groupings list says which of the four causes it is', () => {
+	const ARMS = [
+		'never_clustered',
+		'nothing_visible',
+		'lens_narrowed',
+		'unreadable_or_absent',
+	] as const;
+
+	test('no two causes are spelled alike — the defect was one sentence for all four', () => {
+		const said = ARMS.map((a) => describeGroupingCount(0, a, CTX));
+		expect(
+			new Set(said).size,
+			`four causes produced ${new Set(said).size} distinct sentences`,
+		).toBe(4);
+		// The exact sentence the defect produced must no longer be reachable from ANY arm.
+		expect(said).not.toContain('This place has no groupings yet.');
+	});
+
+	test('never_clustered says nothing is broken, because nothing is', () => {
+		const s = describeGroupingCount(0, 'never_clustered', CTX);
+		expect(s).toContain('never been grouped');
+		expect(s).toContain('Nothing here is broken');
+	});
+
+	/**
+	 * This is the one cause with a real next move, and there is no in-app way to take it — so the
+	 * sentence has to send the reader outside the page or leave them waiting for something that will
+	 * never happen on its own. The CLI and MCP doors both name the command; withholding it from the
+	 * reader who cannot look it up in a Rust signature inverts the point of this work.
+	 */
+	test('never_clustered names the permission and who to ask without it', () => {
+		const s = describeGroupingCount(0, 'never_clustered', CTX);
+		expect(s, 'must name the permission it needs').toContain('write access');
+		expect(s, 'must say what to do without that permission').toContain('ask whoever does');
+		// Agentless passive is what made the first draft unactionable: it named no actor at all.
+		expect(s).not.toContain('are built by a separate pass');
+	});
+
+	/**
+	 * **The command is a bare command line, rendered by the page as a `<code>` beneath the sentence.**
+	 * An earlier draft interpolated it INTO the prose wrapped in backticks. It read correctly in the
+	 * source and rendered as literal backtick characters inside an italic paragraph — the one string
+	 * on the page meant to be copied verbatim, in the one treatment that makes a command hard to read.
+	 * `toBe` rather than `toContain` here on purpose: `toContain` is precisely what let the backticks
+	 * through, because they sat inside the expected substring.
+	 */
+	test('the command is bare — no markup, quoting or stray punctuation', () => {
+		for (const place of [CTX, MAP]) {
+			const cmd = materializeCommandFor('never_clustered', place) ?? '';
+			expect(cmd).toMatch(/^temper (context|cogmap) materialize [^`'"]*$/);
+			expect(cmd).not.toContain('`');
+			expect(cmd.trim()).toBe(cmd);
+		}
+	});
+
+	/** Only one arm has an action; the rest must offer no command line at all. */
+	test('offers no command for the three causes that have no action', () => {
+		for (const arm of ['nothing_visible', 'lens_narrowed', 'unreadable_or_absent'] as const) {
+			expect(materializeCommandFor(arm, CTX), arm).toBeNull();
+		}
+	});
+
+	test('the sentence itself carries neither the command nor its backticks', () => {
+		const said = describeGroupingCount(0, 'never_clustered', CTX);
+		expect(said).not.toContain('`');
+		expect(said).not.toContain('temper context materialize');
+		expect(said, 'must lead into the command rendered beneath it').toMatch(/by running:$/);
+	});
+
+	/**
+	 * **The command is the one THIS reader needs, with the argument they would have to supply.**
+	 * The page knows the kind and the ref; making the reader pick from a parenthetical is the page
+	 * handing back work it had already done.
+	 */
+	test('names the one command for this kind of place, with its ref', () => {
+		expect(materializeCommandFor('never_clustered', CTX)).toBe(
+			'temper context materialize @me/temper',
+		);
+		expect(materializeCommandFor('never_clustered', MAP)).toBe(
+			'temper cogmap materialize 019f2391-e001-7933-b88a-28fb92e56ac1',
+		);
+	});
+
+	/**
+	 * **A ref that cannot be rendered safely loses the ARGUMENT, not the command.**
+	 * A cogmap ref is a bare uuid and is safe by construction, but a context's is
+	 * `${owner_ref}/${slug}` and no production gate on that slug could be found — `validate_slug`
+	 * guards `CreateResource` only and the column has no CHECK. So a ref that is not obviously safe
+	 * degrades to a correct command needing one more word, never to one that looks exact and is
+	 * wrong. This surface exists because it used to state things it could not know.
+	 */
+	test('an unsafe-looking ref drops the argument rather than rendering a wrong command', () => {
+		for (const ref of ['@me/a b', '@me/x;rm -rf /', '@me/$(whoami)', "@me/it's"]) {
+			const cmd = materializeCommandFor('never_clustered', { kind: 'context', ref });
+			expect(cmd, `${ref} must not reach the command line`).toBe('temper context materialize');
+		}
+	});
+
+	/** Outside the measured branch the page does not know the kind, so naming both is the honest form. */
+	test('with no place in hand it describes the command rather than naming one', () => {
+		const said = describeGroupingCount(0, 'never_clustered', null);
+		expect(said).toContain('the materialize command');
+		expect(said, 'still a whole sentence, with no command rendered beneath it').toMatch(/\.$/);
+		expect(materializeCommandFor('never_clustered', null)).toBeNull();
+	});
+
+	/**
+	 * `describeStaleness` renders on the SAME page for the SAME never-materialized anchor and spells
+	 * this event "worked out". A second verb for one event reads as a second thing that has not
+	 * happened, which is a comprehension regression rather than a wording preference.
+	 */
+	test("never_clustered shares describeStaleness's verb for the one event they both describe", () => {
+		expect(
+			describeStaleness({
+				materialized_at: null,
+				latest_touch: null,
+				is_stale: true,
+			}),
+		).toContain('worked out');
+		expect(describeGroupingCount(0, 'never_clustered', CTX)).toContain('worked out');
+	});
+
+	/**
+	 * The load-bearing one. `nothing_visible` is reached BOTH when the anchor formed no regions and
+	 * when it formed regions holding nothing this reader can see, and separating those two is what
+	 * the member gate forbids (`20260713000050:137`). So this asserts the wording carries both
+	 * possibilities AND tells the reader not to conclude they lack access — a sentence naming only
+	 * the invisible-members half would be the disclosure the gate refuses, and one naming only the
+	 * no-regions half is the wording defect that was already fixed at the other doors.
+	 */
+	test('nothing_visible names both of its causes and forbids the access conclusion', () => {
+		const s = describeGroupingCount(0, 'nothing_visible', CTX);
+		expect(s, 'must allow "it formed no groupings"').toContain('no groupings at all');
+		expect(s, 'must allow "you cannot see into them"').toContain('not yours to see');
+		expect(s, 'must not let the reader conclude they lack access').toContain(
+			'not evidence that you are missing access',
+		);
+		// It must NOT claim the place was never grouped — it was.
+		expect(s).toContain('has been grouped');
+	});
+
+	test('unreadable_or_absent refuses to say which of the two it is', () => {
+		const s = describeGroupingCount(0, 'unreadable_or_absent', CTX);
+		expect(s).toContain('not readable by you or it is not there');
+		expect(s).toContain('cannot tell you which');
+	});
+
+	/**
+	 * On this route the `<h1>` has already rendered the place's title, from the reader's own anchor
+	 * list. So a sentence claiming the page cannot say whether the place is there contradicts the
+	 * heading directly above it. Scoped to the measurements, it does not.
+	 */
+	test('unreadable_or_absent does not contradict the heading that already named the place', () => {
+		const s = describeGroupingCount(0, 'unreadable_or_absent', CTX);
+		expect(s).toContain('The measurements for this place');
+		expect(s, 'the page has already named the place in its h1').not.toMatch(
+			/^This place could not be read/,
+		);
+	});
+
+	/** The guard has to rest on something the reader can parse, not on how answers reach a page. */
+	test('nothing_visible grounds its guard in the page, not in the wire', () => {
+		const s = describeGroupingCount(0, 'nothing_visible', CTX);
+		expect(s).toContain('This page deliberately cannot tell you which');
+		expect(s, 'system-facing bridge the reader has no referent for').not.toContain(
+			'arrive as one answer',
+		);
+		expect(s, 'must offer the ask-for-access half of the next move').toContain('ask whoever runs');
+	});
+
+	test('lens_narrowed points at the lens, not at the place', () => {
+		const s = describeGroupingCount(0, 'lens_narrowed', CTX);
+		expect(s).toContain('This place has groupings');
+		expect(s).toContain('Widening the view');
+	});
+
+	/**
+	 * `emptiness: null` on an empty set is a state the server does not produce — the SQL sets it
+	 * non-NULL exactly when the row set is empty — so the receiver must not invent a cause for it.
+	 */
+	/**
+	 * A server predating `20260823000010` sends no `emptiness` key, so `undefined` arrives where the
+	 * type says it cannot. Without a `default` the switch falls off the end and a `: string` function
+	 * returns `undefined`, which the page renders as the literal word "undefined". Cast rather than
+	 * typed, because the point is exactly that the type does not admit this and the wire does.
+	 */
+	test('a wire value the type does not admit still gets a sentence, not "undefined"', () => {
+		const s = describeGroupingCount(0, undefined as unknown as null, CTX);
+		expect(s).toBe('No groupings came back, and the read did not say why.');
+		expect(s).not.toBe(undefined);
+	});
+
+	test('no cause given is said as no cause given, never guessed at', () => {
+		const s = describeGroupingCount(0, null, CTX);
+		expect(s).toBe('No groupings came back, and the read did not say why.');
+		for (const claim of ['never been grouped', 'has been grouped', 'not readable by you']) {
+			expect(s, `must not assert "${claim}"`).not.toContain(claim);
+		}
 	});
 });
 

@@ -18,6 +18,7 @@ import type {
 	CogmapAnalyticsRow,
 	CogmapRegionMetricsRow,
 	CogmapRegionRow,
+	ShapeEmptiness,
 } from '$lib/types/generated/cognitive_maps';
 import type { AtlasEntry, AtlasSubgraph } from '$lib/types/generated/graph_atlas';
 import type { QueryResponse } from '$lib/types/generated/query';
@@ -43,6 +44,11 @@ export interface CompositionScenario {
 	surveyStages: string[];
 	walkStage: string;
 	response: QueryResponse;
+	/**
+	 * The region ROWS, not the shape envelope. The door answers an `AnchorShape`;
+	 * `capture-graph-fixtures.ts` takes `.regions` at capture time, exactly where
+	 * `readAnchorRegions` takes it at load time, so this field feeds `RegionLookup.rows` unchanged.
+	 */
 	shape_rows: CogmapRegionRow[];
 }
 
@@ -76,7 +82,15 @@ export interface HarnessBundle {
 }
 
 /** The keys that are the bundle's own bookkeeping rather than a scenario. */
-const META_KEYS = new Set(['_captured', '_sanitized', '_anchors']);
+const META_KEYS = new Set([
+	'_captured',
+	'_sanitized',
+	'_anchors',
+	// Provenance for the `authored_*` scenarios: WRITTEN, not observed. A fixed set, so a new
+	// bookkeeping key that is not added here becomes a SCENARIO and fails the key-set guard loudly
+	// rather than quietly rendering as one.
+	'_authored',
+]);
 
 export const scenarioNames = (bundle: HarnessBundle): string[] =>
 	Object.keys(bundle).filter((k) => !META_KEYS.has(k));
@@ -204,7 +218,26 @@ export function viewFor(bundle: HarnessBundle, name: string): GraphViewData {
 export interface AnalysisScenario {
 	name?: string;
 	ref?: string;
+	/** The region ROWS — `AnchorShape.regions`, as `readAnchorAnalysis` hands them to the door. */
 	shape: CogmapRegionRow[];
+	/**
+	 * `AnchorShape.emptiness` — why `shape` is empty, when it is.
+	 *
+	 * **Optional, and absent from the committed bundle**, which was captured on 2026-08-20 against
+	 * the deployed API — before the shape read carried an envelope at all. So the one zero-row
+	 * scenario in it (`cogmap_never_materialized`) resolves to `null` here and `/dev/analysis`
+	 * renders the no-cause-given wording for it.
+	 *
+	 * That is deliberate rather than an omission waiting to be tidied. The obvious tidy is to write
+	 * `'never_clustered'` into the fixture — its `analytics.staleness.materialized_at` is `null`, so
+	 * the value would even be *right* — but the capture never observed an `emptiness`, and a fixture
+	 * that states what a read said when the read did not say it is a synthesized guarantee. The
+	 * other tidy, deriving the arm here from the captured fields, would put a second copy of
+	 * `anchor_shape`'s arm cascade in TypeScript, free to drift from the SQL that owns it. The
+	 * remainder is named instead: this bundle needs a re-capture to exercise the caused wordings on
+	 * `/dev/analysis`, and until it gets one the four sentences are covered by their own tests.
+	 */
+	emptiness?: ShapeEmptiness | null;
 	region_metrics: CogmapRegionMetricsRow[] | null;
 	analytics?: CogmapAnalyticsRow | null;
 }
@@ -249,6 +282,7 @@ export function analysisViewFor(bundle: AnalysisBundle, name: string): AnalysisV
 		refusal: null,
 		regions: settled(shape.regions),
 		metricsAvailable: settled(shape.metricsAvailable),
+		emptiness: settled(s.emptiness ?? null),
 		map: settled(
 			s.analytics
 				? {

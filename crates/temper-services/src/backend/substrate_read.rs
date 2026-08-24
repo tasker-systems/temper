@@ -33,8 +33,8 @@ use temper_core::types::api::{
     WideArm, WideHit,
 };
 use temper_core::types::cognitive_maps::{
-    CharterBlock, CogmapAnalyticsRow, CogmapRegionMetricsRow, CogmapRegionRow, CogmapRegulationRow,
-    CogmapStaleness,
+    AnchorShape, CharterBlock, CogmapAnalyticsRow, CogmapRegionMetricsRow, CogmapRegionRow,
+    CogmapRegulationRow, CogmapStaleness, ShapeEmptiness,
 };
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{
@@ -1300,29 +1300,61 @@ fn arm_reason(hits: usize) -> SearchReason {
 
 /// `anchor_shape` — the surface-tier read of an anchor's materialized regions, for a context OR a
 /// cogmap (spec §3.7, T8). Service-direct (reads bypass the Backend trait). The access gate lives in
-/// the SQL function: a principal who cannot read the anchor gets an empty vec, never an error — and
-/// for a context that gate is `context_readable_by_profile`, so a context read-grant grants this read
-/// by construction rather than by a second hand-rolled check. Maps the substrate row to the wire type.
+/// the SQL function: a principal who cannot read the anchor gets an empty envelope, never an error —
+/// and for a context that gate is `context_readable_by_profile`, so a context read-grant grants this
+/// read by construction rather than by a second hand-rolled check. Maps the substrate rows to the
+/// wire type.
+///
+/// The answer is an [`AnchorShape`], not a bare list: an empty list has nowhere to carry WHY it is
+/// empty, and "never clustered" and "nothing you can see" were byte-identical `[]` before this. A
+/// denied caller receives `emptiness: UnreadableOrAbsent` with `population: 0` and no clock — which
+/// discloses strictly less than a 403 would, and stays a 200. `materialize_delta`'s
+/// `NotFound`-on-deny posture is correct for that surface and deliberately does not travel here
+/// (design §3.4).
 pub async fn anchor_shape_select(
     pool: &PgPool,
     profile_id: ProfileId,
     anchor: HomeAnchor,
     lens_id: Option<uuid::Uuid>,
-) -> ApiResult<Vec<CogmapRegionRow>> {
-    let rows = readback::anchor_shape(pool, anchor, profile_id, lens_id.map(LensId::from))
+) -> ApiResult<AnchorShape> {
+    let out = readback::anchor_shape(pool, anchor, profile_id, lens_id.map(LensId::from))
         .await
         .map_err(api_err)?;
-    Ok(rows
-        .into_iter()
-        .map(|r| CogmapRegionRow {
-            region_id: r.region_id,
-            lens_id: r.lens_id,
-            salience: r.salience,
-            content_cohesion: r.content_cohesion,
-            label: r.label,
-            member_count: r.member_count,
-        })
-        .collect())
+
+    // The SQL discriminant is mapped here, exhaustively. An unrecognized arm means the migration and
+    // this match have drifted, which is a deploy-time bug — surface it rather than coercing it to a
+    // plausible variant and hiding it.
+    let emptiness = match out.emptiness.as_deref() {
+        None => None,
+        Some("lens_narrowed") => Some(ShapeEmptiness::LensNarrowed),
+        Some("nothing_visible") => Some(ShapeEmptiness::NothingVisible),
+        Some("never_clustered") => Some(ShapeEmptiness::NeverClustered),
+        Some("unreadable_or_absent") => Some(ShapeEmptiness::UnreadableOrAbsent),
+        Some(other) => {
+            return Err(ApiError::Internal(format!(
+                "anchor_shape returned an unknown emptiness arm {other:?} — migration and \
+                 ShapeEmptiness have drifted"
+            )))
+        }
+    };
+
+    Ok(AnchorShape {
+        regions: out
+            .regions
+            .into_iter()
+            .map(|r| CogmapRegionRow {
+                region_id: r.region_id,
+                lens_id: r.lens_id,
+                salience: r.salience,
+                content_cohesion: r.content_cohesion,
+                label: r.label,
+                member_count: r.member_count,
+            })
+            .collect(),
+        population: out.population,
+        emptiness,
+        materialized_at: out.materialized_at,
+    })
 }
 
 /// `anchor_region_metrics` — the per-region analytics tier, for either anchor kind (T8).

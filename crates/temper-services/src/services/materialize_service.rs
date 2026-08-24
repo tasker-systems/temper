@@ -1,6 +1,6 @@
 //! Read path for cron-driven region materialization on a drift threshold (T4b).
 //!
-//! Service-direct (the read-path convention): the surface passes a resolved cogmap id + optional
+//! Service-direct (the read-path convention): the surface passes a resolved anchor + optional
 //! threshold; this gates on `anchor_readable_by_profile` and returns the [`MaterializeDelta`]. The
 //! write side (running the materialize when over threshold) routes through the `Backend` trait /
 //! `DbBackend`, not here.
@@ -14,54 +14,90 @@ use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use temper_core::types::home::HomeAnchor;
-use temper_core::types::ids::{CogmapId, ProfileId};
+use temper_core::types::ids::ProfileId;
 use temper_core::types::materialize::{MaterializeDelta, DEFAULT_MATERIALIZE_THRESHOLD};
 
-/// Compute the materialize delta for a cognitive map: how many formation events have landed on the
-/// cogmap since it was last materialized, and whether that clears `threshold`.
+/// Compute the materialize delta for an anchor: how many formation events have landed on it since it
+/// was last materialized, and whether that clears `threshold`.
 ///
-/// Auth: the caller must be able to READ the cogmap (`anchor_readable_by_profile`). A cogmap the
+/// Anchor-generic because everything beneath it already was — `formation_touched_count_since` takes a
+/// [`HomeAnchor`], and `shape_materialized_event_id` is a column on BOTH anchor tables. Only this
+/// function's signature and its inline gate query were cogmap-only.
+///
+/// Auth: the caller must be able to READ the anchor (`anchor_readable_by_profile`). An anchor the
 /// caller cannot see is reported as `NotFound` (show-deny → 404, never leaking existence).
+///
+/// **This surface's deny posture is 404 and stays 404.** The shape read next door denies with an
+/// empty envelope and never an error (`crate::backend::substrate_read::anchor_shape_select`). Both
+/// are non-oracular; they are not the same rule, and neither posture travels to the other.
 pub async fn materialize_delta(
     pool: &PgPool,
     principal: ProfileId,
-    cogmap_id: CogmapId,
+    anchor: HomeAnchor,
     threshold: Option<i64>,
 ) -> ApiResult<MaterializeDelta> {
     // One query does the read-gate AND the materialize-watermark lookup: an absent row means the
-    // cogmap does not exist OR the caller cannot read it — both surface as NotFound. The column is
+    // anchor does not exist OR the caller cannot read it — both surface as NotFound. The column is
     // nullable (NULL = never materialized), so the scalar is `Option<Uuid>` inside the fetch_optional
     // `Option`.
-    let watermark: Option<Uuid> = sqlx::query_scalar!(
-        r#"
-        SELECT shape_materialized_event_id AS "watermark: Uuid"
-          FROM kb_cogmaps
-         WHERE id = $1
-           AND anchor_readable_by_profile($2, 'kb_cogmaps', $1)
-        "#,
-        *cogmap_id,
-        *principal,
-    )
-    .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| ApiError::NotFound("cognitive map not found or not readable".to_string()))?;
+    //
+    // The table name cannot be bound as a parameter, so the statement goes inside each match arm
+    // rather than being selected into one runtime call — the same shape `region_clocks::shape_watermark`
+    // uses for the identical column. Both literals land in the `.sqlx` cache; a query chosen at
+    // runtime from a closed set is still two static queries, and the enum keeps it exhaustive.
+    let id = anchor.uuid();
+    let watermark: Option<Uuid> = match anchor {
+        HomeAnchor::Context(_) => {
+            sqlx::query_scalar!(
+                r#"
+                SELECT shape_materialized_event_id AS "watermark: Uuid"
+                  FROM kb_contexts
+                 WHERE id = $1
+                   AND anchor_readable_by_profile($2, 'kb_contexts', $1)
+                "#,
+                id,
+                *principal,
+            )
+            .fetch_optional(pool)
+            .await?
+        }
+        HomeAnchor::Cogmap(_) => {
+            sqlx::query_scalar!(
+                r#"
+                SELECT shape_materialized_event_id AS "watermark: Uuid"
+                  FROM kb_cogmaps
+                 WHERE id = $1
+                   AND anchor_readable_by_profile($2, 'kb_cogmaps', $1)
+                "#,
+                id,
+                *principal,
+            )
+            .fetch_optional(pool)
+            .await?
+        }
+    }
+    .ok_or_else(|| {
+        // The noun follows the anchor: a context denied by this path must not be called a cognitive
+        // map. The two arms say the same amount — existence and readability stay collapsed.
+        let noun = match anchor {
+            HomeAnchor::Context(_) => "context",
+            HomeAnchor::Cogmap(_) => "cognitive map",
+        };
+        ApiError::NotFound(format!("{noun} not found or not readable"))
+    })?;
 
-    let formation_events = temper_substrate::replay::formation_touched_count_since(
-        pool,
-        HomeAnchor::Cogmap(cogmap_id),
-        watermark,
-    )
-    .await
-    .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let formation_events =
+        temper_substrate::replay::formation_touched_count_since(pool, anchor, watermark)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
 
     let threshold = threshold.unwrap_or(DEFAULT_MATERIALIZE_THRESHOLD);
-    Ok(MaterializeDelta {
-        cogmap_id: *cogmap_id,
+    Ok(MaterializeDelta::new(
+        anchor,
         watermark,
         formation_events,
         threshold,
-        exceeds_threshold: formation_events >= threshold,
-    })
+    ))
 }
 
 #[cfg(all(test, feature = "test-db"))]
@@ -185,9 +221,14 @@ mod tests {
         // A non-formation event on the cogmap — excluded from the count.
         add_cogmap_event(&pool, s.entity, "region_materialized", s.cogmap).await;
 
-        let d = materialize_delta(&pool, s.member.into(), s.cogmap.into(), None)
-            .await
-            .unwrap();
+        let d = materialize_delta(
+            &pool,
+            s.member.into(),
+            HomeAnchor::Cogmap(s.cogmap.into()),
+            None,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             d.formation_events, 3,
@@ -205,14 +246,24 @@ mod tests {
             add_cogmap_event(&pool, s.entity, "resource_created", s.cogmap).await;
         }
 
-        let below = materialize_delta(&pool, s.member.into(), s.cogmap.into(), Some(5))
-            .await
-            .unwrap();
+        let below = materialize_delta(
+            &pool,
+            s.member.into(),
+            HomeAnchor::Cogmap(s.cogmap.into()),
+            Some(5),
+        )
+        .await
+        .unwrap();
         assert!(!below.exceeds_threshold, "3 < 5");
 
-        let at_boundary = materialize_delta(&pool, s.member.into(), s.cogmap.into(), Some(3))
-            .await
-            .unwrap();
+        let at_boundary = materialize_delta(
+            &pool,
+            s.member.into(),
+            HomeAnchor::Cogmap(s.cogmap.into()),
+            Some(3),
+        )
+        .await
+        .unwrap();
         assert!(at_boundary.exceeds_threshold, "3 >= 3 (>= boundary)");
         assert_eq!(at_boundary.threshold, 3);
     }
@@ -220,13 +271,99 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn unreadable_cogmap_is_not_found(pool: PgPool) {
         let s = seed(&pool).await;
-        let err = materialize_delta(&pool, s.outsider.into(), s.cogmap.into(), None)
-            .await
-            .unwrap_err();
+        let err = materialize_delta(
+            &pool,
+            s.outsider.into(),
+            HomeAnchor::Cogmap(s.cogmap.into()),
+            None,
+        )
+        .await
+        .unwrap_err();
         assert!(
             matches!(err, ApiError::NotFound(_)),
             "deny → 404, no existence oracle"
         );
+    }
+
+    /// The widened arm: a CONTEXT anchor is gated, counted and reported, and the delta carries the
+    /// anchor pair with the legacy `cogmap_id` absent. Before this, `materialize_delta` could not be
+    /// asked about a context at all — the asymmetry T8 left when it generalized only the write path.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn delta_counts_formation_events_scoped_to_a_context(pool: PgPool) {
+        let s = seed(&pool).await;
+        let ctx = seed_context(&pool, s.member).await;
+
+        // Formation events on the CONTEXT: 2 counted.
+        add_context_event(&pool, s.entity, "resource_created", ctx).await;
+        add_context_event(&pool, s.entity, "relationship_asserted", ctx).await;
+        // A non-formation event on the context — excluded.
+        add_context_event(&pool, s.entity, "region_materialized", ctx).await;
+        // A formation event on the COGMAP — different anchor, so not in this context's count.
+        add_cogmap_event(&pool, s.entity, "resource_created", s.cogmap).await;
+
+        let d = materialize_delta(
+            &pool,
+            s.member.into(),
+            HomeAnchor::Context(ctx.into()),
+            Some(2),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(d.formation_events, 2, "anchor-scoped to the context");
+        assert!(d.exceeds_threshold, "2 >= 2 (>= boundary)");
+        assert_eq!(d.watermark, None, "never materialized yet");
+        assert_eq!(d.anchor_table, "kb_contexts");
+        assert_eq!(d.anchor_id, ctx);
+        assert_eq!(
+            d.cogmap_id, None,
+            "the legacy alias is present iff the anchor is a cogmap"
+        );
+    }
+
+    /// The cogmap arm still populates the legacy alias beside the anchor pair — the back-compat
+    /// promise `MaterializeDelta` documents, held from one source so the two cannot disagree.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn cogmap_delta_carries_the_anchor_pair_and_the_legacy_alias(pool: PgPool) {
+        let s = seed(&pool).await;
+
+        let d = materialize_delta(
+            &pool,
+            s.member.into(),
+            HomeAnchor::Cogmap(s.cogmap.into()),
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(d.anchor_table, "kb_cogmaps");
+        assert_eq!(d.anchor_id, s.cogmap);
+        assert_eq!(d.cogmap_id, Some(s.cogmap));
+    }
+
+    /// A context the caller cannot read denies the same way a cogmap does — 404, collapsing
+    /// "absent" with "denied". The posture is this surface's and is unchanged by the widening.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn unreadable_context_is_not_found(pool: PgPool) {
+        let s = seed(&pool).await;
+        let ctx = seed_context(&pool, s.member).await;
+
+        let err = materialize_delta(
+            &pool,
+            s.outsider.into(),
+            HomeAnchor::Context(ctx.into()),
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        match err {
+            ApiError::NotFound(msg) => assert!(
+                msg.contains("context"),
+                "a denied context must not be called a cognitive map, got: {msg}"
+            ),
+            other => panic!("deny → 404, no existence oracle; got {other:?}"),
+        }
     }
 
     /// Below threshold, the trigger is an idempotent no-op: it returns `materialized: false` with no

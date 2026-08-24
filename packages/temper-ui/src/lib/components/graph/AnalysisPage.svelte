@@ -25,6 +25,7 @@
 		METRICS_UNAVAILABLE,
 		describeConstant,
 		describeGroupingCount,
+		materializeCommandFor,
 		describeNulls,
 		describeRange,
 		describeRegulation,
@@ -49,9 +50,48 @@
 	 * `{:catch}` still sees the failure.
 	 */
 	const measurements = $derived.by(() => {
-		const all = Promise.all([data.regions, data.metricsAvailable, data.map]);
+		const all = Promise.all([data.regions, data.metricsAvailable, data.map, data.emptiness]);
 		all.catch(() => {});
 		return all;
+	});
+
+	/**
+	 * **The one live region on this route, and it is mounted before any read settles.**
+	 *
+	 * `RegionState state="arriving"` carries `role="status"`, and it works — on first paint it is
+	 * part of the initial content a screen reader reads. What did not work was the TRANSITION: when
+	 * `measurements` settles, Svelte tears that branch down, destroying the only live region, and
+	 * mounts fresh nodes in its place. A live region added to the DOM together with its text is
+	 * commonly not announced at all — the region has to already exist for a change inside it to be
+	 * a change. So the reader was told "Loading measurements…" and then told nothing, and the
+	 * `role="status"` first put on the settled paragraph was very likely announcing nothing either.
+	 *
+	 * This element exists from first paint, outside `{#await}`, and only its TEXT changes. That is
+	 * the shape that actually announces.
+	 *
+	 * **Scoped to the settled groupings outcome, deliberately.** The `{:catch}` branch already mounts
+	 * a `RegionState` that owns the failure wording for three surfaces; repeating that sentence here
+	 * would make two sources of truth for it. That node has the same fresh-mount weakness, and fixing
+	 * it is a change to `RegionState` itself — which `GraphPage` and `NodeRail` also render.
+	 */
+	let announced = $state('');
+
+	$effect(() => {
+		const read = measurements;
+		const place = data.place;
+		let live = true;
+
+		read.then(([regions, , , emptiness]) => {
+			// A late arrival from a superseded read must not narrate over the current one.
+			if (!live || !place) return;
+			announced = describeGroupingCount(regions.length, emptiness, place);
+		}).catch(() => {
+			// Owned by RegionState in `{:catch}`, per the note above.
+		});
+
+		return () => {
+			live = false;
+		};
 	});
 
 	const placeHref = $derived(
@@ -76,9 +116,16 @@
 					Nothing to measure for {data.refusal.named === 1 ? 'that place' : 'those places'}
 				</h1>
 				<p>
+					<!--
+						`is not` / `is`, NOT `is` / `is`. The plural carries its negation in "None of
+						the places"; the singular has none of its own, so with both arms spelling `is`
+						this read "The place named in this link IS readable by you, so there is nothing
+						here to measure" — the opposite of the truth, in the one sentence about the
+						reader's own access, on the commonest case (a link naming one place).
+					-->
 					{data.refusal.named === 1 ? 'The place' : 'None of the places'} named in this link
-					{data.refusal.named === 1 ? 'is' : 'is'} readable by you, so there is nothing here to
-					measure. It may have been removed, or never shared with you.
+					{data.refusal.named === 1 ? 'is not' : 'is'} readable by you, so there is nothing here
+					to measure. It may have been removed, or never shared with you.
 				</p>
 			{:else}
 				<h1>There is nothing here yet</h1>
@@ -123,11 +170,15 @@
 
 			ONE await for both sections. They are two views of a single read, so they arrive together.
 		-->
+		<!-- Outside `{#await}` on purpose: see `announced`. Empty until the read settles, because
+		     the arriving sentence is already carried by the marker inside the await below. -->
+		<p class="sr-only" role="status" data-testid="measurement-announcement">{announced}</p>
+
 		{#await measurements}
 			<div class="region-slot">
 				<RegionState state="arriving" label="measurements" />
 			</div>
-		{:then [regions, metricsAvailable, map]}
+		{:then [regions, metricsAvailable, map, emptiness]}
 			{@const reports = reportMetrics(regions)}
 			{@const columns = reports.filter((r) => r.asColumn)}
 			<section class="map-level" aria-labelledby="map-level-h">
@@ -163,17 +214,47 @@
 				<h2 id="groupings-h">How its work has been grouped</h2>
 				<!--
 					`[reviewed — 2026-08-21]` This is the one settled-empty state that does NOT route
-					through `RegionState`, and that is deliberate. `describeGroupingCount(0)` says
-					"This place has no groupings yet." — which is what a reader needs here and is more
-					specific than the shared vocabulary's "No measurements." Swapping it for the generic
-					wording would satisfy a consistency argument by making the page say less.
+					through `RegionState`, and that is deliberate. It is more specific than the shared
+					vocabulary's "No measurements.", and swapping it for the generic wording would
+					satisfy a consistency argument by making the page say less.
 
-					The clause it has to meet is that no two states present alike, and it does: this
-					sentence and the `{:catch}`'s "Measurements unavailable — nothing here was read"
+					The clause it has to meet is that no two states present alike, and it does: these
+					sentences and the `{:catch}`'s "Measurements unavailable — nothing here was read"
 					share no words. What `RegionState` protects against is drift between the ARRIVING
 					and FAILED spellings across surfaces, and both of those still come from it.
+
+					`[2026-08-24]` The empty spelling was ONE sentence — "This place has no groupings
+					yet." — for all four causes, and its *yet* asserted `never_clustered` on a read
+					that may have meant any of them. It now takes the cause the read carried. This was
+					the last door still claiming a cause it could not know; `16a9e357` fixed the CLI.
 				-->
-				<p class="lead" data-testid="grouping-count">{describeGroupingCount(regions.length)}</p>
+				{#if regions.length === 0}
+					<!--
+						`.declared-absent` rather than `.lead` alone: `.lead` is sized for the one-line
+						row count this used to be, and these sentences are declarations of the same
+						species as `CONTEXT_HAS_NO_MAP_READOUT`, which already uses that treatment.
+
+						No `role="status"` here, and that is the fix rather than its absence. This node
+						is mounted together with its text when the read settles, which is exactly the
+						shape a screen reader does not announce. The announcing is done by the live
+						region above the `{#await}`, which exists from first paint — see `announced`.
+					-->
+					<p class="lead empty-cause" data-testid="grouping-count">
+						{describeGroupingCount(0, emptiness, place)}
+					</p>
+					{#if materializeCommandFor(emptiness, place)}
+						<!-- A `<code>`, not prose. This is the one string on the page meant to be copied
+						     verbatim: it needs a monospaced face (so `-`, `l` and `1` stay distinct), no
+						     italics, and no punctuation glued to its ends. -->
+						<code class="command" data-testid="materialize-command"
+							>{materializeCommandFor(emptiness, place)}</code
+						>
+					{/if}
+				{:else}
+					<p class="lead" data-testid="grouping-count">
+						{describeGroupingCount(regions.length, emptiness, place)}
+					</p>
+				{/if}
 
 				{#if !metricsAvailable}
 					<p class="unavailable" role="status" data-testid="metrics-unavailable">
@@ -250,6 +331,14 @@
 </div>
 
 <style>
+	.sr-only {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip: rect(0 0 0 0);
+		white-space: nowrap;
+	}
 	.analysis {
 		display: flex;
 		flex-direction: column;
@@ -290,6 +379,26 @@
 	.declared-absent {
 		color: #8b94a5;
 		font-style: italic;
+	}
+	/*
+		Like `.declared-absent` in weight, but NOT italic. These sentences can carry a command's
+		lead-in, and an italic face makes a command line harder to read at exactly the moment the
+		reader is trying to copy one.
+	*/
+	.empty-cause {
+		color: #8b94a5;
+	}
+	.command {
+		display: inline-block;
+		margin-top: 8px;
+		padding: 6px 10px;
+		border: 1px solid #2b3140;
+		border-radius: 4px;
+		background: #11141c;
+		color: #cdd6e3;
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		font-size: 12.5px;
+		user-select: all;
 	}
 	.unavailable {
 		margin: 0;

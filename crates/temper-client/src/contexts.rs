@@ -6,13 +6,13 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::context_ref::ContextOwnerRef;
-use temper_core::types::cognitive_maps::{CogmapRegionMetricsRow, CogmapRegionRow};
+use temper_core::types::cognitive_maps::{AnchorShape, CogmapRegionMetricsRow};
 use temper_core::types::context::{
     ContextCreateRequest, ContextRow, ContextRowWithCounts, ReassignContextOutcome,
     ReassignContextRequest, RenameContextOutcome, RenameContextRequest, ShareContextOutcome,
     ShareContextRequest, UnshareContextOutcome,
 };
-use temper_core::types::materialize::{MaterializeAck, MaterializeRequest};
+use temper_core::types::materialize::{MaterializeAck, MaterializeDelta, MaterializeRequest};
 
 /// Sub-client for context operations.
 pub struct ContextClient<'a> {
@@ -133,13 +133,16 @@ impl<'a> ContextClient<'a> {
 
 impl ContextClient<'_> {
     /// GET `/api/contexts/{id}/shape[?lens=]` — the context's materialized regions (surface tier),
-    /// most salient first. Empty if the caller cannot read the context (gate is in the SQL — no
-    /// existence oracle), which is also what an un-materialized context returns.
-    pub async fn shape(
-        &self,
-        context_id: Uuid,
-        lens: Option<Uuid>,
-    ) -> Result<Vec<CogmapRegionRow>> {
+    /// most salient first, wrapped in an [`AnchorShape`] envelope.
+    ///
+    /// An empty answer is no longer mute: `emptiness` names the cause. A caller who cannot read the
+    /// context gets `emptiness: unreadable_or_absent` with `population: 0` and no clock — the gate
+    /// is in the SQL and stays a 200, so this is still no existence oracle. An un-materialized
+    /// context is `never_clustered`; a materialized one that yielded nothing readable —
+    /// because it formed no regions, or because none of them holds a member this caller can read,
+    /// two causes the member gate keeps deliberately indistinguishable — is `nothing_visible`; and
+    /// a `lens` that matched nothing is `lens_narrowed`. Four cases that were one bare `[]` before.
+    pub async fn shape(&self, context_id: Uuid, lens: Option<Uuid>) -> Result<AnchorShape> {
         let token = self.http.resolve_token()?;
         let path = context_shape_path(context_id, lens);
         let req = self.http.get(&path);
@@ -156,6 +159,27 @@ impl ContextClient<'_> {
     ) -> Result<Vec<CogmapRegionMetricsRow>> {
         let token = self.http.resolve_token()?;
         let path = context_region_metrics_path(context_id, lens);
+        let req = self.http.get(&path);
+        self.http
+            .send_json(&Method::GET, &path, req, Some(&token))
+            .await
+    }
+
+    /// GET `/api/contexts/{id}/materialize-delta[?threshold=]` — how many formation events have landed
+    /// on the context since its last materialize, and whether that clears the threshold. The read peer
+    /// of `materialize` below.
+    ///
+    /// **Deny is an error here, not an empty envelope.** A context the caller cannot read — and one
+    /// that does not exist — both come back as 404, collapsed so this is still no existence oracle.
+    /// `shape` next door denies by answering 200 with `emptiness: unreadable_or_absent`; the two
+    /// postures are deliberately different and neither travels to the other.
+    pub async fn materialize_delta(
+        &self,
+        context_id: Uuid,
+        threshold: Option<i64>,
+    ) -> Result<MaterializeDelta> {
+        let token = self.http.resolve_token()?;
+        let path = context_materialize_delta_path(context_id, threshold);
         let req = self.http.get(&path);
         self.http
             .send_json(&Method::GET, &path, req, Some(&token))
@@ -198,6 +222,16 @@ fn context_region_metrics_path(context_id: Uuid, lens: Option<Uuid>) -> String {
     }
 }
 
+/// `/api/contexts/{id}/materialize-delta` with an optional `?threshold=` query — shared by the method
+/// and its test.
+fn context_materialize_delta_path(context_id: Uuid, threshold: Option<i64>) -> String {
+    let base = format!("/api/contexts/{context_id}/materialize-delta");
+    match threshold {
+        Some(t) => format!("{base}?threshold={t}"),
+        None => base,
+    }
+}
+
 #[cfg(test)]
 mod orientation_path_tests {
     use super::*;
@@ -223,5 +257,18 @@ mod orientation_path_tests {
             "/api/contexts/00000000-0000-0000-0000-000000000000/region-metrics"
         );
         assert!(context_region_metrics_path(ctx, Some(Uuid::nil())).contains("?lens="));
+    }
+
+    #[test]
+    fn materialize_delta_path_appends_threshold_only_when_present() {
+        let ctx = Uuid::nil();
+        assert_eq!(
+            context_materialize_delta_path(ctx, None),
+            "/api/contexts/00000000-0000-0000-0000-000000000000/materialize-delta"
+        );
+        assert_eq!(
+            context_materialize_delta_path(ctx, Some(5)),
+            "/api/contexts/00000000-0000-0000-0000-000000000000/materialize-delta?threshold=5"
+        );
     }
 }

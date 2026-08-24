@@ -110,6 +110,7 @@ fn gated_routes() -> OpenApiRouter<AppState> {
         // Context orientation reads (T8) — the peers of the cognitive-map trio above.
         .routes(routes!(handlers::contexts::shape))
         .routes(routes!(handlers::contexts::region_metrics))
+        .routes(routes!(handlers::contexts::materialize_delta))
         .routes(routes!(handlers::contexts::materialize))
         .routes(routes!(handlers::teams::list, handlers::teams::create))
         .routes(routes!(handlers::teams::add_member))

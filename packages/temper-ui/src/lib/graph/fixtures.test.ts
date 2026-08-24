@@ -64,6 +64,7 @@ const ANALYSIS_VIEW_KEYS = {
 	refusal: true,
 	regions: true,
 	metricsAvailable: true,
+	emptiness: true,
 	map: true,
 } satisfies Record<keyof AnalysisViewData, true>;
 
@@ -242,6 +243,40 @@ describe('the captured corpus shapes', () => {
 		// And the surface cannot fall back to rung 2 here: that verdict belongs to the entry read,
 		// which is keyed on `eligible`, and a composition has no such axis.
 		expect(await cold.tooLittleStructure).toBeNull();
+	});
+
+	/**
+	 * **The authored scenarios are scaffolding, and this is what keeps them honest.**
+	 *
+	 * They exist because the capture beneath this bundle predates the envelope and production still
+	 * answers a bare array, so no real read can supply an `emptiness` until this branch deploys.
+	 * Two things have to stay true while they live here: they must cover every arm (or /dev/analysis
+	 * silently stops showing one), and they must not have contaminated the capture.
+	 */
+	it('the authored scenarios cover every ShapeEmptiness arm', () => {
+		const authored = analysisScenarioNames(analysis).filter((n) => n.startsWith('authored_'));
+		const arms = new Set(
+			authored.map((n) => (analysis[n] as { emptiness?: string }).emptiness ?? '(none)'),
+		);
+
+		expect([...arms].sort()).toEqual([
+			'lens_narrowed',
+			'never_clustered',
+			'nothing_visible',
+			'unreadable_or_absent',
+		]);
+		expect((analysis._authored as { authored?: boolean })?.authored, 'must be stamped').toBe(true);
+	});
+
+	/**
+	 * The captured scenarios must carry NO `emptiness`. `cogmap_never_materialized` is the tempting
+	 * one — its staleness proves it was never materialized, so `'never_clustered'` would even be the
+	 * right value — and writing it in would state what a read said when the read did not say it.
+	 */
+	it('no captured scenario was given an emptiness the capture never observed', () => {
+		for (const n of analysisScenarioNames(analysis).filter((k) => !k.startsWith('authored_'))) {
+			expect(analysis[n], `captured scenario "${n}"`).not.toHaveProperty('emptiness');
+		}
 	});
 
 	it('analysis carries an anchor that has never materialized a region', () => {

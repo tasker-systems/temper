@@ -1,8 +1,8 @@
 //! `temper cogmap shape` business logic — thin wrapper over the cognitive-maps client. Cloud-only.
 
 use temper_core::types::cognitive_maps::{
-    BindTeamOutcome, BindTeamRequest, CogmapAnalyticsRow, CogmapDetail, CogmapGrantBody,
-    CogmapRegionMetricsRow, CogmapRegionRow, CogmapRevokeBody, CogmapRow, GrantOutcome,
+    AnchorShape, BindTeamOutcome, BindTeamRequest, CogmapAnalyticsRow, CogmapDetail,
+    CogmapGrantBody, CogmapRegionMetricsRow, CogmapRevokeBody, CogmapRow, GrantOutcome,
     RevokeOutcome, UnbindTeamOutcome,
 };
 
@@ -61,11 +61,13 @@ pub async fn show_api(
 }
 
 /// Call the shape API for the given cogmap (and optional lens), both already resolved to UUIDs.
+/// The answer is the [`AnchorShape`] envelope, not a bare list: an empty `regions` carries an
+/// `emptiness` naming why it is empty, so the CLI no longer has to guess a cause.
 pub async fn shape_api(
     client: &temper_client::TemperClient,
     cogmap_id: uuid::Uuid,
     lens_id: Option<uuid::Uuid>,
-) -> Result<Vec<CogmapRegionRow>> {
+) -> Result<AnchorShape> {
     client
         .cognitive_maps()
         .shape(cogmap_id, lens_id)
@@ -276,20 +278,35 @@ mod tests {
     }
 
     #[test]
-    fn render_shape_rows_json_is_passthrough_array() {
-        let rows: Vec<CogmapRegionRow> = vec![CogmapRegionRow {
-            region_id: Uuid::from_u128(1).into(),
-            lens_id: Uuid::from_u128(2).into(),
-            salience: 0.5,
-            content_cohesion: None,
-            label: Some("region".to_string()),
-            member_count: 2,
-        }];
+    fn render_shape_envelope_json_is_passthrough_object() {
+        use temper_core::types::cognitive_maps::{CogmapRegionRow, ShapeEmptiness};
+        // The shape verb now renders an OBJECT. The rows moved under `regions`, and the envelope
+        // fields ride alongside them — a renderer that still emitted an array would be lying about
+        // the wire shape the API returns.
+        let shape = AnchorShape {
+            regions: vec![CogmapRegionRow {
+                region_id: Uuid::from_u128(1).into(),
+                lens_id: Uuid::from_u128(2).into(),
+                salience: 0.5,
+                content_cohesion: None,
+                label: Some("region".to_string()),
+                member_count: 2,
+            }],
+            population: 3,
+            emptiness: Some(ShapeEmptiness::LensNarrowed),
+            materialized_at: None,
+        };
         let out =
-            crate::format::render(&rows, crate::format::OutputFormat::Json).expect("json render");
-        assert!(out.starts_with('['), "json should be an array: {out}");
+            crate::format::render(&shape, crate::format::OutputFormat::Json).expect("json render");
+        assert!(out.starts_with('{'), "json should be an object: {out}");
+        assert!(out.contains("\"regions\""), "json: {out}");
         assert!(out.contains("\"region_id\""), "json: {out}");
         assert!(out.contains("\"member_count\""), "json: {out}");
+        assert!(out.contains("\"population\""), "json: {out}");
+        assert!(
+            out.contains("\"lens_narrowed\""),
+            "emptiness names its cause: {out}"
+        );
     }
 
     fn sample_cogmap_row(name: &str, statement: Option<&str>) -> CogmapRow {

@@ -23,10 +23,18 @@ drilling into action parameters.
 `cogmap_list`, `context_read`, `describe_schema`, `invocation_read`,
 `facets_read`, `steward_ingest_delta`
 
-**Writes (12):** `create_resource`, `update_resource`, `update_resource_meta`,
-`delete_resource`, `annotate_resource`, `relationship`, `facet_set`,
-`record_citation_audit`, `invocation_manage`, `segmented_ingest`,
-`cogmap_create`, `cogmap_materialize`, `context_manage`, `steward_advance_watermark`
+**Writes (15 listed; the list is known to be incomplete — see the note):** `create_resource`,
+`update_resource`, `update_resource_meta`, `delete_resource`, `annotate_resource`,
+`relationship`, `facet_set`, `record_citation_audit`, `invocation_manage`,
+`segmented_ingest`, `cogmap_create`, `cogmap_materialize`, `context_materialize`,
+`context_manage`, `steward_advance_watermark`
+
+> `[2026-08-24]` The count read **12** beside a list of **14**, and the list omits at least
+> `commit_data_artifact` and `declare_data_artifact_shape`, both advertised by the router and both
+> writes. The number now describes the list; the list still does not describe the router. This file
+> is hand-written — `generate_agent_skill_files()` deliberately does not emit it — so no gate
+> re-derives its contents, and the tool-NAME half of that gap is covered only by tests in
+> temper-mcp. A full reconciliation against `tool_router()` is worth doing and has not been done.
 
 **Declared off-MCP (CLI door):** grants (`resource_grant`/`revoke`,
 `cogmap_grant`/`revoke`), `admin_ledger`, cogmap bind/unbind, team invitations,
@@ -94,15 +102,43 @@ the resource-ref parser is not used here.
 
 ### `context_read` (view: shape) — what the context is about
 
-The primary orientation read. Returns the context's materialized regions, most
-salient first, each with its salience, content cohesion, agent-authored label
-(if any), and member count. This is the fastest way to see the structure of a
+The primary orientation read. This is the fastest way to see the structure of a
 context before you commit tokens to reading its documents.
 
 ```
 Tool: context_read
 Input: { "view": "shape", "context": "@me/temper", "lens": "<optional lens ref>" }
 ```
+
+The reply is an **object, not an array**:
+
+- `regions` — the materialized regions, most salient first, each with its
+  salience, content cohesion, agent-authored label (if any), and member count.
+  Member counts are gated: they cover the members *you* can read, so two callers
+  can legitimately see different numbers for the same region.
+- `population` — how many regions you can see in this context across **all**
+  lenses. Under a `lens` it is the denominator `regions` was drawn from.
+- `emptiness` — `null` when `regions` has rows. When `regions` is empty it names
+  which of four things happened: `never_clustered` (nothing has been materialized
+  yet), `nothing_visible` (it has materialized, but nothing came back),
+  `lens_narrowed` (your `lens` excluded them all), or `unreadable_or_absent`
+  (you cannot read this context, or it does not exist — one answer on purpose).
+- `materialized_at` — when the context was last clustered. `null` means never,
+  or that you cannot read this context.
+
+**Read `emptiness` before concluding anything from an empty `regions`.** The
+four causes call for four different next moves, and only that field tells them
+apart.
+
+**`nothing_visible` is not a verdict about your access.** It covers two
+situations at once: the materialize formed no regions at all, and the
+materialize formed regions but none of them holds a resource *you* can read.
+You cannot tell which, by design — separating them would tell you that
+resources exist beyond your reach, and this API never reports how much you
+cannot see. So do not go hunting for a missing grant when you meet it. A first
+materialize of a small context stamps its watermark whether or not anything
+clustered, so a context that legitimately formed nothing reports the same arm.
+Add or check what the context holds, re-materialize, and read the field again.
 
 ### `context_read` (view: metrics) — the analytics tier
 

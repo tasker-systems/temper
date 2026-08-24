@@ -115,8 +115,32 @@ from — rides on `--sources` (and, with `--sources-as-edges`, `derived_from` ed
 `managed_meta`. Neither belongs in a facet.
 
 **Materialize** (recompute regions) is `temper cogmap materialize <MAP> [--threshold N]`
-on the CLI, or `cogmap_materialize` / `cogmap_materialize_delta` on the agent surface.
+on the CLI, or `cogmap_materialize` / `cogmap_materialize_delta` on the agent surface. A
+CONTEXT materializes the same way: `temper context materialize`, or `context_materialize` on the
+agent surface — the peer tool, registered 2026-08-24 after sitting implemented-but-unregistered.
 Regions only exist *after* a materialize.
+
+**A `shape` read with no regions says why.** `cogmap shape` returns an envelope —
+`regions` plus `population`, `emptiness` and `materialized_at` — and when `regions` is empty,
+`emptiness` names which of four things happened: `never_clustered` (materialize it),
+`nothing_visible` (it has materialized, but nothing came back), `lens_narrowed`
+(your `--lens` excluded them all), or `unreadable_or_absent`. Do not read an empty list as
+"not materialized yet"; read the field.
+
+**`nothing_visible` does not mean "you lack a grant."** It covers two situations at once: the
+materialize formed no regions at all, and the materialize formed regions but none of them holds
+a member *you* can read. You cannot tell which, and that is deliberate — telling them apart
+would tell you that resources exist beyond your reach, which the member gate refuses on
+principle. So do not treat this arm as a permissions diagnosis. A first materialize of a small
+map stamps its watermark whether or not anything clustered, so a map that legitimately formed
+nothing reports exactly the same arm. Check what the map holds and re-materialize before
+suspecting access.
+
+**`cogmap list`'s `region_count` and `shape`'s `population` count different things and will
+disagree.** `region_count` is every non-folded region on the map, ungated. `population` is
+the regions holding at least one member *you* can read, across all lenses. A `population`
+below `region_count` means regions exist whose contents are outside your reach — not that
+they are missing, and not that the map needs re-materializing.
 
 ### The node manifest — the single highest-leverage habit
 

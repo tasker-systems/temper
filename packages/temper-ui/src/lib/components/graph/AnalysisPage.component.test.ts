@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fireEvent, render, screen } from '@testing-library/svelte';
+import { tick } from 'svelte';
 import { describe, expect, it, vi } from 'vitest';
 import { type AnalysedRegion, analyseShape, METRICS } from '$lib/graph/analysis';
 import type { AnalysisViewData } from '$lib/graph/view';
@@ -9,6 +10,7 @@ import type {
 	CogmapAnalyticsRow,
 	CogmapRegionMetricsRow,
 	CogmapRegionRow,
+	ShapeEmptiness,
 } from '$lib/types/generated/cognitive_maps';
 import { sentenceOf } from '../../../test/sentence';
 import AnalysisPage from './AnalysisPage.svelte';
@@ -49,10 +51,14 @@ const fixture = JSON.parse(
  */
 type AnalysisMap = Awaited<AnalysisViewData['map']>;
 
-type ViewOverrides = Partial<Omit<AnalysisViewData, 'regions' | 'metricsAvailable' | 'map'>> & {
+type ViewOverrides = Partial<
+	Omit<AnalysisViewData, 'regions' | 'metricsAvailable' | 'map' | 'emptiness'>
+> & {
 	regions?: AnalysedRegion[] | Promise<AnalysedRegion[]>;
 	metricsAvailable?: boolean | Promise<boolean>;
 	map?: AnalysisMap | Promise<AnalysisMap>;
+	/** Settled like the three above, so a test writes the cause rather than a promise of one. */
+	emptiness?: ShapeEmptiness | null | Promise<ShapeEmptiness | null>;
 };
 
 /**
@@ -74,18 +80,20 @@ const base: AnalysisViewData = {
 	refusal: null,
 	regions: Promise.resolve([]),
 	metricsAvailable: Promise.resolve(true),
+	emptiness: Promise.resolve(null),
 	map: Promise.resolve(null),
 };
 
 const view = (over: ViewOverrides = {}): AnalysisViewData => {
-	const { regions, metricsAvailable, map, ...settled } = over;
+	const { regions, metricsAvailable, map, emptiness, ...settled } = over;
 	return {
 		...base,
 		...settled,
 		regions: always(regions ?? []),
 		metricsAvailable: always(metricsAvailable ?? true),
-		// `=== undefined` rather than `??`, on the field where a caller passing `null` means it.
+		// `=== undefined` rather than `??`, on the two fields where a caller passing `null` means it.
 		map: always(map === undefined ? null : map),
+		emptiness: always(emptiness === undefined ? null : emptiness),
 	};
 };
 
@@ -244,6 +252,113 @@ describe('the displaced payload is here, whole', () => {
 	});
 });
 
+/**
+ * The empty view, at the one door where the reader is a person.
+ *
+ * `[2026-08-24]` Until the envelope crossed this door the page spelled every empty read *"This
+ * place has no groupings yet."*, whose *yet* asserts `never_clustered`. These render through the
+ * real component rather than asserting on {@link describeGroupingCount} alone, because the unit
+ * test cannot see the wiring — the field has to reach the template from the same awaited read as
+ * the rows, and a page that computed the right sentence and rendered the old one would pass there.
+ */
+describe('an empty groupings list tells the person which cause they are in', () => {
+	it('renders the cause the read carried, not a cause it guessed', async () => {
+		const { container } = await painted(contextView({ regions: [], emptiness: 'nothing_visible' }));
+		const said = container.querySelector('[data-testid="grouping-count"]')?.textContent ?? '';
+
+		expect(said).toContain('has been grouped');
+		expect(said).toContain('not evidence that you are missing access');
+		// The defect, stated as the assertion that would have caught it.
+		expect(said).not.toContain('no groupings yet');
+	});
+
+	/** Queried through each render's own `container`, so two pages can be compared in one test. */
+	const emptyPageSays = async (emptiness: ShapeEmptiness) => {
+		const { container } = await painted(contextView({ regions: [], emptiness }));
+		return container.querySelector('[data-testid="grouping-count"]')?.textContent ?? '';
+	};
+
+	it('a never-clustered place and an unreadable one do not read alike', async () => {
+		const never = await emptyPageSays('never_clustered');
+		const denied = await emptyPageSays('unreadable_or_absent');
+
+		expect(never).not.toBe(denied);
+		expect(never).toContain('Nothing here is broken');
+		expect(denied).toContain('cannot tell you which');
+	});
+
+	/**
+	 * The cause is streamed from the SAME read as the rows, so it must not paint before them. If it
+	 * arrived on its own promise a reader could be told WHY the list is empty while the list is
+	 * still arriving — a cause attached to a row set nobody has seen yet.
+	 *
+	 * **The flush is what makes this bite.** A first draft asserted synchronously, immediately after
+	 * `render`, and that could never fail: nothing promise-based has resolved at that point, so a
+	 * hoisted `{#await data.emptiness}` block above the real await would have passed it. Draining the
+	 * microtask queue lets `emptiness` — which settles now — paint if anything is wired to let it,
+	 * while `regions` never settles. Only then is a null assertion evidence of anything.
+	 */
+	/**
+	 * **The region has to exist BEFORE the read settles, or it announces nothing.**
+	 *
+	 * This is the assertion that separates the real fix from the one it replaced. A `role="status"`
+	 * put on the settled paragraph looks right in a diff and is mounted together with its text,
+	 * which is the one shape assistive tech commonly ignores. So asserting "the sentence has
+	 * role=status" would have passed against the broken version; asserting "a live region was
+	 * already there, empty, while the read was in flight" does not.
+	 */
+	const pendingRegions = () => new Promise<AnalysedRegion[]>(() => {});
+
+	it('has an empty live region in the DOM while the read is still in flight', () => {
+		const { container } = render(AnalysisPage, {
+			data: contextView({ regions: pendingRegions(), emptiness: 'never_clustered' }),
+		});
+		const region = container.querySelector('[data-testid="measurement-announcement"]');
+
+		expect(region, 'the live region must exist before the read settles').not.toBeNull();
+		expect(region?.getAttribute('role')).toBe('status');
+		expect(region?.textContent).toBe('');
+	});
+
+	it('announces the cause into that same region once the read settles', async () => {
+		const { container } = await painted(contextView({ regions: [], emptiness: 'nothing_visible' }));
+
+		await vi.waitFor(() => {
+			const said =
+				container.querySelector('[data-testid="measurement-announcement"]')?.textContent ?? '';
+			expect(said).toContain('nothing came back that you can read');
+		});
+	});
+
+	/**
+	 * Exactly one announcer. The visible paragraph is purely visual now — two live regions carrying
+	 * the same sentence would read it twice.
+	 */
+	it('does not also mark the visible sentence as a live region', async () => {
+		const { container } = await painted(contextView({ regions: [], emptiness: 'never_clustered' }));
+
+		expect(
+			container.querySelector('[data-testid="grouping-count"]')?.getAttribute('role'),
+		).toBeNull();
+	});
+
+	it('does not paint a cause while the rows are still arriving', async () => {
+		const { container } = render(AnalysisPage, {
+			data: contextView({
+				regions: new Promise<AnalysedRegion[]>(() => {}), // never settles
+				emptiness: 'never_clustered', // settles immediately
+			}),
+		});
+
+		// Drain: anything awaiting only `emptiness` has had every chance to render by now.
+		for (let i = 0; i < 8; i++) await Promise.resolve();
+		await tick();
+
+		expect(container.querySelector('[data-testid="grouping-count"]')).toBeNull();
+		expect(container.querySelector('.groupings')).toBeNull();
+	});
+});
+
 describe('what a place does not have is declared, not fabricated', () => {
 	it('a context says why it has no charter rather than reporting a failure', async () => {
 		await painted(contextView());
@@ -292,6 +407,39 @@ describe('the door answers an address it cannot resolve, and one with no address
 
 		expect(screen.getByText(/Nothing to measure for that place/)).toBeTruthy();
 		expect(screen.queryByRole('table')).toBeNull();
+	});
+
+	/**
+	 * **The singular refusal said the opposite of the truth.** The ternary carrying the verb had two
+	 * identical arms (`? 'is' : 'is'`), which is itself the tell: the plural reads correctly because
+	 * "None of the places" carries the negation, and the singular had none of its own. So a reader
+	 * following a shared link to one place never shared with them was told, in the only sentence
+	 * about their own access, that the place IS readable by them. `named === 1` is the common case.
+	 *
+	 * Asserted on the rendered sentence rather than the heading, because the heading was already
+	 * correct and already tested — the defect lived entirely in the paragraph below it.
+	 */
+	it('tells a reader who named ONE unreadable place that it is not readable by them', () => {
+		const { container } = render(AnalysisPage, {
+			data: view({ refusal: { kind: 'no-place-resolved', named: 1 } }),
+		});
+		const said = container.querySelector('.refusal p')?.textContent?.replace(/\s+/g, ' ') ?? '';
+
+		expect(said).toContain('The place named in this link is not readable by you');
+		expect(said, 'the inverted claim must be unreachable').not.toMatch(
+			/The place named in this link is readable by you/,
+		);
+		// The absent/unshared ambiguity is what keeps this from being an existence oracle.
+		expect(said).toContain('removed, or never shared with you');
+	});
+
+	it('still reads correctly in the plural, where the negation sits in the subject', () => {
+		const { container } = render(AnalysisPage, {
+			data: view({ refusal: { kind: 'no-place-resolved', named: 3 } }),
+		});
+		const said = container.querySelector('.refusal p')?.textContent?.replace(/\s+/g, ' ') ?? '';
+
+		expect(said).toContain('None of the places named in this link is readable by you');
 	});
 
 	it('no address at all offers the places the reader can read', () => {

@@ -1,9 +1,11 @@
 import type { Anchor } from '$lib/graph/composition';
 import type {
+	AnchorShape,
 	CogmapAnalyticsRow,
 	CogmapRegionMetricsRow,
 	CogmapRegionRow,
 	CogmapRow,
+	ShapeEmptiness,
 } from '$lib/types/generated/cognitive_maps';
 import type { ContextRowWithCounts } from '$lib/types/generated/context';
 import type { AtlasEntry, AtlasSubgraph } from '$lib/types/generated/graph_atlas';
@@ -103,7 +105,9 @@ export const readSeedResources = (token: string, ids: string[]): Promise<Resourc
  *
  * **Both anchor kinds answer the same read**, and that is not a coincidence to be tidied away:
  * `/api/contexts/{id}/shape` and `/api/cognitive-maps/{id}/shape` are two doors onto one
- * `anchor_shape_select(principal, HomeAnchor, lens)` and both return `Vec<CogmapRegionRow>`. So
+ * `anchor_shape_select(principal, HomeAnchor, lens)` and both return `AnchorShape` — the region
+ * rows inside an anchor-level envelope (`population`, `emptiness`, `materialized_at`) that lets an
+ * empty answer say WHY it is empty rather than arriving as a byte-identical `[]`. So
  * `cross-kind-relationship-is-reachable` holds a layer below the composition too, and the readout
  * needs no per-kind branch to name what it drew on. **Contexts genuinely have regions** — measured,
  * `@me/temper` holds 499 — so resolving only cogmaps would render every context-anchored grouping
@@ -134,18 +138,50 @@ const anchorShapePath = (anchor: Anchor): string =>
  * gone, so a rejection degrades the whole lookup to incomplete rather than propagating as a page
  * error. One anchor being unreadable is not a reason to refuse the reader their graph, and it is
  * not evidence that anything was re-derived either.
+ *
+ * **The envelope is unwrapped here, with ONE exception that is the whole point of the exception.**
+ * This lookup exists to NAME a disclosed region id, and `nameOf` matches on `region_id` alone, so
+ * `population` and `materialized_at` are dropped: they are per-anchor facts that would have to be
+ * re-associated with the anchors they came from to say anything, and the flat set below is
+ * deliberately not keyed that way.
+ *
+ * **`emptiness` is read, and not to report a cause.** `complete` means *a read did not answer*, and
+ * it used to be `every(fulfilled)` — which is an HTTP-level question asked of an authorization-level
+ * failure. A caller who may not read an anchor gets `emptiness: 'unreadable_or_absent'` with
+ * `population: 0` **on a 200, never a 403** (`substrate_read.rs`, *"discloses strictly less than a
+ * 403 would, and stays a 200"*) — deliberately, so the shape read is not an existence oracle. So a
+ * denial arrived *fulfilled*, `complete` stayed `true`, and `nameOf` answered `re-derived`:
+ *
+ *     a region the trace disclosed, whose anchor this caller cannot read
+ *       →  200, zero rows  →  complete: true  →  "This grouping has been re-derived."
+ *
+ * which is a claim about the substrate drawn from a read that told the caller nothing. `unchecked`
+ * exists for exactly that — *"the surface must never tell a reader their grouping is gone on
+ * evidence it does not have"* (`readout.ts`) — and was unreachable in the one case it was built for,
+ * because the posture that protects the anchor also disguises the denial as an empty success.
+ *
+ * **This does not collapse `complete` into an `emptiness` arm.** The two still mean different
+ * things, and only ONE arm is consulted: `never_clustered` and `nothing_visible` are answers — the
+ * anchor genuinely holds nothing for this caller, and an unfound id really is `re-derived`.
+ * `unreadable_or_absent` is not an answer about the anchor at all; it is the read declining to make
+ * one. Reading it here asks the question `complete` always asked, at the layer that can answer it.
  */
 export async function readAnchorRegions(
 	token: string,
 	anchors: Anchor[],
 ): Promise<{ rows: CogmapRegionRow[]; complete: boolean }> {
 	const reads = await Promise.allSettled(
-		anchors.map((a) => apiGet<CogmapRegionRow[]>(anchorShapePath(a), token)),
+		anchors.map((a) => apiGet<AnchorShape>(anchorShapePath(a), token)),
 	);
 
+	/** A rejection did not answer — and neither did a 200 that declined to say anything. */
+	const answered = (r: PromiseSettledResult<AnchorShape>): boolean =>
+		r.status === 'fulfilled' && r.value.emptiness !== 'unreadable_or_absent';
+
 	return {
-		rows: reads.flatMap((r) => (r.status === 'fulfilled' ? r.value : [])),
-		complete: reads.every((r) => r.status === 'fulfilled'),
+		// Unchanged: a denied read carries no rows anyway, so this only ever drops empties.
+		rows: reads.flatMap((r) => (r.status === 'fulfilled' ? r.value.regions : [])),
+		complete: reads.every(answered),
 	};
 }
 
@@ -218,9 +254,10 @@ const anchorMetricsPath = (anchor: Anchor): string =>
  *
  * Three different failure postures, and the differences are the point:
  *
- * - **`shape` throws.** It is the row set; without it there is no page, and an empty list is
+ * - **`shape` throws.** It is the row set; without it there is no page, and an empty envelope is
  *   already the honest answer for a place the caller cannot read (the API refuses to be an
- *   existence oracle).
+ *   existence oracle — a denied caller gets `emptiness: 'unreadable_or_absent'` with
+ *   `population: 0` on a 200, never a 403; `substrate_read.rs:1308-1312`).
  * - **`metrics` degrades to `null`.** That is *unknown*, not *absent* — captioning 501 groupings
  *   "not computed" on a read that never answered would be a claim about the substrate made on
  *   evidence the surface does not have.
@@ -233,12 +270,13 @@ export async function readAnchorAnalysis(
 	anchor: Anchor,
 ): Promise<{
 	shape: CogmapRegionRow[];
+	emptiness: ShapeEmptiness | null;
 	metrics: CogmapRegionMetricsRow[] | null;
 	analytics: CogmapAnalyticsRow | null;
 	telos: ResourceView | null;
 }> {
 	const [shape, metrics, analytics] = await Promise.all([
-		apiGet<CogmapRegionRow[]>(anchorShapePath(anchor), token),
+		apiGet<AnchorShape>(anchorShapePath(anchor), token),
 		apiGet<CogmapRegionMetricsRow[]>(anchorMetricsPath(anchor), token).catch(() => null),
 		anchor.kind === 'cogmap'
 			? apiGet<CogmapAnalyticsRow>(`/api/cognitive-maps/${anchor.id}/analytics`, token).catch(
@@ -256,5 +294,27 @@ export async function readAnchorAnalysis(
 			)
 		: null;
 
-	return { shape, metrics, analytics, telos };
+	// **`emptiness` is carried; the rest of the envelope is still dropped here.** This door is the
+	// one place a PERSON meets an empty region set, and until this field crossed it the page said
+	// "This place has no groupings yet." for all four causes -- asserting `never_clustered` on a
+	// read that may have meant any of them. That is the same claim-a-cause-you-cannot-know defect
+	// `16a9e357` fixed at the CLI door, and this is its last unfixed instance.
+	//
+	// **`population` is deliberately NOT carried, and the reason is arithmetic rather than taste.**
+	// It is the all-lens denominator, and this door passes no `lens` (see above -- the lens is a
+	// clustering-time parameter). With `p_lens IS NULL` the shape function's row filter and its
+	// `population` count range over the same `regs` set, so `population === shape.regions.length`
+	// on every read this door can make. Surfacing it would print the row count twice under two
+	// names. **`lens_narrowed` is unreachable here for the same reason**: arm 3 fires only when
+	// `regs` is non-empty while the lens-filtered rows are empty, which no NULL lens can produce
+	// (`migrations/20260823000010_anchor_shape_envelope.sql:121-122` and `:132`). The receiver still
+	// that arm, because the type has four and an exhaustive match is what keeps a future
+	// lens-passing caller honest -- but it is labelled unreachable rather than left to look live.
+	//
+	// **`materialized_at` is not carried either.** The page already shows a clock for maps, from
+	// `analytics.staleness`; adding a second one from a different read would put two timestamps
+	// about one place on one page with nothing saying why they differ. It is also stamped at the
+	// materialize transaction's START rather than at the end of the clustering work, so it runs
+	// systematically early -- a skew worth fixing before it is put in front of a reader, not after.
+	return { shape: shape.regions, emptiness: shape.emptiness, metrics, analytics, telos };
 }

@@ -1,4 +1,8 @@
-import type { CogmapRegulationRow, CogmapStaleness } from '$lib/types/generated/cognitive_maps';
+import type {
+	CogmapRegulationRow,
+	CogmapStaleness,
+	ShapeEmptiness,
+} from '$lib/types/generated/cognitive_maps';
 import type { EventTrail } from '$lib/types/generated/element_trail';
 import type { AnalysedRegion } from './analysis';
 import type { BoundDeclaration } from './bound';
@@ -209,6 +213,28 @@ export interface AnalysisViewData {
 	 * read was declined*.
 	 */
 	metricsAvailable: Promise<boolean>;
+	/**
+	 * **Why the groupings list is empty, when it is** — `null` when it is not, and `null` on the
+	 * branches that ran no read.
+	 *
+	 * Streamed, and derived from the **same** read as {@link AnalysisViewData.regions}, for the
+	 * reason that governs every other field here: a cause and the row set it explains must not be
+	 * able to disagree about which read they came from.
+	 *
+	 * This exists because an empty groupings list is **four different situations** and the page used
+	 * to spell all of them *"This place has no groupings yet."* — a sentence that asserts
+	 * `never_clustered`. Under `nothing_visible` it told a reader nothing had been built when the
+	 * place had in fact been clustered; under `unreadable_or_absent` it described a place the reader
+	 * cannot read at all.
+	 *
+	 * **Two of the four arms cannot arrive at this door.** `lens_narrowed` needs a `lens`, and
+	 * `readAnchorAnalysis` passes none by definition. That is recorded at the read rather than
+	 * relied on here: this field carries whatever the wire said, and the receiver spells all four.
+	 *
+	 * **`nothing_visible` covers two causes on purpose** and must never be split — see
+	 * {@link ShapeEmptiness}.
+	 */
+	emptiness: Promise<ShapeEmptiness | null>;
 	/**
 	 * The map-level picture — streamed, from the same read as the two above.
 	 *

@@ -2,6 +2,7 @@ import type {
 	CogmapRegionMetricsRow,
 	CogmapRegionRow,
 	CogmapStaleness,
+	ShapeEmptiness,
 } from '$lib/types/generated/cognitive_maps';
 import { relativeTime } from './relativeTime';
 
@@ -376,9 +377,143 @@ export function describeRegulation(n: number): string {
 	return `${n} ${n === 1 ? 'concept regulates' : 'concepts regulate'} this map.`;
 }
 
-/** How many groupings this place publishes, and in whose order they are shown. */
-export function describeGroupingCount(n: number): string {
-	if (n === 0) return 'This place has no groupings yet.';
+/**
+ * Why an empty groupings list is empty, in the reader's own terms.
+ *
+ * **This is the sentence the whole task turns on.** An empty list is four different situations, and
+ * until the envelope crossed the door this page spelled all four *"This place has no groupings
+ * yet."* — a sentence whose *yet* asserts `never_clustered`. For a reader under `nothing_visible`
+ * it claimed nothing had been built when the place had in fact been clustered; under
+ * `unreadable_or_absent` it described a place they cannot read at all as though it were their own
+ * and merely young. The same claim-a-cause-you-cannot-know defect was fixed at the CLI door in
+ * `16a9e357`; this was its last unfixed instance, and the one door where the reader is a person.
+ *
+ * **`nothing_visible` deliberately does not separate its two causes, and this wording must not
+ * either.** It is reached both when the anchor formed no regions at all and when it formed regions
+ * holding nothing this reader can see. Splitting them would tell a caller how many resources they
+ * cannot read, which is precisely what the member gate forbids
+ * (`migrations/20260713000050_region_visible_member_count.sql:137`, *"a caller is never told how
+ * many resources they cannot read"*). So the sentence names **both** possibilities and then says
+ * outright that the reader must not read it as missing access — because a reader told only the
+ * second half would conclude exactly that, and a reader told only the first would be misinformed.
+ * The reasoning is recorded at the SQL arm and in
+ * `internal/superpowers/specs/2026-08-23-anchor-shape-envelope-design.md`. **Do not add a fifth
+ * case here.** The ambiguity reads like a gap and is load-bearing.
+ *
+ * **Each sentence names a next move, because the four causes differ in what to DO, not in tone.**
+ * `never_clustered` is the only one with an action, and it names the command, the permission it
+ * needs, and who to ask without it — the CLI and MCP doors already say *run `context materialize`*,
+ * and withholding it from the one reader who cannot look it up in a Rust signature inverts the whole
+ * point of this work. There is no in-app way to materialize, so the sentence says the exit is
+ * outside the page rather than leaving the reader to wait for something that will never happen.
+ *
+ * **One verb for one event.** `describeStaleness` already spells this event *"worked out"*, and it
+ * renders on the SAME page eight lines above this one for the same never-materialized anchor
+ * (pinned by `analysis.captured.test.ts`'s `cogmap_never_materialized` fixture). An earlier draft
+ * said *"groupings are built by a separate pass"* — a third noun and a third verb for one thing,
+ * which reads to a non-expert as two separate things that have each not happened.
+ *
+ * **`unreadable_or_absent` is about the MEASUREMENTS, not the place's existence.** On this route the
+ * `<h1>` has already rendered the place's title, from the reader's own anchor list — so a sentence
+ * claiming the page cannot say whether it is there contradicts the heading directly above it. The
+ * existence was never disclosed BY this arm (it came from the reader's own listing), so this is a
+ * page contradicting itself rather than a leak; the wording is scoped to what this read could not
+ * fetch.
+ *
+ * **`lens_narrowed` cannot arrive at this door today**, and is spelled anyway. `readAnchorAnalysis`
+ * passes no `lens` — the lens is a clustering-time parameter — and with `p_lens IS NULL` the shape
+ * function's row filter and its `population` count range over the same set, so arm 3 can never fire
+ * (`migrations/20260823000010_anchor_shape_envelope.sql:121-122` and `:132`). It is written rather than thrown
+ * to a default so the match stays exhaustive over {@link ShapeEmptiness}: the day a caller does
+ * pass a lens, `tsc` will already have been satisfied and the reader will already have a sentence.
+ */
+/** The place the sentence is about, structurally — avoids importing `NamedPlace` from `entry.ts`. */
+export type PlaceRef = { kind: 'context' | 'cogmap'; ref: string } | null;
+
+/**
+ * Refs safe to render inside a command line a reader will paste.
+ *
+ * **Rendered as a guard rather than asserted as an invariant, because it is not one.** A cogmap's
+ * `ref` is `m.id`, a bare uuid, and is safe by construction. A context's is `${owner_ref}/${slug}`,
+ * and no production gate on that slug could be found: `validate_slug` guards `CreateResource` only,
+ * every `INSERT INTO kb_contexts` in the tree is in a test, and the column carries no CHECK. So
+ * "context slugs are lowercase-and-hyphens" is how they all look, not something enforced where this
+ * code can see it.
+ *
+ * A ref that fails this drops the ARGUMENT, not the command — the reader gets a line that is correct
+ * and needs one more word, instead of one that looks exact and is wrong. That direction matters more
+ * here than usual: this whole surface exists because it used to state things it could not know.
+ */
+const PASTE_SAFE_REF =
+	/^(?:[@+][a-z0-9][a-z0-9-]*\/[a-z0-9][a-z0-9-]*|[a-z0-9-]*[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/;
+
+/**
+ * The command this reader would run, as a bare command line — or `null` when there is none to give.
+ *
+ * **Returned separately from the sentence so the page can render it as a `<code>`.** An earlier
+ * draft interpolated it into the prose wrapped in backticks, which read correctly in the source and
+ * rendered as *literal backtick characters* in an italic paragraph: the one string on the page meant
+ * to be copied verbatim, set in the one treatment that makes a command hard to read, with stray
+ * punctuation glued to both ends. Nothing caught it — every assertion used `toContain`, and the
+ * backticks were inside the expected substring. It took looking at the page.
+ */
+export const materializeCommandFor = (
+	emptiness: ShapeEmptiness | null,
+	place: PlaceRef,
+): string | null => {
+	// Only one arm has an action, and only when the page knows which kind of place it is on.
+	if (emptiness !== 'never_clustered' || !place) return null;
+
+	const cmd = place.kind === 'cogmap' ? 'temper cogmap materialize' : 'temper context materialize';
+	return PASTE_SAFE_REF.test(place.ref) ? `${cmd} ${place.ref}` : cmd;
+};
+
+const describeEmptyShape = (emptiness: ShapeEmptiness | null, place: PlaceRef): string => {
+	switch (emptiness) {
+		case 'never_clustered':
+			// The command is NOT in this sentence; the page renders it beneath, as a `<code>`. What
+			// stays here is the lead-in, and it has to read correctly whether or not one follows —
+			// `place: null` yields no command, and this still has to be a whole sentence there.
+			return place
+				? 'This place has never been grouped — its groupings have not been worked out yet. Nothing here is broken. If you do not have write access to the place, ask whoever does; anyone who has it can work them out by running:'
+				: 'This place has never been grouped — its groupings have not been worked out yet. Nothing here is broken. Anyone with write access to the place can work them out with the materialize command; if you do not have write access, ask whoever does.';
+		case 'nothing_visible':
+			return 'This place has been grouped, and nothing came back that you can read. It may have formed no groupings at all, or the groupings it formed may hold only work that is not yours to see. This page deliberately cannot tell you which, so it is not evidence that you are missing access — if you expected to find work here, ask whoever runs this place.';
+		case 'lens_narrowed':
+			return 'This place has groupings, and the view you have selected excludes every one of them. Widening the view — or clearing it altogether — will bring them back.';
+		case 'unreadable_or_absent':
+			return 'The measurements for this place could not be read. Either they are not readable by you or it is not there any more — this page deliberately cannot tell you which, because saying which would answer the other. If you followed a link here, check it with whoever sent it.';
+		case null:
+		// The read said the set was non-empty while handing back no rows. The server does not
+		// produce this — `emptiness` is non-NULL exactly when the row set is empty — so rather
+		// than invent a cause for a state that should not exist, say only what is known.
+		//
+		// `default` shares this arm and is NOT dead code, however exhaustive the union looks.
+		// `undefined` reaches here from an API build predating `20260823000010`, which sends no
+		// `emptiness` key at all (the field carries no `skip_serializing_if`, so this needs version
+		// skew rather than an ordinary response). Without it the switch falls off the end, the
+		// function returns `undefined` from a `: string` signature, and the page renders the literal
+		// word "undefined" under "How its work has been grouped" — failing ugly on precisely the
+		// door this work exists to make honest.
+		default:
+			return 'No groupings came back, and the read did not say why.';
+	}
+};
+
+/**
+ * How many groupings this place publishes, and in whose order they are shown — or, at zero, **why
+ * there are none**.
+ *
+ * `emptiness` is required rather than optional on purpose. Making it optional would leave the old
+ * one-argument call compiling and still asserting a cause it cannot know; requiring it makes `tsc`
+ * name every site that has to supply one. See {@link describeEmptyShape}.
+ */
+export function describeGroupingCount(
+	n: number,
+	emptiness: ShapeEmptiness | null,
+	place: PlaceRef,
+): string {
+	if (n === 0) return describeEmptyShape(emptiness, place);
 	return `${n} ${n === 1 ? 'grouping' : 'groupings'}, in the order this place itself ranks them.`;
 }
 

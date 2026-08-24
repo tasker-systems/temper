@@ -15469,5 +15469,53 @@
 		"note": "Structure-preserving synthetic remap of a real capture. Every id, count, number, timestamp and edge label is the real one; every title, label, ref, handle and excerpt is drawn from scripts/graph-synthetic-vocabulary.mjs. Regenerate with scripts/sanitize-graph-fixtures.mjs from a local capture.",
 		"uuids_remapped": 914,
 		"texts_remapped": 905
+	},
+	"_authored": {
+		"authored": true,
+		"why": "The capture beneath this bundle is from 2026-08-20, BEFORE anchor_shape carried an envelope — every captured scenario therefore has no `emptiness`, and production still returns a bare array today (verified 2026-08-24: HTTP 200, Array, no emptiness key), so a re-capture cannot supply one until this branch deploys.",
+		"what": "The `authored_*` scenarios below were WRITTEN, not observed. They exist so /dev/analysis can render each ShapeEmptiness arm, which is the only way a person can read those sentences in place — they had been reviewed as string literals only, and the worst defect review found (two vocabularies for one event, eight lines apart on one screen) is exactly the class that reading literals cannot surface.",
+		"what_it_is_not": "No captured scenario was edited. In particular `cogmap_never_materialized` still carries NO `emptiness`, though its staleness proves it was never materialized and 'never_clustered' would be the correct value — writing it in would state what a read said when the read did not say it.",
+		"free_text": "Drawn from scripts/graph-synthetic-vocabulary.mjs, same bank the sanitizer uses.",
+		"replace_with": "A real capture, once the envelope is deployed. These are scaffolding, not evidence."
+	},
+	"authored_never_clustered": {
+		"ref": "@meadow/thicket",
+		"shape": [],
+		"emptiness": "never_clustered",
+		"region_metrics": []
+	},
+	"authored_nothing_visible": {
+		"ref": "@meadow/lattice",
+		"shape": [],
+		"emptiness": "nothing_visible",
+		"region_metrics": []
+	},
+	"authored_lens_narrowed": {
+		"ref": "@meadow/cobalt",
+		"shape": [],
+		"emptiness": "lens_narrowed",
+		"region_metrics": []
+	},
+	"authored_unreadable_or_absent": {
+		"ref": "@meadow/quartz",
+		"shape": [],
+		"emptiness": "unreadable_or_absent",
+		"region_metrics": []
+	},
+	"authored_never_clustered_map": {
+		"name": "harbor beacon",
+		"ref": "019fbeef-0000-7000-8000-00000000beef",
+		"shape": [],
+		"emptiness": "never_clustered",
+		"region_metrics": [],
+		"analytics": {
+			"telos_resource_id": "019fbeef-0000-7000-8000-0000000000a1",
+			"staleness": {
+				"materialized_at": null,
+				"latest_touch": null,
+				"is_stale": true
+			},
+			"regulation": []
+		}
 	}
 }

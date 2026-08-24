@@ -37,6 +37,7 @@ lib/temper/generated/models/add_member_request.rb
 lib/temper/generated/models/advance_watermark_ack.rb
 lib/temper/generated/models/advance_watermark_request.rb
 lib/temper/generated/models/agent_authorship.rb
+lib/temper/generated/models/anchor_shape.rb
 lib/temper/generated/models/append_block_payload.rb
 lib/temper/generated/models/artifact_commit_request.rb
 lib/temper/generated/models/artifact_commit_response.rb
@@ -268,6 +269,7 @@ lib/temper/generated/models/segment_info.rb
 lib/temper/generated/models/segmented_begin.rb
 lib/temper/generated/models/segmented_begin_response.rb
 lib/temper/generated/models/shape_declare_request.rb
+lib/temper/generated/models/shape_emptiness.rb
 lib/temper/generated/models/shape_view.rb
 lib/temper/generated/models/share_context_outcome.rb
 lib/temper/generated/models/share_context_request.rb
