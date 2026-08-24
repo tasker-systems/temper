@@ -495,23 +495,34 @@ fn validate_open_meta_shape(open_meta: Option<&serde_json::Value>) -> Result<(),
 /// identity does not depend on whether it was just written or merely looked at. Visibility is gated
 /// inside that readback (WS2 — `resources_visible_to`).
 ///
-/// Asks for **no sections**: the row shape this replaced on `create`/`update`/`annotate` carried
-/// neither meta tier nor the body, and `managed_meta` is not a section — it is always present.
-/// `show_resource` asks for `open-meta` on top, because the detail shape it replaced carried both
-/// tiers.
+/// Asks for **`open-meta`, and only that** — the same section set `show_resource` asks for, so a
+/// write and a read of one resource answer with the same filled shape.
+///
+/// It asked for **nothing** until this change, on a reason that had outlived its subject: the row
+/// type it replaced on `create`/`update`/`annotate` carried neither meta tier, and that type is
+/// gone. The managed tier survived the omission because it is not a section — it is always present
+/// on a view — so a managed-tier write came back verified from storage. The open tier **is** a
+/// section, so a write that changed a caller's own descriptions came back with `open_meta: None`:
+/// the tier it had just written, absent from its own answer, and indistinguishable from a resource
+/// that has no open tier at all.
+///
+/// That was not the section vocabulary working as designed. `None` means *not requested*
+/// (`section_open_meta_absent_omits_open_meta` pins that on `show_view_select`, which this does not
+/// touch), and the write door was the only door answering in [`ResourceView`] that did not ask.
+///
+/// **The body stays unasked.** It has its own door (`GET /api/resources/{id}/content`), its
+/// reconstruction is 2-3 statements, and a write that echoed the whole document back would make
+/// every write pay for a read nobody asked for. The open tier costs one batched statement
+/// (`readback::meta_batch`), which is what a write owes the caller for the tier it just changed.
 async fn native_resource_view(
     pool: &PgPool,
     principal: ProfileId,
     new_id: ResourceId,
 ) -> Result<ResourceView, TemperError> {
-    crate::backend::substrate_read::show_view_select(
-        pool,
-        principal,
-        new_id,
-        &SectionSet::default(),
-    )
-    .await
-    .map_err(TemperError::from)
+    let sections: SectionSet = [ResourceSection::OpenMeta].into_iter().collect();
+    crate::backend::substrate_read::show_view_select(pool, principal, new_id, &sections)
+        .await
+        .map_err(TemperError::from)
 }
 
 // `native_resource_row` is GONE with `ResourceRow` itself. It mapped `readback::resource_row` onto
