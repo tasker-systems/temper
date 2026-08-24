@@ -83,14 +83,22 @@ export interface Readout {
  * `/api/cognitive-maps/{id}/shape` and `/api/contexts/{id}/shape`), which is
  * `cross-kind-relationship-is-reachable` holding one layer down.
  *
- * **`rows` is the unwrapped `regions`, and this type deliberately stops there.** That read now
- * answers an anchor-level envelope (`population`, `emptiness`, `materialized_at`);
- * `readAnchorRegions` drops it, because those facts are per-anchor and this set is flat by design,
- * and because naming a grouping needs `region_id`, `label` and `member_count` and nothing else.
+ * **`rows` is the unwrapped `regions`, and this type deliberately stops there.** That read answers
+ * an anchor-level envelope (`population`, `emptiness`, `materialized_at`); `readAnchorRegions` drops
+ * the first and third, because those are per-anchor facts and this set is flat by design, and
+ * because naming a grouping needs `region_id`, `label` and `member_count` and nothing else.
  *
  * `complete` is false when any of those reads did not answer. It degrades every unfound id to
  * `unchecked` rather than `re-derived` — conservative in the one direction that matters, since the
  * surface must never tell a reader their grouping is gone on evidence it does not have.
+ *
+ * **`[2026-08-24]` "Did not answer" is not the same question as "did not reject."** A caller who may
+ * not read an anchor is answered `emptiness: 'unreadable_or_absent'` on a **200** with zero rows —
+ * the posture that keeps the shape read from being an existence oracle. So a denial used to arrive
+ * here as a fulfilled promise, `complete` stayed `true`, and `nameOf` told the reader their grouping
+ * had been re-derived on the strength of a read that disclosed nothing. `readAnchorRegions` now
+ * treats that one arm as a non-answer, which is what makes the conservative branch below reachable
+ * in the case it was written for. The other arms are left alone: they are answers.
  */
 export interface RegionLookup {
 	rows: CogmapRegionRow[];

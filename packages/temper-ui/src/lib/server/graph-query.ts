@@ -139,11 +139,32 @@ const anchorShapePath = (anchor: Anchor): string =>
  * error. One anchor being unreadable is not a reason to refuse the reader their graph, and it is
  * not evidence that anything was re-derived either.
  *
- * **The envelope is unwrapped here, not carried.** Each door answers an `AnchorShape`; this lookup
- * exists to NAME a disclosed region id, and `nameOf` matches on `region_id` alone. Per-anchor
- * `population` / `emptiness` / `materialized_at` would have to be re-associated with the anchors
- * they came from to say anything, and the one flat set below is deliberately not keyed that way —
- * so they are dropped at the door rather than threaded through a readout that has no use for them.
+ * **The envelope is unwrapped here, with ONE exception that is the whole point of the exception.**
+ * This lookup exists to NAME a disclosed region id, and `nameOf` matches on `region_id` alone, so
+ * `population` and `materialized_at` are dropped: they are per-anchor facts that would have to be
+ * re-associated with the anchors they came from to say anything, and the flat set below is
+ * deliberately not keyed that way.
+ *
+ * **`emptiness` is read, and not to report a cause.** `complete` means *a read did not answer*, and
+ * it used to be `every(fulfilled)` — which is an HTTP-level question asked of an authorization-level
+ * failure. A caller who may not read an anchor gets `emptiness: 'unreadable_or_absent'` with
+ * `population: 0` **on a 200, never a 403** (`substrate_read.rs`, *"discloses strictly less than a
+ * 403 would, and stays a 200"*) — deliberately, so the shape read is not an existence oracle. So a
+ * denial arrived *fulfilled*, `complete` stayed `true`, and `nameOf` answered `re-derived`:
+ *
+ *     a region the trace disclosed, whose anchor this caller cannot read
+ *       →  200, zero rows  →  complete: true  →  "This grouping has been re-derived."
+ *
+ * which is a claim about the substrate drawn from a read that told the caller nothing. `unchecked`
+ * exists for exactly that — *"the surface must never tell a reader their grouping is gone on
+ * evidence it does not have"* (`readout.ts`) — and was unreachable in the one case it was built for,
+ * because the posture that protects the anchor also disguises the denial as an empty success.
+ *
+ * **This does not collapse `complete` into an `emptiness` arm.** The two still mean different
+ * things, and only ONE arm is consulted: `never_clustered` and `nothing_visible` are answers — the
+ * anchor genuinely holds nothing for this caller, and an unfound id really is `re-derived`.
+ * `unreadable_or_absent` is not an answer about the anchor at all; it is the read declining to make
+ * one. Reading it here asks the question `complete` always asked, at the layer that can answer it.
  */
 export async function readAnchorRegions(
 	token: string,
@@ -153,9 +174,14 @@ export async function readAnchorRegions(
 		anchors.map((a) => apiGet<AnchorShape>(anchorShapePath(a), token)),
 	);
 
+	/** A rejection did not answer — and neither did a 200 that declined to say anything. */
+	const answered = (r: PromiseSettledResult<AnchorShape>): boolean =>
+		r.status === 'fulfilled' && r.value.emptiness !== 'unreadable_or_absent';
+
 	return {
+		// Unchanged: a denied read carries no rows anyway, so this only ever drops empties.
 		rows: reads.flatMap((r) => (r.status === 'fulfilled' ? r.value.regions : [])),
-		complete: reads.every((r) => r.status === 'fulfilled'),
+		complete: reads.every(answered),
 	};
 }
 

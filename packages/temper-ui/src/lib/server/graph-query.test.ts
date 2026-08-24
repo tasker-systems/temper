@@ -121,12 +121,14 @@ describe('the analysis door carries the cause off the wire', () => {
 	});
 });
 
-describe('the pooled read still drops the envelope, and that is the decision', () => {
+describe('the pooled read reports no cause, but does read one arm', () => {
 	/**
 	 * `readAnchorRegions` reads MANY anchors and is called ONLY when regions were disclosed
-	 * (`+page.server.ts`), so it never meets an empty answer and has no single cause to report.
-	 * Pinned so that "the other door carries it, why not this one" is answered by a failing test
-	 * rather than by a comment someone can skim past.
+	 * (`+page.server.ts`), so it never meets an empty answer and has no single cause to REPORT — the
+	 * return shape stays `{ rows, complete }`. What it does read is `unreadable_or_absent`, and only
+	 * to answer the question `complete` already asked; see the two tests below. Pinned so that "the
+	 * other door carries the whole envelope, why not this one" is answered by a failing test rather
+	 * than by a comment someone can skim past.
 	 */
 	it('returns rows and completeness, and no per-anchor cause', async () => {
 		apiGet.mockResolvedValue(emptyShape({ regions: [ROW] as AnchorShape['regions'] }));
@@ -152,5 +154,39 @@ describe('the pooled read still drops the envelope, and that is the decision', (
 
 		expect(out.rows).toEqual([ROW]);
 		expect(out.complete).toBe(false);
+	});
+
+	/**
+	 * **The denial that arrives as a success.** A caller who may not read an anchor gets
+	 * `unreadable_or_absent` with zero rows on a **200**, never a 403 — the posture that keeps the
+	 * shape read from being an existence oracle. Under `every(fulfilled)` that counted as an answer,
+	 * so `complete` stayed true and `nameOf` told the reader their grouping had been re-derived on
+	 * the strength of a read that disclosed nothing to them.
+	 */
+	it('a denial delivered as an empty 200 is a non-answer, not a completed read', async () => {
+		apiGet
+			.mockResolvedValueOnce(emptyShape({ regions: [ROW] as AnchorShape['regions'] }))
+			.mockResolvedValueOnce(emptyShape({ emptiness: 'unreadable_or_absent', population: 0 }));
+
+		const out = await readAnchorRegions('tok', [CONTEXT, COGMAP]);
+
+		expect(out.rows).toEqual([ROW]);
+		expect(out.complete, 'a 200 that declined to answer is not a completed read').toBe(false);
+	});
+
+	/**
+	 * The other three arms are ANSWERS, and must keep counting as such — otherwise this really would
+	 * collapse `complete` into `emptiness`, and every reader of a legitimately empty anchor would be
+	 * told their groupings were merely unchecked.
+	 */
+	it('an anchor that genuinely holds nothing for this caller still counts as answered', async () => {
+		for (const arm of ['never_clustered', 'nothing_visible', 'lens_narrowed'] as const) {
+			apiGet.mockReset();
+			apiGet.mockResolvedValue(emptyShape({ emptiness: arm }));
+
+			const out = await readAnchorRegions('tok', [CONTEXT]);
+
+			expect(out.complete, `${arm} is an answer about the anchor`).toBe(true);
+		}
 	});
 });
