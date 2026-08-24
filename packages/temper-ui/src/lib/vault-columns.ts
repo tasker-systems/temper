@@ -25,8 +25,10 @@ export interface VaultColumn {
  * the work, so a column ranked on them would rank by a stale prediction.
  *
  * The drift guard in `vault-columns.test.ts` keeps this honest against the
- * schemas without demanding equality — `MANAGED_KEY_ORDER` (`properties.ts:21`)
- * plays the same role for the property list and never got one.
+ * schemas without demanding equality. It is the only such guard the surface still
+ * needs: `MANAGED_KEY_ORDER` (`properties.ts`) used to want one too, and no longer
+ * does — it stopped being a copy of the managed set and became an editorial ranking
+ * over a set the server assigns.
  */
 export const KIND_KEYS: Readonly<Record<string, readonly string[]>> = {
 	task: ['temper-stage'],

@@ -10,6 +10,7 @@ export * from './generated/resource.ts';
 // the rest of `resource.ts` is temper-workflow's. It was re-exported through `resource.ts`
 // before the split, so it is re-exported here to keep the barrel's surface unchanged.
 export * from './generated/resource_view.ts';
+export * from './generated/schema.ts';
 export * from './generated/search.ts';
 export * from './generated/serde_json/JsonValue.ts';
 export * from './generated/team.ts';
