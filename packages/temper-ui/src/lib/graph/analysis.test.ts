@@ -415,6 +415,18 @@ describe('an empty groupings list says which of the four causes it is', () => {
 	 * `emptiness: null` on an empty set is a state the server does not produce — the SQL sets it
 	 * non-NULL exactly when the row set is empty — so the receiver must not invent a cause for it.
 	 */
+	/**
+	 * A server predating `20260823000010` sends no `emptiness` key, so `undefined` arrives where the
+	 * type says it cannot. Without a `default` the switch falls off the end and a `: string` function
+	 * returns `undefined`, which the page renders as the literal word "undefined". Cast rather than
+	 * typed, because the point is exactly that the type does not admit this and the wire does.
+	 */
+	test('a wire value the type does not admit still gets a sentence, not "undefined"', () => {
+		const s = describeGroupingCount(0, undefined as unknown as null);
+		expect(s).toBe('No groupings came back, and the read did not say why.');
+		expect(s).not.toBe(undefined);
+	});
+
 	test('no cause given is said as no cause given, never guessed at', () => {
 		const s = describeGroupingCount(0, null);
 		expect(s).toBe('No groupings came back, and the read did not say why.');

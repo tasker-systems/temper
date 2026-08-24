@@ -281,7 +281,7 @@ export async function readAnchorAnalysis(
 	// on every read this door can make. Surfacing it would print the row count twice under two
 	// names. **`lens_narrowed` is unreachable here for the same reason**: arm 3 fires only when
 	// `regs` is non-empty while the lens-filtered rows are empty, which no NULL lens can produce
-	// (`migrations/20260823000010_anchor_shape_envelope.sql:126-131`). The receiver still spells
+	// (`migrations/20260823000010_anchor_shape_envelope.sql:121-122` and `:132`). The receiver still
 	// that arm, because the type has four and an exhaustive match is what keeps a future
 	// lens-passing caller honest -- but it is labelled unreachable rather than left to look live.
 	//

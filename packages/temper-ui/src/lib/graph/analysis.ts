@@ -423,7 +423,7 @@ export function describeRegulation(n: number): string {
  * **`lens_narrowed` cannot arrive at this door today**, and is spelled anyway. `readAnchorAnalysis`
  * passes no `lens` — the lens is a clustering-time parameter — and with `p_lens IS NULL` the shape
  * function's row filter and its `population` count range over the same set, so arm 3 can never fire
- * (`migrations/20260823000010_anchor_shape_envelope.sql:126-131`). It is written rather than thrown
+ * (`migrations/20260823000010_anchor_shape_envelope.sql:121-122` and `:132`). It is written rather than thrown
  * to a default so the match stays exhaustive over {@link ShapeEmptiness}: the day a caller does
  * pass a lens, `tsc` will already have been satisfied and the reader will already have a sentence.
  */
@@ -438,9 +438,18 @@ const describeEmptyShape = (emptiness: ShapeEmptiness | null): string => {
 		case 'unreadable_or_absent':
 			return 'The measurements for this place could not be read. Either they are not readable by you or it is not there any more — this page deliberately cannot tell you which, because saying which would answer the other. If you followed a link here, check it with whoever sent it.';
 		case null:
-			// The read said the set was non-empty while handing back no rows. The server does not
-			// produce this — `emptiness` is non-NULL exactly when the row set is empty — so rather
-			// than invent a cause for a state that should not exist, say only what is known.
+		// The read said the set was non-empty while handing back no rows. The server does not
+		// produce this — `emptiness` is non-NULL exactly when the row set is empty — so rather
+		// than invent a cause for a state that should not exist, say only what is known.
+		//
+		// `default` shares this arm and is NOT dead code, however exhaustive the union looks.
+		// `undefined` reaches here from an API build predating `20260823000010`, which sends no
+		// `emptiness` key at all (the field carries no `skip_serializing_if`, so this needs version
+		// skew rather than an ordinary response). Without it the switch falls off the end, the
+		// function returns `undefined` from a `: string` signature, and the page renders the literal
+		// word "undefined" under "How its work has been grouped" — failing ugly on precisely the
+		// door this work exists to make honest.
+		default:
 			return 'No groupings came back, and the read did not say why.';
 	}
 };
