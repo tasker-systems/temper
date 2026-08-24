@@ -459,6 +459,32 @@ pub struct ValidateManagedMetaParams<'a> {
     /// write to every resource in that context. Callers pass a **slug** (context home) or the raw
     /// home **UUID** (cogmap home, which has no context slug) — both satisfy the pattern.
     pub context_token: &'a str,
+    /// The managed tier this resource **already holds**, when there is one.
+    ///
+    /// The applicability rule is a property of the *act*, not of the data: a door may not
+    /// **introduce** a state its kind does not carry, but a value already stored may be restated.
+    /// Without this, a full-tier restate (`PUT /api/resources/{id}/meta` states both tiers in
+    /// full) of a resource holding a stray field would 400 with no door able to remove it —
+    /// wedged, since a null in `managed_meta` is skipped by `properties_from_meta` rather than
+    /// retracting the row.
+    ///
+    /// `None` means *every* inapplicable field is an introduction. Create passes `None` because
+    /// nothing is stored yet; update passes `None` when the act also **changes the doc type**,
+    /// so a retype cannot carry the old kind's state across (the caller is assembling a fresh
+    /// payload there and is not wedged by refusing).
+    pub stored_managed: Option<&'a Value>,
+}
+
+/// Whether the resource already stores a value under `field` — the restate half of the
+/// applicability rule.
+///
+/// A stored JSON `null` does not count: the write path skips nulls
+/// (`properties_from_meta`), so a null was never a stored value and restating one would be an
+/// introduction.
+fn already_stores(stored: Option<&Value>, field: &str) -> bool {
+    stored
+        .and_then(|s| s.get(field))
+        .is_some_and(|v| !v.is_null())
 }
 
 /// Validate `managed_meta` against the doc-type schema, returning a typed [`temper_core::error::TemperError`] on failure
@@ -479,6 +505,32 @@ pub fn validate_managed_meta(
         return Err(TemperError::BadRequest(
             "invalid managed_meta shape: managed_meta must be a JSON object".to_owned(),
         ));
+    }
+
+    // Applicability, before the value check: a field this kind of work does not carry at all is
+    // a different fault from a carried field holding an out-of-vocabulary value, and it is the
+    // more specific of the two. Read from `managed` — the caller's own keys — and NOT from the
+    // assembled document below, whose injected identity keys include `temper-slug`, which the
+    // base schema does not declare and several doc-type schemas do not either.
+    if let Some(obj) = managed.as_object() {
+        let supplied: Vec<&str> = obj.keys().map(String::as_str).collect();
+        let introduced: Vec<String> =
+            crate::schema::inapplicable_fields(params.doc_type, &supplied)
+                .into_iter()
+                .filter(|field| !already_stores(params.stored_managed, field))
+                .collect();
+        if !introduced.is_empty() {
+            return Err(TemperError::BadRequest(format!(
+                "managed_meta inapplicable for doc_type={}: {} — {} belongs to another kind of work",
+                params.doc_type,
+                introduced.join(", "),
+                if introduced.len() == 1 {
+                    "that field"
+                } else {
+                    "those fields"
+                }
+            )));
+        }
     }
 
     let identity = FrontmatterIdentity {
@@ -514,6 +566,122 @@ pub fn validate_managed_meta(
             params.doc_type,
             detail.join("; ")
         )))
+    }
+}
+
+#[cfg(test)]
+mod applicability_tests {
+    use super::*;
+    use temper_core::types::ids::ResourceId;
+
+    fn params<'a>(
+        doc_type: &'a str,
+        managed: &'a Value,
+        stored: Option<&'a Value>,
+    ) -> ValidateManagedMetaParams<'a> {
+        ValidateManagedMetaParams {
+            id: ResourceId::from(uuid::Uuid::nil()),
+            created: DateTime::<Utc>::from_timestamp(0, 0).expect("epoch is a valid timestamp"),
+            doc_type,
+            managed_meta: Some(managed),
+            slug: "a-slug",
+            title: "A title",
+            context_token: "a-context",
+            stored_managed: stored,
+        }
+    }
+
+    /// `no-door-stores-a-state-its-kind-does-not-carry`. This is the write the clause names, and
+    /// it validated clean before this gate existed.
+    #[test]
+    fn introducing_a_state_another_kind_carries_is_refused() {
+        let managed = serde_json::json!({ "temper-stage": "backlog" });
+        let err = validate_managed_meta(&params("goal", &managed, None))
+            .expect_err("a goal does not carry a task's stage");
+        let message = err.to_string();
+        assert!(
+            message.contains("temper-stage") && message.contains("goal"),
+            "the refusal must name the field and the kind, so the caller can act on it: {message}"
+        );
+    }
+
+    /// The converse direction, so the gate is not merely refusing one hard-coded pair.
+    #[test]
+    fn introducing_a_goal_status_on_a_task_is_refused() {
+        let managed = serde_json::json!({ "temper-stage": "backlog", "temper-status": "active" });
+        assert!(
+            validate_managed_meta(&params("task", &managed, None)).is_err(),
+            "a task does not carry a goal's status"
+        );
+    }
+
+    /// The restate half. Without it, the two production resources measured as already holding a
+    /// stray field would be un-restatable through `PUT /meta` with no door able to remove it.
+    #[test]
+    fn restating_a_state_already_stored_is_allowed() {
+        let managed = serde_json::json!({ "temper-status": "active" });
+        let stored = serde_json::json!({ "temper-status": "active" });
+        assert!(
+            validate_managed_meta(&params("concept", &managed, Some(&stored))).is_ok(),
+            "a stray field already on the resource may be restated — nothing can remove it yet"
+        );
+    }
+
+    /// Restate is scoped to what is actually there: a stray field the resource does NOT hold is
+    /// an introduction even when the resource holds some other stray.
+    #[test]
+    fn a_stored_field_does_not_license_a_different_one() {
+        let managed = serde_json::json!({ "temper-status": "active", "temper-stage": "done" });
+        let stored = serde_json::json!({ "temper-status": "active" });
+        assert!(
+            validate_managed_meta(&params("concept", &managed, Some(&stored))).is_err(),
+            "storing temper-status must not license introducing temper-stage"
+        );
+    }
+
+    /// A stored null was never a stored value — `properties_from_meta` skips nulls, so no row
+    /// exists and restating it would be an introduction.
+    #[test]
+    fn a_stored_null_is_not_a_stored_value() {
+        let managed = serde_json::json!({ "temper-status": "active" });
+        let stored = serde_json::json!({ "temper-status": serde_json::Value::Null });
+        assert!(
+            validate_managed_meta(&params("concept", &managed, Some(&stored))).is_err(),
+            "a null is not stored, so this is an introduction"
+        );
+    }
+
+    /// The gate must not refuse ordinary writes: a kind's own state, and the base-declared
+    /// provenance trio every create stamps regardless of type.
+    #[test]
+    fn a_kinds_own_state_and_the_provenance_trio_pass() {
+        let task = serde_json::json!({
+            "temper-stage": "backlog",
+            "temper-mode": "build",
+            "temper-provenance": "user-created",
+        });
+        assert!(validate_managed_meta(&params("task", &task, None)).is_ok());
+
+        let memory = serde_json::json!({
+            "temper-provenance": "llm-discovered",
+            "temper-llm-model": "claude-opus-5",
+            "temper-llm-run": "019f0000-0000-7000-8000-000000000000",
+        });
+        assert!(
+            validate_managed_meta(&params("memory", &memory, None)).is_ok(),
+            "the provenance trio is base-declared, so every kind carries it"
+        );
+    }
+
+    /// Applicability and value-vocabulary are separate faults. A carried field holding an
+    /// out-of-vocabulary value must still be refused by the schema check the gate already ran.
+    #[test]
+    fn a_carried_field_with_an_out_of_vocabulary_value_still_fails() {
+        let managed = serde_json::json!({ "temper-stage": "not-a-stage" });
+        assert!(
+            validate_managed_meta(&params("task", &managed, None)).is_err(),
+            "a task carries temper-stage, but not that value"
+        );
     }
 }
 

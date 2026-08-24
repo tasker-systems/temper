@@ -40,7 +40,10 @@ async fn setup_resource_with_managed_meta(
         .header("Authorization", format!("Bearer {token}"))
         .json(&json!({
             "kb_context_id": context_id.to_string(),
-            "doc_type": "research",
+            // A `task`, not a `research`: these tests merge *workflow* keys, and the
+            // applicability gate refuses a state its kind does not carry. The subject is
+            // key-wise merging, so the keys must be ones the kind actually has.
+            "doc_type": "task",
             "origin_uri": format!("test://merge-managed-{}", Uuid::new_v4()),
             "title": "Managed Meta Merge Test",
             "slug": null
@@ -185,7 +188,7 @@ async fn managed_meta_partial_update_preserves_untouched_fields(pool: PgPool) {
     let stored = json!({
         "temper-stage": "in-progress",
         "temper-mode": "build",
-        "temper-status": "active"
+        "temper-effort": "small"
     });
     let (token, resource_id) = setup_resource_with_managed_meta(&app, &pool, stored).await;
 
@@ -224,9 +227,9 @@ async fn managed_meta_partial_update_preserves_untouched_fields(pool: PgPool) {
         "mode must be preserved"
     );
     assert_eq!(
-        merged["temper-status"],
-        json!("active"),
-        "status must be preserved"
+        merged["temper-effort"],
+        json!("small"),
+        "effort must be preserved"
     );
 }
 
@@ -242,7 +245,7 @@ async fn managed_meta_merges_by_property_key(pool: PgPool) {
 
     // PATCH a different managed key — `temper-mode` must survive.
     let req_body = json!({
-        "managed_meta": { "temper-status": "active" }
+        "managed_meta": { "temper-effort": "large" }
     });
 
     let resp = app
@@ -268,9 +271,9 @@ async fn managed_meta_merges_by_property_key(pool: PgPool) {
         "existing managed key 'temper-mode' must be preserved"
     );
     assert_eq!(
-        merged["temper-status"],
-        json!("active"),
-        "incoming managed key 'temper-status' must be added"
+        merged["temper-effort"],
+        json!("large"),
+        "incoming managed key 'temper-effort' must be added"
     );
 }
 

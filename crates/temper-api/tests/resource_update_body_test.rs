@@ -73,7 +73,10 @@ async fn update_response_includes_body_hash(pool: PgPool) {
         .patch(app.url(&format!("/api/resources/{resource_id}")))
         .header("Authorization", format!("Bearer {token}"))
         .json(&json!({
-            "managed_meta": { "temper-stage": "done" }
+            // `temper-provenance` is base-declared, so a research carries it. This read
+            // `temper-stage` until the applicability gate landed: the field is arbitrary filler
+            // for "a managed-tier change", and a research does not carry a task's stage.
+            "managed_meta": { "temper-provenance": "llm-discovered" }
         }))
         .send()
         .await

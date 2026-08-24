@@ -130,15 +130,20 @@ async fn meta_only_update_preserves_title(pool: PgPool) {
 
     let resource_id = ingest_research(&app, &token, "Preserve Original").await;
 
-    // PUT /api/resources/{id}/meta with only a stage change (no title). The title
+    // PUT /api/resources/{id}/meta with only a managed-tier change (no title). The title
     // column must survive untouched.
+    //
+    // The field changed is `temper-provenance` — base-declared, so every kind carries it. This
+    // read `temper-stage` until the applicability gate landed and refused it: a research does
+    // not carry a task's stage, and the subject here is the title, not the stage. Do not swap it
+    // back for a field the doc type does not have.
     let put_resp = app
         .client
         .put(app.url(&format!("/api/resources/{resource_id}/meta")))
         .header("Authorization", format!("Bearer {token}"))
         .json(&json!({
             "resource_id": resource_id,
-            "managed_meta": {"temper-stage": "done"},
+            "managed_meta": {"temper-provenance": "llm-discovered"},
             "open_meta": {},
             "managed_hash": "",
             "open_hash": "",

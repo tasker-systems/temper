@@ -418,6 +418,11 @@ struct ManagedValidationParams<'a> {
     /// real resource id); they only seed the validation document.
     id: uuid::Uuid,
     created: chrono::DateTime<Utc>,
+    /// The managed tier already stored on this resource — see
+    /// [`temper_workflow::operations::ValidateManagedMetaParams::stored_managed`]. Create passes
+    /// `None` (nothing is stored yet); update passes the current tier, except when the act also
+    /// changes the doc type.
+    stored_managed: Option<serde_json::Value>,
 }
 
 /// The shared managed-meta validation pipeline used by BOTH `create_resource` and `update_resource`:
@@ -442,6 +447,7 @@ fn validate_managed_meta_pipeline(
         slug: params.validator_slug,
         title: params.title,
         context_token: params.context_token,
+        stored_managed: params.stored_managed.as_ref(),
     };
     temper_workflow::operations::validate_managed_meta(&validate_params)?;
     Ok(managed)
@@ -1748,6 +1754,8 @@ impl DbBackend {
             context_token: &home.id.to_string(),
             id: uuid::Uuid::now_v7(),
             created: Utc::now(),
+            // Nothing is stored yet, so every inapplicable field is an introduction.
+            stored_managed: None,
         })?;
 
         // No content-hash dedup on create. A resource's identity is its id + its position in the
@@ -2028,6 +2036,14 @@ impl Backend for DbBackend {
                 context_token: &effective_context,
                 id: new_id,
                 created: current.created,
+                // What this resource already holds, so a full-tier restate of a stray field is
+                // not refused with no door able to remove it. Withheld when the act CHANGES the
+                // doc type: the old kind's stored state is not the new kind's to carry, and a
+                // caller assembling a retype payload can simply drop the field.
+                stored_managed: (effective_doc_type == current.doc_type_name)
+                    .then(|| serde_json::to_value(&current.managed_meta))
+                    .transpose()
+                    .map_err(|e| TemperError::Api(e.to_string()))?,
             })?;
 
             // Write only the caller-supplied keys (PATCH is a partial merge; `PropertySet`

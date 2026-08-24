@@ -6,7 +6,7 @@
 use crate::frontmatter::fields::{KNOWN_TEMPER_FIELDS, SYSTEM_MANAGED_FIELDS};
 use jsonschema::{Resource, Validator};
 use serde::Serialize;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::OnceLock;
 use temper_core::error::{Result, TemperError};
 
@@ -464,6 +464,65 @@ pub fn schema_value(doc_type: &str) -> Result<serde_json::Value> {
 pub fn base_schema_value() -> Result<serde_json::Value> {
     serde_json::from_str(BASE_SCHEMA)
         .map_err(|e| TemperError::Config(format!("base schema JSON parse error: {e}")))
+}
+
+/// The managed fields **every** kind of work carries — `base.schema.json`'s own declared
+/// properties.
+///
+/// Derived from the embedded base schema rather than listed. Every doc-type schema pulls the
+/// base in via `allOf`/`$ref`, so a key declared there is carried by every kind *by
+/// construction* — which is exactly why a hand-written copy of this set drifts. There was one:
+/// `validate_update_args`' `BASE_FIELDS` in the CLI held `["temper-title"]` and silently omitted
+/// the provenance trio.
+///
+/// Parsed once. The base schema ships with the binary, so a parse failure is a build-time fault,
+/// not a runtime condition.
+///
+/// # Panics
+/// Panics if the embedded base schema fails to parse — see [`base_schema_value`].
+pub fn universal_fields() -> &'static BTreeSet<String> {
+    static UNIVERSAL: OnceLock<BTreeSet<String>> = OnceLock::new();
+    UNIVERSAL.get_or_init(|| {
+        let base = base_schema_value().expect("embedded base schema must parse");
+        base.get("properties")
+            .and_then(|p| p.as_object())
+            .map(|props| props.keys().cloned().collect())
+            .unwrap_or_default()
+    })
+}
+
+/// Which of `fields` this kind of work does not carry — each one a field belonging to some
+/// *other* kind.
+///
+/// A field is carried by doc type `T` iff [`universal_fields`] holds it (the base schema
+/// declares it for every kind) or `T`'s own schema declares it. Both halves are read from the
+/// embedded schemas; neither is restated here, which is what keeps this answer and
+/// [`enum_fields`] from disagreeing about what a kind of work has.
+///
+/// **Open tail.** A doc type with no embedded schema carries no opinion and returns empty — the
+/// same short-circuit [`validate_frontmatter`] takes for an unrecognized type. There are live
+/// resources on out-of-vocabulary doc types (see
+/// `an_out_of_vocabulary_doctype_is_updatable_by_flags_needing_no_schema`), and every create
+/// stamps the provenance trio; a type with no schema to consult must not have that read as
+/// "carries nothing".
+///
+/// This answers *applicability* only. Whether a carried field's **value** is in its vocabulary is
+/// [`validate_frontmatter`]'s question, and a field can fail either independently.
+pub fn inapplicable_fields(doc_type: &str, fields: &[&str]) -> Vec<String> {
+    let Ok(schema) = schema_value(doc_type) else {
+        return Vec::new();
+    };
+    let declared: HashSet<&str> = schema
+        .get("properties")
+        .and_then(|p| p.as_object())
+        .map(|props| props.keys().map(String::as_str).collect())
+        .unwrap_or_default();
+
+    fields
+        .iter()
+        .filter(|f| !universal_fields().contains(**f) && !declared.contains(**f))
+        .map(|f| (*f).to_string())
+        .collect()
 }
 
 /// Return the embedded open_meta recognized-conventions schema as a JSON value.
@@ -1613,6 +1672,98 @@ title: "Test task"
         assert!(
             !goal.enum_fields.contains_key("temper-stage"),
             "a goal carries no temper-stage, so the vocabulary must not offer one"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Applicability — which fields a kind of work carries at all
+    // -------------------------------------------------------------------------
+
+    /// The set is READ from the base schema, not listed beside it. Asserted on a key the base
+    /// declares and a key it does not, so a derivation that returned everything (or nothing)
+    /// fails rather than passing by accident.
+    #[test]
+    fn universal_fields_are_read_from_the_base_schema() {
+        let universal = universal_fields();
+        for field in [
+            "temper-title",
+            "temper-provenance",
+            "temper-llm-model",
+            "temper-llm-run",
+        ] {
+            assert!(
+                universal.contains(field),
+                "{field} is declared by base.schema.json, so every kind carries it"
+            );
+        }
+        assert!(
+            !universal.contains("temper-stage"),
+            "temper-stage is a task field, not a base one — a universal set holding it would \
+             make every kind carry a task's state"
+        );
+    }
+
+    /// The clause this exists for: `no-door-stores-a-state-its-kind-does-not-carry`.
+    #[test]
+    fn a_state_belonging_to_one_kind_is_inapplicable_on_another() {
+        assert_eq!(
+            inapplicable_fields("goal", &["temper-stage"]),
+            vec!["temper-stage".to_string()],
+            "temper-stage is a task's state; a goal does not carry one"
+        );
+        assert_eq!(
+            inapplicable_fields("task", &["temper-status"]),
+            vec!["temper-status".to_string()],
+            "temper-status is a goal's state; a task does not carry one"
+        );
+        assert_eq!(
+            inapplicable_fields("session", &["temper-branch", "temper-seq"]),
+            vec!["temper-branch".to_string(), "temper-seq".to_string()],
+            "a session carries neither a task's branch nor an ordering seq"
+        );
+    }
+
+    /// The positive half, so the predicate cannot pass the test above by refusing everything.
+    #[test]
+    fn a_kind_carries_its_own_declared_fields_and_the_universal_ones() {
+        assert!(
+            inapplicable_fields(
+                "task",
+                &[
+                    "temper-stage",
+                    "temper-mode",
+                    "temper-effort",
+                    "temper-branch",
+                    "temper-pr",
+                    "temper-seq"
+                ]
+            )
+            .is_empty(),
+            "every one of these is declared by task.schema.json"
+        );
+        assert!(
+            inapplicable_fields("goal", &["temper-status", "temper-seq"]).is_empty(),
+            "both are declared by goal.schema.json"
+        );
+        assert!(
+            inapplicable_fields(
+                "memory",
+                &["temper-provenance", "temper-llm-model", "temper-llm-run"]
+            )
+            .is_empty(),
+            "the provenance trio is base-declared, so every kind carries it — a create stamps \
+             all three regardless of type"
+        );
+    }
+
+    /// The open tail. A type the enum does not name has no schema to consult, so the answer is
+    /// "no opinion" — NOT "carries nothing". Live production resources sit on out-of-vocabulary
+    /// doc types, and every create stamps the provenance trio onto them.
+    #[test]
+    fn an_out_of_vocabulary_doc_type_carries_no_applicability_opinion() {
+        assert!(
+            inapplicable_fields("kernel_landmark", &["temper-stage", "temper-status"]).is_empty(),
+            "a type with no embedded schema must not have that read as carrying nothing"
         );
     }
 }
