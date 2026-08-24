@@ -283,10 +283,10 @@ describe('what a context genuinely does not have is declared, not fabricated', (
 	});
 
 	test('the grouping count says whose order it is showing', () => {
-		expect(describeGroupingCount(406, null)).toBe(
+		expect(describeGroupingCount(406, null, CTX)).toBe(
 			'406 groupings, in the order this place itself ranks them.',
 		);
-		expect(describeGroupingCount(1, null)).toBe(
+		expect(describeGroupingCount(1, null, CTX)).toBe(
 			'1 grouping, in the order this place itself ranks them.',
 		);
 	});
@@ -302,6 +302,9 @@ describe('what a context genuinely does not have is declared, not fabricated', (
  * not be shown, and vice versa. A test that only checked non-emptiness would have passed against the
  * defect.
  */
+const CTX = { kind: 'context', ref: '@me/temper' } as const;
+const MAP = { kind: 'cogmap', ref: '019f2391-e001-7933-b88a-28fb92e56ac1' } as const;
+
 describe('an empty groupings list says which of the four causes it is', () => {
 	const ARMS = [
 		'never_clustered',
@@ -311,7 +314,7 @@ describe('an empty groupings list says which of the four causes it is', () => {
 	] as const;
 
 	test('no two causes are spelled alike — the defect was one sentence for all four', () => {
-		const said = ARMS.map((a) => describeGroupingCount(0, a));
+		const said = ARMS.map((a) => describeGroupingCount(0, a, CTX));
 		expect(
 			new Set(said).size,
 			`four causes produced ${new Set(said).size} distinct sentences`,
@@ -321,7 +324,7 @@ describe('an empty groupings list says which of the four causes it is', () => {
 	});
 
 	test('never_clustered says nothing is broken, because nothing is', () => {
-		const s = describeGroupingCount(0, 'never_clustered');
+		const s = describeGroupingCount(0, 'never_clustered', CTX);
 		expect(s).toContain('never been grouped');
 		expect(s).toContain('Nothing here is broken');
 	});
@@ -333,12 +336,53 @@ describe('an empty groupings list says which of the four causes it is', () => {
 	 * reader who cannot look it up in a Rust signature inverts the point of this work.
 	 */
 	test('never_clustered names the command, the permission and who to ask without it', () => {
-		const s = describeGroupingCount(0, 'never_clustered');
+		const s = describeGroupingCount(0, 'never_clustered', CTX);
 		expect(s, 'must name the command').toContain('temper context materialize');
 		expect(s, 'must name the permission it needs').toContain('write access');
 		expect(s, 'must say what to do without that permission').toContain('ask whoever does');
 		// Agentless passive is what made the first draft unactionable: it named no actor at all.
 		expect(s).not.toContain('are built by a separate pass');
+	});
+
+	/**
+	 * **The command is the one THIS reader needs, with the argument they would have to supply.**
+	 * The page knows the kind and the ref; making the reader pick from a parenthetical is the page
+	 * handing back work it had already done.
+	 */
+	test('names the one command for this kind of place, with its ref', () => {
+		expect(describeGroupingCount(0, 'never_clustered', CTX)).toContain(
+			'`temper context materialize @me/temper`',
+		);
+		const onAMap = describeGroupingCount(0, 'never_clustered', MAP);
+		expect(onAMap).toContain('`temper cogmap materialize 019f2391-e001-7933-b88a-28fb92e56ac1`');
+		expect(onAMap, 'a map reader must not be shown the context command').not.toContain(
+			'temper context materialize',
+		);
+	});
+
+	/**
+	 * **A ref that cannot be rendered safely loses the ARGUMENT, not the command.**
+	 * A cogmap ref is a bare uuid and is safe by construction, but a context's is
+	 * `${owner_ref}/${slug}` and no production gate on that slug could be found — `validate_slug`
+	 * guards `CreateResource` only and the column has no CHECK. So a ref that is not obviously safe
+	 * degrades to a correct command needing one more word, never to one that looks exact and is
+	 * wrong. This surface exists because it used to state things it could not know.
+	 */
+	test('an unsafe-looking ref drops the argument rather than rendering a wrong command', () => {
+		for (const ref of ['@me/a b', '@me/x;rm -rf /', '@me/$(whoami)', "@me/it's"]) {
+			const said = describeGroupingCount(0, 'never_clustered', { kind: 'context', ref });
+			expect(said, `${ref} must not reach the command line`).toContain(
+				'`temper context materialize`',
+			);
+			expect(said).not.toContain(ref);
+		}
+	});
+
+	/** Outside the measured branch the page does not know the kind, so naming both is the honest form. */
+	test('with no place in hand it names both commands rather than guessing one', () => {
+		const said = describeGroupingCount(0, 'never_clustered', null);
+		expect(said).toContain('temper context materialize');
+		expect(said).toContain('temper cogmap materialize');
 	});
 
 	/**
@@ -354,7 +398,7 @@ describe('an empty groupings list says which of the four causes it is', () => {
 				is_stale: true,
 			}),
 		).toContain('worked out');
-		expect(describeGroupingCount(0, 'never_clustered')).toContain('worked out');
+		expect(describeGroupingCount(0, 'never_clustered', CTX)).toContain('worked out');
 	});
 
 	/**
@@ -366,7 +410,7 @@ describe('an empty groupings list says which of the four causes it is', () => {
 	 * no-regions half is the wording defect that was already fixed at the other doors.
 	 */
 	test('nothing_visible names both of its causes and forbids the access conclusion', () => {
-		const s = describeGroupingCount(0, 'nothing_visible');
+		const s = describeGroupingCount(0, 'nothing_visible', CTX);
 		expect(s, 'must allow "it formed no groupings"').toContain('no groupings at all');
 		expect(s, 'must allow "you cannot see into them"').toContain('not yours to see');
 		expect(s, 'must not let the reader conclude they lack access').toContain(
@@ -377,7 +421,7 @@ describe('an empty groupings list says which of the four causes it is', () => {
 	});
 
 	test('unreadable_or_absent refuses to say which of the two it is', () => {
-		const s = describeGroupingCount(0, 'unreadable_or_absent');
+		const s = describeGroupingCount(0, 'unreadable_or_absent', CTX);
 		expect(s).toContain('not readable by you or it is not there');
 		expect(s).toContain('cannot tell you which');
 	});
@@ -388,7 +432,7 @@ describe('an empty groupings list says which of the four causes it is', () => {
 	 * heading directly above it. Scoped to the measurements, it does not.
 	 */
 	test('unreadable_or_absent does not contradict the heading that already named the place', () => {
-		const s = describeGroupingCount(0, 'unreadable_or_absent');
+		const s = describeGroupingCount(0, 'unreadable_or_absent', CTX);
 		expect(s).toContain('The measurements for this place');
 		expect(s, 'the page has already named the place in its h1').not.toMatch(
 			/^This place could not be read/,
@@ -397,7 +441,7 @@ describe('an empty groupings list says which of the four causes it is', () => {
 
 	/** The guard has to rest on something the reader can parse, not on how answers reach a page. */
 	test('nothing_visible grounds its guard in the page, not in the wire', () => {
-		const s = describeGroupingCount(0, 'nothing_visible');
+		const s = describeGroupingCount(0, 'nothing_visible', CTX);
 		expect(s).toContain('This page deliberately cannot tell you which');
 		expect(s, 'system-facing bridge the reader has no referent for').not.toContain(
 			'arrive as one answer',
@@ -406,7 +450,7 @@ describe('an empty groupings list says which of the four causes it is', () => {
 	});
 
 	test('lens_narrowed points at the lens, not at the place', () => {
-		const s = describeGroupingCount(0, 'lens_narrowed');
+		const s = describeGroupingCount(0, 'lens_narrowed', CTX);
 		expect(s).toContain('This place has groupings');
 		expect(s).toContain('Widening the view');
 	});
@@ -422,13 +466,13 @@ describe('an empty groupings list says which of the four causes it is', () => {
 	 * typed, because the point is exactly that the type does not admit this and the wire does.
 	 */
 	test('a wire value the type does not admit still gets a sentence, not "undefined"', () => {
-		const s = describeGroupingCount(0, undefined as unknown as null);
+		const s = describeGroupingCount(0, undefined as unknown as null, CTX);
 		expect(s).toBe('No groupings came back, and the read did not say why.');
 		expect(s).not.toBe(undefined);
 	});
 
 	test('no cause given is said as no cause given, never guessed at', () => {
-		const s = describeGroupingCount(0, null);
+		const s = describeGroupingCount(0, null, CTX);
 		expect(s).toBe('No groupings came back, and the read did not say why.');
 		for (const claim of ['never been grouped', 'has been grouped', 'not readable by you']) {
 			expect(s, `must not assert "${claim}"`).not.toContain(claim);

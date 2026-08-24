@@ -200,11 +200,11 @@
 						the await settles; that is a change to how this route streams, not to this line.
 					-->
 					<p class="lead declared-absent" data-testid="grouping-count" role="status">
-						{describeGroupingCount(0, emptiness)}
+						{describeGroupingCount(0, emptiness, place)}
 					</p>
 				{:else}
 					<p class="lead" data-testid="grouping-count">
-						{describeGroupingCount(regions.length, emptiness)}
+						{describeGroupingCount(regions.length, emptiness, place)}
 					</p>
 				{/if}
 

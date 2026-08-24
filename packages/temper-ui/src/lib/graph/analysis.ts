@@ -427,10 +427,40 @@ export function describeRegulation(n: number): string {
  * to a default so the match stays exhaustive over {@link ShapeEmptiness}: the day a caller does
  * pass a lens, `tsc` will already have been satisfied and the reader will already have a sentence.
  */
-const describeEmptyShape = (emptiness: ShapeEmptiness | null): string => {
+/** The place the sentence is about, structurally — avoids importing `NamedPlace` from `entry.ts`. */
+export type PlaceRef = { kind: 'context' | 'cogmap'; ref: string } | null;
+
+/**
+ * Refs safe to render inside a command line a reader will paste.
+ *
+ * **Rendered as a guard rather than asserted as an invariant, because it is not one.** A cogmap's
+ * `ref` is `m.id`, a bare uuid, and is safe by construction. A context's is `${owner_ref}/${slug}`,
+ * and no production gate on that slug could be found: `validate_slug` guards `CreateResource` only,
+ * every `INSERT INTO kb_contexts` in the tree is in a test, and the column carries no CHECK. So
+ * "context slugs are lowercase-and-hyphens" is how they all look, not something enforced where this
+ * code can see it.
+ *
+ * A ref that fails this drops the ARGUMENT, not the command — the reader gets a line that is correct
+ * and needs one more word, instead of one that looks exact and is wrong. That direction matters more
+ * here than usual: this whole surface exists because it used to state things it could not know.
+ */
+const PASTE_SAFE_REF =
+	/^(?:[@+][a-z0-9][a-z0-9-]*\/[a-z0-9][a-z0-9-]*|[a-z0-9-]*[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/;
+
+/** The one command this reader needs, with its argument when that can be rendered safely. */
+const materializeCommand = (place: PlaceRef): string => {
+	// No place: the sentence is being rendered outside the measured branch, where the page does not
+	// know which kind it is talking about. Naming both is right there — it is the only honest form.
+	if (!place) return '`temper context materialize` (or `temper cogmap materialize` for a map)';
+
+	const cmd = place.kind === 'cogmap' ? 'temper cogmap materialize' : 'temper context materialize';
+	return PASTE_SAFE_REF.test(place.ref) ? `\`${cmd} ${place.ref}\`` : `\`${cmd}\``;
+};
+
+const describeEmptyShape = (emptiness: ShapeEmptiness | null, place: PlaceRef): string => {
 	switch (emptiness) {
 		case 'never_clustered':
-			return 'This place has never been grouped — its groupings have not been worked out yet. Nothing here is broken. Anyone with write access to the place can work them out with `temper context materialize` (or `temper cogmap materialize` for a map); if you do not have write access, ask whoever does.';
+			return `This place has never been grouped — its groupings have not been worked out yet. Nothing here is broken. Anyone with write access to the place can work them out with ${materializeCommand(place)}; if you do not have write access, ask whoever does.`;
 		case 'nothing_visible':
 			return 'This place has been grouped, and nothing came back that you can read. It may have formed no groupings at all, or the groupings it formed may hold only work that is not yours to see. This page deliberately cannot tell you which, so it is not evidence that you are missing access — if you expected to find work here, ask whoever runs this place.';
 		case 'lens_narrowed':
@@ -462,8 +492,12 @@ const describeEmptyShape = (emptiness: ShapeEmptiness | null): string => {
  * one-argument call compiling and still asserting a cause it cannot know; requiring it makes `tsc`
  * name every site that has to supply one. See {@link describeEmptyShape}.
  */
-export function describeGroupingCount(n: number, emptiness: ShapeEmptiness | null): string {
-	if (n === 0) return describeEmptyShape(emptiness);
+export function describeGroupingCount(
+	n: number,
+	emptiness: ShapeEmptiness | null,
+	place: PlaceRef,
+): string {
+	if (n === 0) return describeEmptyShape(emptiness, place);
 	return `${n} ${n === 1 ? 'grouping' : 'groupings'}, in the order this place itself ranks them.`;
 }
 
