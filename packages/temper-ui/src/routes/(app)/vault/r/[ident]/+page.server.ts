@@ -1,6 +1,6 @@
 import { error, fail } from '@sveltejs/kit';
 import { mayChangeResource } from '$lib/authority';
-import { type EditableKind, revisedValue } from '$lib/descriptions';
+import { editableKind, revisedValue } from '$lib/descriptions';
 import { parseRef } from '$lib/ref';
 import { ApiError, apiGet, apiPatch } from '$lib/server/api';
 import { bounded } from '$lib/server/bounded';
@@ -36,6 +36,70 @@ async function readStateVocabulary(
 		return described.enum_fields as Readonly<Record<string, readonly string[]>>;
 	} catch (err) {
 		if (err instanceof ApiError && err.status === 404) return {};
+		return null;
+	}
+}
+
+/**
+ * Property keys the read path does **not** return as a description, and which this surface must
+ * therefore never write as one.
+ *
+ * `open_meta` is carried verbatim into a tierless `kb_properties` store and the read path sorts
+ * the tiers apart **by key name** (`temper-substrate/src/readback/mod.rs`). Three names are peeled
+ * out of that stream before anything becomes a description:
+ *
+ * - **`doc_type`** — the resource's authoritative KIND, surfaced as `ResourceView.doc_type_name`.
+ *   Its only intended writer is a type move (`MoveSpec.type_to`). Written as a description it
+ *   retypes the resource with no validation, and every later managed write to it then skips the
+ *   enum check and the applicability gate, because an unrecognized kind has no schema to enforce.
+ * - **`facet`** — merged per inner key into the facet slot, not stored as a plain value.
+ * - **`temper-*`** — sorted into the managed tier by `is_managed_property_key`, so a description
+ *   named `temper-stage` comes back as the task's *stage*, holding a value that never met the
+ *   vocabulary check the state arm exists to enforce.
+ *
+ * **No door refuses any of this**, at any surface — `properties_from_meta` filters the managed
+ * tier through `key_fate` and the open tier not at all. That is a server-side hole, filed
+ * separately. This is the half a surface can hold without restating a vocabulary it does not own:
+ * a description is a thing the read path gives back as a description, and these are not.
+ *
+ * The `temper-` rule over-declines — `temper-invented` is an ordinary open key the system accepts.
+ * That is the safe direction, and it is a named limit rather than a silent one.
+ */
+function reservedName(name: string): string | null {
+	if (name.startsWith('temper-')) {
+		return `"${name}" is a name the system owns — descriptions cannot start with "temper-".`;
+	}
+	if (name === 'doc_type') {
+		return '"doc_type" is this resource\'s kind, not a description of it.';
+	}
+	if (name === 'facet') {
+		return '"facet" is a name the system owns.';
+	}
+	return null;
+}
+
+/**
+ * The resource's descriptions as they stand **right now**, read at action time.
+ *
+ * Both description actions need this and neither can take it from the form. The `name` a
+ * submission carries is browser-supplied — a hidden input on the revise control, a text box on
+ * attach — so trusting it means trusting the client about which key it is allowed to write. What
+ * the surface actually offered is a property of the resource, and only the resource can answer it.
+ *
+ * Returns `null` when the read fails, which both callers turn into a refusal: an unverifiable
+ * write is not attempted.
+ */
+async function currentDescriptions(
+	id: string,
+	accessToken: string,
+): Promise<{ open: Record<string, unknown>; managed: Record<string, unknown> } | null> {
+	try {
+		const view = await apiGet<ResourceView>(`/api/resources/${id}`, accessToken);
+		return {
+			open: (view.open_meta as Record<string, unknown> | null) ?? {},
+			managed: (view.managed_meta as unknown as Record<string, unknown> | null) ?? {},
+		};
+	} catch {
 		return null;
 	}
 }
@@ -156,25 +220,47 @@ export const actions: Actions = {
 	 * description and lands outside nothing that was shown. (The additive `open_meta_add`
 	 * channel is for list union and is not what a single-value revision means.)
 	 *
-	 * `kind` keeps the stored type — see `revisedValue`. It comes from the browser, which can
-	 * only use it to give the reader's own description a type they chose.
+	 * **It revises only a key that IS currently an editable description**, checked against the
+	 * resource rather than against the form. `name` arrives in a hidden input, so the rendered
+	 * page can only ever send a key it rendered — but a hand-written same-origin POST is not the
+	 * rendered page, and the same-origin CSRF guard does not make a submission trustworthy, only
+	 * same-origin. Without this check that POST could write any key at all, including a managed
+	 * one at a type its field cannot decode, which fails the batched read for **every** page that
+	 * lists the resource, for every principal who can see it, with no door able to retract it.
+	 *
+	 * **The stored type comes from the stored value, not from the browser.** It used to travel as
+	 * a hidden `kind` field; a caller who picks both the key and its JSON type is the mechanism
+	 * above. `editableKind` re-derives it here, so the type a revision keeps is the type the
+	 * resource actually holds.
 	 */
 	changeDescription: async ({ request, locals, params }) => {
 		const id = parseRef(params.ident);
 		const form = await request.formData();
 		const name = form.get('name');
 		const value = form.get('value');
-		const kind = form.get('kind');
 
 		if (typeof name !== 'string' || !name || typeof value !== 'string') {
 			return fail(400, { field: null, message: 'Nothing to change.' });
 		}
-		const asKind: EditableKind =
-			kind === 'number' || kind === 'boolean' || kind === 'string' ? kind : 'string';
+
+		const stored = await currentDescriptions(id, locals.accessToken!);
+		if (!stored) {
+			return fail(502, { field: name, message: 'Could not read this resource to change it.' });
+		}
+		const kind = editableKind(stored.open[name]);
+		if (kind === null) {
+			// Covers every not-a-revisable-description case in one refusal: the key is absent, it
+			// is a state rather than a description, or its value is structured — which the table
+			// already shows as uneditable.
+			return fail(400, {
+				field: name,
+				message: `"${name}" is not a description that can be changed here.`,
+			});
+		}
 
 		try {
 			await apiPatch<ResourceView>(`/api/resources/${id}`, locals.accessToken!, {
-				open_meta: { [name]: revisedValue(value, asKind) },
+				open_meta: { [name]: revisedValue(value, kind) },
 			});
 		} catch (err) {
 			if (err instanceof ApiError) return fail(err.status, { field: name, message: err.message });
@@ -189,17 +275,23 @@ export const actions: Actions = {
 	 * A new description is text: nothing on this surface lets the reader say otherwise, so
 	 * nothing here guesses a type for them.
 	 *
-	 * **A `temper-`prefixed name is declined, and this is the one rule the surface applies
-	 * itself.** The open tier is carried verbatim into the same flat property store the managed
-	 * tier lands in, and the read path sorts them apart by name — so a description called
-	 * `temper-stage` would come back as the task's STAGE, set to a value that never passed the
-	 * vocabulary check the state arm exists to enforce. That is the rejected equivalence
-	 * arriving through the back door. No door refuses it today, at any surface; declining to
-	 * author into a namespace the system owns is the conservative half this one can do without
-	 * restating which names are managed — which it deliberately no longer knows.
+	 * Two rules, both applied against the resource rather than the form — see `reservedName` and
+	 * `currentDescriptions`.
 	 *
-	 * It over-declines: `temper-invented` is an ordinary open key the system would accept. That
-	 * is the safe direction, and it is a named limit rather than a silent one.
+	 * **A reserved name is declined**: `doc_type`, `facet`, and anything `temper-`prefixed are
+	 * keys the read path does not give back as descriptions.
+	 *
+	 * **A name already in use is declined, and this one is about data.** `open_meta` is a
+	 * REPLACE-shaped channel: the write folds the key's whole live set and inserts one value. So
+	 * attaching a name that already exists is not an attach at all — it overwrites. On a
+	 * list-valued description that means an N-member list becomes one scalar, silently, on the
+	 * very rows this table has just told the reader it cannot edit. This codebase has the scar
+	 * already: `--tags docs` on a resource holding six tags wrote a one-element list and
+	 * destroyed the other five, under a flag whose help read *"Add tag"*. Attach means attach;
+	 * changing what is there is the revise control, beside the row.
+	 *
+	 * Both refusals name the offending key, because "that name is taken" is only actionable if
+	 * the reader can see which one.
 	 */
 	attachDescription: async ({ request, locals, params }) => {
 		const id = parseRef(params.ident);
@@ -212,10 +304,18 @@ export const actions: Actions = {
 			return fail(400, { field: '', message: 'A description needs a name and a value.' });
 		}
 		const trimmed = name.trim();
-		if (trimmed.startsWith('temper-')) {
-			return fail(400, {
+
+		const reserved = reservedName(trimmed);
+		if (reserved) return fail(400, { field: '', message: reserved });
+
+		const stored = await currentDescriptions(id, locals.accessToken!);
+		if (!stored) {
+			return fail(502, { field: '', message: 'Could not read this resource to add to it.' });
+		}
+		if (trimmed in stored.open || trimmed in stored.managed) {
+			return fail(409, {
 				field: '',
-				message: `"${trimmed}" is a name the system owns. Descriptions you attach cannot start with "temper-".`,
+				message: `"${trimmed}" is already on this resource. Change it where it is shown above rather than attaching it again — attaching would replace what is there.`,
 			});
 		}
 

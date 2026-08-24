@@ -289,6 +289,31 @@ describe('changing a state the system defines', () => {
  * same one. These assertions are what make the two visibly different: this arm travels on the
  * open tier, keeps the type it had, and carries the one rule the surface applies itself.
  */
+/**
+ * Both description actions now read the resource at action time, because what the surface
+ * offered is a property of the resource and the form's `name` is browser-supplied. `stored`
+ * sets what that read answers.
+ */
+const storedTiers = (
+	open: Record<string, unknown> = { owner: 'Pete', priority: 3 },
+	managed: Record<string, unknown> = { 'temper-stage': 'design' },
+) => {
+	apiGet.mockImplementation((path: string) => {
+		if (path.endsWith('/content')) return new Promise(() => {});
+		if (path.includes('/api/schema/doc-types/')) return Promise.resolve({ enum_fields: {} });
+		return Promise.resolve({
+			id: 'r1',
+			title: 'A resource',
+			doc_type_name: 'task',
+			kb_context_id: CTX,
+			owner_profile_id: 'p-someone-else',
+			is_active: true,
+			open_meta: open,
+			managed_meta: managed,
+		});
+	});
+};
+
 const describeIt = (action: string, fields: Record<string, unknown>) =>
 	(actions[action] as (e: unknown) => Promise<unknown>)({
 		locals: { accessToken: 'tok' },
@@ -300,8 +325,9 @@ const describeIt = (action: string, fields: Record<string, unknown>) =>
 
 describe('attaching and revising a description', () => {
 	it('revises one description and lands outside nothing else', async () => {
+		storedTiers();
 		apiPatch.mockResolvedValue({ id: 'r1' });
-		await describeIt('changeDescription', { name: 'owner', value: 'Pete', kind: 'string' });
+		await describeIt('changeDescription', { name: 'owner', value: 'Pete' });
 		const [path, , body] = apiPatch.mock.calls[0];
 		expect(path).toBe('/api/resources/r1');
 		// `open_meta` merges at the key level, so one key is one description. Nothing else moves.
@@ -312,12 +338,14 @@ describe('attaching and revising a description', () => {
 		// THE BITE, and it is invisible without the assertion: a form submits text, so a
 		// revision of `priority: 3` to `4` would store `"4"` — a change nobody asked for that
 		// renders identically in the table and that every downstream consumer sees.
+		storedTiers();
 		apiPatch.mockResolvedValue({ id: 'r1' });
-		await describeIt('changeDescription', { name: 'priority', value: '4', kind: 'number' });
+		await describeIt('changeDescription', { name: 'priority', value: '4' });
 		expect(apiPatch.mock.calls[0][2]).toEqual({ open_meta: { priority: 4 } });
 	});
 
 	it('attaches a new description as text', async () => {
+		storedTiers();
 		apiPatch.mockResolvedValue({ id: 'r1' });
 		await describeIt('attachDescription', { name: 'reviewer', value: 'qa' });
 		expect(apiPatch.mock.calls[0][2]).toEqual({ open_meta: { reviewer: 'qa' } });
@@ -329,6 +357,7 @@ describe('attaching and revising a description', () => {
 		// sorts them apart BY NAME — so `temper-stage` attached as a description comes back as
 		// the task's stage, set to a value that never met the vocabulary check the state arm
 		// exists to enforce. No door refuses this today, at any surface.
+		storedTiers();
 		apiPatch.mockResolvedValue({ id: 'r1' });
 		const result = (await describeIt('attachDescription', {
 			name: 'temper-stage',
@@ -340,6 +369,7 @@ describe('attaching and revising a description', () => {
 	});
 
 	it('writes nothing when a description has no name or no value', async () => {
+		storedTiers();
 		apiPatch.mockResolvedValue({ id: 'r1' });
 		expect(
 			((await describeIt('attachDescription', { name: '  ', value: 'x' })) as { status: number })
@@ -353,16 +383,174 @@ describe('attaching and revising a description', () => {
 	});
 
 	it('hands a refusal back rather than throwing the page away', async () => {
+		storedTiers({ descriptor: 'a descriptor' });
 		const err = new ApiErrorStub('invalid open_meta shape: descriptor: expected string');
 		err.status = 400;
 		apiPatch.mockRejectedValue(err);
 		const result = (await describeIt('changeDescription', {
 			name: 'descriptor',
 			value: 'x',
-			kind: 'string',
 		})) as { status: number; data: { field: string; message: string } };
 		expect(result.status).toBe(400);
 		expect(result.data.field).toBe('descriptor');
 		expect(result.data.message).toContain('invalid open_meta shape');
+	});
+});
+
+/**
+ * What the description actions refuse — every one of these found by adversarial review of the
+ * arm above, and every one reachable before the refusal existed.
+ *
+ * The shared shape of the class: `open_meta` is carried VERBATIM into a tierless property store
+ * and the read path sorts the tiers apart BY KEY NAME, so which key a description is given
+ * decides what it becomes. No door refuses any of this server-side, at any surface; these are
+ * the half a surface can hold.
+ */
+describe('a description cannot be given a name that is not a description', () => {
+	it('declines `doc_type`, which is the resource’s kind and not a description of it', async () => {
+		// THE BITE, and it needed no forgery — a reader types `doc_type` into the rendered attach
+		// box and presses Attach. Verified end to end against a live stack before the fix: the
+		// PATCH returned 200, `doc_type_name` became the typed value, and because an unrecognized
+		// kind has no schema, EVERY later managed write to that resource then skipped both the
+		// enum check and the applicability gate — an out-of-vocabulary `temper-stage` was
+		// accepted with 200. One form submission disarms the gate #769 exists to enforce.
+		storedTiers();
+		apiPatch.mockResolvedValue({ id: 'r1' });
+		const result = (await describeIt('attachDescription', {
+			name: 'doc_type',
+			value: 'banana',
+		})) as { status: number; data: { message: string } };
+		expect(result.status).toBe(400);
+		expect(result.data.message).toContain('doc_type');
+		expect(apiPatch).not.toHaveBeenCalled();
+	});
+
+	it('declines `facet`, which the read path merges rather than stores', async () => {
+		storedTiers();
+		apiPatch.mockResolvedValue({ id: 'r1' });
+		expect(
+			(
+				(await describeIt('attachDescription', { name: 'facet', value: 'x' })) as {
+					status: number;
+				}
+			).status,
+		).toBe(400);
+		expect(apiPatch).not.toHaveBeenCalled();
+	});
+
+	it('declines a managed name on REVISE too, not only on attach', async () => {
+		// The rendered page cannot send this — `name` is a hidden input from a row key, and a
+		// stored `temper-stage` comes back in the managed tier, which gets no description
+		// control. A hand-written same-origin POST is not the rendered page, and the origin CSRF
+		// guard makes a submission same-origin, never trustworthy. Before the fix this wrote
+		// `{"temper-stage": 3}`, which `ManagedMeta` cannot decode (`stage` is `Option<String>`)
+		// — failing the BATCHED read for every list and search page carrying the resource, for
+		// every principal who can see it, with no door able to retract it.
+		storedTiers();
+		apiPatch.mockResolvedValue({ id: 'r1' });
+		const result = (await describeIt('changeDescription', {
+			name: 'temper-stage',
+			value: '3',
+		})) as { status: number; data: { message: string } };
+		expect(result.status).toBe(400);
+		expect(apiPatch).not.toHaveBeenCalled();
+	});
+
+	it('revises only a key that IS an editable description right now', async () => {
+		storedTiers({ owner: 'Pete', tags: ['a', 'b'] });
+		apiPatch.mockResolvedValue({ id: 'r1' });
+		// Absent from the resource entirely.
+		expect(
+			(
+				(await describeIt('changeDescription', { name: 'invented', value: 'x' })) as {
+					status: number;
+				}
+			).status,
+		).toBe(400);
+		// Present, but structured — the table shows it as uneditable, so the action agrees.
+		expect(
+			(
+				(await describeIt('changeDescription', { name: 'tags', value: 'x' })) as {
+					status: number;
+				}
+			).status,
+		).toBe(400);
+		expect(apiPatch).not.toHaveBeenCalled();
+	});
+
+	it('takes the stored type from the resource, not from the submission', async () => {
+		// `kind` used to be a hidden field. A caller who picks the key AND its JSON type is the
+		// mechanism above; the type now comes from what is stored, so a forged `kind` is inert.
+		storedTiers({ priority: 3 });
+		apiPatch.mockResolvedValue({ id: 'r1' });
+		await describeIt('changeDescription', { name: 'priority', value: '4', kind: 'string' });
+		expect(apiPatch.mock.calls[0][2]).toEqual({ open_meta: { priority: 4 } });
+	});
+});
+
+describe('attach means attach — it never replaces what is already there', () => {
+	it('refuses a name already in use rather than overwriting it', async () => {
+		// THE BITE, and this codebase has the scar: `--tags docs` on a resource holding six tags
+		// wrote a one-element list and destroyed the other five, under a flag whose help read
+		// "Add tag". `open_meta` is a REPLACE channel — the write folds the key's whole live set
+		// and inserts one value. So attaching `tags` over a list flattens it to a scalar, on
+		// exactly the rows the table has just told the reader it cannot edit.
+		storedTiers({ owner: 'Pete', tags: ['architecture', 'review', 'backlog'] });
+		apiPatch.mockResolvedValue({ id: 'r1' });
+		const result = (await describeIt('attachDescription', {
+			name: 'tags',
+			value: 'design',
+		})) as { status: number; data: { message: string } };
+		expect(result.status).toBe(409);
+		expect(result.data.message).toContain('tags');
+		expect(apiPatch).not.toHaveBeenCalled();
+	});
+
+	it('refuses a name in use by a STATE as well as by a description', async () => {
+		storedTiers({ owner: 'Pete' }, { 'temper-branch': 'jct/x' });
+		apiPatch.mockResolvedValue({ id: 'r1' });
+		expect(
+			(
+				(await describeIt('attachDescription', { name: 'temper-branch', value: 'y' })) as {
+					status: number;
+				}
+			).status,
+		).toBe(400); // reserved rule fires first — the name never reaches the collision check
+		expect(apiPatch).not.toHaveBeenCalled();
+	});
+
+	it('still attaches a genuinely new name', async () => {
+		// The refusals must not be passing by refusing everything.
+		storedTiers({ owner: 'Pete' });
+		apiPatch.mockResolvedValue({ id: 'r1' });
+		await describeIt('attachDescription', { name: 'reviewer', value: 'qa' });
+		expect(apiPatch.mock.calls[0][2]).toEqual({ open_meta: { reviewer: 'qa' } });
+	});
+});
+
+describe('an unverifiable description write is not attempted', () => {
+	it('refuses rather than writing when the resource cannot be re-read', async () => {
+		// Both actions check the submission against the resource. If that read fails, what the
+		// surface offered is unknown — and an unknown offer is not a licence to write.
+		apiGet.mockImplementation((path: string) => {
+			if (path.endsWith('/content')) return new Promise(() => {});
+			return Promise.reject(new Error('503'));
+		});
+		apiPatch.mockResolvedValue({ id: 'r1' });
+		expect(
+			(
+				(await describeIt('changeDescription', { name: 'owner', value: 'x' })) as {
+					status: number;
+				}
+			).status,
+		).toBe(502);
+		expect(
+			(
+				(await describeIt('attachDescription', { name: 'reviewer', value: 'x' })) as {
+					status: number;
+				}
+			).status,
+		).toBe(502);
+		expect(apiPatch).not.toHaveBeenCalled();
 	});
 });

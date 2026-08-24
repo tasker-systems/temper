@@ -1,6 +1,4 @@
 <script lang="ts">
-	import type { EditableKind } from '$lib/descriptions';
-
 	/**
 	 * One description the reader attached, offered for revision where it is read.
 	 *
@@ -9,9 +7,10 @@
 	 * storage layer and nothing else: this one cannot be validated before it is sent, so it is
 	 * sent and the server's answer is what the reader is shown.
 	 *
-	 * `kind` travels with the submission so the value keeps the type it already had — a form
-	 * submits text, and without it revising `priority: 3` would silently store `"3"`. See
-	 * `revisedValue`.
+	 * The value keeps the type it already had — a form submits text, and without that a revision
+	 * of `priority: 3` would silently store `"3"`. The type is re-derived **server-side from the
+	 * stored value**; it used to travel here as a hidden `kind` field, which let a hand-written
+	 * submission choose the key *and* its JSON type. See `revisedValue` and the action.
 	 *
 	 * **Revision only. There is no remove.** No door retracts an open key — the write path skips
 	 * nulls rather than deleting the row — so a delete control would be an affordance for
@@ -20,12 +19,10 @@
 	let {
 		name,
 		current,
-		kind,
 		error,
 	}: {
 		name: string;
 		current: string;
-		kind: EditableKind;
 		error: string | null;
 	} = $props();
 
@@ -43,7 +40,6 @@
 
 <form method="POST" action="?/changeDescription" class="ctl">
 	<input type="hidden" name="name" value={name} />
-	<input type="hidden" name="kind" value={kind} />
 	<input
 		type="text"
 		name="value"

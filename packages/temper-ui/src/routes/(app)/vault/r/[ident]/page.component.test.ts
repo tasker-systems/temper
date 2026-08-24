@@ -461,19 +461,51 @@ describe('a state the system defines is changed where it is read', () => {
 
 	it('offers no control at all to a reader who may not change this', async () => {
 		// The default fixture is that reader. The read view must be exactly what it was before
-		// this arm existed — no controls, and no placeholder rows for states not held.
+		// this arm existed — no controls, no placeholder rows for states not held, and none of
+		// the arm's explanatory notes.
+		//
+		// The resource carries a STRUCTURED description on purpose. Without one, the assertion
+		// that no "not editable here" note appears cannot fail: `hasStructured` would be false
+		// for want of a structured row rather than for want of write authority, and the probe
+		// would pass against a version that leaked the note to every reader.
+		const readOnlyReader = makeRow({
+			title: 'The rendering approach',
+			doc_type_name: 'design',
+			open_meta: { owner: 'Pete', tags: ['a', 'b'] },
+		});
 		const { container } = render(Page, {
-			data: data({ content: pending(), trail: pending(), edges: pending() }),
+			data: {
+				...data({ content: pending(), trail: pending(), edges: pending() }),
+				resource: readOnlyReader,
+			} as PageData,
 			form: null,
 		});
 		expect(container.querySelector('.props select')).toBeNull();
 		expect(container.querySelector('.props form')).toBeNull();
-		expect([...container.querySelectorAll('.props dt')].map((dt) => dt.textContent)).toEqual([
-			'doc_type',
-			'temper-stage',
-			'owner',
-			'priority',
-		]);
+		expect([...container.querySelectorAll('.props dt')].map((dt) => dt.textContent)).toContain(
+			'tags',
+		);
+		expect(container.querySelector('.props .unread')).toBeNull();
+	});
+
+	it('renders a refusal that belongs to no row against the table itself', async () => {
+		// `field` is a three-way address: a key names its row, `''` names the attach form, and
+		// `null` names the whole table (a submission carrying nothing to change). Only the first
+		// two were rendered by any test, so the third branch shipped unexercised.
+		const { container } = render(Page, {
+			data: data({
+				content: pending(),
+				trail: pending(),
+				edges: pending(),
+				mayChange: true,
+				stateVocabulary: {},
+			}),
+			form: { field: null, message: 'Nothing to change.' },
+		});
+		expect(container.querySelector('.props .row .err')).toBeNull();
+		expect(sentenceOf(container.querySelector('.props > .unread[role="alert"]'))).toBe(
+			'Nothing to change.',
+		);
 	});
 
 	it('offers exactly the states the work carries, and reaches them by POST', async () => {

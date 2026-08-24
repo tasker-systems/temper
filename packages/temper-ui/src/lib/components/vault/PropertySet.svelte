@@ -59,7 +59,6 @@
 						<DescriptionControl
 							name={row.key}
 							current={String(row.value)}
-							kind={row.editable}
 							error={refusal?.field === row.key ? refusal.message : null}
 						/>
 					{:else}

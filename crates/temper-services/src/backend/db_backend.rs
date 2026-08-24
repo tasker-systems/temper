@@ -508,12 +508,23 @@ fn validate_open_meta_shape(open_meta: Option<&serde_json::Value>) -> Result<(),
 ///
 /// That was not the section vocabulary working as designed. `None` means *not requested*
 /// (`section_open_meta_absent_omits_open_meta` pins that on `show_view_select`, which this does not
-/// touch), and the write door was the only door answering in [`ResourceView`] that did not ask.
+/// touch), and the write door did not ask.
+///
+/// **It is NOT the only door that still does not ask, and an earlier version of this comment
+/// claimed it was.** `temper-mcp`'s resource-browse URI (`temper-mcp/src/resources.rs`) serializes
+/// a whole [`ResourceView`] built with `SectionSet::default()`, and unlike a list caller it has no
+/// parameter with which to ask — so the same hardcoded no-ask survives on that read door.
+/// `temper-mcp`'s write tools separately discard this readback and re-read, so they do not benefit
+/// from the fix either. Both are outside this change and neither is fixed by it; the sentence is
+/// here because the claim was made and was false.
 ///
 /// **The body stays unasked.** It has its own door (`GET /api/resources/{id}/content`), its
 /// reconstruction is 2-3 statements, and a write that echoed the whole document back would make
 /// every write pay for a read nobody asked for. The open tier costs one batched statement
-/// (`readback::meta_batch`), which is what a write owes the caller for the tier it just changed.
+/// (`readback::meta_batch`) per call — which is what a write owes the caller for the tier it just
+/// changed, and is why the update path's PRE-write read uses
+/// [`native_resource_identity`] instead: that call reads its own current row to resolve the
+/// effective doc type, never looks at `open_meta`, and would otherwise pay the batch twice.
 async fn native_resource_view(
     pool: &PgPool,
     principal: ProfileId,
@@ -523,6 +534,33 @@ async fn native_resource_view(
     crate::backend::substrate_read::show_view_select(pool, principal, new_id, &sections)
         .await
         .map_err(TemperError::from)
+}
+
+/// The update path's read of its **own current row**, before it writes — not a readback.
+///
+/// Split from [`native_resource_view`] rather than sharing it, because the two want different
+/// things and only look alike. A readback answers the caller and therefore owes them the tier the
+/// write touched; this one exists to resolve the effective doc type and the identity fields the
+/// validation pipeline needs, reads `open_meta` nowhere, and is followed by a readback that fetches
+/// it properly. Sharing the helper made every update pay `readback::meta_batch` twice and discard
+/// the first result — a cost the readback's own doc comment then described as "one batched
+/// statement", which was true per call and wrong per update.
+///
+/// `SectionSet::default()` asks for no sections. The managed tier is not a section — it is always
+/// present on a view — so everything this caller reads is still here.
+async fn native_resource_identity(
+    pool: &PgPool,
+    principal: ProfileId,
+    new_id: ResourceId,
+) -> Result<ResourceView, TemperError> {
+    crate::backend::substrate_read::show_view_select(
+        pool,
+        principal,
+        new_id,
+        &SectionSet::default(),
+    )
+    .await
+    .map_err(TemperError::from)
 }
 
 // `native_resource_row` is GONE with `ResourceRow` itself. It mapped `readback::resource_row` onto
@@ -1999,7 +2037,8 @@ impl Backend for DbBackend {
             // carries no doc_type/context, so take the EFFECTIVE values from the current row
             // (already visibility-gated via `check_can_modify_next`).
             let current =
-                native_resource_view(&self.pool, self.profile_id, ResourceId::from(new_id)).await?;
+                native_resource_identity(&self.pool, self.profile_id, ResourceId::from(new_id))
+                    .await?;
             // A type change arrives as `temper-type` in managed_meta (the PUT /meta path) or
             // `move_to.type_to` (the file-move path); else the doc type is unchanged.
             let effective_doc_type = incoming
