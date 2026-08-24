@@ -168,6 +168,12 @@ fn gated_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::auditor::complete))
         .routes(routes!(handlers::events::cursor))
         .routes(routes!(handlers::events::element_trail))
+        // The vocabularies each kind of work carries. Caller-independent answers over the
+        // embedded schemas — still on the gated surface, because caller-independence is a
+        // property of the answer and not a reason to publish it.
+        .routes(routes!(handlers::schema::list_doc_types))
+        .routes(routes!(handlers::schema::describe_doc_type))
+        .routes(routes!(handlers::schema::describe_open_meta))
         .routes(routes!(handlers::search::search))
         .routes(routes!(handlers::query::query))
         .routes(routes!(handlers::slack_disconnect::admin_disconnect))
