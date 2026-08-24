@@ -32,8 +32,13 @@ async fn seed(
     goal: Option<Uuid>,
 ) -> Uuid {
     let mut managed = serde_json::Map::new();
-    managed.insert("temper-mode".to_string(), serde_json::json!("build"));
-    managed.insert("temper-effort".to_string(), serde_json::json!("small"));
+    // Filler so the managed tier is non-empty. Conditioned on the kind: these are TASK
+    // fields and this helper seeds goals too, and the applicability gate refuses a state
+    // its kind does not carry.
+    if doc_type == "task" {
+        managed.insert("temper-mode".to_string(), serde_json::json!("build"));
+        managed.insert("temper-effort".to_string(), serde_json::json!("small"));
+    }
 
     let payload = IngestPayload {
         idempotency_key: None,

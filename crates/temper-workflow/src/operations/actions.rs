@@ -521,13 +521,13 @@ pub fn validate_managed_meta(
                 .collect();
         if !introduced.is_empty() {
             return Err(TemperError::BadRequest(format!(
-                "managed_meta inapplicable for doc_type={}: {} — {} belongs to another kind of work",
+                "managed_meta inapplicable for doc_type={}: {} — {}",
                 params.doc_type,
                 introduced.join(", "),
                 if introduced.len() == 1 {
-                    "that field"
+                    "that field belongs to another kind of work"
                 } else {
-                    "those fields"
+                    "those fields belong to another kind of work"
                 }
             )));
         }

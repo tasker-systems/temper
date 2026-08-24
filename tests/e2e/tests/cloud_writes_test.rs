@@ -262,7 +262,9 @@ async fn cloud_update_meta_only_partial_managed_meta(pool: sqlx::PgPool) {
         origin_uri: "kb://myapp/session/meta-only-update-test".to_string(),
         context_ref: "@me/myapp".to_string(),
         home_cogmap_id: None,
-        doc_type_name: "session".to_string(),
+        // A `task`, not a `session`: these update tests ride on `temper-stage` (asserted
+        // preserved below), and the applicability gate refuses a state its kind does not carry.
+        doc_type_name: "task".to_string(),
         content_hash: Some(body_hash.clone()),
         content: body_text.to_string(),
         metadata: None,
@@ -427,7 +429,9 @@ async fn cloud_update_body_and_meta_in_one_request(pool: sqlx::PgPool) {
         origin_uri: "kb://myapp/session/body-and-meta-update-test".to_string(),
         context_ref: "@me/myapp".to_string(),
         home_cogmap_id: None,
-        doc_type_name: "session".to_string(),
+        // A `task`, not a `session`: these update tests ride on `temper-stage` (asserted
+        // preserved below), and the applicability gate refuses a state its kind does not carry.
+        doc_type_name: "task".to_string(),
         content_hash: Some(initial_hash.clone()),
         content: initial_body.to_string(),
         metadata: None,
@@ -602,7 +606,9 @@ async fn cloud_update_body_only_no_managed_meta(pool: sqlx::PgPool) {
         origin_uri: "kb://myapp/session/body-only-update-test".to_string(),
         context_ref: "@me/myapp".to_string(),
         home_cogmap_id: None,
-        doc_type_name: "session".to_string(),
+        // A `task`, not a `session`: these update tests ride on `temper-stage` (asserted
+        // preserved below), and the applicability gate refuses a state its kind does not carry.
+        doc_type_name: "task".to_string(),
         content_hash: Some(initial_hash.clone()),
         content: initial_body.to_string(),
         metadata: None,
@@ -760,7 +766,9 @@ async fn cloud_update_body_at_empty_file_errors_and_does_not_mutate(pool: sqlx::
         origin_uri: "kb://myapp/session/body-empty-guard-test".to_string(),
         context_ref: "@me/myapp".to_string(),
         home_cogmap_id: None,
-        doc_type_name: "session".to_string(),
+        // A `task`, not a `session`: these update tests ride on `temper-stage` (asserted
+        // preserved below), and the applicability gate refuses a state its kind does not carry.
+        doc_type_name: "task".to_string(),
         content_hash: Some(initial_hash.clone()),
         content: initial_body.to_string(),
         metadata: None,
