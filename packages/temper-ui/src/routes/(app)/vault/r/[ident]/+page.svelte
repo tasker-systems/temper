@@ -24,7 +24,7 @@
 			data.resource.managed_meta as Record<string, unknown> | null | undefined,
 			data.resource.open_meta as Record<string, unknown> | null | undefined,
 			data.resource.doc_type_name,
-			data.stateVocabulary
+			{ states: data.stateVocabulary, descriptions: data.mayChange }
 		)
 	);
 
@@ -52,7 +52,7 @@
 			<HomeChip row={data.resource} />
 		</div>
 
-		<PropertySet {rows} {vocabularyUnread} {refusal} />
+		<PropertySet {rows} {vocabularyUnread} {refusal} mayDescribe={data.mayChange} />
 
 		<!--
 			Everything above this point is the scaffold and renders from `data.resource`, which the

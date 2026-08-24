@@ -1,5 +1,6 @@
 import { error, fail } from '@sveltejs/kit';
 import { mayChangeResource } from '$lib/authority';
+import { type EditableKind, revisedValue } from '$lib/descriptions';
 import { parseRef } from '$lib/ref';
 import { ApiError, apiGet, apiPatch } from '$lib/server/api';
 import { bounded } from '$lib/server/bounded';
@@ -140,5 +141,92 @@ export const actions: Actions = {
 			throw err;
 		}
 		return { field };
+	},
+
+	/**
+	 * Revise a description the reader attached — free text, and deliberately so.
+	 *
+	 * This is the **other** act, and the register it answers to rejects the equivalence that
+	 * would make it the same one: *a state the system defines and a description the reader
+	 * invented are not the same act because they are the same storage.* There is no vocabulary
+	 * to check this against, so it is sent and the server's answer is what the reader sees —
+	 * which is why it is a separate action rather than a mode on the one above.
+	 *
+	 * `open_meta` merges at the KEY level: unsupplied keys are untouched, so this revises one
+	 * description and lands outside nothing that was shown. (The additive `open_meta_add`
+	 * channel is for list union and is not what a single-value revision means.)
+	 *
+	 * `kind` keeps the stored type — see `revisedValue`. It comes from the browser, which can
+	 * only use it to give the reader's own description a type they chose.
+	 */
+	changeDescription: async ({ request, locals, params }) => {
+		const id = parseRef(params.ident);
+		const form = await request.formData();
+		const name = form.get('name');
+		const value = form.get('value');
+		const kind = form.get('kind');
+
+		if (typeof name !== 'string' || !name || typeof value !== 'string') {
+			return fail(400, { field: null, message: 'Nothing to change.' });
+		}
+		const asKind: EditableKind =
+			kind === 'number' || kind === 'boolean' || kind === 'string' ? kind : 'string';
+
+		try {
+			await apiPatch<ResourceView>(`/api/resources/${id}`, locals.accessToken!, {
+				open_meta: { [name]: revisedValue(value, asKind) },
+			});
+		} catch (err) {
+			if (err instanceof ApiError) return fail(err.status, { field: name, message: err.message });
+			throw err;
+		}
+		return { field: name };
+	},
+
+	/**
+	 * Attach a description the system has no field for.
+	 *
+	 * A new description is text: nothing on this surface lets the reader say otherwise, so
+	 * nothing here guesses a type for them.
+	 *
+	 * **A `temper-`prefixed name is declined, and this is the one rule the surface applies
+	 * itself.** The open tier is carried verbatim into the same flat property store the managed
+	 * tier lands in, and the read path sorts them apart by name — so a description called
+	 * `temper-stage` would come back as the task's STAGE, set to a value that never passed the
+	 * vocabulary check the state arm exists to enforce. That is the rejected equivalence
+	 * arriving through the back door. No door refuses it today, at any surface; declining to
+	 * author into a namespace the system owns is the conservative half this one can do without
+	 * restating which names are managed — which it deliberately no longer knows.
+	 *
+	 * It over-declines: `temper-invented` is an ordinary open key the system would accept. That
+	 * is the safe direction, and it is a named limit rather than a silent one.
+	 */
+	attachDescription: async ({ request, locals, params }) => {
+		const id = parseRef(params.ident);
+		const form = await request.formData();
+		const name = form.get('name');
+		const value = form.get('value');
+
+		// `field: ''` addresses the attach form rather than any row — `null` is the whole table.
+		if (typeof name !== 'string' || !name.trim() || typeof value !== 'string' || !value) {
+			return fail(400, { field: '', message: 'A description needs a name and a value.' });
+		}
+		const trimmed = name.trim();
+		if (trimmed.startsWith('temper-')) {
+			return fail(400, {
+				field: '',
+				message: `"${trimmed}" is a name the system owns. Descriptions you attach cannot start with "temper-".`,
+			});
+		}
+
+		try {
+			await apiPatch<ResourceView>(`/api/resources/${id}`, locals.accessToken!, {
+				open_meta: { [trimmed]: value },
+			});
+		} catch (err) {
+			if (err instanceof ApiError) return fail(err.status, { field: '', message: err.message });
+			throw err;
+		}
+		return { field: trimmed };
 	},
 };

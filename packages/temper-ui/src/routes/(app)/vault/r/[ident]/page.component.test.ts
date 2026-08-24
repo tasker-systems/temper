@@ -602,3 +602,139 @@ describe('a state the system defines is changed where it is read', () => {
 		);
 	});
 });
+
+/**
+ * The description arm, as the reader reaches it.
+ *
+ * The fixture's open tier is `{ owner: 'Pete', priority: 'high' }` — both single values, so
+ * both are offered. The structured case gets its own render.
+ */
+describe('a reader attaches and revises their own descriptions where they read them', () => {
+	const offering = {
+		content: pending<string>(),
+		trail: pending<never>(),
+		edges: pending<never>(),
+		mayChange: true,
+		stateVocabulary: {},
+	};
+
+	const cellFor = (container: HTMLElement, key: string) =>
+		[...container.querySelectorAll('.props .row')].find(
+			(row) => row.querySelector('dt')?.textContent === key,
+		);
+
+	it('offers no description control to a reader who may not change this', () => {
+		const { container } = render(Page, {
+			data: data({ content: pending(), trail: pending(), edges: pending() }),
+			form: null,
+		});
+		expect(container.querySelector('.props input[type="text"]')).toBeNull();
+		expect(container.querySelector('.attach')).toBeNull();
+	});
+
+	it('offers revision on a description, by POST to its own action', () => {
+		const { container } = render(Page, { data: data(offering), form: null });
+		const cell = cellFor(container, 'owner');
+		const input = cell?.querySelector('input[name="value"]') as HTMLInputElement;
+		expect(input.value).toBe('Pete');
+		const form = cell?.querySelector('form') as HTMLFormElement;
+		// A DIFFERENT action from the state arm. They share a storage layer and nothing else.
+		expect(form.getAttribute('action')).toBe('?/changeDescription');
+		expect(form.getAttribute('method')?.toLowerCase()).toBe('post');
+		expect((cell?.querySelector('button') as HTMLButtonElement).disabled).toBe(true);
+	});
+
+	it('offers attaching a description the system has no field for', () => {
+		const { container } = render(Page, { data: data(offering), form: null });
+		const attach = container.querySelector('.attach') as HTMLFormElement;
+		expect(attach.getAttribute('action')).toBe('?/attachDescription');
+		expect(attach.querySelector('input[name="name"]')).not.toBeNull();
+		expect(attach.querySelector('input[name="value"]')).not.toBeNull();
+	});
+
+	it('offers nothing on a structured description, and says so', () => {
+		// The register's exclusion, made visible. `tags` is the commonest open key there is; a
+		// reader who finds no control on it and no explanation reads it as a bug.
+		const withList = makeRow({
+			title: 'The rendering approach',
+			doc_type_name: 'design',
+			open_meta: { owner: 'Pete', tags: ['a', 'b'] },
+		});
+		const { container } = render(Page, {
+			data: { ...data(offering), resource: withList } as PageData,
+			form: null,
+		});
+		expect(cellFor(container, 'tags')?.querySelector('input')).toBeNull();
+		expect(cellFor(container, 'owner')?.querySelector('input')).not.toBeNull();
+		expect([...container.querySelectorAll('.props .unread')].map((p) => sentenceOf(p))).toContain(
+			'Descriptions holding lists or nested values are not editable here.',
+		);
+	});
+
+	it('never offers a free-text control on a state the system defines', () => {
+		// The rejected equivalence, at the surface: the state arm validates against a closed
+		// vocabulary and this one cannot, so free text must never reach a managed key.
+		//
+		// `temper-branch` is here on purpose. It is a managed key with NO enum — most of them
+		// are — so a version of this that only checked the validated key would pass while free
+		// text reached every unvalidated one. The reason free text is wrong here is that the key
+		// belongs to the system, not that this particular one happens to be checked.
+		const withUnvalidatedState = makeRow({
+			title: 'The rendering approach',
+			doc_type_name: 'task',
+			managed_meta: {
+				'temper-stage': 'design',
+				'temper-branch': 'jct/x',
+				'temper-mode': null,
+				'temper-effort': null,
+				'temper-status': null,
+				'temper-seq': null,
+				'temper-pr': null,
+				'temper-llm-model': null,
+				'temper-llm-run': null,
+				'temper-provenance': null,
+			},
+			open_meta: { owner: 'Pete' },
+		});
+		const { container } = render(Page, {
+			data: {
+				...data({ ...offering, stateVocabulary: { 'temper-stage': ['backlog', 'design'] } }),
+				resource: withUnvalidatedState,
+			} as PageData,
+			form: null,
+		});
+		const stage = cellFor(container, 'temper-stage');
+		expect(stage?.querySelector('select')).not.toBeNull();
+		expect(stage?.querySelector('input[type="text"]')).toBeNull();
+
+		// And not only the state that HAS a vocabulary. A managed key with no enum — most of
+		// them — must get no free-text box either: the reason free text is wrong here is that
+		// the key belongs to the system, not that this particular one happens to be validated.
+		const managedKeys = [...container.querySelectorAll('.props .row.is-managed')].map(
+			(row) => row.querySelector('dt')?.textContent,
+		);
+		expect(managedKeys).toContain('temper-branch');
+		for (const row of container.querySelectorAll('.props .row.is-managed')) {
+			expect(
+				row.querySelector('input[type="text"]'),
+				`${row.querySelector('dt')?.textContent} is a state, not a description`,
+			).toBeNull();
+		}
+		// The description beside them still gets one, so this is not passing by offering nothing.
+		expect(cellFor(container, 'owner')?.querySelector('input[type="text"]')).not.toBeNull();
+	});
+
+	it('shows an attach refusal at the attach form, not at a row', () => {
+		const { container } = render(Page, {
+			data: data(offering),
+			form: {
+				field: '',
+				message: '"temper-stage" is a name the system owns.',
+			},
+		});
+		expect(cellFor(container, 'owner')?.querySelector('.err')).toBeNull();
+		expect(sentenceOf(container.querySelector('.props > .err'))).toBe(
+			'"temper-stage" is a name the system owns.',
+		);
+	});
+});

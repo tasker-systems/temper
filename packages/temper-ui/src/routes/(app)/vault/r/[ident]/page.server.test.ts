@@ -281,3 +281,88 @@ describe('changing a state the system defines', () => {
 		expect(apiPatch).not.toHaveBeenCalled();
 	});
 });
+
+/**
+ * Attaching and revising a description the system has no field for.
+ *
+ * The other arm of the act, and the register rejects the equivalence that would make it the
+ * same one. These assertions are what make the two visibly different: this arm travels on the
+ * open tier, keeps the type it had, and carries the one rule the surface applies itself.
+ */
+const describeIt = (action: string, fields: Record<string, unknown>) =>
+	(actions[action] as (e: unknown) => Promise<unknown>)({
+		locals: { accessToken: 'tok' },
+		params: { ident: 'r1' },
+		request: {
+			formData: async () => new Map(Object.entries(fields)) as unknown as FormData,
+		},
+	});
+
+describe('attaching and revising a description', () => {
+	it('revises one description and lands outside nothing else', async () => {
+		apiPatch.mockResolvedValue({ id: 'r1' });
+		await describeIt('changeDescription', { name: 'owner', value: 'Pete', kind: 'string' });
+		const [path, , body] = apiPatch.mock.calls[0];
+		expect(path).toBe('/api/resources/r1');
+		// `open_meta` merges at the key level, so one key is one description. Nothing else moves.
+		expect(body).toEqual({ open_meta: { owner: 'Pete' } });
+	});
+
+	it('keeps the type a description already had', async () => {
+		// THE BITE, and it is invisible without the assertion: a form submits text, so a
+		// revision of `priority: 3` to `4` would store `"4"` — a change nobody asked for that
+		// renders identically in the table and that every downstream consumer sees.
+		apiPatch.mockResolvedValue({ id: 'r1' });
+		await describeIt('changeDescription', { name: 'priority', value: '4', kind: 'number' });
+		expect(apiPatch.mock.calls[0][2]).toEqual({ open_meta: { priority: 4 } });
+	});
+
+	it('attaches a new description as text', async () => {
+		apiPatch.mockResolvedValue({ id: 'r1' });
+		await describeIt('attachDescription', { name: 'reviewer', value: 'qa' });
+		expect(apiPatch.mock.calls[0][2]).toEqual({ open_meta: { reviewer: 'qa' } });
+	});
+
+	it('declines to attach a description into the namespace the system owns', async () => {
+		// THE BITE for the rejected equivalence arriving through the back door. The open tier is
+		// carried verbatim into the same flat store the managed tier lands in, and the read path
+		// sorts them apart BY NAME — so `temper-stage` attached as a description comes back as
+		// the task's stage, set to a value that never met the vocabulary check the state arm
+		// exists to enforce. No door refuses this today, at any surface.
+		apiPatch.mockResolvedValue({ id: 'r1' });
+		const result = (await describeIt('attachDescription', {
+			name: 'temper-stage',
+			value: 'whatever-i-like',
+		})) as { status: number; data: { message: string } };
+		expect(result.status).toBe(400);
+		expect(result.data.message).toContain('temper-');
+		expect(apiPatch).not.toHaveBeenCalled();
+	});
+
+	it('writes nothing when a description has no name or no value', async () => {
+		apiPatch.mockResolvedValue({ id: 'r1' });
+		expect(
+			((await describeIt('attachDescription', { name: '  ', value: 'x' })) as { status: number })
+				.status,
+		).toBe(400);
+		expect(
+			((await describeIt('attachDescription', { name: 'x', value: '' })) as { status: number })
+				.status,
+		).toBe(400);
+		expect(apiPatch).not.toHaveBeenCalled();
+	});
+
+	it('hands a refusal back rather than throwing the page away', async () => {
+		const err = new ApiErrorStub('invalid open_meta shape: descriptor: expected string');
+		err.status = 400;
+		apiPatch.mockRejectedValue(err);
+		const result = (await describeIt('changeDescription', {
+			name: 'descriptor',
+			value: 'x',
+			kind: 'string',
+		})) as { status: number; data: { field: string; message: string } };
+		expect(result.status).toBe(400);
+		expect(result.data.field).toBe('descriptor');
+		expect(result.data.message).toContain('invalid open_meta shape');
+	});
+});

@@ -1,9 +1,33 @@
+import { type EditableKind, editableKind } from './descriptions';
+
 /**
  * One property as the page renders it. The managed/open split is a read-time
  * projection over a single flat `kb_properties` store — this merges it back.
  * `managed` survives only as a presentation hint (managed keys tint toward the
  * doc-type hue); it is not a storage fact.
  */
+/**
+ * What this reader is being offered on this resource — the two arms of the act, stated
+ * separately because they are separate acts.
+ *
+ * The register they answer to rejects the equivalence a single "make properties editable"
+ * framing makes without stating it: *a state the system defines and a description the reader
+ * invented are not the same act because they are the same storage.* They validate differently,
+ * refuse differently, and answer differently. So they are offered independently here, and a
+ * reader can be offered one and not the other — which is what happens when the vocabulary read
+ * fails on a resource they may still describe.
+ */
+export interface OfferedChanges {
+	/**
+	 * Which values each state of this kind of work takes — `DocTypeDescription.enum_fields`,
+	 * from `GET /api/schema/doc-types/{name}`. `null` offers no state control: the reader may
+	 * not change this resource, the kind has no schema, or the read did not answer.
+	 */
+	states: Readonly<Record<string, readonly string[]>> | null;
+	/** Whether the open tier may be attached to and revised. */
+	descriptions: boolean;
+}
+
 export interface PropertyRow {
 	key: string;
 	value: unknown;
@@ -21,6 +45,12 @@ export interface PropertyRow {
 	 * null-valued row survives.
 	 */
 	choices?: readonly string[];
+	/**
+	 * The JSON type this description's value has, when it is being offered for revision.
+	 * Absent means no revision control — the reader may not change this resource, the row is a
+	 * state rather than a description, or the value is structured (see `editableKind`).
+	 */
+	editable?: EditableKind;
 }
 
 /**
@@ -73,18 +103,17 @@ const UNRANKED = MANAGED_KEY_ORDER.length;
  * fields away, but the generated TS types them `T | null`, so both spellings arrive.) The one
  * exception is a state the work carries and this resource has not got: see `choices`.
  *
- * `enumFields` is `DocTypeDescription.enum_fields` — which values each field of this kind of
- * work takes, read from its own schema. Pass `null` to offer nothing: that is the shape for a
- * reader who may not change this resource, for a doc type with no schema, and for a read that
- * failed. Only the last is a degradation, and offering nothing is the honest response to all
- * three.
+ * `offer` says what this reader is being offered, per arm — see `OfferedChanges`. The default
+ * offers nothing, which is the shape for a reader who may not change this resource; a table
+ * built that way is byte-identical to the one this surface rendered before it could write.
  */
 export function mergeProperties(
 	managed: Record<string, unknown> | null | undefined,
 	open: Record<string, unknown> | null | undefined,
 	docType: string,
-	enumFields: Readonly<Record<string, readonly string[]>> | null = null,
+	offer: OfferedChanges = { states: null, descriptions: false },
 ): PropertyRow[] {
+	const enumFields = offer.states;
 	const managedRows: PropertyRow[] = [];
 	const openRows: PropertyRow[] = [];
 	const offered = new Set(Object.keys(enumFields ?? {}));
@@ -106,7 +135,10 @@ export function mergeProperties(
 	}
 	for (const [key, value] of Object.entries(open ?? {})) {
 		if (value === null || value === undefined) continue;
-		openRows.push({ key, value, managed: false });
+		const kind = offer.descriptions ? editableKind(value) : null;
+		openRows.push(
+			kind ? { key, value, managed: false, editable: kind } : { key, value, managed: false },
+		);
 	}
 
 	managedRows.sort((a, b) => {

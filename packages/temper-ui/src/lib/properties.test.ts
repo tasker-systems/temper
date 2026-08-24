@@ -99,6 +99,10 @@ describe('mergeProperties', () => {
 		// `GET /api/schema/doc-types/{name}` — the doc-type's own schema, never a set this
 		// surface chose. It is passed as `null` whenever the reader may not change the
 		// resource, so a read-only view is byte-identical to what it was before this arm.
+		const offering = (states: Record<string, string[]> | null) => ({
+			states,
+			descriptions: false,
+		});
 		const TASK = {
 			'temper-stage': ['backlog', 'in-progress', 'done', 'cancelled'],
 			'temper-mode': ['plan', 'build'],
@@ -106,7 +110,7 @@ describe('mergeProperties', () => {
 		};
 
 		it('offers exactly the values the schema carries, on the field that carries them', () => {
-			const rows = mergeProperties({ 'temper-stage': 'backlog' }, null, 'task', TASK);
+			const rows = mergeProperties({ 'temper-stage': 'backlog' }, null, 'task', offering(TASK));
 			const stage = rows.find((r) => r.key === 'temper-stage');
 			expect(stage?.choices).toEqual(['backlog', 'in-progress', 'done', 'cancelled']);
 		});
@@ -118,7 +122,7 @@ describe('mergeProperties', () => {
 				{ 'temper-stage': 'done', 'temper-branch': 'jct/x' },
 				{ alpha: 1 },
 				'task',
-				TASK,
+				offering(TASK),
 			);
 			expect(rows.find((r) => r.key === 'temper-branch')?.choices).toBeUndefined();
 			expect(rows.find((r) => r.key === 'alpha')?.choices).toBeUndefined();
@@ -129,7 +133,7 @@ describe('mergeProperties', () => {
 			// "no more, no FEWER". A task carries `temper-mode` whether or not this one has a
 			// value; a surface that only decorated existing rows would present a subset of the
 			// states the work carries, and the reader could never set the missing ones.
-			const rows = mergeProperties({ 'temper-stage': 'done' }, null, 'task', TASK);
+			const rows = mergeProperties({ 'temper-stage': 'done' }, null, 'task', offering(TASK));
 			const mode = rows.find((r) => r.key === 'temper-mode');
 			expect(mode).toEqual({
 				key: 'temper-mode',
@@ -150,7 +154,12 @@ describe('mergeProperties', () => {
 			// Measured across all 14 embedded schemas: only `task` and `goal` declare an enum
 			// in their own properties. Twelve kinds get no control, and that is the clause
 			// holding rather than a gap.
-			const rows = mergeProperties({ 'temper-provenance': 'user-created' }, null, 'concept', {});
+			const rows = mergeProperties(
+				{ 'temper-provenance': 'user-created' },
+				null,
+				'concept',
+				offering({}),
+			);
 			expect(rows.every((r) => r.choices === undefined)).toBe(true);
 			expect(rows.map((r) => r.key)).toEqual(['doc_type', 'temper-provenance']);
 		});
@@ -158,9 +167,61 @@ describe('mergeProperties', () => {
 		it('offers nothing when the vocabulary could not be read', () => {
 			// A 404 (out-of-vocabulary doc type) or a failed read arrives as null. An
 			// affordance must never be offered over an answer nobody got.
-			const rows = mergeProperties({ 'temper-stage': 'done' }, null, 'task', null);
+			const rows = mergeProperties({ 'temper-stage': 'done' }, null, 'task', offering(null));
 			expect(rows.every((r) => r.choices === undefined)).toBe(true);
 			expect(rows.map((r) => r.key)).toEqual(['doc_type', 'temper-stage']);
+		});
+	});
+
+	describe('offered descriptions', () => {
+		const offering = { states: null, descriptions: true };
+
+		it('offers revision on a single-value description, keeping its type', () => {
+			const rows = mergeProperties(
+				null,
+				{ owner: 'Pete', priority: 3, done: false },
+				'task',
+				offering,
+			);
+			expect(rows.find((r) => r.key === 'owner')?.editable).toBe('string');
+			expect(rows.find((r) => r.key === 'priority')?.editable).toBe('number');
+			expect(rows.find((r) => r.key === 'done')?.editable).toBe('boolean');
+		});
+
+		it('offers nothing on a structured description', () => {
+			// The register's exclusion, and it bites on the commonest keys there are.
+			const rows = mergeProperties(null, { tags: ['a', 'b'], nested: { x: 1 } }, 'task', offering);
+			expect(rows.find((r) => r.key === 'tags')?.editable).toBeUndefined();
+			expect(rows.find((r) => r.key === 'nested')?.editable).toBeUndefined();
+		});
+
+		it('never offers revision on a state the system defines', () => {
+			// THE REJECTED EQUIVALENCE, asserted. A state and a description are not one act
+			// because they are one storage: the state arm validates against a closed vocabulary
+			// and this one cannot, so a free-text control must never reach a managed key.
+			const rows = mergeProperties({ 'temper-stage': 'done' }, { owner: 'Pete' }, 'task', {
+				states: { 'temper-stage': ['backlog', 'done'] },
+				descriptions: true,
+			});
+			expect(rows.find((r) => r.key === 'temper-stage')?.editable).toBeUndefined();
+			expect(rows.find((r) => r.key === 'temper-stage')?.choices).toEqual(['backlog', 'done']);
+			expect(rows.find((r) => r.key === 'doc_type')?.editable).toBeUndefined();
+			expect(rows.find((r) => r.key === 'owner')?.editable).toBe('string');
+		});
+
+		it('offers the two arms independently', () => {
+			// A reader whose vocabulary read failed may still describe. Collapsing the two into
+			// one flag would take away an arm that never depended on the failed read.
+			const rows = mergeProperties(null, { owner: 'Pete' }, 'task', {
+				states: null,
+				descriptions: true,
+			});
+			expect(rows.find((r) => r.key === 'owner')?.editable).toBe('string');
+		});
+
+		it('offers nothing at all to a reader who may not change this', () => {
+			const rows = mergeProperties(null, { owner: 'Pete' }, 'task');
+			expect(rows.find((r) => r.key === 'owner')?.editable).toBeUndefined();
 		});
 	});
 });
