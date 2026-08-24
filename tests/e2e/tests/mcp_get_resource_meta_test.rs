@@ -119,7 +119,9 @@ async fn seed_resource(
             origin_uri: format!("mcp://test/{slug}"),
             context_ref: format!("@me/{context_name}"),
             home_cogmap_id: None,
-            doc_type_name: "research".to_string(),
+            // A `task`: these rows carry `temper-stage`, and the applicability gate refuses a
+            // state its kind does not carry.
+            doc_type_name: "task".to_string(),
             content_hash: Some(format!("sha256:{}", sha2_hex(slug))),
             // EMPTY body: client-ingested prose rides in `chunks_packed`, so a non-empty `content`
             // would engage `create_resource`'s body-dedup, which collapses these empty-bodied batch
@@ -181,7 +183,7 @@ async fn mcp_get_resource_carries_both_meta_tiers(pool: sqlx::PgPool) {
 
     // doc_type lives on the typed top-level field (the substrate's `doc_type` property), not in the
     // managed bag — `temper-type` is `KeyFate::ReconcileToDocType`.
-    assert_eq!(v["doc_type_name"], "research");
+    assert_eq!(v["doc_type_name"], "task");
     // Workflow keys survive §7 as `kb_properties`, and reach the caller under their canonical
     // `temper-*` names rather than hoisted flat onto the response.
     assert_eq!(v["managed_meta"]["temper-stage"], "in-progress");
@@ -291,7 +293,7 @@ async fn mcp_list_emits_ref_for_every_row(pool: sqlx::PgPool) {
                 status: None,
                 tags: None,
                 context_ref: None,
-                doc_type_name: Some("research".to_string()),
+                doc_type_name: Some("task".to_string()),
                 limit: None,
                 offset: None,
                 fields: None,
@@ -365,7 +367,7 @@ async fn mcp_list_envelope_carries_paging_state(pool: sqlx::PgPool) {
                         status: None,
                         tags: None,
                         context_ref: None,
-                        doc_type_name: Some("research".to_string()),
+                        doc_type_name: Some("task".to_string()),
                         limit,
                         offset: None,
                         fields: None,
@@ -445,7 +447,7 @@ async fn mcp_list_carries_both_meta_tiers_for_every_row(pool: sqlx::PgPool) {
                 status: None,
                 tags: None,
                 context_ref: None,
-                doc_type_name: Some("research".to_string()),
+                doc_type_name: Some("task".to_string()),
                 limit: None,
                 offset: None,
                 fields: None,

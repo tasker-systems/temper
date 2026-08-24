@@ -2310,11 +2310,14 @@ fn validate_update_args(params: &UpdateParams<'_>, current_type: &str) -> Result
 
     let schema_fields = schema::updatable_fields(current_type)?;
 
-    // Base fields valid on all types (from base.schema.json).
-    const BASE_FIELDS: &[&str] = &["temper-title"];
+    // Fields valid on all types — READ from base.schema.json, not listed. This was a
+    // hand-written `["temper-title"]` that silently omitted the base-declared provenance trio;
+    // `schema::universal_fields` is the same answer the shared write gate applies, so the CLI's
+    // friendlier per-flag message survives without the definition forking from it.
+    let universal = schema::universal_fields();
 
     for (field_name, value) in &scalar_updates {
-        if BASE_FIELDS.contains(field_name) {
+        if universal.contains(*field_name) {
             continue;
         }
         match schema_fields.iter().find(|(n, _)| n == field_name) {

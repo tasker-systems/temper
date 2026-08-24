@@ -508,7 +508,9 @@ async fn mcp_update_resource_meta_preserves_chunks_and_body_hash(pool: sqlx::PgP
         origin_uri: "mcp://test/meta-parity".to_string(),
         context_ref: "@me/mcp-meta-parity".to_string(),
         home_cogmap_id: None,
-        doc_type_name: "research".to_string(),
+        // A `task`: the managed change this test rides on is `temper-stage`, and the
+        // applicability gate refuses a state its kind does not carry.
+        doc_type_name: "task".to_string(),
         content_hash: Some(format!("sha256:{}", sha2_hex(content))),
         content: content.to_string(),
         metadata: None,
@@ -854,7 +856,9 @@ async fn mcp_get_resource_routes_through_selector_legacy(pool: sqlx::PgPool) {
         content_hash: Some(format!("sha256:{}", sha2_hex(&content))),
         content,
         metadata: None,
-        managed_meta: Some(serde_json::json!({"temper-stage": "in-progress"})),
+        // No `temper-stage`: this row is a `research` (asserted below) and a research does not
+        // carry a task's stage. The stage was never asserted here — it was filler.
+        managed_meta: Some(serde_json::json!({})),
         open_meta: Some(serde_json::json!({"tags": ["selector", "route"]})),
         chunks_packed: Some(packed),
         act: Default::default(),
@@ -1008,7 +1012,13 @@ async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
         let content = format!("# {title}\n\n{body}");
         let packed = temper_core::types::ingest::pack_chunks(&[fake_chunk(0, title, &body)])
             .expect("pack chunks");
-        let managed = serde_json::json!({"temper-stage": "in-progress"});
+        // The two kinds are the point of this loop, so the FILLER is conditioned rather than
+        // the doc type changed: a research does not carry a task's stage.
+        let managed = if doc_type_name == "task" {
+            serde_json::json!({"temper-stage": "in-progress"})
+        } else {
+            serde_json::json!({})
+        };
         let payload = temper_core::types::ingest::IngestPayload {
             idempotency_key: None,
             segmented: None,
