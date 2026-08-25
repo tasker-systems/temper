@@ -484,15 +484,38 @@ async fn eval_expectation(
         Expectation::Stale { expect } => {
             // `cogmap_staleness` gained a principal in 20260825000020 and the old ungated
             // `cogmap_staleness(uuid)` was DROPPED, not overloaded — so this call site had to move
-            // in the same change. The scenario owner is the principal: `fetch_one` here means a
-            // deny (zero rows) would surface as a `RowNotFound` error rather than a false reading,
-            // and the owner never denies — they can read every region of the map they own. That
-            // also means the scenario suite does NOT exercise the new gate; the bite witnesses for
-            // it live in the API test tier, not here.
+            // in the same change.
+            //
+            // THE PRINCIPAL IS THE MAP ITSELF, not `loaded.owner`, and the first draft of this
+            // change got that wrong in a way only the `artifact-tests` tier could catch. It passed
+            // `('profile', loaded.owner)` on the reasoning that "the owner never denies — they can
+            // read every region of the map they own". **That is false for a seeded map.**
+            // `cogmap_readable_by_profile` needs a `kb_team_cogmaps` binding or an explicit grant,
+            // and `scenario::loader` writes NEITHER — only the access-scenario loader does
+            // (`scenario/access/loader.rs:428`). So the gate denied, the deny is zero rows by
+            // design, and `fetch_one` turned it into `RowNotFound`: every growth runbook died at
+            // its first `stale` check with "no rows returned by a query that expected to return at
+            // least one row". Green locally under `test-db`, which does not compile this tier.
+            //
+            // The self-read arm is the RIGHT principal here rather than a workaround for that.
+            // A runbook asserting `stale: true` is asserting a STRUCTURAL property of the map --
+            // "has anything under this anchor moved since it was materialized" -- not one
+            // principal's partial view of it. The `'cogmap'` arm exempts the member and endpoint
+            // rules (20260825000020, both arms), so it yields exactly the structural clock these
+            // runbooks asserted against BEFORE this branch. This preserves their meaning rather
+            // than changing it.
+            //
+            // It also means the scenario suite does NOT exercise the new gate -- which was already
+            // true and already recorded; the bite witnesses live in the API test tier.
+            //
+            // NOTE FOR THE AUDIT TRAIL: this is the one non-`'profile'` principal-kind literal in
+            // `crates/**/src/**.rs`. It is reachable only from `crates/temper-substrate/tests/`
+            // (`run_scenario` has no application caller), so it is not an application path -- but
+            // any future scan asserting "every staleness call site passes 'profile'" must name this
+            // exemption rather than be written as an absolute and then fail on it.
             let is_stale = sqlx::query_scalar!(
-                "SELECT is_stale FROM cogmap_staleness($1, 'profile', $2)",
-                loaded.cogmap,
-                loaded.owner
+                "SELECT is_stale FROM cogmap_staleness($1, 'cogmap', $1)",
+                loaded.cogmap
             )
             .fetch_one(pool)
             .await?
