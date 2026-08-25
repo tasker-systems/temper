@@ -38,6 +38,16 @@ const emptyShape = (over: Partial<AnchorShape> = {}): AnchorShape =>
 
 const ROW = { region_id: 'r-1', lens_id: 'l-1', label: 'A grouping', member_count: 3, salience: 1 };
 
+/** What `/api/contexts/{id}/analytics` returns: the clock, bare, and nothing beside it. */
+const CLOCK = {
+	materialized_at: '2026-08-20T10:00:00.000Z',
+	latest_touch: '2026-08-21T09:00:00.000Z',
+	is_stale: true,
+};
+
+/** What `/api/cognitive-maps/{id}/analytics` returns: the same clock, plus the two a map has. */
+const ANALYTICS_ROW = { telos_resource_id: 'res-1', staleness: CLOCK, regulation: [] };
+
 beforeEach(() => {
 	vi.clearAllMocks();
 });
@@ -105,6 +115,56 @@ describe('the analysis door carries the cause off the wire', () => {
 		routeReads(emptyShape());
 		await readAnchorAnalysis('tok', COGMAP);
 		expect(apiGet).toHaveBeenCalledWith('/api/cognitive-maps/map-1/shape', 'tok');
+	});
+
+	/**
+	 * **Both anchor kinds are asked for the anchor-level readout, and for DIFFERENT shapes.**
+	 *
+	 * A context was not asked at all until `/api/contexts/{id}/analytics` shipped, and the door
+	 * handed it `null` — which the page then spelled as *a context has no map-level readout*. These
+	 * two pin the replacement: the door is asked, and what comes back is tagged with the kind that
+	 * asked, so nothing downstream has to infer a context from the absence of a charter.
+	 *
+	 * The SHAPE is the assertion that matters. A context has no charter resource and no regulation
+	 * set, so widening this into one row with both of them nullable would spell *nothing found*
+	 * about two things that cannot exist.
+	 */
+	it('asks the context door for the clock, and tags what comes back as a context', async () => {
+		apiGet.mockImplementation((path: string) => {
+			if (path.endsWith('/shape')) return Promise.resolve(emptyShape());
+			if (path === '/api/contexts/ctx-1/analytics') return Promise.resolve(CLOCK);
+			return Promise.reject(new Error('not under test'));
+		});
+
+		const out = await readAnchorAnalysis('tok', CONTEXT);
+
+		expect(apiGet).toHaveBeenCalledWith('/api/contexts/ctx-1/analytics', 'tok');
+		expect(out.analytics).toEqual({ kind: 'context', staleness: CLOCK });
+		// No charter to look up, so none is looked up — and none is invented as a null peer field.
+		expect(out.telos).toBeNull();
+		for (const [path] of apiGet.mock.calls) expect(String(path)).not.toContain('/api/resources/');
+	});
+
+	it('tags the cogmap door’s five-field row as a cogmap, and follows its charter', async () => {
+		apiGet.mockImplementation((path: string) => {
+			if (path.endsWith('/shape')) return Promise.resolve(emptyShape());
+			if (path === '/api/cognitive-maps/map-1/analytics') return Promise.resolve(ANALYTICS_ROW);
+			if (path === '/api/resources/res-1') return Promise.resolve({ title: 'The charter' });
+			return Promise.reject(new Error('not under test'));
+		});
+
+		const out = await readAnchorAnalysis('tok', COGMAP);
+
+		expect(apiGet).toHaveBeenCalledWith('/api/cognitive-maps/map-1/analytics', 'tok');
+		expect(out.analytics).toEqual({ kind: 'cogmap', ...ANALYTICS_ROW });
+		expect(out.telos).toEqual({ title: 'The charter' });
+	});
+
+	/** A deny is a 404, and a 404 is `null` — for either kind, and never an error. */
+	it('a declined anchor-level read is null rather than a throw, for a context too', async () => {
+		routeReads(emptyShape());
+
+		await expect(readAnchorAnalysis('tok', CONTEXT)).resolves.toMatchObject({ analytics: null });
 	});
 
 	/**

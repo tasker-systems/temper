@@ -5,6 +5,7 @@ import type {
 	CogmapRegionMetricsRow,
 	CogmapRegionRow,
 	CogmapRow,
+	CogmapStaleness,
 	ShapeEmptiness,
 } from '$lib/types/generated/cognitive_maps';
 import type { ContextRowWithCounts } from '$lib/types/generated/context';
@@ -238,8 +239,41 @@ const anchorMetricsPath = (anchor: Anchor): string =>
 		? `/api/cognitive-maps/${anchor.id}/region-metrics`
 		: `/api/contexts/${anchor.id}/region-metrics`;
 
+/** The anchor-level door — the third of the three that come in a cogmap/context pair. */
+const anchorAnalyticsPath = (anchor: Anchor): string =>
+	anchor.kind === 'cogmap'
+		? `/api/cognitive-maps/${anchor.id}/analytics`
+		: `/api/contexts/${anchor.id}/analytics`;
+
 /**
- * Everything the analysis door reads about one place. Four reads, none of them new.
+ * What the anchor-level door answers — **two shapes, and the difference between them is the
+ * answer** rather than a gap in it.
+ *
+ * `/api/cognitive-maps/{id}/analytics` answers with the clock **plus a charter resource and a
+ * regulation set**; `/api/contexts/{id}/analytics` answers with the clock alone. A context has no
+ * charter and no regulation set, so those two are not fields it declines to fill — they are fields
+ * it cannot have. Widening this into one type with both of them optional would spell *nothing
+ * found* about two things that **cannot exist**, which is exactly the faked peer field
+ * `CONTEXT_HAS_NO_MAP_READOUT` was written to refuse (`$lib/graph/analysis.ts`).
+ *
+ * So it is a union discriminated on the anchor kind, and the two halves are carried differently on
+ * purpose:
+ *
+ * - the cogmap arm **intersects the generated wire type** rather than restating its fields, so a
+ *   change to `CogmapAnalyticsRow` lands here by construction and cannot drift;
+ * - `staleness` sits on **both** members, so the half the two anchor kinds genuinely share reads
+ *   without narrowing, and the half they do not share cannot be read without it.
+ */
+export type AnchorAnalytics =
+	| ({ kind: 'cogmap' } & CogmapAnalyticsRow)
+	| { kind: 'context'; staleness: CogmapStaleness };
+
+/**
+ * Everything the analysis door reads about one place. Four reads.
+ *
+ * **`[2026-08-25]` One of them is new for one anchor kind.** `/api/contexts/{id}/analytics` did not
+ * exist when this door was built, so contexts were skipped and the page declared the readout absent
+ * for them. It exists now; they are asked. The other three are unchanged.
  *
  * **The two per-region reads are the same pairing as `shape`** —
  * `/api/contexts/{id}/region-metrics` and `/api/cognitive-maps/{id}/region-metrics` are two doors
@@ -262,8 +296,12 @@ const anchorMetricsPath = (anchor: Anchor): string =>
  *   "not computed" on a read that never answered would be a claim about the substrate made on
  *   evidence the surface does not have.
  * - **`analytics` 404s to `null`.** A 404 here is a deny, and the task's own acceptance says it
- *   renders "not available" and never an error. Contexts are not asked at all: there is no context
- *   analytics read (D6 is unshipped), and inventing a peer field is exactly what the task forbids.
+ *   renders "not available" and never an error. **Both anchor kinds are asked** — the context door
+ *   `/api/contexts/{id}/analytics` ships as of `context_analytics` — and they are asked for
+ *   different shapes, because a context is answered for staleness and gets **no** charter and
+ *   **no** regulation. Inventing either as a null peer field is exactly what the task forbids: see
+ *   {@link AnchorAnalytics}, which is a union rather than one optional-everything row for that
+ *   reason alone.
  */
 export async function readAnchorAnalysis(
 	token: string,
@@ -272,27 +310,39 @@ export async function readAnchorAnalysis(
 	shape: CogmapRegionRow[];
 	emptiness: ShapeEmptiness | null;
 	metrics: CogmapRegionMetricsRow[] | null;
-	analytics: CogmapAnalyticsRow | null;
+	analytics: AnchorAnalytics | null;
 	telos: ResourceView | null;
 }> {
+	// The kind is decided ONCE, here, and travels on the value. The alternative — re-deriving it
+	// downstream from which fields happen to be present — would make the presence of a charter the
+	// definition of being a map, and a map whose read was declined would then read as a context.
+	const analyticsRead: Promise<AnchorAnalytics | null> =
+		anchor.kind === 'cogmap'
+			? apiGet<CogmapAnalyticsRow>(anchorAnalyticsPath(anchor), token)
+					.then((row): AnchorAnalytics => ({ kind: 'cogmap', ...row }))
+					.catch(() => null)
+			: apiGet<CogmapStaleness>(anchorAnalyticsPath(anchor), token)
+					.then((staleness): AnchorAnalytics => ({ kind: 'context', staleness }))
+					.catch(() => null);
+
 	const [shape, metrics, analytics] = await Promise.all([
 		apiGet<AnchorShape>(anchorShapePath(anchor), token),
 		apiGet<CogmapRegionMetricsRow[]>(anchorMetricsPath(anchor), token).catch(() => null),
-		anchor.kind === 'cogmap'
-			? apiGet<CogmapAnalyticsRow>(`/api/cognitive-maps/${anchor.id}/analytics`, token).catch(
-					() => null,
-				)
-			: Promise.resolve(null),
+		analyticsRead,
 	]);
 
 	// The charter's title, so the link says what it points at rather than showing a uuid. The
 	// column is NOT NULL, so this is a read that should succeed — and a failure still leaves a
 	// linkable id, which is why it degrades rather than throws.
-	const telos = analytics
-		? await apiGet<ResourceView>(`/api/resources/${analytics.telos_resource_id}`, token).catch(
-				() => null,
-			)
-		: null;
+	//
+	// Only a map has one to fetch. A context is not asked for a charter it does not have — the
+	// narrowing is what stops this from becoming a lookup of `undefined`.
+	const telos =
+		analytics?.kind === 'cogmap'
+			? await apiGet<ResourceView>(`/api/resources/${analytics.telos_resource_id}`, token).catch(
+					() => null,
+				)
+			: null;
 
 	// **`emptiness` is carried; the rest of the envelope is still dropped here.** This door is the
 	// one place a PERSON meets an empty region set, and until this field crossed it the page said

@@ -120,6 +120,15 @@ CONTEXT materializes the same way: `temper context materialize`, or `context_mat
 agent surface — the peer tool, registered 2026-08-24 after sitting implemented-but-unregistered.
 Regions only exist *after* a materialize.
 
+**Whether a shape is still current** is `temper cogmap analytics <MAP>`, and a CONTEXT has the
+peer read: `temper context analytics <CONTEXT_REF>`, or `context_read` (view: analytics) on the
+agent surface. **Three fields there, not the map's five** — `materialized_at`, `latest_touch`,
+`is_stale` — because a context has no charter resource and no regulation set, so there is
+nothing there to report rather than nothing found. On both anchors the clock is **yours**:
+`latest_touch` covers only the regions and edges *you* can read, the same member gate `shape`'s
+counts carry, so two callers can legitimately disagree about whether the same anchor is stale.
+Staleness is reported, never blocking — a stale read is still a read.
+
 **A `shape` read with no regions says why.** `cogmap shape` returns an envelope —
 `regions` plus `population`, `emptiness` and `materialized_at` — and when `regions` is empty,
 `emptiness` names which of four things happened: `never_clustered` (materialize it),

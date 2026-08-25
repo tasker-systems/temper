@@ -3,13 +3,14 @@ import { join } from 'node:path';
 import { fireEvent, render, screen } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import { describe, expect, it, vi } from 'vitest';
-import { type AnalysedRegion, analyseShape, METRICS } from '$lib/graph/analysis';
+import { type AnalysedRegion, analyseShape, describeStaleness, METRICS } from '$lib/graph/analysis';
 import type { AnalysisViewData } from '$lib/graph/view';
 import { describeFailure, GaveUp } from '$lib/server/bounded';
 import type {
 	CogmapAnalyticsRow,
 	CogmapRegionMetricsRow,
 	CogmapRegionRow,
+	CogmapStaleness,
 	ShapeEmptiness,
 } from '$lib/types/generated/cognitive_maps';
 import { sentenceOf } from '../../../test/sentence';
@@ -65,8 +66,9 @@ type ViewOverrides = Partial<
  * The wrapper for the three fields whose promise is **unconditional**.
  *
  * `null` on `map` becomes `Promise.resolve(null)` rather than staying `null`: the inner null is the
- * only null there is. A test writing `map: null` means *this place published no map-level readout*,
- * which is a fact about the place; an outer null would be a fourth state on a field that already
+ * only null there is. A test writing `map: null` means *the anchor-level read did not answer* —
+ * true of either anchor kind now that a context is asked at its own door, where it used to also
+ * cover *a context was never asked*. An outer null would be a fourth state on a field that already
  * carries three.
  */
 const always = <T>(v: T | Promise<T>): Promise<T> =>
@@ -97,10 +99,27 @@ const view = (over: ViewOverrides = {}): AnalysisViewData => {
 	};
 };
 
+/**
+ * A context's clock, **written here rather than captured**.
+ *
+ * The bundle under this file was captured on 2026-08-20, before `/api/contexts/{id}/analytics`
+ * existed, so it holds no real context staleness to read (see `harness.ts` for the same remainder).
+ * The value below is arbitrary and says nothing about the substrate; what the tests using it pin is
+ * that the page renders a clock for a context AT ALL, which needs no captured row to state.
+ */
+const CONTEXT_CLOCK: CogmapStaleness = {
+	materialized_at: '2026-08-20T10:00:00.000Z',
+	latest_touch: null,
+	is_stale: false,
+};
+
 const contextView = (over: ViewOverrides = {}): AnalysisViewData =>
 	view({
 		place: { kind: 'context', ref: '@me/temper', title: '@me/temper' },
 		...analyseShape(fixture.context.shape, fixture.context.region_metrics),
+		// A context is asked at its own door and answers with the clock and nothing else. It carries
+		// no `telos` and no `regulation` — not as nulls, but as fields the arm does not have.
+		map: { kind: 'context', staleness: CONTEXT_CLOCK },
 		...over,
 	});
 
@@ -113,6 +132,7 @@ const cogmapView = (over: ViewOverrides = {}): AnalysisViewData =>
 		},
 		...analyseShape(fixture.cogmap.shape, fixture.cogmap.region_metrics),
 		map: {
+			kind: 'cogmap',
 			telos: { id: fixture.cogmap.analytics.telos_resource_id, title: 'Temper — telos charter' },
 			staleness: fixture.cogmap.analytics.staleness,
 			regulation: fixture.cogmap.analytics.regulation,
@@ -366,6 +386,40 @@ describe('what a place does not have is declared, not fabricated', () => {
 
 		expect(said).toContain('a context has neither');
 		expect(said).not.toMatch(/error|failed|not found/i);
+		// What it declines to show is the charter and the regulation set, and nothing else. The two
+		// halves a map has that a context does not are absent; a clock is not one of them.
+		expect(screen.queryByTestId('regulation')).toBeNull();
+	});
+
+	/**
+	 * **The half the two anchor kinds share, rendered the same way for both.**
+	 *
+	 * This is the assertion that fails if the context arm is ever dropped back to *not asked*: the
+	 * page said `staleness` was absent for a context until `/api/contexts/{id}/analytics` shipped,
+	 * and a sentence declaring an absence must stop declaring it the moment it stops being true.
+	 */
+	it('a context shows the clock, in the same words a map gets', async () => {
+		await painted(contextView());
+		const said = screen.getByTestId('staleness').textContent ?? '';
+
+		// `describeStaleness` and nothing else: the two anchor kinds are rendered by the SAME call,
+		// so they cannot drift into describing one fact in two voices.
+		expect(said).toBe(describeStaleness(CONTEXT_CLOCK));
+		expect(said).not.toMatch(/error|failed|not found/i);
+	});
+
+	it('a map shows the clock through that same call', async () => {
+		await painted(cogmapView());
+
+		expect(screen.getByTestId('staleness').textContent).toBe(
+			describeStaleness(fixture.cogmap.analytics.staleness),
+		);
+	});
+
+	it('a context whose clock read was declined shows no clock, rather than a made-up one', async () => {
+		await painted(contextView({ map: null }));
+
+		expect(screen.getByTestId('map-absent').textContent ?? '').toContain('a context has neither');
 		expect(screen.queryByTestId('staleness')).toBeNull();
 	});
 

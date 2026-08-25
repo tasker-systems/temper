@@ -100,18 +100,25 @@ export const load: PageServerLoad = async ({ locals, params, url }): Promise<Ana
 		// the cause look like a conclusion drawn from the rows, which is exactly backwards -- the
 		// rows are empty and the cause is the only thing that says why.
 		emptiness: derive(measured, ({ emptiness }) => emptiness),
-		// The inner null still covers the two situations the page tells apart: a context, which
-		// genuinely has neither a charter nor a regulation set, and a map whose analytics read was
-		// declined. The read FAILING is the third state, and it is a rejection — never spelled as
-		// either of those absences (spec §5.1).
-		map: derive(measured, ({ analytics, telos }) =>
-			analytics
+		// **The inner null now covers ONE situation**: the anchor-level read was declined. Both anchor
+		// kinds are asked as of `context_analytics`, so a context reaching this door with a null is a
+		// context whose read did not answer — not a context that was never asked. What a context does
+		// not have is carried by the SHAPE of the readout rather than by its absence: the `context`
+		// arm has the clock and no charter and no regulation set, because it has none to report and a
+		// null peer field would say *nothing found* about two things that cannot exist.
+		//
+		// The read FAILING is still the third state, and it is a rejection — never spelled as either
+		// of those absences (spec §5.1).
+		map: derive(measured, ({ analytics, telos }) => {
+			if (!analytics) return null;
+			return analytics.kind === 'cogmap'
 				? {
+						kind: 'cogmap' as const,
 						telos: { id: analytics.telos_resource_id, title: telos?.title ?? null },
 						staleness: analytics.staleness,
 						regulation: analytics.regulation,
 					}
-				: null,
-		),
+				: { kind: 'context' as const, staleness: analytics.staleness };
+		}),
 	};
 };

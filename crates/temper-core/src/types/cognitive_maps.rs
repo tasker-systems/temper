@@ -144,6 +144,16 @@ pub struct CogmapAnalyticsInput {
     pub cogmap: String,
 }
 
+/// MCP/surface input for the context-level analytics read. Its own type rather than a reuse of
+/// [`ContextShapeInput`]: that one carries a `lens`, and the analytics read is anchor-level with no
+/// per-region filter to apply — the same reason `CogmapAnalyticsInput` above is not `CogmapShapeInput`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct ContextAnalyticsInput {
+    /// The context to read, by context ref (`@me/<slug>`, `+<team>/<slug>`, or a UUID).
+    pub context: String,
+}
+
 /// The per-region analytics tier (the five materialized scalar readouts) as returned by
 /// `cogmap_region_metrics`. Sibling to `CogmapRegionRow`'s surface tier; member identities are still
 /// never carried. Each metric is `Option<f64>` (the columns are nullable until materialization computes
@@ -170,9 +180,24 @@ pub struct CogmapRegionMetricsRow {
     pub telos_alignment: Option<f64>,
 }
 
-/// Map-level staleness readout (`cogmap_staleness`): when the shape was last materialized, the latest
-/// touch to the map's regions/edges, and whether the read is stale. Staleness is LEGIBLE — reported,
-/// never blocking. `materialized_at` is `None` when the map has never been materialized.
+/// Anchor-level staleness readout: when the shape was last materialized, the latest touch to the
+/// anchor's regions/edges **that the reading principal may see**, and whether the read is stale.
+/// Staleness is LEGIBLE — reported, never blocking. `materialized_at` is `None` when the anchor has
+/// never been materialized.
+///
+/// Carried by BOTH anchor kinds: nested inside [`CogmapAnalyticsRow`] for a cognitive map
+/// (`cogmap_staleness`) and returned bare by `GET /api/contexts/{id}/analytics` for a context
+/// (`context_analytics`), which has nothing to put in that row's other two fields. Both are thin
+/// wrappers over the one gated core, `anchor_staleness`, so the three values mean the same thing on
+/// either anchor. The `Cogmap` in the name is historical — the same "shared on purpose, the
+/// `cogmap_*` naming is what M3 retires, not the shape" convention `CogmapRegionMetricsRow` already
+/// rides on for the context region-metrics route.
+///
+/// The touch is **gated** as of migration `20260825000020`: a region holding no member this
+/// principal can read does not move this clock, and neither does an edge with an unreadable
+/// endpoint. Folded regions and edges are still counted deliberately — a fold advances
+/// `last_event_id` and IS a touch, so narrowing either arm to live rows would make a stale anchor
+/// read fresh.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "cognitive_maps.ts"))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -46,7 +46,8 @@ MCP is a declaration, not a gap.
 | Intent | Use | Why |
 |--------|-----|-----|
 | See what a context is *about* before reading it | Tool: `context_read` (view: shape) | Region-level map, most salient first — the fastest orientation move |
-| Per-region analytics for a context | Tool: `context_read` (view: metrics) | Centrality, cohesion, tension, telos alignment under an optional lens |
+| Per-region analytics-tier metrics for a context | Tool: `context_read` (view: metrics) | Centrality, cohesion, tension, telos alignment under an optional lens |
+| Whether a context's shape is still current | Tool: `context_read` (view: analytics) | Anchor-level staleness: when the shape was materialized, the latest touch *you* can see, and whether the read is stale |
 | Browse what's in a context | Resource: `temper://contexts/{ref}/resources` | No tool call overhead, client can cache |
 | Read a specific document | Resource: `temper://resources/{id}` | Returns metadata + full markdown |
 | Get raw markdown only | Resource: `temper://resources/{id}/content` | Lighter than full resource read |
@@ -140,7 +141,7 @@ materialize of a small context stamps its watermark whether or not anything
 clustered, so a context that legitimately formed nothing reports the same arm.
 Add or check what the context holds, re-materialize, and read the field again.
 
-### `context_read` (view: metrics) — the analytics tier
+### `context_read` (view: metrics) — the per-region analytics tier
 
 Deeper per-region metrics for the same regions: centrality, content cohesion,
 internal tension, reference standing, and telos alignment. Use when
@@ -152,18 +153,42 @@ Tool: context_read
 Input: { "view": "metrics", "context": "@me/temper", "lens": "<optional lens ref>" }
 ```
 
+### `context_read` (view: analytics) — is the shape still current?
+
+The context-level readout, one row rather than one per region: `materialized_at`
+(when the shape was last worked out), `latest_touch` (the most recent change *you*
+can see to its regions and edges), and `is_stale`. Use it before you trust a
+`shape` or `metrics` read, or to decide whether a re-materialize is worth it.
+
+```
+Tool: context_read
+Input: { "view": "analytics", "context": "@me/temper" }
+```
+
+**Three fields, not the five of `cogmap_read` (view: analytics).** A context has
+no charter resource and no regulation set, so there is nothing there to report —
+that is a shape difference, not a gap.
+
+**The clock is yours, not the context's.** `latest_touch` and `is_stale` cover
+only the regions and edges you can read, the same gate `shape`'s member counts
+carry, so two callers can legitimately disagree about whether the same context is
+stale. **Staleness is legible, never blocking** — a stale read is still a read,
+and this field never refuses one.
+
 ### The `lens` parameter
 
-`context_read` (views: shape, metrics) takes an optional `lens` ref. A lens
-is a perspective that produces its own regioning of the same context; omit `lens`
-to read across all lenses. Leave it off unless you have a specific lens ref in
-hand.
+All three of these reads take a `context` ref. Of the three, `shape` and `metrics`
+also take an optional `lens` ref — `analytics` does not, because it reports on the
+anchor rather than on any regioning of it. A lens is a perspective that produces
+its own regioning of the same context; omit `lens` to read across all lenses.
+Leave it off unless you have a specific lens ref in hand.
 
 > **Cognitive-map peers**: these reads are the context-addressed peers of
 > the cognitive-map orientation reads (`cogmap_read` with views: shape,
-> metrics). The region reads beneath them are the same — only the anchor
-> differs (a context ref instead of a cogmap ref). If you are orienting on
-> a cognitive map rather than a context, use `cogmap_read` instead.
+> metrics, analytics). The region reads beneath them are the same — only the
+> anchor differs (a context ref instead of a cogmap ref); `analytics` is the
+> one that answers in a narrower shape, for the reason given above. If you are
+> orienting on a cognitive map rather than a context, use `cogmap_read` instead.
 
 ## Reading Content
 

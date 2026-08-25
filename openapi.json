@@ -1735,6 +1735,74 @@
         "x-apidog-folder": "Reference/API Reference/Contexts"
       }
     },
+    "/api/contexts/{id}/analytics": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Contexts"
+        ],
+        "summary": "Read a context's analytics",
+        "description": "The last asymmetric row of the anchor read surface: `shape`, `region-metrics`,\n`materialize-delta` and `materialize` were already symmetric across the two anchor kinds and\n`analytics` was cogmap-only.\n\n**Three fields, not the five of `/api/cognitive-maps/{id}/analytics`.** A context has no charter\nresource and no regulation set, so `telos_resource_id` and `regulation` would be null peer fields\nreporting \"nothing found\" about two things that cannot exist. The shape difference is the answer,\nnot a gap in it.\n\nDeny is 404 here, matching the cogmap peer and `materialize-delta` next door — NOT the 200-with-\n`emptiness` posture of `/shape`. Absent and unreadable are collapsed (the SQL yields zero rows for\nboth), so it is still no existence oracle.",
+        "operationId": "context_analytics",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Context ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Context-level staleness: when the shape was last materialized, the latest readable touch, and whether the read is stale",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CogmapStaleness"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Context not found, or not readable by the caller (uniform — no existence oracle)"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Contexts"
+      }
+    },
     "/api/contexts/{id}/materialize": {
       "parameters": [
         {
@@ -9817,7 +9885,7 @@
       },
       "CogmapStaleness": {
         "type": "object",
-        "description": "Map-level staleness readout (`cogmap_staleness`): when the shape was last materialized, the latest\ntouch to the map's regions/edges, and whether the read is stale. Staleness is LEGIBLE — reported,\nnever blocking. `materialized_at` is `None` when the map has never been materialized.",
+        "description": "Anchor-level staleness readout: when the shape was last materialized, the latest touch to the\nanchor's regions/edges **that the reading principal may see**, and whether the read is stale.\nStaleness is LEGIBLE — reported, never blocking. `materialized_at` is `None` when the anchor has\nnever been materialized.\n\nCarried by BOTH anchor kinds: nested inside [`CogmapAnalyticsRow`] for a cognitive map\n(`cogmap_staleness`) and returned bare by `GET /api/contexts/{id}/analytics` for a context\n(`context_analytics`), which has nothing to put in that row's other two fields. Both are thin\nwrappers over the one gated core, `anchor_staleness`, so the three values mean the same thing on\neither anchor. The `Cogmap` in the name is historical — the same \"shared on purpose, the\n`cogmap_*` naming is what M3 retires, not the shape\" convention `CogmapRegionMetricsRow` already\nrides on for the context region-metrics route.\n\nThe touch is **gated** as of migration `20260825000020`: a region holding no member this\nprincipal can read does not move this clock, and neither does an edge with an unreadable\nendpoint. Folded regions and edges are still counted deliberately — a fold advances\n`last_event_id` and IS a touch, so narrowing either arm to live rows would make a stale anchor\nread fresh.",
         "required": [
           "is_stale"
         ],

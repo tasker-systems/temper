@@ -236,20 +236,43 @@ export interface AnalysisViewData {
 	 */
 	emptiness: Promise<ShapeEmptiness | null>;
 	/**
-	 * The map-level picture — streamed, from the same read as the two above.
+	 * The anchor-level picture — streamed, from the same read as the two above.
 	 *
-	 * The inner `null` keeps both meanings it has always carried, and the page tells them apart by
-	 * `place.kind`: a **context**, which genuinely has neither a charter nor a regulation set, and a
-	 * **map whose analytics read was declined** by `readAnchorAnalysis`'s own `.catch(() => null)`.
+	 * **`[2026-08-25]` The inner `null` now means one thing.** It used to carry two, told apart by
+	 * `place.kind`: a context, which was never asked, and a map whose analytics read was declined.
+	 * A context IS asked now, at `/api/contexts/{id}/analytics`, so a `null` here is a read that did
+	 * not answer for either kind. What a context does not have — a charter, a regulation set — is
+	 * carried in the shape of {@link AnchorReadout}'s context arm rather than in this null.
 	 *
 	 * `[2026-08-21]` Streaming adds the third state that was missing. *The read failed* used to be
 	 * indistinguishable from the second — the whole load rejected, or would have had to degrade —
 	 * and it is now a **rejection**, rendered as a named failure. That is exactly the conflation
 	 * spec §5.1 catalogued: a failed read must never be spelled as an absence.
 	 */
-	map: Promise<{
-		telos: { id: string; title: string | null };
-		staleness: CogmapStaleness;
-		regulation: CogmapRegulationRow[];
-	} | null>;
+	map: Promise<AnchorReadout | null>;
 }
+
+/**
+ * The anchor-level readout, in the **two shapes the two anchor kinds actually have**.
+ *
+ * A cognitive map publishes a charter, a clock and a regulation set. A context publishes the clock
+ * and nothing else — it has no charter resource and no regulation set, so those are not fields it
+ * declines to fill but fields it cannot have. Carrying one shape with both of them optional would
+ * let the page spell *nothing found* about two things that cannot exist, which is precisely what
+ * `CONTEXT_HAS_NO_MAP_READOUT` was written to refuse.
+ *
+ * `staleness` sits on **both** members on purpose: it is the half the two kinds genuinely share, so
+ * the page reads it without narrowing and the two anchor kinds cannot drift into describing one
+ * clock in two voices. Everything they do not share is behind `kind`, and unreachable without it.
+ *
+ * **The field is still called `map`** because the section it feeds is still the map-level one; what
+ * changed is that a context now has something to put in it.
+ */
+export type AnchorReadout =
+	| {
+			kind: 'cogmap';
+			telos: { id: string; title: string | null };
+			staleness: CogmapStaleness;
+			regulation: CogmapRegulationRow[];
+	  }
+	| { kind: 'context'; staleness: CogmapStaleness };
