@@ -219,7 +219,8 @@ pub async fn rename(
 // ─────────────────────────────────────────────────────────────────────────────
 // Context orientation reads (spec §3.7, T8) — the region-level view of a context.
 //
-// The peer of `/api/cognitive-maps/{id}/{shape,region-metrics,materialize,materialize-delta}`, and
+// The peer of the cognitive-map orientation reads —
+// `/api/cognitive-maps/{id}/{shape,region-metrics,materialize,materialize-delta,analytics}` — and
 // deliberately the SAME wire types: a region row carries nothing cogmap-specific, so
 // `CogmapRegionRow` describes a context's region exactly as well (the `cogmap_*` naming goes away at
 // M3, not the shape).

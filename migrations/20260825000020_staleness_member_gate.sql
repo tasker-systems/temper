@@ -62,8 +62,19 @@
 -- The distinction that makes fold-inclusive-and-member-gated coherent rather than merely
 -- inconsistent, from internal/agents/key-patterns.md: `resources_visible_to` and
 -- `kb_resources.is_active` are AUTHORIZATION predicates (who may read); `is_folded` / `is_current`
--- are CURRENCY predicates (what is in force). Only the first class is a disclosure question. This
--- migration adds authorization and touches currency nowhere.
+-- are CURRENCY predicates (what is in force). Only the first class is a disclosure question.
+--
+-- **BUT THE CLASSIFICATION IS NOT A PARTITION, AND READING IT AS ONE IS A DEFECT THIS MIGRATION
+-- ALMOST SHIPPED.** `is_active` is in BOTH classes. It is an authorization predicate at every
+-- enumeration door -- a deleted resource must not be named -- and it is simultaneously a currency
+-- fact, because `resource_deleted` is a STRUCTURAL event (replay.rs:737-744) that removes the
+-- resource from the node set and therefore genuinely changes the shape. An earlier draft of this
+-- header claimed "this migration adds authorization and touches currency nowhere". That was FALSE,
+-- and an adversarial review caught it: composing `endpoint_readable_by_profile` silently imported
+-- the soft-delete floor and, through it, suppressed a real formation touch. The fix and the full
+-- argument are at the edges arm below. The lesson generalises past this one column: the classes
+-- describe how a predicate is USED, not which predicates belong to which set, so "X is an
+-- authorization predicate" never by itself licenses composing X into a currency question.
 --
 -- Note the asymmetry with `anchor_shape` and `anchor_region_metrics`, which DO carry
 -- `NOT reg.is_folded` (`20260823000010:86`, `20260713000050:258`). That is not an inconsistency to
@@ -229,17 +240,81 @@ LANGUAGE sql STABLE AS $$
                -- element_trail_edge composes for the same purpose (20260719000010:167-168). So:
                -- both endpoints, independently, and the home half is already handled by `gate`.
                --
-               -- THIS ARM CANNOT BE TOO TIGHT, AND THAT IS A CONSTRAINT ARGUMENT, NOT A ROW COUNT.
-               -- `endpoint_readable_by_profile` falls closed on an unrecognised table via its
-               -- `ELSE false` (20260624000002:297). That branch is UNREACHABLE for a kb_edges
-               -- endpoint: `kb_edges_source_table_check` and `kb_edges_target_table_check` constrain
-               -- both columns to exactly ARRAY['kb_resources','kb_cogmaps'], which is precisely the
-               -- domain the CASE dispatches on. So no edge can be dropped from the clock for a
-               -- reason unrelated to visibility. Being drawn from a CHECK constraint rather than
-               -- from present data, that holds for rows that do not exist yet.
+               -- THIS ARM CANNOT BE TOO TIGHT ON AN UNKNOWN TABLE, AND THAT IS A CONSTRAINT
+               -- ARGUMENT, NOT A ROW COUNT. `endpoint_readable_by_profile` falls closed on an
+               -- unrecognised table via its `ELSE false` (20260624000002:297). That branch is
+               -- UNREACHABLE for a kb_edges endpoint: `kb_edges_source_table_check` and
+               -- `kb_edges_target_table_check` constrain both columns to exactly
+               -- ARRAY['kb_resources','kb_cogmaps'], which is precisely the domain the CASE
+               -- dispatches on. Being drawn from a CHECK constraint rather than from present data,
+               -- that holds for rows that do not exist yet.
+               --
+               -- ── THE `is_active` DISJUNCT, AND WHY IT IS NOT OPTIONAL ────────────────────────
+               --
+               -- `endpoint_readable_by_profile` is NOT purely an authorization predicate, and
+               -- taking it for one is a real defect that an adversarial review caught here before
+               -- this shipped. Its kb_resources branch resolves to
+               -- `IN (SELECT resource_id FROM resources_visible_to(p_profile))`, and that function
+               -- ENDS in the soft-delete read floor -- `JOIN kb_resources r ON ... AND r.is_active`
+               -- (20260807000010:223-225), commented in the schema as "a deleted resource is
+               -- invisible on every axis".
+               --
+               -- So `is_active` wears both hats, and for THIS function the currency hat is the one
+               -- that matters. A `resource_deleted` is a STRUCTURAL event
+               -- (crates/temper-substrate/src/replay.rs:737-744) -- the resource leaves the node set
+               -- (substrate.rs:93-99, `AND r.is_active`), so the partition genuinely changes and the
+               -- anchor genuinely IS stale. `_project_resource_deleted` flips `is_active` and
+               -- NOTHING ELSE: it folds no edge and advances no `last_event_id`, so the edge stays
+               -- live and unfolded, still carrying its real post-watermark stamp.
+               --
+               -- Gate on readability ALONE and the sequence below tells the OWNER a lie:
+               --   t0 materialize        -> fresh
+               --   t1 assert edge X->Y   -> stale   (correct, both versions)
+               --   t2 delete Y           -> stale under the incumbent, FRESH under a readable-only
+               --                            gate -- and the anchor is MORE out of date at t2, not
+               --                            less. Nothing is denied to the owner; they simply
+               --                            cannot see Y because Y is DEAD.
+               -- That is the same silent failure §2 refuses for `is_folded`, arriving through
+               -- `is_active` instead, and the gate can only ever REMOVE touches, so every
+               -- differential it produces is an under-report.
+               --
+               -- The fix is the second disjunct: an endpoint homed in THIS anchor still moves this
+               -- anchor's clock, alive or dead. It is disclosure-safe rather than merely convenient,
+               -- and the argument is exact: the outer WHERE has already established that this
+               -- principal may read this anchor, and anchor-readability IMPLIES visibility of every
+               -- ACTIVE resource homed in it -- `resources_visible_to`'s context arm calls
+               -- `contexts_readable_by` with the same argument `context_readable_by_profile` does,
+               -- and its cogmap arms are `cogmap_readable_by_profile`'s two disjuncts verbatim. So
+               -- for an admitted caller this disjunct adds back EXACTLY the dead-but-homed
+               -- endpoints and nothing else. It is redundant for live ones, deliberately: stating
+               -- the rule as "readable, or part of the formation you are already reading" is what
+               -- makes it self-documenting.
+               --
+               -- A cross-anchor endpoint -- one NOT homed here -- still requires readability. That
+               -- is the disclosure this arm exists to close, and it is untouched. Such an edge is
+               -- also formation-irrelevant, so gating it out removes a pre-existing over-report --
+               -- but the citation for that takes TWO hops, and an earlier draft of this comment
+               -- collapsed them into one wrong pointer. `substrate.rs:107-112` loads edges by HOME
+               -- ANCHOR alone and applies no endpoint filter; the both-endpoints-must-be-members
+               -- test is downstream in `affinity.rs:229`
+               -- (`if members.contains(&e.src) && members.contains(&e.tgt)`), where `members`
+               -- derives from the `nodes` set built at `substrate.rs:93-99`.
+               --
+               -- `kb_resource_homes` is the right table to ask: the delete projection does not
+               -- touch it, so the home row survives the soft-delete. `kb_cogmaps` endpoints have no
+               -- home row and are unaffected -- they keep the readability test alone, which is
+               -- correct, since a cogmap endpoint is never part of a resource formation.
                AND (p_principal_kind = 'cogmap' OR (
-                     endpoint_readable_by_profile(p_principal_id, e.source_table, e.source_id)
-                 AND endpoint_readable_by_profile(p_principal_id, e.target_table, e.target_id)
+                     (endpoint_readable_by_profile(p_principal_id, e.source_table, e.source_id)
+                      OR EXISTS (SELECT 1 FROM kb_resource_homes h
+                                  WHERE h.resource_id  = e.source_id
+                                    AND h.anchor_table = p_anchor_table
+                                    AND h.anchor_id    = p_anchor_id))
+                 AND (endpoint_readable_by_profile(p_principal_id, e.target_table, e.target_id)
+                      OR EXISTS (SELECT 1 FROM kb_resource_homes h
+                                  WHERE h.resource_id  = e.target_id
+                                    AND h.anchor_table = p_anchor_table
+                                    AND h.anchor_id    = p_anchor_id))
                ))
         ) t
     )
@@ -255,7 +330,7 @@ LANGUAGE sql STABLE AS $$
 $$;
 
 COMMENT ON FUNCTION anchor_staleness(text, uuid, text, uuid) IS
-'ON-READ staleness for EITHER anchor kind (kb_contexts or kb_cogmaps): compares the anchor''s stored shape_materialized_event_id watermark against the latest event touching the regions and edges homed on it that THIS PRINCIPAL MAY READ. Keyed on the anchor pair (home_anchor_table, home_anchor_id) -- the same key anchor_shape uses -- NOT on the vestigial kb_cogmap_regions.cogmap_id, which is NULL for every context region. GATED, in two parts, matching its two sibling doors exactly: the anchor disjunction carried verbatim from anchor_shape (20260823000010:59-66, EXISTS conjunct included -- carried so one rule reads identically in both places, NOT because it is load-bearing here: this function ends in a cross join against an empty mat CTE, so an invented uuid yields zero rows however the gate answers), and the member/endpoint rule -- a region with no visible member does not move this clock, an edge with an unreadable endpoint does not move this clock. Supersedes the "ungated by design, the gate lives in the composers" claim of 20260823000020: the composer gate is on the ANCHOR and cannot reach the clock''s inputs. Folded regions and edges remain deliberately INCLUDED: a fold advances last_event_id and is a touch, and narrowing either arm to live rows would make a stale anchor read fresh (20260708000008). Yields exactly one row for an anchor that exists and is readable; ZERO rows on deny or absence, which are indistinguishable to the caller by design. Staleness is LEGIBLE -- reported, never blocking.';
+'ON-READ staleness for EITHER anchor kind (kb_contexts or kb_cogmaps): compares the anchor''s stored shape_materialized_event_id watermark against the latest event touching the regions and edges homed on it that THIS PRINCIPAL MAY READ. Keyed on the anchor pair (home_anchor_table, home_anchor_id) -- the same key anchor_shape uses -- NOT on the vestigial kb_cogmap_regions.cogmap_id, which is NULL for every context region. GATED, in two parts, matching its two sibling doors exactly: the anchor disjunction carried verbatim from anchor_shape (20260823000010:59-66, EXISTS conjunct included -- carried so one rule reads identically in both places, NOT because it is load-bearing here: this function ends in a cross join against an empty mat CTE, so an invented uuid yields zero rows however the gate answers), and the member/endpoint rule -- a region with no visible member does not move this clock, and neither does an edge with an endpoint this principal can neither read NOR reach as part of this anchor''s own formation. That second disjunct is load-bearing, not belt-and-braces: endpoint_readable_by_profile inherits resources_visible_to''s soft-delete floor, and a resource_deleted is a STRUCTURAL event, so gating on readability alone would let deleting an endpoint make a genuinely staler anchor read FRESH to its own owner -- the is_folded failure of section 2 arriving through is_active. An endpoint homed in an anchor you may already read moves that anchor''s clock whether it is alive or dead; a cross-anchor endpoint still requires readability, which is the disclosure this arm closes. Supersedes the "ungated by design, the gate lives in the composers" claim of 20260823000020: the composer gate is on the ANCHOR and cannot reach the clock''s inputs. Folded regions and edges remain deliberately INCLUDED: a fold advances last_event_id and is a touch, and narrowing either arm to live rows would make a stale anchor read fresh (20260708000008). Yields exactly one row for an anchor that exists and is readable; ZERO rows on deny or absence, which are indistinguishable to the caller by design. Staleness is LEGIBLE -- reported, never blocking.';
 
 -- ── The two wrappers ─────────────────────────────────────────────────────────────────────────────
 --
@@ -342,5 +417,5 @@ COMMENT ON FUNCTION context_analytics(uuid, text, uuid) IS
 SELECT declare_migration(
     20260825000020,
     'shape-breaking',
-    'The staleness clock gains a principal and the gate its two sibling doors already carry, and context gains an analytics read (task 01a03636-8077-7ee2-a070-f6766658a41e). THE GATE: anchor_staleness previously took max(occurred_at) over every region and every edge homed on the anchor with no readability predicate on either arm (20260823000020:68-80), while both enumeration doors onto that same anchor refuse to name a region with no visible member (anchor_shape 20260823000010:87-88; anchor_region_metrics 20260713000050:262-268), so the clock reported movement in regions the shape read would not admit exist. It is now gated in TWO parts: the anchor disjunction carried verbatim from anchor_shape (20260823000010:59-66) including the EXISTS conjunct, plus the member rule on the regions arm and endpoint_readable_by_profile on BOTH endpoints of the edges arm. The edges arm deliberately composes endpoint_readable_by_profile (20260624000002:292) rather than calling edges_visible_to (20260712000010:295-309), because that read-set mixes an authorization predicate with a currency one and calling it would silently import a fold narrowing this function must not have. Deny is zero rows, never an error, which is what cogmap_analytics already produced on deny, so that composer does not move. The ANCHOR half of the gate is what makes deny and absence indistinguishable, and stated precisely it closes a narrower hole than the design spec first claimed: before it, a caller who could not read a REAL anchor still received a row carrying that anchor watermark and an is_stale reporting whether it had ever been materialized. It was never an oracle over invented uuids -- mat selects on id = p_anchor_id, so a uuid naming no anchor already yielded zero rows through the cross join, measured against the incumbent on a live database. The spec said "for any uuid they invent"; that was wrong and is corrected here rather than carried forward. THE FOLD ARMS ARE PRESERVED ON PURPOSE, in both the regions arm and the edges arm: a fold advances last_event_id and IS a touch (20260708000008:10-15), so narrowing either to live rows would make a stale anchor read FRESH -- silently, since nothing would error and every value would still be a plausible timestamp. Authorization was added; currency was not touched. CLASSED SHAPE-BREAKING because both prior signatures were explicitly DROPPED rather than replaced, and that matters more than the return shape: adding a parameter in Postgres creates an OVERLOAD, so a CREATE OR REPLACE at the longer argument list would have left anchor_staleness(text, uuid) and cogmap_staleness(uuid) standing and UNGATED under the same names with the same column names and the same boolean type -- no type error, no failing test, every existing caller silently resolving to the ungated function. This schema already carries live proof that overloads accumulate here: __temper_ungated_follow_from exists under three signatures at once. There is deliberately NO ungated variant and the gate is NOT expressed as nullable parameters where NULL falls open; ungated, if it ever returns, must be a name nobody can type by accident. Consequently the compile-time-checked caller at crates/temper-substrate/src/scenario/runner.rs:486 must move in the same change. ALSO ADDED: context_analytics(uuid, text, uuid), returning three columns and not the five of its cogmap peer, because a context has no charter resource and no regulation set and a null peer field would report "nothing found" about something that cannot exist. NO DIFFERENTIAL WAS MEASURED. Unlike 20260713000050, which counted 0 of 546 regions diverging before shipping, nothing here was measured against production or any other data set. This is a structural fix about what the read is WILLING to say, not a response to an observed leak; latest_touch is a max() and discloses at most one bit per distinct timestamp, never a row identity. Anything read as a claim about live exposure would be a claim this migration does not make. THIS MIGRATION CORRECTS 20260823000020:50-52 and its COMMENT at :87, which said "no gate here ... the gate lives in the composers" -- true of a function that took no principal, false of this one; the composer gate is on the ANCHOR (20260628000001:38-39, which that header miscites as :77-78 in a 40-line file) and cannot reach the clock inputs. The other half of that sentence stands untouched: staleness is still reported and never blocking. Design: internal/superpowers/specs/2026-08-25-staleness-member-gate-and-context-analytics-design.md.'
+    'The staleness clock gains a principal and the gate its two sibling doors already carry, and context gains an analytics read (task 01a03636-8077-7ee2-a070-f6766658a41e). THE GATE: anchor_staleness previously took max(occurred_at) over every region and every edge homed on the anchor with no readability predicate on either arm (20260823000020:68-80), while both enumeration doors onto that same anchor refuse to name a region with no visible member (anchor_shape 20260823000010:87-88; anchor_region_metrics 20260713000050:262-268), so the clock reported movement in regions the shape read would not admit exist. It is now gated in TWO parts: the anchor disjunction carried verbatim from anchor_shape (20260823000010:59-66) including the EXISTS conjunct, plus the member rule on the regions arm and endpoint_readable_by_profile on BOTH endpoints of the edges arm. The edges arm deliberately composes endpoint_readable_by_profile (20260624000002:292) rather than calling edges_visible_to (20260712000010:295-309), because that read-set mixes an authorization predicate with a currency one and calling it would silently import a fold narrowing this function must not have. Deny is zero rows, never an error, which is what cogmap_analytics already produced on deny, so that composer does not move. The ANCHOR half of the gate is what makes deny and absence indistinguishable, and stated precisely it closes a narrower hole than the design spec first claimed: before it, a caller who could not read a REAL anchor still received a row carrying that anchor watermark and an is_stale reporting whether it had ever been materialized. It was never an oracle over invented uuids -- mat selects on id = p_anchor_id, so a uuid naming no anchor already yielded zero rows through the cross join, measured against the incumbent on a live database. The spec said "for any uuid they invent"; that was wrong and is corrected here rather than carried forward. THE FOLD ARMS ARE PRESERVED ON PURPOSE, in both the regions arm and the edges arm: a fold advances last_event_id and IS a touch (20260708000008:10-15), so narrowing either to live rows would make a stale anchor read FRESH -- silently, since nothing would error and every value would still be a plausible timestamp. Authorization was added; currency was not touched. CLASSED SHAPE-BREAKING because both prior signatures were explicitly DROPPED rather than replaced, and that matters more than the return shape: adding a parameter in Postgres creates an OVERLOAD, so a CREATE OR REPLACE at the longer argument list would have left anchor_staleness(text, uuid) and cogmap_staleness(uuid) standing and UNGATED under the same names with the same column names and the same boolean type -- no type error, no failing test, every existing caller silently resolving to the ungated function. This schema already carries live proof that overloads accumulate here: __temper_ungated_follow_from exists under three signatures at once. There is deliberately NO ungated variant and the gate is NOT expressed as nullable parameters where NULL falls open; ungated, if it ever returns, must be a name nobody can type by accident. Consequently the compile-time-checked caller at crates/temper-substrate/src/scenario/runner.rs:486 must move in the same change. The class is correct BY RULE rather than by consequence, and the difference is worth recording: DEPLOYING.md defines dropping anything as shape-breaking, and two DROP FUNCTIONs satisfy that outright -- but the measured blast radius on a request path is ZERO. The only caller of either dropped signature is that scenario runner, which is reached solely from crates/temper-substrate/tests/, and cogmap_analytics keeps its signature and all five columns, so an old binary meeting this schema decodes it unchanged and simply gets a correctly gated answer ahead of its own deploy. A future reader should not infer that production callers were at risk. ALSO ADDED: context_analytics(uuid, text, uuid), returning three columns and not the five of its cogmap peer, because a context has no charter resource and no regulation set and a null peer field would report "nothing found" about something that cannot exist. NO POPULATION DIFFERENTIAL WAS MEASURED. Unlike 20260713000050, which counted 0 of 546 regions diverging before shipping, no corpus was compared here: nothing counted how many live anchors change their answer. Stated precisely, because an earlier draft of this very reason said "nothing here was measured against production or any other data set" while ALSO citing a probe run against a live dev database two sentences earlier -- a contradiction a reader grepping for "measured" would have hit. Single-case probes against a dev database WERE run, and the bite witnesses run against ephemeral ones; what was never taken is a population count. This is a structural fix about what the read is WILLING to say, not a response to an observed leak; latest_touch is a max() and discloses at most one bit per distinct timestamp, never a row identity. Anything read as a claim about live exposure would be a claim this migration does not make. THIS MIGRATION CORRECTS 20260823000020:50-52 and its COMMENT at :87, which said "no gate here ... the gate lives in the composers" -- true of a function that took no principal, false of this one; the composer gate is on the ANCHOR (20260628000001:38-39, which that header miscites as :77-78 in a 40-line file) and cannot reach the clock inputs. The other half of that sentence stands untouched: staleness is still reported and never blocking. Design: internal/superpowers/specs/2026-08-25-staleness-member-gate-and-context-analytics-design.md.'
 );

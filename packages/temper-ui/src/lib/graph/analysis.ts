@@ -319,7 +319,8 @@ export function describeStaleness(s: CogmapStaleness): string {
 	if (s.materialized_at === null) return 'This shape has never been worked out.';
 
 	const when = relativeTime(s.materialized_at);
-	if (!s.is_stale) return `This shape was worked out ${when}, and nothing has changed since.`;
+	if (!s.is_stale)
+		return `This shape was worked out ${when}, and nothing you can see has changed since.`;
 
 	const touched = s.latest_touch ? relativeTime(s.latest_touch) : 'since';
 	return `This shape was worked out ${when}. Your work here has changed since then — ${touched} — so it is being read as it stood, not as it is now.`;

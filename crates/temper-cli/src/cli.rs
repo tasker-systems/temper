@@ -2910,6 +2910,7 @@ mod skill_content_verb_tests {
             &["invocation", "close"],
             &["invocation", "show"],
             &["search"],
+            &["context", "analytics"],
             &["context", "share"],
             &["skill", "generate"],
             &["skill", "install"],

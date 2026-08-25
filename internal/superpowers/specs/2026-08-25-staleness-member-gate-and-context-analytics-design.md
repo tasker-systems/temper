@@ -104,6 +104,46 @@ incumbent read-set `edges_visible_to` mixes both classes in one predicate (`NOT 
 *authorization* half — which the schema already exposes under a name, `endpoint_readable_by_profile`
 (`20260624000002:292`) — and leave its currency half behind. Say so at the field.
 
+> ### AMENDED 2026-08-25 by adversarial review: the classification is **not a partition**
+>
+> The paragraph above is right that `edges_visible_to` must not be called wholesale. It is wrong to
+> imply that `endpoint_readable_by_profile` is therefore *purely* authorization and safe to compose
+> into a currency question. **`is_active` is in both classes**, and taking the classification as a
+> partition let a silent under-report through review and into a first draft of the migration.
+>
+> `endpoint_readable_by_profile`'s `kb_resources` branch resolves through `resources_visible_to`,
+> which **ends** in the soft-delete floor — `JOIN kb_resources r ON … AND r.is_active`
+> (`20260807000010:223-225`), commented *"a deleted resource is invisible on every axis."* But
+> `resource_deleted` is a **STRUCTURAL** event (`replay.rs:737-744`): the resource leaves the node
+> set (`substrate.rs:93-99`), so the shape genuinely changes. And `_project_resource_deleted` flips
+> `is_active` and nothing else — it folds no edge and advances no `last_event_id`.
+>
+> So gating the edges arm on readability alone produced this, for the **owner**:
+>
+> | t | event | incumbent | readable-only gate |
+> |---|---|---|---|
+> | t0 | materialize | fresh | fresh |
+> | t1 | assert edge `X→Y` | **stale** ✓ | **stale** ✓ |
+> | t2 | delete `Y` | **stale** ✓ | **FRESH** ✗ |
+>
+> At t2 the anchor is *more* out of date, not less, and nothing was denied to the owner — they
+> cannot see `Y` because `Y` is dead. That is §2's own `is_folded` failure arriving through
+> `is_active`. The gate can only ever remove touches, so **every** differential it produces is an
+> under-report.
+>
+> **The fix**: an endpoint **homed in this anchor** moves this anchor's clock, alive or dead. It is
+> disclosure-safe by an exact argument — the outer `WHERE` has already established the caller may
+> read the anchor, and anchor-readability *implies* visibility of every **active** homed resource
+> (`resources_visible_to`'s context arm calls `contexts_readable_by` with the same argument
+> `context_readable_by_profile` does; its cogmap arms are `cogmap_readable_by_profile`'s two
+> disjuncts verbatim). So the disjunct adds back exactly the dead-but-homed endpoints and nothing
+> else. A **cross-anchor** endpoint still requires readability — that is the disclosure this arm
+> closes, and it is untouched.
+>
+> **The generalisable lesson, which outlives this column:** the two classes describe how a predicate
+> is *used*, not which predicates belong to which set. "X is an authorization predicate" never by
+> itself licenses composing X into a currency question.
+
 ---
 
 ## 3. A third fork, ruled during grounding: the gate is the FULL gate
