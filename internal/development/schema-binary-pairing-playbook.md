@@ -278,6 +278,45 @@ mistake in a shipped migration is superseded by a new migration, never amended i
 **The environment's database was branched from one carrying a version this build lacks.** A preview
 Neon branch taken from production after production moved ahead of this PR's base.
 
+**Uncommitted — or unpushed — bytes ran.** The cutover is operator-run from a local checkout
+([`DEPLOYING.md` § *Cutover command*](../../DEPLOYING.md#cutover-command--what-to-actually-run)), and
+the migrator applies the files as they sit on disk. It has no notion of a commit. So the checksum
+sqlx writes is of whatever was in the working tree at that moment, whether or not that ever reached
+a branch anyone else can see.
+
+*The reading rule:* if production's checksum for a version matches **no commit**, then the file that
+ran exists in no pushed commit — and the database, not the file, is the authority. A migration
+already applied may never be amended, so the direction of repair is to correct the **file** until it
+reproduces the checksum the database holds. `[observed — 2026-08-24, 12e6df95]` that is what commit
+took: *"where file and database disagree, the database is the authority and the file is corrected to
+match. Restoring it is not an amendment of history — it is ending a disagreement about it."* The
+divergence there was one migration amended in a commit that was never pushed; the tree was clean the
+whole time, which is why a clean-tree check would not have caught it.
+
+*The diagnostic.* Print the SHA-384 of every version of the file git has ever held, with the commit
+that held it, plus the worktree's:
+
+```bash
+f=migrations/20260823000010_anchor_shape_envelope.sql; \
+  for c in $(git log --all --format=%h -- "$f"); do \
+    echo "$c $(git show "$c:$f" | shasum -a 384 | cut -d' ' -f1)"; done; \
+  echo "worktree $(shasum -a 384 "$f" | cut -d' ' -f1)"
+```
+
+sqlx hashes the file untrimmed, so a plain SHA-384 of the bytes reproduces
+`_sqlx_migrations.checksum` exactly. **Caveat, and it is itself diagnostic:** `git log --all`
+only sees refs *this clone holds*. An unpushed commit is visible on the operator's machine and
+invisible on a fresh clone — so a hash that resolves for the operator and resolves for nobody else
+is the signature of this cause, and running the loop in a fresh clone is how you confirm it.
+
+*Where the prod-side number actually lives:* `_sqlx_migrations.checksum`, a `bytea` in sqlx's own
+bookkeeping table — `SELECT version, encode(checksum, 'hex') FROM _sqlx_migrations ORDER BY version;`.
+Worth stating because this section opens by sending you *away* from `kb_migration_ledger`, and a
+reader who takes that as "the ledger is the wrong table" may not know which table is the right one.
+`kb_migration_ledger` has no checksum column at all
+(`migrations/20260731000010_migration_ledger.sql:82-96`); it records class, state and reason, and it
+never carried the number this failure is about.
+
 > **On production, stop.** A mismatch there means a migration that production already ran has
 > changed underneath it. That is not a renumbering problem; work out which migration changed and
 > why before applying anything.

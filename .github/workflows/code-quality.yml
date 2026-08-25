@@ -439,6 +439,16 @@ jobs:
       - name: Guard test — vercel-build (connection choice, skip, and the halt)
         run: bash .github/scripts/test-vercel-build.sh
 
+      # The operator-run half of the same seam. vercel-build applies the additive class
+      # automatically; a shape-breaking cutover is run by hand from a local checkout, and the
+      # migrator applies the FILES ON DISK — sqlx then records their SHA-384 permanently.
+      # `[observed — 2026-08-24, 12e6df95]` a cutover ran from a commit that was never pushed
+      # and production's ledger ended up holding a checksum reachable from no commit. The
+      # guard has two conjuncts and only the second one bites there, so the harness asserts
+      # the runner is NOT invoked in each refusal case rather than trusting the exit code.
+      - name: Guard test — migrate-cutover (clean tree, pushed HEAD, exit pass-through)
+        run: bash .github/scripts/test-migrate-cutover.sh
+
       # The gate itself needs cargo, so it runs in rust-quality; this harness stubs the generator
       # and therefore stays pure bash, which is what lets it live in this job at all.
       - name: Guard test — check-ts-rs-drift

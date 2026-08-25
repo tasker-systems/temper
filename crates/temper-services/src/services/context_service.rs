@@ -1,13 +1,22 @@
 //! Context CRUD service over the substrate.
 //!
 //! Visibility is centralized in the `context_visible_to(principal, context)`
-//! SQL function (migration `20260627000001`): own personal context, OR a context
-//! owned by a team the principal is a member of, OR a context explicitly shared
-//! (`kb_team_contexts`) to one of the principal's teams. Every read/resolve site
+//! SQL function. It was born at `20260627000001`, but its live body is
+//! `20260712000010:147-151`, where it became a one-line delegate to
+//! `context_readable_by_profile` (`:135-140`) over `contexts_readable_by`, whose
+//! authoritative four arms now live at `20260807000010:103-129`: own personal context,
+//! OR a context owned by an enclosing team, OR a context shared (`kb_team_contexts`) to
+//! an enclosing team, OR an explicit `kb_access_grants` read-grant on the context
+//! (profile-anchored, or team-anchored on a reachable team). "Enclosing" is the ancestor
+//! CLOSURE, not direct membership: `profile_reachable_teams` (`20260804000010:117-127`)
+//! expands each membership UP the enclosure chain, so a context held by an ancestor team
+//! reads for everyone beneath it. Every read/resolve site
 //! below calls that one predicate so they cannot drift. `kb_owner_table`/`kb_owner_id`/
 //! `updated` are synthesized to the `ContextRow` shape from the substrate's
 //! `owner_table`/`owner_id`/`created` columns. Resource counts come from
-//! `kb_resource_homes`. Context creation is a plain INSERT (no event emission —
+//! `kb_resource_homes`, intersected with the caller's own `resources_visible_to` and the
+//! soft-delete floor — the anchor gate says who gets an answer, not what is in it.
+//! Context creation is a plain INSERT (no event emission —
 //! product decision 5: contexts are infrastructure).
 
 use sqlx::PgPool;
@@ -30,6 +39,42 @@ pub async fn list_visible(
     pool: &PgPool,
     profile_id: ProfileId,
 ) -> ApiResult<Vec<ContextRowWithCounts>> {
+    // ── Why `resource_count` carries two joins ─────────────────────────────────────
+    //
+    // A returned count is a disclosure about every row that can move it. The anchor gate
+    // below decides whether the caller gets an answer at all; the caller's own read
+    // predicate has to decide which homes are IN that answer. `kb_resource_homes` carries
+    // neither `is_active` nor a reader column (20260624000001:276-284), so a bare COUNT
+    // over it counts soft-deleted resources and resources the caller cannot read —
+    // `context_visible_to` gates the CONTEXT, and says nothing about its contents.
+    // These two joins are the pair `graph_home_contexts` already applies to this same
+    // field on this same anchor (20260712000010:327-331), so the two doors onto a context
+    // cannot disagree about which resources exist. But on this anchor the pair is today
+    // CO-EXTENSIVE, and neither join is the one that "does the work".
+    // `resources_visible_to` ENDS with its own soft-delete floor — `JOIN kb_resources r
+    // ON r.id = v.resource_id AND r.is_active` (20260807000010:223-225) — so it can
+    // never admit a dead resource; and in the other direction its context arm admits
+    // every home in a context `contexts_readable_by` admits (20260807000010:199-205),
+    // which is the same set the WHERE below gates the row on
+    // (20260712000010:147-151 → :135-140 → 20260807000010:143-153), so every LIVE home
+    // reachable here is already inside it. Drop either join and the number is unchanged,
+    // which is why context_resource_count_read_gate_test.rs pins the property and
+    // isolates NEITHER predicate. Both stay anyway: mutual backstops if either function
+    // narrows, and symmetry with the sibling — not two independent filters. What is
+    // genuinely beyond witness is a LIVE resource in a readable context that the caller
+    // cannot read, not constructible while those two functions agree; the reader
+    // predicate is written down regardless, so the count is correct BECAUSE of the
+    // caller rather than by a coincidence between two functions that may yet narrow.
+    // Deliberately no `::int`: that sibling casts because its `RETURNS TABLE` declares
+    // `integer`; here the column is `ContextRowWithCounts.resource_count: i64`, which
+    // `count(*)`'s bigint already is.
+    // A correlated scalar subquery rather than a join, so the statement stays one row per
+    // context with no GROUP BY to hold in step with the select list.
+    //
+    // Kept out of the SQL literal on purpose: sqlx keys the .sqlx cache on the whole query
+    // TEXT, comments included, so a prose correction inside the literal orphans the cache
+    // entry and forces a regenerate. Reasoning about the query as a whole belongs here,
+    // where correcting it is free; only what pins a single line stays in the SQL.
     let rows = sqlx::query_as!(
         ContextRowWithCounts,
         r#"
@@ -44,15 +89,18 @@ pub async fn list_visible(
                  ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)
                END AS "owner_ref!",
                -- Computed INSIDE the visibility-gated query (the WHERE below), so a context the
-               -- caller cannot read is absent rather than present-and-false. Grouping is safe:
-               -- `c.id` is in GROUP BY, so a function of it is functionally determined.
+               -- caller cannot read is absent rather than present-and-false.
                context_authorable_by_profile($1, c.id) AS "can_write!",
-               COUNT(rh.resource_id) AS "resource_count!"
+               -- Counted through the caller's own read predicate, not off the home rows —
+               -- the two joins are co-extensive on this anchor and neither is redundant by
+               -- accident. The reasoning, and what the witness does NOT isolate, is above.
+               (SELECT count(*)
+                  FROM kb_resource_homes rh
+                  JOIN resources_visible_to($1) v ON v.resource_id = rh.resource_id
+                  JOIN kb_resources r ON r.id = rh.resource_id AND r.is_active
+                 WHERE rh.anchor_table = 'kb_contexts' AND rh.anchor_id = c.id) AS "resource_count!"
           FROM kb_contexts c
-          LEFT JOIN kb_resource_homes rh
-                 ON rh.anchor_table = 'kb_contexts' AND rh.anchor_id = c.id
          WHERE context_visible_to($1, c.id)
-         GROUP BY c.id, c.name, c.owner_table, c.owner_id, c.created, c.slug
          ORDER BY c.name
         "#,
         *profile_id

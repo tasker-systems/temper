@@ -65,7 +65,13 @@ fn classify<T>(outcome: Result<T, sqlx::migrate::MigrateError>) -> Result<T> {
          * two branches claimed the same migration version, and the other one merged first;\n\
          * a shipped migration was edited or renumbered — sqlx checksums applied migrations, so\n\
            any change to one already applied is permanent and must be superseded, never amended;\n\
-         * this environment's database was branched from one carrying a version this build lacks.\n\
+         * this environment's database was branched from one carrying a version this build lacks;\n\
+         * a cutover applied bytes that were never committed, or committed and never pushed — the\n\
+           checksum recorded then matches no commit reachable from `main`, so no build can ever\n\
+           agree with it and the file has to be rewritten to match the database. Run cutovers\n\
+           through `scripts/migrate-cutover.sh`, which refuses that.\n\
+         \n\
+         Full diagnosis: internal/development/schema-binary-pairing-playbook.md § 4d.\n\
          \n\
          On a PREVIEW the cheap fix is usually to renumber this branch's migration above the one\n\
          that merged, and let the preview's database be re-created. On PRODUCTION, stop: a\n\

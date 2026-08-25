@@ -199,10 +199,10 @@ an applied migration.
 
 ```bash
 DATABASE_URL='<unpooled neondb_owner URI>' \
-  cargo run --release -p temper-migrate --bin temper-migrate
+  ./scripts/migrate-cutover.sh
 ```
 
-Two traps that both bit one session, on a preview:
+Three traps. The first two bit one session, on a preview; the third bit production:
 
 - **Connect as `neondb_owner`, unpooled.** `kb_migration_ledger` is owned by
   `neondb_owner` and grants to nothing else, so any other role fails with
@@ -216,6 +216,25 @@ Two traps that both bit one session, on a preview:
   the ordering is unforgiving: a reset **after** the manual apply discards it, and the next
   build halts again with no sign of what happened — the symptom is indistinguishable from
   the migration never having run. Always reset **before** the manual apply, never after.
+- **What runs is the files on disk, not a commit.** The migrator reads `migrations/` off
+  the working tree and sqlx records the SHA-384 of each file it applies into
+  `_sqlx_migrations.checksum`, permanently. So a local edit — **or a local commit you
+  never pushed** — becomes production's history, and every deploy afterwards halts at
+  exit 4 against a checksum matching no commit reachable from `main`. Resetting the Neon
+  branch does not clear it: previews branch from production and inherit the divergence.
+  `[observed — 2026-08-24, 12e6df95]` exactly this shipped — the tree was clean, the
+  commit was simply never pushed, and the file had to be rewritten to match what the
+  database had already run. `scripts/migrate-cutover.sh` refuses all three halves of that:
+  `DATABASE_URL` must be set (unset, the migrator falls back to the local dev database and
+  reports success), every `migrations/*.sql` on disk must be byte-identical to HEAD's blob,
+  **and** HEAD must be contained by some remote branch after a pruning fetch.
+
+  **What it does not check**, and the script says so to your face before applying: whether
+  anyone *reviewed* those bytes — reachability is not authenticity; what a prebuilt binary
+  embeds, if you overrode `MIGRATE_CMD`; and the database, which it never reads. The
+  hashes it prints are a claim about disk. Afterwards, run
+  `SELECT version, encode(checksum, 'hex') FROM _sqlx_migrations ORDER BY version;` and
+  compare — that is the only step that turns the claim into a fact about production.
 
 > **Three non-zero exits, three different next moves. Read the code before the message.**
 >
