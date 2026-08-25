@@ -32,14 +32,23 @@
  *
  * The stashed state is encrypted (not just signed) with AES-256-GCM, so the
  * redirect_uri and client state are not visible to the browser or any
- * intermediary. The encryption key is derived from `MCP_PROXY_SECRET` via
- * scrypt (memory-hard KDF).
+ * intermediary. The encryption key is derived by scrypt (memory-hard KDF) from
+ * `MCP_PROXY_SECRET` and nothing else, so the confidentiality of a stashed
+ * redirect_uri rests on a value only the operator holds. A deployment without
+ * that secret serves no request that needs the key — the loopback branch of
+ * `proxyAuthorize` and the relay. The non-loopback pass-through and `proxyToken`
+ * stash nothing, need no key, and stay served.
  *
- * This proxy only activates for Auth0-fronted instances (no `AS_ISSUER`). SAML
- * instances use the Temper AS (`endpoints.ts`) directly.
+ * This proxy serves instances fronted by an external IdP (Auth0, Okta); instances
+ * running the Temper AS use `endpoints.ts` directly. All three entry points read
+ * that mode through one name, `isTemperAsMode` in `env.js`, so they cannot drift
+ * from each other: `api/oauth/authorize.ts` and `api/oauth/token.ts` dispatch to
+ * the AS, and the relay below — which has no AS counterpart to dispatch to —
+ * reports itself absent.
  */
 
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "node:crypto";
+import { isTemperAsMode } from "./env.js";
 
 /** The relay URL that Auth0 redirects to after login. */
 const RELAY_PATH = "/api/auth/mcp-callback";
@@ -56,6 +65,18 @@ const IV_LEN = 12;
 /** scrypt salt — static, not secret. Its purpose is domain separation. */
 const SCRYPT_SALT = "temper-mcp-proxy-v1";
 
+/**
+ * Minimum accepted length of `MCP_PROXY_SECRET`, in characters.
+ *
+ * This is a truncation guard, not an entropy measure: it counts characters, and
+ * scrypt stretches whatever it is handed, so no threshold here can make a weak
+ * secret strong. What it catches is a value that was cut short in transit — a
+ * clipped paste, a shell-quoted fragment — which is the failure an operator hits
+ * and cannot see. Generating the value the way both playbooks say
+ * (`openssl rand -base64 48`, 64 characters) clears it with room to spare.
+ */
+const MIN_PROXY_SECRET_LEN = 32;
+
 function requireEnv(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`Missing required environment variable: ${name}`);
@@ -63,32 +84,36 @@ function requireEnv(name: string): string {
 }
 
 /**
- * Derives the AES-256 key from `MCP_PROXY_SECRET` via scrypt (memory-hard KDF).
- *
- * scrypt is intentionally computationally expensive, satisfying the password-hash
- * effort requirement that CodeQL checks for. The derived key is cached per process
- * so the KDF cost is paid once at cold start, not per request.
- *
- * Falls back to a deprecated non-secret derivation for instances that have not
- * yet set `MCP_PROXY_SECRET`. That fallback will be removed.
+ * The derived key, held for the life of the process so the KDF cost is paid once
+ * at cold start rather than per request. Only a success is cached: a deployment
+ * with no secret re-reads one environment variable per request and pays nothing.
  */
 let cachedKey: Buffer | undefined;
 
-function deriveKey(): Buffer {
+/**
+ * The AES-256 key for the proxy's state tokens, derived from `MCP_PROXY_SECRET`
+ * by scrypt — or `undefined` when that secret is absent or shorter than
+ * `MIN_PROXY_SECRET_LEN`, which are the only two configurations that yield
+ * `undefined`.
+ *
+ * scrypt is intentionally computationally expensive, satisfying the password-hash
+ * effort requirement that CodeQL checks for.
+ *
+ * The key has exactly one input and no substitute for it, which is why this
+ * returns an option rather than a key. Reporting the absence is the caller's
+ * job, because only the caller knows the right shape for it: a handler turns it
+ * into a 503 naming the variable, which is the one form of the answer an
+ * operator can act on. Throwing here would surface as an unattributed platform
+ * 500 from `proxyAuthorize`, and `handleMcpCallback` would report a
+ * configuration fault as a 400 blaming the client's state token.
+ */
+export function stateKey(): Buffer | undefined {
   if (cachedKey) return cachedKey;
 
   const secret = process.env.MCP_PROXY_SECRET;
-  if (secret && secret.length >= 32) {
-    cachedKey = scryptSync(secret, SCRYPT_SALT, KEY_LEN);
-    return cachedKey;
-  }
-  // Deprecated fallback — public values, not a real secret. Removed once all
-  // instances set MCP_PROXY_SECRET.
-  cachedKey = scryptSync(
-    [requireEnv("MCP_BASE_URL"), requireEnv("AUTH_AUDIENCE")].join("|"),
-    SCRYPT_SALT,
-    KEY_LEN,
-  );
+  if (!secret || secret.length < MIN_PROXY_SECRET_LEN) return undefined;
+
+  cachedKey = scryptSync(secret, SCRYPT_SALT, KEY_LEN);
   return cachedKey;
 }
 
@@ -116,7 +141,7 @@ function fromB64url(input: string): Buffer {
  *
  * Both confidentiality and integrity are provided by GCM — no separate HMAC needed.
  */
-export function encodeStashedState(redirectUri: string, oauthState: string): string {
+export function encodeStashedState(key: Buffer, redirectUri: string, oauthState: string): string {
   const payload: StashedState = {
     r: redirectUri,
     s: oauthState,
@@ -124,7 +149,7 @@ export function encodeStashedState(redirectUri: string, oauthState: string): str
   };
 
   const iv = randomBytes(IV_LEN);
-  const cipher = createCipheriv("aes-256-gcm", deriveKey(), iv);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
   const plaintext = Buffer.from(JSON.stringify(payload), "utf8");
   const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
   const authTag = cipher.getAuthTag();
@@ -133,7 +158,7 @@ export function encodeStashedState(redirectUri: string, oauthState: string): str
 }
 
 /** Decrypts and validates the token, returning the stashed state. Throws on failure. */
-function decodeStashedState(token: string): StashedState {
+function decodeStashedState(key: Buffer, token: string): StashedState {
   const parts = token.split(".");
   if (parts.length !== 3) throw new Error("malformed state token");
 
@@ -143,7 +168,7 @@ function decodeStashedState(token: string): StashedState {
 
   if (iv.length !== IV_LEN) throw new Error("malformed state token");
 
-  const decipher = createDecipheriv("aes-256-gcm", deriveKey(), iv);
+  const decipher = createDecipheriv("aes-256-gcm", key, iv);
   decipher.setAuthTag(authTag);
 
   let plaintext: Buffer;
@@ -164,6 +189,22 @@ function redirect(location: string): Response {
 
 function badRequest(reason: string): Response {
   return new Response(reason, { status: 400 });
+}
+
+/**
+ * The refusal a request meets when this instance has no `MCP_PROXY_SECRET` to
+ * derive its state-token key from. 503 rather than 500: the request is
+ * well-formed and the fault is the instance's, so the status says so and the
+ * body names the one variable that resolves it. Following the AS config errors,
+ * it prescribes the relation and prints no value.
+ */
+function proxySecretUnavailable(): Response {
+  return new Response(
+    `MCP_PROXY_SECRET is unset or shorter than ${MIN_PROXY_SECRET_LEN} characters. ` +
+      "The Auth0 loopback proxy derives its state-token key from that secret alone, " +
+      "and serves no request that needs the key without it.",
+    { status: 503, headers: { "cache-control": "no-store" } },
+  );
 }
 
 function isValidUrl(value: string): boolean {
@@ -211,8 +252,15 @@ export async function proxyAuthorize(req: Request): Promise<Response> {
   const relayUri = `${requireEnv("MCP_BASE_URL")}${RELAY_PATH}`;
 
   if (isLoopbackRedirect(redirectUri)) {
+    // Only this branch stashes anything, so only this branch needs the key. A
+    // non-loopback redirect_uri below is forwarded to Auth0 untouched and stays
+    // served, which keeps a missing secret from taking down browser clients that
+    // never used the proxy's crypto.
+    const key = stateKey();
+    if (!key) return proxySecretUnavailable();
+
     // Stash original redirect_uri + state, rewrite redirect_uri to our relay.
-    const stashed = encodeStashedState(redirectUri, state);
+    const stashed = encodeStashedState(key, redirectUri, state);
 
     const auth0Params = new URLSearchParams(params);
     auth0Params.set("redirect_uri", relayUri);
@@ -233,6 +281,17 @@ export async function proxyAuthorize(req: Request): Promise<Response> {
  * authorization code.
  */
 export function handleMcpCallback(req: Request): Response {
+  // The relay is part of the Auth0 proxy, and the proxy serves Auth0-fronted
+  // instances. In AS mode `endpoints.ts` owns the authorization code flow end to
+  // end and redirects no client here, so the endpoint is absent rather than
+  // merely unused — the treatment `handleJwks` gives `/oauth/jwks` on an
+  // instance fronted by an external IdP. Its two sibling entry points read the
+  // same `isTemperAsMode` and dispatch to the AS; this one has no AS counterpart
+  // to dispatch to, so absence is the whole of its answer.
+  if (isTemperAsMode()) {
+    return new Response("Not Found", { status: 404 });
+  }
+
   const url = new URL(req.url);
 
   const error = url.searchParams.get("error");
@@ -245,9 +304,14 @@ export function handleMcpCallback(req: Request): Response {
   const stashed = url.searchParams.get("state");
   if (!code || !stashed) return badRequest("Missing code or state parameter");
 
+  // Before the decode, not inside its catch: that catch reports a bad token as
+  // the client's fault, and a missing secret is the instance's.
+  const key = stateKey();
+  if (!key) return proxySecretUnavailable();
+
   let original: StashedState;
   try {
-    original = decodeStashedState(stashed);
+    original = decodeStashedState(key, stashed);
   } catch {
     return badRequest("Invalid or expired state token");
   }

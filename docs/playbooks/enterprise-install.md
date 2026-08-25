@@ -83,6 +83,7 @@ Sources: [Self-hosting Temper](./self-host-temper.md),
 | `MCP_AUDIENCE` | No | — | — | **Optional.** An instance has ONE audience; both surfaces read `AUTH_AUDIENCE`. If set, must **equal** it — enforced at boot, not by discipline. |
 | `MCP_CLIENT_ID` | Yes | — | — | Auth0 MCP native app client_id; n/a in the SAML path (client allowlisting is `AS_CLIENTS` instead) |
 | `MCP_BASE_URL` | Yes | — | — | `https://<instance>` — used in OAuth discovery responses |
+| `MCP_PROXY_SECRET` | Yes (external-IdP path) | — | — | ≥ 32 chars (`openssl rand -base64 48`); encrypts the loopback redirect proxy's state token, derived from this secret alone. **New — an upgraded deployment will not have it.** Until it is set, a loopback sign-in (MCP CLI clients) answers `503` naming this variable; browser clients with an HTTPS callback are unaffected. Set it **and redeploy** — a Vercel function's environment is bound to its deployment. Rotating it fails sign-ins already in flight for up to 10 minutes; they succeed on retry. **n/a in the SAML path** — the Temper AS runs the whole flow and the relay answers `404` there |
 | **SAML Authorization Server (AS) block** | | | | |
 | `AS_ISSUER` | Yes (SAML path) | — | — | Setting this flips the instance into AS mode |
 | `AS_AUDIENCE` | Yes (SAML path) | — | — | Must equal `AUTH_AUDIENCE` |
