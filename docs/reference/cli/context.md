@@ -20,6 +20,7 @@ Commands:
   rename          Rename a context. The slug is derived from the new name — there is no separate `--slug`
   shape           Orient in a context by its REGIONS: the distilled, region-level view of everything homed there, most salient first. The fastest way to see what a context is about without reading any single resource in it
   region-metrics  Per-region analytics for a context: centrality, content cohesion, internal tension, reference standing, telos alignment
+  analytics       Context-level staleness: when the shape was last materialized, the latest touch you can see to its regions and edges, and whether the read is stale
   materialize     Re-form a context's regions when enough has changed since the last materialize. Below the threshold this is a safe no-op (`materialized: false`). Requires write access to the context
   help            Print this message or the help of the given subcommand(s)
 
@@ -243,6 +244,36 @@ Options:
       --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
       --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
   -h, --help               Print help
+```
+
+### `temper context analytics`
+
+```text
+Context-level staleness: when the shape was last materialized, the latest touch you can see to its regions and edges, and whether the read is stale.
+
+Three fields, not the five of `temper cogmap analytics` — a context has no charter resource and no regulation set, so there is nothing there to report rather than nothing found. Staleness is reported, never blocking: a stale read is still a read.
+
+Usage: temper context analytics [OPTIONS] <CONTEXT>
+
+Arguments:
+  <CONTEXT>
+          Context ref: a UUID or `@me/slug` / `+team-slug/slug`
+
+Options:
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 ### `temper context materialize`

@@ -107,11 +107,13 @@ fn gated_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::contexts::unshare_team))
         .routes(routes!(handlers::contexts::reassign))
         .routes(routes!(handlers::contexts::rename))
-        // Context orientation reads (T8) — the peers of the cognitive-map trio above.
+        // Context orientation reads (T8) — the peers of the five cognitive-map orientation reads
+        // below (shape, materialize-delta, materialize, region-metrics, analytics).
         .routes(routes!(handlers::contexts::shape))
         .routes(routes!(handlers::contexts::region_metrics))
         .routes(routes!(handlers::contexts::materialize_delta))
         .routes(routes!(handlers::contexts::materialize))
+        .routes(routes!(handlers::contexts::analytics))
         .routes(routes!(handlers::teams::list, handlers::teams::create))
         .routes(routes!(handlers::teams::add_member))
         .routes(routes!(handlers::invitations::create))

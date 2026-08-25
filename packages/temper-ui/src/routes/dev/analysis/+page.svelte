@@ -2,11 +2,18 @@
 	/**
 	 * The analysis render harness — the receiver half.
 	 *
-	 * Three anchors, all from one untrimmed capture: a context with 501 groupings, a cogmap with
-	 * 406 and an analytics row, and a cogmap that has **never materialized a region**. The third is
-	 * the one worth having a harness for: a table of nothing, above a legend that has to say why,
-	 * is the screen `displaced-structure-remains-reachable` is judged on and the hardest to get
-	 * right without looking at it.
+	 * Three anchors, all from one untrimmed capture taken **2026-08-20**: a context with 501
+	 * groupings, a cogmap with 406 and an analytics row, and a cogmap that has **never materialized
+	 * a region**. The third is the one worth having a harness for: a table of nothing, above a
+	 * legend that has to say why, is the screen `displaced-structure-remains-reachable` is judged
+	 * on and the hardest to get right without looking at it.
+	 *
+	 * **`[2026-08-25]` The capture date is what the context's missing analytics row means.** A
+	 * context has an anchor-level readout now — `/api/contexts/{id}/analytics` answers the
+	 * staleness half — and the bundle carries none for its context only because it predates that
+	 * door. So the context here renders the declined branch: a property of the CAPTURE, not of the
+	 * world. `$lib/graph/harness.ts` carries the same remainder where it infers the anchor kind
+	 * from that row's presence.
 	 */
 	import AnalysisPage from '$lib/components/graph/AnalysisPage.svelte';
 	import { analysisScenarioNames, analysisViewFor } from '$lib/graph/harness';

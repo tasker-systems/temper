@@ -255,8 +255,19 @@ export const analysisScenarioNames = (bundle: AnalysisBundle): string[] =>
  * Build the analysis view for one captured anchor.
  *
  * The same subtraction the graph half makes: `analyseShape` is the load's own builder, and the
- * `map` field is assembled exactly as `readAnchorAnalysis` assembles it — `null` for a context,
- * which genuinely has neither a charter nor a regulation set, and a value for a cogmap.
+ * `map` field is assembled exactly as `readAnchorAnalysis` assembles it.
+ *
+ * **`[2026-08-25]` A context has an anchor-level readout now** — `/api/contexts/{id}/analytics`
+ * answers the staleness half — and the committed bundle carries none for its context, because the
+ * capture was taken on 2026-08-20, before that door existed. So a context here resolves to `null`
+ * and `/dev/analysis` renders the declined branch for it. That is a property of the CAPTURE, not of
+ * the world, and it is left standing rather than filled in for the same reason `emptiness` is: a
+ * fixture that states what a read said when the read was never made is a synthesized guarantee.
+ * The remainder is named — this bundle needs a re-capture to exercise a context's clock on
+ * `/dev/analysis`, and until it gets one that path is covered by the component tests.
+ *
+ * The anchor `kind` is likewise derived from whether the scenario carries an `analytics` row, which
+ * holds only because of that capture date. A re-capture must carry the kind rather than infer it.
  */
 export function analysisViewFor(bundle: AnalysisBundle, name: string): AnalysisViewData {
 	const s = bundle[name] as AnalysisScenario | undefined;
@@ -286,6 +297,7 @@ export function analysisViewFor(bundle: AnalysisBundle, name: string): AnalysisV
 		map: settled(
 			s.analytics
 				? {
+						kind: 'cogmap' as const,
 						telos: { id: s.analytics.telos_resource_id, title },
 						staleness: s.analytics.staleness,
 						regulation: s.analytics.regulation ?? [],

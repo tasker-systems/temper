@@ -1412,6 +1412,30 @@ pub async fn cogmap_analytics_select(
     }))
 }
 
+/// `context_analytics` — the context-level analytics picture, closing the one asymmetric row of the
+/// anchor read surface (shape / region-metrics / materialize-delta / materialize were already
+/// symmetric; analytics was cogmap-only). Service-direct; gate is in the SQL (deny → `None`,
+/// surfaced as 404 by the handler). Maps the substrate-local row to the wire type.
+///
+/// Three columns, not the five of `cogmap_analytics_select` above: a context has no charter resource
+/// and no regulation set, so there is nothing to put in the other two even in principle. Both the
+/// substrate-local row and the wire row are `CogmapStaleness` — the reuse is argued at
+/// `readback::context_analytics`.
+pub async fn context_analytics_select(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    context_id: uuid::Uuid,
+) -> ApiResult<Option<CogmapStaleness>> {
+    let got = readback::context_analytics(pool, ContextId::from(context_id), profile_id)
+        .await
+        .map_err(api_err)?;
+    Ok(got.map(|s| CogmapStaleness {
+        materialized_at: s.materialized_at,
+        latest_touch: s.latest_touch,
+        is_stale: s.is_stale,
+    }))
+}
+
 /// `cogmap_charter_select` (T1 Sequence C) — the telos/charter-block read: composes `cogmap_telos`
 /// (resolve the map to its charter resource) with the generic `resource_blocks` projection, unfiltered
 /// by role, so a caller gets the statement + questions + framing in seq order. Service-direct (reads

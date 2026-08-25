@@ -184,27 +184,47 @@
 			<section class="map-level" aria-labelledby="map-level-h">
 				<h2 id="map-level-h">What this place says it is for</h2>
 				{#if map}
-					<p>
-						Its charter is <a href={resourceHref({ id: map.telos.id })}
-							>{map.telos.title ?? 'the charter resource'}</a
-						>.
-					</p>
+					{#if map.kind === 'cogmap'}
+						<p>
+							Its charter is <a href={resourceHref({ id: map.telos.id })}
+								>{map.telos.title ?? 'the charter resource'}</a
+							>.
+						</p>
+					{:else}
+						<!-- Declared, not fabricated. A context has no charter and no regulation set even
+						     in principle, and inventing either as a null peer field is what the task
+						     explicitly forbids. The clock below is NOT part of that absence: a context
+						     is asked for staleness, at its own door, and answers. -->
+						<p class="declared-absent" data-testid="map-absent">{CONTEXT_HAS_NO_MAP_READOUT}</p>
+					{/if}
+
+					<!--
+						Outside the kind branch on purpose. The clock is the one half the two anchor
+						kinds genuinely share, so it is rendered by the SAME call for both and the two
+						cannot drift into describing one fact in two voices. Everything above and below
+						it is behind `map.kind`, because everything above and below it is a thing only
+						a cognitive map has.
+					-->
 					<p data-testid="staleness">{describeStaleness(map.staleness)}</p>
-					<p data-testid="regulation">{describeRegulation(map.regulation.length)}</p>
-					{#if map.regulation.length > 0}
-						<ul class="regulation">
-							{#each map.regulation as r (r.resource_id)}
-								<li><a href={resourceHref({ id: r.resource_id })}>{r.title}</a></li>
-							{/each}
-						</ul>
+
+					{#if map.kind === 'cogmap'}
+						<p data-testid="regulation">{describeRegulation(map.regulation.length)}</p>
+						{#if map.regulation.length > 0}
+							<ul class="regulation">
+								{#each map.regulation as r (r.resource_id)}
+									<li><a href={resourceHref({ id: r.resource_id })}>{r.title}</a></li>
+								{/each}
+							</ul>
+						{/if}
 					{/if}
 				{:else if place.kind === 'context'}
-					<!-- Declared, not fabricated. D6 is unshipped and a context has no charter and no
-					     regulation set even in principle; inventing a peer field is what the task
-					     explicitly forbids. -->
+					<!-- A CONTEXT whose anchor-level read was declined. The two things this sentence
+					     names are true of a context whatever any read says, so it still holds — what is
+					     missing here is the clock, and a clock nothing answered for is not printed as a
+					     value. A read that FAILED is the third state and renders in `{:catch}` below. -->
 					<p class="declared-absent" data-testid="map-absent">{CONTEXT_HAS_NO_MAP_READOUT}</p>
 				{:else}
-					<!-- A map whose analytics read was DECLINED — the read answered, and this is what it
+					<!-- A MAP whose analytics read was DECLINED — the read answered, and this is what it
 					     said. A read that FAILED is the third state and renders in `{:catch}` below. -->
 					<p class="declared-absent" data-testid="map-absent">{MAP_READOUT_UNAVAILABLE}</p>
 				{/if}
