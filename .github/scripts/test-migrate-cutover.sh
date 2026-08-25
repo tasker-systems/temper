@@ -73,8 +73,24 @@ exit "${STUB_RC:-0}"
 STUBSH
 chmod +x "$STUB"
 
-# mtime in epoch seconds, GNU and BSD `stat` disagreeing about the flag.
-mtime_of() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1"; }
+# mtime in epoch seconds. GNU and BSD `stat` disagree, and the naive spelling
+# `stat -f %m "$1" 2>/dev/null || stat -c %Y "$1"` is WRONG ON LINUX in a way that passes
+# on macOS: GNU's `-f` is --file-system and takes no argument, so `%m` is read as a
+# FILENAME. GNU then prints the real file's filesystem block to STDOUT, exits non-zero for
+# the missing `%m`, and the `||` fallback runs too — so the function returned the
+# filesystem dump concatenated with the mtime, and `[ ... -gt ... ]` said
+# "integer expression expected". GNU is tried FIRST here, its stdout discarded on failure,
+# and the result is asserted to be digits so a third platform fails loudly instead of
+# comparing garbage.
+mtime_of() {
+    local m
+    m="$(stat -c %Y "$1" 2>/dev/null)" || m="$(stat -f %m "$1" 2>/dev/null)" || m=""
+    case "$m" in
+        ''|*[!0-9]*) echo "mtime_of: no usable stat on this platform for '$1' (got '$m')" >&2
+                     return 1 ;;
+        *) printf '%s' "$m" ;;
+    esac
+}
 
 # Throwaway repo + a bare "origin" it can actually fetch from. Nothing here touches the
 # real repository: the script resolves its root with `git rev-parse --show-toplevel`, so
