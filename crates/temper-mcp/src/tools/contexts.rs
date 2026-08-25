@@ -5,13 +5,13 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use temper_core::types::cognitive_maps::ContextShapeInput;
+use temper_core::types::cognitive_maps::{ContextAnalyticsInput, ContextShapeInput};
 use temper_core::types::context::{ContextCreateRequest, ShareContextRequest};
 use temper_core::types::ids::{ContextId, ProfileId};
 use temper_services::error::ApiError;
 
 use crate::service::TemperMcpService;
-use crate::tools::cognitive_maps::{context_region_metrics, context_shape};
+use crate::tools::cognitive_maps::{context_analytics, context_region_metrics, context_shape};
 
 /// Which admission rule a context tool's `403` describes.
 ///
@@ -280,7 +280,7 @@ pub async fn rename_context(
     )]))
 }
 
-// ── Consolidated read tool (4→1) ───────────────────────────────────────────────
+// ── Consolidated read tool (5→1) ───────────────────────────────────────────────
 
 /// The context-read view to perform.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -294,12 +294,15 @@ pub enum ContextReadView {
     Shape,
     /// Read per-region analytics metrics for the context.
     Metrics,
+    /// Read the context's staleness readout: when its shape was last materialized, the latest
+    /// readable touch to its regions/edges, and whether the read is stale.
+    Analytics,
 }
 
 /// Consolidated context-read tool — one read tool with a `view` discriminator.
 ///
-/// Collapses `list_contexts`, `get_context`, `context_shape`, and `context_region_metrics`
-/// into a single MCP tool.
+/// Collapses `list_contexts`, `get_context`, `context_shape`, `context_region_metrics` and
+/// `context_analytics` into a single MCP tool.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ContextReadInput {
     /// Which context read to perform.
@@ -307,7 +310,7 @@ pub struct ContextReadInput {
     /// Context UUID. Required for `get`; ignored for `list`.
     #[serde(default)]
     pub id: Option<Uuid>,
-    /// Context ref (`@me/<slug>`, `+<team>/<slug>`, or UUID). Required for `shape` and `metrics`; ignored for `list` and `get`.
+    /// Context ref (`@me/<slug>`, `+<team>/<slug>`, or UUID). Required for `shape`, `metrics` and `analytics`; ignored for `list` and `get`.
     #[serde(default)]
     pub context: Option<String>,
     /// Optional lens ref to filter regions. Used with `shape` and `metrics`.
@@ -353,6 +356,12 @@ pub async fn context_read(
                 },
             )
             .await
+        }
+        ContextReadView::Analytics => {
+            let context = input.context.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("analytics requires `context`".to_string(), None)
+            })?;
+            context_analytics(svc, ContextAnalyticsInput { context }).await
         }
     }
 }

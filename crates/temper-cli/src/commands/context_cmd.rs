@@ -445,6 +445,31 @@ pub async fn region_metrics_remote(
     Ok(())
 }
 
+/// `temper context analytics <context_ref>` — the context-level staleness readout.
+///
+/// The peer of `temper cogmap analytics`, and the last asymmetric row of the anchor read surface.
+/// Three fields, not five: a context has no charter resource and no regulation set, so
+/// `telos_resource_id` and `regulation` would be null peer fields reporting "nothing found" about
+/// two things that cannot exist.
+///
+/// Deny is an error (404), collapsed with "does not exist" — the `materialize-delta` posture, not
+/// the 200-with-`emptiness` posture of `shape`.
+pub async fn analytics_remote(
+    client: &temper_client::TemperClient,
+    context: &str,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let context_id = resolve_context_id_for_read(client, context).await?;
+    let staleness = client
+        .contexts()
+        .analytics(context_id)
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
+    let rendered = crate::format::render(&staleness, fmt)?;
+    crate::output::plain(rendered);
+    Ok(())
+}
+
 /// `temper context materialize <context_ref> [--threshold N]` — re-form the context's regions.
 pub async fn materialize_remote(
     client: &temper_client::TemperClient,

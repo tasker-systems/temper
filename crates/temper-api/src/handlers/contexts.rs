@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
 use crate::middleware::surface::RequestSurface;
-use temper_core::types::cognitive_maps::{AnchorShape, CogmapRegionMetricsRow};
+use temper_core::types::cognitive_maps::{AnchorShape, CogmapRegionMetricsRow, CogmapStaleness};
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ContextId, ProfileId};
 use temper_core::types::materialize::{MaterializeAck, MaterializeDelta, MaterializeRequest};
@@ -248,7 +248,8 @@ pub async fn rename(
 // ─────────────────────────────────────────────────────────────────────────────
 // Context orientation reads (spec §3.7, T8) — the region-level view of a context.
 //
-// The peer of `/api/cognitive-maps/{id}/{shape,region-metrics,materialize,materialize-delta}`, and
+// The peer of the cognitive-map orientation reads —
+// `/api/cognitive-maps/{id}/{shape,region-metrics,materialize,materialize-delta,analytics}` — and
 // deliberately the SAME wire types: a region row carries nothing cogmap-specific, so
 // `CogmapRegionRow` describes a context's region exactly as well (the `cogmap_*` naming goes away at
 // M3, not the shape).
@@ -411,4 +412,46 @@ pub async fn materialize(
         .await
         .map_err(ApiError::from)?;
     Ok(Json(out.value))
+}
+
+/// Read a context's analytics
+///
+/// The last asymmetric row of the anchor read surface: `shape`, `region-metrics`,
+/// `materialize-delta` and `materialize` were already symmetric across the two anchor kinds and
+/// `analytics` was cogmap-only.
+///
+/// **Three fields, not the five of `/api/cognitive-maps/{id}/analytics`.** A context has no charter
+/// resource and no regulation set, so `telos_resource_id` and `regulation` would be null peer fields
+/// reporting "nothing found" about two things that cannot exist. The shape difference is the answer,
+/// not a gap in it.
+///
+/// Deny is 404 here, matching the cogmap peer and `materialize-delta` next door — NOT the 200-with-
+/// `emptiness` posture of `/shape`. Absent and unreadable are collapsed (the SQL yields zero rows for
+/// both), so it is still no existence oracle.
+#[utoipa::path(
+    get,
+    operation_id = "context_analytics",
+    path = "/api/contexts/{id}/analytics",
+    tag = "Contexts",
+    params(("id" = Uuid, Path, description = "Context ID")),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Context-level staleness: when the shape was last materialized, the latest readable touch, and whether the read is stale", body = CogmapStaleness),
+        (status = 404, description = "Context not found, or not readable by the caller (uniform — no existence oracle)"),
+        (status = 401, description = "Unauthorized", body = temper_services::error::ErrorBody),
+    )
+)]
+pub async fn analytics(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(context_id): Path<Uuid>,
+) -> ApiResult<Json<CogmapStaleness>> {
+    temper_services::backend::substrate_read::context_analytics_select(
+        &state.pool,
+        ProfileId::from(auth.0.profile().id),
+        context_id,
+    )
+    .await?
+    .map(Json)
+    .ok_or_else(|| ApiError::NotFound("context not found or not readable".to_string()))
 }

@@ -59,9 +59,16 @@ previously produced a hard 500 in the predecessor's capture path.
 | `contextZeroRegion` | §2.3 on a context with **355 resources and zero regions**. Draws a real graph |
 | `traversal` | The `?from=` handoff — a walk that runs no composition. **Had no caller at all until this bundle** |
 
-`/dev/analysis` runs off `graph-analysis-anchors.json`, which was already untrimmed: a context with
-501 groupings, a cogmap with 406 and an analytics row, and a cogmap that has **never materialized a
-region** — the last being the screen `displaced-structure-remains-reachable` is judged on.
+`/dev/analysis` runs off `graph-analysis-anchors.json`, which was already untrimmed: as captured on
+**2026-08-20**, a context with 501 groupings, a cogmap with 406 and an analytics row, and a cogmap
+that has **never materialized a region** — the last being the screen
+`displaced-structure-remains-reachable` is judged on.
+
+**`[2026-08-25]` That capture date is what the missing context analytics row means now.**
+`/api/contexts/{id}/analytics` answers the staleness half for a context, so a context HAS an
+anchor-level readout — the bundle carries none because the capture predates that door. Read the
+line above as a fact about the CAPTURE, not about the world; `$lib/graph/harness.ts` records the
+same remainder at the point where it infers an anchor's kind from that row's presence.
 
 ## What this found before anyone looked at it
 

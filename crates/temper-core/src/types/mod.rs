@@ -74,7 +74,10 @@ pub use access_gate::{
 };
 pub use api::{HealthResponse, ProfileUpdateRequest, SearchParams, SearchResultRow};
 pub use audit::ResourceAuditRow;
-pub use auth::{AuthClaims, AuthProvider, PrincipalKind, ReconcileRequest};
+pub use auth::{
+    AuthClaims, AuthProvider, PrincipalKind, ReconcileRequest, ResolvePrincipalRequest,
+    ResolvePrincipalResponse,
+};
 pub use authorship::{ActContext, ActInput, AgentAuthorship, ConfidenceBand};
 pub use citation_audit::CitationAuditRequest;
 pub use config::{

@@ -1121,6 +1121,16 @@ pub enum ContextAction {
         #[arg(long)]
         lens: Option<String>,
     },
+    /// Context-level staleness: when the shape was last materialized, the latest touch you can see
+    /// to its regions and edges, and whether the read is stale.
+    ///
+    /// Three fields, not the five of `temper cogmap analytics` — a context has no charter resource
+    /// and no regulation set, so there is nothing there to report rather than nothing found.
+    /// Staleness is reported, never blocking: a stale read is still a read.
+    Analytics {
+        /// Context ref: a UUID or `@me/slug` / `+team-slug/slug`.
+        context: String,
+    },
     /// Re-form a context's regions when enough has changed since the last materialize. Below the
     /// threshold this is a safe no-op (`materialized: false`). Requires write access to the context.
     Materialize {
@@ -2913,6 +2923,7 @@ mod skill_content_verb_tests {
             &["invocation", "close"],
             &["invocation", "show"],
             &["search"],
+            &["context", "analytics"],
             &["context", "share"],
             &["skill", "generate"],
             &["skill", "install"],

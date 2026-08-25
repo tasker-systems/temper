@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::context_ref::ContextOwnerRef;
-use temper_core::types::cognitive_maps::{AnchorShape, CogmapRegionMetricsRow};
+use temper_core::types::cognitive_maps::{AnchorShape, CogmapRegionMetricsRow, CogmapStaleness};
 use temper_core::types::context::{
     ContextCreateRequest, ContextRow, ContextRowWithCounts, ReassignContextOutcome,
     ReassignContextRequest, RenameContextOutcome, RenameContextRequest, ShareContextOutcome,
@@ -170,6 +170,25 @@ impl ContextClient<'_> {
     ) -> Result<Vec<CogmapRegionMetricsRow>> {
         let token = self.http.resolve_token()?;
         let path = context_region_metrics_path(context_id, lens);
+        let req = self.http.get(&path);
+        self.http
+            .send_json(&Method::GET, &path, req, Some(&token))
+            .await
+    }
+
+    /// GET `/api/contexts/{id}/analytics` — the context-level staleness readout: when the shape was
+    /// last materialized, the latest touch to the regions and edges homed on it **that this caller
+    /// may read**, and whether the read is stale.
+    ///
+    /// Three fields, not the five its cogmap peer returns: a context has no charter resource and no
+    /// regulation set, so `telos_resource_id` and `regulation` would be null peer fields reporting
+    /// "nothing found" about two things that cannot exist.
+    ///
+    /// **Deny is an error here, not an empty envelope** — 404, collapsed with "does not exist", the
+    /// same posture as `materialize_delta` below and the cogmap peer.
+    pub async fn analytics(&self, context_id: Uuid) -> Result<CogmapStaleness> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/contexts/{context_id}/analytics");
         let req = self.http.get(&path);
         self.http
             .send_json(&Method::GET, &path, req, Some(&token))

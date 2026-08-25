@@ -122,6 +122,51 @@ describe('an empty groupings list arrives with the cause the read gave it', () =
 	});
 });
 
+/**
+ * The anchor-level readout reaches the page from that same read, **for a context too**.
+ *
+ * Asserted here rather than only in the component for the reason this file exists: the component is
+ * handed an `AnalysisViewData` a test built, so it cannot see whether the load ever wired the field
+ * to the read. Until `/api/contexts/{id}/analytics` shipped this load handed contexts a hard `null`
+ * and the page spelled it as *a context has no map-level readout* — a load that quietly went back
+ * to that would leave every component test green.
+ */
+describe('a context carries its clock through the load, tagged as a context', () => {
+	const CLOCK = {
+		materialized_at: '2026-08-20T10:00:00.000Z',
+		latest_touch: null,
+		is_stale: false,
+	};
+
+	it('hands back the context arm — the clock, and no charter or regulation beside it', async () => {
+		readAnchorAnalysis.mockResolvedValue({
+			shape: SHAPE,
+			emptiness: null,
+			metrics: METRICS,
+			analytics: { kind: 'context', staleness: CLOCK },
+			telos: null,
+		});
+
+		const data = await run('?in=ctx:@me/temper');
+
+		// `toEqual`, not `toMatchObject`: the point is that nothing ELSE rides along. A fabricated
+		// `telos: null` or `regulation: []` here would be the faked peer field the design refuses.
+		await expect(data.map).resolves.toEqual({ kind: 'context', staleness: CLOCK });
+	});
+
+	it('a declined read is still null, and null no longer means "a context"', async () => {
+		readAnchorAnalysis.mockResolvedValue({
+			shape: SHAPE,
+			emptiness: null,
+			metrics: METRICS,
+			analytics: null,
+			telos: null,
+		});
+
+		await expect((await run('?in=ctx:@me/temper')).map).resolves.toBeNull();
+	});
+});
+
 describe('the door names the place it is measuring before any measurement arrives', () => {
 	/**
 	 * C1 for this route, stated at the one place it can actually regress. The read never settles, so

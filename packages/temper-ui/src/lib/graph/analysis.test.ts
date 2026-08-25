@@ -278,6 +278,21 @@ describe('what a context genuinely does not have is declared, not fabricated', (
 		expect(CONTEXT_HAS_NO_MAP_READOUT).not.toMatch(/error|failed|missing|not found/i);
 	});
 
+	/**
+	 * **The clock is not one of the two, and this sentence must never claim it is.**
+	 *
+	 * A context IS asked for staleness — `/api/contexts/{id}/analytics` returns the three-field
+	 * readout — and the page renders it beside this sentence. What the sentence declares absent is
+	 * the charter and the concepts regulating it, and those alone: it says *neither*, of two named
+	 * things. A third term creeping back in would be the page declaring absent something it is at
+	 * that moment displaying.
+	 */
+	test('it declares TWO absences, and the clock is not among them', () => {
+		expect(CONTEXT_HAS_NO_MAP_READOUT).toContain('A charter');
+		expect(CONTEXT_HAS_NO_MAP_READOUT).toContain('the concepts that regulate it');
+		expect(CONTEXT_HAS_NO_MAP_READOUT).not.toMatch(/stale|out of date|worked out|last comput/i);
+	});
+
 	test('an empty regulation set is a fact about the map, not a zero', () => {
 		expect(describeRegulation(0)).toBe('No concepts have been set to regulate this map.');
 		expect(describeRegulation(1)).toContain('1 concept regulates');

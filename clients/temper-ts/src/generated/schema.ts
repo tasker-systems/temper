@@ -453,8 +453,41 @@ export interface paths {
         get: operations["get_context"];
         put?: never;
         post?: never;
-        /** Delete a context */
-        delete: operations["delete_context"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/contexts/{id}/analytics": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a context's analytics
+         * @description The last asymmetric row of the anchor read surface: `shape`, `region-metrics`,
+         *     `materialize-delta` and `materialize` were already symmetric across the two anchor kinds and
+         *     `analytics` was cogmap-only.
+         *
+         *     **Three fields, not the five of `/api/cognitive-maps/{id}/analytics`.** A context has no charter
+         *     resource and no regulation set, so `telos_resource_id` and `regulation` would be null peer fields
+         *     reporting "nothing found" about two things that cannot exist. The shape difference is the answer,
+         *     not a gap in it.
+         *
+         *     Deny is 404 here, matching the cogmap peer and `materialize-delta` next door — NOT the 200-with-
+         *     `emptiness` posture of `/shape`. Absent and unreadable are collapsed (the SQL yields zero rows for
+         *     both), so it is still no existence oracle.
+         */
+        get: operations["context_analytics"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -2995,9 +3028,24 @@ export interface components {
             telos_resource_id: string;
         };
         /**
-         * @description Map-level staleness readout (`cogmap_staleness`): when the shape was last materialized, the latest
-         *     touch to the map's regions/edges, and whether the read is stale. Staleness is LEGIBLE — reported,
-         *     never blocking. `materialized_at` is `None` when the map has never been materialized.
+         * @description Anchor-level staleness readout: when the shape was last materialized, the latest touch to the
+         *     anchor's regions/edges **that the reading principal may see**, and whether the read is stale.
+         *     Staleness is LEGIBLE — reported, never blocking. `materialized_at` is `None` when the anchor has
+         *     never been materialized.
+         *
+         *     Carried by BOTH anchor kinds: nested inside [`CogmapAnalyticsRow`] for a cognitive map
+         *     (`cogmap_staleness`) and returned bare by `GET /api/contexts/{id}/analytics` for a context
+         *     (`context_analytics`), which has nothing to put in that row's other two fields. Both are thin
+         *     wrappers over the one gated core, `anchor_staleness`, so the three values mean the same thing on
+         *     either anchor. The `Cogmap` in the name is historical — the same "shared on purpose, the
+         *     `cogmap_*` naming is what M3 retires, not the shape" convention `CogmapRegionMetricsRow` already
+         *     rides on for the context region-metrics route.
+         *
+         *     The touch is **gated** as of migration `20260825000020`: a region holding no member this
+         *     principal can read does not move this clock, and neither does an edge with an unreadable
+         *     endpoint. Folded regions and edges are still counted deliberately — a fold advances
+         *     `last_event_id` and IS a touch, so narrowing either arm to live rows would make a stale anchor
+         *     read fresh.
          */
         CogmapStaleness: {
             is_stale: boolean;
@@ -8222,7 +8270,7 @@ export interface operations {
             };
         };
     };
-    delete_context: {
+    context_analytics: {
         parameters: {
             query?: never;
             header?: {
@@ -8237,29 +8285,26 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Context deleted */
-            204: {
+            /** @description Context-level staleness: when the shape was last materialized, the latest readable touch, and whether the read is stale */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["CogmapStaleness"];
+                };
             };
-            /** @description Caller may read but not administer this context */
-            403: {
+            /** @description Unauthorized */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
-            /** @description Context not found (uniform — no existence oracle) */
+            /** @description Context not found, or not readable by the caller (uniform — no existence oracle) */
             404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Context still has dependent resources, or a connection, homed in it */
-            409: {
                 headers: {
                     [name: string]: unknown;
                 };

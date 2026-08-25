@@ -617,6 +617,18 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     })
                 })
             }
+            ContextAction::Analytics { context } => {
+                temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::context_cmd::analytics_remote(
+                            client,
+                            &context,
+                            output_format,
+                        )
+                        .await
+                    })
+                })
+            }
             ContextAction::Materialize { context, threshold } => {
                 temper_cli::actions::runtime::with_client(|client| {
                     Box::pin(async move {

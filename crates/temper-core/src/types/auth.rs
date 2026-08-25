@@ -85,3 +85,42 @@ pub struct ReconcileRequest {
     /// Asserted group values (possibly empty).
     pub groups: Vec<String>,
 }
+
+/// Wire payload for the internal principal-resolve call (AS → temper-api).
+///
+/// The AS holds a token `sub` and needs the profile it will resolve to, so it can stamp the
+/// refresh-token row with an owner an administrator can later revoke through. It cannot do that
+/// lookup itself: the authoritative provider is temper-api's `auth_provider_name`, and a second
+/// copy of that value in the AS's environment would drift silently — no link matched, nothing
+/// revoked, nothing said. So the resolution stays on the side that owns the config.
+///
+/// Deliberately NOT folded into [`ReconcileRequest`]. That call is skipped entirely when an
+/// assertion carries no group signal, and its `groups: Vec<String>` is the wire form of the
+/// absence-vs-empty distinction the whole SAML design turns on. Widening it to carry a second
+/// purpose would put that distinction under pressure it does not need to be under.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "typescript",
+    ts(export, export_to = "ResolvePrincipalRequest.ts")
+)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolvePrincipalRequest {
+    /// Stable NameID — the same value minted as the token `sub`.
+    pub external_user_id: String,
+    /// Email attribute from the assertion.
+    pub email: String,
+    /// Verified flag (a signed trusted-IdP assertion is treated as verified).
+    pub email_verified: Option<bool>,
+}
+
+/// The profile an [`ResolvePrincipalRequest`] resolved to.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "typescript",
+    ts(export, export_to = "ResolvePrincipalResponse.ts")
+)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolvePrincipalResponse {
+    /// The resolved (or just-provisioned) profile id.
+    pub profile_id: uuid::Uuid,
+}
