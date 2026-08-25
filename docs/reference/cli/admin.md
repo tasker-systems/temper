@@ -15,6 +15,7 @@ Commands:
   demote        Demote a system admin — revoke its governance grant (the manual twin of `promote`)
   access        Admit, revoke, deactivate, or reactivate a principal's system access
   requests      Review pending join requests
+  reviews       Read and close reconsideration requests from revoked principals
   ledger        Read the admin ledger: who granted what, to whom, and when
   saml          SAML provisioning: generate keys + emit the consistent env bundle and SQL (operator tooling)
   machine       Register and rotate machine (client_credentials) principals
@@ -235,6 +236,60 @@ Options:
       --reject             Reject the request
       --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
       --note <NOTE>        Optional decision note
+      --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+  -h, --help               Print help
+```
+
+### `temper admin reviews`
+
+```text
+Read and close reconsideration requests from revoked principals
+
+Usage: temper admin reviews [OPTIONS] <COMMAND>
+
+Commands:
+  list   List undecided reconsideration requests, oldest first
+  close  Record that a reconsideration was handled (grants nothing)
+  help   Print this message or the help of the given subcommand(s)
+
+Options:
+      --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
+      --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+      --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+      --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+  -h, --help               Print help
+```
+
+#### `temper admin reviews list`
+
+```text
+List undecided reconsideration requests, oldest first
+
+Usage: temper admin reviews list [OPTIONS]
+
+Options:
+      --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
+      --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+      --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+      --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+  -h, --help               Print help
+```
+
+#### `temper admin reviews close`
+
+```text
+Record that a reconsideration was handled (grants nothing)
+
+Usage: temper admin reviews close [OPTIONS] <ID>
+
+Arguments:
+  <ID>  Review request ID (UUID)
+
+Options:
+      --note <NOTE>        Optional decision note, recorded against the review
+      --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
+      --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+      --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
       --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
   -h, --help               Print help
 ```

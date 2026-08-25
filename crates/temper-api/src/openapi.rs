@@ -483,6 +483,8 @@ mod tests {
             "/api/access/admin/promote",
             "/api/access/admin/requests",
             "/api/access/admin/requests/{id}",
+            "/api/access/admin/reviews",
+            "/api/access/admin/reviews/{id}",
             "/api/access/admin/settings",
             "/internal/saml/reconcile",
             "/api/embed/dispatch",

@@ -151,6 +151,49 @@ pub async fn requests_list_remote(
     Ok(())
 }
 
+/// List undecided reconsideration requests (spec D15).
+pub async fn reviews_list_remote(
+    client: &temper_client::TemperClient,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let rows = client
+        .admin()
+        .list_reviews()
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
+    let rendered = crate::format::render(&rows, fmt)?;
+    println!("{rendered}");
+    Ok(())
+}
+
+/// Record that a reconsideration was handled. Grants nothing — see `AdminReviewsAction` in `cli.rs`.
+///
+/// Prints the id it closed rather than nothing at all: the endpoint answers `204`, and a command
+/// that succeeds silently gives an operator working a queue no way to tell "closed it" from "typed
+/// the wrong id and closed something else".
+pub async fn reviews_close_remote(
+    client: &temper_client::TemperClient,
+    id: &str,
+    note: Option<&str>,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let request_id = uuid::Uuid::parse_str(id)
+        .map_err(|e| TemperError::Api(format!("invalid review id '{id}': {e}")))?;
+
+    client
+        .admin()
+        .close_review(request_id, note.map(str::to_owned))
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
+
+    let rendered = crate::format::render(
+        &serde_json::json!({ "status": "closed", "review": request_id }),
+        fmt,
+    )?;
+    println!("{rendered}");
+    Ok(())
+}
+
 /// Approve or reject a join request.
 pub async fn requests_review_remote(
     client: &temper_client::TemperClient,

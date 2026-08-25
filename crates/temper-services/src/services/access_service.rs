@@ -22,7 +22,7 @@ use temper_principal::{Act, ActorAuthority};
 
 use temper_core::types::access_gate::{
     Entitlements, JoinRequest, JoinRequestStatus, JoinRequestWithProfile, PublicSystemSettings,
-    SystemSettings,
+    ReviewRequestWithProfile, SystemSettings,
 };
 use temper_core::types::admin::UpdateSettingsRequest;
 use temper_core::types::cognitive_maps::{
@@ -996,6 +996,13 @@ pub async fn withdraw_request(pool: &PgPool, profile_id: ProfileId) -> ApiResult
     }
 }
 
+/// What a principal is told when they already have an undecided reconsideration on file.
+///
+/// Reachable only while a review is open — closing one releases `idx_principal_review_one_open`,
+/// which is what [`close_review_request`] exists to do.
+pub const REVIEW_ALREADY_OPEN: &str =
+    "you already have an open reconsideration request — an admin has not decided it yet";
+
 /// Parameters for a review request (spec D15 — a revoked principal asking for reconsideration).
 pub struct CreateReviewRequestParams {
     pub profile_id: ProfileId,
@@ -1031,7 +1038,100 @@ pub async fn create_review_request(
         params.message,
     )
     .execute(pool)
+    .await
+    // `idx_principal_review_one_open` is the refusal, and the blanket `23505` mapping renders it as
+    // "Resource already exists" — which names neither the thing that exists nor anything to do
+    // about it. This refusal is one of the very few surfaces a revoked principal can still reach,
+    // so it is worth a sentence they can act on.
+    .map_err(|e| match &e {
+        sqlx::Error::Database(db) if db.code().as_deref() == Some("23505") => {
+            ApiError::Conflict(REVIEW_ALREADY_OPEN.to_string())
+        }
+        _ => ApiError::from(e),
+    })?;
+
+    Ok(())
+}
+
+/// List the reconsiderations nobody has decided yet (spec D15 — the inbox this signal always
+/// implied and never had). The `_admin` proof is the capability (admin-authz enclosure, spec §3.2).
+///
+/// Ordered **oldest first**, which is a deliberate divergence from [`list_pending_requests`]'s
+/// `created DESC`. A join request queue is a stream an operator skims; a reconsideration queue is a
+/// waiting-time queue, and the principal who has been locked out longest is the one whose request
+/// has been ignored longest.
+///
+/// Reads `kb_principal_review_requests` and nothing else. It is emphatically **not** consulted by
+/// the admission decision — see the table's own `COMMENT`, and `a_pending_review_does_not_change_admission`.
+pub async fn list_open_review_requests(
+    pool: &PgPool,
+    _admin: &SystemAdmin,
+) -> ApiResult<Vec<ReviewRequestWithProfile>> {
+    let rows = sqlx::query_as!(
+        ReviewRequestWithProfile,
+        r#"
+        SELECT r.id as "id!", r.profile_id as "profile_id!", r.message,
+               r.created as "created!",
+               p.handle as "handle!", p.display_name as "display_name!", p.email
+          FROM kb_principal_review_requests r
+          JOIN kb_profiles p ON p.id = r.profile_id
+         WHERE r.decided_at IS NULL
+         ORDER BY r.created ASC
+        "#,
+    )
+    .fetch_all(pool)
     .await?;
+
+    Ok(rows)
+}
+
+/// Parameters for closing a review request.
+pub struct CloseReviewRequestParams {
+    pub request_id: Uuid,
+    pub decision_note: Option<String>,
+}
+
+/// Close an open reconsideration — record that an admin handled it, and **move nothing** (D15).
+///
+/// This is the write that `idx_principal_review_one_open` was always waiting for. That index is
+/// `UNIQUE (profile_id) WHERE decided_at IS NULL`, so until something could set `decided_at` the
+/// duplicate guard never released: a principal who filed one review could never file another, for
+/// the life of the profile. `closing_a_review_releases_the_one_open_guard` is the witness.
+///
+/// **Closing grants nothing.** The temptation this function must keep refusing is to let "resolve
+/// the reconsideration" mean "readmit the principal" — which would make a revocation launderable by
+/// its own subject's request, the exact conjunction D2 forbids and the table's `COMMENT ON TABLE`
+/// warns about. The admin's actual answer is a separate [`admin_approve`], recorded on the standing
+/// log where admission decisions belong. `closing_a_review_moves_no_standing` pins it.
+///
+/// A close that matches no **open** row is [`ApiError::NotFound`], not a silent success: two admins
+/// working one queue is ordinary, and the one who lost the race should learn their click did
+/// nothing rather than believe they decided it.
+pub async fn close_review_request(
+    pool: &PgPool,
+    admin: &SystemAdmin,
+    params: CloseReviewRequestParams,
+) -> ApiResult<()> {
+    let closed = sqlx::query!(
+        r#"
+        UPDATE kb_principal_review_requests
+           SET decided_at = now(), decided_by = $2, decision_note = $3
+         WHERE id = $1
+           AND decided_at IS NULL
+        "#,
+        params.request_id,
+        *admin.actor(),
+        params.decision_note,
+    )
+    .execute(pool)
+    .await?
+    .rows_affected();
+
+    if closed == 0 {
+        return Err(ApiError::NotFound(
+            "no open review request with that id".to_string(),
+        ));
+    }
 
     Ok(())
 }
