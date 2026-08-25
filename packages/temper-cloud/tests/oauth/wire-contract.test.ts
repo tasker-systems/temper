@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { importSPKI, jwtVerify } from "jose";
 import { beforeAll, describe, expect, it } from "vitest";
 import { type ReconcileRequest, signReconcile } from "../../src/oauth/reconcile.js";
+import type { ResolvePrincipalRequest, ResolvePrincipalResponse } from "../../src/oauth/resolve.js";
 
 /**
  * Cross-language wire-contract proof (M1 Task 1.4).
@@ -97,6 +98,27 @@ describe("ReconcileRequest wire contract (mirrors Rust temper_core::types::Recon
     // nullables accept null (matches Option<..> on the Rust side)
     const nulls: ReconcileRequest = { ...value, provider: null, email_verified: null };
     expect(nulls.provider).toBeNull();
+  });
+});
+
+describe("ResolvePrincipalRequest wire contract (mirrors Rust temper_core::types)", () => {
+  it("has exactly the Rust struct fields, on both halves of the call", () => {
+    const request: ResolvePrincipalRequest = {
+      external_user_id: "nid-1",
+      email: "a@corp.io",
+      email_verified: true,
+    };
+    expect(Object.keys(request).sort()).toEqual(["email", "email_verified", "external_user_id"]);
+    // Option<bool> on the Rust side.
+    const nulls: ResolvePrincipalRequest = { ...request, email_verified: null };
+    expect(nulls.email_verified).toBeNull();
+
+    // The response half matters as much: the AS reads `profile_id` off it and writes that value
+    // into a foreign key, so a rename on the Rust side must not fail silently as `undefined`.
+    const response: ResolvePrincipalResponse = {
+      profile_id: "0198f0a0-0000-7000-8000-000000000001",
+    };
+    expect(Object.keys(response)).toEqual(["profile_id"]);
   });
 });
 

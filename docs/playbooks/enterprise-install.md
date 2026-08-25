@@ -90,10 +90,12 @@ Sources: [Self-hosting Temper](./self-host-temper.md),
 | `AS_SIGNING_KID` | Yes (SAML path) | — | — | Key id published in the JWKS |
 | `AS_CLIENTS` | Yes (SAML path) | — | — | JSON `client_id → [redirect_uris]` allowlist; unset = fail-closed |
 | `AS_ACCESS_TTL_SECONDS` | Optional (default `900`) | — | — | Access-token lifetime |
-| `AS_REFRESH_TTL_SECONDS` | Optional (default `2592000`, 30d) | — | — | Refresh-token lifetime |
+| `AS_REFRESH_TTL_SECONDS` | Optional (default `2592000`, 30d) | — | — | Refresh-token lifetime (slides on rotation) |
+| `AS_REFRESH_CHAIN_MAX_SECONDS` | Optional (default `7776000`, 90d) | — | — | **Absolute** refresh-chain lifetime from the last full login — the real bound on IdP-removed reach |
 | **Group provisioning / reconcile channel (SAML Phase 2)** | | | | |
 | `INTERNAL_RECONCILE_SECRET` | Yes (SAML path; shared AS+API) | — | — | Same value on both; unset disables reconcile (auth still works) |
 | `INTERNAL_RECONCILE_URL` | Yes (SAML path; AS side) | — | — | Full URL of the API's `/internal/saml/reconcile` |
+| `INTERNAL_RESOLVE_URL` | Yes (SAML path; AS side) | — | — | Full URL of the API's `/internal/principal/resolve`; same secret. Unset ⇒ refresh chains carry no owner and an admin revoke cannot end them early |
 | **Slack account link (optional; needed only to run the @temper mention agent)** | | | | |
 | `SLACK_LINK_CLIENT_ID` | Yes (Slack path) | — | — | OAuth client the link flow authorizes as. Auth0: a native/PKCE app's client_id. SAML path: a `client_id` present in `AS_CLIENTS` |
 | `SLACK_LINK_SECRET` | Yes (Slack path; shared API+agent) | — | — | Shared secret gating `/internal/slack/link-state`; same value on the mention agent. Unset ⇒ the endpoint is disabled (auth still works) |
@@ -271,7 +273,9 @@ from the happy path (SAML variant swaps, a failed step to re-run by hand, etc.).
   profile converges because every step is idempotent, but there's no Terraform-like plan/diff
   preview ([Bootstrap an Org](./bootstrap-an-org.md)).
 - **SCIM (Phase 3).** Group provisioning today is JIT on login; immediate deprovisioning needs
-  SCIM, not yet available ([Self-hosting with SAML](./self-host-with-saml.md)).
+  SCIM, not yet available. Until then an IdP-side removal takes effect within
+  `AS_REFRESH_CHAIN_MAX_SECONDS` (90 days by default), and an administrator's revoke is immediate
+  — see the Limitations in [Self-hosting with SAML](./self-host-with-saml.md).
 - **Cogmap-write-by-team-role.** Authorial (write) RBAC for team contexts and team cognitive maps
   is still undefined — de facto, any team member can write, not just admins/owners. This playbook's
   `is_system_admin` gate covers the L0 kernel only, not team-scoped cogmaps.

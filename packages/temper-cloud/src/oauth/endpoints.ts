@@ -17,6 +17,7 @@ import {
   bindCodeToFlow,
   consumeCode,
   createPendingFlow,
+  principalMayRefresh,
   rotateRefreshToken,
   storeRefreshToken,
 } from "./flow.js";
@@ -29,6 +30,7 @@ import {
   newOpaqueToken,
 } from "./mint.js";
 import { reconcileMemberships } from "./reconcile.js";
+import { resolvePrincipal } from "./resolve.js";
 
 /** How long a pending flow (awaiting the IdP round-trip) stays valid. */
 const PENDING_FLOW_TTL_SECONDS = 600;
@@ -38,6 +40,13 @@ const CODE_TTL_SECONDS = 300;
 const REPLAY_TTL_SECONDS = 600;
 /** Default TTL for a freshly-issued refresh token, when AS_REFRESH_TTL_SECONDS is unset/invalid. */
 const DEFAULT_REFRESH_TTL_SECONDS = 2592000;
+/**
+ * Default absolute lifetime of a refresh CHAIN, when AS_REFRESH_CHAIN_MAX_SECONDS is unset/invalid.
+ * 90 days — a meaningful multiple of the 30-day per-token TTL, so rotation still does its job,
+ * and a bound an operator can state at an offboarding review. Mirrored as a literal in the
+ * migration's backfill (20260825000010), which cannot read this env.
+ */
+const DEFAULT_REFRESH_CHAIN_MAX_SECONDS = 7776000;
 
 /** Validated refresh-token TTL, read from AS_REFRESH_TTL_SECONDS (mirrors mint.ts's accessTtlSeconds). */
 function refreshTtlSeconds(): number {
@@ -47,6 +56,24 @@ function refreshTtlSeconds(): number {
   }
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_REFRESH_TTL_SECONDS;
+}
+
+/**
+ * Validated chain lifetime, read from AS_REFRESH_CHAIN_MAX_SECONDS.
+ *
+ * The bound an operator states: how long a session can live at most, measured from the last full
+ * SAML login. Rotation cannot move it; only another login can. It is also the arm that holds
+ * independently of standing — reconciliation against the IdP acts on `source='idp'` team
+ * memberships and leaves standing `approved`, so a clock covers that axis where an admission check
+ * does not.
+ */
+function refreshChainMaxSeconds(): number {
+  const raw = process.env.AS_REFRESH_CHAIN_MAX_SECONDS;
+  if (!raw) {
+    return DEFAULT_REFRESH_CHAIN_MAX_SECONDS;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_REFRESH_CHAIN_MAX_SECONDS;
 }
 
 function badRequest(reason: string): Response {
@@ -187,11 +214,33 @@ export async function handleSamlAcs(req: Request, db: NeonClient): Promise<Respo
       );
     }
 
+    // Who this login is, so the refresh chain the token endpoint is about to mint carries an owner
+    // an administrator can end. Fail-open on its own, exactly like the reconcile above and for the
+    // same reason (design spec §3.8): a principal we could not name must still be able to sign in.
+    // The cost of failing is bounded and stated — that chain is outside the standing hook's reach
+    // until its next rotation re-resolves it, and is held by its absolute lifetime meanwhile.
+    let profileId: string | null = null;
+    try {
+      profileId = (
+        await resolvePrincipal({
+          external_user_id: claims.sub,
+          email: claims.email,
+          email_verified: claims.email_verified,
+        })
+      ).profile_id;
+    } catch (resolveErr) {
+      logger.error(
+        { err: resolveErr instanceof Error ? resolveErr.message : String(resolveErr) },
+        "SAML ACS: principal resolve failed (fail-open, login proceeds without a chain owner)",
+      );
+    }
+
     const code = newOpaqueToken();
     const { redirectUri, oauthState } = await bindCodeToFlow(db, String(relayState), {
       code,
       claims,
       expiresAt: new Date(Date.now() + CODE_TTL_SECONDS * 1000),
+      profileId,
     });
 
     const u = new URL(redirectUri);
@@ -248,11 +297,17 @@ function oauthError(error: string, status = 400): Response {
  * Mints an access token + a fresh opaque refresh token for `claims`, persists the refresh token
  * (scoped to `clientId`), and returns the RFC 6749 §5.1 success body. Shared by both the
  * authorization_code and refresh_token grants in `handleToken`.
+ *
+ * `chainExpiresAt` is the load-bearing parameter: the authorization_code grant computes a fresh one
+ * (a new chain), and the refresh grant passes back the one it read off the token it rotated. There
+ * is deliberately no default — a caller that omits it fails to compile rather than choosing a
+ * deadline by accident.
  */
 async function issueTokenPair(
   db: NeonClient,
   claims: MintedClaims,
   clientId: string,
+  chain: { expiresAt: string; profileId: string | null },
 ): Promise<TokenResponse> {
   const accessToken = await mintAccessToken(claims);
   const refreshToken = newOpaqueToken();
@@ -261,6 +316,8 @@ async function issueTokenPair(
     clientId,
     claims,
     expiresAt: new Date(Date.now() + refreshTtlSeconds() * 1000),
+    chainExpiresAt: chain.expiresAt,
+    profileId: chain.profileId,
   });
 
   return {
@@ -316,14 +373,21 @@ export async function handleToken(req: Request, db: NeonClient): Promise<Respons
       return oauthError("invalid_request");
     }
 
-    let claims: MintedClaims;
+    let consumed: Awaited<ReturnType<typeof consumeCode>>;
     try {
-      claims = await consumeCode(db, String(code), String(codeVerifier), clientId);
+      consumed = await consumeCode(db, String(code), String(codeVerifier), clientId);
     } catch {
       return oauthError("invalid_grant");
     }
 
-    return oauthJson(await issueTokenPair(db, claims, clientId), 200);
+    // A fresh login starts a NEW chain, and this is the only place a chain deadline is computed.
+    return oauthJson(
+      await issueTokenPair(db, consumed.claims, clientId, {
+        expiresAt: new Date(Date.now() + refreshChainMaxSeconds() * 1000).toISOString(),
+        profileId: consumed.profileId,
+      }),
+      200,
+    );
   }
 
   if (grantType === "refresh_token") {
@@ -339,7 +403,44 @@ export async function handleToken(req: Request, db: NeonClient): Promise<Respons
       return oauthError("invalid_grant");
     }
 
-    return oauthJson(await issueTokenPair(db, rotated.claims, rotated.clientId), 200);
+    // A chain minted during a fail-open login, or by a binary that predates the owner column,
+    // carries none. Re-resolve here so the successor — the row that will actually be presented
+    // next — carries the owner, rather than waiting out the chain's remaining lifetime.
+    let profileId = rotated.profileId;
+    if (profileId === null) {
+      try {
+        profileId = (
+          await resolvePrincipal({
+            external_user_id: rotated.claims.sub,
+            email: rotated.claims.email,
+            email_verified: rotated.claims.email_verified,
+          })
+        ).profile_id;
+      } catch (resolveErr) {
+        logger.error(
+          { err: resolveErr instanceof Error ? resolveErr.message : String(resolveErr) },
+          "token: chain owner re-resolve failed (chain stays bounded by its absolute lifetime)",
+        );
+      }
+    }
+
+    // Admission ended ⇒ no new pair, answered HERE rather than only at the API gate the minted
+    // token would later meet. `principal_may_refresh` is the SQL predicate, not a restatement of
+    // it: the same terminal set `standing_service::apply` ends chains for, and `denied` /
+    // `requested` principals pass it deliberately — they hold tokens to reach the ungated
+    // join-request surface. An unresolved owner cannot be asked, and is not refused for it.
+    if (profileId !== null && !(await principalMayRefresh(db, profileId))) {
+      return oauthError("invalid_grant");
+    }
+
+    return oauthJson(
+      await issueTokenPair(db, rotated.claims, rotated.clientId, {
+        // Handed back UNCHANGED. This is the line that makes the bound absolute.
+        expiresAt: rotated.chainExpiresAt,
+        profileId,
+      }),
+      200,
+    );
   }
 
   if (grantType === "client_credentials") {

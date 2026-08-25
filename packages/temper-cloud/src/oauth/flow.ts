@@ -14,6 +14,16 @@ function normalizeClaims(value: unknown): MintedClaims {
   return (typeof value === "string" ? JSON.parse(value) : value) as MintedClaims;
 }
 
+/**
+ * Normalizes a TIMESTAMPTZ column read back from the DB into an ISO string. Same driver split as
+ * `normalizeClaims`: `postgres` (integration tests) hands back a `Date`, `neon()` (production) a
+ * string. Everything downstream of a read passes the value straight back into another query, so
+ * one shape at the boundary keeps the two drivers from disagreeing about a bound.
+ */
+function normalizeTimestamp(value: unknown): string {
+  return value instanceof Date ? value.toISOString() : String(value);
+}
+
 export interface CreatePendingFlowParams {
   relayState: string;
   clientId: string;
@@ -42,6 +52,12 @@ export interface BindCodeToFlowArgs {
   code: string;
   claims: MintedClaims;
   expiresAt: Date;
+  /**
+   * The profile this login resolved to, for stamping on the refresh chain the token endpoint is
+   * about to mint. `null` when the resolve call was unavailable — login proceeds regardless, and
+   * the chain is bounded by its absolute lifetime alone until a rotation re-resolves it.
+   */
+  profileId: string | null;
 }
 
 export interface BindCodeToFlowResult {
@@ -66,6 +82,7 @@ export async function bindCodeToFlow(
     SET code_hash = ${hashToken(args.code)},
         claims = ${JSON.stringify(args.claims)}::jsonb,
         status = 'code_issued',
+        profile_id = ${args.profileId},
         expires_at = ${args.expiresAt.toISOString()}
     WHERE relay_state = ${relayState} AND status = 'pending_saml' AND expires_at > now()
     RETURNING redirect_uri, oauth_state
@@ -85,12 +102,18 @@ export async function bindCodeToFlow(
  * redemptions can only succeed once. Both the lookup and the claim are additionally scoped to
  * `clientId` so a code issued for one client can never be redeemed by another.
  */
+export interface ConsumedCode {
+  claims: MintedClaims;
+  /** The profile the ACS resolved for this login; `null` when it could not be resolved. */
+  profileId: string | null;
+}
+
 export async function consumeCode(
   db: NeonClient,
   code: string,
   codeVerifier: string,
   clientId: string,
-): Promise<MintedClaims> {
+): Promise<ConsumedCode> {
   const codeHash = hashToken(code);
 
   const rows = await db`
@@ -112,14 +135,17 @@ export async function consumeCode(
     UPDATE kb_oauth_flow
     SET status = 'consumed'
     WHERE code_hash = ${codeHash} AND status = 'code_issued' AND client_id = ${clientId}
-    RETURNING claims
+    RETURNING claims, profile_id
   `;
-  const claimedRow = claimed[0] as { claims: unknown } | undefined;
+  const claimedRow = claimed[0] as { claims: unknown; profile_id: string | null } | undefined;
   if (!claimedRow) {
     throw new Error("authorization code was consumed concurrently");
   }
 
-  return normalizeClaims(claimedRow.claims);
+  return {
+    claims: normalizeClaims(claimedRow.claims),
+    profileId: claimedRow.profile_id ?? null,
+  };
 }
 
 export interface StoreRefreshTokenArgs {
@@ -127,17 +153,35 @@ export interface StoreRefreshTokenArgs {
   clientId: string;
   claims: MintedClaims;
   expiresAt: Date;
+  /**
+   * End of the CHAIN this token belongs to. Stamped once at the chain's first token and passed
+   * back unchanged by every rotation — a successor never gets a fresh one, which is what makes the
+   * bound absolute rather than sliding.
+   */
+  chainExpiresAt: string;
+  /** The principal who owns this chain, so an administrator can end it. `null` if unresolved. */
+  profileId: string | null;
 }
 
-/** Persists a newly-issued opaque refresh token (hashed at rest). */
+/**
+ * Persists a newly-issued opaque refresh token (hashed at rest).
+ *
+ * `expires_at` is `LEAST(requested, chain_expires_at)` — computed in SQL against the same clock the
+ * rotation guard reads. A token is never handed out advertising an expiry its own chain bound will
+ * not honour, so `expires_in` and the chain never disagree in front of a client.
+ */
 export async function storeRefreshToken(
   db: NeonClient,
   args: StoreRefreshTokenArgs,
 ): Promise<void> {
   await db`
-    INSERT INTO kb_oauth_refresh_tokens (token_hash, client_id, claims, expires_at)
+    INSERT INTO kb_oauth_refresh_tokens (
+      token_hash, client_id, claims, expires_at, chain_expires_at, profile_id
+    )
     VALUES (
-      ${hashToken(args.token)}, ${args.clientId}, ${JSON.stringify(args.claims)}::jsonb, ${args.expiresAt.toISOString()}
+      ${hashToken(args.token)}, ${args.clientId}, ${JSON.stringify(args.claims)}::jsonb,
+      LEAST(${args.expiresAt.toISOString()}::timestamptz, ${args.chainExpiresAt}::timestamptz),
+      ${args.chainExpiresAt}::timestamptz, ${args.profileId}
     )
   `;
 }
@@ -148,6 +192,10 @@ export interface RotateRefreshTokenResult {
   // refresh token, since a public client's refresh-token request carries no
   // client_id of its own — it's recovered from the token being rotated.
   clientId: string;
+  /** The chain's absolute end, to be handed to the successor UNCHANGED. */
+  chainExpiresAt: string;
+  /** The chain's owner, if one was resolved when it was minted. */
+  profileId: string | null;
 }
 
 /**
@@ -166,13 +214,40 @@ export async function rotateRefreshToken(
     UPDATE kb_oauth_refresh_tokens
     SET revoked_at = now()
     WHERE token_hash = ${hashToken(token)} AND revoked_at IS NULL AND expires_at > now()
-    RETURNING claims, client_id
+      AND chain_expires_at > now()
+    RETURNING claims, client_id, chain_expires_at, profile_id
   `;
-  const row = rows[0] as { claims: unknown; client_id: string } | undefined;
+  const row = rows[0] as
+    | {
+        claims: unknown;
+        client_id: string;
+        chain_expires_at: unknown;
+        profile_id: string | null;
+      }
+    | undefined;
   if (!row) {
-    throw new Error("refresh token is unknown, revoked, or expired");
+    throw new Error("refresh token is unknown, revoked, expired, or its chain has ended");
   }
-  return { claims: normalizeClaims(row.claims), clientId: row.client_id };
+  return {
+    claims: normalizeClaims(row.claims),
+    clientId: row.client_id,
+    chainExpiresAt: normalizeTimestamp(row.chain_expires_at),
+    profileId: row.profile_id ?? null,
+  };
+}
+
+/**
+ * May this principal be handed a new token pair?
+ *
+ * Reads the `principal_may_refresh` SQL predicate (migration 20260825000010) rather than restating
+ * what "admission has ended" means — the same set `standing_service::apply` revokes live chains
+ * for, asked from the other side. A restated copy here would be a true-looking statement about
+ * real columns that nothing could compare against the incumbent.
+ */
+export async function principalMayRefresh(db: NeonClient, profileId: string): Promise<boolean> {
+  const rows = await db`SELECT principal_may_refresh(${profileId}::uuid) AS ok`;
+  const row = rows[0] as { ok: boolean | null } | undefined;
+  return row?.ok === true;
 }
 
 /** Revokes a refresh token. Idempotent — revoking an already-revoked or unknown token is a no-op. */
