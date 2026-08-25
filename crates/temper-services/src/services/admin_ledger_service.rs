@@ -52,11 +52,23 @@ pub struct AdminLedgerEntry {
 ///
 /// `admin_ledger_opened` has no `kb_event_types` row until the epoch marker migration ships. That
 /// is harmless: `= ANY($1)` simply matches nothing and `ledger_epoch` returns `None`.
+///
+/// Pinned to `temper_substrate::payloads::ADMIN_EVENT_NAMES` by
+/// `the_readable_catalogue_is_exactly_the_admin_vocabulary` below. That pin is what stops this
+/// const and the registry drifting apart unnoticed — read its doc before adding a name here.
 const ADMIN_EVENT_TYPES: &[&str] = &[
     "admin_ledger_opened",
     "grant_created",
     "grant_revoked",
     "slack_principal_disconnected",
+    // Principal-admission and governance transitions, written by `principal_standing_apply` /
+    // `principal_governance_set` (`migrations/20260720000030`) and registered `admin` by
+    // `20260720000020`. They were emitted from the day that migration shipped and were readable
+    // through no door at all: the events existed, the fail-closed default hid them, and the absence
+    // was nobody's decision. Their read gate is `readable_event_types`'s admin arm — see the
+    // deliberate-absence note there for why neither gets a subject-axis arm below it.
+    "principal_standing_changed",
+    "principal_governance_changed",
 ];
 
 /// The §5 table, evaluated for one subject. Returns the event types `caller` may read about
@@ -115,6 +127,36 @@ async fn readable_event_types(
     //   precisely because the fail-closed default is doing policy work here, which makes
     //   "deliberately absent" and "not written yet" indistinguishable in the code. A future arm
     //   proposal for this type must revisit that doc FIRST.
+    //
+    // principal_standing_changed / principal_governance_changed → DELIBERATELY ADMIN-ONLY ON THIS
+    //   AXIS, and the self-service half is served by `list_by_actor` rather than by an arm here.
+    //   Not an omission — the arm the source draft proposed would be WRONG, for a mechanical
+    //   reason. This gate returns TYPE NAMES; it cannot dispatch per row. An arm saying "the
+    //   subject may read their own standing types" would hand the subject every standing event
+    //   whose subject is them — including `revoke` and `deactivate` performed BY AN ADMIN — which
+    //   is precisely the actor != subject line the disconnect decision above draws.
+    //
+    //   The actor axis already draws it, structurally rather than by policy:
+    //   `principal_standing_apply` emits through `COALESCE(p_actor, p_profile)`'s entity
+    //   (20260720000030), so a self-service `request`/`withdraw`/`request_review` — the three acts
+    //   that carry `actor: Some(self)` and `ActorAuthority::SelfPrincipal`
+    //   (access_service.rs:866, :957, :1019) — is emitted by the SUBJECT and comes back from
+    //   `list_by_actor(caller = actor = self)`, while an admin's act upon them is emitted by the
+    //   ADMIN and does not. Same shape as `slack_principal_disconnected`, for the same reason.
+    //
+    //   THE NON-APPROVED PRINCIPAL IS EXCLUDED DELIBERATELY, decided 2026-08-24. `list_by_actor`
+    //   gates on `has_system_access`, which since Task 7's repoint answers `standing = approved`, so
+    //   a principal who is `requested`, `denied`, `revoked` or `deactivated` cannot read their own
+    //   self-service acts — including, most pointedly, the `request_review` a revoked principal has
+    //   just filed. These types do NOT earn an exception from that: the question was asked directly
+    //   and answered no. §11.1b's rule holds unchanged — losing system access means you are not a
+    //   reader, and a revoked principal is not owed the record of asking to stop being one.
+    //
+    //   So an arm here would not be an extension, it would be a REVERSAL: a revoked principal
+    //   reading through this door exactly what `list_by_actor` refused them at the other. Recorded
+    //   rather than left implicit because the fail-closed default makes "deliberately excluded" and
+    //   "not written yet" look identical in code — the same reason the disconnect decision above
+    //   has a doc of its own.
     //
     // Default: absent from this fn ⇒ admin-only ⇒ fail closed. The default arm is expressed as
     // ABSENCE from the returned set rather than as a match arm nobody wrote.
@@ -347,4 +389,45 @@ pub fn parse_subject_spec(spec: &str) -> ApiResult<RefTarget> {
         kind: parse_anchor_table(kind)?,
         id,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The read surface's catalogue and the admin vocabulary name the same set.
+    ///
+    /// **This is the pin that closes a divergence that was invisible from either side.** Before it,
+    /// three catalogues claimed to describe the admin vocabulary: this module's `ADMIN_EVENT_TYPES`
+    /// (four), `temper_substrate::payloads::ADMIN_EVENT_NAMES` (six, and what `bootseed` stamps),
+    /// and a `ADMIN_EVENT_TYPES_FOR_TEST` in `tests/admin_ledger_test.rs` whose doc comment claimed
+    /// to mirror THIS const while actually copying the vocabulary. The database and the test agreed
+    /// on six; the read surface honoured four; and nothing compared them. That is the failure
+    /// `temper_core::types::query::act` already names by this const's own name — "a const beside a
+    /// registry, with a test holding its own second copy".
+    ///
+    /// **It does not make a new type readable.** Registering a type as `admin` fails THIS test
+    /// rather than joining the readable set: the reader still has to come here and decide, which is
+    /// what fail-closed means. The point is that the decision can no longer be *skipped silently* —
+    /// it can only be taken or be a red test.
+    ///
+    /// No database: both sides are consts, and a pin that needs `test-db` is a pin most local runs
+    /// never execute.
+    #[test]
+    fn the_readable_catalogue_is_exactly_the_admin_vocabulary() {
+        let mut readable = ADMIN_EVENT_TYPES.to_vec();
+        let mut vocabulary = temper_substrate::payloads::ADMIN_EVENT_NAMES.to_vec();
+        readable.sort_unstable();
+        vocabulary.sort_unstable();
+
+        assert_eq!(
+            readable, vocabulary,
+            "the ledger's readable catalogue and the admin vocabulary have diverged. A type in the \
+             vocabulary but not here is registered `admin` and unreadable in fact — nobody decided \
+             that, it just happened. A type here but not in the vocabulary is one this surface \
+             believes it serves and the registry has never heard of. Take the decision: add it to \
+             ADMIN_EVENT_TYPES with a read-gate arm in `readable_event_types`, or take it out of \
+             ADMIN_EVENT_NAMES."
+        );
+    }
 }
