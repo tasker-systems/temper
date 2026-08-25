@@ -810,7 +810,32 @@ reasons that comment explains at length, and retirement does not change them.
 
 `get_retired_administered` is the same predicate over a single id.
 
-Wire both into the handlers: `list` gains an optional `retired: Option<bool>` query parameter and routes to `list_retired_administered` when true; `get` falls back to `get_retired_administered` when the read-axis lookup returns `NotFound`.
+Wire both into the handlers. `handlers/contexts.rs` already imports `axum::extract::Query` and
+`serde::Deserialize`, so the incumbent query-param shape — copied from `handlers/edges.rs:48-52`
+and its `params(...)` at `:60` — is:
+
+```rust
+/// Query params for the context list. `retired = true` switches the read from the visibility
+/// axis to the ADMIN axis: a retired context is invisible to `contexts_readable_by_teams` by
+/// construction, so it can only be listed by someone who could have retired it.
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub struct ListContextsQuery {
+    /// List retired contexts you administer instead of the contexts you can read.
+    pub retired: Option<bool>,
+}
+```
+
+then `params(ListContextsQuery)` in `list`'s `#[utoipa::path]`, and
+`Query(q): Query<ListContextsQuery>` in its signature.
+
+`get` falls back to `get_retired_administered` when the read-axis lookup returns `NotFound`.
+
+> **The `IntoParams` trap does not bite here, and it is worth knowing why.** `openapi.rs:751-754`
+> records that *enums* reachable only through an `IntoParams` query struct are NOT auto-collected
+> by `.routes()` and must be named in `components(schemas(...))` by hand, or the spec carries a
+> dangling `$ref` and `openapi-generator` emits zero files. `Option<bool>` is a primitive and
+> generates no `$ref`, so nothing needs registering. Do not add a `components(schemas(...))` entry
+> for `ListContextsQuery`.
 
 - [ ] **Step 4: Run the tests and regenerate**
 
