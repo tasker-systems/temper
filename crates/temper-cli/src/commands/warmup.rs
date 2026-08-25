@@ -438,9 +438,16 @@ async fn fetch_pending(client: &temper_client::TemperClient) -> Result<PendingSu
 /// is empty has *read* an empty queue, while a non-admin has read nothing at all. Collapsing
 /// the two would make the field useless to the only person it is for.
 ///
-/// **Every other error still propagates.** Mapping `Forbidden` alone is what keeps this from
-/// being a swallowed-error path: a network failure or an expired token fails warmup loudly
-/// instead of quietly reporting a section that is merely absent.
+/// **Every other error still propagates out of THIS function** — which is what keeps
+/// `Forbidden` from widening into "any failure means not-an-admin". A network failure or an
+/// expired token must never arrive at the caller wearing the same `None` a refusal wears,
+/// because that `None` is a claim about the caller's ROLE.
+///
+/// It no longer follows that such an error fails warmup, and this comment used to say it did.
+/// [`degrade_pending`] catches it one level up and turns it into an absent BLOCK plus a stderr
+/// line, so the primer still prints. The distinction that survives is the one that matters
+/// here: a transport failure never becomes `Some(0)`, and never becomes a field-level `None`
+/// that would read as "you are not an admin".
 ///
 /// Generic over the row type because the count is all this needs — pinning it to
 /// `JoinRequestWithProfile` would buy nothing and cost every test a fifteen-field fixture.
@@ -609,13 +616,16 @@ mod tests {
     }
 
     /// **This is what keeps the arm above from being a swallowed-error path.** Only
-    /// `Forbidden` means "not yours"; anything else is a real failure and must surface.
+    /// `Forbidden` means "not yours"; anything else is a real failure and must surface AS one.
+    /// It does not end warmup — `degrade_pending` absorbs it — but it must not be laundered
+    /// into a refusal on the way, because a refusal is a claim about who the caller is.
     #[test]
     fn a_transport_failure_is_not_mistaken_for_an_absent_section() {
         let result = join_request_count::<()>(Err(ClientError::TokenExpired));
         assert!(
             result.is_err(),
-            "an expired token must fail warmup, not quietly report an absent section"
+            "an expired token must surface as an error here — never as the `None` that means \
+             `not an admin`. What warmup then DOES with that error is `degrade_pending`'s call"
         );
     }
 

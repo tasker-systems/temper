@@ -90,6 +90,23 @@ temper team join <token>
 
 …or decline: `temper team decline <token>`.
 
+They do not have to remember to look. `temper warmup` — the context primer a
+session already starts with — reports how many invitations are waiting on them:
+
+```json
+"pending": { "invitations": 1, "join_requests": null }
+```
+
+So an invitation addressed to someone who has **already signed in** reaches them
+at their next session without anyone chasing it. Someone who has never signed in
+still needs telling once, out of band — the invited email is a correlator, and it
+can only resolve to a profile that exists.
+
+(`join_requests` counts the join requests awaiting *your* review, and is `null`
+when you are not an instance admin — that is "not yours to see", which is a
+different fact from an empty queue. The whole `pending` block is absent if it
+could not be read; the reason is written to stderr.)
+
 As the inviter, you can review a team's outstanding invitations any time:
 
 ```bash
