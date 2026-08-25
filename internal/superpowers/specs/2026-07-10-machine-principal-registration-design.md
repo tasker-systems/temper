@@ -125,7 +125,8 @@ re-conflate them is strong:
 - **Issuer-held credential material** — nothing today. Under Phase B, temper would hold an argon2id
   **hash** of each client secret. A hash, not ciphertext: temper never needs the plaintext back, so
   a KDF strictly dominates encryption, and `kb_oauth_refresh_tokens.token_hash` already models this
-  exactly. `pgcrypto` would be indicated only if temper had to *replay* a third-party secret it
+  exactly. (**Shipped as SHA-256, deliberately** — see the amendment under *Phase B* below. The
+  hash-not-ciphertext half of this sentence is what held; the choice of KDF did not.) `pgcrypto` would be indicated only if temper had to *replay* a third-party secret it
   holds on someone else's behalf. It has no such need, and acquiring one should be resisted.
 
 **No table stores a secret in either phase. `pgcrypto` is not adopted.** The problem is
@@ -397,6 +398,32 @@ that remains valid at the IdP — correct, but not the same as never issuing it.
 - The hash is **argon2id**. Never encryption: temper does not need the plaintext back, so a KDF
   strictly dominates, and there is no key to manage. `kb_oauth_refresh_tokens.token_hash` is the
   precedent already in the schema.
+
+  > **AMENDED 2026-08-25 — shipped as SHA-256, and this paragraph had the reasoning half-right.**
+  >
+  > `crates/temper-services/src/auth/secret.rs` stores `sha256_hex(secret)`, and
+  > `packages/temper-cloud/src/oauth/machine-clients.ts` verifies against it. Not a drift from this
+  > spec so much as a correction to it, and the deciding fact is one this paragraph names without
+  > following: `kb_oauth_refresh_tokens.token_hash` is the precedent — and that column holds a plain
+  > SHA-256, because what it hashes is 32 bytes of CSPRNG output.
+  >
+  > The same is true of a client secret. `mint_secret` draws 32 bytes from `OsRng`; **no request
+  > type carries a caller-chosen secret**, on either write path (`issue`, and rotate). A slow KDF
+  > buys resistance to *guessing*, which is a property of a small input space. Against 256 bits of
+  > uniform randomness there is no dictionary to run and no structure to exploit, so no cost factor
+  > changes the outcome — and a per-row salt prevents no precomputation that was ever possible.
+  > argon2id here would be a five-figure multiple of CPU per token mint, on a serverless function,
+  > for no change in what an attacker holding the digests can do.
+  >
+  > **What would flip this back.** Any path that lets a human choose the secret, or that shortens
+  > it. That case does not get argon2id by editing `sha256_hex` — the token and authorization-code
+  > paths share it — it gets a separate hashing site with a per-row salt, introduced alongside the
+  > feature that introduces the weak input.
+  >
+  > Surfaced by CodeQL `js/insufficient-password-hash` (alert #27), which classifies these
+  > credentials as passwords by their names. Judged not applicable. The residual worth acting on is
+  > that the invariant is *asserted in comments, not enforced* — nothing stops a future caller
+  > handing `hashToken` a user-chosen string. Tracked as its own task.
 - **Two live secrets per client** for zero-downtime secret rotation: `secret_hash` plus
   `secret_hash_previous` with its own expiry. Issue the new secret, deploy it to the caller, retire
   the old one — no window in which the caller has no valid credential. Under Phase A this problem

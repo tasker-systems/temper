@@ -321,10 +321,18 @@ fn gated_routes() -> OpenApiRouter<AppState> {
 fn internal_routes() -> Router<AppState> {
     use axum::routing::post;
 
-    Router::new().route(
-        "/internal/saml/reconcile",
-        post(handlers::internal_saml::reconcile),
-    )
+    Router::new()
+        .route(
+            "/internal/saml/reconcile",
+            post(handlers::internal_saml::reconcile),
+        )
+        // Same caller and the SAME key as its neighbour, which is why it belongs on this router
+        // rather than one of its own: the AS asks who a `sub` resolves to so it can record an owner
+        // on the refresh chain it is about to mint.
+        .route(
+            "/internal/principal/resolve",
+            post(handlers::internal_saml::resolve_principal),
+        )
 }
 
 /// Internal, server-to-server only — gated by `require_slack_link_signature`, NOT

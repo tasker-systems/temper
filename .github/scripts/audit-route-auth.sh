@@ -91,6 +91,7 @@ embed_internal_routes	handlers::embed::warm
 embed_internal_routes	handlers::region::dispatch
 embed_internal_routes	handlers::slack_disconnect::reap_intents
 internal_routes	handlers::internal_saml::reconcile
+internal_routes	handlers::internal_saml::resolve_principal
 public_routes	handlers::health::health_check
 slack_link_internal_routes	handlers::slack_link::slack_link_state
 slack_mint_internal_routes	handlers::slack_mint::slack_mint

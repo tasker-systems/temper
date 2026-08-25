@@ -71,6 +71,7 @@ ALLOWLIST='/api/access/admin/requests
 /api/subscriptions
 /api/subscriptions/{id}
 /internal/saml/reconcile
+/internal/principal/resolve
 /internal/slack/link-state
 /internal/slack/mint
 /api/auth/slack/callback

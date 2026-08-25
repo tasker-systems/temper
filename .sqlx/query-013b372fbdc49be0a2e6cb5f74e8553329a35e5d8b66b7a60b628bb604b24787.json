@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT count(*) AS \"count!\"\n                  FROM kb_oauth_refresh_tokens\n                 WHERE profile_id IS NULL\n                   AND revoked_at IS NULL\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "013b372fbdc49be0a2e6cb5f74e8553329a35e5d8b66b7a60b628bb604b24787"
+}

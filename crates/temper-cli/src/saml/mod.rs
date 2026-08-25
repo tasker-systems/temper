@@ -55,6 +55,9 @@ pub struct SamlProvisionConfig {
     pub clients: Vec<(String, Vec<String>)>,
     pub access_ttl_secs: u32,
     pub refresh_ttl_secs: u32,
+    /// Absolute lifetime of a refresh CHAIN, measured from the last full login. Distinct from
+    /// `refresh_ttl_secs`, which is the lifetime of one token in the chain.
+    pub refresh_chain_max_secs: u32,
     pub idp_cert: String,
     pub idp_sso_url: String,
     pub idp_entity_id: String,
@@ -101,6 +104,7 @@ impl SamlProvisionConfig {
              AS_CLIENTS={clients}\n\
              AS_ACCESS_TTL_SECONDS={access}\n\
              AS_REFRESH_TTL_SECONDS={refresh}\n\
+             AS_REFRESH_CHAIN_MAX_SECONDS={chain_max}\n\
              # ── temper-api ───────────────────────────────────────────────────\n\
              JWKS_URL={issuer}/oauth/jwks\n\
              AUTH_ISSUER={issuer}\n\
@@ -108,7 +112,8 @@ impl SamlProvisionConfig {
              AUTH_PROVIDER_NAME={provider}\n\
              # ── shared (BOTH functions, identical value) ─────────────────────\n\
              INTERNAL_RECONCILE_SECRET={secret}\n\
-             INTERNAL_RECONCILE_URL={api}/internal/saml/reconcile\n",
+             INTERNAL_RECONCILE_URL={api}/internal/saml/reconcile\n\
+             INTERNAL_RESOLVE_URL={api}/internal/principal/resolve\n",
             issuer = issuer,
             audience = audience,
             key = self.signing_key_pem.replace('\n', "\\n"),
@@ -116,6 +121,7 @@ impl SamlProvisionConfig {
             clients = self.clients_json(),
             access = self.access_ttl_secs,
             refresh = self.refresh_ttl_secs,
+            chain_max = self.refresh_chain_max_secs,
             provider = self.provider_name(),
             secret = self.reconcile_secret,
             api = self.api_origin.trim_end_matches('/'),
@@ -220,6 +226,7 @@ mod tests {
             ],
             access_ttl_secs: 900,
             refresh_ttl_secs: 2_592_000,
+            refresh_chain_max_secs: 7_776_000,
             idp_cert: "-----BEGIN CERTIFICATE-----\nX\n-----END CERTIFICATE-----".into(),
             idp_sso_url: "https://idp.acme.com/sso".into(),
             idp_entity_id: "http://www.okta.com/x".into(),
@@ -248,6 +255,16 @@ mod tests {
             get("INTERNAL_RECONCILE_URL"),
             "https://temper.acme.com/internal/saml/reconcile"
         );
+        // The AS cannot record who a chain belongs to without this, and a missing owner is silent
+        // at runtime (the login fails open) — so the bundle must carry it, not the operator's memory.
+        assert_eq!(
+            get("INTERNAL_RESOLVE_URL"),
+            "https://temper.acme.com/internal/principal/resolve"
+        );
+        // The bound the SAML playbook's Limitations section states. Emitted explicitly rather than
+        // left to the AS default, so what an operator deployed and what they told a review board
+        // are the same number.
+        assert_eq!(get("AS_REFRESH_CHAIN_MAX_SECONDS"), "7776000");
         // AS_CLIENTS is valid JSON of the client→redirects map.
         let clients: serde_json::Value = serde_json::from_str(get("AS_CLIENTS")).unwrap();
         assert_eq!(

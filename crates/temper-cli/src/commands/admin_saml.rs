@@ -16,8 +16,11 @@ use crate::saml::{self, SamlProvisionConfig};
 
 /// AS access-token TTL baked into the emitted env bundle (15 minutes).
 const ACCESS_TTL_SECS: u32 = 900;
-/// AS refresh-token TTL baked into the emitted env bundle (30 days).
+/// AS refresh-token TTL baked into the emitted env bundle (30 days) — one token's lifetime.
 const REFRESH_TTL_SECS: u32 = 2_592_000;
+/// Absolute refresh-CHAIN lifetime baked into the emitted env bundle (90 days), measured from the
+/// last full login. This, not the TTL above, is the session bound an operator states.
+const REFRESH_CHAIN_MAX_SECS: u32 = 7_776_000;
 
 /// The clap `Provision` fields, by value. A params struct (not a long argument list) per the
 /// repo's >5-param convention — the interactive-vs-switched surface is wide.
@@ -207,6 +210,7 @@ pub fn provision(args: ProvisionArgs) -> Result<()> {
         clients,
         access_ttl_secs: ACCESS_TTL_SECS,
         refresh_ttl_secs: REFRESH_TTL_SECS,
+        refresh_chain_max_secs: REFRESH_CHAIN_MAX_SECS,
         idp_cert: idp_cert.trim_end().to_string(),
         idp_sso_url,
         idp_entity_id,
