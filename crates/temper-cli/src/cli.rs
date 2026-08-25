@@ -226,7 +226,7 @@ pub enum Commands {
         #[command(subcommand)]
         action: ContextAction,
     },
-    /// Context primer for new sessions — active goals, in-progress tasks, recent session pointers
+    /// Context primer for new sessions — active goals, in-progress tasks, recent session pointers, and what is pending for you
     Warmup {
         /// Context ref (`@owner/slug` or UUID). Required — no context name is
         /// guaranteed to exist for a given principal, so there is no safe default.

@@ -52,6 +52,36 @@ pub struct WarmupTask {
     pub effort: Option<String>,
 }
 
+/// What is waiting on the caller — counts only, never detail.
+///
+/// **Counts, because the primer's job is to say that something is waiting, not to answer it.** The
+/// detail lives one command away: `temper invitations`, `temper admin requests list`,
+/// `temper admin reviews list`.
+///
+/// **Only items with a terminal state belong here** — each of these disappears when the caller acts
+/// on it. That is the line `kb_subscription_deliveries` already drew for external deliveries ("a
+/// record of awareness, NOT an unfinished queue"), and it is why "a context was shared with your
+/// team" is deliberately absent: an FYI with no terminal state, counted next to real obligations,
+/// teaches a reader to ignore the count.
+///
+/// **This block is principal-scoped, not context-scoped** — unlike every other field on
+/// [`WarmupResult`]. Orthogonal in meaning, but not in delivery: they ride one command, and
+/// `--context` is fatal, so an unreadable context takes the whole primer down with it. See
+/// `context_failure_hint` for the one case where that is actively perverse.
+#[derive(Debug, Serialize)]
+pub struct PendingSummary {
+    /// Team invitations addressed to the caller's verified email.
+    pub invitations: usize,
+    /// Join requests awaiting an admin — `None` when the caller is not an instance admin.
+    ///
+    /// `None` and `Some(0)` are different facts and are never collapsed: `None` means nothing was
+    /// read, `Some(0)` means an admin read an empty queue. Collapsing them would make the field
+    /// useless to the only person it is for.
+    pub join_requests: Option<usize>,
+    /// Reconsideration requests awaiting an admin — same `None` semantics as `join_requests`.
+    pub review_requests: Option<usize>,
+}
+
 /// Full warmup result — serialized by `render()` for JSON and Toon outputs.
 ///
 /// **Standing state first, pointers last.** Field order is the primer's argument: what
@@ -76,6 +106,12 @@ pub struct WarmupResult {
     pub in_progress_tasks: Vec<WarmupTask>,
     /// Recent session pointers — titles and dates only.
     pub recent_sessions: Vec<WarmupSession>,
+    /// What is waiting on the caller — `None` when the read failed.
+    ///
+    /// Two nulls at different levels mean different things, and both are deliberate:
+    /// `pending: null` is "could not read"; `pending.join_requests: null` is "not yours to see".
+    /// `invitations: 0` would assert a reading that never happened; absence asserts nothing.
+    pub pending: Option<PendingSummary>,
 }
 
 /// Display limits for the primer, resolved once by [`resolve_limits`].
@@ -150,30 +186,136 @@ pub fn build_warmup_result(
 ) -> Result<WarmupResult> {
     let context_ref = context.to_string();
 
-    let (active_goals, active_goal_total, recent_sessions) =
-        collect_standing_state(&context_ref, limits)?;
+    let cloud = collect_standing_state(&context_ref, limits)?;
     let in_progress_tasks = collect_in_progress_tasks(config, &context_ref);
 
     Ok(WarmupResult {
         context: context_ref,
-        active_goals,
-        active_goal_total,
+        active_goals: cloud.active_goals,
+        active_goal_total: cloud.active_goal_total,
         in_progress_tasks,
-        recent_sessions,
+        recent_sessions: cloud.recent_sessions,
+        pending: cloud.pending,
     })
 }
 
-/// Fetch active goals and recent session pointers over one client runtime.
+/// Everything one `with_client` closure gathers — the principal-scoped block and the
+/// context-scoped reads together.
 ///
-/// Both filters are the query's, not this function's: goals are narrowed by
-/// `status = active` and sessions by doc type, each capped server-side. Nothing is
-/// re-tested after it arrives.
+/// A struct rather than a tuple because these four are not interchangeable and one of them
+/// (`active_goal_total`) is a bare `usize` that a positional return would happily let a caller
+/// swap with a length.
+struct CloudState {
+    pending: Option<PendingSummary>,
+    active_goals: Vec<WarmupGoal>,
+    active_goal_total: usize,
+    recent_sessions: Vec<WarmupSession>,
+}
+
+/// Count what is waiting on the caller, over a client the caller already has open.
 ///
-/// Returns `(displayed_goals, total_active_goals, sessions)`.
-fn collect_standing_state(
-    context_ref: &str,
-    limits: WarmupLimits,
-) -> Result<(Vec<WarmupGoal>, usize, Vec<WarmupSession>)> {
+/// The two operator counts are `Option` because their endpoint answers a non-admin with `403`, and
+/// **the server's gate is the only copy of that rule.** Asking it is deliberate: a client-side
+/// `Entitlements.is_admin` test would be a second copy, free to drift from the gate it predicts —
+/// the same shape this repo retired when the client-side goal-status filter became a query
+/// predicate (see [`goal_from_row`]).
+async fn fetch_pending(client: &temper_client::TemperClient) -> Result<PendingSummary> {
+    let invitations = client
+        .teams()
+        .list_my_invitations()
+        .await
+        .map_err(runtime::client_err_to_temper)?
+        .len();
+
+    let join_requests = admin_count(client.admin().list_requests().await.map(|r| r.len()))?;
+    let review_requests = admin_count(client.admin().list_reviews().await.map(|r| r.len()))?;
+
+    Ok(PendingSummary {
+        invitations,
+        join_requests,
+        review_requests,
+    })
+}
+
+/// Map an operator-queue read to a count the primer can report.
+///
+/// A `403` — in **either** of its arms — is the server saying "not yours to see", which is `None`.
+/// Every other error propagates: a transport failure must never reach the caller wearing the same
+/// `None` a refusal wears, because that `None` is a claim about the caller's *role*, not about the
+/// network. Propagation out of *this* function is what stops `Forbidden` widening into "any failure
+/// means not-an-admin"; what [`build_warmup_result`] then does with the error is a separate
+/// decision, taken in [`degrade_pending`].
+fn admin_count(
+    result: std::result::Result<usize, temper_client::error::ClientError>,
+) -> Result<Option<usize>> {
+    use temper_client::error::ClientError;
+    match result {
+        Ok(n) => Ok(Some(n)),
+        Err(ClientError::Forbidden | ClientError::ForbiddenDetail { .. }) => Ok(None),
+        Err(e) => Err(runtime::client_err_to_temper(e)),
+    }
+}
+
+/// Absorb a failed pending read: the block goes absent, the reason goes to stderr, and the rest of
+/// the primer still prints.
+///
+/// Every other component of warmup already degrades — tasks fall back to an empty list on any
+/// error. Letting the newest and least important component be the fatal one would mean a single
+/// `500` on a secondary endpoint, or a CLI newer than the API it points at, turning the
+/// session-start hook into no output at all.
+fn degrade_pending(result: Result<PendingSummary>) -> Option<PendingSummary> {
+    match result {
+        Ok(p) => Some(p),
+        Err(e) => {
+            eprintln!("warning: could not read what is pending for you: {e}");
+            None
+        }
+    }
+}
+
+/// The one line printed to stderr when warmup fails on its `--context` while an invitation is
+/// waiting.
+///
+/// **The trap this closes.** `warmup` requires a context and fails if the caller cannot read it.
+/// Someone invited to a team so they can work in that team's context hits exactly that failure —
+/// *because the invitation they have not accepted is what would grant them the context.* The one
+/// fact that resolves the situation sits behind the situation.
+///
+/// The command still fails; that contract is not this feature's to rewrite, and a partial primer
+/// would be worse than a refusal because every other field is context-scoped — `active_goals: []`
+/// would read as "none" when it means "could not read". So the fix is a sentence on the way out,
+/// pointing at `temper invitations`, which needs no context and is therefore reachable from inside
+/// the failure it is printed during.
+///
+/// **It stays quiet when there is nothing to say** — zero invitations, or a pending block that
+/// could not be read. A hint on every failed warmup is noise, and noise is how a real hint gets
+/// ignored. The `None` case is the sharper one: not knowing is not evidence of an invitation.
+fn context_failure_hint(pending: Option<&PendingSummary>) -> Option<String> {
+    let n = pending.map(|p| p.invitations).filter(|n| *n > 0)?;
+    let plural = if n == 1 { "invitation" } else { "invitations" };
+    Some(format!(
+        "! {n} team {plural} waiting on you — run `temper invitations`.\n  \
+         Accepting one may be what grants you the context this command could not read."
+    ))
+}
+
+/// Fetch what is pending, then active goals and recent session pointers — over **one** client
+/// runtime.
+///
+/// Both context filters are the query's, not this function's: goals are narrowed by
+/// `status = active` and sessions by doc type, each capped server-side. Nothing is re-tested after
+/// it arrives.
+///
+/// **One `with_client`, not two.** Each call builds a tokio runtime *and* re-resolves the token
+/// store, and `resolve_token_store` re-emits its near-expiry warning on every resolve — so a
+/// separate closure for the pending read would print that warning three times per warmup instead of
+/// twice. The pending read rides the closure that is already open.
+///
+/// **Pending is read FIRST**, and that ordering is load-bearing rather than incidental: it does not
+/// depend on the context, so reading it first is what lets [`context_failure_hint`] survive the
+/// context reads failing. It costs nothing — the same single request either way.
+///
+fn collect_standing_state(context_ref: &str, limits: WarmupLimits) -> Result<CloudState> {
     // Goals: the server filters to `status = active` and `total` counts the *filtered*
     // set, so the page cap is safe — it bounds what is displayed without touching what is
     // counted. This asked for every goal unbounded (`limit: None`, `meta_only`) while the
@@ -203,11 +345,22 @@ fn collect_standing_state(
         let goal_params = goal_params.clone();
         let session_params = session_params.clone();
         Box::pin(async move {
-            let goal_response = client
-                .resources()
-                .list(&goal_params)
-                .await
-                .map_err(runtime::client_err_to_temper)?;
+            // First, and deliberately: this read is context-independent, so it is the only thing
+            // still true if the context reads below fail.
+            let pending = degrade_pending(fetch_pending(client).await);
+
+            let goal_response = match client.resources().list(&goal_params).await {
+                Ok(r) => r,
+                Err(e) => {
+                    // The error is surfaced unchanged rather than wrapped, so `NotFound` stays
+                    // `NotFound` and the JSON error payload on stdout is untouched. The hint is an
+                    // extra line on stderr, not a different failure.
+                    if let Some(hint) = context_failure_hint(pending.as_ref()) {
+                        eprintln!("{hint}");
+                    }
+                    return Err(runtime::client_err_to_temper(e));
+                }
+            };
 
             let displayed: Vec<WarmupGoal> = goal_response.rows.iter().map(goal_from_row).collect();
             // The true count of what is in force comes from the query's `total`, which
@@ -216,15 +369,24 @@ fn collect_standing_state(
             // the exact confusion `active_goal_total` exists to prevent.
             let active_goal_total = goal_response.total as usize;
 
-            let session_response = client
-                .resources()
-                .list(&session_params)
-                .await
-                .map_err(runtime::client_err_to_temper)?;
+            let session_response = match client.resources().list(&session_params).await {
+                Ok(r) => r,
+                Err(e) => {
+                    if let Some(hint) = context_failure_hint(pending.as_ref()) {
+                        eprintln!("{hint}");
+                    }
+                    return Err(runtime::client_err_to_temper(e));
+                }
+            };
             let sessions: Vec<WarmupSession> =
                 session_response.rows.iter().map(session_from_row).collect();
 
-            Ok((displayed, active_goal_total, sessions))
+            Ok(CloudState {
+                pending,
+                active_goals: displayed,
+                active_goal_total,
+                recent_sessions: sessions,
+            })
         })
     })
 }
@@ -304,6 +466,89 @@ fn in_progress_tasks(tasks: Vec<TaskInfo>) -> Vec<WarmupTask> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use temper_client::error::ClientError;
+
+    fn pending(invitations: usize) -> PendingSummary {
+        PendingSummary {
+            invitations,
+            join_requests: None,
+            review_requests: None,
+        }
+    }
+
+    /// **Both `403` arms mean the same fact, and both must map to `None`.**
+    ///
+    /// `None` on an operator count is a claim about the caller's ROLE: "the server refused to tell
+    /// me". `require_system_admin` returns a bare `ApiError::Forbidden` today, so bare
+    /// `ClientError::Forbidden` is the arm that arrives — but this repo's own idiom for a refusal
+    /// that names the capability it withheld is `ForbiddenDetail`, and this door has exactly one
+    /// gate behind it. Matching only the bare arm would mean that the day that gate gains a message,
+    /// every non-admin silently stops getting a pending block at all, and nothing fails.
+    #[test]
+    fn either_forbidden_arm_reads_as_not_an_admin() {
+        assert_eq!(admin_count(Err(ClientError::Forbidden)).unwrap(), None);
+        assert_eq!(
+            admin_count(Err(ClientError::ForbiddenDetail {
+                message: "system administration required".to_string(),
+            }))
+            .unwrap(),
+            None,
+        );
+    }
+
+    /// An admin reading an empty queue is `Some(0)`, which is a different fact from `None` and must
+    /// never collapse into it. `None` says "not yours to see"; `Some(0)` says "yours, and empty".
+    #[test]
+    fn an_admin_reading_an_empty_queue_is_some_zero() {
+        assert_eq!(admin_count(Ok(0)).unwrap(), Some(0));
+        assert_eq!(admin_count(Ok(3)).unwrap(), Some(3));
+    }
+
+    /// **Every non-403 error still propagates out of this function.** This is what stops
+    /// `Forbidden` widening into "any failure means not-an-admin" — a transport failure must never
+    /// reach the caller wearing the `None` a refusal wears, because that `None` is a claim about
+    /// the caller's role rather than about the network.
+    ///
+    /// What `build_warmup_result` then DOES with the propagated error is a separate decision (it
+    /// degrades the whole block to absent). The two must not be conflated: absorbing here would
+    /// make a 500 indistinguishable from a refusal.
+    #[test]
+    fn a_transport_failure_is_not_a_statement_about_the_caller() {
+        assert!(admin_count(Err(ClientError::NotFound {
+            message: "no such route".to_string(),
+        }))
+        .is_err());
+        assert!(admin_count(Err(ClientError::TokenExpired)).is_err());
+    }
+
+    /// The hint names the count, and reaches for the one command that needs no context.
+    #[test]
+    fn the_hint_names_a_waiting_invitation() {
+        let hint = context_failure_hint(Some(&pending(1))).expect("one invitation is worth saying");
+        assert!(hint.contains("1 team invitation"), "{hint}");
+        assert!(
+            hint.contains("temper invitations"),
+            "the way out must be reachable from inside the failure: {hint}"
+        );
+    }
+
+    #[test]
+    fn the_hint_is_plural_when_it_should_be() {
+        let hint = context_failure_hint(Some(&pending(3))).unwrap();
+        assert!(hint.contains("3 team invitations"), "{hint}");
+    }
+
+    /// **Both silences.** A hint that fires on every failed warmup is noise, and noise is how a
+    /// real hint gets ignored — so zero invitations says nothing, and a pending block that could
+    /// not be read says nothing either. The second is the sharper case: absence of knowledge is not
+    /// evidence of an invitation, and guessing here would print the hint to everyone whose network
+    /// blipped.
+    #[test]
+    fn the_hint_stays_quiet_when_there_is_nothing_to_say() {
+        assert!(context_failure_hint(Some(&pending(0))).is_none());
+        assert!(context_failure_hint(None).is_none());
+    }
 
     /// A `ResourceView` carrying its workflow values where they actually live.
     ///
