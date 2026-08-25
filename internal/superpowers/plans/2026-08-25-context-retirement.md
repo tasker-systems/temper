@@ -35,8 +35,7 @@
 | `crates/temper-core/src/types/context.rs` | **Modify.** `retired: bool` on `ContextRow` and `ContextRowWithCounts`. |
 | `crates/temper-client/src/contexts.rs` | **Modify.** Add `restore`; keep `delete`. |
 | `crates/temper-cli/src/cli.rs`, `commands/context_cmd.rs`, `main.rs` | **Modify.** `restore` verb, `--retired` flag, format-aware output. |
-| `crates/temper-services/tests/context_read_predicate_test.rs` | **Modify.** Read-floor witnesses, one per admitting arm. |
-| `crates/temper-api/tests/context_write_authority_test.rs` | **Modify.** Write-floor witness. |
+| `crates/temper-services/tests/context_read_predicate_test.rs` | **Modify.** Both floors' witnesses, one per admitting arm. Already owns every fixture and both probes. |
 | `tests/e2e/tests/context_retire_e2e.rs` | **Rename from** `context_delete_e2e.rs`, rewrite. |
 | `crates/temper-substrate/tests/context_retire_replay.rs` | **Create.** The replay round-trip hard delete could not pass. |
 | `docs/reference/cli/context.md` | **Modify.** Regenerated CLI reference. |
@@ -127,144 +126,154 @@ The whole enforcement surface. Nothing consumes it yet — every existing row is
 
 **Files:**
 - Create: `migrations/20260825000030_context_retirement.sql`
-- Modify: `crates/temper-services/tests/context_read_predicate_test.rs`
-- Modify: `crates/temper-api/tests/context_write_authority_test.rs`
+- Modify: `crates/temper-services/tests/context_read_predicate_test.rs` — **both** floors' witnesses live here. This file already owns the two probes (`can_read` at `:216`, `can_author` at `:224`) and the whole fixture set, so splitting the write witness into `context_write_authority_test.rs` would duplicate a fixture tree to re-ask a question this file already asks.
 
 **Interfaces:**
 - Consumes: nothing.
 - Produces: `kb_contexts.is_active BOOLEAN NOT NULL DEFAULT true`; floored `contexts_readable_by_teams(uuid, uuid[])` and `context_authorable_by_profile(uuid, uuid)`. Both keep their existing signatures and return types exactly — no caller changes.
 
-- [ ] **Step 1: Write the failing read-floor witnesses**
+- [ ] **Step 1: Write the failing read-floor and write-floor witnesses**
 
 **EXTEND** — spec §2.2 authorizes the floor; §3 requires one isolated witness per admitting arm, because a caller with several reaches cannot tell you which arm closed.
 
-Add to `crates/temper-services/tests/context_read_predicate_test.rs`, using the file's existing `Org` fixture and its `sqlx::query_scalar(...).bind(...)` runtime style (this file is `#![cfg(feature = "test-db")]` and deliberately uses runtime queries, so it needs no `.sqlx` entries):
+**CONFORM on the fixtures.** `crates/temper-services/tests/context_read_predicate_test.rs` already
+carries every helper these tests need. Use them exactly as they are; do not add a second seeding
+path beside the incumbent one. The real signatures, read from the file:
 
 ```rust
-/// Retiring a context closes EVERY admitting arm of `contexts_readable_by_teams`, and the
-/// four arms are proved one at a time: a caller who reaches a context by two routes cannot
-/// witness which one closed.
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn a_retired_context_closes_each_read_arm_independently(pool: PgPool) {
-    let org = Org::seed(&pool).await.expect("seed org");
+async fn org(pool: &PgPool) -> sqlx::Result<Org>                       // :78  — the EPD fixture, a FREE fn
+async fn personal_context(pool: &PgPool, owner: Uuid, slug: &str) -> sqlx::Result<Uuid>   // :119
+async fn team_context(pool: &PgPool, owner_team: Uuid, slug: &str) -> sqlx::Result<Uuid>  // :107
+async fn share_to_team(pool: &PgPool, context_id: Uuid, team_id: Uuid) -> sqlx::Result<()> // :130
+async fn grant(pool: &PgPool, context_id: Uuid, principal_table: &str, principal_id: Uuid,
+               granted_by: Uuid, can_read: bool, can_write: bool) -> sqlx::Result<()>      // :141
+async fn resource_in(pool: &PgPool, context_id: Uuid, owner: Uuid, title: &str)
+    -> sqlx::Result<Uuid>                                                                  // :166
+async fn can_read(pool: &PgPool, p: Uuid, c: Uuid) -> sqlx::Result<bool>                   // :216
+async fn can_author(pool: &PgPool, p: Uuid, c: Uuid) -> sqlx::Result<bool>                 // :224
+async fn sees_resource(pool: &PgPool, p: Uuid, r: Uuid) -> sqlx::Result<bool>              // :232
+```
 
-    // ARM 1 — personal context, owner is the only reader.
-    let personal = personal_context(&pool, org.dana, "dana-personal").await;
-    assert!(readable(&pool, org.dana, personal).await, "owner reads it before retirement");
-    retire(&pool, personal).await;
-    assert!(!readable(&pool, org.dana, personal).await, "arm 1 closes: the owner loses it too");
+`Org` has fields `epd`, `engineering`, `payroll_group`, `squad_two`, `security_it_ops`, `dana`
+(direct member of `squad_two` only), `outsider` (owns nothing, belongs to nothing). Tests in this
+file return `sqlx::Result<()>` and use `?`, not `.expect(...)`.
+
+**The only new helper you may add** is the one that does not exist:
+
+```rust
+/// Flip the retirement flag directly. Deliberately raw SQL, not the service: this file tests the
+/// PREDICATES, and reaching for `context_service::retire` would couple the floor's witnesses to a
+/// function Task 3 has not written yet.
+async fn retire(pool: &PgPool, context_id: Uuid) -> sqlx::Result<()> {
+    sqlx::query("UPDATE kb_contexts SET is_active = false WHERE id = $1")
+        .bind(context_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+```
+
+Add these three tests to the same file:
+
+```rust
+/// Retiring a context closes EVERY admitting arm of `contexts_readable_by_teams`, and the four
+/// arms are proved one at a time: a caller who reaches a context by two routes cannot witness
+/// which one closed. Arms 3 and 4 never join `kb_contexts`, so they are the two an EXISTS-less
+/// floor would silently leave open.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_retired_context_closes_each_read_arm_independently(pool: PgPool) -> sqlx::Result<()> {
+    let o = org(&pool).await?;
+
+    // ARM 1 — personal context.
+    let personal = personal_context(&pool, o.dana, "dana-personal").await?;
+    assert!(can_read(&pool, o.dana, personal).await?, "arm 1 admits before retirement");
+    retire(&pool, personal).await?;
+    assert!(!can_read(&pool, o.dana, personal).await?, "arm 1 closes: the owner loses it too");
 
     // ARM 2 — team-owned, read inherited UP the enclosure chain.
-    let team_owned = team_context(&pool, org.engineering, "eng-owned").await;
-    assert!(readable(&pool, org.dana, team_owned).await, "dana reaches it via enclosure");
-    retire(&pool, team_owned).await;
-    assert!(!readable(&pool, org.dana, team_owned).await, "arm 2 closes");
+    let owned = team_context(&pool, o.engineering, "eng-owned").await?;
+    assert!(can_read(&pool, o.dana, owned).await?, "arm 2 admits via enclosure");
+    retire(&pool, owned).await?;
+    assert!(!can_read(&pool, o.dana, owned).await?, "arm 2 closes");
 
-    // ARM 3 — shared into a team via kb_team_contexts. This arm never joins kb_contexts,
-    // so it is the one an EXISTS-less floor would silently leave open.
-    let shared = personal_context(&pool, org.outsider, "outsider-shared").await;
-    share_to_team(&pool, shared, org.squad_two).await;
-    assert!(readable(&pool, org.dana, shared).await, "dana reaches it via the share");
-    retire(&pool, shared).await;
-    assert!(!readable(&pool, org.dana, shared).await, "arm 3 closes");
+    // ARM 3 — shared into a reachable team. Never joins kb_contexts.
+    let shared = personal_context(&pool, o.outsider, "outsider-shared").await?;
+    share_to_team(&pool, shared, o.squad_two).await?;
+    assert!(can_read(&pool, o.dana, shared).await?, "arm 3 admits via the share");
+    retire(&pool, shared).await?;
+    assert!(!can_read(&pool, o.dana, shared).await?, "arm 3 closes");
 
-    // ARM 4 — explicit read-grant. Also never joins kb_contexts.
-    let granted = personal_context(&pool, org.outsider, "outsider-granted").await;
-    grant_read(&pool, granted, org.dana).await;
-    assert!(readable(&pool, org.dana, granted).await, "dana reaches it via the grant");
-    retire(&pool, granted).await;
-    assert!(!readable(&pool, org.dana, granted).await, "arm 4 closes");
+    // ARM 4 — explicit read-grant. Never joins kb_contexts.
+    let granted = personal_context(&pool, o.outsider, "outsider-granted").await?;
+    grant(&pool, granted, "kb_profiles", o.dana, o.outsider, true, false).await?;
+    assert!(can_read(&pool, o.dana, granted).await?, "arm 4 admits via the grant");
+    retire(&pool, granted).await?;
+    assert!(!can_read(&pool, o.dana, granted).await?, "arm 4 closes");
+
+    Ok(())
 }
 
-/// The floor propagates to resource visibility — but only for reach the CONTAINER conferred.
-/// A resource whose home row names you as owner stays visible, which is what keeps
-/// retirement from being a data jail (spec §1.4).
+/// A retired context is frozen on every arm of `context_authorable_by_profile`, including the
+/// explicit write-grant arm — which delegates to `profile_explicit_grant`, a subject-polymorphic
+/// helper that cannot know a context is retired, so its floor has to be added at the call site.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn retirement_removes_container_conferred_reach_but_not_ownership(pool: PgPool) {
-    let org = Org::seed(&pool).await.expect("seed org");
+async fn a_retired_context_is_not_authorable_by_any_arm(pool: PgPool) -> sqlx::Result<()> {
+    let o = org(&pool).await?;
 
-    let ctx = personal_context(&pool, org.outsider, "outsider-notes").await;
-    let theirs = resource_homed_in(&pool, ctx, org.outsider).await;
-    grant_read(&pool, ctx, org.dana).await;
+    // ARM 1 — personal owner.
+    let personal = personal_context(&pool, o.dana, "dana-writes").await?;
+    // ARM 2 — direct membership in the owning team with an authoring role. Dana is a direct
+    // member of squad_two only, which is why the context must be owned by THAT team.
+    let owned = team_context(&pool, o.squad_two, "squad-writes").await?;
+    // ARM 3 — explicit write-grant, no ownership and no membership.
+    let granted = personal_context(&pool, o.outsider, "outsider-writes").await?;
+    grant(&pool, granted, "kb_profiles", o.dana, o.outsider, true, true).await?;
 
-    assert!(resource_visible(&pool, org.dana, theirs).await, "dana reads it through the context");
-    assert!(resource_visible(&pool, org.outsider, theirs).await, "the owner reads their own");
+    for (label, ctx) in [("personal", personal), ("team-owned", owned), ("write-grant", granted)] {
+        assert!(can_author(&pool, o.dana, ctx).await?, "{label} admits before retirement");
+        retire(&pool, ctx).await?;
+        assert!(!can_author(&pool, o.dana, ctx).await?, "{label} is frozen once retired");
+    }
 
-    retire(&pool, ctx).await;
+    Ok(())
+}
 
-    assert!(!resource_visible(&pool, org.dana, theirs).await, "container-conferred reach is gone");
+/// The floor removes reach the CONTAINER conferred, and nothing else. A resource whose home row
+/// names you as owner stays visible, which is what keeps retirement from being a data jail
+/// (spec §1.4) — `resources_visible_to`'s first arm is `h.owner_profile_id = p_profile`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn retirement_removes_container_conferred_reach_but_not_ownership(
+    pool: PgPool,
+) -> sqlx::Result<()> {
+    let o = org(&pool).await?;
+
+    let ctx = personal_context(&pool, o.outsider, "outsider-notes").await?;
+    let theirs = resource_in(&pool, ctx, o.outsider, "their note").await?;
+    grant(&pool, ctx, "kb_profiles", o.dana, o.outsider, true, false).await?;
+
+    assert!(sees_resource(&pool, o.dana, theirs).await?, "dana reads it through the context");
+    assert!(sees_resource(&pool, o.outsider, theirs).await?, "the owner reads their own");
+
+    retire(&pool, ctx).await?;
+
+    assert!(!sees_resource(&pool, o.dana, theirs).await?, "container-conferred reach is gone");
     assert!(
-        resource_visible(&pool, org.outsider, theirs).await,
-        "the owner arm of resources_visible_to is untouched — this is the anti-trap property"
+        sees_resource(&pool, o.outsider, theirs).await?,
+        "the owner arm is untouched — this is the anti-trap property"
     );
+
+    Ok(())
 }
 ```
-
-Add these helpers to the same file, matching its existing runtime-query style:
-
-```rust
-async fn personal_context(pool: &PgPool, owner: Uuid, slug: &str) -> Uuid {
-    sqlx::query_scalar(
-        "INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name)
-         VALUES (uuid_generate_v7(), 'kb_profiles', $1, $2, $2) RETURNING id",
-    )
-    .bind(owner).bind(slug).fetch_one(pool).await.expect("insert personal context")
-}
-
-async fn team_context(pool: &PgPool, team: Uuid, slug: &str) -> Uuid {
-    sqlx::query_scalar(
-        "INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name)
-         VALUES (uuid_generate_v7(), 'kb_teams', $1, $2, $2) RETURNING id",
-    )
-    .bind(team).bind(slug).fetch_one(pool).await.expect("insert team context")
-}
-
-async fn share_to_team(pool: &PgPool, context: Uuid, team: Uuid) {
-    sqlx::query("INSERT INTO kb_team_contexts (team_id, context_id) VALUES ($1, $2)")
-        .bind(team).bind(context).execute(pool).await.expect("share context");
-}
-
-async fn grant_read(pool: &PgPool, context: Uuid, profile: Uuid) {
-    sqlx::query(
-        "INSERT INTO kb_access_grants
-             (id, principal_table, principal_id, subject_table, subject_id, can_read)
-         VALUES (uuid_generate_v7(), 'kb_profiles', $1, 'kb_contexts', $2, true)",
-    )
-    .bind(profile).bind(context).execute(pool).await.expect("grant read");
-}
-
-async fn retire(pool: &PgPool, context: Uuid) {
-    sqlx::query("UPDATE kb_contexts SET is_active = false WHERE id = $1")
-        .bind(context).execute(pool).await.expect("retire");
-}
-
-async fn readable(pool: &PgPool, profile: Uuid, context: Uuid) -> bool {
-    sqlx::query_scalar("SELECT context_readable_by_profile($1, $2)")
-        .bind(profile).bind(context).fetch_one(pool).await.expect("readable probe")
-}
-
-async fn resource_visible(pool: &PgPool, profile: Uuid, resource: Uuid) -> bool {
-    sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM resources_visible_to($1) v WHERE v.resource_id = $2)",
-    )
-    .bind(profile).bind(resource).fetch_one(pool).await.expect("resource visibility probe")
-}
-```
-
-> ⚠️ **Plan/reality gap to close before writing these.** This file's fixture is a
-> `struct Org` with a constructor the plan has not read in full, and `resource_homed_in`
-> does not exist yet. Open `crates/temper-services/tests/context_read_predicate_test.rs`
-> and match the real constructor name and the real way it seeds a resource + home row. If
-> the fixture builds `Org` by a free function rather than `Org::seed`, use that. Do not
-> invent a second seeding path beside the incumbent one.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-cargo nextest run -p temper-services --features test-db a_retired_context_closes_each_read_arm 2>&1 | tail -30
+cargo nextest run -p temper-services --features test-db --test context_read_predicate_test 2>&1 | tail -30
 ```
 
-Expected: FAIL — `column "is_active" of relation "kb_contexts" does not exist`, from the `retire` helper.
+Expected: the three new tests FAIL with `column "is_active" of relation "kb_contexts" does not exist`,
+raised by the `retire` helper. The file's pre-existing tests still pass.
 
 - [ ] **Step 3: Write the migration**
 
@@ -379,54 +388,25 @@ SELECT declare_migration(
 ```bash
 touch crates/temper-migrate/src/lib.rs   # migrations/ changes do NOT trigger a rebuild on their own
 cargo make db-migrate
-cargo nextest run -p temper-services --features test-db a_retired_context_closes_each_read_arm 2>&1 | tail -30
-cargo nextest run -p temper-services --features test-db retirement_removes_container 2>&1 | tail -30
+cargo nextest run -p temper-services --features test-db --test context_read_predicate_test 2>&1 | tail -40
 ```
 
-Expected: both PASS.
+Expected: all three new tests PASS, and the file's pre-existing tests stay green — the floor
+must not change any answer for an active context.
 
 If `db-migrate` fails on a checksum, the migration was edited after being applied — reset the Docker volume rather than amending the file.
 
-- [ ] **Step 5: Write and run the write-floor witness**
-
-**EXTEND** — spec §2.2.
-
-Add to `crates/temper-api/tests/context_write_authority_test.rs`, matching that file's existing harness:
-
-```rust
-/// A retired context is frozen: no arm of `context_authorable_by_profile` admits, including
-/// the explicit write-grant arm, which delegates to a subject-polymorphic helper that cannot
-/// know a context is retired.
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn a_retired_context_is_not_authorable_by_any_arm(pool: PgPool) {
-    // Build one context per admitting arm: personal-owned, team-owned with an authoring
-    // role, and one reached only by an explicit write-grant. Assert all three authorable,
-    // retire all three, assert none authorable.
-    // Probe: SELECT context_authorable_by_profile($1, $2)
-}
-```
-
-> ⚠️ Replace the comment body with the real fixture calls from that file. The plan does not
-> name them because it has not read the file; open it and follow its incumbent setup rather
-> than seeding a fourth way.
-
-```bash
-cargo nextest run -p temper-api --features test-db a_retired_context_is_not_authorable 2>&1 | tail -30
-```
-
-Expected: PASS.
-
-- [ ] **Step 6: Regenerate the sqlx cache and check**
+- [ ] **Step 5: Regenerate the sqlx cache and check**
 
 ```bash
 cargo sqlx prepare --workspace -- --all-features
 cargo make check 2>&1 | tail -40
 ```
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add migrations/ crates/temper-services/tests/ crates/temper-api/tests/ .sqlx/ crates/*/.sqlx/
+git add migrations/ crates/temper-services/tests/ .sqlx/ crates/*/.sqlx/
 git commit -m "feat(context): add is_active and floor the read and write predicates"
 ```
 
