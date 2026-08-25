@@ -917,3 +917,162 @@ async fn resource_in_context(
     .await?;
     Ok(id)
 }
+
+// =================================================================================================
+// Context retirement (is_active). Nothing consumes it but the two chokepoints this migration
+// floors: contexts_readable_by_teams (the read axis) and context_authorable_by_profile (the write
+// axis). Every existing row is born is_active = true, so an active context must answer identically
+// to before — the floor only has to fire once a context is retired.
+// =================================================================================================
+
+/// Flip the retirement flag directly. Deliberately raw SQL, not the service: this file tests the
+/// PREDICATES, and reaching for `context_service::retire` would couple the floor's witnesses to a
+/// function Task 3 has not written yet.
+async fn retire(pool: &PgPool, context_id: Uuid) -> sqlx::Result<()> {
+    sqlx::query("UPDATE kb_contexts SET is_active = false WHERE id = $1")
+        .bind(context_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Retiring a context closes EVERY admitting arm of `contexts_readable_by_teams`, and the four
+/// arms are proved one at a time: a caller who reaches a context by two routes cannot witness
+/// which one closed. Arms 3 and 4 never join `kb_contexts`, so they are the two an EXISTS-less
+/// floor would silently leave open.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_retired_context_closes_each_read_arm_independently(pool: PgPool) -> sqlx::Result<()> {
+    let o = org(&pool).await?;
+
+    // ARM 1 — personal context.
+    let personal = personal_context(&pool, o.dana, "dana-personal").await?;
+    assert!(
+        can_read(&pool, o.dana, personal).await?,
+        "arm 1 admits before retirement"
+    );
+    retire(&pool, personal).await?;
+    assert!(
+        !can_read(&pool, o.dana, personal).await?,
+        "arm 1 closes: the owner loses it too"
+    );
+
+    // ARM 2 — team-owned, read inherited UP the enclosure chain.
+    let owned = team_context(&pool, o.engineering, "eng-owned").await?;
+    assert!(
+        can_read(&pool, o.dana, owned).await?,
+        "arm 2 admits via enclosure"
+    );
+    retire(&pool, owned).await?;
+    assert!(!can_read(&pool, o.dana, owned).await?, "arm 2 closes");
+
+    // ARM 3 — shared into a reachable team. Never joins kb_contexts.
+    let shared = personal_context(&pool, o.outsider, "outsider-shared").await?;
+    share_to_team(&pool, shared, o.squad_two).await?;
+    assert!(
+        can_read(&pool, o.dana, shared).await?,
+        "arm 3 admits via the share"
+    );
+    retire(&pool, shared).await?;
+    assert!(!can_read(&pool, o.dana, shared).await?, "arm 3 closes");
+
+    // ARM 4 — explicit read-grant. Never joins kb_contexts.
+    let granted = personal_context(&pool, o.outsider, "outsider-granted").await?;
+    grant(
+        &pool,
+        granted,
+        "kb_profiles",
+        o.dana,
+        o.outsider,
+        true,
+        false,
+    )
+    .await?;
+    assert!(
+        can_read(&pool, o.dana, granted).await?,
+        "arm 4 admits via the grant"
+    );
+    retire(&pool, granted).await?;
+    assert!(!can_read(&pool, o.dana, granted).await?, "arm 4 closes");
+
+    Ok(())
+}
+
+/// A retired context is frozen on every arm of `context_authorable_by_profile`, including the
+/// explicit write-grant arm — which delegates to `profile_explicit_grant`, a subject-polymorphic
+/// helper that cannot know a context is retired, so its floor has to be added at the call site.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_retired_context_is_not_authorable_by_any_arm(pool: PgPool) -> sqlx::Result<()> {
+    let o = org(&pool).await?;
+
+    // ARM 1 — personal owner.
+    let personal = personal_context(&pool, o.dana, "dana-writes").await?;
+    // ARM 2 — direct membership in the owning team with an authoring role. Dana is a direct
+    // member of squad_two only, which is why the context must be owned by THAT team.
+    let owned = team_context(&pool, o.squad_two, "squad-writes").await?;
+    // ARM 3 — explicit write-grant, no ownership and no membership.
+    let granted = personal_context(&pool, o.outsider, "outsider-writes").await?;
+    grant(
+        &pool,
+        granted,
+        "kb_profiles",
+        o.dana,
+        o.outsider,
+        true,
+        true,
+    )
+    .await?;
+
+    for (label, ctx) in [
+        ("personal", personal),
+        ("team-owned", owned),
+        ("write-grant", granted),
+    ] {
+        assert!(
+            can_author(&pool, o.dana, ctx).await?,
+            "{label} admits before retirement"
+        );
+        retire(&pool, ctx).await?;
+        assert!(
+            !can_author(&pool, o.dana, ctx).await?,
+            "{label} is frozen once retired"
+        );
+    }
+
+    Ok(())
+}
+
+/// The floor removes reach the CONTAINER conferred, and nothing else. A resource whose home row
+/// names you as owner stays visible, which is what keeps retirement from being a data jail
+/// (spec §1.4) — `resources_visible_to`'s first arm is `h.owner_profile_id = p_profile`.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn retirement_removes_container_conferred_reach_but_not_ownership(
+    pool: PgPool,
+) -> sqlx::Result<()> {
+    let o = org(&pool).await?;
+
+    let ctx = personal_context(&pool, o.outsider, "outsider-notes").await?;
+    let theirs = resource_in(&pool, ctx, o.outsider, "their note").await?;
+    grant(&pool, ctx, "kb_profiles", o.dana, o.outsider, true, false).await?;
+
+    assert!(
+        sees_resource(&pool, o.dana, theirs).await?,
+        "dana reads it through the context"
+    );
+    assert!(
+        sees_resource(&pool, o.outsider, theirs).await?,
+        "the owner reads their own"
+    );
+
+    retire(&pool, ctx).await?;
+
+    assert!(
+        !sees_resource(&pool, o.dana, theirs).await?,
+        "container-conferred reach is gone"
+    );
+    assert!(
+        sees_resource(&pool, o.outsider, theirs).await?,
+        "the owner arm is untouched — this is the anti-trap property"
+    );
+
+    Ok(())
+}
