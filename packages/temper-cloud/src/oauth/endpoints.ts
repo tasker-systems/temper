@@ -17,7 +17,6 @@ import {
   bindCodeToFlow,
   consumeCode,
   createPendingFlow,
-  principalMayRefresh,
   rotateRefreshToken,
   storeRefreshToken,
 } from "./flow.js";
@@ -47,6 +46,12 @@ const DEFAULT_REFRESH_TTL_SECONDS = 2592000;
  * migration's backfill (20260825000010), which cannot read this env.
  */
 const DEFAULT_REFRESH_CHAIN_MAX_SECONDS = 7776000;
+/**
+ * Ceiling on a configured chain lifetime — ten years. Not a policy, a units check: anything above
+ * this is a seconds-vs-milliseconds slip rather than an intent, and a chain that outlives the
+ * deployment is not a bound.
+ */
+const MAX_REFRESH_CHAIN_SECONDS = 315360000;
 
 /** Validated refresh-token TTL, read from AS_REFRESH_TTL_SECONDS (mirrors mint.ts's accessTtlSeconds). */
 function refreshTtlSeconds(): number {
@@ -73,7 +78,23 @@ function refreshChainMaxSeconds(): number {
     return DEFAULT_REFRESH_CHAIN_MAX_SECONDS;
   }
   const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_REFRESH_CHAIN_MAX_SECONDS;
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > MAX_REFRESH_CHAIN_SECONDS) {
+    // REFUSE rather than substitute, which is where this parser parts company with its two
+    // siblings above. Those describe how often a token is reminted; this one is the number the
+    // playbook tells an operator to state at an offboarding review. Silently swallowing
+    // `AS_REFRESH_CHAIN_MAX_SECONDS=7d` and serving 90 days would make what they deployed and what
+    // they reported differ by an order of magnitude, with nothing anywhere disagreeing.
+    //
+    // The upper bound catches the same mistake in the other direction: a value in milliseconds is
+    // finite, positive, and yields a deadline centuries out — an unbounded chain wearing a bound's
+    // clothes. Past ~1e13 it also overflows `new Date(...)`, which would surface as a 500 on every
+    // login rather than as anything a reader could diagnose.
+    throw new Error(
+      `AS_REFRESH_CHAIN_MAX_SECONDS must be a positive number of seconds no greater than ` +
+        `${MAX_REFRESH_CHAIN_SECONDS}; got ${JSON.stringify(raw)}`,
+    );
+  }
+  return parsed;
 }
 
 function badRequest(reason: string): Response {
@@ -263,7 +284,13 @@ interface TokenResponse {
   access_token: string;
   token_type: "Bearer";
   expires_in: number;
-  refresh_token: string;
+  /**
+   * Absent when the principal's admission has ended. RFC 6749 §5.1 makes this OPTIONAL, and the
+   * distinction is deliberate rather than an error: such a principal may still hold a short-lived
+   * access token — they need one to reach the ungated join-request and review-request surface —
+   * but they do not get a renewable session to carry it forward.
+   */
+  refresh_token?: string;
 }
 
 /** The `/oauth/token` success body for client_credentials — no refresh token (RFC 6749 §4.4.3). */
@@ -311,7 +338,7 @@ async function issueTokenPair(
 ): Promise<TokenResponse> {
   const accessToken = await mintAccessToken(claims);
   const refreshToken = newOpaqueToken();
-  await storeRefreshToken(db, {
+  const minted = await storeRefreshToken(db, {
     token: refreshToken,
     clientId,
     claims,
@@ -324,7 +351,7 @@ async function issueTokenPair(
     access_token: accessToken,
     token_type: "Bearer",
     expires_in: accessTtlSeconds(),
-    refresh_token: refreshToken,
+    ...(minted ? { refresh_token: refreshToken } : {}),
   };
 }
 
@@ -381,6 +408,12 @@ export async function handleToken(req: Request, db: NeonClient): Promise<Respons
     }
 
     // A fresh login starts a NEW chain, and this is the only place a chain deadline is computed.
+    //
+    // Login is never refused on admission — a principal whose standing has ended still needs a
+    // token to reach the ungated review-request surface. What they do not get is a renewable
+    // session: `storeRefreshToken`'s predicate declines to mint the chain, so the response carries
+    // an access token and no refresh token, and the revoke that ended their standing is not undone
+    // by their next sign-in.
     return oauthJson(
       await issueTokenPair(db, consumed.claims, clientId, {
         expiresAt: new Date(Date.now() + refreshChainMaxSeconds() * 1000).toISOString(),
@@ -406,6 +439,15 @@ export async function handleToken(req: Request, db: NeonClient): Promise<Respons
     // A chain minted during a fail-open login, or by a binary that predates the owner column,
     // carries none. Re-resolve here so the successor — the row that will actually be presented
     // next — carries the owner, rather than waiting out the chain's remaining lifetime.
+    //
+    // THIS HEALS A TRANSIENT FAILURE ONLY, and the distinction is the whole difference between a
+    // blip and a deployment that never had the mechanism. `resolvePrincipal` opens with
+    // `requireEnv`, so an unset `INTERNAL_RESOLVE_URL` (or a secret the API disagrees with) throws
+    // here exactly as it threw at the ACS — deterministically, every time. Such a deployment mints
+    // ownerless chains forever, the admission gate below is skipped for every one of them, and
+    // `standing_service::apply`'s hook matches nothing. It is not distinguishable at runtime from
+    // a healthy one; what reports it is the Rust-side warning when a terminal transition ends zero
+    // chains.
     let profileId = rotated.profileId;
     if (profileId === null) {
       try {
@@ -424,23 +466,21 @@ export async function handleToken(req: Request, db: NeonClient): Promise<Respons
       }
     }
 
-    // Admission ended ⇒ no new pair, answered HERE rather than only at the API gate the minted
-    // token would later meet. `principal_may_refresh` is the SQL predicate, not a restatement of
-    // it: the same terminal set `standing_service::apply` ends chains for, and `denied` /
-    // `requested` principals pass it deliberately — they hold tokens to reach the ungated
-    // join-request surface. An unresolved owner cannot be asked, and is not refused for it.
-    if (profileId !== null && !(await principalMayRefresh(db, profileId))) {
+    const pair = await issueTokenPair(db, rotated.claims, rotated.clientId, {
+      // Handed back UNCHANGED. This is the line that makes the bound absolute.
+      expiresAt: rotated.chainExpiresAt,
+      profileId,
+    });
+
+    // No successor chain means the admission predicate inside the INSERT declined — the principal's
+    // standing has reached a terminal. Refused HERE rather than only at the API gate the access
+    // token would later meet. `denied` and `requested` principals pass that predicate on purpose;
+    // it asks whether admission has ENDED, not whether it was ever granted.
+    if (!pair.refresh_token) {
       return oauthError("invalid_grant");
     }
 
-    return oauthJson(
-      await issueTokenPair(db, rotated.claims, rotated.clientId, {
-        // Handed back UNCHANGED. This is the line that makes the bound absolute.
-        expiresAt: rotated.chainExpiresAt,
-        profileId,
-      }),
-      200,
-    );
+    return oauthJson(pair, 200);
   }
 
   if (grantType === "client_credentials") {

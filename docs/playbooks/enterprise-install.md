@@ -95,7 +95,7 @@ Sources: [Self-hosting Temper](./self-host-temper.md),
 | **Group provisioning / reconcile channel (SAML Phase 2)** | | | | |
 | `INTERNAL_RECONCILE_SECRET` | Yes (SAML path; shared AS+API) | — | — | Same value on both; unset disables reconcile (auth still works) |
 | `INTERNAL_RECONCILE_URL` | Yes (SAML path; AS side) | — | — | Full URL of the API's `/internal/saml/reconcile` |
-| `INTERNAL_RESOLVE_URL` | Yes (SAML path; AS side) | — | — | Full URL of the API's `/internal/principal/resolve`; same secret. Unset ⇒ refresh chains carry no owner and an admin revoke cannot end them early |
+| `INTERNAL_RESOLVE_URL` | Yes (SAML path; AS side) | — | — | Full URL of the API's `/internal/principal/resolve`; same secret. **New — an upgraded deployment will not have it.** Unset ⇒ refresh chains carry no owner, an admin revoke ends none of them, and every request still returns `200`. See the upgrade note in [Self-hosting with SAML](./self-host-with-saml.md#limitations) |
 | **Slack account link (optional; needed only to run the @temper mention agent)** | | | | |
 | `SLACK_LINK_CLIENT_ID` | Yes (Slack path) | — | — | OAuth client the link flow authorizes as. Auth0: a native/PKCE app's client_id. SAML path: a `client_id` present in `AS_CLIENTS` |
 | `SLACK_LINK_SECRET` | Yes (Slack path; shared API+agent) | — | — | Shared secret gating `/internal/slack/link-state`; same value on the mention agent. Unset ⇒ the endpoint is disabled (auth still works) |

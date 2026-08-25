@@ -190,8 +190,16 @@ pub async fn apply(pool: &PgPool, params: ApplyStandingParams) -> ApiResult<Stan
 
         // The same two terminals end the principal's live refresh chains, in the same transaction
         // and for the same reason the demotion is here: ending a standing should end the
-        // credentials that standing backed, atomically, rather than leaving the API gate as the
-        // only thing standing between a held credential and a refusal. Defence in depth for the
+        // credentials that standing backed in the same commit, rather than leaving the API gate as
+        // the only thing between a held credential and a refusal.
+        //
+        // "In the same commit" is the honest claim, and it is narrower than "atomically with
+        // respect to everything". The AS rotates over an HTTP driver with no interactive
+        // transaction, so a rotation already past its own admission check can still insert its
+        // successor after this commit lands — leaving one live row for a principal this just
+        // revoked. That row is refused at ITS next rotation, so the excursion is one token pair
+        // wide; it is named because an operator auditing "live chains for revoked principals"
+        // straight after a revoke can legitimately see one. Defence in depth for the
         // gate, and it generalizes what `slack_disconnect_service::revoke_as_refresh_token` had
         // done for its own single token.
         //
@@ -203,7 +211,7 @@ pub async fn apply(pool: &PgPool, params: ApplyStandingParams) -> ApiResult<Stan
         // Machines never match: `client_credentials` issues no refresh token (endpoints.ts's
         // `MachineTokenResponse` carries none), so this is a no-op on that arm rather than a
         // behaviour it quietly acquires.
-        sqlx::query!(
+        let chains_ended = sqlx::query!(
             r#"
             UPDATE kb_oauth_refresh_tokens
                SET revoked_at = now()
@@ -213,7 +221,35 @@ pub async fn apply(pool: &PgPool, params: ApplyStandingParams) -> ApiResult<Stan
             *params.subject,
         )
         .execute(&mut *tx)
-        .await?;
+        .await?
+        .rows_affected();
+
+        // Say how many. Without this the call is indistinguishable, to the operator and to the
+        // ledger, between "ended three live sessions" and "matched nothing" — and matching nothing
+        // is the expected outcome of every misconfiguration on the AS side, where the owner never
+        // got recorded. A revoke that quietly ends no credentials is the failure this hook exists
+        // to prevent, so it must not report success in the same words as one that works.
+        //
+        // Emitted HERE, in Rust, deliberately: this surface is instrumented and ships to Tempo,
+        // and the AS surface that would otherwise have to report it is not.
+        //
+        // Zero is not by itself an error — a principal may genuinely hold no live chain — so it is
+        // a warning to correlate, not a failure to act on blindly.
+        if chains_ended == 0 {
+            tracing::warn!(
+                subject = %params.subject,
+                act = act_name(&act),
+                "standing terminal ended no refresh chains — expected if the principal held none, \
+                 but also what an unrecorded chain owner looks like"
+            );
+        } else {
+            tracing::info!(
+                subject = %params.subject,
+                act = act_name(&act),
+                chains_ended,
+                "standing terminal ended live refresh chains"
+            );
+        }
     }
 
     tx.commit().await?;

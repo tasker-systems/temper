@@ -245,6 +245,10 @@ describe("e2e: full mock-IdP SAML login", () => {
       INSERT INTO kb_profiles (handle, display_name, email, preferences)
       VALUES (${handle}, ${handle}, ${`${handle}@example.test`}, '{}') RETURNING id`;
     const profileId = (rows[0] as { id: string }).id;
+    // A JIT-provisioned profile is born WITH standing (`Denied`, via `provision_conn`), and the
+    // chain-minting predicate denies on ABSENCE — so a fixture profile lacking a standing row
+    // would get no refresh token, and would fail here for a reason unrelated to the relay.
+    await sql`INSERT INTO kb_principal_standing (profile_id, state) VALUES (${profileId}, 'denied')`;
 
     const resolveCalls: Array<{ url: string; rawBody: string; signature: string | null }> = [];
     vi.stubGlobal(

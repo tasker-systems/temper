@@ -455,13 +455,29 @@ appliers interleave across the full install timeline.
 
 - **An administrator's revoke is immediate, and does not wait for any of the above.** Revoking or
   deactivating a principal ends their live refresh chains in the same transaction as the standing
-  change, and the token endpoint declines to mint a new pair for a principal whose admission has
-  ended. This is the path to use when you need a departure to take effect now; the chain lifetime
-  is the backstop for the case nobody acted on.
+  change, and no later sign-in mints them a new one. This is the path to use when you need a
+  departure to take effect now; the chain lifetime is the backstop for the case nobody acted on.
+
+  **What a revoked principal can still do, stated exactly**, because "immediate" is easy to
+  over-read. They can complete a SAML sign-in and receive an **access token** — deliberately, since
+  reaching `/api/access/review-request` to contest the revocation requires one. That token is
+  refused on every data route, and it is **not** renewable: no refresh chain is minted for them, so
+  it expires within `AS_ACCESS_TTL_SECONDS` and is not carried forward. If you need the sign-in
+  itself to stop, disable the account at your IdP — that is the control temper does not own.
 
   A principal who has *not yet been approved* (or whose request was declined) keeps refreshing
-  normally — deliberately. They hold a token in order to reach the join-request endpoints and ask
-  for access; taking it away would make asking harder, not safer.
+  normally — also deliberately. Nothing has been taken away from them, and they hold a token in
+  order to reach the join-request endpoints and ask for access; removing it would make asking
+  harder, not safer.
+
+> [!IMPORTANT]
+> **Upgrading an existing SAML deployment?** `INTERNAL_RESOLVE_URL` is new, and nothing sets it for
+> you — `temper admin saml provision` emits it only into a freshly generated bundle. Without it the
+> AS cannot record which principal a refresh chain belongs to, so **an administrator's revoke ends
+> no chains** and the only remaining bound is `AS_REFRESH_CHAIN_MAX_SECONDS`. Logins and refreshes
+> keep returning `200` throughout, so there is no failure to notice: the visible signal is a
+> `standing terminal ended no refresh chains` warning on the API when you revoke someone. Add the
+> variable, pointing at your API origin's `/internal/principal/resolve`, before relying on revoke.
 - **Single active IdP** per instance, **SP-initiated** flows only.
 - **Single issuer** per instance: an instance is either an AS/SAML instance (`AS_ISSUER` set)
   or an Auth0/OIDC instance, not both.

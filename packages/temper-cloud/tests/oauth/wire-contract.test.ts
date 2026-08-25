@@ -102,23 +102,46 @@ describe("ReconcileRequest wire contract (mirrors Rust temper_core::types::Recon
 });
 
 describe("ResolvePrincipalRequest wire contract (mirrors Rust temper_core::types)", () => {
-  it("has exactly the Rust struct fields, on both halves of the call", () => {
+  /**
+   * Read the field names out of a ts-rs-generated type. Those files ARE the Rust structs — they
+   * are regenerated from them and pinned by the `ts-rs-drift` CI gate — so comparing against them
+   * is comparing against Rust, at one remove that cannot silently widen.
+   *
+   * The previous version of this test built a TypeScript literal and asserted its keys against the
+   * hand-written interface in `resolve.ts`. Both halves of that comparison lived in this repo's
+   * own TypeScript, so it could only restate itself: rename the field in Rust and the Rust
+   * compiles, ts-rs regenerates, `resolve.ts` is untouched, and the test still passes — while the
+   * AS reads `undefined` off a live response. That is the exact hazard its own comment named.
+   */
+  function generatedFields(file: string): string[] {
+    const src = readFileSync(
+      new URL(`../../../temper-ui/src/lib/types/generated/${file}`, import.meta.url),
+      "utf8",
+    );
+    const body = src.slice(src.indexOf("= {") + 3);
+    return [...body.matchAll(/^(\w+):/gm)].map((m) => m[1]).sort();
+  }
+
+  it("the request interface the AS sends matches the Rust struct field-for-field", () => {
     const request: ResolvePrincipalRequest = {
       external_user_id: "nid-1",
       email: "a@corp.io",
       email_verified: true,
     };
-    expect(Object.keys(request).sort()).toEqual(["email", "email_verified", "external_user_id"]);
+    expect(Object.keys(request).sort()).toEqual(generatedFields("ResolvePrincipalRequest.ts"));
     // Option<bool> on the Rust side.
     const nulls: ResolvePrincipalRequest = { ...request, email_verified: null };
     expect(nulls.email_verified).toBeNull();
+  });
 
-    // The response half matters as much: the AS reads `profile_id` off it and writes that value
-    // into a foreign key, so a rename on the Rust side must not fail silently as `undefined`.
+  it("the response field the AS reads is the one Rust emits", () => {
+    // This half carries the consequence: the AS reads `profile_id` off the response and writes it
+    // into a foreign key, and into an admission predicate's argument. A rename on the Rust side
+    // must break a build, not produce `undefined` at runtime.
     const response: ResolvePrincipalResponse = {
       profile_id: "0198f0a0-0000-7000-8000-000000000001",
     };
-    expect(Object.keys(response)).toEqual(["profile_id"]);
+    expect(Object.keys(response)).toEqual(generatedFields("ResolvePrincipalResponse.ts"));
   });
 });
 

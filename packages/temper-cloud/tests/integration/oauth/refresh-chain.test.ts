@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { exportPKCS8, generateKeyPair } from "jose";
 import type postgres from "postgres";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NeonClient } from "../../../src/db.js";
 import { handleToken } from "../../../src/oauth/endpoints.js";
 import { bindCodeToFlow, createPendingFlow } from "../../../src/oauth/flow.js";
@@ -25,7 +25,7 @@ interface TokenSuccessBody {
   access_token: string;
   token_type: string;
   expires_in: number;
-  refresh_token: string;
+  refresh_token?: string;
 }
 
 interface TokenErrorBody {
@@ -70,11 +70,11 @@ async function login(
   return (await res.json()) as TokenSuccessBody;
 }
 
-function refresh(db: NeonClient, refreshToken: string): Promise<Response> {
+function refresh(db: NeonClient, refreshToken: string | undefined): Promise<Response> {
   return handleToken(
     new Request("https://as/oauth/token", {
       method: "POST",
-      body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshToken }),
+      body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshToken ?? "" }),
     }),
     db,
   );
@@ -180,22 +180,32 @@ describe("refresh chain bound + admission gate", () => {
     expect(row.expires_at.getTime()).toBe(row.chain_expires_at.getTime());
   });
 
-  it("refuses a new pair to a principal whose admission has ended", async () => {
+  it("gives a principal whose admission has ended a token but not a renewable session", async () => {
+    // Login is never refused on admission — a revoked principal needs a token to reach the ungated
+    // review-request surface. What they must not get is a fresh chain, because that would undo an
+    // administrator's revoke on the subject's very next sign-in.
     const revoked = await principal("revoked");
     const issued = await login(db, { relay: "rs-revoked", code: "c-revoked", profileId: revoked });
-    expect((await chainRow(issued.refresh_token)).profile_id).toBe(revoked);
 
-    const res = await refresh(db, issued.refresh_token);
-    expect(res.status).toBe(400);
-    expect((await res.json()) as TokenErrorBody).toEqual({ error: "invalid_grant" });
+    expect(issued.access_token, "the self-service surface must stay reachable").toBeTruthy();
+    expect(issued.refresh_token, "a terminal principal gets no renewable session").toBeUndefined();
+
+    const live = await sql`
+      SELECT count(*)::int AS n FROM kb_oauth_refresh_tokens
+       WHERE profile_id = ${revoked} AND revoked_at IS NULL`;
+    expect((live[0] as { n: number }).n, "a revoke must not be undone by logging in again").toBe(0);
   });
 
   it("refuses a deactivated principal too — both terminals, not just the one", async () => {
     const off = await principal("deactivated");
     const issued = await login(db, { relay: "rs-deact", code: "c-deact", profileId: off });
+    expect(issued.refresh_token).toBeUndefined();
 
-    const res = await refresh(db, issued.refresh_token);
-    expect(res.status).toBe(400);
+    // And a chain minted BEFORE the terminal is refused at its next rotation, not merely absent.
+    const approved = await principal("approved");
+    const live = await login(db, { relay: "rs-deact2", code: "c-deact2", profileId: approved });
+    await sql`UPDATE kb_principal_standing SET state = 'deactivated' WHERE profile_id = ${approved}`;
+    expect((await refresh(db, live.refresh_token)).status).toBe(400);
   });
 
   it("leaves a still-admitted principal's ordinary refresh untouched", async () => {
@@ -208,6 +218,43 @@ describe("refresh chain bound + admission gate", () => {
     expect(body.refresh_token).not.toBe(issued.refresh_token);
     // The owner travels to the successor, so the chain stays endable after every rotation.
     expect((await chainRow(body.refresh_token)).profile_id).toBe(approved);
+  });
+
+  it("treats a malformed resolve response as no answer, not as a refusal", async () => {
+    // The two failures either side of the response boundary must land in the same place. A
+    // transport error or non-2xx throws and the caller carries on without an owner; a 200 carrying
+    // the wrong shape used to yield `undefined`, which survives a `!== null` guard, reaches
+    // `principal_may_refresh(NULL)` — which answers FALSE, not null — and refuses a rotation whose
+    // token has ALREADY been revoked by `rotateRefreshToken`. Success reported, user locked out.
+    //
+    // The population is not hypothetical: every chain backfilled by 20260825000010 carries a NULL
+    // owner, so every one of them takes this re-resolve branch on its next refresh.
+    process.env.INTERNAL_RESOLVE_URL = "https://api.internal/internal/principal/resolve";
+    process.env.INTERNAL_RECONCILE_SECRET = "s3cr3t";
+    const issued = await login(db, { relay: "rs-junk", code: "c-junk", profileId: null });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ status: "ok" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+    try {
+      const res = await refresh(db, issued.refresh_token);
+      expect(res.status, "an unusable answer is no answer — it must not cost a session").toBe(200);
+      const body = (await res.json()) as TokenSuccessBody;
+      expect(body.refresh_token).not.toBe(issued.refresh_token);
+      // …and the successor is still ownerless rather than carrying a junk id into a foreign key.
+      expect((await chainRow(body.refresh_token)).profile_id).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+      delete process.env.INTERNAL_RESOLVE_URL;
+      delete process.env.INTERNAL_RECONCILE_SECRET;
+    }
   });
 
   it("still refreshes a principal who has never been approved — the state every login is born into", async () => {

@@ -39,14 +39,31 @@
 -- What the default does NOT do is make the bound a property of the CHAIN. That lives entirely in
 -- the new binary, which reads the deadline off the token it rotates and hands it to the successor
 -- UNCHANGED. NOT NULL still holds the line that matters: no row exists without a bound.
+--
+-- AND THE CONCESSION IS NOT FULLY CONTAINED, which is worth stating rather than leaving to be
+-- discovered. While BOTH binaries are live -- a rolling deploy, a canary, a rollback -- a rotation
+-- served by the old one omits the column, takes a fresh 90 days from the DEFAULT, and the new
+-- binary then reads that value back and inherits it as authoritative. The deadline moves, and it
+-- does not heal: nothing re-derives it from the login it was supposed to be measured from. The
+-- owner heals on the next rotation; the deadline does not. Keep the mixed window short.
 ALTER TABLE kb_oauth_refresh_tokens
     ADD COLUMN chain_expires_at TIMESTAMPTZ NOT NULL DEFAULT (now() + INTERVAL '90 days'),
     ADD COLUMN profile_id       UUID REFERENCES kb_profiles(id) ON DELETE CASCADE;
 
 -- Rows already on disk take their bound from their own `created`, not from the deploy clock the
 -- column default would give them.
+--
+-- The WHERE is not an optimization, it is the difference between rewriting the rows this backfill
+-- is FOR and rewriting the table's whole history. Nothing reaps `kb_oauth_refresh_tokens` — every
+-- token ever issued is still here, revoked and expired ones included — and this statement runs
+-- inside the migration's transaction, holding the ACCESS EXCLUSIVE the ALTER above took. Every
+-- login and every refresh queues behind it. A dead row's chain deadline is read by nothing: the
+-- rotation guard already refuses on `revoked_at`/`expires_at` before `chain_expires_at` is
+-- consulted, so the DEFAULT is a perfectly good value for them.
 UPDATE kb_oauth_refresh_tokens
-   SET chain_expires_at = created + INTERVAL '90 days';
+   SET chain_expires_at = created + INTERVAL '90 days'
+ WHERE revoked_at IS NULL
+   AND expires_at > now();
 
 COMMENT ON COLUMN kb_oauth_refresh_tokens.chain_expires_at IS
   'Absolute end of this refresh CHAIN, stamped at the chain''s first token and inherited unchanged '

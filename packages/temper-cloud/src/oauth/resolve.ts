@@ -19,6 +19,15 @@ export interface ResolvePrincipalResponse {
 }
 
 /**
+ * Any RFC 4122 UUID. Checked before the value is allowed to leave this module, because everywhere
+ * it goes afterwards treats it as one: a `::uuid` cast in `principal_may_refresh` (a malformed
+ * value is a SQL error, not a false), and a foreign key on both `kb_oauth_refresh_tokens` and
+ * `kb_oauth_flow` (where a well-formed but unknown id surfaces as a rejected SAML assertion,
+ * blaming the IdP for something the resolve leg did).
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
  * Asks temper-api which profile a token `sub` resolves to, so the refresh chain we are about to
  * mint can carry an owner an administrator is able to end.
  *
@@ -53,7 +62,21 @@ export async function resolvePrincipal(
   if (!res.ok) {
     throw new Error(`principal resolve endpoint returned ${res.status}`);
   }
-  const parsed = (await res.json()) as ResolvePrincipalResponse;
-  logger.info({ profile_id: parsed.profile_id }, "principal resolve ok");
-  return parsed;
+
+  // Validate, do not assert. `as ResolvePrincipalResponse` is a compile-time claim about a value
+  // that arrives at runtime from another process, and the two failure postures either side of this
+  // line are opposite: a transport error or non-2xx THROWS, and both callers treat that as "no
+  // owner yet" and carry on. A malformed 200 asserted into the type does not throw — it yields
+  // `undefined`, which survives the callers' `!== null` guard, reaches
+  // `principal_may_refresh(NULL)` (which answers FALSE, not null), and refuses a rotation whose
+  // token `rotateRefreshToken` has already revoked. That is an irrecoverable logout produced by a
+  // misconfiguration that logs success. Throwing here collapses both failures onto the fail-open
+  // path the design actually intends.
+  const parsed: unknown = await res.json();
+  const profileId = (parsed as { profile_id?: unknown } | null)?.profile_id;
+  if (typeof profileId !== "string" || !UUID_RE.test(profileId)) {
+    throw new Error("principal resolve endpoint returned no usable profile_id");
+  }
+  logger.info({ profile_id: profileId }, "principal resolve ok");
+  return { profile_id: profileId };
 }

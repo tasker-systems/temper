@@ -164,26 +164,48 @@ export interface StoreRefreshTokenArgs {
 }
 
 /**
- * Persists a newly-issued opaque refresh token (hashed at rest).
+ * Persists a newly-issued opaque refresh token (hashed at rest). Answers whether a chain was
+ * actually minted.
  *
- * `expires_at` is `LEAST(requested, chain_expires_at)` — computed in SQL against the same clock the
- * rotation guard reads. A token is never handed out advertising an expiry its own chain bound will
- * not honour, so `expires_in` and the chain never disagree in front of a client.
+ * **The admission predicate lives in this INSERT, not in a statement before it**, and that placement
+ * is doing two jobs. It makes the check atomic with the write, closing the window in which a
+ * rotation that passed a separate gate could insert its successor after an administrator's revoke
+ * had already committed and scanned — a live chain for a principal whose admission just ended.
+ * And it means EVERY caller inherits the gate: the authorization_code grant cannot mint a fresh
+ * 90-day chain for a principal a revoke has just ended, which a check placed only on the refresh
+ * path would have allowed on the subject's very next login.
+ *
+ * A NULL owner passes deliberately — an unresolved principal cannot be asked, and is not refused
+ * for it.
+ *
+ * `expires_at` is `LEAST(requested, chain_expires_at)`, so a stored token never outlives the chain
+ * it belongs to and the rotation guard never has to choose between two disagreeing bounds.
+ *
+ * Only the COMPARISON happens in SQL. Both operands originate on the AS host clock (`Date.now()`
+ * at the call site), while the rotation guard's `now()` is the database's — so host/DB skew shifts
+ * a chain's real length by that skew. Small in practice, named here because "computed in SQL"
+ * would otherwise read as "on the database clock", which is not what this does.
+ *
+ * Note this says nothing about `expires_in` in the token response: that is the ACCESS token's TTL.
+ * A refresh token's expiry is never advertised to a client at all.
  */
 export async function storeRefreshToken(
   db: NeonClient,
   args: StoreRefreshTokenArgs,
-): Promise<void> {
-  await db`
+): Promise<boolean> {
+  const rows = await db`
     INSERT INTO kb_oauth_refresh_tokens (
       token_hash, client_id, claims, expires_at, chain_expires_at, profile_id
     )
-    VALUES (
+    SELECT
       ${hashToken(args.token)}, ${args.clientId}, ${JSON.stringify(args.claims)}::jsonb,
       LEAST(${args.expiresAt.toISOString()}::timestamptz, ${args.chainExpiresAt}::timestamptz),
       ${args.chainExpiresAt}::timestamptz, ${args.profileId}
-    )
+    WHERE ${args.profileId}::uuid IS NULL
+       OR principal_may_refresh(${args.profileId}::uuid)
+    RETURNING id
   `;
+  return rows.length > 0;
 }
 
 export interface RotateRefreshTokenResult {
@@ -234,20 +256,6 @@ export async function rotateRefreshToken(
     chainExpiresAt: normalizeTimestamp(row.chain_expires_at),
     profileId: row.profile_id ?? null,
   };
-}
-
-/**
- * May this principal be handed a new token pair?
- *
- * Reads the `principal_may_refresh` SQL predicate (migration 20260825000010) rather than restating
- * what "admission has ended" means — the same set `standing_service::apply` revokes live chains
- * for, asked from the other side. A restated copy here would be a true-looking statement about
- * real columns that nothing could compare against the incumbent.
- */
-export async function principalMayRefresh(db: NeonClient, profileId: string): Promise<boolean> {
-  const rows = await db`SELECT principal_may_refresh(${profileId}::uuid) AS ok`;
-  const row = rows[0] as { ok: boolean | null } | undefined;
-  return row?.ok === true;
 }
 
 /** Revokes a refresh token. Idempotent — revoking an already-revoked or unknown token is a no-op. */
