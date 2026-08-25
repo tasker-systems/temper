@@ -11,5 +11,5 @@ Generator version: 7.23.0
 =end
 
 module Temper::Generated
-  VERSION = '0.3.4'
+  VERSION = '0.1.0'
 end

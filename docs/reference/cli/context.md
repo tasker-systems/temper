@@ -17,6 +17,7 @@ Commands:
   share           Share a context into a team's read-reach. Requires that you administer the context (own it, or manage its owning team) AND manage the target team (owner/maintainer), OR that you are an instance administrator. The context ref is a UUID or the `@handle/slug` / `+team-slug/slug` form (from `context list`); `@me` shorthand is not accepted
   unshare         Unshare a context from a team (same authority as `share`)
   transfer        Transfer a context's ownership to a team — the single path to shared authorship (read-sharing stays `share`; writing into a context requires team ownership)
+  delete          Permanently delete a context
   rename          Rename a context. The slug is derived from the new name — there is no separate `--slug`
   shape           Orient in a context by its REGIONS: the distilled, region-level view of everything homed there, most salient first. The fastest way to see what a context is about without reading any single resource in it
   region-metrics  Per-region analytics for a context: centrality, content cohesion, internal tension, reference standing, telos alignment
@@ -156,6 +157,38 @@ Options:
       --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
       --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
   -h, --help               Print help
+```
+
+### `temper context delete`
+
+```text
+Permanently delete a context.
+
+THIS IS A HARD DELETE. Contexts carry no `is_active` column (creation is a plain INSERT with no event emission — contexts are infrastructure, not domain data), so unlike `resource delete` there is nothing to undo and no `temper pull` that brings it back.
+
+Refused with a message naming what is still attached when the context still homes live resources (grouped by doc type) or a connection. Move resources first with `temper resource update <ref> --context-to <new-context>`, then retry.
+
+Usage: temper context delete [OPTIONS] <CONTEXT>
+
+Arguments:
+  <CONTEXT>
+          Context ref: a UUID or `@me/slug` / `@handle/slug` / `+team-slug/slug`
+
+Options:
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 ### `temper context rename`
