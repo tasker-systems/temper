@@ -679,14 +679,13 @@ async fn population_is_member_gated_across_two_principals(pool: PgPool) {
 // so it was structurally blind to them in exactly the way the orientation reads were before T8.
 // ---------------------------------------------------------------------------------------------
 
-/// Mint an event that occurred strictly AFTER the fixture's watermark, and point one region's
-/// `last_event_id` at it — the "touched since it materialized" half of the witness below.
+/// Mint an event that occurred strictly AFTER the fixture's watermark.
 ///
 /// The timestamp is explicit (`now() + interval '1 day'`) rather than the column default:
 /// `mark_context_materialized` stamps a migration-seeded event whose `occurred_at` is only
-/// microseconds behind the test's own clock, and the assertion turns on
+/// microseconds behind the test's own clock, and every assertion in this arc turns on
 /// `latest_touch > materialized_at` being unambiguously true rather than on two stamps that tie.
-async fn touch_region_with_a_later_event(pool: &PgPool, profile: Uuid, region: Uuid) {
+async fn mint_event_later_than_the_watermark(pool: &PgPool, profile: Uuid) -> Uuid {
     // A fresh emitter entity, as `common::seed_genesis_event` does: `kb_events.emitter_entity_id`
     // is NOT NULL and the entity name is unique, so it is suffixed with the id.
     let entity = Uuid::now_v7();
@@ -698,7 +697,7 @@ async fn touch_region_with_a_later_event(pool: &PgPool, profile: Uuid, region: U
         .await
         .expect("insert the touching emitter entity");
 
-    let event: Uuid = sqlx::query_scalar(
+    sqlx::query_scalar(
         "INSERT INTO kb_events (event_type_id, emitter_entity_id, occurred_at) \
          SELECT (SELECT id FROM kb_event_types WHERE name = 'relationship_asserted'), $1, \
                 now() + interval '1 day' \
@@ -707,8 +706,13 @@ async fn touch_region_with_a_later_event(pool: &PgPool, profile: Uuid, region: U
     .bind(entity)
     .fetch_one(pool)
     .await
-    .expect("mint an event later than the watermark");
+    .expect("mint an event later than the watermark")
+}
 
+/// Point one region's `last_event_id` at an event later than the watermark — the "touched since it
+/// materialized" half of the witnesses below.
+async fn touch_region_with_a_later_event(pool: &PgPool, profile: Uuid, region: Uuid) {
+    let event = mint_event_later_than_the_watermark(pool, profile).await;
     sqlx::query("UPDATE kb_cogmap_regions SET last_event_id = $2 WHERE id = $1")
         .bind(region)
         .bind(event)
@@ -717,28 +721,138 @@ async fn touch_region_with_a_later_event(pool: &PgPool, profile: Uuid, region: U
         .expect("advance the region's clock");
 }
 
-/// One `anchor_staleness` row over a context, as `(is_stale, has_materialized_at, has_latest_touch)`.
+/// The edges-arm counterpart of `touch_region_with_a_later_event`.
+async fn touch_edge_with_a_later_event(pool: &PgPool, profile: Uuid, edge: Uuid) {
+    let event = mint_event_later_than_the_watermark(pool, profile).await;
+    sqlx::query("UPDATE kb_edges SET last_event_id = $2 WHERE id = $1")
+        .bind(edge)
+        .bind(event)
+        .execute(pool)
+        .await
+        .expect("advance the edge's clock");
+}
+
+/// The event the context's `shape_materialized_event_id` points at — read back rather than
+/// re-derived with the `ORDER BY occurred_at LIMIT 1` that `mark_context_materialized` uses, so an
+/// edge born "at the watermark" is born at THE watermark and not merely at something that ties with
+/// it.
+async fn context_watermark_event(pool: &PgPool, context: Uuid) -> Uuid {
+    sqlx::query_scalar("SELECT shape_materialized_event_id FROM kb_contexts WHERE id = $1")
+        .bind(context)
+        .fetch_one(pool)
+        .await
+        .expect("the context must be materialized before an edge can be born at its watermark")
+}
+
+/// An edge homed on a CONTEXT, between two `kb_resources` endpoints, born at that context's own
+/// shape watermark — so it starts out contributing a `latest_touch` exactly EQUAL to
+/// `materialized_at` (`>` is false, the anchor reads fresh) until something moves it.
 ///
-/// Runtime `query_scalar`/`query_as`, not the macro: the function is brand new, and a
-/// compile-time-checked call would demand a `.sqlx` cache entry that only `cargo sqlx prepare`
-/// against a migrated database can produce. `is_stale` is read as `Option<bool>` because
-/// `RETURNS TABLE` declares it nullable even though the `COALESCE` never yields NULL — a NULL here
-/// would itself be a finding, so it is unwrapped with a message rather than decoded into `bool`.
-async fn context_staleness(pool: &PgPool, context: Uuid) -> (bool, bool, bool) {
-    let (stale, has_mat, has_touch): (Option<bool>, bool, bool) = sqlx::query_as(
-        "SELECT s.is_stale, s.materialized_at IS NOT NULL, s.latest_touch IS NOT NULL \
-           FROM anchor_staleness('kb_contexts', $1) s",
+/// The three table literals are the only values the CHECK constraints admit here:
+/// `kb_edges_home_anchor_table_check` restricts the home to `{kb_contexts, kb_cogmaps}` and the two
+/// endpoint checks restrict both endpoints to `{kb_resources, kb_cogmaps}`. That is what makes
+/// `endpoint_readable_by_profile`'s `ELSE false` arm unreachable for any real edge — the constraint
+/// argument `migrations/20260825000010_staleness_member_gate.sql:232-239` makes to establish that
+/// the gated edges arm can only ever drop an edge for a VISIBILITY reason.
+async fn insert_context_edge(pool: &PgPool, context: Uuid, source: Uuid, target: Uuid) -> Uuid {
+    let event = context_watermark_event(pool, context).await;
+    sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO kb_edges \
+           (source_table, source_id, target_table, target_id, edge_kind, \
+            home_anchor_table, home_anchor_id, asserted_by_event_id, last_event_id, is_folded) \
+         VALUES ('kb_resources', $1, 'kb_resources', $2, 'express', \
+                 'kb_contexts', $3, $4, $4, false) \
+         RETURNING id",
     )
+    .bind(source)
+    .bind(target)
     .bind(context)
+    .bind(event)
     .fetch_one(pool)
     .await
-    .expect("anchor_staleness yields exactly one row for a context that exists");
+    .expect("insert a context-homed edge")
+}
 
-    (
-        stale.expect("is_stale is a COALESCE and is never NULL"),
-        has_mat,
-        has_touch,
+/// The soft-delete floor, applied. `resources_visible_to` ends in
+/// `JOIN kb_resources r ON r.id = v.resource_id AND r.is_active`, so this one flag makes the
+/// resource invisible on every axis — INCLUDING to the profile that owns it, which is what lets the
+/// ghost fixtures below bite the owner and need no second principal at all.
+async fn soft_delete_resource(pool: &PgPool, resource: Uuid) {
+    sqlx::query("UPDATE kb_resources SET is_active = false WHERE id = $1")
+        .bind(resource)
+        .execute(pool)
+        .await
+        .expect("soft-delete the resource");
+}
+
+/// One `anchor_staleness` row, decoded as BOOLEANS rather than timestamps.
+///
+/// Every field is computed in SQL so that nothing here depends on a timestamp decoder:
+/// `temper-api`'s **dev**-dependency on sqlx does not enable the `chrono` feature
+/// (`crates/temper-api/Cargo.toml`, `[dev-dependencies] sqlx`), and leaning on feature unification
+/// with the lib dependency to supply one would be an invisible coupling for a test file to carry.
+#[derive(Debug, Clone, Copy)]
+struct Staleness {
+    is_stale: bool,
+    has_materialized_at: bool,
+    has_latest_touch: bool,
+    /// `latest_touch = materialized_at`. The discriminator `has_latest_touch` alone cannot supply:
+    /// it separates "the arm is gated and contributed nothing" from "the arm is WORKING and what it
+    /// contributed simply has not moved past the watermark". A test whose fixture holds one readable
+    /// and one unreadable row on the same arm needs that distinction, or a mutation that deletes the
+    /// arm outright would pass it.
+    touch_equals_watermark: bool,
+}
+
+/// One `anchor_staleness` row for `p_principal_kind = 'profile'`, or `None` when the function yields
+/// ZERO ROWS.
+///
+/// **`Option` is the point of this helper, not defensiveness.** After
+/// `migrations/20260825000010_staleness_member_gate.sql` the deny path IS zero rows (`:249-254`) —
+/// deliberately indistinguishable from an absent anchor — so a helper that `fetch_one`s cannot
+/// express the answer the deny test has to assert, and would report a gate failure as a decode
+/// panic.
+///
+/// Runtime `query_as`, not the macro, for the reason the incumbent helper gave and which the new
+/// signature does not change: these functions are new in this migration and a compile-time-checked
+/// call would demand a `.sqlx` cache entry that only `cargo sqlx prepare` against a migrated
+/// database can produce. `is_stale` is read as `Option<bool>` because `RETURNS TABLE` declares it
+/// nullable even though the `COALESCE` never yields NULL — a NULL here would itself be a finding, so
+/// it is unwrapped with a message rather than decoded into `bool`.
+async fn anchor_staleness_row(
+    pool: &PgPool,
+    anchor_table: &str,
+    anchor_id: Uuid,
+    profile: Uuid,
+) -> Option<Staleness> {
+    let row: Option<(Option<bool>, bool, bool, bool)> = sqlx::query_as(
+        "SELECT s.is_stale, \
+                s.materialized_at IS NOT NULL, \
+                s.latest_touch IS NOT NULL, \
+                COALESCE(s.latest_touch = s.materialized_at, false) \
+           FROM anchor_staleness($1, $2, 'profile', $3) s",
     )
+    .bind(anchor_table)
+    .bind(anchor_id)
+    .bind(profile)
+    .fetch_optional(pool)
+    .await
+    .expect("anchor_staleness is never an error — deny and absence are both zero rows");
+
+    row.map(|(stale, has_mat, has_touch, equal)| Staleness {
+        is_stale: stale.expect("is_stale is a COALESCE and is never NULL"),
+        has_materialized_at: has_mat,
+        has_latest_touch: has_touch,
+        touch_equals_watermark: equal,
+    })
+}
+
+/// `anchor_staleness` over a context that the caller is expected to be able to read — the common
+/// case, where zero rows would itself be the failure and is reported as such.
+async fn context_staleness(pool: &PgPool, context: Uuid, profile: Uuid) -> Staleness {
+    anchor_staleness_row(pool, "kb_contexts", context, profile)
+        .await
+        .expect("a readable context that exists yields exactly one anchor_staleness row")
 }
 
 /// **The witness for the generalized clock**, and the only assertion in this arc that can tell the
@@ -760,29 +874,39 @@ async fn a_touched_context_reports_stale(pool: PgPool) {
     let (profile, context) =
         common::fixtures::create_test_profile_with_context(&pool, "clock@example.com").await;
     let region = insert_context_region(&pool, context, 0.9, Some(0.5), "the region").await;
+    // The region needs ONE VISIBLE MEMBER or it does not move this clock at all
+    // (`migrations/20260825000010_staleness_member_gate.sql:206-212`) — the same rule both
+    // enumeration doors already applied, now applied to the clock. Before that migration this
+    // fixture held a member-less region and still reported a touch, which is precisely the
+    // disclosure `a_ghost_region_does_not_move_the_staleness_clock` below pins.
+    let member = insert_resource(&pool, context, profile, "a live member").await;
+    add_member(&pool, region, member, 0.9).await;
     // `insert_context_region` stamps the region's clock with the earliest seeded event and
     // `mark_context_materialized` stamps the watermark with the same one, so the context starts
     // materialized-and-untouched: the two timestamps are equal and `>` is false.
     mark_context_materialized(&pool, context).await;
 
-    let (stale, has_mat, has_touch) = context_staleness(&pool, context).await;
-    assert!(has_mat, "the context was just materialized");
+    let s = context_staleness(&pool, context, profile).await;
+    assert!(s.has_materialized_at, "the context was just materialized");
     assert!(
-        has_touch,
+        s.has_latest_touch,
         "latest_touch is NULL only if the regions arm cannot see this context's regions — i.e. it \
          is still keyed on the vestigial cogmap_id instead of the anchor pair"
     );
     assert!(
-        !stale,
+        !s.is_stale,
         "nothing has touched the context since its watermark, so it is fresh"
     );
 
     touch_region_with_a_later_event(&pool, profile, region).await;
 
-    let (stale, has_mat, has_touch) = context_staleness(&pool, context).await;
-    assert!(has_mat && has_touch, "both clocks are still readable");
+    let s = context_staleness(&pool, context, profile).await;
     assert!(
-        stale,
+        s.has_materialized_at && s.has_latest_touch,
+        "both clocks are still readable"
+    );
+    assert!(
+        s.is_stale,
         "a context touched after materializing is stale — if this is false, the regions arm is \
          still keyed on cogmap_id and every context is permanently, silently fresh"
     );
@@ -796,13 +920,25 @@ async fn a_touched_context_reports_stale(pool: PgPool) {
 /// rather than an obvious NULL.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_never_materialized_context_is_stale(pool: PgPool) {
-    let (_profile, context) =
+    let (profile, context) =
         common::fixtures::create_test_profile_with_context(&pool, "unclustered@example.com").await;
-    insert_context_region(&pool, context, 0.5, None, "the region").await;
+    let region = insert_context_region(&pool, context, 0.5, None, "the region").await;
+    // A visible member, so the region reaches the clock at all under the member gate. Not strictly
+    // needed for the limb under test — `materialized_at IS NULL` is true whatever `latest_touch`
+    // says — but a member-less region would leave this test silently exercising the gated-out path
+    // rather than the limb it names.
+    let member = insert_resource(&pool, context, profile, "a live member").await;
+    add_member(&pool, region, member, 0.9).await;
 
-    let (stale, has_mat, _) = context_staleness(&pool, context).await;
-    assert!(!has_mat, "the fixture context carries no watermark yet");
-    assert!(stale, "never materialized reads as stale, not as fresh");
+    let s = context_staleness(&pool, context, profile).await;
+    assert!(
+        !s.has_materialized_at,
+        "the fixture context carries no watermark yet"
+    );
+    assert!(
+        s.is_stale,
+        "never materialized reads as stale, not as fresh"
+    );
 }
 
 /// A context that does not exist yields ZERO rows, not a row of NULLs — the behaviour
@@ -811,15 +947,12 @@ async fn a_never_materialized_context_is_stale(pool: PgPool) {
 /// gate in `WHERE` deny to an empty result rather than to a spurious row.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn an_absent_anchor_yields_no_row(pool: PgPool) {
-    let rows: Vec<i32> = sqlx::query_scalar("SELECT 1 FROM anchor_staleness('kb_contexts', $1)")
-        .bind(Uuid::now_v7())
-        .fetch_all(&pool)
-        .await
-        .expect("an absent anchor is not an error");
+    let profile = common::fixtures::create_test_profile(&pool, "nobody@example.com").await;
+    let got = anchor_staleness_row(&pool, "kb_contexts", Uuid::now_v7(), profile).await;
 
     assert!(
-        rows.is_empty(),
-        "an anchor that does not exist has no clock to report: {rows:?}"
+        got.is_none(),
+        "an anchor that does not exist has no clock to report: {got:?}"
     );
 }
 
@@ -833,7 +966,19 @@ async fn an_absent_anchor_yields_no_row(pool: PgPool) {
 /// (`migrations/20260823000020_anchor_staleness.sql`, the comment above `cogmap_staleness`). A
 /// fixture that bound `cogmap_id` alone would construct a row the real system never produces, and
 /// the wrapper would answer `is_stale = false` on it forever.
-async fn insert_materialized_cogmap_with_region(pool: &PgPool, name: &str) -> (Uuid, Uuid) {
+///
+/// **Two things this fixture gained with `20260825000010`, and neither is decoration.** The map is
+/// now linked to a team `profile` can reach and its region is given a member homed in the map,
+/// because the wrapper is gated from that migration onward: `cogmap_readable_by_profile` admits a
+/// map only through `kb_team_cogmaps` ⋈ `profile_reachable_teams` or an explicit grant, and the
+/// regions arm now requires the region to hold a member the caller can see. A bare map with an empty
+/// region — what this fixture used to build — would answer ZERO ROWS, and the delegation test would
+/// fail for a reason that has nothing to do with the delegation.
+async fn insert_materialized_cogmap_with_region(
+    pool: &PgPool,
+    profile: Uuid,
+    name: &str,
+) -> (Uuid, Uuid) {
     let telos: Uuid = sqlx::query_scalar(
         "INSERT INTO kb_resources (title, origin_uri) VALUES ($1, $2) RETURNING id",
     )
@@ -878,32 +1023,83 @@ async fn insert_materialized_cogmap_with_region(pool: &PgPool, name: &str) -> (U
     .await
     .expect("insert a cogmap-homed region carrying BOTH keys");
 
+    // The gate's anchor half: `cogmap_readable_by_profile` admits a map only through
+    // `kb_team_cogmaps` joined to `profile_reachable_teams`, or an explicit grant.
+    //
+    // `profile_effective_teams` and NOT `profile_reachable_teams`, deliberately. The first is DIRECT
+    // memberships (`kb_team_members` ⋈ active teams), and a fresh test profile has exactly one — the
+    // `personal-<handle>` team minted by `sync_personal_team`. The second expands UP through
+    // `team_ancestors`, and that same trigger parents every personal team to `temper-system`, so
+    // `reachable` holds at least two rows in no defined order — a `LIMIT 1` over it could bind this
+    // map to the ROOT team, which would make it readable by every profile in the database.
+    let team: Uuid = sqlx::query_scalar("SELECT team_id FROM profile_effective_teams($1)")
+        .bind(profile)
+        .fetch_one(pool)
+        .await
+        .expect("the personal-team trigger gives every test profile exactly one direct team");
+    sqlx::query("INSERT INTO kb_team_cogmaps (team_id, cogmap_id) VALUES ($1, $2)")
+        .bind(team)
+        .bind(cogmap)
+        .execute(pool)
+        .await
+        .expect("link the map to a team the profile can reach");
+
+    // The gate's member half: a resource homed IN the map, which the same team link makes visible
+    // (the "resources homed in a cognitive map joined to a REACHABLE team" arm of
+    // `resources_visible_to`), added to the region so it is a region the caller can see into.
+    let member: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_resources (title, origin_uri) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(format!("{name}-member"))
+    .bind(format!("test://{name}-member"))
+    .fetch_one(pool)
+    .await
+    .expect("insert the region's member resource");
+    sqlx::query(
+        "INSERT INTO kb_resource_homes \
+           (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id) \
+         VALUES ($1, 'kb_cogmaps', $2, $3, $3)",
+    )
+    .bind(member)
+    .bind(cogmap)
+    .bind(profile)
+    .execute(pool)
+    .await
+    .expect("home the member in the map");
+    add_member(pool, region, member, 0.9).await;
+
     (cogmap, region)
 }
 
-/// One `cogmap_staleness` row — the DELEGATING wrapper, not `anchor_staleness` — as
-/// `(is_stale, has_materialized_at, has_latest_touch)`.
+/// One `cogmap_staleness` row — the DELEGATING wrapper, not `anchor_staleness` — or `None` on the
+/// wrapper's zero-row deny.
 ///
 /// Deliberately calls the wrapper by its own name. That name is what `cogmap_analytics`
 /// (`migrations/20260628000001_cogmap_analytics_read_functions.sql:37`) and the scenario runner
 /// (`crates/temper-substrate/src/scenario/runner.rs:486`) call, so it is the surface whose answer
 /// must not move; calling `anchor_staleness('kb_cogmaps', …)` here would test the delegate and skip
-/// the delegation.
-async fn cogmap_staleness_row(pool: &PgPool, cogmap: Uuid) -> (bool, bool, bool) {
-    let (stale, has_mat, has_touch): (Option<bool>, bool, bool) = sqlx::query_as(
-        "SELECT s.is_stale, s.materialized_at IS NOT NULL, s.latest_touch IS NOT NULL \
-           FROM cogmap_staleness($1) s",
+/// the delegation. The wrapper carries NO gate of its own — it inherits the core's — which is why
+/// this returns an `Option` too.
+async fn cogmap_staleness_row(pool: &PgPool, cogmap: Uuid, profile: Uuid) -> Option<Staleness> {
+    let row: Option<(Option<bool>, bool, bool, bool)> = sqlx::query_as(
+        "SELECT s.is_stale, \
+                s.materialized_at IS NOT NULL, \
+                s.latest_touch IS NOT NULL, \
+                COALESCE(s.latest_touch = s.materialized_at, false) \
+           FROM cogmap_staleness($1, 'profile', $2) s",
     )
     .bind(cogmap)
-    .fetch_one(pool)
+    .bind(profile)
+    .fetch_optional(pool)
     .await
-    .expect("cogmap_staleness yields exactly one row for a cogmap that exists");
+    .expect("cogmap_staleness is never an error — deny and absence are both zero rows");
 
-    (
-        stale.expect("is_stale is a COALESCE and is never NULL"),
-        has_mat,
-        has_touch,
-    )
+    row.map(|(stale, has_mat, has_touch, equal)| Staleness {
+        is_stale: stale.expect("is_stale is a COALESCE and is never NULL"),
+        has_materialized_at: has_mat,
+        has_latest_touch: has_touch,
+        touch_equals_watermark: equal,
+    })
 }
 
 /// **The cogmap-side witness for the delegation**, mirroring `a_touched_context_reports_stale`.
@@ -928,27 +1124,38 @@ async fn cogmap_staleness_row(pool: &PgPool, cogmap: Uuid) -> (bool, bool, bool)
 async fn a_touched_cogmap_reports_stale_through_the_delegating_wrapper(pool: PgPool) {
     let (profile, _context) =
         common::fixtures::create_test_profile_with_context(&pool, "mapclock@example.com").await;
-    let (cogmap, region) = insert_materialized_cogmap_with_region(&pool, "clock-map").await;
+    let (cogmap, region) =
+        insert_materialized_cogmap_with_region(&pool, profile, "clock-map").await;
 
-    let (stale, has_mat, has_touch) = cogmap_staleness_row(&pool, cogmap).await;
-    assert!(has_mat, "the map was inserted with its watermark stamped");
+    let s = cogmap_staleness_row(&pool, cogmap, profile)
+        .await
+        .expect("a readable map that exists yields exactly one cogmap_staleness row");
     assert!(
-        has_touch,
+        s.has_materialized_at,
+        "the map was inserted with its watermark stamped"
+    );
+    assert!(
+        s.has_latest_touch,
         "latest_touch is NULL only if the regions arm cannot see this map's region — i.e. the arm \
          and the row disagree about the key, which is the unconstrained equality the delegation \
          rests on"
     );
     assert!(
-        !stale,
+        !s.is_stale,
         "nothing has touched the map since its watermark, so it is fresh"
     );
 
     touch_region_with_a_later_event(&pool, profile, region).await;
 
-    let (stale, has_mat, has_touch) = cogmap_staleness_row(&pool, cogmap).await;
-    assert!(has_mat && has_touch, "both clocks are still readable");
+    let s = cogmap_staleness_row(&pool, cogmap, profile)
+        .await
+        .expect("the gate does not move when the clock does");
     assert!(
-        stale,
+        s.has_materialized_at && s.has_latest_touch,
+        "both clocks are still readable"
+    );
+    assert!(
+        s.is_stale,
         "a cogmap touched after materializing is stale — if this is false, the delegation lost the \
          region and every such map is permanently, silently fresh"
     );
@@ -957,10 +1164,17 @@ async fn a_touched_cogmap_reports_stale_through_the_delegating_wrapper(pool: PgP
     // must equal what the pre-delegation body computed, whose regions arm was keyed on
     // `reg.cogmap_id` (`20260624000002:538-541`). Both arms are reproduced here over the same row,
     // so a divergence localises to the key and nothing else.
+    //
+    // **The inline `old` arm is UNGATED, and that is what this fixture is arranged for.** Every row
+    // it can see — the one region, its one member — is visible to `profile`, so the gate added by
+    // `20260825000010` removes nothing here and the two answers must still agree. This comparison is
+    // therefore a key test, NOT a gate test: it says the delegation preserved the answer where the
+    // gate has nothing to do. The gate's own differential is the ghost-region and ghost-endpoint
+    // witnesses below, where these two arms deliberately DISAGREE.
     let agrees: Option<bool> = sqlx::query_scalar(
         "SELECT new.is_stale IS NOT DISTINCT FROM old.is_stale
                AND new.latest_touch IS NOT DISTINCT FROM old.latest_touch
-           FROM cogmap_staleness($1) new,
+           FROM cogmap_staleness($1, 'profile', $2) new,
                 LATERAL (
                   SELECT mat.materialized_at, t.latest_touch,
                          COALESCE(t.latest_touch > mat.materialized_at,
@@ -981,6 +1195,7 @@ async fn a_touched_cogmap_reports_stale_through_the_delegating_wrapper(pool: PgP
                 ) old",
     )
     .bind(cogmap)
+    .bind(profile)
     .fetch_one(&pool)
     .await
     .expect("both arms answer over the same map");
@@ -990,5 +1205,506 @@ async fn a_touched_cogmap_reports_stale_through_the_delegating_wrapper(pool: PgP
         Some(true),
         "the anchor-pair arm and the cogmap_id arm must agree for a region carrying both keys — \
          disagreement means the delegation changed the answer for cogmaps"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// THE GATE (`migrations/20260825000010_staleness_member_gate.sql`) — the clock stops reporting on
+// rows the caller cannot read, and gains a context-side composer.
+//
+// **Why the tests above cannot serve as the witnesses for it.** Every one of them reads as the
+// OWNER of a fully-visible fixture, and an owner sees all their own regions — so they answer
+// identically before and after the gate. The design says so in as many words (§6: "a test that
+// merely re-runs the current function proves reproducibility, not correctness"). The reachable
+// bite is SOFT-DELETE and only soft-delete: `20260823000010:157-173` establishes that a readable
+// anchor's regions are built from that anchor's own homes and `resources_visible_to` admits every
+// resource homed in a readable anchor, so "a region holding members another tenant hid from you"
+// is not a row the writer can produce — but a GHOST region, whose members were soft-deleted after
+// materialize, is, and 40 of 40 dead-but-homed resources on prod were still region members.
+//
+// The incumbent body these bite against is quoted from the live catalog rather than paraphrased
+// (`\sf anchor_staleness` on the pre-migration database):
+//
+//     touch AS (
+//         SELECT max(occurred_at) AS latest_touch FROM (
+//             SELECT ev.occurred_at FROM kb_cogmap_regions reg
+//               JOIN kb_events ev ON ev.id = reg.last_event_id
+//              WHERE reg.home_anchor_table = p_anchor_table
+//                AND reg.home_anchor_id    = p_anchor_id
+//             UNION ALL
+//             SELECT ev.occurred_at FROM kb_edges e
+//               JOIN kb_events ev ON ev.id = e.last_event_id
+//              WHERE e.home_anchor_table = p_anchor_table
+//                AND e.home_anchor_id    = p_anchor_id
+//         ) t
+//     )
+//
+// No readability predicate on either arm. That is what the next two tests are built to fail.
+// ---------------------------------------------------------------------------------------------
+
+/// **THE REGIONS-ARM BITE.** A region whose every member has been soft-deleted is a region the
+/// caller can see nothing in, so its clock is not their clock — the same rule both enumeration
+/// doors onto this anchor already applied (`anchor_shape` `20260823000010:87-88`,
+/// `anchor_region_metrics` `20260713000050:262-268`), now applied to the staleness read.
+///
+/// **What the OLD function answers for THIS EXACT FIXTURE, which is why this test bites.** The
+/// incumbent's regions arm (quoted in the block comment above) selects every region whose
+/// `home_anchor_table`/`home_anchor_id` match, with no member predicate. This ghost region matches
+/// the anchor pair, so `max(occurred_at)` over the arm is the `now() + interval '1 day'` event that
+/// step 3 pointed `last_event_id` at. Therefore, under the incumbent:
+///
+///   * `latest_touch` is that later stamp — **NOT NULL**, so `assert!(!s.has_latest_touch)` fails;
+///   * `latest_touch > materialized_at` is **true**, so `assert!(!s.is_stale)` fails.
+///
+/// Two independent assertions, both red. Under the gated function the region is excluded, the
+/// context has no edges, so `latest_touch` is NULL, `NULL > materialized_at` is NULL, and the
+/// `COALESCE` falls to `materialized_at IS NULL` — false, because step 1 materialized. The whole
+/// point of step 1 is to make that fallback answer `false`: without it the assertion would be
+/// satisfied by the never-clustered limb and prove nothing.
+///
+/// **Which conjunct this isolates: the MEMBER RULE, and only it.** The reader here is the context's
+/// OWNER, so the gate's anchor disjunction (`anchor_readable_by_profile`) is satisfied — a build
+/// carrying the anchor gate but no member rule returns a row with the ghost's touch in it and fails
+/// this test. It says nothing about the anchor half; that is
+/// `a_context_the_caller_cannot_read_yields_no_staleness_row`'s job.
+///
+/// **What it deliberately does NOT prove**, so nobody reads more into the `latest_touch IS NULL`
+/// assertion than it carries: a build that deleted the regions arm outright would also pass. That
+/// the arm still works is pinned by `a_touched_context_reports_stale` above, over a live member.
+/// The pair is the witness; neither half is alone.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_ghost_region_does_not_move_the_staleness_clock(pool: PgPool) {
+    let (owner, context) =
+        common::fixtures::create_test_profile_with_context(&pool, "ghost-region@example.com").await;
+    let region = insert_context_region(&pool, context, 0.9, Some(0.5), "the ghost").await;
+    let member = insert_resource(&pool, context, owner, "a member, until it wasn't").await;
+    add_member(&pool, region, member, 0.9).await;
+
+    // 1. Materialize: sets the watermark, and makes `is_stale = false` mean FRESH rather than
+    //    "never clustered" (the other limb of the same COALESCE).
+    mark_context_materialized(&pool, context).await;
+
+    // 2. Soft-delete every member. `resources_visible_to` ends in `AND r.is_active`, so the member
+    //    is now invisible on every axis — including to this owner, who could see it a moment ago.
+    //    The region itself is untouched: it still exists and still points at this context.
+    soft_delete_resource(&pool, member).await;
+
+    // 3. Advance the ghost's clock past the watermark. This context has no edges at all, so the
+    //    ghost region is the ONLY thing under the anchor that has moved, and any `latest_touch` the
+    //    read produces can only have come from it.
+    touch_region_with_a_later_event(&pool, owner, region).await;
+
+    // 4. Read as the OWNER — no second principal, which is what makes the fixture sharp rather than
+    //    weak: the person who owns the anchor must stop seeing the clock move.
+    let s = context_staleness(&pool, context, owner).await;
+
+    assert!(
+        s.has_materialized_at,
+        "step 1 stamped the watermark — without it `is_stale = false` below would be the \
+         never-clustered limb answering, not the freshness limb: {s:?}"
+    );
+    assert!(
+        !s.has_latest_touch,
+        "a region the caller can see NOTHING in must not reach the clock at all. A non-NULL \
+         latest_touch here is the ungated regions arm counting the ghost's touch: {s:?}"
+    );
+    assert!(
+        !s.is_stale,
+        "...and therefore the anchor reads fresh. `is_stale = true` here is the disclosure this \
+         migration closes: it reports that something moved under an anchor whose only movement was \
+         in a region the shape read refuses to admit exists: {s:?}"
+    );
+}
+
+/// **THE EDGES-ARM BITE.** An edge with an unreadable endpoint does not move this clock. The edges
+/// arm has no member concept at all — it gates on `endpoint_readable_by_profile`
+/// (`20260624000002:292`) on BOTH endpoints, which is the AUTHORIZATION half of `edges_visible_to`
+/// taken on its own so the CURRENCY half (`NOT is_folded`) is not imported with it
+/// (`20260825000010:221-231`).
+///
+/// **What the OLD function answers for THIS EXACT FIXTURE.** The incumbent's edges arm carried NO
+/// predicate whatsoever — not even the endpoint check — so it takes `max(occurred_at)` over both
+/// edges homed here. The ghost edge's `last_event_id` is the `now() + interval '1 day'` event, so:
+///
+///   * `latest_touch` is that later stamp, so `assert!(s.touch_equals_watermark)` fails;
+///   * `latest_touch > materialized_at` is true, so `assert!(!s.is_stale)` fails.
+///
+/// Under the gated function the ghost edge is dropped (its source endpoint is soft-deleted, so
+/// `endpoint_readable_by_profile` → `resources_visible_to` excludes it), and the only edge left is
+/// the readable control, born at the watermark: `latest_touch = materialized_at`, `>` is false.
+///
+/// **Why the readable CONTROL edge is in the fixture.** Without it, "the ghost was gated out" and
+/// "the edges arm was deleted" produce the same `latest_touch IS NULL`. With it, the arm must still
+/// be alive AND still be selective, and `touch_equals_watermark` is what says so. This is the
+/// discriminator the regions-arm witness above cannot have without giving up its `latest_touch IS
+/// NULL` assertion, so it is stated here instead.
+///
+/// **Which conjunct this isolates: the EDGES-ARM ENDPOINT RULE, and only it.** The reader is the
+/// owner, so the anchor disjunction passes; the context holds NO regions, so the member rule on the
+/// regions arm has nothing to act on and cannot be what changes the answer.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_ghost_endpoint_does_not_move_the_staleness_clock(pool: PgPool) {
+    let (owner, context) =
+        common::fixtures::create_test_profile_with_context(&pool, "ghost-edge@example.com").await;
+    // NO regions on this context, deliberately: the edges arm must be the only contributor, or an
+    // assertion about `latest_touch` could not be localised to it.
+    mark_context_materialized(&pool, context).await;
+
+    let live_a = insert_resource(&pool, context, owner, "one live endpoint").await;
+    let live_b = insert_resource(&pool, context, owner, "the other live endpoint").await;
+    let doomed = insert_resource(&pool, context, owner, "an endpoint, until it wasn't").await;
+
+    // The CONTROL: both endpoints readable, born at the watermark, never moved.
+    insert_context_edge(&pool, context, live_a, live_b).await;
+
+    // The GHOST: one endpoint about to be soft-deleted, and the only thing that moves afterwards.
+    let ghost_edge = insert_context_edge(&pool, context, doomed, live_b).await;
+    soft_delete_resource(&pool, doomed).await;
+    touch_edge_with_a_later_event(&pool, owner, ghost_edge).await;
+
+    let s = context_staleness(&pool, context, owner).await;
+
+    assert!(
+        s.has_materialized_at,
+        "the watermark is stamped, so `is_stale = false` below is the freshness limb: {s:?}"
+    );
+    assert!(
+        s.has_latest_touch,
+        "the readable control edge still reaches the clock — if this is NULL the edges arm was not \
+         gated but REMOVED, which is a different defect and not the one under test: {s:?}"
+    );
+    assert!(
+        s.touch_equals_watermark,
+        "...and what it contributes is the watermark itself. The ghost edge's later stamp must not \
+         be in the max(): if latest_touch has moved past materialized_at, the unreadable endpoint \
+         was counted: {s:?}"
+    );
+    assert!(
+        !s.is_stale,
+        "an edge whose endpoint the caller cannot read does not make their anchor stale: {s:?}"
+    );
+}
+
+/// **THE ANCHOR-GATE HALF (§3).** A caller who cannot read the anchor gets ZERO ROWS — not an
+/// error, and not a row of NULLs.
+///
+/// **The assertion is deliberately `is_none()` and not `is_stale == false`, and that is the whole
+/// content of this test.** Gating only the member/endpoint half would leave both arms contributing
+/// nothing to a denied caller, `latest_touch` NULL, and the `COALESCE` collapsing to
+/// `materialized_at IS NULL` — while the `mat` CTE reads the anchor's watermark UNCONDITIONALLY. So
+/// a member-gated-but-anchor-ungated build hands a stranger ONE ROW carrying a real anchor's
+/// `materialized_at` and an `is_stale` reporting whether it has ever been clustered. A test that
+/// asserted `is_stale == false` would pass against exactly that build. Row COUNT is the only
+/// assertion that separates them.
+///
+/// **Which conjunct this isolates: the ANCHOR DISJUNCTION, and only it.** The fixture's region holds
+/// a live, visible-to-its-owner member, so the member rule admits it; the sole reason the stranger
+/// gets nothing is `anchor_readable_by_profile`.
+///
+/// The owner read at the end is a POSITIVE CONTROL, not decoration: without it, `is_none()` could be
+/// satisfied by a fixture that yields no row for anyone (an absent anchor, an unmaterialized one, a
+/// broken insert), and the test would pass while proving nothing about the gate. The same fixture
+/// must return a row to someone.
+///
+/// Both names are checked because `context_analytics` carries no gate of its own — it inherits the
+/// core's (`20260825000010:327-330`) — so "the wrapper leaks what the core denies" is a real
+/// regression shape and cannot be inferred from the core's own behaviour.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_context_the_caller_cannot_read_yields_no_staleness_row(pool: PgPool) {
+    let (owner, context) =
+        common::fixtures::create_test_profile_with_context(&pool, "gated@example.com").await;
+    let stranger = common::fixtures::create_test_profile(&pool, "stranger@example.com").await;
+
+    let region = insert_context_region(&pool, context, 0.9, Some(0.5), "a live region").await;
+    let member = insert_resource(&pool, context, owner, "a live member").await;
+    add_member(&pool, region, member, 0.9).await;
+    mark_context_materialized(&pool, context).await;
+    // Touched after materializing: the anchor is genuinely STALE, so the row being withheld carries
+    // a fact — not just a watermark, but a watermark plus "and something has moved since".
+    touch_region_with_a_later_event(&pool, owner, region).await;
+
+    let denied_core = anchor_staleness_row(&pool, "kb_contexts", context, stranger).await;
+    assert!(
+        denied_core.is_none(),
+        "a caller who cannot read the anchor gets ZERO ROWS — deny and absence are the same answer, \
+         so the row itself would be an existence-and-clock oracle: {denied_core:?}"
+    );
+
+    let denied_composer = context_analytics_row(&pool, context, stranger).await;
+    assert!(
+        denied_composer.is_none(),
+        "...and the composer inherits that gate rather than carrying one of its own, so it must \
+         deny identically: {denied_composer:?}"
+    );
+
+    // POSITIVE CONTROL: the same anchor, read by someone who may.
+    let allowed = context_staleness(&pool, context, owner).await;
+    assert!(
+        allowed.is_stale && allowed.has_materialized_at,
+        "the fixture really is a materialized, touched, readable anchor — so the two `is_none()` \
+         assertions above are about the GATE and not about an anchor that answers to nobody: \
+         {allowed:?}"
+    );
+}
+
+/// One `context_analytics` row — the new context-side composer — or `None` on its zero-row deny.
+/// Same shape and same reasoning as `anchor_staleness_row`; it exists separately so the composer is
+/// exercised BY ITS OWN NAME, which is the surface the API, MCP and CLI wiring of Beat B will call.
+async fn context_analytics_row(pool: &PgPool, context: Uuid, profile: Uuid) -> Option<Staleness> {
+    let row: Option<(Option<bool>, bool, bool, bool)> = sqlx::query_as(
+        "SELECT s.is_stale, \
+                s.materialized_at IS NOT NULL, \
+                s.latest_touch IS NOT NULL, \
+                COALESCE(s.latest_touch = s.materialized_at, false) \
+           FROM context_analytics($1, 'profile', $2) s",
+    )
+    .bind(context)
+    .bind(profile)
+    .fetch_optional(pool)
+    .await
+    .expect("context_analytics is never an error — deny and absence are both zero rows");
+
+    row.map(|(stale, has_mat, has_touch, equal)| Staleness {
+        is_stale: stale.expect("is_stale is a COALESCE and is never NULL"),
+        has_materialized_at: has_mat,
+        has_latest_touch: has_touch,
+        touch_equals_watermark: equal,
+    })
+}
+
+/// `context_analytics` over a readable, materialized context: exactly ONE row, and its three columns
+/// are the core's three columns.
+///
+/// The equality against `anchor_staleness` is asserted rather than assumed because the composer is a
+/// delegating wrapper with no body of its own (`20260825000010:332-337`) — a hand-copied second
+/// implementation is the thing that would drift, and this is the assertion that would notice.
+///
+/// The touch at the end is what makes the columns LIVE rather than constant: a wrapper returning
+/// three literal NULLs, or a `materialized_at` read straight off the context row, would satisfy
+/// every assertion before it.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn context_analytics_returns_one_row_of_the_staleness_triple(pool: PgPool) {
+    let (owner, context) =
+        common::fixtures::create_test_profile_with_context(&pool, "analytics@example.com").await;
+    let region = insert_context_region(&pool, context, 0.9, Some(0.5), "a live region").await;
+    let member = insert_resource(&pool, context, owner, "a live member").await;
+    add_member(&pool, region, member, 0.9).await;
+    mark_context_materialized(&pool, context).await;
+
+    let rows: Vec<i32> = sqlx::query_scalar("SELECT 1 FROM context_analytics($1, 'profile', $2)")
+        .bind(context)
+        .bind(owner)
+        .fetch_all(&pool)
+        .await
+        .expect("context_analytics over a readable context is Ok");
+    assert_eq!(
+        rows.len(),
+        1,
+        "a readable, existing context yields exactly one analytics row: {rows:?}"
+    );
+
+    let fresh = context_analytics_row(&pool, context, owner)
+        .await
+        .expect("...and it decodes");
+    assert!(
+        fresh.has_materialized_at && fresh.has_latest_touch,
+        "both clocks are readable through the composer: {fresh:?}"
+    );
+    assert!(
+        !fresh.is_stale,
+        "nothing has moved since the watermark: {fresh:?}"
+    );
+
+    // The delegation, stated as an equality rather than inferred from two separately-asserted
+    // values: whatever the core says, the composer says, column for column.
+    let agrees: Option<bool> = sqlx::query_scalar(
+        "SELECT a.materialized_at IS NOT DISTINCT FROM s.materialized_at
+               AND a.latest_touch IS NOT DISTINCT FROM s.latest_touch
+               AND a.is_stale     IS NOT DISTINCT FROM s.is_stale
+           FROM context_analytics($1, 'profile', $2) a,
+                anchor_staleness('kb_contexts', $1, 'profile', $2) s",
+    )
+    .bind(context)
+    .bind(owner)
+    .fetch_one(&pool)
+    .await
+    .expect("both reads answer over the same context");
+    assert_eq!(
+        agrees,
+        Some(true),
+        "context_analytics must be the core's answer verbatim — it has no body of its own to \
+         disagree with it"
+    );
+
+    touch_region_with_a_later_event(&pool, owner, region).await;
+    let touched = context_analytics_row(&pool, context, owner)
+        .await
+        .expect("the composer still answers after a touch");
+    assert!(
+        touched.is_stale,
+        "the composer's columns track the live clock — if this is false it is reporting something \
+         static rather than delegating: {touched:?}"
+    );
+}
+
+/// `context_analytics` returns THREE columns, not the five its cogmap peer returns (§4).
+///
+/// A context has no charter resource and no regulation set, so `telos_resource_id NULL` and
+/// `regulation '[]'` would say *nothing found* about two things that cannot exist — the exact
+/// failure `CONTEXT_HAS_NO_MAP_READOUT` was written to avoid. The return type IS that design
+/// decision, so it is pinned from the live catalog rather than left to a reviewer's eye.
+///
+/// Read as an equality against `anchor_staleness`'s own result type rather than against a
+/// hard-coded string, so the assertion survives a rename of the triple and fails only on a genuine
+/// shape divergence.
+///
+/// This test does not bite against the incumbent in the way the two ghost witnesses do — before this
+/// migration `context_analytics` did not exist at all, so there is no "old answer" for it to differ
+/// from. It is a shape guard against a future "make it a peer of cogmap_analytics" edit.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn context_analytics_returns_three_columns_and_not_its_cogmap_peers_five(pool: PgPool) {
+    let (context_shape, core_shape, peer_shape): (String, String, String) = sqlx::query_as(
+        "SELECT (SELECT pg_get_function_result(oid) FROM pg_proc \
+                  WHERE pronamespace = 'public'::regnamespace \
+                    AND proname = 'context_analytics'), \
+                (SELECT pg_get_function_result(oid) FROM pg_proc \
+                  WHERE pronamespace = 'public'::regnamespace \
+                    AND proname = 'anchor_staleness'), \
+                (SELECT pg_get_function_result(oid) FROM pg_proc \
+                  WHERE pronamespace = 'public'::regnamespace \
+                    AND proname = 'cogmap_analytics')",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("all three functions exist under exactly one signature each");
+
+    assert_eq!(
+        context_shape, core_shape,
+        "context_analytics returns the staleness triple its core returns, unchanged"
+    );
+    assert_ne!(
+        context_shape, peer_shape,
+        "...and NOT the five columns of cogmap_analytics: a context has no charter resource and no \
+         regulation set, so those two would be null peer fields reporting `nothing found` about \
+         something that cannot exist"
+    );
+}
+
+/// **§4: the old ungated signatures are GONE, not standing beside the new ones as overloads.**
+///
+/// In Postgres, adding a parameter creates an overload rather than replacing a function. A
+/// `CREATE OR REPLACE` at the longer argument list would have left `anchor_staleness(text, uuid)`
+/// and `cogmap_staleness(uuid)` in the catalog — same name, same column names, same `boolean` type,
+/// no gate — and every existing caller would keep resolving to them. Nothing errors, nothing goes
+/// red, and the fix silently does not apply. That is misrouting, not drift.
+///
+/// The hazard is not hypothetical for this schema: `__temper_ungated_follow_from` exists under three
+/// signatures at once, each a generation that was added rather than replaced
+/// (`20260825000010:115-117`).
+///
+/// So this asserts the catalog holds EXACTLY the gated signature for each name. It is the only test
+/// in this file that a correct-looking migration can fail while every behavioural test above still
+/// passes — because the behavioural tests bind their arguments, and a bound four-argument call
+/// resolves to the gated function whether or not the two-argument one is still there.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_old_ungated_staleness_signatures_are_dropped_not_overloaded(pool: PgPool) {
+    let signatures: Vec<String> = sqlx::query_scalar(
+        "SELECT p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' \
+           FROM pg_proc p \
+          WHERE p.pronamespace = 'public'::regnamespace \
+            AND p.proname IN ('anchor_staleness', 'cogmap_staleness', 'context_analytics') \
+          ORDER BY 1",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("read the live function catalog");
+
+    assert_eq!(
+        signatures,
+        vec![
+            "anchor_staleness(p_anchor_table text, p_anchor_id uuid, p_principal_kind text, \
+             p_principal_id uuid)"
+                .to_string(),
+            "cogmap_staleness(p_cogmap uuid, p_principal_kind text, p_principal_id uuid)"
+                .to_string(),
+            "context_analytics(p_context uuid, p_principal_kind text, p_principal_id uuid)"
+                .to_string(),
+        ],
+        "one signature per name, each taking a principal. An extra row here is the ungated \
+         incumbent still standing and still absorbing callers: {signatures:?}"
+    );
+}
+
+// ── The fold arms, which must NOT be narrowed ────────────────────────────────
+//
+// These two do NOT bite against the incumbent — the incumbent is fold-inclusive too, so they pass
+// against both. They are here for the opposite reason: they PROTECT an arm from being "tightened"
+// later by someone reconciling it with `anchor_shape`, which does carry `NOT reg.is_folded`
+// (`20260823000010:86`). The distinction that makes the asymmetry deliberate rather than an
+// oversight, from `internal/agents/key-patterns.md` and restated at `20260825000010:62-71`:
+// `is_active` and `resources_visible_to` are AUTHORIZATION predicates, `is_folded` is a CURRENCY
+// one. This migration added authorization and touched currency nowhere.
+//
+// The failure a narrowing would cause is silent: a fold advances `last_event_id`, so dropping
+// folded rows makes a STALE anchor read FRESH, with every value still a plausible timestamp and
+// nothing to error on. The covering index was built for exactly this folded-inclusive scan
+// (`20260708000008:10-15`, `idx_kb_edges_home_all`).
+
+/// A FOLDED region still moves the staleness clock.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_folded_region_still_moves_the_staleness_clock(pool: PgPool) {
+    let (owner, context) =
+        common::fixtures::create_test_profile_with_context(&pool, "fold-region@example.com").await;
+    let region = insert_context_region(&pool, context, 0.9, Some(0.5), "the folded region").await;
+    // A LIVE, visible member: the member rule must pass, so that the only predicate this fixture
+    // can be failed by is a fold predicate. Without it the test would go green for the wrong reason
+    // under a narrowing — gated out by the member rule instead of admitted despite the fold.
+    let member = insert_resource(&pool, context, owner, "a live member").await;
+    add_member(&pool, region, member, 0.9).await;
+    mark_context_materialized(&pool, context).await;
+
+    sqlx::query("UPDATE kb_cogmap_regions SET is_folded = true WHERE id = $1")
+        .bind(region)
+        .execute(&pool)
+        .await
+        .expect("fold the region");
+    touch_region_with_a_later_event(&pool, owner, region).await;
+
+    let s = context_staleness(&pool, context, owner).await;
+    assert!(
+        s.has_latest_touch && s.is_stale,
+        "a fold IS a touch — it advances last_event_id. If the regions arm ever grows a \
+         `NOT reg.is_folded` predicate to match anchor_shape's, this anchor reads FRESH while being \
+         stale, and nothing else in the suite would notice: {s:?}"
+    );
+}
+
+/// A FOLDED edge still moves the staleness clock.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_folded_edge_still_moves_the_staleness_clock(pool: PgPool) {
+    let (owner, context) =
+        common::fixtures::create_test_profile_with_context(&pool, "fold-edge@example.com").await;
+    // No regions: the edges arm is the only contributor, so the assertion localises to it.
+    mark_context_materialized(&pool, context).await;
+
+    // Both endpoints live and visible, so the endpoint rule passes and a fold predicate is the only
+    // thing that could drop this edge.
+    let live_a = insert_resource(&pool, context, owner, "one live endpoint").await;
+    let live_b = insert_resource(&pool, context, owner, "the other live endpoint").await;
+    let edge = insert_context_edge(&pool, context, live_a, live_b).await;
+
+    sqlx::query("UPDATE kb_edges SET is_folded = true WHERE id = $1")
+        .bind(edge)
+        .execute(&pool)
+        .await
+        .expect("fold the edge");
+    touch_edge_with_a_later_event(&pool, owner, edge).await;
+
+    let s = context_staleness(&pool, context, owner).await;
+    assert!(
+        s.has_latest_touch && s.is_stale,
+        "the edges arm is folded-inclusive on purpose, and calling `edges_visible_to` wholesale \
+         would have imported the `NOT e.is_folded` at 20260712000010:297 through the back door — \
+         which is why the migration composes `endpoint_readable_by_profile` instead: {s:?}"
     );
 }
