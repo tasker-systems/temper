@@ -154,6 +154,10 @@ async fn can_author(pool: &PgPool, p: Uuid, c: Uuid) -> sqlx::Result<bool>      
 async fn sees_resource(pool: &PgPool, p: Uuid, r: Uuid) -> sqlx::Result<bool>              // :232
 ```
 
+**The migrator in this file is `temper_substrate::MIGRATOR`, not `temper_api::MIGRATOR`** — all 14
+existing tests use it, and temper-services' test crate resolves it through its own re-export. Copy
+the attribute exactly as written below.
+
 `Org` has fields `epd`, `engineering`, `payroll_group`, `squad_two`, `security_it_ops`, `dana`
 (direct member of `squad_two` only), `outsider` (owns nothing, belongs to nothing). Tests in this
 file return `sqlx::Result<()>` and use `?`, not `.expect(...)`.
@@ -180,7 +184,7 @@ Add these three tests to the same file:
 /// arms are proved one at a time: a caller who reaches a context by two routes cannot witness
 /// which one closed. Arms 3 and 4 never join `kb_contexts`, so they are the two an EXISTS-less
 /// floor would silently leave open.
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn a_retired_context_closes_each_read_arm_independently(pool: PgPool) -> sqlx::Result<()> {
     let o = org(&pool).await?;
 
@@ -216,7 +220,7 @@ async fn a_retired_context_closes_each_read_arm_independently(pool: PgPool) -> s
 /// A retired context is frozen on every arm of `context_authorable_by_profile`, including the
 /// explicit write-grant arm — which delegates to `profile_explicit_grant`, a subject-polymorphic
 /// helper that cannot know a context is retired, so its floor has to be added at the call site.
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn a_retired_context_is_not_authorable_by_any_arm(pool: PgPool) -> sqlx::Result<()> {
     let o = org(&pool).await?;
 
@@ -241,7 +245,7 @@ async fn a_retired_context_is_not_authorable_by_any_arm(pool: PgPool) -> sqlx::R
 /// The floor removes reach the CONTAINER conferred, and nothing else. A resource whose home row
 /// names you as owner stays visible, which is what keeps retirement from being a data jail
 /// (spec §1.4) — `resources_visible_to`'s first arm is `h.owner_profile_id = p_profile`.
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn retirement_removes_container_conferred_reach_but_not_ownership(
     pool: PgPool,
 ) -> sqlx::Result<()> {
@@ -492,18 +496,46 @@ Expected: FAIL — `cannot find function 'retire'`.
 
 **AMEND** — spec §2.7 authorizes removing the guard; the auth gate and existence check are **CONFORM**, carried unchanged from PR #777.
 
-Delete from `context_service.rs`: the `HomedResourceCount` struct, the two dependents queries, both `ApiError::Conflict` returns, and `map_context_delete_err`. Keep the `authorize::<ContextAdminAuthority>` call and the `fetch_one`-on-`EXISTS` existence check exactly as they are — the reasoning in that comment (the `SystemAdmin` arm admits without consulting the subject's existence) is correct and still applies.
+Delete from `context_service.rs`: the `HomedResourceCount` struct, the two dependents queries, both `ApiError::Conflict` returns, and `map_context_delete_err`. Keep the `authorize::<ContextAdminAuthority>` call exactly where it is.
 
-The new body, after the gate and the existence check:
+**Replace the `EXISTS` probe with a row fetch.** The current `delete` (`:1000-1008`) fetches only a
+boolean, so there is no `cur` to build an outcome from. `rename` already has the exact fetch this
+needs, at `:867-880` — copy it verbatim, including its `fetch_optional` + `ok_or_else`, which
+subsumes the existence check the `EXISTS` was doing and carries the same SystemAdmin reasoning:
 
 ```rust
-    // The mangled address, computed through the incumbent rather than a second uniqueness
-    // rule. `next_unique_context_slug` is deliberately `is_active`-BLIND: retired rows keep
-    // their slugs in the same UNIQUE space, so a floor added there would hand out an address
-    // that collides with a retired row and fail at the INSERT. Do not "fix" it.
-    let retired_slug =
-        next_unique_context_slug(pool, &cur.owner_table, cur.owner_id, &format!("{}-retired", cur.slug))
-            .await?;
+    let cur = sqlx::query!(
+        r#"SELECT owner_table AS "owner_table!", owner_id AS "owner_id!", slug, name,
+              CASE owner_table
+                WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = owner_id)
+                ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = owner_id)
+              END AS "owner_ref!"
+         FROM kb_contexts WHERE id = $1"#,
+        context_id,
+    )
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| ApiError::NotFound(CONTEXT_REFUSAL.to_string()))?;
+```
+
+Do **not** write a fourth spelling of that `CASE`: it is the incumbent both-kinds owner-ref
+expression used at `:42-46`, `:77-80`, `:377-380` and now here. `team_owner_ref` is team-only and
+would `fetch_one`-panic on a profile-owned context.
+
+Then the retire itself:
+
+```rust
+    // The mangled address, computed through the incumbent rather than a second uniqueness rule.
+    // `next_unique_context_slug` is deliberately `is_active`-BLIND: retired rows keep their slugs
+    // in the same UNIQUE space, so a floor added there would hand out an address that collides
+    // with a retired row and fail at the INSERT. Do not "fix" it.
+    let retired_slug = next_unique_context_slug(
+        pool,
+        &cur.owner_table,
+        cur.owner_id,
+        &format!("{}-retired", cur.slug),
+    )
+    .await?;
 
     let updated = sqlx::query!(
         r#"UPDATE kb_contexts
@@ -519,15 +551,22 @@ The new body, after the gate and the existence check:
     if updated.rows_affected() == 0 {
         return Err(ApiError::NotFound(CONTEXT_REFUSAL.to_string()));
     }
+
+    Ok(RetireContextOutcome {
+        context_id: ContextId::from(context_id),
+        context_ref: format!("{}/{retired_slug}", cur.owner_ref),
+        slug: retired_slug,
+        name: cur.name,
+    })
 ```
 
-Then build and return `RetireContextOutcome` from `cur` plus `retired_slug`, composing `context_ref` as `format!("{}/{retired_slug}", cur.owner_ref)` — the same composition `rename` uses, and for the same reason its comment gives: never through `decorated_context_ref`, whose parameter is the bare handle and would yield `@@handle/slug`.
+`map_context_write_err` takes `anyhow::Error` (`:1104`), not `sqlx::Error` — the wrap is required,
+and its `23505` arm renders `CONTEXT_SLUG_TAKEN`, which is the right refusal if a concurrent write
+takes the mangled address between the two statements.
 
-> **Two things to verify on disk before writing this.** (a) `cur` is whatever the existing
-> `delete` already fetched — confirm it carries `owner_table`, `owner_id`, `slug`, `name` and
-> `owner_ref`; if it does not, widen that fetch rather than adding a second one. (b)
-> `map_context_write_err` takes `anyhow::Error` (`:1104`), not `sqlx::Error` — the wrap above is
-> required. Confirm the `23505` arm still renders `CONTEXT_SLUG_TAKEN`.
+Compose `context_ref` from the already-decorated `cur.owner_ref`, never through
+`decorated_context_ref` — that helper's parameter is the **bare** handle and would yield
+`@@handle/slug`. This is the same note `rename` carries at its own return.
 
 - [ ] **Step 4: Run the tests**
 
