@@ -223,7 +223,7 @@ in an agentic session.
 | API identifier (MCP) | `MCP_AUDIENCE` | Optional. If set, it **must equal** `AUTH_AUDIENCE` — it restates the one audience, it does not add a second one |
 | MCP app client_id | `MCP_CLIENT_ID` | The MCP native application's client_id |
 | Instance base URL | `MCP_BASE_URL` | `https://<instance>` — no trailing slash |
-| Proxy signing secret | `MCP_PROXY_SECRET` | Random string ≥ 32 chars (e.g. `openssl rand -base64 48`). Signs the state token in the Auth0 loopback redirect proxy. If unset, falls back to a deprecated non-secret derivation |
+| Proxy state secret | `MCP_PROXY_SECRET` | Not an Auth0 value — you generate it: a random string of **at least 32 characters** (`openssl rand -base64 48`). The Auth0 loopback redirect proxy derives its state-token encryption key from this secret alone, so keep it secret and out of source control |
 
 ## Deploy to Vercel
 
@@ -245,6 +245,7 @@ deployment.
 | `MCP_AUDIENCE` | api, mcp | No | An optional restatement of `AUTH_AUDIENCE`. If set it must **equal** it; unset is the normal configuration |
 | `MCP_CLIENT_ID` | mcp | Yes | MCP native application client_id |
 | `MCP_BASE_URL` | mcp | Yes | `https://<instance>` — used in OAuth discovery responses |
+| `MCP_PROXY_SECRET` | mcp | Yes | At least 32 characters (`openssl rand -base64 48`). Encrypts the state token in the loopback redirect proxy that every externally-fronted instance serves (Auth0 or Okta). Requests that need that key — a loopback `/oauth/authorize` and the `/api/auth/mcp-callback` relay — answer `503` naming this variable until it is set, so an MCP CLI client cannot sign in without it. `temper auth login` and browser clients with an HTTPS callback do not use the proxy's crypto and are unaffected. **Set it before the first deployment and redeploy after any change** — a function's environment is bound to its deployment. Rotating it fails sign-ins already in flight for up to 10 minutes; they succeed on retry. Not used in the SAML path |
 | `API_BASE_URL` | ui | No | Only for the optional [web UI](./deploy-the-web-ui.md) (a separate Vercel project); not required for API + MCP + CLI |
 | `BLOB_READ_WRITE_TOKEN` | api | Yes | Vercel Blob token — used by the upload/extract/embed pipeline |
 | `ENABLE_SWAGGER` | api | No | Set `true` to expose `/swagger-ui` in non-production deployments |
@@ -414,6 +415,19 @@ curl https://<instance>/api/health
 
 A healthy response is HTTP 200 with a JSON body. A 500 or connection error
 typically indicates a missing environment variable or a failed migration.
+
+### The loopback redirect proxy
+
+`temper auth login` and browser clients do not use the proxy's state-token key, so
+they pass whether or not `MCP_PROXY_SECRET` is set. This check is the one that does:
+
+```sh
+curl -si "https://<instance>/oauth/authorize?response_type=code&state=x\
+&client_id=<MCP_CLIENT_ID>&redirect_uri=http://127.0.0.1:1/callback" | head -1
+```
+
+Expect `HTTP/2 302`. A `503` names the variable to set — MCP CLI clients such as
+opencode and Claude Code sign in through this path, so fix it before inviting them.
 
 ### CLI login
 
