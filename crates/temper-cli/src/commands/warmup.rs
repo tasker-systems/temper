@@ -8,7 +8,7 @@ use temper_client::error::ClientError;
 use crate::actions::runtime;
 use crate::actions::types::TaskInfo;
 use crate::config::Config;
-use crate::error::Result;
+use crate::error::{Result, TemperError};
 use crate::format::{render, OutputFormat};
 
 /// How many recent sessions to surface as pointers when unconfigured.
@@ -198,7 +198,18 @@ pub fn build_warmup_result(
 ) -> Result<WarmupResult> {
     let context_ref = context.to_string();
 
-    let cloud = collect_cloud_state(&context_ref, limits)?;
+    let cloud = match collect_cloud_state(&context_ref, limits) {
+        Ok(cloud) => cloud,
+        Err(failure) => {
+            // The context read failed. What is waiting on the CALLER did not, and is very often
+            // the way out of that failure — so it is said before the error, and the error itself
+            // is surfaced unchanged.
+            if let Some(hint) = failure.hint {
+                crate::output::warning(hint);
+            }
+            return Err(failure.error);
+        }
+    };
     let in_progress_tasks = collect_in_progress_tasks(config, &context_ref);
 
     // stderr, so stdout stays a parseable primer. `degrade_pending` decided; this only writes.
@@ -214,6 +225,15 @@ pub fn build_warmup_result(
         recent_sessions: cloud.recent_sessions,
         pending: cloud.pending,
     })
+}
+
+/// A context-scoped failure, carrying the principal-scoped line that outlived it.
+///
+/// The two scopes fail independently, so the error and the hint travel together rather than the
+/// error erasing the hint. Printing happens at the caller — see [`pending_hint`].
+struct CloudFailure {
+    error: TemperError,
+    hint: Option<String>,
 }
 
 /// Everything one open client is asked for, so the primer opens exactly one.
@@ -236,7 +256,10 @@ struct CloudState {
 /// **One client, three reads, two failure regimes.** Goals and sessions are the primer's
 /// subject and stay fatal. The pending block is a passenger and degrades to absent — see
 /// [`degrade_pending`] for why a passenger must not be able to abort the journey.
-fn collect_cloud_state(context_ref: &str, limits: WarmupLimits) -> Result<CloudState> {
+fn collect_cloud_state(
+    context_ref: &str,
+    limits: WarmupLimits,
+) -> std::result::Result<CloudState, CloudFailure> {
     // Goals: the server filters to `status = active` and `total` counts the *filtered*
     // set, so the page cap is safe — it bounds what is displayed without touching what is
     // counted. This asked for every goal unbounded (`limit: None`, `meta_only`) while the
@@ -262,44 +285,63 @@ fn collect_cloud_state(context_ref: &str, limits: WarmupLimits) -> Result<CloudS
         ..Default::default()
     };
 
-    runtime::with_client(move |client| {
+    // `with_client`'s own failure (no runtime, no token) happens before any read, so there is no
+    // hint to have gathered — hence the nested Result: the inner one carries a hint, the outer
+    // one cannot.
+    let outcome = runtime::with_client(move |client| {
         let goal_params = goal_params.clone();
         let session_params = session_params.clone();
         Box::pin(async move {
-            let goal_response = client
-                .resources()
-                .list(&goal_params)
-                .await
-                .map_err(runtime::client_err_to_temper)?;
-
-            let displayed: Vec<WarmupGoal> = goal_response.rows.iter().map(goal_from_row).collect();
-            // The true count of what is in force comes from the query's `total`, which
-            // counts the filtered set and is unaffected by the page cap above. Deriving it
-            // from `displayed.len()` instead would make every capped list look complete —
-            // the exact confusion `active_goal_total` exists to prevent.
-            let active_goal_total = goal_response.total as usize;
-
-            let session_response = client
-                .resources()
-                .list(&session_params)
-                .await
-                .map_err(runtime::client_err_to_temper)?;
-            let sessions: Vec<WarmupSession> =
-                session_response.rows.iter().map(session_from_row).collect();
+            // FIRST, deliberately. The pending read does not depend on the context, and reading it
+            // before the context-scoped reads is what lets `pending_hint` survive their failure —
+            // the case where the unaccepted invitation IS why the context cannot be read. Ordering
+            // it here costs nothing: it is the same single request either way.
+            let (pending, pending_warning) = degrade_pending(fetch_pending(client).await);
+            let hint = pending_hint(pending.as_ref());
 
             // Goals and sessions are the primer's SUBJECT and stay fatal; the pending block is a
             // passenger and degrades. That asymmetry is the point — see `degrade_pending`.
-            let (pending, pending_warning) = degrade_pending(fetch_pending(client).await);
+            let read = async {
+                let goal_response = client
+                    .resources()
+                    .list(&goal_params)
+                    .await
+                    .map_err(runtime::client_err_to_temper)?;
 
-            Ok(CloudState {
-                active_goals: displayed,
-                active_goal_total,
-                recent_sessions: sessions,
-                pending,
-                pending_warning,
-            })
+                let displayed: Vec<WarmupGoal> =
+                    goal_response.rows.iter().map(goal_from_row).collect();
+                // The true count of what is in force comes from the query's `total`, which
+                // counts the filtered set and is unaffected by the page cap above. Deriving it
+                // from `displayed.len()` instead would make every capped list look complete —
+                // the exact confusion `active_goal_total` exists to prevent.
+                let active_goal_total = goal_response.total as usize;
+
+                let session_response = client
+                    .resources()
+                    .list(&session_params)
+                    .await
+                    .map_err(runtime::client_err_to_temper)?;
+                let sessions: Vec<WarmupSession> =
+                    session_response.rows.iter().map(session_from_row).collect();
+
+                Ok::<_, TemperError>(CloudState {
+                    active_goals: displayed,
+                    active_goal_total,
+                    recent_sessions: sessions,
+                    pending,
+                    pending_warning,
+                })
+            }
+            .await;
+
+            Ok(read.map_err(|error| CloudFailure { error, hint }))
         })
-    })
+    });
+
+    match outcome {
+        Ok(inner) => inner,
+        Err(error) => Err(CloudFailure { error, hint: None }),
+    }
 }
 
 /// Derive a [`WarmupGoal`] from a goal row, computing the decorated ref the same way
@@ -364,6 +406,32 @@ fn in_progress_tasks(tasks: Vec<TaskInfo>) -> Vec<WarmupTask> {
             effort: t.effort,
         })
         .collect()
+}
+
+/// The line worth saying even when the primer itself could not be built.
+///
+/// **The trap this exists for.** `warmup` requires a context and fails if the caller cannot read
+/// it. Someone invited to a team so they can work in that team's context hits exactly that
+/// failure — because the invitation they have not accepted is what would grant them the context.
+/// The one fact that resolves the situation is otherwise hidden behind the situation.
+///
+/// So the count survives the failure as a stderr line. It is `None` when there is nothing to say:
+/// zero invitations, or a pending block that could not be read. A hint that fires on every failed
+/// warmup would be noise, and noise is how a real hint gets ignored.
+///
+/// Returns the message rather than printing it, like [`degrade_pending`] — the caller owns the
+/// write.
+fn pending_hint(pending: Option<&PendingSummary>) -> Option<String> {
+    let count = pending.map(|p| p.invitations).filter(|n| *n > 0)?;
+    let noun = if count == 1 {
+        "invitation is"
+    } else {
+        "invitations are"
+    };
+    Some(format!(
+        "{count} team {noun} waiting on you — run `temper invitations`. \
+         Accepting one may be what grants you the context this command could not read."
+    ))
 }
 
 /// Degrade a failed pending read to an absent block plus a warning, rather than to a failed
@@ -655,6 +723,58 @@ mod tests {
         assert!(
             warning.is_some_and(|w| w.contains("boom")),
             "the warning must carry the reason the read failed"
+        );
+    }
+
+    /// The trap case: a waiting invitation is named even though the primer failed.
+    #[test]
+    fn a_waiting_invitation_is_named_when_the_primer_could_not_be_built() {
+        let hint = pending_hint(Some(&PendingSummary {
+            invitations: 1,
+            join_requests: None,
+        }))
+        .expect("one waiting invitation is worth saying");
+
+        assert!(hint.contains('1'), "the count is the point: {hint}");
+        assert!(
+            hint.contains("temper invitations"),
+            "the hint must name the command that needs no context: {hint}"
+        );
+    }
+
+    /// Plural reads as plural. A hint that says "1 invitations" undercuts itself.
+    #[test]
+    fn more_than_one_waiting_invitation_reads_as_plural() {
+        let hint = pending_hint(Some(&PendingSummary {
+            invitations: 3,
+            join_requests: None,
+        }))
+        .expect("three waiting invitations are worth saying");
+
+        assert!(hint.contains('3'), "got: {hint}");
+        assert!(hint.contains("invitations"), "got: {hint}");
+    }
+
+    /// **Silence when there is nothing to say.** A hint on every failed warmup is noise, and
+    /// noise is how a real hint gets ignored.
+    #[test]
+    fn nothing_waiting_produces_no_hint() {
+        assert!(
+            pending_hint(Some(&PendingSummary {
+                invitations: 0,
+                join_requests: Some(4),
+            }))
+            .is_none(),
+            "zero invitations is nothing to say — join requests are not the caller's own trap"
+        );
+    }
+
+    /// An unreadable pending block has nothing to assert either, and must not invent a count.
+    #[test]
+    fn an_unreadable_pending_block_produces_no_hint() {
+        assert!(
+            pending_hint(None).is_none(),
+            "a block that could not be read cannot claim an invitation is waiting"
         );
     }
 

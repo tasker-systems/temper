@@ -688,3 +688,71 @@ async fn warmup_reveals_the_review_queue_only_to_an_admin(pool: sqlx::PgPool) {
         "an admin reads the queue, so the section is present even when empty"
     );
 }
+
+/// **The trap, closed.** `warmup` fails on a context the caller cannot read — and the invitation
+/// they have not accepted is very often exactly what would grant it. The primer still cannot be
+/// built, but the way out is named on stderr instead of dying with it.
+///
+/// Driven through the real binary rather than the lib call, because the thing under test IS the
+/// stderr of a failed process: exit status and stream are the assertion.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_failed_warmup_still_names_the_invitation_that_would_unblock_it(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+
+    common::provision_and_approve_second(&app).await;
+    let inviter_token = common::generate_second_user_jwt();
+    let team: serde_json::Value = app
+        .reqwest_client
+        .post(app.url("/api/teams"))
+        .bearer_auth(&inviter_token)
+        .json(&serde_json::json!({ "slug": "trap-team" }))
+        .send()
+        .await
+        .expect("inviter creates a team")
+        .json()
+        .await
+        .expect("team json");
+    let invite = app
+        .reqwest_client
+        .post(app.url(&format!(
+            "/api/teams/{}/invite",
+            team["id"].as_str().expect("team id")
+        )))
+        .bearer_auth(&inviter_token)
+        .json(&serde_json::json!({
+            "invited_email": "e2e@test.example.com",
+            "role": "member",
+        }))
+        .send()
+        .await
+        .expect("inviter invites the app principal");
+    assert_eq!(
+        invite.status(),
+        reqwest::StatusCode::CREATED,
+        "the invite must exist for this test to mean anything"
+    );
+
+    // A context this caller cannot read — the shape of "the team's context you were invited to".
+    let out = common::run_temper_cli(&app, &["warmup", "--context", "@me/not-yours"])
+        .await
+        .expect("cli runs");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    assert!(
+        !out.status.success(),
+        "an unreadable context must still fail — this does NOT loosen that contract. stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("temper invitations"),
+        "the failure must name the command that needs no context. stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains('1'),
+        "the waiting invitation must be counted. stderr: {stderr}"
+    );
+}
