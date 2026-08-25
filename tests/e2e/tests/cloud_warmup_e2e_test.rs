@@ -582,6 +582,18 @@ async fn warmup_now(app: &common::E2eTestApp) -> temper_cli::commands::warmup::W
     .expect("spawn_blocking joined")
 }
 
+/// Warm up and unwrap the pending block.
+///
+/// The block is `Option` because a failed read degrades to absent rather than failing the whole
+/// primer. Against a live server every read here succeeds, so `expect` is the assertion that it
+/// did: a degraded block would otherwise read as a passing test with nothing in it.
+async fn pending(app: &common::E2eTestApp) -> temper_cli::commands::warmup::PendingSummary {
+    warmup_now(app)
+        .await
+        .pending
+        .expect("the pending block must be present against a live server")
+}
+
 /// **The headline behaviour.** An invitation addressed to the caller reaches them through the
 /// primer they already run at session start — no out-of-band Slack message required.
 ///
@@ -597,7 +609,7 @@ async fn warmup_counts_an_invitation_waiting_on_the_caller(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;
 
     assert_eq!(
-        warmup_now(&app).await.pending.invitations,
+        pending(&app).await.invitations,
         0,
         "a caller with nothing addressed to them starts at zero"
     );
@@ -636,7 +648,7 @@ async fn warmup_counts_an_invitation_waiting_on_the_caller(pool: sqlx::PgPool) {
     );
 
     assert_eq!(
-        warmup_now(&app).await.pending.invitations,
+        pending(&app).await.invitations,
         1,
         "the invitation addressed to the caller must surface in the primer"
     );
@@ -656,7 +668,7 @@ async fn warmup_reveals_the_review_queue_only_to_an_admin(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;
 
     assert_eq!(
-        warmup_now(&app).await.pending.join_requests,
+        pending(&app).await.join_requests,
         None,
         "a non-admin reads nothing from the operator surface — None, never Some(0)"
     );
@@ -671,7 +683,7 @@ async fn warmup_reveals_the_review_queue_only_to_an_admin(pool: sqlx::PgPool) {
     common::make_system_admin(&app.pool, admin_id).await;
 
     assert_eq!(
-        warmup_now(&app).await.pending.join_requests,
+        pending(&app).await.join_requests,
         Some(0),
         "an admin reads the queue, so the section is present even when empty"
     );

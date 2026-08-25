@@ -58,8 +58,15 @@ pub struct WarmupTask {
 ///
 /// **Principal-scoped, unlike the rest of this primer.** Every other field here is scoped to
 /// the `context` argument; these counts are scoped to the caller and span every team and
-/// context they touch. The two are orthogonal rather than inconsistent: which context you are
-/// priming has no bearing on what you owe other people. Keeping them in one payload is what
+/// context they touch. Which context you are priming has no bearing on what you owe other
+/// people.
+///
+/// **They are orthogonal in MEANING but not in DELIVERY, and the gap is worth knowing.** This
+/// block rides a command whose context argument is fatal: ask for a context you cannot read and
+/// `warmup` errors, so the block never prints — including in the ironic case where the
+/// invitation you have not seen is the very thing that would grant you that context. Warmup
+/// erroring on an unreadable context is its contract and this block does not get to change it,
+/// so the surface that closes that gap is `temper invitations`, which needs no context at all. Keeping them in one payload is what
 /// makes the queue arrive without anyone remembering to ask for it, which is the whole point —
 /// a surface nobody runs is the out-of-band-notification problem wearing a new hat.
 ///
@@ -110,8 +117,11 @@ pub struct WarmupResult {
     pub in_progress_tasks: Vec<WarmupTask>,
     /// Recent session pointers — titles and dates only.
     pub recent_sessions: Vec<WarmupSession>,
-    /// What is waiting on the caller. Principal-scoped — see [`PendingSummary`].
-    pub pending: PendingSummary,
+    /// What is waiting on the caller, or `None` when that could not be read.
+    ///
+    /// Principal-scoped — see [`PendingSummary`]. Absent rather than zeroed on failure: a zero
+    /// asserts a reading that never happened, and the reason is written to stderr instead.
+    pub pending: Option<PendingSummary>,
 }
 
 /// Display limits for the primer, resolved once by [`resolve_limits`].
@@ -161,8 +171,8 @@ pub fn run(
     Ok(())
 }
 
-/// Collect everything the warmup primer reports: active goals, in-progress tasks, and
-/// recent session pointers.
+/// Collect everything the warmup primer reports: active goals, in-progress tasks, recent
+/// session pointers, and what is waiting on the caller.
 ///
 /// Cloud-only: goals and sessions are listed from the API and tasks come from the
 /// cloud-backed [`crate::commands::task::load_tasks`]. The local vault is a read-only
@@ -170,9 +180,11 @@ pub fn run(
 /// would silently return nothing there. Reading live is what settles drift between
 /// machines — an on-disk copy is an offline cache, not a source.
 ///
-/// Goals and sessions are gathered in a single `with_client` closure (one runtime);
-/// tasks come from `load_tasks`, which manages its own runtime, in a sequential (not
-/// nested) call.
+/// Goals, sessions and the pending block are gathered in a single `with_client` closure
+/// (one runtime); tasks come from `load_tasks`, which manages its own runtime, in a
+/// sequential (not nested) call. Keeping the pending read inside the existing closure is
+/// deliberate — a third `with_client` is a third token-store resolve, and that re-emits the
+/// near-expiry warning a third time.
 ///
 /// `context` is required rather than defaulted. There is no defensible default: the
 /// previous hardcoded `"general"` is a bare name the API rejects outright ("bare names
@@ -186,32 +198,45 @@ pub fn build_warmup_result(
 ) -> Result<WarmupResult> {
     let context_ref = context.to_string();
 
-    let (active_goals, active_goal_total, recent_sessions) =
-        collect_standing_state(&context_ref, limits)?;
+    let cloud = collect_cloud_state(&context_ref, limits)?;
     let in_progress_tasks = collect_in_progress_tasks(config, &context_ref);
-    let pending = collect_pending()?;
+
+    // stderr, so stdout stays a parseable primer. `degrade_pending` decided; this only writes.
+    if let Some(message) = cloud.pending_warning {
+        crate::output::warning(message);
+    }
 
     Ok(WarmupResult {
         context: context_ref,
-        active_goals,
-        active_goal_total,
+        active_goals: cloud.active_goals,
+        active_goal_total: cloud.active_goal_total,
         in_progress_tasks,
-        recent_sessions,
-        pending,
+        recent_sessions: cloud.recent_sessions,
+        pending: cloud.pending,
     })
 }
 
-/// Fetch active goals and recent session pointers over one client runtime.
+/// Everything one open client is asked for, so the primer opens exactly one.
+struct CloudState {
+    active_goals: Vec<WarmupGoal>,
+    active_goal_total: usize,
+    recent_sessions: Vec<WarmupSession>,
+    /// `None` when the pending read failed — see [`degrade_pending`].
+    pending: Option<PendingSummary>,
+    /// The stderr line the caller owes the reader when `pending` is `None`.
+    pending_warning: Option<String>,
+}
+
+/// Read active goals, recent session pointers, and the pending block over ONE client.
 ///
-/// Both filters are the query's, not this function's: goals are narrowed by
-/// `status = active` and sessions by doc type, each capped server-side. Nothing is
-/// re-tested after it arrives.
+/// Both list filters are the query's, not this function's: goals are narrowed by
+/// `status = active` and sessions by doc type, each capped server-side. Nothing is re-tested
+/// after it arrives.
 ///
-/// Returns `(displayed_goals, total_active_goals, sessions)`.
-fn collect_standing_state(
-    context_ref: &str,
-    limits: WarmupLimits,
-) -> Result<(Vec<WarmupGoal>, usize, Vec<WarmupSession>)> {
+/// **One client, three reads, two failure regimes.** Goals and sessions are the primer's
+/// subject and stay fatal. The pending block is a passenger and degrades to absent — see
+/// [`degrade_pending`] for why a passenger must not be able to abort the journey.
+fn collect_cloud_state(context_ref: &str, limits: WarmupLimits) -> Result<CloudState> {
     // Goals: the server filters to `status = active` and `total` counts the *filtered*
     // set, so the page cap is safe — it bounds what is displayed without touching what is
     // counted. This asked for every goal unbounded (`limit: None`, `meta_only`) while the
@@ -262,7 +287,17 @@ fn collect_standing_state(
             let sessions: Vec<WarmupSession> =
                 session_response.rows.iter().map(session_from_row).collect();
 
-            Ok((displayed, active_goal_total, sessions))
+            // Goals and sessions are the primer's SUBJECT and stay fatal; the pending block is a
+            // passenger and degrades. That asymmetry is the point — see `degrade_pending`.
+            let (pending, pending_warning) = degrade_pending(fetch_pending(client).await);
+
+            Ok(CloudState {
+                active_goals: displayed,
+                active_goal_total,
+                recent_sessions: sessions,
+                pending,
+                pending_warning,
+            })
         })
     })
 }
@@ -331,38 +366,60 @@ fn in_progress_tasks(tasks: Vec<TaskInfo>) -> Vec<WarmupTask> {
         .collect()
 }
 
+/// Degrade a failed pending read to an absent block plus a warning, rather than to a failed
+/// warmup.
+///
+/// **The primer's subject is the context; the pending block is a passenger.** Letting a passenger
+/// abort the journey is the regression this exists to prevent: before this block existed, a 500
+/// on one secondary endpoint could not stop `warmup` from printing goals, tasks and sessions, and
+/// it must not start now. Version skew makes that concrete — a CLI newer than the API it is
+/// pointed at would otherwise turn every session-start hook into no output at all.
+///
+/// Returning `None` is not the lie that returning `PendingSummary { invitations: 0, .. }` would
+/// be. Zero asserts a reading that never happened; absence asserts nothing, and the warning says
+/// why on stderr while stdout stays machine-parseable.
+///
+/// Shaped as `(value, Option<warning>)` rather than printing here, mirroring
+/// `runtime::token_expiry_warning`: the decision is testable and the caller owns the write.
+fn degrade_pending(result: Result<PendingSummary>) -> (Option<PendingSummary>, Option<String>) {
+    match result {
+        Ok(summary) => (Some(summary), None),
+        Err(e) => (
+            None,
+            Some(format!(
+                "could not read what is waiting on you: {e}. Run `temper invitations` directly."
+            )),
+        ),
+    }
+}
+
 /// Fetch what is waiting on the caller: their pending invitations, and — only if they are an
 /// instance admin — the join requests awaiting review.
 ///
-/// **Its own `with_client`, sequential and not nested**, exactly as `collect_in_progress_tasks`
-/// is. `with_client` builds a tokio runtime, and nesting one inside the closure that
-/// [`collect_standing_state`] already holds would panic. Folding these two reads into that
-/// closure would save a runtime, but it would also turn its return into a four-tuple and give
-/// a function named for *standing state* a second, principal-scoped job.
+/// **Takes the caller's client rather than building its own.** This used to hold a third
+/// `runtime::with_client`, which is a third tokio runtime AND a third
+/// `build_config_store_and_client` — and that last one is not free of observable effect:
+/// `resolve_token_store` re-emits the near-expiry warning on every resolve, so a session inside
+/// the one-hour window printed that warning three times per warmup instead of twice. Riding the
+/// closure that is already open costs nothing and says it once fewer.
 ///
-/// **Both reads propagate their failures.** Reporting `invitations: 0` because the request
-/// failed would be a primer asserting something it never established — the same fault the
-/// retired `last_session_content` was dropped for. Only the admin read has a non-error absence,
-/// and it is a real answer from the server rather than a swallowed failure (see
-/// [`join_request_count`]). In practice a broken connection fails on goals long before it
-/// reaches here; this arm is about being honest when it does not.
-fn collect_pending() -> Result<PendingSummary> {
-    runtime::with_client(|client| {
-        Box::pin(async move {
-            let invitations = client
-                .teams()
-                .list_my_invitations()
-                .await
-                .map_err(runtime::client_err_to_temper)?
-                .len();
+/// Only the admin read has a non-error absence, and it is a real answer from the server rather
+/// than a swallowed failure (see [`join_request_count`]). A failure of either read is a failure
+/// of this whole fetch, which [`degrade_pending`] then turns into an absent block rather than an
+/// absent warmup.
+async fn fetch_pending(client: &temper_client::TemperClient) -> Result<PendingSummary> {
+    let invitations = client
+        .teams()
+        .list_my_invitations()
+        .await
+        .map_err(runtime::client_err_to_temper)?
+        .len();
 
-            let join_requests = join_request_count(client.admin().list_requests().await)?;
+    let join_requests = join_request_count(client.admin().list_requests().await)?;
 
-            Ok(PendingSummary {
-                invitations,
-                join_requests,
-            })
-        })
+    Ok(PendingSummary {
+        invitations,
+        join_requests,
     })
 }
 
@@ -559,6 +616,35 @@ mod tests {
         assert!(
             result.is_err(),
             "an expired token must fail warmup, not quietly report an absent section"
+        );
+    }
+
+    /// A successful read is carried through untouched, and says nothing on stderr.
+    #[test]
+    fn a_successful_pending_read_is_carried_through_without_a_warning() {
+        let (value, warning) = degrade_pending(Ok(PendingSummary {
+            invitations: 2,
+            join_requests: Some(1),
+        }));
+
+        assert_eq!(value.expect("the block must survive").invitations, 2);
+        assert!(warning.is_none(), "a success has nothing to warn about");
+    }
+
+    /// **A failed read must not fail the primer.** The block goes absent — never zero, which
+    /// would assert a reading that never happened — and the reason goes to stderr.
+    #[test]
+    fn a_failed_pending_read_degrades_to_an_absent_block_and_warns() {
+        let (value, warning) =
+            degrade_pending(Err(crate::error::TemperError::Api("boom".to_string())));
+
+        assert!(
+            value.is_none(),
+            "a failed read is an absent block, not a zero count"
+        );
+        assert!(
+            warning.is_some_and(|w| w.contains("boom")),
+            "the warning must carry the reason the read failed"
         );
     }
 
