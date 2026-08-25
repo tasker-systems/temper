@@ -60,8 +60,16 @@ ALTER TABLE kb_oauth_refresh_tokens
 -- login and every refresh queues behind it. A dead row's chain deadline is read by nothing: the
 -- rotation guard already refuses on `revoked_at`/`expires_at` before `chain_expires_at` is
 -- consulted, so the DEFAULT is a perfectly good value for them.
+--
+-- GREATEST, because `created + 90 days` can already be in the past. The "generous" reasoning above
+-- silently assumes the 30-day default `AS_REFRESH_TTL_SECONDS`; an operator who raised it beyond 90
+-- days has live tokens older than that, and stamping them with a deadline that has already passed
+-- would have the rotation guard refuse their very next refresh -- an instant, unexplained logout at
+-- deploy, while `expires_at` still says the token is good for weeks. The floor gives every existing
+-- session a week to rotate normally onto a properly-stamped successor, and every chain on disk is
+-- still bounded well within 90 days of this migration.
 UPDATE kb_oauth_refresh_tokens
-   SET chain_expires_at = created + INTERVAL '90 days'
+   SET chain_expires_at = GREATEST(created + INTERVAL '90 days', now() + INTERVAL '7 days')
  WHERE revoked_at IS NULL
    AND expires_at > now();
 

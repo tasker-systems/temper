@@ -220,6 +220,49 @@ describe("refresh chain bound + admission gate", () => {
     expect((await chainRow(body.refresh_token)).profile_id).toBe(approved);
   });
 
+  it("refuses a login on an unusable chain bound, in a form that names itself", async () => {
+    // A bound the operator cannot state is not a bound, so refusing the configured value is right.
+    // Letting that refusal escape uncaught is not: it would be a platform 500 with no reason
+    // attached, on NEW logins only, while existing sessions kept rotating — a shape almost
+    // impossible to trace back to a typo in an environment variable.
+    process.env.AS_REFRESH_CHAIN_MAX_SECONDS = "7d";
+    try {
+      await createPendingFlow(db, {
+        relayState: "rs-badcfg",
+        clientId: "cli",
+        redirectUri: "http://localhost/cb",
+        codeChallenge: CHALLENGE,
+        codeChallengeMethod: "S256",
+        oauthState: "st",
+        audience: "aud",
+        expiresAt: new Date(Date.now() + 600000),
+      });
+      await bindCodeToFlow(db, "rs-badcfg", {
+        code: "c-badcfg",
+        claims: { sub: "u1", email: "u1@example.com", email_verified: true },
+        expiresAt: new Date(Date.now() + 300000),
+        profileId: null,
+      });
+
+      const res = await handleToken(
+        new Request("https://as/oauth/token", {
+          method: "POST",
+          body: new URLSearchParams({
+            grant_type: "authorization_code",
+            code: "c-badcfg",
+            code_verifier: VERIFIER,
+            client_id: "cli",
+          }),
+        }),
+        db,
+      );
+      expect(res.status, "a misconfiguration is the server's fault, not the client's").toBe(503);
+      expect((await res.json()) as TokenErrorBody).toEqual({ error: "temporarily_unavailable" });
+    } finally {
+      process.env.AS_REFRESH_CHAIN_MAX_SECONDS = "7776000";
+    }
+  });
+
   it("treats a malformed resolve response as no answer, not as a refusal", async () => {
     // The two failures either side of the response boundary must land in the same place. A
     // transport error or non-2xx throws and the caller carries on without an owner; a 200 carrying

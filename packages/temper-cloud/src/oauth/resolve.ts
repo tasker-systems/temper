@@ -2,6 +2,9 @@ import { logger } from "../logger.js";
 import { requireEnv } from "./env.js";
 import { SIGNATURE_HEADER, signReconcile, TIMESTAMP_HEADER } from "./reconcile.js";
 
+/** Ceiling on an internal server-to-server call, so a slow dependency fails open rather than hanging. */
+const INTERNAL_CALL_TIMEOUT_MS = 5000;
+
 /**
  * Wire payload for the internal principal-resolve call. Mirrors the Rust
  * `temper_core::types::ResolvePrincipalRequest` field-for-field; parity is enforced by
@@ -58,6 +61,12 @@ export async function resolvePrincipal(
       [SIGNATURE_HEADER]: signature,
     },
     body,
+    // Fail-open is only a mercy if it fails FAST. Both callers catch and carry on, but an
+    // unbounded fetch does not reach the catch — it holds the request until the platform's own
+    // function timeout, turning a degraded dependency into a stalled login or rotation. Since the
+    // migration, the first rotation of every pre-existing chain takes the resolve branch, so this
+    // sits on a hot path rather than a rare one.
+    signal: AbortSignal.timeout(INTERNAL_CALL_TIMEOUT_MS),
   });
   if (!res.ok) {
     throw new Error(`principal resolve endpoint returned ${res.status}`);

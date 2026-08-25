@@ -236,11 +236,33 @@ pub async fn apply(pool: &PgPool, params: ApplyStandingParams) -> ApiResult<Stan
         // Zero is not by itself an error — a principal may genuinely hold no live chain — so it is
         // a warning to correlate, not a failure to act on blindly.
         if chains_ended == 0 {
+            // Zero on its own is a poor signal and would be a poor detector: it is the guaranteed
+            // outcome for every machine principal (`client_credentials` mints no refresh token) and
+            // for any human who simply was not signed in. So carry the fact that actually separates
+            // "nothing to end" from "the AS is not recording owners" — the number of LIVE chains on
+            // the instance belonging to nobody. That is a property of the deployment rather than of
+            // this subject, it is what a missing `INTERNAL_RESOLVE_URL` produces, and it is
+            // index-covered by `idx_kb_oauth_refresh_tokens_live_profile`.
+            //
+            // Read only on this branch: the common, healthy path pays nothing for it.
+            let ownerless: i64 = sqlx::query_scalar!(
+                r#"
+                SELECT count(*) AS "count!"
+                  FROM kb_oauth_refresh_tokens
+                 WHERE profile_id IS NULL
+                   AND revoked_at IS NULL
+                "#,
+            )
+            .fetch_one(&mut *tx)
+            .await?;
+
             tracing::warn!(
                 subject = %params.subject,
                 act = act_name(&act),
-                "standing terminal ended no refresh chains — expected if the principal held none, \
-                 but also what an unrecorded chain owner looks like"
+                ownerless_live_chains = ownerless,
+                "standing terminal ended no refresh chains — unremarkable if the principal held \
+                 none, but a non-zero ownerless_live_chains means the authorization server is not \
+                 recording chain owners and no revoke can end a session"
             );
         } else {
             tracing::info!(

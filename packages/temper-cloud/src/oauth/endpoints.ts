@@ -347,6 +347,17 @@ async function issueTokenPair(
     profileId: chain.profileId,
   });
 
+  if (!minted) {
+    // Say so. The Rust side warns when a terminal transition ends no chains precisely because a
+    // refusal must not report success in the same words as a success; this is the same event seen
+    // from the other end, and leaving it silent would make a non-renewable session indistinguishable
+    // from an ordinary one until the client's next refresh fails minutes later.
+    logger.info(
+      { profile_id: chain.profileId, client_id: clientId },
+      "token: admission has ended for this principal — access token issued, no chain minted",
+    );
+  }
+
   return {
     access_token: accessToken,
     token_type: "Bearer",
@@ -407,7 +418,23 @@ export async function handleToken(req: Request, db: NeonClient): Promise<Respons
       return oauthError("invalid_grant");
     }
 
-    // A fresh login starts a NEW chain, and this is the only place a chain deadline is computed.
+    // A fresh login starts a NEW chain, and this is the only place a chain deadline is computed —
+    // which is also the only place the configured bound is parsed, so a bad value lands HERE and
+    // only here. Refusing an unusable value is right; letting the refusal escape as an uncaught
+    // 500 is not. It would be a platform error with no reason attached, on new logins only, while
+    // existing sessions kept rotating — the hardest possible shape to attribute to a typo in an
+    // environment variable.
+    let chainDeadline: string;
+    try {
+      chainDeadline = new Date(Date.now() + refreshChainMaxSeconds() * 1000).toISOString();
+    } catch (configErr) {
+      logger.error(
+        { err: configErr instanceof Error ? configErr.message : String(configErr) },
+        "token: refresh-chain bound is unusable; refusing to mint a session on a bound nobody can state",
+      );
+      return oauthError("temporarily_unavailable", 503);
+    }
+
     //
     // Login is never refused on admission — a principal whose standing has ended still needs a
     // token to reach the ungated review-request surface. What they do not get is a renewable
@@ -416,7 +443,7 @@ export async function handleToken(req: Request, db: NeonClient): Promise<Respons
     // by their next sign-in.
     return oauthJson(
       await issueTokenPair(db, consumed.claims, clientId, {
-        expiresAt: new Date(Date.now() + refreshChainMaxSeconds() * 1000).toISOString(),
+        expiresAt: chainDeadline,
         profileId: consumed.profileId,
       }),
       200,

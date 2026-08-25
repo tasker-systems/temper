@@ -475,9 +475,14 @@ appliers interleave across the full install timeline.
 > you — `temper admin saml provision` emits it only into a freshly generated bundle. Without it the
 > AS cannot record which principal a refresh chain belongs to, so **an administrator's revoke ends
 > no chains** and the only remaining bound is `AS_REFRESH_CHAIN_MAX_SECONDS`. Logins and refreshes
-> keep returning `200` throughout, so there is no failure to notice: the visible signal is a
-> `standing terminal ended no refresh chains` warning on the API when you revoke someone. Add the
-> variable, pointing at your API origin's `/internal/principal/resolve`, before relying on revoke.
+> keep returning `200` throughout, so there is no failure to notice.
+>
+> **The signal to look for** is the API's `standing terminal ended no refresh chains` warning when
+> you revoke someone — but read its `ownerless_live_chains` field, not merely its presence. That
+> warning is also the normal outcome for a machine principal and for anyone who simply was not
+> signed in; a **non-zero** `ownerless_live_chains` is the part that means the authorization server
+> is not recording owners at all. Add the variable, pointing at your API origin's
+> `/internal/principal/resolve`, before relying on revoke.
 - **Single active IdP** per instance, **SP-initiated** flows only.
 - **Single issuer** per instance: an instance is either an AS/SAML instance (`AS_ISSUER` set)
   or an Auth0/OIDC instance, not both.
