@@ -482,7 +482,7 @@ async fn eval_expectation(
             }
         }
         Expectation::Stale { expect } => {
-            // `cogmap_staleness` gained a principal in 20260825000010 and the old ungated
+            // `cogmap_staleness` gained a principal in 20260825000020 and the old ungated
             // `cogmap_staleness(uuid)` was DROPPED, not overloaded — so this call site had to move
             // in the same change. The scenario owner is the principal: `fetch_one` here means a
             // deny (zero rows) would surface as a `RowNotFound` error rather than a false reading,

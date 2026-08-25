@@ -3041,7 +3041,7 @@ export interface components {
          *     `cogmap_*` naming is what M3 retires, not the shape" convention `CogmapRegionMetricsRow` already
          *     rides on for the context region-metrics route.
          *
-         *     The touch is **gated** as of migration `20260825000010`: a region holding no member this
+         *     The touch is **gated** as of migration `20260825000020`: a region holding no member this
          *     principal can read does not move this clock, and neither does an edge with an unreadable
          *     endpoint. Folded regions and edges are still counted deliberately — a fold advances
          *     `last_event_id` and IS a touch, so narrowing either arm to live rows would make a stale anchor

@@ -752,7 +752,7 @@ async fn context_watermark_event(pool: &PgPool, context: Uuid) -> Uuid {
 /// `kb_edges_home_anchor_table_check` restricts the home to `{kb_contexts, kb_cogmaps}` and the two
 /// endpoint checks restrict both endpoints to `{kb_resources, kb_cogmaps}`. That is what makes
 /// `endpoint_readable_by_profile`'s `ELSE false` arm unreachable for any real edge — the constraint
-/// argument `migrations/20260825000010_staleness_member_gate.sql:232-239` makes to establish that
+/// argument `migrations/20260825000020_staleness_member_gate.sql:232-239` makes to establish that
 /// the gated edges arm can only ever drop an edge for a VISIBILITY reason.
 async fn insert_context_edge(pool: &PgPool, context: Uuid, source: Uuid, target: Uuid) -> Uuid {
     let event = context_watermark_event(pool, context).await;
@@ -808,7 +808,7 @@ struct Staleness {
 /// ZERO ROWS.
 ///
 /// **`Option` is the point of this helper, not defensiveness.** After
-/// `migrations/20260825000010_staleness_member_gate.sql` the deny path IS zero rows (`:249-254`) —
+/// `migrations/20260825000020_staleness_member_gate.sql` the deny path IS zero rows (`:249-254`) —
 /// deliberately indistinguishable from an absent anchor — so a helper that `fetch_one`s cannot
 /// express the answer the deny test has to assert, and would report a gate failure as a decode
 /// panic.
@@ -875,7 +875,7 @@ async fn a_touched_context_reports_stale(pool: PgPool) {
         common::fixtures::create_test_profile_with_context(&pool, "clock@example.com").await;
     let region = insert_context_region(&pool, context, 0.9, Some(0.5), "the region").await;
     // The region needs ONE VISIBLE MEMBER or it does not move this clock at all
-    // (`migrations/20260825000010_staleness_member_gate.sql:206-212`) — the same rule both
+    // (`migrations/20260825000020_staleness_member_gate.sql:206-212`) — the same rule both
     // enumeration doors already applied, now applied to the clock. Before that migration this
     // fixture held a member-less region and still reported a touch, which is precisely the
     // disclosure `a_ghost_region_does_not_move_the_staleness_clock` below pins.
@@ -967,7 +967,7 @@ async fn an_absent_anchor_yields_no_row(pool: PgPool) {
 /// fixture that bound `cogmap_id` alone would construct a row the real system never produces, and
 /// the wrapper would answer `is_stale = false` on it forever.
 ///
-/// **Two things this fixture gained with `20260825000010`, and neither is decoration.** The map is
+/// **Two things this fixture gained with `20260825000020`, and neither is decoration.** The map is
 /// now linked to a team `profile` can reach and its region is given a member homed in the map,
 /// because the wrapper is gated from that migration onward: `cogmap_readable_by_profile` admits a
 /// map only through `kb_team_cogmaps` ⋈ `profile_reachable_teams` or an explicit grant, and the
@@ -1167,7 +1167,7 @@ async fn a_touched_cogmap_reports_stale_through_the_delegating_wrapper(pool: PgP
     //
     // **The inline `old` arm is UNGATED, and that is what this fixture is arranged for.** Every row
     // it can see — the one region, its one member — is visible to `profile`, so the gate added by
-    // `20260825000010` removes nothing here and the two answers must still agree. This comparison is
+    // `20260825000020` removes nothing here and the two answers must still agree. This comparison is
     // therefore a key test, NOT a gate test: it says the delegation preserved the answer where the
     // gate has nothing to do. The gate's own differential is the ghost-region and ghost-endpoint
     // witnesses below, where these two arms deliberately DISAGREE.
@@ -1209,7 +1209,7 @@ async fn a_touched_cogmap_reports_stale_through_the_delegating_wrapper(pool: PgP
 }
 
 // ---------------------------------------------------------------------------------------------
-// THE GATE (`migrations/20260825000010_staleness_member_gate.sql`) — the clock stops reporting on
+// THE GATE (`migrations/20260825000020_staleness_member_gate.sql`) — the clock stops reporting on
 // rows the caller cannot read, and gains a context-side composer.
 //
 // **Why the tests above cannot serve as the witnesses for it.** Every one of them reads as the
@@ -1320,7 +1320,7 @@ async fn a_ghost_region_does_not_move_the_staleness_clock(pool: PgPool) {
 /// arm has no member concept at all — it gates on `endpoint_readable_by_profile`
 /// (`20260624000002:292`) on BOTH endpoints, which is the AUTHORIZATION half of `edges_visible_to`
 /// taken on its own so the CURRENCY half (`NOT is_folded`) is not imported with it
-/// (`20260825000010:221-231`).
+/// (`20260825000020:221-231`).
 ///
 /// **What the OLD function answers for THIS EXACT FIXTURE.** The incumbent's edges arm carried NO
 /// predicate whatsoever — not even the endpoint check — so it takes `max(occurred_at)` over both
@@ -1407,7 +1407,7 @@ async fn a_ghost_endpoint_does_not_move_the_staleness_clock(pool: PgPool) {
 /// must return a row to someone.
 ///
 /// Both names are checked because `context_analytics` carries no gate of its own — it inherits the
-/// core's (`20260825000010:327-330`) — so "the wrapper leaks what the core denies" is a real
+/// core's (`20260825000020:327-330`) — so "the wrapper leaks what the core denies" is a real
 /// regression shape and cannot be inferred from the core's own behaviour.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_context_the_caller_cannot_read_yields_no_staleness_row(pool: PgPool) {
@@ -1476,7 +1476,7 @@ async fn context_analytics_row(pool: &PgPool, context: Uuid, profile: Uuid) -> O
 /// are the core's three columns.
 ///
 /// The equality against `anchor_staleness` is asserted rather than assumed because the composer is a
-/// delegating wrapper with no body of its own (`20260825000010:332-337`) — a hand-copied second
+/// delegating wrapper with no body of its own (`20260825000020:332-337`) — a hand-copied second
 /// implementation is the thing that would drift, and this is the assertion that would notice.
 ///
 /// The touch at the end is what makes the columns LIVE rather than constant: a wrapper returning
@@ -1600,7 +1600,7 @@ async fn context_analytics_returns_three_columns_and_not_its_cogmap_peers_five(p
 ///
 /// The hazard is not hypothetical for this schema: `__temper_ungated_follow_from` exists under three
 /// signatures at once, each a generation that was added rather than replaced
-/// (`20260825000010:115-117`).
+/// (`20260825000020:115-117`).
 ///
 /// So this asserts the catalog holds EXACTLY the gated signature for each name. It is the only test
 /// in this file that a correct-looking migration can fail while every behavioural test above still
@@ -1641,7 +1641,7 @@ async fn the_old_ungated_staleness_signatures_are_dropped_not_overloaded(pool: P
 // against both. They are here for the opposite reason: they PROTECT an arm from being "tightened"
 // later by someone reconciling it with `anchor_shape`, which does carry `NOT reg.is_folded`
 // (`20260823000010:86`). The distinction that makes the asymmetry deliberate rather than an
-// oversight, from `internal/agents/key-patterns.md` and restated at `20260825000010:62-71`:
+// oversight, from `internal/agents/key-patterns.md` and restated at `20260825000020:62-71`:
 // `is_active` and `resources_visible_to` are AUTHORIZATION predicates, `is_folded` is a CURRENCY
 // one. This migration added authorization and touched currency nowhere.
 //

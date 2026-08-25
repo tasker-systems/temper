@@ -2137,7 +2137,7 @@ pub async fn cogmap_analytics(
     }))
 }
 
-/// The context-level analytics read (`context_analytics`, migration `20260825000010`). Gate IS in
+/// The context-level analytics read (`context_analytics`, migration `20260825000020`). Gate IS in
 /// the SQL: this function is a thin wrapper over `anchor_staleness`, which carries the full two-part
 /// gate, so a principal who cannot read the context gets zero rows → `None` (never an error), and
 /// deny is indistinguishable from absence.
@@ -2145,7 +2145,7 @@ pub async fn cogmap_analytics(
 /// THREE columns, not the five its cogmap peer returns, and the two it lacks are the answer rather
 /// than a gap in it: a context has no charter resource and no regulation set, so `telos_resource_id`
 /// and `regulation` would be null peer fields asserting "nothing found" about two things that cannot
-/// exist (`migrations/20260825000010_staleness_member_gate.sql:311-330`).
+/// exist (`migrations/20260825000020_staleness_member_gate.sql:311-330`).
 ///
 /// **Why this returns `CogmapStaleness` rather than a context peer struct.** The three columns are
 /// the identical projection of the identical gated core — both composers select straight off

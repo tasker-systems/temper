@@ -451,7 +451,7 @@ sql_relations_current() {
 # Reviewed 2026-08-25, task 01a03636 (the staleness clock gains its gate):
 #   **THE FIRST ENTRY LISTED FOR A PROSE MENTION ALONE, and it must not be read by analogy with any
 #   entry above it.** Every other file in this list is here because it DEFINES or REDEFINES an
-#   ungated body. `20260825000010` does neither. It names `__temper_ungated_follow_from` inside a
+#   ungated body. `20260825000020` does neither. It names `__temper_ungated_follow_from` inside a
 #   COMMENT, as evidence for an unrelated claim — that adding a parameter in Postgres creates an
 #   OVERLOAD rather than replacing, so a `CREATE OR REPLACE` at a longer argument list would have
 #   left the old ungated `anchor_staleness(text, uuid)` standing under the same name. That function
@@ -483,7 +483,7 @@ read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260817000010_decompose_walk.sql
 20260817000020_follow_from_offset.sql
 20260820000010_survey_honors_funnel_width.sql
-20260825000010_staleness_member_gate.sql
+20260825000020_staleness_member_gate.sql
 EOF
 
 # ── THE RELATION WATCH — derived from what the cores READ, not what names them ──

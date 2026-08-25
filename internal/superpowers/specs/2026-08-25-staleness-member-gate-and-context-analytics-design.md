@@ -273,7 +273,7 @@ green because it never asked the question is the failure mode this repo has hit 
 Each step names the incumbent to copy. **No code bodies are authored here** — where a predicate is
 needed, the citation *is* the specification, and the implementer reads it from disk.
 
-### Beat A — the migration (`migrations/20260825000010_staleness_member_gate.sql`)
+### Beat A — the migration (`migrations/20260825000020_staleness_member_gate.sql`)
 
 Number chosen as the next slot above `main`'s maximum, `20260823000020`. **Immutable once applied.**
 
