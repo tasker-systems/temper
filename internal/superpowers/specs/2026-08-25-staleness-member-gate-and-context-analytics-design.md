@@ -66,7 +66,7 @@ Both enumeration doors on the same anchor refuse to name a region the clock repo
 
 The edges arm is broader still — it carries **no predicate at all**, where the incumbent read-set
 `edges_visible_to` (`20260712000010:295-309`) requires non-folded plus both endpoints visible, and
-`element_trail_edge` (`20260719000010:165-167`) requires `anchor_readable_by_profile` **and**
+`element_trail_edge` (`20260719000010:166-168`) requires `anchor_readable_by_profile` **and**
 `endpoint_readable_by_profile` on both endpoints.
 
 ### Honest bounds — do not oversell this
@@ -115,13 +115,33 @@ decision made in this spec, not carried in from the task, and here is the argume
 With members and endpoints gated but no anchor gate, a caller who cannot read the anchor gets
 `latest_touch = NULL` (both arms contribute nothing). The `COALESCE` at `20260823000020:82` then
 collapses `is_stale` to `mat.materialized_at IS NULL` — and the `mat` CTE (`:57-67`) reads the
-anchor's watermark **unconditionally**. So the denied caller learns, for any uuid, whether a
-materialized anchor sits behind it.
+anchor's watermark **unconditionally**. So a caller who cannot read a **real** anchor still receives
+a row carrying that anchor's watermark and an `is_stale` reporting whether it has ever been
+materialized.
 
-That is precisely the leak `anchor_shape` had to close one migration earlier — the `EXISTS` conjunct
-at `20260823000010:65`, argued at `:43-58`, added because an envelope turned a harmless tautology
-into an existence-and-clock oracle. Handing `anchor_staleness` a principal does the same thing to
-the same function for the same reason.
+> **CORRECTED 2026-08-25, after this spec was first published.** The paragraph above originally said
+> the denied caller learns this *"for any uuid they invent"*. **That was false, and it is measurably
+> false.** `mat` selects `WHERE id = p_anchor_id`, so a uuid naming no anchor produces no `mat` row,
+> and the final `FROM mat, touch` cross join yields **zero rows**. Verified against the *incumbent*
+> on the live local database: an invented uuid returns 0 rows there today, with no gate at all.
+> The real disclosure is narrower and sharper — it is about a **real anchor the caller may not
+> read**, which is the case where "this uuid names something that exists" is itself the fact handed
+> over. The argument for the full gate is unaffected; only my description of its size was wrong.
+
+The full gate closes it by making **deny and absent the same answer** — zero rows either way, so the
+two are indistinguishable. That is the property `anchor_shape` states as *"deny and absent collapse
+into ONE arm and disclose neither population nor clock"* (`20260823000010:186`), which it reaches via
+the `EXISTS` conjunct at `:65`, argued at `:43-58`. Handing `anchor_staleness` a principal puts it
+under the same obligation, so it adopts the same gate.
+
+**One asymmetry worth recording, because it runs the other way.** That `EXISTS` conjunct is
+**load-bearing in `anchor_shape` and not here.** `anchor_shape` forces a row via `LEFT JOIN … ON
+true` (`20260823000010:181`) to carry its envelope, so a tautological cogmap self-read arm would hand
+back `emptiness` and `materialized_at` for an invented uuid. `anchor_staleness` ends in a cross join
+against a `mat` CTE that is empty for a non-existent anchor, so it already answers nothing. The
+conjunct is carried anyway — one rule in two places must read identically to stay in sync — but the
+migration must not claim it closes a hole here, or it repeats the error corrected above one level
+down.
 
 **So `anchor_staleness` carries the same two-part gate its two siblings carry:** the anchor
 disjunction *and* the member/endpoint rule. On deny it yields **zero rows**, which is what
@@ -265,12 +285,23 @@ Number chosen as the next slot above `main`'s maximum, `20260823000020`. **Immut
 | A4 | regions arm: add the member rule, same words as both incumbent doors | **CONFORM** | `20260823000010:87-88`; `20260713000050:260-268` |
 | A5 | edges arm: add `endpoint_readable_by_profile` on **both** endpoints, plus the cogmap self-read exemption | **CONFORM** | `20260624000002:292`; `20260719000010:166-167` |
 | A6 | **leave both arms fold-inclusive**; state at the field why the two halves differ | **CONFORM** | `20260823000020:30-32`; `20260708000008:12-13` |
-| A7 | `mat` CTE stays byte-identical to `anchor_shape`'s `clock` CTE | **CONFORM** | `20260823000020:34-38` vs `20260823000010:93-103` |
+| A7 | `mat` CTE's inner `UNION ALL` subquery stays byte-identical to `anchor_shape`'s `clock` | **CONFORM** | `20260823000020:59-66` ≡ `20260823000010:95-101` — see note |
 | A8 | `DROP FUNCTION cogmap_staleness(uuid)`, then `CREATE` it at `(uuid, text, uuid)` | **AMEND** | wrapper pattern `20260823000020:103-108`; §3 overload |
 | A9 | `CREATE OR REPLACE cogmap_analytics` — pass its principal through to the wrapper at `:37` | **AMEND** | `20260628000001:37`; the `:35` tell |
 | A10 | `CREATE FUNCTION context_analytics(uuid, text, uuid)` → three columns | **EXTEND** | authorized by §0 ruling + goal D6; shape argued §4 |
 | A11 | `COMMENT ON FUNCTION` for each; **correct**, do not restate, `20260823000020:50-52` | **AMEND** | §3 |
 | A12 | `declare_migration(..., 'shape-breaking', ...)` — reason states the gate, the preserved fold arm, the dropped overloads, and that **no differential was measured** | **CONFORM** | `20260823000020:110-114` as the model |
+
+> **A7 corrected during Beat A.** This spec originally said the two CTEs are byte-identical. They
+> are not, and forcing them to be would be wrong: `anchor_shape`'s `clock` additionally projects
+> `a.eid`, which its `never_clustered` arm needs and staleness has no use for. What must stay
+> byte-identical is the **inner `UNION ALL` subquery** — the two read the same column off the same
+> two tables, and a divergence there would be a divergence between what a shape read calls
+> "materialized" and what a staleness read compares against.
+
+> **A citation repair found while grounding A11.** `20260823000020:51` cites the composer gate as
+> `20260628000001:77-78`. That file is 40 lines long; the gate is at `:38-39`. The new migration
+> repairs the citation rather than propagating it.
 
 ### Beat B — Rust
 

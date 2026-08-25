@@ -448,6 +448,27 @@ sql_relations_current() {
 #      arm can supply; `offset` was appended as the LAST argument. The emitter remains the single
 #      place the id source is fixed.
 #   3. RESIDUE — unchanged; still source discipline rather than a database permission.
+# Reviewed 2026-08-25, task 01a03636 (the staleness clock gains its gate):
+#   **THE FIRST ENTRY LISTED FOR A PROSE MENTION ALONE, and it must not be read by analogy with any
+#   entry above it.** Every other file in this list is here because it DEFINES or REDEFINES an
+#   ungated body. `20260825000010` does neither. It names `__temper_ungated_follow_from` inside a
+#   COMMENT, as evidence for an unrelated claim — that adding a parameter in Postgres creates an
+#   OVERLOAD rather than replacing, so a `CREATE OR REPLACE` at a longer argument list would have
+#   left the old ungated `anchor_staleness(text, uuid)` standing under the same name. That function
+#   existing under three signatures at once is the schema's own live proof of it, which is why the
+#   migration names it rather than asserting the behaviour abstractly.
+#   1. VERDICT — n/a, and deliberately so. This migration creates no ungated fragment. It creates
+#      four functions and every one of them GATES: `anchor_staleness` carries the anchor disjunction
+#      and the member/endpoint rule, and the three wrappers over it inherit that gate. It is the
+#      opposite of an ungated-surface change — it removes an ungated read.
+#   2. EMITTER — untouched. No Rust call shape changed, and the Rust baseline below is unchanged,
+#      which is the fact to check rather than take from this sentence.
+#   3. RESIDUE — unchanged; still source discipline rather than a database permission.
+#   The function-NAME set is UNCHANGED at five, verified with `--list` before rebaselining. That is
+#   the set that moves when a genuinely new ungated body appears; this file's addition moves only
+#   the derived file scan, which cannot tell a comment from a definition and is not being asked to.
+#   Recorded rather than dodged: rewording the migration until a text-derived guard fell silent
+#   would have traded a checkable citation for a quiet tick.
 read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260808000030_composable_find_family.sql
 20260810000010_anchor_readability_both_kinds.sql
@@ -462,6 +483,7 @@ read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260817000010_decompose_walk.sql
 20260817000020_follow_from_offset.sql
 20260820000010_survey_honors_funnel_width.sql
+20260825000010_staleness_member_gate.sql
 EOF
 
 # ── THE RELATION WATCH — derived from what the cores READ, not what names them ──
