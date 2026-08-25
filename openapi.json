@@ -1733,6 +1733,45 @@
           }
         ],
         "x-apidog-folder": "Reference/API Reference/Contexts"
+      },
+      "delete": {
+        "tags": [
+          "Contexts"
+        ],
+        "summary": "Delete a context",
+        "operationId": "delete_context",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Context ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Context deleted"
+          },
+          "403": {
+            "description": "Caller may read but not administer this context"
+          },
+          "404": {
+            "description": "Context not found (uniform — no existence oracle)"
+          },
+          "409": {
+            "description": "Context still has dependent resources, or a connection, homed in it"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Contexts"
       }
     },
     "/api/contexts/{id}/materialize": {

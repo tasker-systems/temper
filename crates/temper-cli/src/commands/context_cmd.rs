@@ -262,18 +262,18 @@ pub async fn transfer_remote(
     Ok(())
 }
 
-/// Map a `context rename` client error to a CLI error. Deliberately **not** [`map_share_err`]:
-/// that message names a target team ("...AND manage the target team"), and a rename has no target
-/// team — reusing it would state a requirement that does not exist. A rename requires only that you
-/// administer the context itself.
-fn map_rename_err(e: temper_client::error::ClientError) -> TemperError {
+/// Map a `context rename`/`context delete` client error to a CLI error. Deliberately **not**
+/// [`map_share_err`]: that message names a target team ("...AND manage the target team"), and
+/// neither rename nor delete has one — reusing it would state a requirement that does not exist.
+/// Both require only that the caller administer the context itself, so one mapper serves both,
+/// parametrized on the action name the way [`map_share_err`] already is on `action`.
+fn map_admin_required_err(action: &str, e: temper_client::error::ClientError) -> TemperError {
     match e {
-        temper_client::error::ClientError::Forbidden => TemperError::Api(
-            "not authorized: `context rename` requires that you administer the context \
+        temper_client::error::ClientError::Forbidden => TemperError::Api(format!(
+            "not authorized: `context {action}` requires that you administer the context \
              (own it, or manage its owning team as owner/maintainer) — or that you are an \
              instance administrator."
-                .to_owned(),
-        ),
+        )),
         other => crate::actions::runtime::client_err_to_temper(other),
     }
 }
@@ -300,9 +300,32 @@ pub async fn rename_remote(
             },
         )
         .await
-        .map_err(map_rename_err)?;
+        .map_err(|e| map_admin_required_err("rename", e))?;
     let rendered = crate::format::render(&outcome, fmt)?;
     println!("{rendered}");
+    Ok(())
+}
+
+/// `temper context delete <context_ref>` — permanently delete a context.
+///
+/// **A hard delete.** Contexts carry no `is_active` column (creation is a plain INSERT with no
+/// event emission — contexts are infrastructure, not domain data), so there is nothing to undo.
+/// The server refuses with an actionable `409` — surfaced verbatim, not rewritten — when the
+/// context still homes live resources or a connection; move resources first with `temper resource
+/// update <ref> --context-to <new-context>`, then retry. Uses the `@me`-accepting read resolver,
+/// like `rename` and `transfer` — the headline flow is deleting your own `@me/my-project`.
+pub async fn delete_remote(
+    client: &temper_client::TemperClient,
+    context: &str,
+    _fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let context_id = resolve_context_id_for_read(client, context).await?;
+    client
+        .contexts()
+        .delete(context_id)
+        .await
+        .map_err(|e| map_admin_required_err("delete", e))?;
+    output::success("Context deleted.");
     Ok(())
 }
 

@@ -94,6 +94,35 @@ pub async fn get(
     .map(Json)
 }
 
+/// Delete a context
+#[utoipa::path(
+    delete,
+    operation_id = "delete_context",
+    path = "/api/contexts/{id}",
+    tag = "Contexts",
+    params(("id" = Uuid, Path, description = "Context ID")),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 204, description = "Context deleted"),
+        (status = 403, description = "Caller may read but not administer this context"),
+        (status = 404, description = "Context not found (uniform — no existence oracle)"),
+        (status = 409, description = "Context still has dependent resources, or a connection, homed in it"),
+    )
+)]
+pub async fn delete(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(context_id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    context_service::delete(
+        &state.pool,
+        ProfileId::from(auth.0.profile().id),
+        context_id,
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// Share a context with a team
 #[utoipa::path(
     post,

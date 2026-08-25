@@ -1060,6 +1060,19 @@ pub enum ContextAction {
         /// Target team: a team slug (optionally `+`-prefixed) or a team UUID.
         team: String,
     },
+    /// Permanently delete a context.
+    ///
+    /// THIS IS A HARD DELETE. Contexts carry no `is_active` column (creation is a plain INSERT
+    /// with no event emission — contexts are infrastructure, not domain data), so unlike
+    /// `resource delete` there is nothing to undo and no `temper pull` that brings it back.
+    ///
+    /// Refused with a message naming what is still attached when the context still homes live
+    /// resources (grouped by doc type) or a connection. Move resources first with `temper
+    /// resource update <ref> --context-to <new-context>`, then retry.
+    Delete {
+        /// Context ref: a UUID or `@me/slug` / `@handle/slug` / `+team-slug/slug`.
+        context: String,
+    },
     /// Rename a context. The slug is derived from the new name — there is no separate
     /// `--slug`.
     ///

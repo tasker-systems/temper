@@ -956,6 +956,127 @@ pub async fn rename(
     })
 }
 
+/// How many live resources are homed in a context, broken down by `doc_type` — the shape
+/// [`delete`]'s refusal message reports so the caller knows exactly what to move before retrying.
+/// Internal only: never serialized, never crosses the API boundary as its own type.
+struct HomedResourceCount {
+    doc_type: String,
+    count: i64,
+}
+
+/// Delete a context — **a hard delete**, unlike every other context mutation in this file.
+/// `kb_contexts` carries no `is_active` column (creation is a plain INSERT with no event emission —
+/// product decision 5: contexts are infrastructure), so there is no soft-delete state to flip and
+/// nothing for `delete` to undo; once gone, the slug is free and a repeat call renders the same
+/// `NotFound` a never-existed context would.
+///
+/// **Auth before writes**, the same gate as [`rename`]: `ContextAdminAuthority` — own the context,
+/// or manage its owning team, or be an instance administrator.
+///
+/// **Dependents block the delete; they are never swept.** `kb_resource_homes` is the polymorphic
+/// navigation table — "no real FK (can't FK two tables)" per its own migration comment — so an
+/// orphaned home would not fail at the database layer; it would just silently strand every resource
+/// still anchored here. This function checks for that explicitly and refuses with a `409` naming
+/// what is attached, grouped by `doc_type`, and pointing at the fix: `temper resource update <ref>
+/// --context-to <new-context>` moves a resource's home without touching its content. Only **live**
+/// (`is_active`) resources count — a soft-deleted resource's home row is inert, and let it ride the
+/// cascade rather than block a delete over data nobody can see.
+///
+/// `kb_team_contexts` (context shares) is deliberately **not** part of this check: it
+/// `ON DELETE CASCADE`s, and a share is reach metadata about the context, not data homed in it —
+/// deleting the context correctly takes its shares with it, the same way [`reassign`] correctly
+/// leaves them for the new owner to prune.
+///
+/// A `kb_connections` row homing here **is** checked explicitly, ahead of the DELETE: unlike
+/// `kb_resource_homes` it is a real `NOT NULL` FK with no cascade (a connection is temper's authed
+/// link to a remote system — silently orphaning that link would be worse than refusing the delete),
+/// so an unmapped `23503` would otherwise surface as a bare 500 instead of a clean, actionable 409.
+pub async fn delete(pool: &PgPool, caller: ProfileId, context_id: uuid::Uuid) -> ApiResult<()> {
+    crate::authz::authorize::<ContextAdminAuthority>(pool, caller, context_id).await?;
+
+    // `fetch_one` on an EXISTS, not `fetch_optional` on the row: mirrors `rename` — the gate's
+    // SystemAdmin arm admits without consulting the subject's existence, so a system admin naming a
+    // context id that does not exist reaches here. That is the read refusal, not a panic.
+    let exists = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM kb_contexts WHERE id = $1) AS "ok!""#,
+        context_id
+    )
+    .fetch_one(pool)
+    .await?;
+    if !exists {
+        return Err(ApiError::NotFound(CONTEXT_REFUSAL.to_string()));
+    }
+
+    let dependents = sqlx::query_as!(
+        HomedResourceCount,
+        r#"
+        SELECT COALESCE(dt.property_value #>> '{}', 'untyped') AS "doc_type!",
+               COUNT(*) AS "count!"
+          FROM kb_resource_homes h
+          JOIN kb_resources r ON r.id = h.resource_id AND r.is_active
+          LEFT JOIN kb_properties dt
+                 ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id
+                AND dt.property_key = 'doc_type' AND NOT dt.is_folded
+         WHERE h.anchor_table = 'kb_contexts' AND h.anchor_id = $1
+         GROUP BY 1
+         ORDER BY 2 DESC, 1
+        "#,
+        context_id
+    )
+    .fetch_all(pool)
+    .await?;
+
+    if !dependents.is_empty() {
+        let total: i64 = dependents.iter().map(|d| d.count).sum();
+        let breakdown = dependents
+            .iter()
+            .map(|d| format!("{} {}", d.count, d.doc_type))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(ApiError::Conflict(format!(
+            "this context has {total} dependent resource(s) ({breakdown}); move them to another \
+             context with `temper resource update <ref> --context-to <new-context>` first, then \
+             try again"
+        )));
+    }
+
+    let connections = sqlx::query_scalar!(
+        r#"SELECT COUNT(*) AS "count!" FROM kb_connections WHERE home_context_id = $1"#,
+        context_id
+    )
+    .fetch_one(pool)
+    .await?;
+    if connections > 0 {
+        return Err(ApiError::Conflict(format!(
+            "this context is the home of {connections} connection(s); re-home them first, then \
+             try again"
+        )));
+    }
+
+    sqlx::query!("DELETE FROM kb_contexts WHERE id = $1", context_id)
+        .execute(pool)
+        .await
+        .map_err(map_context_delete_err)?;
+    Ok(())
+}
+
+/// Map a raw `DELETE FROM kb_contexts` failure to an [`ApiError`]. The two dependents checks in
+/// [`delete`] are meant to make `23503` unreachable, but they run as separate statements ahead of
+/// the DELETE rather than inside its transaction, so this is a caught TOCTOU — something got
+/// attached between the check and the write — not a dead arm. It renders the same class of refusal
+/// the pre-checks render, never a raw 500.
+fn map_context_delete_err(e: sqlx::Error) -> ApiError {
+    if let sqlx::Error::Database(db) = &e {
+        if db.code().as_deref() == Some("23503") {
+            return ApiError::Conflict(
+                "this context still has data referencing it; move or remove it, then try again"
+                    .to_string(),
+            );
+        }
+    }
+    ApiError::from(e)
+}
+
 /// The `23505` refusal both context write paths render when they lose the collision race.
 ///
 /// A constant rather than a literal, for the reason [`CONTEXT_REFUSAL`] gives: it is one defence

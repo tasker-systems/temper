@@ -64,6 +64,17 @@ impl<'a> ContextClient<'a> {
             .await
     }
 
+    /// DELETE /api/contexts/{id} — permanently delete the context (admin-gated).
+    pub async fn delete(&self, context_id: Uuid) -> Result<()> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/contexts/{context_id}");
+        let req = self.http.delete(&path);
+        self.http
+            .send(&Method::DELETE, &path, req, Some(&token))
+            .await?;
+        Ok(())
+    }
+
     /// POST /api/contexts/{id}/teams — share the context into a team (admin-gated, idempotent).
     pub async fn share_team(
         &self,
