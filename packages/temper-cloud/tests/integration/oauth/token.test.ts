@@ -21,6 +21,7 @@ interface TokenErrorBody {
 
 async function seedCode(
   db: NeonClient,
+  profileId: string | null = null,
 ): Promise<{ code: string; verifier: string; relayState: string }> {
   const verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
   const challenge = createHash("sha256").update(verifier).digest("base64url");
@@ -41,6 +42,7 @@ async function seedCode(
     code,
     claims: { sub: "u1", email: "u1@example.com", email_verified: true },
     expiresAt: new Date(Date.now() + 300000),
+    profileId,
   });
 
   return { code, verifier, relayState };

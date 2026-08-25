@@ -2,6 +2,9 @@ import { createHmac } from "node:crypto";
 import { logger } from "../logger.js";
 import { requireEnv } from "./env.js";
 
+/** Ceiling on an internal server-to-server call, so a slow dependency fails open rather than hanging. */
+const INTERNAL_CALL_TIMEOUT_MS = 5000;
+
 /** Header carrying the Unix-seconds timestamp the signature was computed over. */
 export const TIMESTAMP_HEADER = "X-Temper-Timestamp";
 /** Header carrying the lowercase-hex HMAC-SHA256 signature. */
@@ -55,6 +58,12 @@ export async function reconcileMemberships(payload: ReconcileRequest): Promise<v
       [SIGNATURE_HEADER]: signature,
     },
     body,
+    // Fail-open is only a mercy if it fails FAST. Both callers catch and carry on, but an
+    // unbounded fetch does not reach the catch — it holds the request until the platform's own
+    // function timeout, turning a degraded dependency into a stalled login or rotation. Since the
+    // migration, the first rotation of every pre-existing chain takes the resolve branch, so this
+    // sits on a hot path rather than a rare one.
+    signal: AbortSignal.timeout(INTERNAL_CALL_TIMEOUT_MS),
   });
   if (!res.ok) {
     throw new Error(`reconcile endpoint returned ${res.status}`);

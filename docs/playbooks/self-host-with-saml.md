@@ -216,7 +216,8 @@ openssl genpkey -algorithm ed25519 -out as_signing_key.pem
 | `AS_SIGNING_KID` | e.g. `as-2026-07` | Key id published in the JWKS. |
 | `AS_CLIENTS` | *(JSON, see below)* | **Required** allowlist of `client_id → [redirect_uris]`. Without it every `/oauth/authorize` is rejected (fail-closed). |
 | `AS_ACCESS_TTL_SECONDS` | `900` (default) | Access-token lifetime. |
-| `AS_REFRESH_TTL_SECONDS` | `2592000` (default, 30d) | Refresh-token lifetime. |
+| `AS_REFRESH_TTL_SECONDS` | `2592000` (default, 30d) | Refresh-token lifetime. Slides on every rotation. |
+| `AS_REFRESH_CHAIN_MAX_SECONDS` | `7776000` (default, 90d) | **Absolute** lifetime of a refresh chain, from the last full SAML login. Rotation never moves it, so this — not the two TTLs above — is the bound on how long IdP-removed reach can persist. See [Limitations](#limitations). |
 
 `AS_CLIENTS` registers the exact redirect URIs each client may use (exact string match — this
 is the control that prevents authorization-code exfiltration):
@@ -253,6 +254,7 @@ provisioning occurs (authentication still works).
 | --- | --- | --- |
 | `INTERNAL_RECONCILE_SECRET` | AS + API (shared) | Shared secret gating the internal reconcile call. Same value on both. Unset ⇒ reconcile disabled, no group provisioning. |
 | `INTERNAL_RECONCILE_URL` | AS | Full URL of the `temper-api` `/internal/saml/reconcile` endpoint the AS calls before minting (e.g. `https://<your-api-origin>/internal/saml/reconcile`). |
+| `INTERNAL_RESOLVE_URL` | AS | Full URL of the `temper-api` `/internal/principal/resolve` endpoint (e.g. `https://<your-api-origin>/internal/principal/resolve`). Gated by the same `INTERNAL_RECONCILE_SECRET`. The AS calls it to learn which profile a login belongs to, so an administrator's revoke can end that principal's refresh chains. Unset ⇒ chains are minted without an owner and are bounded by `AS_REFRESH_CHAIN_MAX_SECONDS` alone. |
 
 ### Slack account link (optional)
 
@@ -436,9 +438,51 @@ appliers interleave across the full install timeline.
 ## Limitations
 
 - **Reconcile-on-login only.** Profile attributes refresh when the user logs in; there is no
-  live deprovisioning. A user removed at the IdP retains access until their token expires
-  (bounded by `AS_ACCESS_TTL_SECONDS`) and cannot re-login. Automated deprovisioning (SCIM) is
-  not yet available.
+  live deprovisioning. Automated deprovisioning (SCIM) is not yet available.
+
+  **The bound to state is `AS_REFRESH_CHAIN_MAX_SECONDS`, not `AS_ACCESS_TTL_SECONDS`.** A session
+  survives across access-token expiries by refreshing, so the access TTL describes how often a
+  token is reminted, not how long a session lives. What bounds the session is the **chain's**
+  lifetime: every refresh token belongs to a chain whose deadline is stamped at the last full SAML
+  login and inherited unchanged by every rotation. Once it passes, the only way forward is a fresh
+  login — which reconciles against the IdP, and brings the user's team reach back into agreement
+  with what the IdP confers today.
+
+  So the figure to give a review board for IdP-side removals is
+  **`AS_REFRESH_CHAIN_MAX_SECONDS` + `AS_ACCESS_TTL_SECONDS`** — 90 days plus 15 minutes on the
+  defaults. Lower `AS_REFRESH_CHAIN_MAX_SECONDS` to shorten it, at the cost of how often your users
+  re-authenticate.
+
+- **An administrator's revoke is immediate, and does not wait for any of the above.** Revoking or
+  deactivating a principal ends their live refresh chains in the same transaction as the standing
+  change, and no later sign-in mints them a new one. This is the path to use when you need a
+  departure to take effect now; the chain lifetime is the backstop for the case nobody acted on.
+
+  **What a revoked principal can still do, stated exactly**, because "immediate" is easy to
+  over-read. They can complete a SAML sign-in and receive an **access token** — deliberately, since
+  reaching `/api/access/review-request` to contest the revocation requires one. That token is
+  refused on every data route, and it is **not** renewable: no refresh chain is minted for them, so
+  it expires within `AS_ACCESS_TTL_SECONDS` and is not carried forward. If you need the sign-in
+  itself to stop, disable the account at your IdP — that is the control temper does not own.
+
+  A principal who has *not yet been approved* (or whose request was declined) keeps refreshing
+  normally — also deliberately. Nothing has been taken away from them, and they hold a token in
+  order to reach the join-request endpoints and ask for access; removing it would make asking
+  harder, not safer.
+
+> [!IMPORTANT]
+> **Upgrading an existing SAML deployment?** `INTERNAL_RESOLVE_URL` is new, and nothing sets it for
+> you — `temper admin saml provision` emits it only into a freshly generated bundle. Without it the
+> AS cannot record which principal a refresh chain belongs to, so **an administrator's revoke ends
+> no chains** and the only remaining bound is `AS_REFRESH_CHAIN_MAX_SECONDS`. Logins and refreshes
+> keep returning `200` throughout, so there is no failure to notice.
+>
+> **The signal to look for** is the API's `standing terminal ended no refresh chains` warning when
+> you revoke someone — but read its `ownerless_live_chains` field, not merely its presence. That
+> warning is also the normal outcome for a machine principal and for anyone who simply was not
+> signed in; a **non-zero** `ownerless_live_chains` is the part that means the authorization server
+> is not recording owners at all. Add the variable, pointing at your API origin's
+> `/internal/principal/resolve`, before relying on revoke.
 - **Single active IdP** per instance, **SP-initiated** flows only.
 - **Single issuer** per instance: an instance is either an AS/SAML instance (`AS_ISSUER` set)
   or an Auth0/OIDC instance, not both.

@@ -77,6 +77,7 @@ describe("oauth flow store", () => {
         code: "auth-code-1",
         claims: CLAIMS,
         expiresAt: futureDate(),
+        profileId: null,
       });
 
       expect(result).toEqual({
@@ -96,6 +97,7 @@ describe("oauth flow store", () => {
           code: "auth-code-x",
           claims: CLAIMS,
           expiresAt: futureDate(),
+          profileId: null,
         }),
       ).rejects.toThrow();
     });
@@ -117,6 +119,7 @@ describe("oauth flow store", () => {
           code: "auth-code-expired",
           claims: CLAIMS,
           expiresAt: futureDate(),
+          profileId: null,
         }),
       ).rejects.toThrow();
 
@@ -132,9 +135,10 @@ describe("oauth flow store", () => {
         code: "auth-code-3",
         claims: CLAIMS,
         expiresAt: futureDate(),
+        profileId: null,
       });
 
-      const claims = await consumeCode(db, "auth-code-3", CODE_VERIFIER, "client-1");
+      const { claims } = await consumeCode(db, "auth-code-3", CODE_VERIFIER, "client-1");
 
       expect(claims.sub).toBe(CLAIMS.sub);
       expect(claims.email).toBe(CLAIMS.email);
@@ -147,6 +151,7 @@ describe("oauth flow store", () => {
         code: "auth-code-4",
         claims: CLAIMS,
         expiresAt: futureDate(),
+        profileId: null,
       });
 
       await consumeCode(db, "auth-code-4", CODE_VERIFIER, "client-1");
@@ -160,12 +165,13 @@ describe("oauth flow store", () => {
         code: "auth-code-5",
         claims: CLAIMS,
         expiresAt: futureDate(),
+        profileId: null,
       });
 
       await expect(consumeCode(db, "auth-code-5", "wrong-verifier", "client-1")).rejects.toThrow();
 
       // Still consumable afterward with the right verifier.
-      const claims = await consumeCode(db, "auth-code-5", CODE_VERIFIER, "client-1");
+      const { claims } = await consumeCode(db, "auth-code-5", CODE_VERIFIER, "client-1");
       expect(claims.sub).toBe(CLAIMS.sub);
     });
 
@@ -175,6 +181,7 @@ describe("oauth flow store", () => {
         code: "auth-code-6",
         claims: CLAIMS,
         expiresAt: pastDate(),
+        profileId: null,
       });
 
       await expect(consumeCode(db, "auth-code-6", CODE_VERIFIER, "client-1")).rejects.toThrow();
@@ -186,6 +193,7 @@ describe("oauth flow store", () => {
         code: "auth-code-7",
         claims: CLAIMS,
         expiresAt: futureDate(),
+        profileId: null,
       });
 
       await expect(
@@ -193,7 +201,7 @@ describe("oauth flow store", () => {
       ).rejects.toThrow();
 
       // Still consumable afterward by the client it was actually issued to.
-      const claims = await consumeCode(db, "auth-code-7", CODE_VERIFIER, "client-1");
+      const { claims } = await consumeCode(db, "auth-code-7", CODE_VERIFIER, "client-1");
       expect(claims.sub).toBe(CLAIMS.sub);
     });
   });
@@ -205,6 +213,8 @@ describe("oauth flow store", () => {
         clientId: "client-9",
         claims: CLAIMS,
         expiresAt: futureDate(60 * 60),
+        chainExpiresAt: futureDate(90 * 24 * 60 * 60).toISOString(),
+        profileId: null,
       });
 
       const result = await rotateRefreshToken(db, "refresh-token-1");
@@ -221,6 +231,8 @@ describe("oauth flow store", () => {
         clientId: "client-9",
         claims: CLAIMS,
         expiresAt: futureDate(60 * 60),
+        chainExpiresAt: futureDate(90 * 24 * 60 * 60).toISOString(),
+        profileId: null,
       });
 
       await rotateRefreshToken(db, "refresh-token-2");

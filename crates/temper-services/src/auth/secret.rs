@@ -12,6 +12,18 @@ use sha2::{Digest, Sha256};
 const CLIENT_ID_PREFIX: &str = "tmpr_";
 
 /// Lowercase SHA-256 hex of `input`. Matches the TS AS's `hashToken`.
+///
+/// A fast hash is correct here for one reason, and it is a fact about the INPUT rather than about
+/// the algorithm: everything hashed on this path is 32 bytes from `OsRng` ([`mint_secret`]) or a
+/// candidate being compared against one. A slow KDF exists to make guessing expensive, and there is
+/// nothing guessable about 256 bits of uniform randomness — no cost factor changes that, and a
+/// per-row salt prevents no precomputation that was possible to begin with.
+///
+/// Route a human-chosen secret through here and that reasoning collapses. Such a case needs
+/// argon2id and a per-row salt, applied at the site that introduces it — not a change to this
+/// function, which the token and authorization-code paths also depend on. The full argument, and
+/// the CodeQL rule that flags it, are in the TS twin's doc comment
+/// (`packages/temper-cloud/src/oauth/mint.ts`).
 pub fn sha256_hex(input: &str) -> String {
     let mut h = Sha256::new();
     h.update(input.as_bytes());
