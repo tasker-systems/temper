@@ -18,7 +18,7 @@ Commands:
   resource       Manage resources (tasks, goals, sessions, research, concepts, decisions)
   data-artifact  List and show data artifacts owned by a resource
   context        Manage contexts (projects)
-  warmup         Context primer for new sessions — active goals, in-progress tasks, recent session pointers
+  warmup         Context primer for new sessions — active goals, in-progress tasks, recent session pointers, and what is waiting on you
   invitations    List the pending team invitations addressed to you
   skill          Manage agent skill (install for Claude Code or opencode)
   memory         Manage the Claude Code memory projection
@@ -59,7 +59,7 @@ Options:
 | [`temper resource`](./resource.md) | Manage resources (tasks, goals, sessions, research, concepts, decisions) |
 | [`temper data-artifact`](./data-artifact.md) | List and show data artifacts owned by a resource |
 | [`temper context`](./context.md) | Manage contexts (projects) |
-| [`temper warmup`](./warmup.md) | Context primer for new sessions — active goals, in-progress tasks, recent session pointers |
+| [`temper warmup`](./warmup.md) | Context primer for new sessions — active goals, in-progress tasks, recent session pointers, and what is waiting on you |
 | [`temper invitations`](./invitations.md) | List the pending team invitations addressed to you |
 | [`temper skill`](./skill.md) | Manage agent skill (install for Claude Code or opencode) |
 | [`temper memory`](./memory.md) | Manage the Claude Code memory projection |

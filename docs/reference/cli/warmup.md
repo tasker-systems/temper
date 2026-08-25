@@ -2,10 +2,10 @@
 
 # `temper warmup`
 
-Context primer for new sessions — active goals, in-progress tasks, recent session pointers
+Context primer for new sessions — active goals, in-progress tasks, recent session pointers, and what is waiting on you
 
 ```text
-Context primer for new sessions — active goals, in-progress tasks, recent session pointers
+Context primer for new sessions — active goals, in-progress tasks, recent session pointers, and what is waiting on you
 
 Usage: temper warmup [OPTIONS] --context <CONTEXT>
 

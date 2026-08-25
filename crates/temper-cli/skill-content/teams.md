@@ -64,8 +64,16 @@ one profile. An email spread across multiple profiles (possible only via unverif
 sign-ins) is discounted — not shown, never mis-delivered; the fallback there is the
 inviter sharing the printed token directly.
 
-Over MCP the same three verbs exist: `list_my_invitations`, `accept_invitation`,
-`decline_invitation`.
+**Invitations are CLI-only.** MCP deliberately exposes no invitation verbs: the tool
+consolidation that trimmed that surface removed identity and membership tools from it
+wholesale — "each capability stays at the CLI; the absence is a declaration". An agent
+working over MCP has to shell out to `temper` for anything in this file.
+
+`temper warmup` reports how many invitations are waiting on you (`pending.invitations`),
+so an invite addressed to someone already signed in reaches them at their next session
+without anyone sending a Slack message. Someone who has never signed in still has to be
+told once, out of band — the invited email is a correlator, and it can only resolve to a
+profile that exists.
 
 ## Membership + metadata
 

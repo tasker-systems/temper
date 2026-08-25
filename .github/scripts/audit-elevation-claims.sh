@@ -204,6 +204,7 @@ claim crates/temper-cli/src/commands/admin_subscription.rs 2 subscription
 claim crates/temper-cli/src/commands/admin.rs 3 -
 claim crates/temper-cli/src/commands/cogmap.rs 3 require_cogmap_write_admin
 claim crates/temper-cli/src/commands/context_cmd.rs 2 context_admin
+claim crates/temper-cli/src/commands/warmup.rs 4 is_system_admin
 claim crates/temper-mcp/src/service.rs 2 -
 claim crates/temper-mcp/src/tools/cognitive_maps.rs 1 require_cogmap_write_admin
 claim crates/temper-mcp/src/tools/contexts.rs 2 context_admin,two_sided

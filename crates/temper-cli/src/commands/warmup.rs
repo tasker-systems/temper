@@ -3,6 +3,8 @@ use temper_core::types::config::CliSection;
 use temper_workflow::operations::decorated_ref;
 use temper_workflow::types::resource::{ResourceListParams, ResourceSortField, SortOrder};
 
+use temper_client::error::ClientError;
+
 use crate::actions::runtime;
 use crate::actions::types::TaskInfo;
 use crate::config::Config;
@@ -52,6 +54,38 @@ pub struct WarmupTask {
     pub effort: Option<String>,
 }
 
+/// What is waiting on **you** — a queue, not a feed.
+///
+/// **Principal-scoped, unlike the rest of this primer.** Every other field here is scoped to
+/// the `context` argument; these counts are scoped to the caller and span every team and
+/// context they touch. The two are orthogonal rather than inconsistent: which context you are
+/// priming has no bearing on what you owe other people. Keeping them in one payload is what
+/// makes the queue arrive without anyone remembering to ask for it, which is the whole point —
+/// a surface nobody runs is the out-of-band-notification problem wearing a new hat.
+///
+/// **Counts only, deliberately.** The detail lives behind `temper invitations` and
+/// `temper admin requests list`. A primer that inlined the rows would grow without bound with
+/// the thing it is least qualified to prioritize.
+///
+/// **Only items with a terminal state belong here.** Each of these disappears when the caller
+/// acts on it. That is the line this repo already drew for external deliveries — an undisposed
+/// row is "a record of awareness, NOT an unfinished queue"
+/// (`migrations/20260819000030_kb_subscription_deliveries.sql`) — and it is why "a context was
+/// shared with your team" is absent: it is an FYI with no terminal state, and mixing FYIs into
+/// a count trains a reader to ignore the count.
+#[derive(Debug, Serialize)]
+pub struct PendingSummary {
+    /// Team invitations addressed to you and still redeemable.
+    pub invitations: usize,
+    /// Join requests awaiting your review, or `None` when this is not yours to see.
+    ///
+    /// `None` and `Some(0)` are different facts and are never collapsed: `None` means the
+    /// caller is not an instance admin and read nothing, `Some(0)` means an admin read an
+    /// empty queue. The `None` is produced by the server's own admin gate refusing the
+    /// operator surface — not by a client-side guess at who counts as an admin.
+    pub join_requests: Option<usize>,
+}
+
 /// Full warmup result — serialized by `render()` for JSON and Toon outputs.
 ///
 /// **Standing state first, pointers last.** Field order is the primer's argument: what
@@ -76,6 +110,8 @@ pub struct WarmupResult {
     pub in_progress_tasks: Vec<WarmupTask>,
     /// Recent session pointers — titles and dates only.
     pub recent_sessions: Vec<WarmupSession>,
+    /// What is waiting on the caller. Principal-scoped — see [`PendingSummary`].
+    pub pending: PendingSummary,
 }
 
 /// Display limits for the primer, resolved once by [`resolve_limits`].
@@ -153,6 +189,7 @@ pub fn build_warmup_result(
     let (active_goals, active_goal_total, recent_sessions) =
         collect_standing_state(&context_ref, limits)?;
     let in_progress_tasks = collect_in_progress_tasks(config, &context_ref);
+    let pending = collect_pending()?;
 
     Ok(WarmupResult {
         context: context_ref,
@@ -160,6 +197,7 @@ pub fn build_warmup_result(
         active_goal_total,
         in_progress_tasks,
         recent_sessions,
+        pending,
     })
 }
 
@@ -293,6 +331,76 @@ fn in_progress_tasks(tasks: Vec<TaskInfo>) -> Vec<WarmupTask> {
         .collect()
 }
 
+/// Fetch what is waiting on the caller: their pending invitations, and — only if they are an
+/// instance admin — the join requests awaiting review.
+///
+/// **Its own `with_client`, sequential and not nested**, exactly as `collect_in_progress_tasks`
+/// is. `with_client` builds a tokio runtime, and nesting one inside the closure that
+/// [`collect_standing_state`] already holds would panic. Folding these two reads into that
+/// closure would save a runtime, but it would also turn its return into a four-tuple and give
+/// a function named for *standing state* a second, principal-scoped job.
+///
+/// **Both reads propagate their failures.** Reporting `invitations: 0` because the request
+/// failed would be a primer asserting something it never established — the same fault the
+/// retired `last_session_content` was dropped for. Only the admin read has a non-error absence,
+/// and it is a real answer from the server rather than a swallowed failure (see
+/// [`join_request_count`]). In practice a broken connection fails on goals long before it
+/// reaches here; this arm is about being honest when it does not.
+fn collect_pending() -> Result<PendingSummary> {
+    runtime::with_client(|client| {
+        Box::pin(async move {
+            let invitations = client
+                .teams()
+                .list_my_invitations()
+                .await
+                .map_err(runtime::client_err_to_temper)?
+                .len();
+
+            let join_requests = join_request_count(client.admin().list_requests().await)?;
+
+            Ok(PendingSummary {
+                invitations,
+                join_requests,
+            })
+        })
+    })
+}
+
+/// Turn an admin-only pending-queue read into a count, distinguishing **"not yours to
+/// see"** from **"yours, and empty"**.
+///
+/// `GET /api/access/admin/requests` is an operator-only surface: the route is mounted
+/// unconditionally and the gate lives in the handler, which answers a non-admin with
+/// `ApiError::Forbidden` (`temper_services::auth::require_system_admin`). So the server's
+/// own gate is the authority on who may read this queue, and asking it is the ONLY copy of
+/// that rule. A client-side `Entitlements.is_admin` test would be a second copy — able to
+/// drift from the gate it predicts — which is the shape this repo has already retired once
+/// (see `goal_from_row` on the client-side status filter that became a query predicate).
+///
+/// `Forbidden` therefore maps to `None`, and `None` is not `Some(0)`: an admin whose queue
+/// is empty has *read* an empty queue, while a non-admin has read nothing at all. Collapsing
+/// the two would make the field useless to the only person it is for.
+///
+/// **Every other error still propagates.** Mapping `Forbidden` alone is what keeps this from
+/// being a swallowed-error path: a network failure or an expired token fails warmup loudly
+/// instead of quietly reporting a section that is merely absent.
+///
+/// Generic over the row type because the count is all this needs — pinning it to
+/// `JoinRequestWithProfile` would buy nothing and cost every test a fifteen-field fixture.
+fn join_request_count<T>(
+    result: std::result::Result<Vec<T>, ClientError>,
+) -> Result<Option<usize>> {
+    match result {
+        Ok(rows) => Ok(Some(rows.len())),
+        // Only the bare `Forbidden` — the arm the handler's `require_system_admin` actually
+        // emits. `ForbiddenDetail` is the capability-naming 403 a caller who already reads the
+        // subject gets, which this operator-only route never issues; leaving it out of this arm
+        // keeps the mapping to the refusal that is really on the wire.
+        Err(ClientError::Forbidden) => Ok(None),
+        Err(e) => Err(runtime::client_err_to_temper(e)),
+    }
+}
+
 /// **Retired here, as a named remainder rather than a silent gap**:
 /// `only_status_active_counts_as_standing`, which pinned the client-side rule that only
 /// `temper-status = active` reads as standing (and that a goal with no status does not).
@@ -408,6 +516,49 @@ mod tests {
         assert!(
             in_progress_tasks(vec![task]).is_empty(),
             "no stage is not `in-progress`"
+        );
+    }
+
+    /// An admin reads the queue, so the count is a real reading of it.
+    #[test]
+    fn an_admin_gets_a_counted_review_queue() {
+        let result = join_request_count(Ok(vec![(), ()])).expect("an admin read must succeed");
+        assert_eq!(result, Some(2), "two pending requests must count as two");
+    }
+
+    /// **The distinction the field exists for.** A non-admin is refused the operator
+    /// surface, and that refusal reads as an ABSENT section — never as an empty one.
+    #[test]
+    fn a_forbidden_read_is_an_absent_section_not_an_empty_one() {
+        let result = join_request_count::<()>(Err(ClientError::Forbidden))
+            .expect("a refusal is not a warmup failure");
+        assert_eq!(
+            result, None,
+            "a non-admin has read nothing — that is None, not Some(0)"
+        );
+    }
+
+    /// The other half of the same distinction, which the test above cannot prove alone: an
+    /// admin whose queue happens to be empty has still *read* it. A collapsed implementation
+    /// that returned `None` for both would pass the previous test and fail this one.
+    #[test]
+    fn an_admin_with_an_empty_queue_is_not_a_non_admin() {
+        let result = join_request_count::<()>(Ok(vec![])).expect("an admin read must succeed");
+        assert_eq!(
+            result,
+            Some(0),
+            "an empty queue an admin CAN see is Some(0), distinct from None"
+        );
+    }
+
+    /// **This is what keeps the arm above from being a swallowed-error path.** Only
+    /// `Forbidden` means "not yours"; anything else is a real failure and must surface.
+    #[test]
+    fn a_transport_failure_is_not_mistaken_for_an_absent_section() {
+        let result = join_request_count::<()>(Err(ClientError::TokenExpired));
+        assert!(
+            result.is_err(),
+            "an expired token must fail warmup, not quietly report an absent section"
         );
     }
 

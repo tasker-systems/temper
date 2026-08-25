@@ -539,3 +539,140 @@ async fn warmup_capped_goal_list_still_reports_true_total(pool: sqlx::PgPool) {
          a cap that hides its own existence is silent truncation"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The pending queue: what is waiting on the caller
+// ---------------------------------------------------------------------------
+
+/// Run `build_warmup_result` as the app principal against a context that exists.
+///
+/// The `pending` block is principal-scoped, so the context argument is incidental to what
+/// these tests assert — but it still has to name a real context, because warmup's context
+/// argument has no defensible default and a missing one is a hard 404.
+///
+/// Callable more than once per test: the two tests below each warm up before and after
+/// changing exactly one fact, so the assertion is about the DELTA rather than about a number
+/// that might have been hardcoded. `contexts().create` is therefore tolerated as already-exists
+/// on the second call.
+async fn warmup_now(app: &common::E2eTestApp) -> temper_cli::commands::warmup::WarmupResult {
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    let _ = app.client.contexts().create("pending-ctx", None).await;
+
+    let global_config = app.vault_dir.path().join("no-such-config.toml");
+    let api_url = format!("http://{}", app.addr);
+    let token = app.token.clone();
+    let global_config_str = global_config.to_str().unwrap().to_string();
+    let cli_config = app.cli_config.clone();
+
+    tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(cloud_env(&api_url, &token, &global_config_str), || {
+            temper_cli::commands::warmup::build_warmup_result(
+                &cli_config,
+                "@me/pending-ctx",
+                default_limits(),
+            )
+            .expect("build_warmup_result must succeed in cloud mode")
+        })
+    })
+    .await
+    .expect("spawn_blocking joined")
+}
+
+/// **The headline behaviour.** An invitation addressed to the caller reaches them through the
+/// primer they already run at session start — no out-of-band Slack message required.
+///
+/// Asserted as a before/after on ONE principal: zero when nothing is addressed to them, one
+/// once an invitation is. The "before" half is what stops a hardcoded count from passing, and
+/// pinning both halves to the same caller means the invitation is the only thing that changed.
+///
+/// The invite is issued by a DIFFERENT principal (`second@test.example.com`) so this exercises
+/// the real shape — someone else invites you, and you find out. `list_for_profile` matches on a
+/// verified auth-link email, which provisioning deposits.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn warmup_counts_an_invitation_waiting_on_the_caller(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+
+    assert_eq!(
+        warmup_now(&app).await.pending.invitations,
+        0,
+        "a caller with nothing addressed to them starts at zero"
+    );
+
+    common::provision_and_approve_second(&app).await;
+    let inviter_token = common::generate_second_user_jwt();
+
+    let team: serde_json::Value = app
+        .reqwest_client
+        .post(app.url("/api/teams"))
+        .bearer_auth(&inviter_token)
+        .json(&serde_json::json!({ "slug": "warmup-invite-team" }))
+        .send()
+        .await
+        .expect("inviter creates a team")
+        .json()
+        .await
+        .expect("team json");
+    let team_id = team["id"].as_str().expect("team id");
+
+    let resp = app
+        .reqwest_client
+        .post(app.url(&format!("/api/teams/{team_id}/invite")))
+        .bearer_auth(&inviter_token)
+        .json(&serde_json::json!({
+            "invited_email": "e2e@test.example.com",
+            "role": "member",
+        }))
+        .send()
+        .await
+        .expect("inviter invites the app principal");
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::CREATED,
+        "the invite must be created for this test to mean anything"
+    );
+
+    assert_eq!(
+        warmup_now(&app).await.pending.invitations,
+        1,
+        "the invitation addressed to the caller must surface in the primer"
+    );
+}
+
+/// **The operator surface stays operator-only — and its absence is not an empty queue.**
+///
+/// A non-admin is refused `/api/access/admin/requests`, which must read as an ABSENT section
+/// (`None`) and must not fail the primer. Granting the same principal instance-adminhood then
+/// turns the section present-but-empty (`Some(0)`).
+///
+/// Both halves ride one principal so the ONLY thing that changes between them is the
+/// entitlement. Split across two principals, a bug that keyed off anything else about the
+/// caller would still pass.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn warmup_reveals_the_review_queue_only_to_an_admin(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+
+    assert_eq!(
+        warmup_now(&app).await.pending.join_requests,
+        None,
+        "a non-admin reads nothing from the operator surface — None, never Some(0)"
+    );
+
+    let admin_id = app
+        .client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight")
+        .id;
+    common::make_system_admin(&app.pool, admin_id).await;
+
+    assert_eq!(
+        warmup_now(&app).await.pending.join_requests,
+        Some(0),
+        "an admin reads the queue, so the section is present even when empty"
+    );
+}
