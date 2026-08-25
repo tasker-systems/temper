@@ -327,3 +327,70 @@ async fn the_cli_reads_the_ledger_on_both_axes(pool: sqlx::PgPool) {
         "naming both axes must fail before the request is sent"
     );
 }
+
+/// A revocation performed over HTTP is readable over HTTP — the offboarding question, end to end.
+///
+/// The source draft proposed extending `access_gate_test.rs`'s `audit_events_written_for_lifecycle`
+/// instead, on the belief that it asserts ledger-event *presence*. It does not: that test reads
+/// `kb_join_requests` for status and reviewer and never touches `kb_events`. So the readability
+/// witness belongs here, in the file whose whole premise is that an act performed over HTTP is
+/// readable over HTTP.
+///
+/// Before this task the admin's read returned an empty page over a subject that had just been
+/// revoked by that same admin, one request earlier — the events were written, categorised `admin`,
+/// and matched by no `t.name = ANY($1)` bind on any door.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_revocation_made_over_http_is_readable_on_the_ledger_over_http(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let admin_id = provision(&app, &app.token).await;
+    common::approved_admin(&app.pool, admin_id).await;
+
+    let subject_token = common::generate_second_user_jwt();
+    let subject_id = provision(&app, &subject_token).await;
+
+    let resp = app
+        .reqwest_client
+        .post(app.url(&format!("/api/access/admin/principals/{subject_id}/revoke")))
+        .header("Authorization", format!("Bearer {}", app.token))
+        .json(&serde_json::json!({ "reason": "offboarded" }))
+        .send()
+        .await
+        .expect("revoke request failed");
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::OK,
+        "the admin revoke door must accept a legal revocation"
+    );
+
+    let (status, body) = get_ledger(
+        &app,
+        &app.token,
+        &format!("subject=kb_profiles:{subject_id}"),
+    )
+    .await;
+    assert_eq!(
+        status,
+        reqwest::StatusCode::OK,
+        "an admin reads a subject's standing history: {body}"
+    );
+
+    let entries = body["entries"].as_array().expect("entries array");
+    let revoke = entries
+        .iter()
+        .find(|e| {
+            e["event_type"] == "principal_standing_changed" && e["payload"]["act"] == "revoke"
+        })
+        .unwrap_or_else(|| panic!("the revocation must be readable over HTTP: {body}"));
+
+    // Who revoked whom, and why — the two questions an offboarding review asks, both answered by
+    // one read rather than by a log trawl ending in a hedge.
+    assert_eq!(
+        revoke["actor_profile_id"],
+        admin_id.to_string(),
+        "the ledger must attribute the revoking admin: {body}"
+    );
+    assert_eq!(revoke["payload"]["subject_id"], subject_id.to_string());
+    assert_eq!(revoke["payload"]["prior"], "approved");
+    assert_eq!(revoke["payload"]["resulting"], "revoked");
+    assert_eq!(revoke["payload"]["reason"], "offboarded");
+}

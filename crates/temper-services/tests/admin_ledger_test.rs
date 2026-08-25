@@ -31,39 +31,37 @@ use temper_substrate::payloads::{AnchorTable, RefTarget};
 use temper_workflow::operations::Surface;
 use uuid::Uuid;
 
-/// The admin event types this suite scans for. Mirrors the (private) `ADMIN_EVENT_TYPES` in
-/// `admin_ledger_service` — a test-local copy because that const is not (and should not be) part of
-/// the service's public API.
-///
-/// **What this const actually gates, and what it does NOT.** It is a real gate for
-/// `exactly_the_admin_event_types_are_categorised_admin`, which set-compares it against
-/// `kb_event_types WHERE category = 'admin'` — that catches a type registered without its
-/// `category` stamp, and vice versa.
-///
-/// It is **not** a gate for `no_admin_payload_spells_a_trail_matched_key`, despite that test binding
-/// it. That scan only inspects rows that EXIST, and the only writer in this file
-/// (`seed_admin_event`) hardcodes `WHERE et.name = 'grant_created'` — so for any type this suite
-/// cannot produce a row for, the `t.name = ANY($1)` predicate matches nothing and the scan passes
-/// VACUOUSLY. Adding a name here does not extend that coverage by itself.
-///
-/// `slack_principal_disconnected` is the live example: its banned-key assertion lives with its real
-/// writer, in `slack_disconnect_service`'s `the_disconnect_payload_spells_no_trail_matched_key`.
-/// When you add an admin type, put the banned-key assertion where the event is actually emitted, or
-/// teach `seed_admin_event` to take the type name — do not assume this const bought you the scan.
-const ADMIN_EVENT_TYPES_FOR_TEST: &[&str] = &[
-    "admin_ledger_opened",
-    "grant_created",
-    "grant_revoked",
-    "slack_principal_disconnected",
-    // Principal-admission acts (spec 2026-07-20 §10, D4), registered 'admin' by
-    // 20260720000020. Per the note above, listing them here does NOT buy the banned-key scan —
-    // `seed_admin_event` only writes `grant_created`, so that scan stays vacuous for these two.
-    // Their real writer is `principal_standing_apply` (20260720000030), and the payload it builds
-    // spells only subject_table/subject_id/act/prior/resulting/actor/reason.
-    "principal_standing_changed",
-    "principal_governance_changed",
-];
-
+// The admin event vocabulary this suite scans for — `temper_substrate::payloads::ADMIN_EVENT_NAMES`
+// itself, deliberately, rather than a copy of it.
+//
+// **There used to be a local `ADMIN_EVENT_TYPES_FOR_TEST` here, and it was the bug.** Its doc
+// comment said it mirrored the *private* `ADMIN_EVENT_TYPES` in `admin_ledger_service` — and it
+// did not: it listed six names, the service honoured four, and the two standing types were in this
+// file, in the registry, and readable through no door. Nothing compared the two catalogues, so the
+// divergence was invisible from either side. That is the failure
+// `temper_core::types::query::act` names by that const's own name: *"a const beside a registry,
+// with a test holding its own second copy."*
+//
+// The copy is gone. Three things now pin to ONE vocabulary:
+//   - the read surface — `the_readable_catalogue_is_exactly_the_admin_vocabulary`, a no-DB unit
+//     test in `admin_ledger_service` (so it runs without `test-db`, which is where a pin belongs);
+//   - the registry as MIGRATED — `exactly_the_admin_event_types_are_categorised_admin` below;
+//   - the registry as RESEEDED — `the_migrated_categories_match_the_bootseed_constants` below.
+//
+// The pin does NOT make a new type readable: registering one `admin` turns the unit test red until
+// someone comes to `ADMIN_EVENT_TYPES` and decides. Fail-closed is unchanged; only the silence is.
+//
+// **What this still does NOT gate** — unchanged from the note it replaces, and the reason
+// `no_admin_payload_spells_a_trail_matched_key` is not the coverage it looks like. That scan only
+// inspects rows that EXIST, and the writer in this file (`seed_admin_event`) hardcodes
+// `WHERE et.name = 'grant_created'`, so for any type this suite cannot produce a row for, the
+// `t.name = ANY($1)` predicate matches nothing and the scan passes VACUOUSLY. Naming a type in the
+// vocabulary buys the categorisation pins above; it does not buy the payload scan. Put the
+// banned-key assertion where the event is actually emitted:
+// `slack_principal_disconnected` has one in `slack_disconnect_service`, and the two standing types
+// have `the_standing_writers_payloads_spell_no_trail_matched_key` in `standing_transition_test.rs`,
+// against the real `principal_standing_apply` / `principal_governance_set`.
+use temper_substrate::payloads::ADMIN_EVENT_NAMES;
 /// Keys the `element_trail_*` functions match on by shape, with **no** event-type filter. An admin
 /// payload spelling any of these would leak an authority record into a cognition read gated only by
 /// `resources_visible_to` (spec 2026-07-16 §5). Derived from the live function bodies:
@@ -700,7 +698,7 @@ async fn no_admin_payload_spells_a_trail_matched_key(pool: PgPool) {
              CROSS JOIN LATERAL jsonb_object_keys(e.payload) AS k(key)
             WHERE t.name = ANY($1) AND k.key = ANY($2)"#,
     )
-    .bind(ADMIN_EVENT_TYPES_FOR_TEST)
+    .bind(ADMIN_EVENT_NAMES.as_slice())
     .bind(BANNED_ADMIN_PAYLOAD_KEYS)
     .fetch_all(&pool)
     .await
@@ -761,7 +759,7 @@ async fn an_admin_event_never_appears_in_an_element_trail(pool: PgPool) {
             WHERE tr.kind = ANY($2)"#,
     )
     .bind(f.owner_profile.uuid())
-    .bind(ADMIN_EVENT_TYPES_FOR_TEST)
+    .bind(ADMIN_EVENT_NAMES.as_slice())
     .fetch_one(&pool)
     .await
     .unwrap();
@@ -950,10 +948,7 @@ async fn exactly_the_admin_event_types_are_categorised_admin(pool: PgPool) {
     .await
     .unwrap();
 
-    let mut expected: Vec<String> = ADMIN_EVENT_TYPES_FOR_TEST
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect();
+    let mut expected: Vec<String> = ADMIN_EVENT_NAMES.iter().map(|s| (*s).to_string()).collect();
     expected.sort();
 
     assert_eq!(
@@ -983,7 +978,7 @@ async fn the_migrated_categories_match_the_bootseed_constants(pool: PgPool) {
             .unwrap();
 
     for (name, category) in &rows {
-        let expected = if temper_substrate::payloads::ADMIN_EVENT_NAMES.contains(&name.as_str()) {
+        let expected = if ADMIN_EVENT_NAMES.contains(&name.as_str()) {
             "admin"
         } else if temper_substrate::payloads::SYSTEM_EVENT_NAMES.contains(&name.as_str()) {
             "system"
@@ -1544,5 +1539,260 @@ async fn a_kb_events_subject_parses_and_then_denies(pool: PgPool) {
     assert!(
         matches!(err, ApiError::NotFound(_)),
         "the widened subject surface must fail CLOSED with 404 (the deny-split invariant); got {err:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Standing and governance are readable — the two types that were emitted from the day
+// `20260720000020` shipped and were readable through no door at all.
+//
+// Driven through the REAL writers (`principal_standing_apply` / `principal_governance_set`,
+// `20260720000030`) rather than `seed_admin_event`, because the property under test is that the
+// read surface returns what production actually writes — including the emitter resolution
+// (`COALESCE(p_actor, p_profile)`) that decides which axis an act comes back on.
+// ---------------------------------------------------------------------------------------------
+
+/// Run one transition through the real committer. `actor` is `None` only where production has no
+/// actor to name (the boot-seed and the human mint); every admin act names one.
+async fn standing_act(
+    pool: &PgPool,
+    subject: ProfileId,
+    act: &str,
+    resulting: &str,
+    actor: Option<ProfileId>,
+    reason: Option<&str>,
+) {
+    sqlx::query_scalar::<_, String>("SELECT principal_standing_apply($1,$2,$3,$4,$5)")
+        .bind(subject.uuid())
+        .bind(act)
+        .bind(resulting)
+        .bind(actor.map(|a| a.uuid()))
+        .bind(reason)
+        .fetch_one(pool)
+        .await
+        .expect("the standing committer must accept a legal transition");
+}
+
+/// `who-changed-whose-standing-is-readable-by-an-authorized-reader`.
+///
+/// Fails before this task's change for the reason the whole task exists: `ADMIN_EVENT_TYPES`
+/// honoured four names, so `t.name = ANY($1)` matched neither type and the admin's read came back
+/// EMPTY over a subject with a full revocation history.
+///
+/// The assertions go past "a row came back" to the four things an offboarding review actually
+/// asks — who acted, upon whom, from what state to what state — because a read that returns the
+/// event but loses the actor answers the presence question and not the accountability one.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_admin_reads_who_revoked_whom_and_who_demoted_them(pool: PgPool) {
+    let f = admin_fixture(&pool).await;
+    let subject = f.outsider_profile;
+
+    // A whole life, as production writes it: born denied, asks, is approved and promoted, then is
+    // offboarded by the admin and demoted with it.
+    standing_act(&pool, subject, "provision", "denied", None, None).await;
+    standing_act(&pool, subject, "request", "requested", Some(subject), None).await;
+    standing_act(
+        &pool,
+        subject,
+        "approve",
+        "approved",
+        Some(f.admin_profile),
+        None,
+    )
+    .await;
+    sqlx::query_scalar::<_, bool>("SELECT principal_governance_set($1,true,$2,$3)")
+        .bind(subject.uuid())
+        .bind(f.admin_profile.uuid())
+        .bind("system admin promotion")
+        .fetch_one(&pool)
+        .await
+        .expect("promote");
+    standing_act(
+        &pool,
+        subject,
+        "revoke",
+        "revoked",
+        Some(f.admin_profile),
+        Some("offboarded"),
+    )
+    .await;
+    sqlx::query_scalar::<_, bool>("SELECT principal_governance_set($1,false,$2,$3)")
+        .bind(subject.uuid())
+        .bind(f.admin_profile.uuid())
+        .bind("demoted by revoke")
+        .fetch_one(&pool)
+        .await
+        .expect("demote");
+
+    let entries = admin_ledger_service::list_by_subject(
+        &pool,
+        f.admin_profile,
+        RefTarget {
+            kind: AnchorTable::Profiles,
+            id: subject.uuid(),
+        },
+        50,
+        0,
+    )
+    .await
+    .expect("an admin reads a subject's standing history");
+
+    let revoke = entries
+        .iter()
+        .find(|e| e.event_type == "principal_standing_changed" && e.payload["act"] == "revoke")
+        .expect(
+            "the revocation must be readable — this is the whole question an offboarding review \
+             asks, and before this task it returned nothing",
+        );
+    assert_eq!(
+        revoke.actor_profile_id,
+        f.admin_profile.uuid(),
+        "the ledger must say WHO revoked — an event that loses its actor answers presence, not \
+         accountability"
+    );
+    assert_eq!(revoke.payload["subject_id"], subject.uuid().to_string());
+    assert_eq!(revoke.payload["prior"], "approved");
+    assert_eq!(revoke.payload["resulting"], "revoked");
+    assert_eq!(revoke.payload["reason"], "offboarded");
+
+    let demote = entries
+        .iter()
+        .find(|e| e.event_type == "principal_governance_changed" && e.payload["change"] == "revoked")
+        .expect("the governance demotion must be readable too — 'may you govern' is the second question");
+    assert_eq!(demote.actor_profile_id, f.admin_profile.uuid());
+}
+
+/// `a-subject-reads-their-own-acts-and-not-acts-taken-upon-them`.
+///
+/// The line is actor != subject, and it is drawn STRUCTURALLY rather than by a policy arm: the
+/// committer emits through `COALESCE(p_actor, p_profile)`'s entity, so a self-service act carries
+/// the subject's emitter and an admin's act upon them carries the admin's. `list_by_actor` is
+/// therefore already the self-read arm — which is why `readable_event_types` grew no arm for these
+/// two types, and the note there says so.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_subject_reads_their_own_request_but_not_the_admin_approval_of_it(pool: PgPool) {
+    let f = admin_fixture(&pool).await;
+    let subject = f.owner_profile; // approved, and deliberately NOT an admin
+
+    standing_act(&pool, subject, "request", "requested", Some(subject), None).await;
+    standing_act(
+        &pool,
+        subject,
+        "approve",
+        "approved",
+        Some(f.admin_profile),
+        None,
+    )
+    .await;
+
+    let own = admin_ledger_service::list_by_actor(&pool, subject, subject, 50, 0)
+        .await
+        .expect("a subject may read the record of acts they performed");
+
+    let acts: Vec<&str> = own
+        .iter()
+        .filter(|e| e.event_type == "principal_standing_changed")
+        .filter_map(|e| e.payload["act"].as_str())
+        .collect();
+    assert!(
+        acts.contains(&"request"),
+        "the subject's own self-service act must come back to them: {acts:?}"
+    );
+    assert!(
+        !acts.contains(&"approve"),
+        "the ADMIN's act upon the subject must not ride the subject's own-history read — that is \
+         the actor != subject line the disconnect decision draws, and it must hold for standing \
+         too: {acts:?}"
+    );
+
+    // The other half of the clause: the subject axis is admin-only for these types, so the subject
+    // cannot reach the admin's act by asking about themselves instead.
+    let about_self = admin_ledger_service::list_by_subject(
+        &pool,
+        subject,
+        RefTarget {
+            kind: AnchorTable::Profiles,
+            id: subject.uuid(),
+        },
+        50,
+        0,
+    )
+    .await;
+    let leaked: Vec<&str> = match &about_self {
+        // A 404 is the deny-is-absence refusal and is the expected shape; an Ok page is only
+        // acceptable if it carries no standing or governance act.
+        Err(ApiError::NotFound(_)) => Vec::new(),
+        Ok(entries) => entries
+            .iter()
+            .filter(|e| {
+                e.event_type == "principal_standing_changed"
+                    || e.event_type == "principal_governance_changed"
+            })
+            .map(|e| e.event_type.as_str())
+            .collect(),
+        Err(other) => panic!("unexpected refusal shape: {other:?}"),
+    };
+    assert!(
+        leaked.is_empty(),
+        "the subject axis must stay admin-only for standing and governance — a self-arm here \
+         cannot dispatch per row and would hand the subject every admin act upon them: {leaked:?}"
+    );
+}
+
+/// Revocation takes the subject's own standing acts with it — **deliberately**, decided 2026-08-24.
+///
+/// `losing_system_access_takes_your_own_history_with_it` above already witnesses the general rule
+/// for a grant event. This one exists for the coupling that makes the rule consequential rather
+/// than incidental: the act that removes the reader is the SAME act they would want to read about,
+/// and the record they lose includes the `request`/`request_review` they filed themselves. Stated
+/// as a question — *should a revoked principal see their own request for review?* — the answer is
+/// no, and this pins it.
+///
+/// So this is not a shortfall awaiting a fix. An arm on `readable_event_types` would not extend the
+/// self-read, it would reverse §11.1b: a revoked principal reading through the subject axis exactly
+/// what this door refused them. Read the note in `readable_event_types` before proposing one.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn revocation_takes_the_subjects_own_standing_acts_with_it(pool: PgPool) {
+    let f = admin_fixture(&pool).await;
+    let subject = f.owner_profile;
+
+    standing_act(&pool, subject, "request", "requested", Some(subject), None).await;
+    standing_act(
+        &pool,
+        subject,
+        "approve",
+        "approved",
+        Some(f.admin_profile),
+        None,
+    )
+    .await;
+
+    // Positive control: while approved, the self-read genuinely works — so the refusal below is
+    // caused by the standing change and not by the fixture never having had a readable act.
+    let before = admin_ledger_service::list_by_actor(&pool, subject, subject, 50, 0)
+        .await
+        .expect("an approved subject reads their own acts");
+    assert!(
+        before
+            .iter()
+            .any(|e| e.event_type == "principal_standing_changed"),
+        "the control must actually return the subject's own standing act"
+    );
+
+    standing_act(
+        &pool,
+        subject,
+        "revoke",
+        "revoked",
+        Some(f.admin_profile),
+        Some("offboarded"),
+    )
+    .await;
+
+    let after = admin_ledger_service::list_by_actor(&pool, subject, subject, 50, 0).await;
+    assert!(
+        matches!(after, Err(ApiError::NotFound(_))),
+        "a revoked principal loses their own history along with their access — §11.1b's rule, \
+         and the standing types take no exception from it: {after:?}"
     );
 }

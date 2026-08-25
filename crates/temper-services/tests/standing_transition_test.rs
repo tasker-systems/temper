@@ -199,3 +199,104 @@ async fn governance_set_is_idempotent_and_emits_only_on_change(pool: PgPool) {
     .unwrap();
     assert_eq!(events, 1, "a no-op is not an admin act; the ledger is append-only and a spurious row can never be corrected, only quarantined");
 }
+
+/// The banned-key scan for the two standing types, put where the events are ACTUALLY WRITTEN.
+///
+/// `element_trail_node` / `element_trail_edge` match payloads on key SHAPE with no event-type
+/// filter, gated only by `resources_visible_to` — so an admin payload spelling one of those keys
+/// leaks an authority record into an ordinary cognition read (spec 2026-07-16 §5).
+///
+/// **Why here and not in `admin_ledger_test.rs`.** That suite's corpus scan binds the admin
+/// vocabulary, and its own doc warns that naming a type there buys nothing on its own: the scan
+/// inspects rows that EXIST, and that file's writer hardcodes `grant_created`. For the two standing
+/// types it would match no rows and pass VACUOUSLY — a green result proving only that the corpus was
+/// empty. This file drives `principal_standing_apply` and `principal_governance_set` themselves, so
+/// the payloads under the scan are the ones production writes. The row-count assertions below are
+/// what make that claim checkable rather than asserted.
+///
+/// Mirrors `slack_disconnect_service`'s `the_disconnect_payload_spells_no_trail_matched_key`, which
+/// is the same move for the same reason on the type that established the pattern.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_standing_writers_payloads_spell_no_trail_matched_key(pool: PgPool) {
+    /// Keys the `element_trail_*` functions match on by shape.
+    /// Mirrors `BANNED_ADMIN_PAYLOAD_KEYS` in `tests/admin_ledger_test.rs`.
+    const BANNED: &[&str] = &["resource_id", "block_id", "edge_id", "owner"];
+
+    let p = a_profile(&pool, "trail-keys").await;
+    let admin = a_profile(&pool, "trail-keys-admin").await;
+
+    // Every payload-shaping branch the two writers have: an actor-less act (`jsonb_strip_nulls`
+    // drops `actor`), an act with an actor, one carrying a `reason`, and both governance
+    // directions — so the scan covers each shape rather than one representative of them.
+    sqlx::query_scalar::<_, String>(
+        "SELECT principal_standing_apply($1,'provision','denied',NULL,NULL)",
+    )
+    .bind(p)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query_scalar::<_, String>(
+        "SELECT principal_standing_apply($1,'request','requested',$2,NULL)",
+    )
+    .bind(p)
+    .bind(p)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query_scalar::<_, String>(
+        "SELECT principal_standing_apply($1,'approve','approved',$2,'admin approval')",
+    )
+    .bind(p)
+    .bind(admin)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query_scalar::<_, bool>("SELECT principal_governance_set($1,true,$2,'promotion')")
+        .bind(p)
+        .bind(admin)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    sqlx::query_scalar::<_, bool>("SELECT principal_governance_set($1,false,$2,'demotion')")
+        .bind(p)
+        .bind(admin)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    // Non-vacuity, asserted rather than hoped for: without rows the scan below passes on an empty
+    // corpus and proves nothing at all.
+    let (standing, governance): (i64, i64) = sqlx::query_as(
+        "SELECT count(*) FILTER (WHERE t.name = 'principal_standing_changed'),
+                count(*) FILTER (WHERE t.name = 'principal_governance_changed')
+           FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id
+          WHERE e.payload->>'subject_id' = $1::text",
+    )
+    .bind(p)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(standing, 3, "the scan is vacuous without standing rows");
+    assert_eq!(governance, 2, "the scan is vacuous without governance rows");
+
+    let offenders: Vec<(String, String)> = sqlx::query_as(
+        r#"SELECT t.name, k.key
+             FROM kb_events e
+             JOIN kb_event_types t ON t.id = e.event_type_id
+             CROSS JOIN LATERAL jsonb_object_keys(e.payload) AS k(key)
+            WHERE t.name = ANY($1) AND k.key = ANY($2)"#,
+    )
+    .bind(["principal_standing_changed", "principal_governance_changed"].as_slice())
+    .bind(BANNED)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    assert!(
+        offenders.is_empty(),
+        "a standing payload spelling one of these keys is matched by element_trail_* on shape \
+         alone, which would surface an authority record in an ordinary cognition read. The subject \
+         is carried as subject_table/subject_id plus a `references` entry, never as resource_id. \
+         Offenders: {offenders:?}"
+    );
+}

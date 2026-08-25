@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT principal_standing_apply($1,'provision','denied',$2,'machine issue')",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "principal_standing_apply",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "3f84d8eb232b39250ff511bcf7cc8cb35f29191f44104a36ba551591ca68d1da"
+}
