@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT a.asserted_by_event_id, c.content FROM kb_data_artifacts a JOIN kb_data_artifact_content c ON c.artifact_id = a.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "asserted_by_event_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "content",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "fdeacfc7cadd12297038a65013d69e3855dcf216d5763ce0753b1d1d32dc7736"
+}

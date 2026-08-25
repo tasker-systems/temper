@@ -272,9 +272,17 @@ pub async fn provision(
     // never confers any. Raw principal_standing_apply on the transaction, NOT
     // standing_service::provision — that takes &PgPool and would write outside this tx, risking an
     // orphaned standing row if the registration rolls back.
+    //
+    // `caller` is the actor, and passing NULL here was a real attribution hole rather than a
+    // stylistic one: the committer resolves its emitter through `COALESCE(p_actor, p_profile)`
+    // (20260720000030), so a NULL actor makes the emitter the SUBJECT'S OWN entity. The ledger then
+    // could not say who registered a machine, and the machine's own actor-axis read returned a
+    // `provision` it did not perform. The registrar is already recorded one statement above, in
+    // `kb_machine_clients.registered_by_profile_id` — the ledger now says what the row says.
     sqlx::query_scalar!(
-        "SELECT principal_standing_apply($1,'provision','denied',NULL,'machine registration')",
-        profile_id
+        "SELECT principal_standing_apply($1,'provision','denied',$2,'machine registration')",
+        profile_id,
+        *caller,
     )
     .fetch_one(&mut *tx)
     .await?;
@@ -352,10 +360,12 @@ pub async fn issue(
 
     // D11 — the temper-minted machine door births Denied too. `issue` is `provision`'s structural
     // twin (a second mint door), so it carries the same born-Denied standing; leaving it unwired is
-    // exactly the carelessly-added door the whole-surface property guards against.
+    // exactly the carelessly-added door the whole-surface property guards against. It carries the
+    // actor for the same reason too — see the note on `provision`'s call.
     sqlx::query_scalar!(
-        "SELECT principal_standing_apply($1,'provision','denied',NULL,'machine issue')",
-        profile_id
+        "SELECT principal_standing_apply($1,'provision','denied',$2,'machine issue')",
+        profile_id,
+        *caller,
     )
     .fetch_one(&mut *tx)
     .await?;
@@ -1114,6 +1124,102 @@ mod tests {
         assert!(
             matches!(err, crate::error::ApiError::Conflict(_)),
             "got {err:?}"
+        );
+    }
+
+    /// The mint doors attribute their registrar ON THE LEDGER, not only on the row.
+    ///
+    /// Both doors used to pass `NULL` as `principal_standing_apply`'s actor. That is not a
+    /// stylistic omission: the committer resolves its emitter through
+    /// `COALESCE(p_actor, p_profile)` (`migrations/20260720000030`), so a NULL actor made the
+    /// emitter the SUBJECT'S OWN entity. Two consequences, both invisible while the standing types
+    /// were readable through no door at all:
+    ///   - the ledger could not say who registered a machine, though
+    ///     `kb_machine_clients.registered_by_profile_id` had recorded it all along;
+    ///   - the machine's own actor-axis read returned a `provision` it did not perform, since it
+    ///     was its own emitter.
+    ///
+    /// Asserted through `admin_ledger_service` rather than against `kb_events` directly, because
+    /// the actor axis is a two-hop join (`kb_events` → `kb_entities` → `kb_profiles`) and it is
+    /// that resolution — not the payload field alone — that a reader actually gets.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn both_mint_doors_name_their_registrar_on_the_ledger(pool: PgPool) {
+        use crate::services::admin_ledger_service;
+        use temper_substrate::payloads::{AnchorTable, RefTarget};
+
+        let admin = seed_admin(&pool).await;
+
+        let provisioned = svc::provision(&pool, admin, &req("attributed-agent"))
+            .await
+            .expect("provision");
+        let issued = svc::issue(
+            &pool,
+            admin,
+            &IssueMachineRequest {
+                label: "attributed-issue".to_string(),
+                owner_team_id: None,
+                teams: vec![],
+                grants: vec![],
+            },
+        )
+        .await
+        .expect("issue");
+
+        for (door, machine_profile) in [
+            ("provision", provisioned.profile_id),
+            ("issue", issued.client.profile_id),
+        ] {
+            // The subject axis: an operator asking "who registered this machine?" gets an answer.
+            let entries = admin_ledger_service::list_by_subject(
+                &pool,
+                admin,
+                RefTarget {
+                    kind: AnchorTable::Profiles,
+                    id: machine_profile,
+                },
+                50,
+                0,
+            )
+            .await
+            .unwrap_or_else(|e| {
+                panic!("{door}: admin reads the machine's standing history: {e:?}")
+            });
+
+            let birth = entries
+                .iter()
+                .find(|e| {
+                    e.event_type == "principal_standing_changed" && e.payload["act"] == "provision"
+                })
+                .unwrap_or_else(|| panic!("{door}: the machine's provision must be on the ledger"));
+
+            assert_eq!(
+                birth.actor_profile_id, *admin,
+                "{door}: the ledger must name the registrar, as \
+                 kb_machine_clients.registered_by_profile_id already does",
+            );
+            assert_eq!(
+                birth.payload["actor"],
+                admin.uuid().to_string(),
+                "{door}: the payload must carry the actor too — jsonb_strip_nulls drops the key \
+                 entirely when NULL is passed, which is how the hole read as an absent field \
+                 rather than as a wrong one",
+            );
+        }
+
+        // The other half: the registrar's own history now carries both mints, and the machine's
+        // does not carry an act it never performed.
+        let own = admin_ledger_service::list_by_actor(&pool, admin, admin, 100, 0)
+            .await
+            .expect("the registrar reads their own acts");
+        let provisions = own
+            .iter()
+            .filter(|e| {
+                e.event_type == "principal_standing_changed" && e.payload["act"] == "provision"
+            })
+            .count();
+        assert_eq!(
+            provisions, 2,
+            "both mint doors must land on the registrar's own actor axis, not the machine's",
         );
     }
 }

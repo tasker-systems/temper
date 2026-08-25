@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT string_agg(bc.content, '' ORDER BY b.seq)\n             FROM kb_content_blocks b\n             LEFT JOIN kb_block_content bc ON bc.block_revision_id = b.current_revision_id\n            WHERE b.resource_id = $1 AND NOT b.is_folded\n           HAVING count(*) = count(bc.block_revision_id)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "string_agg",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d099ff10ea1b1da338767db81a84048a856366cf2fa0d69fa80d46e4b3b8c4b0"
+}
