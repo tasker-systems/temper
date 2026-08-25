@@ -866,7 +866,26 @@ git commit -m "feat(context): address retired contexts on the admin axis"
 
 - [ ] **Step 1: Add the client method**
 
-**CONFORM** — mirror the existing `share_team` POST method in the same file, not the `delete` method (which returns `()`; `restore` returns a body).
+**CONFORM.** `crates/temper-client/src/contexts.rs` has two send variants and the difference is
+load-bearing: `send` returns a raw `Response` (what `delete` uses today, which is why it returns
+`()`), while `send_json` deserializes into the return type.
+
+`unshare_team` (`:91-104`) is the exact model for **both** changes here — a body-less request that
+returns a typed outcome:
+
+```rust
+    pub async fn unshare_team(&self, context_id: Uuid, team_id: Uuid) -> Result<UnshareContextOutcome> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/contexts/{context_id}/teams/{team_id}");
+        let req = self.http.delete(&path);
+        self.http.send_json(&Method::DELETE, &path, req, Some(&token)).await
+    }
+```
+
+So: change `delete` from `send` to `send_json` and its return type from `Result<()>` to
+`Result<RetireContextOutcome>`; add `restore` as the same shape with `self.http.post(&path)` (no
+`.json(...)` — there is no request body) and `send_json(&Method::POST, ...)`, returning
+`Result<RestoreContextOutcome>`.
 
 - [ ] **Step 2: Change `delete_remote` to render its outcome**
 
