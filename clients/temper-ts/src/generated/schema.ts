@@ -453,7 +453,8 @@ export interface paths {
         get: operations["get_context"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** Delete a context */
+        delete: operations["delete_context"];
         options?: never;
         head?: never;
         patch?: never;
@@ -8263,6 +8264,51 @@ export interface operations {
             };
             /** @description Not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    delete_context: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Context ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Context deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Caller may read but not administer this context */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Context not found (uniform — no existence oracle) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Context still has dependent resources, or a connection, homed in it */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
