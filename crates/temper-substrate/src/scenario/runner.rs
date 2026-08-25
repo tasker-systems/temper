@@ -482,11 +482,21 @@ async fn eval_expectation(
             }
         }
         Expectation::Stale { expect } => {
-            let is_stale =
-                sqlx::query_scalar!("SELECT is_stale FROM cogmap_staleness($1)", loaded.cogmap)
-                    .fetch_one(pool)
-                    .await?
-                    .context("cogmap_staleness returned null")?;
+            // `cogmap_staleness` gained a principal in 20260825000010 and the old ungated
+            // `cogmap_staleness(uuid)` was DROPPED, not overloaded — so this call site had to move
+            // in the same change. The scenario owner is the principal: `fetch_one` here means a
+            // deny (zero rows) would surface as a `RowNotFound` error rather than a false reading,
+            // and the owner never denies — they can read every region of the map they own. That
+            // also means the scenario suite does NOT exercise the new gate; the bite witnesses for
+            // it live in the API test tier, not here.
+            let is_stale = sqlx::query_scalar!(
+                "SELECT is_stale FROM cogmap_staleness($1, 'profile', $2)",
+                loaded.cogmap,
+                loaded.owner
+            )
+            .fetch_one(pool)
+            .await?
+            .context("cogmap_staleness returned null")?;
             if is_stale != *expect {
                 bail!("stale = {is_stale}, expected {expect}");
             }

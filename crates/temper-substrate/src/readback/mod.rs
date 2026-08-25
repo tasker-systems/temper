@@ -2137,6 +2137,54 @@ pub async fn cogmap_analytics(
     }))
 }
 
+/// The context-level analytics read (`context_analytics`, migration `20260825000010`). Gate IS in
+/// the SQL: this function is a thin wrapper over `anchor_staleness`, which carries the full two-part
+/// gate, so a principal who cannot read the context gets zero rows → `None` (never an error), and
+/// deny is indistinguishable from absence.
+///
+/// THREE columns, not the five its cogmap peer returns, and the two it lacks are the answer rather
+/// than a gap in it: a context has no charter resource and no regulation set, so `telos_resource_id`
+/// and `regulation` would be null peer fields asserting "nothing found" about two things that cannot
+/// exist (`migrations/20260825000010_staleness_member_gate.sql:311-330`).
+///
+/// **Why this returns `CogmapStaleness` rather than a context peer struct.** The three columns are
+/// the identical projection of the identical gated core — both composers select straight off
+/// `anchor_staleness` — so a second struct with the same three fields would be pure drift surface
+/// with nothing to say this one does not, and any real divergence originates in one migration and
+/// breaks both `query!` sites at compile time rather than silently. Reuse of a cogmap-named row type
+/// on a context read is also the incumbent, not a new liberty: `anchor_region_metrics_select` hands
+/// `Vec<CogmapRegionMetricsRow>` to the context route
+/// (`crates/temper-api/src/handlers/contexts.rs:287-291`), and the context sub-client states the
+/// convention outright — "the response types are shared with the cogmap side on purpose … the
+/// `cogmap_*` naming is what M3 retires, not the shape"
+/// (`crates/temper-client/src/contexts.rs:127-132`). The honest repair for the *name* is the
+/// anchor-generic rename `AnchorShape` already models
+/// (`crates/temper-core/src/types/cognitive_maps.rs:117`) — `CogmapStaleness` → `AnchorStaleness` —
+/// and it is deliberately not taken here: it renames a shipped wire type that the TypeScript
+/// bindings and the UI import.
+pub async fn context_analytics(
+    pool: &PgPool,
+    context_id: ContextId,
+    principal: ProfileId,
+) -> Result<Option<CogmapStaleness>> {
+    let row = sqlx::query!(
+        r#"SELECT materialized_at,
+                  latest_touch,
+                  is_stale AS "is_stale!"
+             FROM context_analytics($1, 'profile', $2)"#,
+        context_id.uuid(),
+        principal.uuid(),
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| CogmapStaleness {
+        materialized_at: r.materialized_at,
+        latest_touch: r.latest_touch,
+        is_stale: r.is_stale,
+    }))
+}
+
 // ── Data artifact reads (Beat C) ───────────────────────────────────────────────────────────────
 //
 // Four read surfaces over `kb_data_artifacts`, all gated through `resources_visible_to` in the

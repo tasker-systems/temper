@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT is_stale FROM cogmap_staleness($1)",
+  "query": "SELECT is_stale FROM cogmap_staleness($1, 'profile', $2)",
   "describe": {
     "columns": [
       {
@@ -11,6 +11,7 @@
     ],
     "parameters": {
       "Left": [
+        "Uuid",
         "Uuid"
       ]
     },
@@ -18,5 +19,5 @@
       null
     ]
   },
-  "hash": "2c7323be71b840b7cdb1b024800e87658c41ab548992d5a6b2c0141689f5d43f"
+  "hash": "d81347ae3759a2c8b2e1754dc9fb105866293e1f531075fe64fc1eff36dad2b1"
 }

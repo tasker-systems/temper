@@ -265,9 +265,24 @@ telos_resource_id: string,
 charter_statement: string | null, };
 
 /**
- * Map-level staleness readout (`cogmap_staleness`): when the shape was last materialized, the latest
- * touch to the map's regions/edges, and whether the read is stale. Staleness is LEGIBLE — reported,
- * never blocking. `materialized_at` is `None` when the map has never been materialized.
+ * Anchor-level staleness readout: when the shape was last materialized, the latest touch to the
+ * anchor's regions/edges **that the reading principal may see**, and whether the read is stale.
+ * Staleness is LEGIBLE — reported, never blocking. `materialized_at` is `None` when the anchor has
+ * never been materialized.
+ *
+ * Carried by BOTH anchor kinds: nested inside [`CogmapAnalyticsRow`] for a cognitive map
+ * (`cogmap_staleness`) and returned bare by `GET /api/contexts/{id}/analytics` for a context
+ * (`context_analytics`), which has nothing to put in that row's other two fields. Both are thin
+ * wrappers over the one gated core, `anchor_staleness`, so the three values mean the same thing on
+ * either anchor. The `Cogmap` in the name is historical — the same "shared on purpose, the
+ * `cogmap_*` naming is what M3 retires, not the shape" convention `CogmapRegionMetricsRow` already
+ * rides on for the context region-metrics route.
+ *
+ * The touch is **gated** as of migration `20260825000010`: a region holding no member this
+ * principal can read does not move this clock, and neither does an edge with an unreadable
+ * endpoint. Folded regions and edges are still counted deliberately — a fold advances
+ * `last_event_id` and IS a touch, so narrowing either arm to live rows would make a stale anchor
+ * read fresh.
  */
 export type CogmapStaleness = { materialized_at: string | null, latest_touch: string | null, is_stale: boolean, };
 

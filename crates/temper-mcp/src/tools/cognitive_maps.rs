@@ -2,9 +2,9 @@
 //! `cogmap_region_metrics`, `cogmap_analytics`. Write: `cogmap_create` (genesis — create a new map).
 //!
 //! Also the CONTEXT orientation peers (spec §3.7, T8): `context_shape`, `context_region_metrics`,
-//! `context_materialize`. They share the region reads beneath them — the substrate read is
-//! anchor-generic, so the only thing that differs is how the anchor is addressed (a context ref, not
-//! a resource ref) and which lens it materializes under.
+//! `context_analytics`, `context_materialize`. They share the reads beneath them — the substrate
+//! read is anchor-generic, so the only thing that differs is how the anchor is addressed (a context
+//! ref, not a resource ref) and which lens it materializes under.
 
 use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
@@ -15,7 +15,7 @@ use temper_core::context_ref::parse_context_ref;
 use temper_core::error::TemperError;
 use temper_core::types::cognitive_maps::{
     BindTeamRequest, CogmapAnalyticsInput, CogmapRegionMetricsInput, CogmapShapeInput,
-    ContextShapeInput, GrantCapabilityRequest, RevokeCapabilityRequest,
+    ContextAnalyticsInput, ContextShapeInput, GrantCapabilityRequest, RevokeCapabilityRequest,
 };
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{CogmapId, ProfileId};
@@ -666,6 +666,46 @@ pub async fn context_region_metrics(
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         text,
     )]))
+}
+
+/// `context_analytics` — the context-level staleness readout (materialized_at / latest_touch /
+/// is_stale), closing the one asymmetric row of the anchor read surface.
+///
+/// Three fields, not the five of `cogmap_analytics`: a context has no charter resource and no
+/// regulation set, so there is nothing to report there rather than nothing found.
+///
+/// Deny is an error, not an empty object — the same no-leak convention as `cogmap_analytics`, and
+/// "not readable" and "does not exist" are one message on purpose.
+pub async fn context_analytics(
+    svc: &TemperMcpService,
+    input: ContextAnalyticsInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let profile = svc.require_profile().await?;
+    let profile_id = ProfileId::from(profile.id);
+    let anchor = context_anchor(svc, profile_id, &input.context).await?;
+
+    let got = temper_services::backend::substrate_read::context_analytics_select(
+        &svc.api_state.pool,
+        profile_id,
+        anchor.uuid(),
+    )
+    .await
+    .map_err(|e| rmcp::ErrorData::internal_error(format!("context_analytics failed: {e}"), None))?;
+
+    match got {
+        Some(staleness) => {
+            // Object, not array — the fallback must match the schema.
+            let text =
+                serde_json::to_string_pretty(&staleness).unwrap_or_else(|_| "{}".to_string());
+            Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+                text,
+            )]))
+        }
+        None => Err(rmcp::ErrorData::invalid_params(
+            "context not found or not readable".to_string(),
+            None,
+        )),
+    }
 }
 
 /// `context_materialize` — re-form the context's regions when its formation delta clears the
