@@ -351,12 +351,14 @@ export function reportMetrics(regions: AnalysedRegion[]): MetricReport[] {
 }
 
 /**
- * Why a context shows no charter, staleness or regulation — declared, never faked as a peer field.
+ * Why a context shows no charter and no regulation — declared, never faked as a peer field.
  *
- * The unification's **D6** would port the staleness half of `cogmap_analytics` to contexts, and it
- * is unshipped: `kb_contexts.shape_materialized_event_id` exists and is written, but there is no
- * context analytics read. A context has a `telos_centroid` and neither a charter resource nor a
- * regulation set, so there is nothing to return even in principle for two of the three.
+ * **A context IS asked for staleness now**, and the clock it answers with renders beside this
+ * sentence: `/api/contexts/{id}/analytics` returns three fields where the cogmap door returns five.
+ * What it does not return is the other two, and those two are what this sentence is about. A
+ * context has a `telos_centroid` and neither a charter resource nor a regulation set, so for those
+ * there is nothing to return even in principle — and a null peer field would report *nothing
+ * found* about two things that cannot exist.
  */
 export const CONTEXT_HAS_NO_MAP_READOUT =
 	'This is a context. A charter, and the concepts that regulate it, belong to a cognitive map — a context has neither, so there is nothing here to report rather than nothing found. What is measured below is its groupings.';
