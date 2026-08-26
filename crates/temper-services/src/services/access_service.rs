@@ -1143,6 +1143,27 @@ pub async fn list_open_review_requests(
     Ok(rows)
 }
 
+/// How many reconsiderations are open — [`list_open_review_requests`] without the rows.
+///
+/// `decided_at IS NULL` is the same open-ness test the list applies, and the same one
+/// `idx_principal_review_one_open` enforces. Open-ness is not restated here as a second
+/// predicate; it is the one the index and the list already agree on.
+///
+/// Same `SystemAdmin` proof as its list sibling, so a refusal stays a `403` and never a `0`.
+pub async fn count_open_review_requests(pool: &PgPool, _admin: &SystemAdmin) -> ApiResult<i32> {
+    let count = sqlx::query_scalar!(
+        r#"
+        SELECT COUNT(*)::int4 as "count!"
+          FROM kb_principal_review_requests
+         WHERE decided_at IS NULL
+        "#,
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(count)
+}
+
 /// Parameters for closing a review request.
 pub struct CloseReviewRequestParams {
     pub request_id: Uuid,
@@ -1229,6 +1250,38 @@ pub async fn list_pending_requests(
     .await?;
 
     Ok(rows)
+}
+
+/// How many join requests are outstanding — [`list_pending_requests`] without the rows.
+///
+/// Same `SystemAdmin` proof, so the gate is unchanged: a caller who may not read the queue is
+/// refused here exactly as they are refused there. **The refusal is the `403` the gate already
+/// raises — never a `0`.** A count that answered a non-admin with zero would report an empty
+/// queue to someone who is not permitted to know whether it is empty, and `temper warmup` would
+/// print that zero as a fact it had read.
+///
+/// The gating-team absence is carried the same way too: no gating team means no queue, which is
+/// a true `0` rather than a refusal.
+pub async fn count_pending_requests(pool: &PgPool, _admin: &SystemAdmin) -> ApiResult<i32> {
+    let settings = get_system_settings(pool).await?;
+
+    let Some(gating_slug) = settings.gating_team_slug else {
+        return Ok(0);
+    };
+
+    let count = sqlx::query_scalar!(
+        r#"
+        SELECT COUNT(*)::int4 as "count!"
+          FROM vw_join_requests
+         WHERE team_slug = $1
+           AND status = 'pending'
+        "#,
+        gating_slug,
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(count)
 }
 
 /// Parameters for reviewing (approving/rejecting) a join request. The reviewer is no longer carried

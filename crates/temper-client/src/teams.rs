@@ -7,7 +7,7 @@ use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::invitation::{
     AcceptInvitationResponse, CreateInvitationRequest, InvitationTokenRequest, InviteeInvitation,
-    TeamInvitation,
+    PendingInvitationCounts, TeamInvitation,
 };
 use temper_core::types::reassign::{
     BulkReassignAck, BulkReassignRequest, RemoveMemberOutcome, ResidualOwnedReach,
@@ -205,6 +205,29 @@ impl<'a> TeamsClient<'a> {
         let token = self.http.resolve_token()?;
         let path = "/api/invitations/mine";
         let req = self.http.get(path);
+        self.http
+            .send_json(&Method::GET, path, req, Some(&token))
+            .await
+    }
+
+    /// GET /api/invitations/mine/count — how many invitations are waiting, without them.
+    ///
+    /// [`Self::list_my_invitations`] returns each invitation's redemption `token`; this returns
+    /// integers. Callers that only need the number — `temper warmup`, which runs at every
+    /// session start — take this one so no bearer capability crosses the wire to produce a count.
+    ///
+    /// `team_slug` asks, in the same round trip, how many of them are to that team.
+    /// `None` in, `matching: None` out: not asking and being told none are different answers.
+    pub async fn count_my_invitations(
+        &self,
+        team_slug: Option<&str>,
+    ) -> Result<PendingInvitationCounts> {
+        let token = self.http.resolve_token()?;
+        let path = "/api/invitations/mine/count";
+        let mut req = self.http.get(path);
+        if let Some(slug) = team_slug {
+            req = req.query(&[("team_slug", slug)]);
+        }
         self.http
             .send_json(&Method::GET, path, req, Some(&token))
             .await

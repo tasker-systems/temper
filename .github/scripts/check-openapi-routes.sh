@@ -48,8 +48,10 @@ ROUTES_FILE="${1:-${REPO_ROOT}/crates/temper-api/src/routes.rs}"
 # verbatim payload, which has no schema temper owns (the same reason its kb_event_types row
 # carries a NULL payload_schema).
 ALLOWLIST='/api/access/admin/requests
+/api/access/admin/requests/count
 /api/access/admin/requests/{id}
 /api/access/admin/reviews
+/api/access/admin/reviews/count
 /api/access/admin/reviews/{id}
 /api/access/admin/settings
 /api/access/admin/promote

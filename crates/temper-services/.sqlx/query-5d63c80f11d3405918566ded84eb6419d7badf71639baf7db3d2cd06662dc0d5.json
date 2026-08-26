@@ -1,0 +1,106 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id as \"id!\", team_id as \"team_id!\",\n               team_slug as \"team_slug!\", team_name as \"team_name!\",\n               invited_email as \"invited_email!\", invited_by_profile_id as \"invited_by_profile_id!\",\n               role as \"role!: TeamRole\", token as \"token!\",\n               status as \"status!: InvitationStatus\",\n               expires_at as \"expires_at!\", created as \"created!\"\n          FROM vw_invitee_invitations\n         WHERE invitee_profile_id = $1\n         ORDER BY created DESC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "team_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "team_slug!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "team_name!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "invited_email!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "invited_by_profile_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 6,
+        "name": "role!: TeamRole",
+        "type_info": {
+          "Custom": {
+            "name": "team_role",
+            "kind": {
+              "Enum": [
+                "owner",
+                "maintainer",
+                "member",
+                "watcher"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "token!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 8,
+        "name": "status!: InvitationStatus",
+        "type_info": {
+          "Custom": {
+            "name": "invitation_status",
+            "kind": {
+              "Enum": [
+                "pending",
+                "accepted",
+                "declined",
+                "expired"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "expires_at!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 10,
+        "name": "created!",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "5d63c80f11d3405918566ded84eb6419d7badf71639baf7db3d2cd06662dc0d5"
+}

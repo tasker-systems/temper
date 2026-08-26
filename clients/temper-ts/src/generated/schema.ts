@@ -1021,6 +1021,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/invitations/mine/count": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Count the invitations addressed to you
+         * @description The counting half of `list_mine`, for callers that want the number and not the rows —
+         *     principally `temper warmup`, which runs at every session start. Its sibling returns each
+         *     invitation's redemption `token`; this returns an integer, so no bearer capability moves
+         *     across the wire to answer "how many?".
+         *
+         *     `team_slug` folds a second question into the same round trip: *of those, how many are to
+         *     this team?* Absent parameter, absent answer — `matching` is `null`, not `0`.
+         */
+        get: operations["count_mine"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/invocations": {
         parameters: {
             query?: never;
@@ -4845,6 +4874,41 @@ export interface components {
              *     `produces` field which could only ever be right for a one-arm plan.
              */
             returns: components["schemas"]["ReturnSpec"][];
+        };
+        /**
+         * @description How many invitations are waiting on the caller — the count-shaped answer to
+         *     `GET /api/invitations/mine/count`.
+         *
+         *     **This exists so that asking "how many?" does not require being handed them.** The
+         *     sibling `GET /api/invitations/mine` returns [`InviteeInvitation`] rows, each carrying a
+         *     redemption `token` — a bearer capability. It is legitimately the caller's to see, but
+         *     `temper warmup` runs from the `SessionStart` hook and needs only `.len()`, so every
+         *     session on every machine was moving credential material across the wire to produce an
+         *     integer. Reporting how many things await someone does not require transferring them.
+         *
+         *     **`matching` is `Option` because absent and zero are different answers.** `None` means
+         *     no team was asked about; `Some(0)` means one was and the caller holds no invitation to
+         *     it. Collapsing them would let "I did not ask" wear the same shape as "I asked and the
+         *     answer is no" — and the difference is exactly what decides whether `temper warmup` may
+         *     tell a reader that an invitation explains the context it could not read.
+         */
+        PendingInvitationCounts: {
+            /**
+             * Format: int32
+             * @description Every pending invitation addressed to the caller.
+             *
+             *     `i32`, not `i64`, and deliberately: these numbers cross to a browser, and ts-rs maps a
+             *     64-bit count to `bigint`, which cannot survive `JSON.stringify` on the boundary. The same
+             *     reasoning `EntryBounds::drawn` carries. A principal's pending invitations are not a
+             *     quantity that needs 64 bits.
+             */
+            count: number;
+            /**
+             * Format: int32
+             * @description Of those, how many are to the team named by the `team_slug` query parameter —
+             *     `None` when the parameter was not supplied.
+             */
+            matching?: number | null;
         };
         /**
          * @description One reason a plan is not executable. Static — no database was consulted.
@@ -9425,6 +9489,32 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InviteeInvitation"][];
+                };
+            };
+        };
+    };
+    count_mine: {
+        parameters: {
+            query?: {
+                /** @description Restrict the `matching` half of the answer to invitations to this team. */
+                team_slug?: string | null;
+            };
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description How many invitations are waiting on the caller */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PendingInvitationCounts"];
                 };
             };
         };

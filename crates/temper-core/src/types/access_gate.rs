@@ -171,3 +171,30 @@ pub struct SystemAccessDetails {
     pub request_url: Option<String>,
     pub cli_command: Option<String>,
 }
+
+/// How many principals are waiting in an operator queue — the count-shaped answer to
+/// `GET /api/access/admin/requests/count` and `GET /api/access/admin/reviews/count`.
+///
+/// **A count, not a queue.** `temper warmup` reports that a queue has something in it; the
+/// queue itself is one command away (`temper admin requests list`, `temper admin reviews
+/// list`). Fetching every row with its handle, display name, email and message so that
+/// `.len()` could be taken made a session-start primer carry other people's identities
+/// through the client on every session.
+///
+/// **A refusal is a `403`, never a zero.** These routes sit behind `require_system_admin`,
+/// exactly as their list siblings do, so a caller who may not see the queue is told so — and
+/// "not yours to see" stays distinguishable from "yours to see, and empty". A count endpoint
+/// that answered a non-admin with `0` would erase that difference silently, which is the one
+/// thing the primer's `Option` fields exist to prevent.
+///
+/// No `utoipa` derive, matching [`ReviewRequestWithProfile`] and every other type on this
+/// operator-only surface: those routes are mounted with a plain `.route(...)` and stay off the
+/// documented contract on purpose.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "access.ts"))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueueCount {
+    /// `i32` for the same reason as [`crate::types::invitation::PendingInvitationCounts::count`]: a 64-bit count reaches
+    /// TypeScript as `bigint` and does not survive `JSON.stringify`.
+    pub count: i32,
+}

@@ -1,4 +1,5 @@
 use serde::Serialize;
+use temper_core::context_ref::{parse_context_ref, ContextOwnerRef, ContextRef};
 use temper_core::types::config::CliSection;
 use temper_workflow::operations::decorated_ref;
 use temper_workflow::types::resource::{ResourceListParams, ResourceSortField, SortOrder};
@@ -72,6 +73,21 @@ pub struct WarmupTask {
 pub struct PendingSummary {
     /// Team invitations addressed to the caller's verified email.
     pub invitations: usize,
+    /// The team whose pending invitation would grant the context this run asked for — `None`
+    /// when nothing establishes that relation.
+    ///
+    /// **Not part of the primer's answer, so not serialized.** Every other field here is a fact
+    /// about the caller; this one is a fact about the caller *and this invocation's `--context`*,
+    /// and it exists for exactly one reader: `context_failure_hint`, deciding whether it has
+    /// grounds to say that an invitation explains the failure. Putting it in the JSON would
+    /// publish a context-relative answer inside a principal-scoped block.
+    ///
+    /// `Some` only when the server was asked about a specific team **and** answered that the
+    /// caller holds an invitation to it. A personal context, a UUID ref, an unrelated team, or a
+    /// team the caller holds nothing for all leave it `None` — the states differ in why, and none
+    /// of them establishes a cause.
+    #[serde(skip)]
+    pub granting_team: Option<String>,
     /// Join requests awaiting an admin — `None` when the queue was **not read**.
     ///
     /// `None` and `Some(0)` are different facts and are never collapsed: `Some(0)` means an admin
@@ -225,49 +241,80 @@ struct CloudState {
 /// `Entitlements.is_admin` test would be a second copy, free to drift from the gate it predicts —
 /// the same shape this repo retired when the client-side goal-status filter became a query
 /// predicate (see [`goal_from_row`]).
-/// **Named remainder — this counts by fetching.** All three reads return full rows (handles,
-/// emails, messages, and for invitations the redemption `token`) so that `.len()` can be taken, on
-/// a command wired into the session-start hook. Three round trips per warmup, two of which are a
-/// refusal for every non-admin — and a non-admin cannot be identified without asking, which is the
-/// whole design. Count endpoints would fix it and are not built here.
-async fn fetch_pending(client: &temper_client::TemperClient) -> Result<PendingSummary> {
-    let invitations = client
+/// **All three reads are count-shaped.** They were not: each fetched full rows (handles, emails,
+/// messages, and for invitations the redemption `token` — a bearer capability) so that `.len()`
+/// could be taken, on a command wired into the session-start hook. Reporting how many things await
+/// someone does not require transferring them, and it certainly does not require moving their
+/// credentials to do it.
+///
+/// Still three round trips, and two of them are still a refusal for every non-admin. That half is
+/// by design and stays: a caller's standing is the server's to state, and you cannot learn that
+/// someone is not an admin without asking. What is gone is the payload — three integers now, and
+/// no `token` on the wire at all.
+///
+/// `requested_team` exists for one reason: when this run's `--context` names a team, the invitation
+/// count is asked a second question in the same round trip — *how many of these are to that team?*
+/// That answer is the only thing that entitles [`context_failure_hint`] to say an invitation
+/// explains a context failure.
+async fn fetch_pending(
+    client: &temper_client::TemperClient,
+    requested_team: Option<&str>,
+) -> Result<PendingSummary> {
+    let counts = client
         .teams()
-        .list_my_invitations()
+        .count_my_invitations(requested_team)
         .await
-        .map_err(runtime::client_err_to_temper)?
-        .len();
+        .map_err(runtime::client_err_to_temper)?;
 
     // The operator queues degrade to "not read" independently. Only the invitation read above is
     // allowed to take the whole block down with it, because that count is what this block is FOR —
     // if it is unknown there is nothing worth reporting, and the hint has nothing to say.
     Ok(PendingSummary {
-        invitations,
-        join_requests: operator_count(
-            client.admin().list_requests().await.map(|r| r.len()),
-            "join request",
-        ),
-        review_requests: operator_count(
-            client.admin().list_reviews().await.map(|r| r.len()),
-            "reconsideration",
-        ),
+        invitations: counts.count.max(0) as usize,
+        // `matching` is `Some` only when a team was named, and `> 0` only when the server found
+        // one. Both conditions are the server's answer, not a client-side guess about it.
+        granting_team: requested_team
+            .filter(|_| counts.matching.is_some_and(|m| m > 0))
+            .map(str::to_owned),
+        join_requests: operator_count(client.admin().count_requests().await, "join request"),
+        review_requests: operator_count(client.admin().count_reviews().await, "reconsideration"),
     })
+}
+
+/// The team a context ref is owned by, when it names one.
+///
+/// Parsing is [`parse_context_ref`]'s job, not this module's: `@me/x`, `@handle/x`, `+team/x` and
+/// a bare UUID are one grammar with one parser, and a second copy here would be free to disagree
+/// with the one the server resolves against. Every non-team form yields `None`, which is the
+/// honest answer — **no team invitation can grant a personal context**, and a UUID names a context
+/// whose owner this command could not read, which is why it is failing.
+fn requested_team(context_ref: &str) -> Option<String> {
+    match parse_context_ref(context_ref) {
+        Ok(ContextRef::OwnerSlug {
+            owner: ContextOwnerRef::Team(slug),
+            ..
+        }) => Some(slug),
+        _ => None,
+    }
 }
 
 /// Map an operator-queue read to a count the primer can report.
 ///
-/// A `403` — in **either** of its arms — is the server saying "not yours to see", which is `None`.
+/// A `403` — in **any** of its three arms — is the server saying "not yours to see", which is
+/// `None`. Three, not two: `SystemAccessRequired` is checked before `ForbiddenDetail` and
+/// `Forbidden` and does not carry "Forbidden" in its name, which is how it was missed once. It is
+/// the arm the not-yet-admitted principal meets, and therefore the only one the invitee ever sees.
 /// Every other error propagates: a transport failure must never reach the caller wearing the same
 /// `None` a refusal wears, because that `None` is a claim about the caller's *role*, not about the
 /// network. Propagation out of *this* function is what stops `Forbidden` widening into "any failure
 /// means not-an-admin"; what [`build_warmup_result`] then does with the error is a separate
 /// decision, taken in [`degrade_pending`].
 fn admin_count(
-    result: std::result::Result<usize, temper_client::error::ClientError>,
+    result: std::result::Result<i32, temper_client::error::ClientError>,
 ) -> Result<Option<usize>> {
     use temper_client::error::ClientError;
     match result {
-        Ok(n) => Ok(Some(n)),
+        Ok(n) => Ok(Some(n.max(0) as usize)),
         Err(
             ClientError::Forbidden
             | ClientError::ForbiddenDetail { .. }
@@ -283,12 +330,13 @@ fn admin_count(
 /// silently wear a refusal's `None`, and this wrapper decides — separately, and out loud — that a
 /// primer should not lose the rest of its answer over one secondary queue.
 ///
-/// The concrete case is version skew, which this very change guarantees for a window: a CLI that
-/// knows `/api/access/admin/reviews` pointed at an API that does not yet serve it gets a `404`, and
-/// without this the caller's own invitation count — read successfully, moments earlier — would be
-/// thrown away on every session start.
+/// The concrete case is version skew, which this change re-creates for a fresh window exactly as
+/// the one that introduced these queues did: a CLI that knows `/api/access/admin/requests/count`
+/// pointed at an API serving only the uncounted list gets a `404`, and without this the caller's
+/// own invitation count — read successfully, moments earlier — would be thrown away on every
+/// session start.
 fn operator_count(
-    result: std::result::Result<usize, temper_client::error::ClientError>,
+    result: std::result::Result<i32, temper_client::error::ClientError>,
     queue: &str,
 ) -> Option<usize> {
     match admin_count(result) {
@@ -334,12 +382,44 @@ fn degrade_pending(result: Result<PendingSummary>) -> Option<PendingSummary> {
 /// **It stays quiet when there is nothing to say** — zero invitations, or a pending block that
 /// could not be read. A hint on every failed warmup is noise, and noise is how a real hint gets
 /// ignored. The `None` case is the sharper one: not knowing is not evidence of an invitation.
+///
+/// # Two lines, and the second one has to be earned
+///
+/// - the **waiting line** reports what is waiting. It is a fact about the caller, true regardless
+///   of why this command failed, and it is what puts `temper invitations` in front of a reader who
+///   cannot reach anything else.
+/// - the **grant line** says an invitation explains *this* failure. That is a claim about cause,
+///   and it is printed only when [`PendingSummary::granting_team`] carries the server's answer
+///   that the caller holds an invitation to the very team that owns the requested context.
+///
+/// This shipped saying the second thing whenever the first was true, hedged to "may be what
+/// grants you" — so `temper warmup --context @me/typo` told a reader that a team invitation might
+/// explain a *personal* context, which no team invitation can ever grant, and an invitation to
+/// `+acme-eng` was offered as the explanation for `+other-team/roadmap`. The hedge was doing the
+/// work of a check. It is read at the moment a reader has least context to doubt it, which is what
+/// makes a wrong hint worse than no hint.
+///
+/// **The un-established case keeps the waiting line rather than falling silent.** A newcomer whose
+/// one invitation is to a different team than the context they asked for still has an invitation
+/// waiting, and on a context failure this stderr line is the *only* place it appears — the primer
+/// never renders, because the command fails. Dropping to silence would protect them from a wrong
+/// cause by also withholding the true fact.
 fn context_failure_hint(pending: Option<&PendingSummary>) -> Option<String> {
-    let n = pending.map(|p| p.invitations).filter(|n| *n > 0)?;
+    let pending = pending?;
+    let n = pending.invitations;
+    if n == 0 {
+        return None;
+    }
+
     let plural = if n == 1 { "invitation" } else { "invitations" };
+    let waiting_line = format!("! {n} team {plural} waiting on you — run `temper invitations`.");
+
+    let Some(team) = pending.granting_team.as_deref() else {
+        return Some(waiting_line);
+    };
     Some(format!(
-        "! {n} team {plural} waiting on you — run `temper invitations`.\n  \
-         Accepting one may be what grants you the context this command could not read."
+        "{waiting_line}\n  \
+         Accepting your invitation to +{team} grants you the context this command could not read."
     ))
 }
 
@@ -356,8 +436,14 @@ fn context_failure_hint(pending: Option<&PendingSummary>) -> Option<String> {
 /// twice. The pending read rides the closure that is already open.
 ///
 /// **Pending is read FIRST**, and that ordering is load-bearing rather than incidental: it does not
-/// depend on the context, so reading it first is what lets [`context_failure_hint`] survive the
-/// context reads failing. It costs nothing — the same single request either way.
+/// depend on the context being *readable*, so reading it first is what lets
+/// [`context_failure_hint`] survive the context reads failing. It costs nothing — the same single
+/// request either way.
+///
+/// It does now consult the context *ref*, which is not the same thing: [`requested_team`] is pure
+/// string parsing over the argument the caller typed, needing no server round trip and no
+/// permission to read anything. The invitation count carries that team along and comes back saying
+/// whether one of the caller's invitations is to it.
 ///
 fn collect_standing_state(context_ref: &str, limits: WarmupLimits) -> Result<CloudState> {
     // Goals: the server filters to `status = active` and `total` counts the *filtered*
@@ -385,13 +471,17 @@ fn collect_standing_state(context_ref: &str, limits: WarmupLimits) -> Result<Clo
         ..Default::default()
     };
 
+    // Parsed once, here, where the ref the caller typed is still in hand.
+    let requested_team = requested_team(context_ref);
+
     runtime::with_client(move |client| {
         let goal_params = goal_params.clone();
         let session_params = session_params.clone();
+        let requested_team = requested_team.clone();
         Box::pin(async move {
-            // First, and deliberately: this read is context-independent, so it is the only thing
-            // still true if the context reads below fail.
-            let pending = degrade_pending(fetch_pending(client).await);
+            // First, and deliberately: this read does not need the context to be readable, so it
+            // is the only thing still true if the context reads below fail.
+            let pending = degrade_pending(fetch_pending(client, requested_team.as_deref()).await);
 
             let goal_response = match client.resources().list(&goal_params).await {
                 Ok(r) => r,
@@ -518,9 +608,23 @@ mod tests {
 
     use temper_client::error::ClientError;
 
+    /// Invitations waiting, and **nothing establishing that any of them grants the context** —
+    /// the ordinary state, and the one the shipped hint got wrong.
     fn pending(invitations: usize) -> PendingSummary {
         PendingSummary {
             invitations,
+            granting_team: None,
+            join_requests: None,
+            review_requests: None,
+        }
+    }
+
+    /// Invitations waiting, one of them to the team that owns the requested context — the server
+    /// having answered that the relation holds.
+    fn pending_granting(invitations: usize, team: &str) -> PendingSummary {
+        PendingSummary {
+            invitations,
+            granting_team: Some(team.to_string()),
             join_requests: None,
             review_requests: None,
         }
@@ -631,10 +735,73 @@ mod tests {
         );
     }
 
+    /// **The defect this fixes, stated as a test.** An invitation waiting is not, on its own,
+    /// an explanation for a context that could not be read — and the shipped hint said it was,
+    /// hedged to "may be what grants you", on every failure where any invitation existed.
+    ///
+    /// `pending()` is the un-established state: invitations exist, nothing relates them to what
+    /// was asked for. What must be absent is the CAUSAL sentence, not the notice — see
+    /// `the_unexplained_case_still_says_what_is_waiting` for the half that must survive.
+    #[test]
+    fn no_cause_is_offered_for_a_context_nothing_was_shown_to_grant() {
+        let hint = context_failure_hint(Some(&pending(1))).unwrap();
+        assert!(
+            !hint.contains("grants you the context"),
+            "a cause must be established before it is named: {hint}"
+        );
+        assert!(
+            !hint.contains("may be"),
+            "and a hedge is not a substitute for the check: {hint}"
+        );
+    }
+
+    /// **The other half, and the reason silence was the wrong answer.** A newcomer whose one
+    /// invitation is to a different team than the context they asked for still has an invitation
+    /// waiting — and when `warmup` fails on its context, this stderr line is the only place it
+    /// appears, because the primer never renders. Refusing to name a cause must not turn into
+    /// withholding the fact.
+    #[test]
+    fn the_unexplained_case_still_says_what_is_waiting() {
+        let hint =
+            context_failure_hint(Some(&pending(1))).expect("the notice survives the missing cause");
+        assert!(hint.contains("1 team invitation waiting on you"), "{hint}");
+        assert!(hint.contains("temper invitations"), "{hint}");
+    }
+
+    /// **When the relation IS established, the hint says so — definitely, and names it.**
+    ///
+    /// `granting_team` carries the server's answer that one of the caller's invitations is to the
+    /// team owning the requested context. That is a checked cause, so the sentence is flat: no
+    /// "may be", and the team the reader must accept an invitation to is named rather than left
+    /// as "one" of an unnamed set.
+    #[test]
+    fn an_established_cause_is_named_without_a_hedge() {
+        let hint = context_failure_hint(Some(&pending_granting(1, "acme-eng"))).unwrap();
+        assert!(hint.contains("1 team invitation waiting on you"), "{hint}");
+        assert!(
+            hint.contains("Accepting your invitation to +acme-eng grants you the context"),
+            "the established cause is stated definitely, and names which invitation: {hint}"
+        );
+        assert!(!hint.contains("may be"), "no hedge is needed now: {hint}");
+    }
+
     #[test]
     fn the_hint_is_plural_when_it_should_be() {
         let hint = context_failure_hint(Some(&pending(3))).unwrap();
         assert!(hint.contains("3 team invitations"), "{hint}");
+
+        // The waiting line counts everything waiting; the grant line names the ONE team that
+        // explains this failure. Three invitations of which one grants the context is the case
+        // where conflating the two numbers would misreport both.
+        let granting = context_failure_hint(Some(&pending_granting(3, "acme-eng"))).unwrap();
+        assert!(
+            granting.contains("3 team invitations waiting"),
+            "{granting}"
+        );
+        assert!(
+            granting.contains("your invitation to +acme-eng"),
+            "{granting}"
+        );
     }
 
     /// **Both silences.** A hint that fires on every failed warmup is noise, and noise is how a
@@ -646,6 +813,36 @@ mod tests {
     fn the_hint_stays_quiet_when_there_is_nothing_to_say() {
         assert!(context_failure_hint(Some(&pending(0))).is_none());
         assert!(context_failure_hint(None).is_none());
+    }
+
+    /// **Which refs can a team invitation possibly explain?** Only one shape: a context owned by
+    /// a team. This is the test that decides whether the count read even asks the question, so
+    /// the negative cases matter more than the positive one.
+    ///
+    /// `@me/...` and `@handle/...` are personal contexts — **no team invitation can ever grant
+    /// one**, which is precisely the case the shipped hint got wrong. A bare UUID names a context
+    /// whose owner this command could not read; that is why it is failing, so nothing here can
+    /// establish a relation to it. An unparseable ref answers nothing rather than erroring: the
+    /// command is already failing and the hint is not the place to re-report why.
+    #[test]
+    fn only_a_team_owned_context_can_be_granted_by_an_invitation() {
+        assert_eq!(
+            requested_team("+acme-eng/work"),
+            Some("acme-eng".to_string())
+        );
+
+        assert_eq!(requested_team("@me/typo"), None, "a personal context");
+        assert_eq!(requested_team("@someone/notes"), None, "someone else's");
+        assert_eq!(
+            requested_team("019fbb77-72a3-72e1-bbbd-13eb6aa64982"),
+            None,
+            "a UUID names a context whose owner could not be read"
+        );
+        assert_eq!(
+            requested_team("not-a-ref"),
+            None,
+            "and garbage asks nothing"
+        );
     }
 
     /// A `ResourceView` carrying its workflow values where they actually live.

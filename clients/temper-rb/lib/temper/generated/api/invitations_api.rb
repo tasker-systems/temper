@@ -92,6 +92,73 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Count the invitations addressed to you
+    # The counting half of `list_mine`, for callers that want the number and not the rows — principally `temper warmup`, which runs at every session start. Its sibling returns each invitation's redemption `token`; this returns an integer, so no bearer capability moves across the wire to answer \"how many?\".  `team_slug` folds a second question into the same round trip: *of those, how many are to this team?* Absent parameter, absent answer — `matching` is `null`, not `0`.
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :team_slug Restrict the &#x60;matching&#x60; half of the answer to invitations to this team.
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [PendingInvitationCounts]
+    def count_mine(opts = {})
+      data, _status_code, _headers = count_mine_with_http_info(opts)
+      data
+    end
+
+    # Count the invitations addressed to you
+    # The counting half of &#x60;list_mine&#x60;, for callers that want the number and not the rows — principally &#x60;temper warmup&#x60;, which runs at every session start. Its sibling returns each invitation&#39;s redemption &#x60;token&#x60;; this returns an integer, so no bearer capability moves across the wire to answer \&quot;how many?\&quot;.  &#x60;team_slug&#x60; folds a second question into the same round trip: *of those, how many are to this team?* Absent parameter, absent answer — &#x60;matching&#x60; is &#x60;null&#x60;, not &#x60;0&#x60;.
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :team_slug Restrict the &#x60;matching&#x60; half of the answer to invitations to this team.
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(PendingInvitationCounts, Integer, Hash)>] PendingInvitationCounts data, response status code and response headers
+    def count_mine_with_http_info(opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: InvitationsApi.count_mine ...'
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/invitations/mine/count'
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+      query_params[:'team_slug'] = opts[:'team_slug'] if !opts[:'team_slug'].nil?
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body]
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'PendingInvitationCounts'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"InvitationsApi.count_mine",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:GET, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: InvitationsApi#count_mine\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
     # Invite someone to a team
     # @param id [String] Team ID
     # @param create_invitation_request [CreateInvitationRequest] 

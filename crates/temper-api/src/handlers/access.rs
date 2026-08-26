@@ -7,7 +7,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use temper_core::types::access_gate::{
-    JoinRequest, JoinRequestStatus, JoinRequestWithProfile, PublicSystemSettings,
+    JoinRequest, JoinRequestStatus, JoinRequestWithProfile, PublicSystemSettings, QueueCount,
     ReviewRequestWithProfile, SystemSettings,
 };
 use temper_core::types::admin::{DemoteAdminRequest, PromoteAdminRequest, UpdateSettingsRequest};
@@ -208,6 +208,21 @@ pub async fn list_pending(
         .map(Json)
 }
 
+/// GET /api/access/admin/requests/count — how many join requests are outstanding (admin only).
+///
+/// [`list_pending`] without the rows, for `temper warmup`. Same admin proof, so a caller who may
+/// not read the queue still gets a `403` — never a `0`, which would tell them the queue is empty
+/// while refusing to let them see it.
+pub async fn count_pending(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> ApiResult<Json<QueueCount>> {
+    let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
+    access_service::count_pending_requests(&state.pool, &admin)
+        .await
+        .map(|count| Json(QueueCount { count }))
+}
+
 /// PATCH /api/access/admin/requests/:id — approve or reject a join request (admin only).
 pub async fn review_request(
     State(state): State<AppState>,
@@ -240,6 +255,19 @@ pub async fn list_reviews(
     access_service::list_open_review_requests(&state.pool, &admin)
         .await
         .map(Json)
+}
+
+/// GET /api/access/admin/reviews/count — how many reconsiderations are open (admin only).
+///
+/// [`list_reviews`] without the rows. Same admin proof, same `403`-not-`0` rule as its neighbour.
+pub async fn count_reviews(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> ApiResult<Json<QueueCount>> {
+    let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
+    access_service::count_open_review_requests(&state.pool, &admin)
+        .await
+        .map(|count| Json(QueueCount { count }))
 }
 
 /// PATCH /api/access/admin/reviews/:id — record that a reconsideration was handled.
