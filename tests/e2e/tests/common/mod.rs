@@ -8,6 +8,7 @@
 pub mod tracing_layer;
 
 use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 
 use chrono::{Duration, Utc};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
@@ -631,6 +632,41 @@ async fn clean_and_seed(_pool: &PgPool) {}
 
 /// Build an `E2eTestApp` from a pool provided by `#[sqlx::test]`.
 pub async fn setup(pool: PgPool) -> E2eTestApp {
+    setup_with_recorder(pool, None).await
+}
+
+/// Every request path the test server received, in order.
+///
+/// A **wire-level** record: the CLI runs as a real subprocess against a real socket, so this is
+/// what actually crossed it, not what the client library believes it sent. That distinction is
+/// the whole point — a test asserting on the CLI's own bookkeeping cannot witness a claim about
+/// what was transferred.
+pub type RequestLog = Arc<Mutex<Vec<String>>>;
+
+/// [`setup`], plus a record of every path the server is asked for.
+///
+/// Reach for this when the property under test is *which route was called* — most sharply, when a
+/// route must **not** be. Asserting that some endpoint was never touched is not expressible any
+/// other way: the absence of a request leaves no trace in a response, a database, or a process's
+/// output.
+pub async fn setup_recording(pool: PgPool) -> (E2eTestApp, RequestLog) {
+    let log: RequestLog = Arc::new(Mutex::new(Vec::new()));
+    let app = setup_with_recorder(pool, Some(log.clone())).await;
+    (app, log)
+}
+
+async fn record_request_path(
+    axum::extract::State(log): axum::extract::State<RequestLog>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    log.lock()
+        .expect("request log is not poisoned")
+        .push(req.uri().path().to_string());
+    next.run(req).await
+}
+
+async fn setup_with_recorder(pool: PgPool, recorder: Option<RequestLog>) -> E2eTestApp {
     clean_and_seed(&pool).await;
 
     // --- Server setup ---
@@ -660,6 +696,13 @@ pub async fn setup(pool: PgPool) -> E2eTestApp {
 
     let state = AppState::new(pool.clone(), jwks_store, api_config);
     let app = create_app(state);
+    let app = match recorder {
+        Some(log) => app.layer(axum::middleware::from_fn_with_state(
+            log,
+            record_request_path,
+        )),
+        None => app,
+    };
 
     let listener = TcpListener::bind("127.0.0.1:0")
         .await

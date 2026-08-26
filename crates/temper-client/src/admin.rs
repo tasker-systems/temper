@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::access_gate::{
-    JoinRequest, JoinRequestStatus, JoinRequestWithProfile, ReviewRequestWithProfile,
+    JoinRequest, JoinRequestStatus, JoinRequestWithProfile, QueueCount, ReviewRequestWithProfile,
     SystemSettings,
 };
 use temper_core::types::admin::{
@@ -109,6 +109,36 @@ impl<'a> AdminClient<'a> {
         self.http
             .send_json(&Method::GET, path, req, Some(&token))
             .await
+    }
+
+    /// GET /api/access/admin/requests/count — how many join requests are outstanding.
+    ///
+    /// [`Self::list_requests`] without the rows, for callers that report that a queue has
+    /// something in it rather than answering it. A non-admin is refused with the same `403` the
+    /// list raises, so "not yours to see" never arrives as a `0`.
+    pub async fn count_requests(&self) -> Result<i32> {
+        let token = self.http.resolve_token()?;
+        let path = "/api/access/admin/requests/count";
+        let req = self.http.get(path);
+        let body: QueueCount = self
+            .http
+            .send_json(&Method::GET, path, req, Some(&token))
+            .await?;
+        Ok(body.count)
+    }
+
+    /// GET /api/access/admin/reviews/count — how many reconsiderations are open.
+    ///
+    /// [`Self::list_reviews`] without the rows; same refusal posture as [`Self::count_requests`].
+    pub async fn count_reviews(&self) -> Result<i32> {
+        let token = self.http.resolve_token()?;
+        let path = "/api/access/admin/reviews/count";
+        let req = self.http.get(path);
+        let body: QueueCount = self
+            .http
+            .send_json(&Method::GET, path, req, Some(&token))
+            .await?;
+        Ok(body.count)
     }
 
     /// Record that a reconsideration was handled (admin only).
