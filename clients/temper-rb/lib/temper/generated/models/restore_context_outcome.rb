@@ -28,7 +28,7 @@ module Temper::Generated
     # The address after restore — the name's canonical slug, suffixed only if something else has since taken it.
     attr_accessor :slug
 
-    # True when the original address was taken and restore landed on a suffix. Reported rather than applied silently: handing back a different address without saying so is the failure mode `rename` explicitly refuses.
+    # True when the address this restore hands back differs from the address the context was retired under. That includes the case where the original address had been freed meanwhile and restore landed on it — the caller still moves off the ref they retired with, so it is still a change to report.  Reported rather than applied silently: handing back a different address without saying so is the failure mode `rename` explicitly refuses. The baseline is the `from_slug` recorded on the `context_retired` event; a context retired before that event existed has no recorded baseline and reports `true`, because nothing proves the address was preserved. Witness: `restore_reports_a_change_when_it_lands_on_a_freed_sibling_address`.
     attr_accessor :slug_changed
 
     # Attribute mapping from ruby-style variable name to JSON key.

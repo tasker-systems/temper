@@ -1271,6 +1271,29 @@ pub async fn restore(
     let restored_slug =
         next_unique_context_slug(pool, &cur.owner_table, cur.owner_id, &cur.name).await?;
 
+    // The address the caller retired UNDER, read off the ledger entry that recorded it: [`retire`]
+    // passes `cur.slug` to `retire_context_with` as `from_slug`, which is exactly the pre-mangle
+    // address and rides in the `context_retired` payload.
+    //
+    // Anchor-scoped, the shape `event_service::latest_event_id_for_context` uses (`_event_append`
+    // anchors context events to `('kb_contexts', context_id)`), most recent first because a
+    // context can be retired and restored more than once and only the last retirement is the one
+    // being undone.
+    let retired_from_slug = sqlx::query_scalar!(
+        r#"SELECT e.payload->>'from_slug' AS from_slug
+             FROM kb_events e
+             JOIN kb_event_types t ON t.id = e.event_type_id
+            WHERE t.name = 'context_retired'
+              AND e.producing_anchor_table = 'kb_contexts'
+              AND e.producing_anchor_id = $1
+            ORDER BY e.occurred_at DESC, e.id DESC
+            LIMIT 1"#,
+        context_id,
+    )
+    .fetch_optional(pool)
+    .await?
+    .flatten();
+
     let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -1285,9 +1308,22 @@ pub async fn restore(
     .await
     .map_err(map_context_write_err)?;
 
-    // `slug_changed` compares against what the caller would expect back — the plain sluggification
-    // of the name — not against whatever retire mangled it to.
-    let slug_changed = restored_slug != sluggify(&cur.name);
+    // The baseline is the retired-under address, NOT `sluggify(&cur.name)`. `create` hands out
+    // suffixed slugs for duplicate names, so a context named "Notes" routinely lives at `notes-2`,
+    // and the name's canonical slug then answers a question nobody asked — it calls a restore that
+    // landed exactly where it started "changed", and, worse, calls a restore that handed back a
+    // DIFFERENT address "unchanged". The second is the silent re-addressing this field exists to
+    // refuse. Witnessed by `restore_reports_a_change_when_it_lands_on_a_freed_sibling_address` and
+    // `restore_reports_no_change_when_it_lands_back_on_its_suffixed_address`.
+    //
+    // No ledger entry: the context was retired by the un-evented path that shipped earlier on this
+    // branch, before migration `20260825000040` added `context_retire`. The address it was retired
+    // under is recorded nowhere, so the answer that cannot mislead is "assume it moved" — `true`
+    // sends the caller to the `slug` this same response carries, while `false` would assert an
+    // address was preserved that nothing on disk can vouch for. The arm is bounded rather than
+    // open-ended: every retirement since that migration appends the event, so it only ever covers
+    // rows retired before it.
+    let slug_changed = retired_from_slug.is_none_or(|from| restored_slug != from);
 
     // Composed from the already-decorated `cur.owner_ref` — never through `decorated_context_ref`,
     // whose `owner_addressable` parameter is the *bare* handle/team slug and would yield
@@ -2401,6 +2437,75 @@ mod tests {
         assert!(
             out.slug_changed,
             "landing on a suffix must be reported, not applied silently"
+        );
+    }
+
+    /// The baseline is the address the caller RETIRED UNDER, not the name's canonical slug.
+    /// `restore_into_a_taken_address_suffixes_and_reports_it` cannot see the difference: its
+    /// context is named `scratch`, where the two coincide by construction. Here they do not —
+    /// two contexts share the name "Notes", so the
+    /// second lives at `notes-2`. Retire both, restore the second, and it lands on the freed
+    /// `notes`: the caller handed in `@alice/notes-2` and gets `@alice/notes` back. Against
+    /// `sluggify("Notes")` (= `notes`) that reads as UNCHANGED — the silent re-addressing this
+    /// field exists to refuse.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn restore_reports_a_change_when_it_lands_on_a_freed_sibling_address(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let first = create(&pool, alice, "kb_profiles", *alice, "Notes")
+            .await
+            .expect("create the first Notes");
+        let second = create(&pool, alice, "kb_profiles", *alice, "Notes")
+            .await
+            .expect("create the second Notes");
+        assert_eq!(first.slug, "notes");
+        assert_eq!(
+            second.slug, "notes-2",
+            "the same name a second time is suffixed, got {:?}",
+            second.slug
+        );
+
+        retire(&pool, alice, *second.id)
+            .await
+            .expect("retire notes-2");
+        // Retiring the first frees `notes`, so the restore below can reclaim it.
+        retire(&pool, alice, *first.id).await.expect("retire notes");
+
+        let out = restore(&pool, alice, *second.id).await.expect("restore");
+        assert_eq!(out.slug, "notes", "got slug {:?}", out.slug);
+        assert_eq!(out.context_ref, "@alice/notes");
+        assert!(
+            out.slug_changed,
+            "retired under `notes-2`, handed back `notes` — that must be reported"
+        );
+    }
+
+    /// The mirror: landing back on the suffixed address it was retired under is NO change, even
+    /// though that address is not the name's canonical slug. `first` stays live and keeps `notes`,
+    /// so the restore returns to `notes-2` — the exact address the caller retired. Against
+    /// `sluggify("Notes")` this reads as changed, sending the caller to re-address a context that
+    /// never moved.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn restore_reports_no_change_when_it_lands_back_on_its_suffixed_address(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let first = create(&pool, alice, "kb_profiles", *alice, "Notes")
+            .await
+            .expect("create the first Notes");
+        let second = create(&pool, alice, "kb_profiles", *alice, "Notes")
+            .await
+            .expect("create the second Notes");
+        assert_eq!(first.slug, "notes");
+        assert_eq!(second.slug, "notes-2");
+
+        retire(&pool, alice, *second.id)
+            .await
+            .expect("retire notes-2");
+
+        let out = restore(&pool, alice, *second.id).await.expect("restore");
+        assert_eq!(out.slug, "notes-2", "got slug {:?}", out.slug);
+        assert_eq!(out.context_ref, "@alice/notes-2");
+        assert!(
+            !out.slug_changed,
+            "back on the address it was retired under — nothing to report"
         );
     }
 

@@ -14794,7 +14794,7 @@
           },
           "slug_changed": {
             "type": "boolean",
-            "description": "True when the original address was taken and restore landed on a suffix.\nReported rather than applied silently: handing back a different address without\nsaying so is the failure mode `rename` explicitly refuses."
+            "description": "True when the address this restore hands back differs from the address the context\nwas retired under. That includes the case where the original address had been freed\nmeanwhile and restore landed on it — the caller still moves off the ref they retired\nwith, so it is still a change to report.\n\nReported rather than applied silently: handing back a different address without\nsaying so is the failure mode `rename` explicitly refuses. The baseline is the\n`from_slug` recorded on the `context_retired` event; a context retired before that\nevent existed has no recorded baseline and reports `true`, because nothing proves the\naddress was preserved. Witness:\n`restore_reports_a_change_when_it_lands_on_a_freed_sibling_address`."
           }
         }
       },
