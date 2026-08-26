@@ -108,7 +108,7 @@ h.owner_profile_id = p_profile`. `resources_visible_to` has the same owner-first
 across its six arms.
 
 And re-homing write-gates the **destination only**
-(`crates/temper-services/src/backend/db_backend.rs:1993-1995`):
+(`check_context_authorable`'s re-home call in `crates/temper-services/src/backend/db_backend.rs`):
 
 ```rust
 if let Some(ctx_to) = cmd.move_to.as_ref().and_then(|m| m.context_to) {
@@ -134,13 +134,13 @@ Its header states the semantics we are copying:
 The write half is a plain, un-evented `UPDATE`
 (`crates/temper-services/src/services/team_service.rs:393-394`). No `team_deleted` event
 type exists anywhere in `crates/` or `migrations/`. A soft-deleted team is also not
-updatable — `team_service.rs:360` carries `AND is_active` in the update's `WHERE`, so the
+updatable — `team_service::update_team`'s `WHERE` carries `AND is_active` in the update's `WHERE`, so the
 freeze falls out of the same flag.
 
 ### 1.6 Why a hard delete could not ship
 
 `kb_contexts` is a replay **input** table, restored verbatim
-(`crates/temper-substrate/src/replay.rs:101-125`), and `kb_events` is one too. Both
+(`INPUT_TABLES` in `crates/temper-substrate/src/replay.rs`), and `kb_events` is one too. Both
 context projectors raise on a missing row:
 
 ```
@@ -151,7 +151,7 @@ migrations/20260715000010_context_reassign_fns.sql:28
     IF NOT FOUND THEN RAISE EXCEPTION 'context_reassign: context % not found', v_context; END IF;
 ```
 
-and `replay.rs:621-637` calls them unguarded. So `create → rename → hard delete → replay`
+and `replay::replay`'s projector arms call them unguarded. So `create → rename → hard delete → replay`
 aborts. A soft-delete has no such problem: the flipped row rides in with the verbatim
 restore, and no projector ever sees an absent context. **The property that made hard
 delete unsafe is the same one that makes retirement safe.**
@@ -186,11 +186,31 @@ row is born `true`.
 ### 2.2 Two floors, two `CREATE OR REPLACE`s
 
 **Read** — inside `contexts_readable_by_teams`. Arms 1 and 2 take `AND c.is_active`; arms
-3 and 4 gain an `EXISTS (SELECT 1 FROM kb_contexts c WHERE c.id = … AND c.is_active)`,
+3 and 4 gain a `NOT EXISTS (SELECT 1 FROM kb_contexts c WHERE c.id = … AND NOT c.is_active)`,
 because they never join the context row. Because the other three read predicates are thin
 delegations (§1.2), this single edit floors `context_visible_to`,
 `context_readable_by_profile`, `contexts_readable_by`, `resources_visible_to`, and every
 graph read that gates through them.
+
+**The double negative on arms 3 and 4 is load-bearing, not a slip.** This section originally
+specified the positive spelling, `EXISTS (… AND c.is_active)`. That is wrong, and a pre-existing
+test caught it: arms 3 and 4 read `kb_team_contexts` and `kb_access_grants`, and `kb_access_grants`
+has **no** foreign key to `kb_contexts`, so a grant can name an id with no row behind it — which
+both arms admitted before this change. The positive spelling silently revokes those, which is a
+behaviour change nobody asked for;
+`access_grants_read_wiring::explicit_context_read_grant_confers_context_and_resources` uses a
+synthetic anchor and fails under it. The requirement here is narrow — *do not admit a context that
+is RETIRED* — and a context that does not exist is a different question this migration must not
+answer:
+
+| context row | retired row exists? | `NOT EXISTS` | result |
+|---|---|---|---|
+| active | no | true | admit (unchanged) |
+| retired | yes | false | **deny** (the floor) |
+| no row at all | no | true | admit (unchanged, deliberately) |
+
+(`kb_team_contexts` *does* have an FK to `kb_contexts` with `ON DELETE CASCADE`, so its third row
+is unreachable; arm 3 takes the same spelling for symmetry with arm 4, where it is required.)
 
 **Write** — inside `context_authorable_by_profile`, the same shape its team arm already
 uses for `kb_teams.is_active`.
@@ -202,25 +222,36 @@ the four read arms anywhere.
 
 `DELETE /api/contexts/{id}` — the verb teams already use for a soft-delete
 (`handlers::teams::delete`). Gated by `ContextAdminAuthority`
-(`crates/temper-services/src/authz/context_admin.rs:65-85`): administers the context, or
+(`ContextAdminAuthority::resolve`, `crates/temper-services/src/authz/context_admin.rs`): administers the context, or
 manages its owning team as owner/maintainer, or is an instance administrator. Auth runs
 before any write.
 
-One statement, which §2.8 later routes through the event ledger — the raw form is kept
-here because it is what the projector half still executes:
+One statement, which §2.8 routes through the event ledger. The mutation half
+(`context_retire`) carries the no-op refusal; the projector half (`_project_context_retired`) is an
+unconditional re-apply, because on replay it must be idempotent against a row already carrying the
+retired state:
 
 ```sql
+-- context_retire (mutation half): refuses a no-op before appending
+IF NOT v_is_active THEN
+    RAISE EXCEPTION 'context_retire: context % is already retired', v_context
+          USING ERRCODE = 'P0002';
+END IF;
+
+-- _project_context_retired (projector half): unconditional, idempotent under replay
 UPDATE kb_contexts
-   SET is_active = false, slug = <mangled>
- WHERE id = $1 AND is_active
+   SET is_active = false, slug = p_payload->>'to_slug'
+ WHERE id = v_context;
 ```
+
+Adding `AND is_active` to the projector would break the re-apply.
 
 **The slug is mangled; the name is not.** `slug` is an address and may be lossy; `name` is
 a display label and may not — the split rename's design already rests on. Mangling only
 the address frees `@me/scratch` for immediate reuse (the outcome we want) while leaving
 the `UNIQUE` constraint in place (the additive class we want). The retired row still reads
-as `scratch` in a retired listing; only its address moves, to
-`<slug>-retired-<short-id>`.
+as `scratch` in a retired listing; only its address moves, to `<slug>-retired` — suffixed
+`-2`, `-3`, … by `next_unique_context_slug` if that address is itself taken.
 
 Nothing is swept and nothing cascades. Resources, homes, regions, edges, shares, grants
 and connections all survive untouched. **There is no dependents guard** — retiring a
@@ -239,7 +270,7 @@ Consequences, stated rather than discovered later:
 
 `POST /api/contexts/{id}/restore`, same gate, same shape (evented — §2.8). The address is
 re-derived from the untouched `name` through `next_unique_context_slug`
-(`crates/temper-services/src/services/context_service.rs:374`) — the incumbent `create`
+(`next_unique_context_slug` in `crates/temper-services/src/services/context_service.rs`) — the incumbent `create`
 already calls for exactly this collision, with its `notes` → `notes-2` auto-suffix.
 
 If a new context claimed the original slug meanwhile, restore lands on the suffixed
@@ -251,9 +282,11 @@ address silently is the failure mode `rename` explicitly refuses; reporting it i
 Retirement moves a context out of reach of the machinery that addresses it, in two ways at
 once, and both must be answered or `restore` cannot resolve its own argument:
 
-1. The read floor (§2.2) hides it, and every CLI context verb resolves refs through
-   `resolve_context_id_for_read`
-   (`crates/temper-cli/src/commands/context_cmd.rs:360`), which gates on the read axis.
+1. The read floor (§2.2) hides it, and the CLI's read-axis resolver
+   `resolve_context_id_for_read` (`crates/temper-cli/src/commands/context_cmd.rs`) gates on the
+   read axis, as does the stricter `resolve_context_id` that `share`/`unshare` use. (Not *every*
+   context verb goes through the same resolver — there are three, and `restore` needs a fourth
+   behaviour, which is the point of this section.)
 2. The slug was mangled (§2.3), so the ref the operator remembers — `@me/scratch` — no
    longer names the row even if they could see it.
 
@@ -266,17 +299,34 @@ So:
   mangled ref, resolved without going through the read predicate — which by construction
   cannot see a retired context.
 
-  **Restore's gate and the listing's scope are adjacent, not identical, and deliberately so.**
-  Restore gates on `ContextAdminAuthority`, whose three arms include *system admin*. The
-  §2.5 listing scopes on ownership alone — own it, or manage the owning team — with **no**
-  system-admin arm. That asymmetry is not an oversight: `contexts_readable_by_teams` has no
-  system-admin branch either, so a system admin cannot enumerate *live* contexts they do not
-  otherwise read. Giving them the retired listing would make retired contexts more visible
-  than live ones. The consequence — a system admin can restore by UUID but cannot browse for
-  one — is the same shape `rename` already has today.
-- **`context show` on a retired context admits on the admin axis too**, reporting
+  **Restore's gate and the listing's scope are the same three arms.** Both admit on: own the
+  context, manage its owning team as owner/maintainer, or be a system admin. Restore gates on
+  `ContextAdminAuthority`; the §2.5 listing binds the same three, with `is_system_admin` computed
+  in Rust and passed as a bound bool — the shape `subscription_service::list` already uses.
+
+  **The system-admin arm was argued both ways; this records the decision and its cost.** An
+  earlier draft of this section scoped the listing to ownership alone, reasoning that
+  `contexts_readable_by_teams` has no system-admin branch, so admitting one here would make
+  *retired* contexts more enumerable than *live* ones. That objection is factually true and is
+  kept here rather than deleted. It was overruled deliberately, on the grounds that it compares
+  across two different categories:
+
+  - **Visibility predicates** — `resources_visible_to`, `edges_visible_to`,
+    `contexts_readable_by_teams`, `cogmaps_readable_by_profile` — carry **no** system-admin arm,
+    because admin confers authority over a *named subject*, never reach over a *set*. This change
+    touches none of them.
+  - **Admin-axis listings** — `subscription_service::list`, `machine_client_service` — already read
+    `is_admin OR ownership` and enumerate instance-wide. `list_retired_administered` and
+    `get_retired_administered` are this second category.
+
+  The accepted cost: a system admin can enumerate retired contexts they could not have read while
+  those contexts were live. The benefit taken in exchange is that an instance administrator can
+  find a context to recover for a user, rather than needing its UUID handed to them.
+- **`GET /api/contexts/{id}` admits a retired context on the admin axis too**, reporting
   `retired: true`. Listing a thing you cannot then inspect is an incoherent pair, and the
-  admin axis is already the answer for the listing.
+  admin axis is already the answer for the listing. Note this is an API surface: there is no
+  `temper context show` verb, so at the CLI the pair is closed by `context list --retired`
+  carrying the full row rather than by a separate inspect command.
 
 This is the one place the feature adds surface beyond two floors and two verbs, and it is
 load-bearing rather than convenience: without it, `--retired` shows you a row you cannot
@@ -292,10 +342,10 @@ admin-scoped door, which `restore` and `context show` then reuse (§2.4.1) rathe
 growing their own.
 
 The care point: `caller_administers_context`
-(`crates/temper-services/src/services/context_service.rs:575`) is a **point** check over
+(`caller_administers_context` in `crates/temper-services/src/services/context_service.rs`) is a **point** check over
 one context id, and its team half is decided in Rust —
 `team_service::role_on_team` plus `can_manage`, which is
-`matches!(role, TeamRole::Owner | TeamRole::Maintainer)` at `team_service.rs:79-81`.
+`matches!(role, TeamRole::Owner | TeamRole::Maintainer)` in `team_service::can_manage`.
 There is no SQL predicate for "teams I manage"; a `grep` for `manage` over `pg_proc`
 returns nothing.
 
@@ -313,14 +363,15 @@ array parameter.** The SQL is parameterized by the rule rather than restating it
 | `GET /api/contexts?retired=true` | New filter, admin-axis scoped. |
 | `GET /api/contexts/{id}` | Admits a retired context on the admin axis (§2.4.1); still `404` on the read axis. |
 | `ContextRow` | New `retired: bool`, beside the existing computed `can_write`. |
-| `temper-client` | `contexts().delete()` (kept), `contexts().restore()` (new). |
+| `ContextRowWithCounts` | Same new `retired: bool`. This is the DTO the retired listing returns. |
+| `temper-client` | `contexts().delete()` (kept), `contexts().restore()` (new), `contexts().list_retired()` (new — a sibling method rather than a param on `list()`, because three out-of-scope callers use `list()`). |
 | `temper context delete <ref>` | Retire. Prints the id and the mangled ref. |
 | `temper context restore <ref\|uuid>` | New. Resolves on the admin axis. |
 | `temper context list --retired` | New. |
 | OpenAPI, temper-rb, temper-ts | Regenerated; all changed codegen committed together. |
 
 CLI output goes through `crate::format::render`, matching `resource delete`
-(`crates/temper-cli/src/commands/resource.rs:1374`) rather than `output::success` — the
+(`resource delete` in `crates/temper-cli/src/commands/resource.rs`) rather than `output::success` — the
 non-TTY contract is JSON, and an agent must be able to parse the result.
 
 ### 2.7 What happens to PR #777
@@ -338,6 +389,54 @@ resolved by rebasing and regenerating, never by hand-merging.
 not exist — a `23503` TOCTOU backstop for `kb_resource_homes`, which has no foreign key,
 and a "cascade" for soft-deleted resources' home rows, which likewise does not exist.
 Neither survives, because neither guard survives.
+
+### 2.8 Retirement is event-sourced — the reversal, and what forced it
+
+**This section reverses §4's original "Rejected: an event for retirement".** That rejection reasoned
+that `kb_contexts` is a replay INPUT table restored verbatim, so the retirement flag rides in with
+the restore and an event would add a projector with nothing to project. The first half is true. The
+second is false, and a witness — not an argument — is what found it:
+
+```text
+create → rename → retire → replay
+  expected: ("Annual Planning", "annual-planning-retired", false)
+  got:      ("Annual Planning", "annual-planning",         false)
+```
+
+The **flag** rides in. The **mangled slug** does not. `replay::replay` walks the ledger in event
+order on top of the verbatim restore, and `_project_context_renamed` sets `slug` from its own
+payload — so re-applying the earlier rename drives the address back to its pre-retirement value,
+because nothing on the ledger recorded that a retirement ever happened.
+
+`kb_teams` gets away with an un-evented soft-delete because it never touches an identity-bearing
+column. Retirement moves the `slug`. Identity-bearing columns are exactly what `context_rename` and
+`context_reassign` are evented for — so the analogy that justified the un-evented design was the
+wrong analogy.
+
+**Both verbs are evented, not just retirement.** With only `context_retired`, the sequence
+`create → rename → retire → restore` replays to a *retired* state: the restore never happened on the
+ledger, so nothing re-applies it. Both halves are required for replay to reproduce whichever of the
+two states the ledger actually ends on.
+
+`20260825000040_context_retire_fns.sql` adds two event types and four functions, mirroring
+`context_rename`'s shape exactly:
+
+| half | function | authorizes? |
+|---|---|---|
+| projector | `_project_context_retired` / `_project_context_restored` | **never** — replayed history is not re-adjudicated against present-day membership |
+| mutation | `context_retire` / `context_restore` | yes — the RBAC gate is an in-transaction invariant, in the same transaction as the append and the projection, so there is no check-then-act window |
+
+`context_service::retire`/`restore` still run the `ContextAdminAuthority` gate up front: it renders
+the caller's refusal on the common path, and the in-function guard is the atomic backstop for the
+race. A lost race raises `42501` and maps to `403` rather than `500`.
+
+**A known remainder, recorded rather than claimed closed.** Eventing fixes the *mis-projection*
+above. It does not make every interleaving replay-safe: because the walk applies events in ledger
+order, `create → rename → retire → create a new context under the freed slug → replay` still
+re-applies the rename first, driving the retired row onto an address the new row now holds, and
+`UNIQUE (owner_table, owner_id, slug)` aborts the walk. `replay::replay` has no production caller
+today, so this is a test-tier invariant rather than an outage — but the migration's own
+`declare_migration` text overstates the fix, and that text is durable in `kb_migration_ledger`.
 
 ---
 
@@ -363,12 +462,13 @@ Witnesses authored during the build, each failing against the state its clause c
 - Retire is idempotent-ish: a second retire of an already-retired context is a clean
   refusal, not a 500.
 
-**Addressing (§2.4.1)** — the witnesses that keep retirement from being one-way in practice:
+**Addressing (§2.4.1)** — the witnesses that keep retirement from being one-way in practice
+(`context show` is an API surface, not a CLI verb — see §2.4.1):
 - Retire's response carries the id and the mangled ref, and the CLI prints both.
 - `restore` resolves a retired context by UUID *and* by its mangled ref; resolving it by
   its **original** ref fails, which is the correct and documented behavior.
-- `context show` on a retired context succeeds for an administrator with `retired: true`,
-  and `404`s for a principal whose only reach was the read axis.
+- `GET /api/contexts/{id}` on a retired context succeeds for an administrator with
+  `retired: true`, and `404`s for a principal whose only reach was the read axis.
 
 **Authorization** — the gap PR #777 would have inherited. Both its tests provision an
 instance admin via `root_bootstrap_first_admin`, so no non-admin caller is ever exercised:
@@ -418,6 +518,21 @@ context keeps a valid FK and simply becomes unaddressable through its home. Givi
 connections a re-home path is real work with its own design, and nothing in this feature
 depends on it.
 
+**Re-homing a data-artifact schema when its resource relocates.** §1.4's relocation story — an
+owner can always move their work out of a retired context, because re-homing write-gates the
+destination only — is correct for a resource on its own. It is **not** yet correct for a data
+artifact whose schema is declared in a *different* context from the one the resource is moving
+into. Today there is no path to re-home a schema, so a relocation can land a data artifact in a
+context that cannot resolve the shape it is committed against.
+
+Closing this needs a re-homing path for schemas, and that path first needs a **precedence ruling**
+that does not exist yet: when a resource moves into a context that already declares a shape under
+the same kind, does the schema follow the resource, does the destination's declaration win, or is
+the move refused as a conflict? Each answer implies a different migration and a different failure
+mode for artifacts already committed against the losing shape. That is its own design, and nothing
+in retirement depends on it — retirement neither creates this case nor worsens it, it is the
+relocation playbook that meets it.
+
 **Sweeping orphaned rows.** Retirement preserves everything by construction, so the
 polymorphic referrers that a hard delete would have stranded — regions, edges,
 subscriptions, grants, artifact shapes, properties — are simply not a problem here. If a
@@ -430,8 +545,8 @@ must confront those ten referrers, the three foreign keys, and §1.6.
 
 None blocking. Two judgment calls recorded rather than hidden:
 
-- The mangled address format (`<slug>-retired-<short-id>`) is a choice, not a constraint.
-  Any collision-free transform works; this one keeps the original readable.
+- The mangled address format (`<slug>-retired`, collision-suffixed) is a choice, not a
+  constraint. Any collision-free transform works; this one keeps the original readable.
 - Whether a retired context should be excluded from semantic search is not addressed here.
   Search scopes through `resources_visible_to`, which inherits the floor (§1.2), so the
   behavior falls out — but it falls out rather than being designed, and that is worth a

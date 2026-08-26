@@ -1,5 +1,25 @@
 # Context Retirement Implementation Plan
 
+> ## ⚠️ SUPERSEDED — do not implement from this plan
+>
+> **This plan was executed and is now a historical record. It stopped being amended after Task 3
+> (commit `6b99dba9`), and three of its instructions no longer describe what shipped:**
+>
+> | Plan says | What shipped | Where the real design lives |
+> |---|---|---|
+> | Task 4 Step 3: retire/restore are plain `UPDATE … WHERE id = $1 AND NOT is_active`, refusing on `rows_affected() == 0` | **Event-sourced.** `context_retire`/`context_restore` append + project in one transaction; the no-op refusal is `P0002` | Spec §2.8, migration `20260825000040_context_retire_fns.sql` |
+> | Task 5 Step 3: the retired listing scopes on ownership alone, with no system-admin arm | **Three arms** — own it, manage the owning team, or be a system admin | Spec §2.4.1, commit `dd0d39d1` |
+> | Task 5 Step 4: run `cargo sqlx prepare --workspace` | **Wrong task** — it writes the root cache and leaves per-crate caches stale. Use `cargo make prepare-services` | `Makefile.toml`'s own comment |
+>
+> The un-evented design in Task 4 was not a simplification — it was falsified by a replay witness
+> mid-build, which is the single most important thing that happened on this branch. Reading Task 4
+> as current would reintroduce it.
+>
+> **Authoritative sources, in order:** the spec
+> (`internal/superpowers/specs/2026-08-25-context-retirement-design.md`), then the build ledger
+> (`.superpowers/sdd/2026-08-25-context-retirement/progress.md`, 19 rulings with their
+> cost-if-wrong), then the code.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace PR #777's hard delete with a reversible retirement: a context can be made invisible and unwriteable without losing a single row, and can be restored.
