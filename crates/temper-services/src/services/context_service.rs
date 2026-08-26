@@ -26,12 +26,14 @@ use crate::error::{ApiError, ApiResult};
 use crate::services::team_service;
 use temper_core::context_ref::{ContextOwnerRef, ContextRef};
 use temper_core::types::ids::{ContextId, ProfileId};
+use temper_core::types::team::TeamRole;
 use temper_workflow::operations::sluggify;
 
 pub use temper_core::types::context::{
     ContextCreateRequest, ContextRow, ContextRowWithCounts, InheritedReadGrant, InheritedShare,
     ReassignContextOutcome, ReassignContextRequest, RenameContextOutcome, RenameContextRequest,
-    ShareContextOutcome, ShareContextRequest, UnshareContextOutcome,
+    RestoreContextOutcome, RetireContextOutcome, ShareContextOutcome, ShareContextRequest,
+    UnshareContextOutcome,
 };
 
 /// List all contexts visible to the profile (owned + team-shared), with resource counts.
@@ -91,6 +93,10 @@ pub async fn list_visible(
                -- Computed INSIDE the visibility-gated query (the WHERE below), so a context the
                -- caller cannot read is absent rather than present-and-false.
                context_authorable_by_profile($1, c.id) AS "can_write!",
+               -- Always `false` here: this is the read axis, and a retired context is invisible
+               -- to `context_visible_to` by construction, so this WHERE can never admit one. The
+               -- column stays in the select list anyway — one honest row shape for both doors.
+               NOT c.is_active AS "retired!",
                -- Counted through the caller's own read predicate, not off the home rows —
                -- the two joins are co-extensive on this anchor and neither is redundant by
                -- accident. The reasoning, and what the witness does NOT isolate, is above.
@@ -132,7 +138,10 @@ pub async fn get_visible(
                END AS "owner_ref!",
                -- Inside the same visibility gate as the WHERE below: an unreadable context is the
                -- one shared refusal, never a row saying `can_write: false`.
-               context_authorable_by_profile($1, c.id) AS "can_write!"
+               context_authorable_by_profile($1, c.id) AS "can_write!",
+               -- Always `false` here: the read axis never admits a retired context (see the same
+               -- note on `list_visible`). Kept in the select list for one honest row shape.
+               NOT c.is_active AS "retired!"
           FROM kb_contexts c
          WHERE c.id = $2
            AND context_visible_to($1, c.id)
@@ -504,7 +513,9 @@ pub async fn create(
                   -- `context_authorable_by_profile` is STABLE, so called here it would read the
                   -- snapshot from BEFORE this INSERT and could not see the row being created —
                   -- the personal-owned arm would answer `false` for the creator's own context.
-                  false AS "can_write!"
+                  false AS "can_write!",
+                  -- A freshly created context is never retired.
+                  false AS "retired!"
         "#,
         *id,
         owner_table,
@@ -595,6 +606,197 @@ pub(crate) async fn caller_administers_context(
         )),
         _ => Ok(false),
     }
+}
+
+/// The manage-capable roles, derived from `can_manage` rather than restated. This is the
+/// admin axis's team half, and it must stay pinned to the one Rust definition of "manage":
+/// a role added to `TeamRole` and forgotten here would silently widen or narrow who can see
+/// retired contexts.
+///
+/// No `TeamRole::iter()` exists (no `strum` in this workspace — checked; `Display`/`ToString`
+/// aren't derived either, so the stored spelling is spelled out below rather than borrowed from
+/// a trait that doesn't exist). The explicit four-variant array is exhaustive today but is NOT
+/// compiler-checked for it; if a fifth role is ever added, this is a call site that must be
+/// remembered, same as every other explicit `[TeamRole::A, TeamRole::B, ...]` in this crate.
+fn manage_capable_roles() -> Vec<String> {
+    [
+        TeamRole::Owner,
+        TeamRole::Maintainer,
+        TeamRole::Member,
+        TeamRole::Watcher,
+    ]
+    .into_iter()
+    .filter(|r| team_service::can_manage(*r))
+    .map(|r| {
+        // The spelling `kb_team_members.role` stores and every write path binds — see
+        // `team_service::create_team`'s `'owner'` literal and `add_member`'s `$3`
+        // (bound as `TeamRole` directly, via `#[sqlx(type_name = "team_role", rename_all =
+        // "snake_case")]`). Written out because `TeamRole` derives `Serialize` (JSON-facing,
+        // not SQL-facing) and nothing else that stringifies it.
+        match r {
+            TeamRole::Owner => "owner",
+            TeamRole::Maintainer => "maintainer",
+            TeamRole::Member => "member",
+            TeamRole::Watcher => "watcher",
+        }
+        .to_string()
+    })
+    .collect()
+}
+
+/// List contexts retired that `profile_id` administers — the admin axis, never the read axis.
+///
+/// A retired context is invisible to `context_visible_to` by construction (`is_active` floors
+/// every arm of `contexts_readable_by_teams`), so this is not `list_visible` with a flipped
+/// flag: it is a **different gate** over the same row shape. Three arms admit:
+///
+/// 1. own the context (`kb_profiles` arm);
+/// 2. hold a `manage_capable_roles` role on its owning team (`kb_teams` arm) — no `EXISTS`/`IN`
+///    restates `can_manage`'s `Owner | Maintainer` split in SQL; the role list is a bound
+///    parameter derived from that one Rust function, so a role added there and forgotten here is
+///    structurally impossible to get out of sync (it just wouldn't be in the bound array);
+/// 3. be a system admin (`access_service::is_system_admin`).
+///
+/// **Why arm 3 belongs here.** This is an admin-axis listing — the same category as
+/// `subscription_service::list`, which already ORs a system-admin bool into its own visibility
+/// WHERE — not a visibility predicate. Visibility predicates (`resources_visible_to`,
+/// `edges_visible_to`, `contexts_readable_by_teams`, `cogmaps_readable_by`) deliberately carry no
+/// system-admin arm, and that separation is untouched by this change: an admin sees every
+/// *retired* row through this door, but still sees only their own reach through the ordinary read
+/// predicates. Computed in Rust and passed as a bound bool, the same shape
+/// `subscription_service::list` uses — not `is_system_admin($1)` inlined into the SQL, which
+/// would be a second spelling of the same rule.
+///
+/// `resource_count` carries `list_visible`'s subquery **verbatim**: it counts through the
+/// caller's OWN read predicate (`resources_visible_to`), not the admin predicate. The count
+/// answers "how much of this can the caller still read", and for a retired context that is a
+/// genuinely mixed number — **not** always zero, which is the tempting and wrong summary:
+///
+/// * Resources the caller **owns** still count. `resources_visible_to`'s first arm is
+///   `kb_resource_homes.owner_profile_id = p_profile` and carries no context floor, which is the
+///   same anti-trap property that lets an owner move their work out of a retired context. Verified
+///   against the live database: owner + own resource + retired context yields `1`, not `0`.
+/// * Resources the caller reached only **through the container** drop to zero, because that arm of
+///   `resources_visible_to` routes through `contexts_readable_by_teams`, which floors on
+///   `is_active`.
+///
+/// So a system admin listing someone else's retired context sees `0` while its owner sees their own
+/// resources still counted. That asymmetry is correct — it is the read predicate answering
+/// truthfully per caller — and it is why the subquery must NOT be switched to the admin predicate.
+/// The comment on `list_visible` gives the fuller argument for the subquery's shape.
+pub async fn list_retired_administered(
+    pool: &PgPool,
+    profile_id: ProfileId,
+) -> ApiResult<Vec<ContextRowWithCounts>> {
+    let roles = manage_capable_roles();
+    let is_admin = crate::services::access_service::is_system_admin(pool, profile_id).await?;
+    let rows = sqlx::query_as!(
+        ContextRowWithCounts,
+        r#"
+        SELECT c.id, c.name,
+               c.owner_table AS "kb_owner_table!",
+               c.owner_id AS "kb_owner_id!",
+               c.created,
+               c.created AS "updated!",
+               c.slug,
+               CASE c.owner_table
+                 WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = c.owner_id)
+                 ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)
+               END AS "owner_ref!",
+               -- Always `false`: `context_authorable_by_profile` floors on `c.is_active`
+               -- (20260826000110), so a retired context is unwriteable by construction.
+               context_authorable_by_profile($1, c.id) AS "can_write!",
+               NOT c.is_active AS "retired!",
+               -- Carried VERBATIM from `list_visible` — counted through the caller's OWN read
+               -- predicate, which can never admit a resource homed in a retired context. See the
+               -- doc comment above.
+               (SELECT count(*)
+                  FROM kb_resource_homes rh
+                  JOIN resources_visible_to($1) v ON v.resource_id = rh.resource_id
+                  JOIN kb_resources r ON r.id = rh.resource_id AND r.is_active
+                 WHERE rh.anchor_table = 'kb_contexts' AND rh.anchor_id = c.id) AS "resource_count!"
+          FROM kb_contexts c
+         WHERE NOT c.is_active
+           AND ( $3
+                 OR (c.owner_table = 'kb_profiles' AND c.owner_id = $1)
+                 OR (
+                   c.owner_table = 'kb_teams'
+                   AND EXISTS (
+                     SELECT 1 FROM kb_team_members tm
+                      WHERE tm.team_id = c.owner_id
+                        AND tm.profile_id = $1
+                        AND tm.role::text = ANY($2)
+                   )
+                 )
+               )
+         ORDER BY c.name
+        "#,
+        *profile_id,
+        &roles,
+        is_admin,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows)
+}
+
+/// Get one retired context by ID, scoped to the ADMIN axis — [`list_retired_administered`]'s
+/// same predicate over a single id, so anything reachable in that listing is reachable here too
+/// (an incoherent pair otherwise: a caller could see a row named but never inspect it). The same
+/// three arms admit: own the context, hold a `manage_capable_roles` role on its owning team, or
+/// be a system admin — see that function's doc for why the admin arm belongs on this axis and not
+/// on a visibility predicate.
+///
+/// Refuses with the same `CONTEXT_REFUSAL` every other context lookup renders — a missing
+/// context, a live one, and one this caller does not administer are indistinguishable, for the
+/// reason that constant's doc gives.
+pub async fn get_retired_administered(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    context_id: ContextId,
+) -> ApiResult<ContextRow> {
+    let roles = manage_capable_roles();
+    let is_admin = crate::services::access_service::is_system_admin(pool, profile_id).await?;
+    sqlx::query_as!(
+        ContextRow,
+        r#"
+        SELECT c.id, c.name,
+               c.owner_table AS "kb_owner_table!",
+               c.owner_id AS "kb_owner_id!",
+               c.created,
+               c.created AS "updated!",
+               c.slug,
+               CASE c.owner_table
+                 WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = c.owner_id)
+                 ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)
+               END AS "owner_ref!",
+               context_authorable_by_profile($1, c.id) AS "can_write!",
+               NOT c.is_active AS "retired!"
+          FROM kb_contexts c
+         WHERE c.id = $2
+           AND NOT c.is_active
+           AND ( $4
+                 OR (c.owner_table = 'kb_profiles' AND c.owner_id = $1)
+                 OR (
+                   c.owner_table = 'kb_teams'
+                   AND EXISTS (
+                     SELECT 1 FROM kb_team_members tm
+                      WHERE tm.team_id = c.owner_id
+                        AND tm.profile_id = $1
+                        AND tm.role::text = ANY($3)
+                   )
+                 )
+               )
+        "#,
+        *profile_id,
+        *context_id,
+        &roles,
+        is_admin,
+    )
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| ApiError::NotFound(CONTEXT_REFUSAL.to_string()))
 }
 
 /// Share a context into a team's read-reach (write a `kb_team_contexts` row).
@@ -956,6 +1158,185 @@ pub async fn rename(
     })
 }
 
+/// Retire a context — a soft delete. `kb_contexts.is_active` flips to `false`, which both
+/// floored predicates (`contexts_readable_by_teams`, `context_authorable_by_profile`) treat as
+/// zero read-reach and zero write authority, while every row it homes is preserved untouched.
+/// The slug is mangled in the same statement so the freed address is immediately reusable —
+/// `UNIQUE (owner_table, owner_id, slug)` is never relaxed, so the retired row keeps occupying
+/// its OLD slug forever unless it moves out of the way.
+///
+/// **Auth before writes**, the same gate as [`rename`]: `ContextAdminAuthority` — own the context,
+/// or manage its owning team, or be an instance administrator.
+///
+/// **No dependents guard.** This supersedes the hard delete of PR #777, whose guard existed only
+/// because a hard delete could strand a resource's home; retirement strands nothing; the whole
+/// point is that a context homing live resources can still be retired.
+pub async fn retire(
+    pool: &PgPool,
+    caller: ProfileId,
+    context_id: uuid::Uuid,
+) -> ApiResult<RetireContextOutcome> {
+    crate::authz::authorize::<ContextAdminAuthority>(pool, caller, context_id).await?;
+
+    // The current identity pair plus the already-sigil'd owner ref, in one read — copied verbatim
+    // from `rename` (`:867-880`). `fetch_optional`, not `fetch_one`: the gate's `SystemAdmin` arm
+    // admits without consulting the subject's existence, so a system admin naming a context id
+    // that does not exist reaches here. That is the read refusal, not a panic. The `CASE` is the
+    // incumbent both-kinds spelling (`:42-46`, `:77-80`, `:377-380`) — `team_owner_ref` is
+    // team-only and would `fetch_one`-panic on a profile-owned context.
+    let cur = sqlx::query!(
+        r#"SELECT owner_table AS "owner_table!", owner_id AS "owner_id!", slug, name,
+              CASE owner_table
+                WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = owner_id)
+                ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = owner_id)
+              END AS "owner_ref!"
+         FROM kb_contexts WHERE id = $1"#,
+        context_id,
+    )
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| ApiError::NotFound(CONTEXT_REFUSAL.to_string()))?;
+
+    // The mangled address, computed through the incumbent rather than a second uniqueness rule.
+    // `next_unique_context_slug` is deliberately `is_active`-BLIND: retired rows keep their slugs
+    // in the same UNIQUE space, so a floor added there would hand out an address that collides
+    // with a retired row and fail at the INSERT. Do not "fix" it.
+    let retired_slug = next_unique_context_slug(
+        pool,
+        &cur.owner_table,
+        cur.owner_id,
+        &format!("{}-retired", cur.slug),
+    )
+    .await?;
+
+    let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    temper_substrate::writes::retire_context_with(
+        pool,
+        temper_substrate::ids::ContextId::from(context_id),
+        cur.slug.as_str(),
+        retired_slug.as_str(),
+        emitter,
+        temper_substrate::events::EventContext::default(),
+    )
+    .await
+    .map_err(map_context_write_err)?;
+
+    // Composed from the already-decorated `cur.owner_ref` — never through `decorated_context_ref`,
+    // whose `owner_addressable` parameter is the *bare* handle/team slug and would yield
+    // `@@handle/slug` from this value. Same note `rename` carries at its own return.
+    Ok(RetireContextOutcome {
+        context_id: ContextId::from(context_id),
+        context_ref: format!("{}/{retired_slug}", cur.owner_ref),
+        slug: retired_slug,
+        name: cur.name,
+    })
+}
+
+/// Restore a retired context — the reverse of [`retire`]. Re-derives the address from the
+/// untouched `name` rather than trying to recover whatever retire mangled the slug to; that
+/// mangled slug was chosen only to get out of the way, and is not owed back.
+///
+/// **Auth before writes**, the same gate as [`retire`]: `ContextAdminAuthority` — own the
+/// context, or manage its owning team, or be an instance administrator.
+///
+/// **Fetching `cur` here is the subtle part.** The context is retired, so anything that reads
+/// through the read predicate will not find it. This copies `retire`'s own `cur` fetch
+/// verbatim (`:985-996`) — it is already `is_active`-BLIND because it reads `kb_contexts` by
+/// primary key, not through `context_visible_to`.
+pub async fn restore(
+    pool: &PgPool,
+    caller: ProfileId,
+    context_id: uuid::Uuid,
+) -> ApiResult<RestoreContextOutcome> {
+    crate::authz::authorize::<ContextAdminAuthority>(pool, caller, context_id).await?;
+
+    let cur = sqlx::query!(
+        r#"SELECT owner_table AS "owner_table!", owner_id AS "owner_id!", slug, name,
+              CASE owner_table
+                WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = owner_id)
+                ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = owner_id)
+              END AS "owner_ref!"
+         FROM kb_contexts WHERE id = $1"#,
+        context_id,
+    )
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| ApiError::NotFound(CONTEXT_REFUSAL.to_string()))?;
+
+    // Re-derived from the untouched name, not the mangled retired slug — `next_unique_context_slug`
+    // is `is_active`-BLIND for the same reason `retire`'s call is: the freed-then-reclaimed slug
+    // space is shared with retired rows.
+    let restored_slug =
+        next_unique_context_slug(pool, &cur.owner_table, cur.owner_id, &cur.name).await?;
+
+    // The address the caller retired UNDER, read off the ledger entry that recorded it: [`retire`]
+    // passes `cur.slug` to `retire_context_with` as `from_slug`, which is exactly the pre-mangle
+    // address and rides in the `context_retired` payload.
+    //
+    // Anchor-scoped, the shape `event_service::latest_event_id_for_context` uses (`_event_append`
+    // anchors context events to `('kb_contexts', context_id)`), most recent first because a
+    // context can be retired and restored more than once and only the last retirement is the one
+    // being undone.
+    let retired_from_slug = sqlx::query_scalar!(
+        r#"SELECT e.payload->>'from_slug' AS from_slug
+             FROM kb_events e
+             JOIN kb_event_types t ON t.id = e.event_type_id
+            WHERE t.name = 'context_retired'
+              AND e.producing_anchor_table = 'kb_contexts'
+              AND e.producing_anchor_id = $1
+            ORDER BY e.occurred_at DESC, e.id DESC
+            LIMIT 1"#,
+        context_id,
+    )
+    .fetch_optional(pool)
+    .await?
+    .flatten();
+
+    let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    temper_substrate::writes::restore_context_with(
+        pool,
+        temper_substrate::ids::ContextId::from(context_id),
+        cur.slug.as_str(),
+        restored_slug.as_str(),
+        emitter,
+        temper_substrate::events::EventContext::default(),
+    )
+    .await
+    .map_err(map_context_write_err)?;
+
+    // The baseline is the retired-under address, NOT `sluggify(&cur.name)`. `create` hands out
+    // suffixed slugs for duplicate names, so a context named "Notes" routinely lives at `notes-2`,
+    // and the name's canonical slug then answers a question nobody asked — it calls a restore that
+    // landed exactly where it started "changed", and, worse, calls a restore that handed back a
+    // DIFFERENT address "unchanged". The second is the silent re-addressing this field exists to
+    // refuse. Witnessed by `restore_reports_a_change_when_it_lands_on_a_freed_sibling_address` and
+    // `restore_reports_no_change_when_it_lands_back_on_its_suffixed_address`.
+    //
+    // No ledger entry: the context was retired by the un-evented path that shipped earlier on this
+    // branch, before migration `20260826000120` added `context_retire`. The address it was retired
+    // under is recorded nowhere, so the answer that cannot mislead is "assume it moved" — `true`
+    // sends the caller to the `slug` this same response carries, while `false` would assert an
+    // address was preserved that nothing on disk can vouch for. The arm is bounded rather than
+    // open-ended: every retirement since that migration appends the event, so it only ever covers
+    // rows retired before it.
+    let slug_changed = retired_from_slug.is_none_or(|from| restored_slug != from);
+
+    // Composed from the already-decorated `cur.owner_ref` — never through `decorated_context_ref`,
+    // whose `owner_addressable` parameter is the *bare* handle/team slug and would yield
+    // `@@handle/slug` from this value. Same note `retire` carries at its own return.
+    Ok(RestoreContextOutcome {
+        context_id: ContextId::from(context_id),
+        context_ref: format!("{}/{restored_slug}", cur.owner_ref),
+        slug: restored_slug,
+        name: cur.name,
+        slug_changed,
+    })
+}
+
 /// The `23505` refusal both context write paths render when they lose the collision race.
 ///
 /// A constant rather than a literal, for the reason [`CONTEXT_REFUSAL`] gives: it is one defence
@@ -964,20 +1345,26 @@ pub async fn rename(
 /// one is reconstructed from a SQLSTATE and has nothing but the constraint that fired.
 const CONTEXT_SLUG_TAKEN: &str = "that owner already holds a context with this slug";
 
-/// Map a substrate write error from `reassign_context_with` / `rename_context_with` to an
-/// [`ApiError`]. **One mapper, two call sites** — the mapping is identical for both and would drift
+/// Map a substrate write error from `reassign_context_with` / `rename_context_with` /
+/// `retire_context_with` / `restore_context_with` to an [`ApiError`]. **One mapper, four call
+/// sites** — the mapping is identical for all of them and would drift
 /// if written twice.
 ///
-/// - `42501` (insufficient_privilege) — `context_reassign` and `context_rename` each carry their
-///   RBAC gate as an in-transaction invariant, not merely a caller pre-check. The Rust gate renders
-///   a clean refusal on the common path, so this arm only fires on a TOCTOU change between check and
-///   write; that lost race should still read as `403`, not `500`.
-/// - `23505` (unique_violation) — `UNIQUE (owner_table, owner_id, slug)` is the backstop behind both
-///   call sites' slug-collision pre-check. **The race path must render the same refusal as the
+/// - `42501` (insufficient_privilege) — `context_reassign`, `context_rename`, `context_retire`, and
+///   `context_restore` each carry their RBAC gate as an in-transaction invariant, not merely a
+///   caller pre-check. The Rust gate renders a clean refusal on the common path, so this arm only
+///   fires on a TOCTOU change between check and write; that lost race should still read as `403`,
+///   not `500`.
+/// - `23505` (unique_violation) — `UNIQUE (owner_table, owner_id, slug)` is the backstop behind
+///   every call site's slug-collision pre-check. **The race path must render the same refusal as the
 ///   pre-check**, or the caller's experience depends on how quickly they lost the race rather than
 ///   on the state of the system: the caller who won gets `409` and the caller who lost gets `500`
 ///   for the same conflict. `reassign` shipped with exactly this hole — a `42501`-only body — and
 ///   rename's tests are what surfaced it; it is fixed here rather than left beside a correct copy.
+/// - `P0002` (no_data_found) — `context_retire`/`context_restore` each refuse a no-op mutation
+///   (retiring an already-retired context, restoring an already-active one) rather than append a
+///   spurious event, raising `P0002`. Rendered as the same `CONTEXT_REFUSAL` `404` the pre-event
+///   `rows_affected() == 0` check used to render for this exact case.
 ///
 /// Everything else is a genuine internal error.
 fn map_context_write_err(e: anyhow::Error) -> ApiError {
@@ -985,6 +1372,7 @@ fn map_context_write_err(e: anyhow::Error) -> ApiError {
         match db.code().as_deref() {
             Some("42501") => return ApiError::Forbidden,
             Some("23505") => return ApiError::Conflict(CONTEXT_SLUG_TAKEN.to_string()),
+            Some("P0002") => return ApiError::NotFound(CONTEXT_REFUSAL.to_string()),
             _ => {}
         }
     }
@@ -1062,6 +1450,17 @@ mod write_err_mapper_tests {
             map_context_write_err(substrate_err("42501")),
             ApiError::Forbidden
         ));
+    }
+
+    /// The no-op refusal `context_retire`/`context_restore` raise (retiring an already-retired
+    /// context, restoring an already-active one) renders the same `CONTEXT_REFUSAL` 404 the
+    /// pre-event `rows_affected() == 0` check used to render for this exact case.
+    #[test]
+    fn no_data_found_renders_the_same_not_found_the_old_rows_affected_check_rendered() {
+        match map_context_write_err(substrate_err("P0002")) {
+            ApiError::NotFound(msg) => assert_eq!(msg, CONTEXT_REFUSAL),
+            other => panic!("expected NotFound, got {other:?}"),
+        }
     }
 
     /// Everything else stays a genuine internal error — the arms are additive, not a catch-all.
@@ -1909,5 +2308,328 @@ mod tests {
             "and still not readable by anyone new"
         );
         assert!(can_modify(&pool, alice, r).await, "authorship unchanged");
+    }
+
+    // ── Context retirement ────────────────────────────────────────────────────
+
+    /// Retirement preserves everything. This is the whole difference from the hard delete it
+    /// replaces: the guard is gone because there is nothing to guard against.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn retire_preserves_every_row_it_homes(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let ctx = mk_personal_context(&pool, "proj", alice).await;
+        let r = mk_homed_resource(&pool, ctx, alice).await;
+
+        retire(&pool, alice, ctx)
+            .await
+            .expect("retire succeeds WITH a resource homed here");
+
+        let row = sqlx::query!(
+            r#"SELECT is_active AS "is_active!" FROM kb_contexts WHERE id = $1"#,
+            ctx
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("the kb_contexts row still exists");
+        assert!(
+            !row.is_active,
+            "retirement flips is_active, it does not delete the row"
+        );
+
+        let resource_active: bool = sqlx::query_scalar!(
+            r#"SELECT is_active AS "a!" FROM kb_resources WHERE id = $1"#,
+            r
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("the kb_resources row is untouched");
+        assert!(resource_active, "the homed resource stays live");
+
+        let home_count: i64 = sqlx::query_scalar!(
+            r#"SELECT COUNT(*) AS "c!" FROM kb_resource_homes
+                WHERE resource_id = $1 AND anchor_table = 'kb_contexts' AND anchor_id = $2"#,
+            r,
+            ctx
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(home_count, 1, "the home row is untouched");
+    }
+
+    /// The address is freed; the display label is not touched.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn retire_frees_the_slug_and_keeps_the_name(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let ctx = mk_personal_context(&pool, "scratch", alice).await;
+
+        let out = retire(&pool, alice, ctx).await.expect("retire");
+        assert!(
+            out.slug.starts_with("scratch-retired"),
+            "got slug {:?}",
+            out.slug
+        );
+        assert_eq!(out.name, "scratch");
+
+        let row = create(&pool, alice, "kb_profiles", *alice, "scratch")
+            .await
+            .expect("the freed slug is immediately reusable");
+        assert_eq!(row.slug, "scratch");
+    }
+
+    /// Retiring twice is a clean refusal, never a 500 and never a second mangle.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn retiring_an_already_retired_context_is_not_found(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let ctx = mk_personal_context(&pool, "temp", alice).await;
+
+        retire(&pool, alice, ctx)
+            .await
+            .expect("first retire succeeds");
+
+        let second = retire(&pool, alice, ctx).await;
+        assert!(
+            matches!(second, Err(ApiError::NotFound(ref msg)) if msg == CONTEXT_REFUSAL),
+            "expected NotFound, got {second:?}"
+        );
+    }
+
+    // ── Context restoration ───────────────────────────────────────────────────
+
+    /// Restore round-trips the address when nothing has since claimed it.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn restore_returns_the_original_address_when_it_is_free(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let ctx = mk_personal_context(&pool, "scratch", alice).await;
+
+        retire(&pool, alice, ctx).await.expect("retire");
+
+        let out = restore(&pool, alice, ctx).await.expect("restore");
+        assert_eq!(out.slug, "scratch");
+        assert!(!out.slug_changed, "the address was free, nothing to report");
+        assert_eq!(out.name, "scratch");
+
+        let readable: bool = sqlx::query_scalar("SELECT context_readable_by_profile($1, $2)")
+            .bind(*alice)
+            .bind(ctx)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(readable, "a restored context is readable again");
+    }
+
+    /// Restore into a collision lands on the suffix and SAYS SO. Handing back a different
+    /// address silently is the failure mode `rename` explicitly refuses (spec §2.4).
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn restore_into_a_taken_address_suffixes_and_reports_it(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let ctx = mk_personal_context(&pool, "scratch", alice).await;
+
+        retire(&pool, alice, ctx).await.expect("retire");
+
+        // A new context claims the freed slug before the first one is restored.
+        create(&pool, alice, "kb_profiles", *alice, "scratch")
+            .await
+            .expect("the freed slug is immediately reusable");
+
+        let out = restore(&pool, alice, ctx).await.expect("restore");
+        assert_eq!(out.slug, "scratch-2", "got slug {:?}", out.slug);
+        assert!(
+            out.slug_changed,
+            "landing on a suffix must be reported, not applied silently"
+        );
+    }
+
+    /// The baseline is the address the caller RETIRED UNDER, not the name's canonical slug.
+    /// `restore_into_a_taken_address_suffixes_and_reports_it` cannot see the difference: its
+    /// context is named `scratch`, where the two coincide by construction. Here they do not —
+    /// two contexts share the name "Notes", so the
+    /// second lives at `notes-2`. Retire both, restore the second, and it lands on the freed
+    /// `notes`: the caller handed in `@alice/notes-2` and gets `@alice/notes` back. Against
+    /// `sluggify("Notes")` (= `notes`) that reads as UNCHANGED — the silent re-addressing this
+    /// field exists to refuse.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn restore_reports_a_change_when_it_lands_on_a_freed_sibling_address(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let first = create(&pool, alice, "kb_profiles", *alice, "Notes")
+            .await
+            .expect("create the first Notes");
+        let second = create(&pool, alice, "kb_profiles", *alice, "Notes")
+            .await
+            .expect("create the second Notes");
+        assert_eq!(first.slug, "notes");
+        assert_eq!(
+            second.slug, "notes-2",
+            "the same name a second time is suffixed, got {:?}",
+            second.slug
+        );
+
+        retire(&pool, alice, *second.id)
+            .await
+            .expect("retire notes-2");
+        // Retiring the first frees `notes`, so the restore below can reclaim it.
+        retire(&pool, alice, *first.id).await.expect("retire notes");
+
+        let out = restore(&pool, alice, *second.id).await.expect("restore");
+        assert_eq!(out.slug, "notes", "got slug {:?}", out.slug);
+        assert_eq!(out.context_ref, "@alice/notes");
+        assert!(
+            out.slug_changed,
+            "retired under `notes-2`, handed back `notes` — that must be reported"
+        );
+    }
+
+    /// The mirror: landing back on the suffixed address it was retired under is NO change, even
+    /// though that address is not the name's canonical slug. `first` stays live and keeps `notes`,
+    /// so the restore returns to `notes-2` — the exact address the caller retired. Against
+    /// `sluggify("Notes")` this reads as changed, sending the caller to re-address a context that
+    /// never moved.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn restore_reports_no_change_when_it_lands_back_on_its_suffixed_address(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let first = create(&pool, alice, "kb_profiles", *alice, "Notes")
+            .await
+            .expect("create the first Notes");
+        let second = create(&pool, alice, "kb_profiles", *alice, "Notes")
+            .await
+            .expect("create the second Notes");
+        assert_eq!(first.slug, "notes");
+        assert_eq!(second.slug, "notes-2");
+
+        retire(&pool, alice, *second.id)
+            .await
+            .expect("retire notes-2");
+
+        let out = restore(&pool, alice, *second.id).await.expect("restore");
+        assert_eq!(out.slug, "notes-2", "got slug {:?}", out.slug);
+        assert_eq!(out.context_ref, "@alice/notes-2");
+        assert!(
+            !out.slug_changed,
+            "back on the address it was retired under — nothing to report"
+        );
+    }
+
+    /// Restoring a context that was never retired is a clean refusal.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn restoring_a_live_context_is_not_found(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let ctx = mk_personal_context(&pool, "scratch", alice).await;
+
+        let out = restore(&pool, alice, ctx).await;
+        assert!(
+            matches!(out, Err(ApiError::NotFound(ref msg)) if msg == CONTEXT_REFUSAL),
+            "expected NotFound, got {out:?}"
+        );
+    }
+
+    // ── The admin axis (retired listing / show) ─────────────────────────────────
+
+    /// You can see a retired context only if you could have retired it. A team MEMBER who could
+    /// read and author a team-owned context before retirement sees NOTHING in the retired
+    /// listing; an owner/maintainer of that team sees it. This is the property that makes the
+    /// listing an admin-axis door and not `list_visible` with a flipped flag.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn the_retired_listing_rides_the_admin_axis_not_the_read_axis(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await; // team owner
+        let bob = mk_profile_ent(&pool, "bob").await; // plain member
+        let acme = mk_team(&pool, "acme").await;
+        add_member(&pool, acme, alice, "owner").await;
+        add_member(&pool, acme, bob, "member").await;
+        let ctx = mk_team_context(&pool, "proj", acme).await;
+
+        // Before retirement: bob (a plain member) can read AND author the context.
+        let r = mk_homed_resource(&pool, ctx, alice).await;
+        assert!(
+            context_visible(&pool, *bob, ctx).await.unwrap(),
+            "member can read before retirement"
+        );
+        assert!(
+            can_modify(&pool, bob, r).await,
+            "member can author before retirement"
+        );
+
+        retire(&pool, alice, ctx).await.expect("retire");
+
+        // After retirement: the member — who could read and author it a moment ago — sees
+        // nothing in the retired listing. This is the property under test.
+        let bob_listing = list_retired_administered(&pool, bob).await.unwrap();
+        assert!(
+            bob_listing.is_empty(),
+            "a member who could read/author before retirement must see nothing after: {bob_listing:?}"
+        );
+
+        // The owner, who manages the owning team, sees exactly the one retired context.
+        let alice_listing = list_retired_administered(&pool, alice).await.unwrap();
+        assert_eq!(alice_listing.len(), 1, "got {alice_listing:?}");
+        assert_eq!(alice_listing[0].id, ContextId::from(ctx));
+        assert!(alice_listing[0].retired, "the listed row must say retired");
+    }
+
+    /// Listing a thing you cannot then inspect is an incoherent pair: `get_retired_administered`
+    /// must answer for exactly what `list_retired_administered` lists.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn an_administrator_can_show_a_retired_context(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let bob = mk_profile_ent(&pool, "bob").await; // plain member — must NOT be able to show it
+        let acme = mk_team(&pool, "acme").await;
+        add_member(&pool, acme, alice, "owner").await;
+        add_member(&pool, acme, bob, "member").await;
+        let ctx = mk_team_context(&pool, "proj", acme).await;
+
+        retire(&pool, alice, ctx).await.expect("retire");
+
+        let shown = get_retired_administered(&pool, alice, ContextId::from(ctx))
+            .await
+            .expect("the administrator can show the retired context");
+        assert_eq!(shown.id, ContextId::from(ctx));
+        assert!(shown.retired, "the shown row must say retired");
+
+        let denied = get_retired_administered(&pool, bob, ContextId::from(ctx)).await;
+        assert!(
+            matches!(denied, Err(ApiError::NotFound(ref msg)) if msg == CONTEXT_REFUSAL),
+            "a non-administering member must be refused, got {denied:?}"
+        );
+    }
+
+    /// The third admitting arm: a system admin sees a retired context through
+    /// [`list_retired_administered`] and [`get_retired_administered`] with **neither** ownership
+    /// **nor** team membership — the property the other two retired-listing tests above cannot
+    /// exercise, since their admins are also the context's owner or a manager of its owning team.
+    ///
+    /// `root` here has no row in `kb_contexts` naming it as owner and no row in
+    /// `kb_team_members` at all, so the first two arms of both queries' WHERE clause are false for
+    /// every context in this fixture — only the `$3`/`$4` system-admin bool can admit it. Without
+    /// that arm, `root_listing` would be empty (failing the `len() == 1` assertion below) and
+    /// `get_retired_administered` would return the `CONTEXT_REFUSAL` `NotFound` both non-admins get
+    /// above, rather than the row.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_system_admin_sees_a_retired_context_they_neither_own_nor_manage(pool: PgPool) {
+        let owner = mk_profile_ent(&pool, "owner").await;
+        let root = mk_profile_ent(&pool, "root").await;
+        // `root` is a system admin under D11 (a `kb_principal_governance` grant), and nothing
+        // else: no `kb_contexts` row it owns, no `kb_team_members` row at all — the fixture the
+        // other two retired-listing tests do not build, and the one this arm needs.
+        crate::test_support::grant_governance(&pool, *root).await;
+
+        let ctx = mk_personal_context(&pool, "priv", owner).await;
+        mk_homed_resource(&pool, ctx, owner).await;
+
+        retire(&pool, owner, ctx).await.expect("retire");
+
+        let root_listing = list_retired_administered(&pool, root).await.unwrap();
+        assert_eq!(
+            root_listing.len(),
+            1,
+            "a system admin with no ownership and no membership must still see the retired \
+             context: got {root_listing:?}"
+        );
+        assert_eq!(root_listing[0].id, ContextId::from(ctx));
+        assert!(root_listing[0].retired, "the listed row must say retired");
+
+        let shown = get_retired_administered(&pool, root, ContextId::from(ctx))
+            .await
+            .expect("a system admin can show a retired context they neither own nor manage");
+        assert_eq!(shown.id, ContextId::from(ctx));
+        assert!(shown.retired, "the shown row must say retired");
     }
 }

@@ -219,6 +219,10 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             | EventKind::ContextReassigned
             // A rename moves two identity columns of one row. No content, so no sidecar.
             | EventKind::ContextRenamed
+            // A retirement/restoration flips `is_active` and mangles/re-derives the slug. No
+            // content, so no sidecar — same posture as `ContextRenamed`.
+            | EventKind::ContextRetired
+            | EventKind::ContextRestored
             | EventKind::DelegatedLaunch
             | EventKind::InvocationClosed
             // Admin-ledger events (NULL-anchored, spec 2026-07-16): no content, no sidecar.
@@ -633,6 +637,32 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     .bind(id)
                     .bind(&payload)
                     .execute(pool)
+                    .await?;
+            }
+            // The pure projector half, deliberately, for the identical reason `ContextRenamed`'s
+            // arm gives: `_project_context_retired` never authorizes, so replayed history is not
+            // re-adjudicated against present-day membership. The authorizing half is
+            // `context_retire`, which the walk never calls.
+            // A compile-checked macro, unlike the runtime `sqlx::query` its sibling arms use.
+            // `audit-sqlx-macro-exceptions` allows this file 37 runtime calls under the
+            // `dynamic-table` reason, and that reason does not cover a fixed projector call with
+            // bound parameters — the script's own near-miss note is explicit that a closed
+            // statement set is not `dynamic-table`. "If no reason fits, that IS the answer: it
+            // converts." So it converts, and gains a `.sqlx` entry the change detector can see.
+            EventKind::ContextRetired => {
+                sqlx::query_scalar!("SELECT _project_context_retired($1,$2)", id, payload)
+                    .fetch_one(pool)
+                    .await?;
+            }
+            // A compile-checked macro, unlike the runtime `sqlx::query` its sibling arms use.
+            // `audit-sqlx-macro-exceptions` allows this file 37 runtime calls under the
+            // `dynamic-table` reason, and that reason does not cover a fixed projector call with
+            // bound parameters — the script's own near-miss note is explicit that a closed
+            // statement set is not `dynamic-table`. "If no reason fits, that IS the answer: it
+            // converts." So it converts, and gains a `.sqlx` entry the change detector can see.
+            EventKind::ContextRestored => {
+                sqlx::query_scalar!("SELECT _project_context_restored($1,$2)", id, payload)
+                    .fetch_one(pool)
                     .await?;
             }
             EventKind::DelegatedLaunch => {

@@ -1,0 +1,79 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT c.id, c.name,\n               c.owner_table AS \"kb_owner_table!\",\n               c.owner_id AS \"kb_owner_id!\",\n               c.created,\n               c.created AS \"updated!\",\n               c.slug,\n               CASE c.owner_table\n                 WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = c.owner_id)\n                 ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)\n               END AS \"owner_ref!\",\n               context_authorable_by_profile($1, c.id) AS \"can_write!\",\n               NOT c.is_active AS \"retired!\"\n          FROM kb_contexts c\n         WHERE c.id = $2\n           AND NOT c.is_active\n           AND ( $4\n                 OR (c.owner_table = 'kb_profiles' AND c.owner_id = $1)\n                 OR (\n                   c.owner_table = 'kb_teams'\n                   AND EXISTS (\n                     SELECT 1 FROM kb_team_members tm\n                      WHERE tm.team_id = c.owner_id\n                        AND tm.profile_id = $1\n                        AND tm.role::text = ANY($3)\n                   )\n                 )\n               )\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "kb_owner_table!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "kb_owner_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "created",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "updated!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "slug",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "owner_ref!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "can_write!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 9,
+        "name": "retired!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "TextArray",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "53df85c5de3fe0be5480e74f4c48e9806d065c7416fece1ea76f539acb02ed9d"
+}

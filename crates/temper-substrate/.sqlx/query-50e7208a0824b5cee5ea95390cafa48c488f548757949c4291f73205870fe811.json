@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT is_stale FROM cogmap_staleness($1, 'cogmap', $1)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "is_stale",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "50e7208a0824b5cee5ea95390cafa48c488f548757949c4291f73205870fe811"
+}

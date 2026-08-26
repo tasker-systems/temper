@@ -140,15 +140,29 @@ pub async fn create_remote(
 /// injected `ref` field (`{owner_ref}/{slug}`) for copy-paste addressing. This is
 /// API-only — it reflects server state (owner + resource counts), not the local
 /// `context subscribe` set.
+///
+/// `retired: true` switches the read from the visibility axis to the ADMIN axis: it lists
+/// retired contexts the caller administers, not contexts they can read. A retired context is
+/// invisible to the read path by construction, so this is a different question, not a filter
+/// over the same rows.
 pub async fn list(
     client: &temper_client::TemperClient,
+    retired: bool,
     fmt: crate::format::OutputFormat,
 ) -> Result<()> {
-    let contexts = client
-        .contexts()
-        .list()
-        .await
-        .map_err(crate::actions::runtime::client_err_to_temper)?;
+    let contexts = if retired {
+        client
+            .contexts()
+            .list_retired()
+            .await
+            .map_err(crate::actions::runtime::client_err_to_temper)?
+    } else {
+        client
+            .contexts()
+            .list()
+            .await
+            .map_err(crate::actions::runtime::client_err_to_temper)?
+    };
 
     let mut rows = serde_json::to_value(&contexts)
         .map_err(|e| crate::error::TemperError::Api(format!("context serialize: {e}")))?;
@@ -262,18 +276,18 @@ pub async fn transfer_remote(
     Ok(())
 }
 
-/// Map a `context rename` client error to a CLI error. Deliberately **not** [`map_share_err`]:
-/// that message names a target team ("...AND manage the target team"), and a rename has no target
-/// team — reusing it would state a requirement that does not exist. A rename requires only that you
-/// administer the context itself.
-fn map_rename_err(e: temper_client::error::ClientError) -> TemperError {
+/// Map a `context rename`/`context delete` client error to a CLI error. Deliberately **not**
+/// [`map_share_err`]: that message names a target team ("...AND manage the target team"), and
+/// neither rename nor delete has one — reusing it would state a requirement that does not exist.
+/// Both require only that the caller administer the context itself, so one mapper serves both,
+/// parametrized on the action name the way [`map_share_err`] already is on `action`.
+fn map_admin_required_err(action: &str, e: temper_client::error::ClientError) -> TemperError {
     match e {
-        temper_client::error::ClientError::Forbidden => TemperError::Api(
-            "not authorized: `context rename` requires that you administer the context \
+        temper_client::error::ClientError::Forbidden => TemperError::Api(format!(
+            "not authorized: `context {action}` requires that you administer the context \
              (own it, or manage its owning team as owner/maintainer) — or that you are an \
              instance administrator."
-                .to_owned(),
-        ),
+        )),
         other => crate::actions::runtime::client_err_to_temper(other),
     }
 }
@@ -300,7 +314,113 @@ pub async fn rename_remote(
             },
         )
         .await
-        .map_err(map_rename_err)?;
+        .map_err(|e| map_admin_required_err("rename", e))?;
+    let rendered = crate::format::render(&outcome, fmt)?;
+    println!("{rendered}");
+    Ok(())
+}
+
+/// `temper context delete <context_ref>` — retire a context.
+///
+/// **Reversible.** The context stops being visible on the read path and stops being writeable,
+/// but every row it homes is preserved untouched, and the slug is freed for immediate reuse.
+/// The rendered outcome carries the mangled `context_ref` — the address `temper context
+/// restore` accepts, since the original ref no longer resolves once the row is hidden and the
+/// slug has moved. Uses the `@me`-accepting read resolver, like `rename` and `transfer` — the
+/// headline flow is retiring your own `@me/my-project`.
+pub async fn delete_remote(
+    client: &temper_client::TemperClient,
+    context: &str,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let context_id = resolve_context_id_for_read(client, context).await?;
+    let outcome = client
+        .contexts()
+        .delete(context_id)
+        .await
+        .map_err(|e| map_admin_required_err("delete", e))?;
+    let rendered = crate::format::render(&outcome, fmt)?;
+    println!("{rendered}");
+    Ok(())
+}
+
+/// Resolve a context ref for `restore`. Cannot use [`resolve_context_id_for_read`]: that
+/// resolver lists through the read predicate, and a retired context is invisible there by
+/// construction (that is what retirement means) — the row `restore` needs to find will never be
+/// in that listing. This resolves on the ADMIN axis instead, via
+/// [`temper_client::contexts::ContextClient::list_retired`], which lists exactly the retired
+/// contexts the caller administers — the same set `temper context list --retired` prints, and
+/// the same authority `restore` itself requires server-side.
+///
+/// `@me` is not accepted, unlike the read resolver: the ref this has to match is the one
+/// `delete` printed (`RetireContextOutcome::context_ref`), which the server always composes
+/// from the concrete `owner_ref` — `@me` can never actually appear in that data, so accepting it
+/// here would add a spelling with nothing behind it.
+pub async fn resolve_context_id_for_restore(
+    client: &temper_client::TemperClient,
+    context: &str,
+) -> Result<Uuid> {
+    if let Ok(id) = Uuid::parse_str(context) {
+        return Ok(id);
+    }
+    let (owner, slug) = context.split_once('/').ok_or_else(|| {
+        TemperError::BadRequest(format!(
+            "invalid context ref {context:?}: use a UUID or the mangled ref `context delete` \
+             printed (`@me/slug` / `@handle/slug` / `+team-slug/slug`) — NOT the original ref"
+        ))
+    })?;
+
+    let contexts = client
+        .contexts()
+        .list_retired()
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
+
+    // `@me` is resolved exactly as `resolve_context_id_for_read` resolves it — profile lookup,
+    // then match on the owner id rather than the decorated ref. Carried rather than dropped: the
+    // ref `delete` prints is the `@handle` form, but `context list --retired` shows the same row
+    // and an operator will reach for `@me` reflexively. Without this the failure would read
+    // "not found among the retired contexts you administer" for a context that IS there and IS
+    // administered — a misleading refusal, which is worse than an unsupported one.
+    let found = if owner == "@me" {
+        let me = client
+            .profile()
+            .get()
+            .await
+            .map_err(crate::actions::runtime::client_err_to_temper)?;
+        contexts
+            .into_iter()
+            .find(|c| c.kb_owner_table == "kb_profiles" && c.kb_owner_id == me.id && c.slug == slug)
+    } else {
+        contexts
+            .into_iter()
+            .find(|c| c.owner_ref == owner && c.slug == slug)
+    };
+
+    found.map(|c| *c.id).ok_or_else(|| {
+        TemperError::Api(format!(
+            "retired context '{context}' not found among the retired contexts you administer \
+             — use the mangled ref `context delete` printed, or check `context list --retired`"
+        ))
+    })
+}
+
+/// `temper context restore <context_ref>` — reverse a retirement.
+///
+/// `context` must be a UUID or the mangled ref `delete` printed; resolved on the admin axis via
+/// [`resolve_context_id_for_restore`], not the read-accepting resolver every other context
+/// command uses.
+pub async fn restore_remote(
+    client: &temper_client::TemperClient,
+    context: &str,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let context_id = resolve_context_id_for_restore(client, context).await?;
+    let outcome = client
+        .contexts()
+        .restore(context_id)
+        .await
+        .map_err(|e| map_admin_required_err("restore", e))?;
     let rendered = crate::format::render(&outcome, fmt)?;
     println!("{rendered}");
     Ok(())

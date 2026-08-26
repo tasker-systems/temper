@@ -1617,6 +1617,20 @@
         ],
         "summary": "List contexts you can see",
         "operationId": "list_contexts",
+        "parameters": [
+          {
+            "name": "retired",
+            "in": "query",
+            "description": "List retired contexts you administer instead of the contexts you can read.",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "List of visible contexts with resource counts",
@@ -1725,6 +1739,49 @@
           },
           "404": {
             "description": "Not found"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Contexts"
+      },
+      "delete": {
+        "tags": [
+          "Contexts"
+        ],
+        "summary": "Retire a context",
+        "operationId": "delete_context",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Context ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Context retired (soft-deleted, and its slug freed for reuse)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetireContextOutcome"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller may read but not administer this context"
+          },
+          "404": {
+            "description": "Context not found (uniform — no existence oracle)"
           }
         },
         "security": [
@@ -2157,6 +2214,69 @@
           },
           "409": {
             "description": "Another context under the same owner already holds the derived slug"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Contexts"
+      }
+    },
+    "/api/contexts/{id}/restore": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Contexts"
+        ],
+        "summary": "Restore a retired context",
+        "operationId": "restore_context",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Context ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Context restored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreContextOutcome"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller may read but not administer this context"
+          },
+          "404": {
+            "description": "Context not found, or not retired (uniform — no existence oracle)"
+          },
+          "409": {
+            "description": "The restored address collided under a concurrent write"
           }
         },
         "security": [
@@ -10178,7 +10298,8 @@
           "updated",
           "slug",
           "owner_ref",
-          "can_write"
+          "can_write",
+          "retired"
         ],
         "properties": {
           "can_write": {
@@ -10206,6 +10327,10 @@
             "type": "string",
             "description": "The already-sigil'd owner addressable: `@<handle>` for profiles, `+<team-slug>` for teams.\nTogether with `slug`, forms the full decorated context ref `{owner_ref}/{slug}`."
           },
+          "retired": {
+            "type": "boolean",
+            "description": "Whether this context is retired — invisible to every read path and unwriteable, with\nevery row it homes preserved.\n\n**Polarity is inverted from the column on purpose.** The database stores `is_active`,\nmirroring `kb_teams`; the wire says `retired`, which is the word the product uses. The\ninversion is written as the identical SQL literal `NOT c.is_active AS \"retired!\"` in\nevery query that selects this column — the two read-axis queries (`list_visible`,\n`get_visible`, always `false` there by construction) and the two admin-axis queries\n(`list_retired_administered`, `get_retired_administered`) — and is never re-derived any\nother way, e.g. never inverted in Rust after the fact."
+          },
           "slug": {
             "type": "string",
             "description": "The context's per-owner-unique slug (the natural-key half of `@owner/slug`)."
@@ -10229,7 +10354,8 @@
           "resource_count",
           "slug",
           "owner_ref",
-          "can_write"
+          "can_write",
+          "retired"
         ],
         "properties": {
           "can_write": {
@@ -10260,6 +10386,10 @@
           "resource_count": {
             "type": "integer",
             "format": "int64"
+          },
+          "retired": {
+            "type": "boolean",
+            "description": "Whether this context is retired — invisible to every read path and unwriteable, with\nevery row it homes preserved.\n\n**Polarity is inverted from the column on purpose.** The database stores `is_active`,\nmirroring `kb_teams`; the wire says `retired`, which is the word the product uses. The\ninversion is written as the identical SQL literal `NOT c.is_active AS \"retired!\"` in\nevery query that selects this column — the two read-axis queries (`list_visible`,\n`get_visible`, always `false` there by construction) and the two admin-axis queries\n(`list_retired_administered`, `get_retired_administered`) — and is never re-derived any\nother way, e.g. never inverted in Rust after the fact."
           },
           "slug": {
             "type": "string",
@@ -14712,6 +14842,65 @@
           "updated": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "RestoreContextOutcome": {
+        "type": "object",
+        "description": "What restore hands back — the reverse of [`RetireContextOutcome`], and the same four\nfields, plus `slug_changed`. Restore re-derives the address from the untouched `name`\nrather than trying to recover whatever retire mangled the slug to, so the returned slug\ncan differ from the one the caller retired under (spec §2.4).",
+        "required": [
+          "context_id",
+          "slug",
+          "context_ref",
+          "name",
+          "slug_changed"
+        ],
+        "properties": {
+          "context_id": {
+            "$ref": "#/components/schemas/ContextId"
+          },
+          "context_ref": {
+            "type": "string",
+            "description": "The full decorated ref, `{owner_ref}/{slug}`."
+          },
+          "name": {
+            "type": "string",
+            "description": "Unchanged by restore. The display label was never touched by retire either."
+          },
+          "slug": {
+            "type": "string",
+            "description": "The address after restore — the name's canonical slug, suffixed only if something else\nhas since taken it."
+          },
+          "slug_changed": {
+            "type": "boolean",
+            "description": "True when the address this restore hands back differs from the address the context\nwas retired under. That includes the case where the original address had been freed\nmeanwhile and restore landed on it — the caller still moves off the ref they retired\nwith, so it is still a change to report.\n\nReported rather than applied silently: handing back a different address without\nsaying so is the failure mode `rename` explicitly refuses. The baseline is the\n`from_slug` recorded on the `context_retired` event; a context retired before that\nevent existed has no recorded baseline and reports `true`, because nothing proves the\naddress was preserved. Witness:\n`restore_reports_a_change_when_it_lands_on_a_freed_sibling_address`."
+          }
+        }
+      },
+      "RetireContextOutcome": {
+        "type": "object",
+        "description": "What retire hands back. The caller needs BOTH halves to undo it: the read floor hides the\ncontext and the slug moved, so the ref they arrived with no longer names the row (spec §2.4.1).",
+        "required": [
+          "context_id",
+          "slug",
+          "context_ref",
+          "name"
+        ],
+        "properties": {
+          "context_id": {
+            "$ref": "#/components/schemas/ContextId"
+          },
+          "context_ref": {
+            "type": "string",
+            "description": "The full decorated ref, `{owner_ref}/{slug}`, which is what `restore` accepts."
+          },
+          "name": {
+            "type": "string",
+            "description": "Unchanged by retirement. The display label is not an address."
+          },
+          "slug": {
+            "type": "string",
+            "description": "The address after mangling — `<slug>-retired`, suffixed if that was taken."
           }
         }
       },

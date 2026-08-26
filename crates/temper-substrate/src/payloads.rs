@@ -1057,6 +1057,34 @@ pub struct ContextRenamed {
     pub to_slug: String,
 }
 
+/// Retire a context in place — flip `kb_contexts.is_active` to false and mangle its slug so the
+/// address frees for reuse. `from_slug`/`to_slug` are recorded for the audit trail; the projector
+/// writes only `to_slug`. Carried for the same reason `ContextRenamed` carries its `from_*` fields:
+/// `kb_contexts` has no `updated` column, so attributability rests entirely on the trail, not on
+/// any before-image the row itself keeps.
+///
+/// No `name` field: retirement never touches the name. No `is_active` field: the event NAME
+/// carries that (`context_retired` vs `context_restored`), and a payload that could disagree with
+/// its own event type is a bug waiting to happen.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct ContextRetired {
+    pub context_id: ContextId,
+    pub from_slug: String,
+    pub to_slug: String,
+}
+
+/// Restore a retired context in place — flip `kb_contexts.is_active` back to true and set the
+/// slug to the re-derived address. The mirror of [`ContextRetired`]; see its doc comment for why
+/// there is no `name` field and no `is_active` field.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct ContextRestored {
+    pub context_id: ContextId,
+    pub from_slug: String,
+    pub to_slug: String,
+}
+
 // `ProvenanceSource` is the shared wire carrier — canonical home `temper_core::types::provenance`
 // (CLAUDE.md: "the wire type lives in temper-core", the same chain as authorship below). Re-exported
 // so substrate's `payloads::ProvenanceSource` users (`Incorporation`, `BlockProvenanceCorrected`, and
