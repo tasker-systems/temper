@@ -2210,6 +2210,69 @@
         "x-apidog-folder": "Reference/API Reference/Contexts"
       }
     },
+    "/api/contexts/{id}/restore": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Contexts"
+        ],
+        "summary": "Restore a retired context",
+        "operationId": "restore_context",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Context ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Context restored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreContextOutcome"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller may read but not administer this context"
+          },
+          "404": {
+            "description": "Context not found, or not retired (uniform — no existence oracle)"
+          },
+          "409": {
+            "description": "The restored address collided under a concurrent write"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Contexts"
+      }
+    },
     "/api/contexts/{id}/shape": {
       "parameters": [
         {
@@ -14676,6 +14739,38 @@
           "updated": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "RestoreContextOutcome": {
+        "type": "object",
+        "description": "What restore hands back — the reverse of [`RetireContextOutcome`], and the same four\nfields, plus `slug_changed`. Restore re-derives the address from the untouched `name`\nrather than trying to recover whatever retire mangled the slug to, so the returned slug\ncan differ from the one the caller retired under (spec §2.4).",
+        "required": [
+          "context_id",
+          "slug",
+          "context_ref",
+          "name",
+          "slug_changed"
+        ],
+        "properties": {
+          "context_id": {
+            "$ref": "#/components/schemas/ContextId"
+          },
+          "context_ref": {
+            "type": "string",
+            "description": "The full decorated ref, `{owner_ref}/{slug}`."
+          },
+          "name": {
+            "type": "string",
+            "description": "Unchanged by restore. The display label was never touched by retire either."
+          },
+          "slug": {
+            "type": "string",
+            "description": "The address after restore — the name's canonical slug, suffixed only if something else\nhas since taken it."
+          },
+          "slug_changed": {
+            "type": "boolean",
+            "description": "True when the original address was taken and restore landed on a suffix.\nReported rather than applied silently: handing back a different address without\nsaying so is the failure mode `rename` explicitly refuses."
           }
         }
       },

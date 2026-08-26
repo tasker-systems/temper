@@ -255,3 +255,27 @@ pub struct RetireContextOutcome {
     /// Unchanged by retirement. The display label is not an address.
     pub name: String,
 }
+
+/// What restore hands back — the reverse of [`RetireContextOutcome`], and the same four
+/// fields, plus `slug_changed`. Restore re-derives the address from the untouched `name`
+/// rather than trying to recover whatever retire mangled the slug to, so the returned slug
+/// can differ from the one the caller retired under (spec §2.4).
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "context.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RestoreContextOutcome {
+    pub context_id: ContextId,
+    /// The address after restore — the name's canonical slug, suffixed only if something else
+    /// has since taken it.
+    pub slug: String,
+    /// The full decorated ref, `{owner_ref}/{slug}`.
+    pub context_ref: String,
+    /// Unchanged by restore. The display label was never touched by retire either.
+    pub name: String,
+    /// True when the original address was taken and restore landed on a suffix.
+    /// Reported rather than applied silently: handing back a different address without
+    /// saying so is the failure mode `rename` explicitly refuses.
+    pub slug_changed: bool,
+}

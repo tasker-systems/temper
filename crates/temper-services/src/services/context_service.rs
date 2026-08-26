@@ -31,7 +31,8 @@ use temper_workflow::operations::sluggify;
 pub use temper_core::types::context::{
     ContextCreateRequest, ContextRow, ContextRowWithCounts, InheritedReadGrant, InheritedShare,
     ReassignContextOutcome, ReassignContextRequest, RenameContextOutcome, RenameContextRequest,
-    RetireContextOutcome, ShareContextOutcome, ShareContextRequest, UnshareContextOutcome,
+    RestoreContextOutcome, RetireContextOutcome, ShareContextOutcome, ShareContextRequest,
+    UnshareContextOutcome,
 };
 
 /// List all contexts visible to the profile (owned + team-shared), with resource counts.
@@ -1030,6 +1031,74 @@ pub async fn retire(
         context_ref: format!("{}/{retired_slug}", cur.owner_ref),
         slug: retired_slug,
         name: cur.name,
+    })
+}
+
+/// Restore a retired context — the reverse of [`retire`]. Re-derives the address from the
+/// untouched `name` rather than trying to recover whatever retire mangled the slug to; that
+/// mangled slug was chosen only to get out of the way, and is not owed back.
+///
+/// **Auth before writes**, the same gate as [`retire`]: `ContextAdminAuthority` — own the
+/// context, or manage its owning team, or be an instance administrator.
+///
+/// **Fetching `cur` here is the subtle part.** The context is retired, so anything that reads
+/// through the read predicate will not find it. This copies `retire`'s own `cur` fetch
+/// verbatim (`:985-996`) — it is already `is_active`-BLIND because it reads `kb_contexts` by
+/// primary key, not through `context_visible_to`.
+pub async fn restore(
+    pool: &PgPool,
+    caller: ProfileId,
+    context_id: uuid::Uuid,
+) -> ApiResult<RestoreContextOutcome> {
+    crate::authz::authorize::<ContextAdminAuthority>(pool, caller, context_id).await?;
+
+    let cur = sqlx::query!(
+        r#"SELECT owner_table AS "owner_table!", owner_id AS "owner_id!", slug, name,
+              CASE owner_table
+                WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = owner_id)
+                ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = owner_id)
+              END AS "owner_ref!"
+         FROM kb_contexts WHERE id = $1"#,
+        context_id,
+    )
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| ApiError::NotFound(CONTEXT_REFUSAL.to_string()))?;
+
+    // Re-derived from the untouched name, not the mangled retired slug — `next_unique_context_slug`
+    // is `is_active`-BLIND for the same reason `retire`'s call is: the freed-then-reclaimed slug
+    // space is shared with retired rows.
+    let restored_slug =
+        next_unique_context_slug(pool, &cur.owner_table, cur.owner_id, &cur.name).await?;
+
+    let updated = sqlx::query!(
+        r#"UPDATE kb_contexts
+              SET is_active = true, slug = $2
+            WHERE id = $1 AND NOT is_active"#,
+        context_id,
+        restored_slug,
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| map_context_write_err(anyhow::Error::new(e)))?;
+
+    if updated.rows_affected() == 0 {
+        return Err(ApiError::NotFound(CONTEXT_REFUSAL.to_string()));
+    }
+
+    // `slug_changed` compares against what the caller would expect back — the plain sluggification
+    // of the name — not against whatever retire mangled it to.
+    let slug_changed = restored_slug != sluggify(&cur.name);
+
+    // Composed from the already-decorated `cur.owner_ref` — never through `decorated_context_ref`,
+    // whose `owner_addressable` parameter is the *bare* handle/team slug and would yield
+    // `@@handle/slug` from this value. Same note `retire` carries at its own return.
+    Ok(RestoreContextOutcome {
+        context_id: ContextId::from(context_id),
+        context_ref: format!("{}/{restored_slug}", cur.owner_ref),
+        slug: restored_slug,
+        name: cur.name,
+        slug_changed,
     })
 }
 
@@ -2069,6 +2138,65 @@ mod tests {
         assert!(
             matches!(second, Err(ApiError::NotFound(ref msg)) if msg == CONTEXT_REFUSAL),
             "expected NotFound, got {second:?}"
+        );
+    }
+
+    // ── Context restoration ───────────────────────────────────────────────────
+
+    /// Restore round-trips the address when nothing has since claimed it.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn restore_returns_the_original_address_when_it_is_free(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let ctx = mk_personal_context(&pool, "scratch", alice).await;
+
+        retire(&pool, alice, ctx).await.expect("retire");
+
+        let out = restore(&pool, alice, ctx).await.expect("restore");
+        assert_eq!(out.slug, "scratch");
+        assert!(!out.slug_changed, "the address was free, nothing to report");
+        assert_eq!(out.name, "scratch");
+
+        let readable: bool = sqlx::query_scalar("SELECT context_readable_by_profile($1, $2)")
+            .bind(*alice)
+            .bind(ctx)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(readable, "a restored context is readable again");
+    }
+
+    /// Restore into a collision lands on the suffix and SAYS SO. Handing back a different
+    /// address silently is the failure mode `rename` explicitly refuses (spec §2.4).
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn restore_into_a_taken_address_suffixes_and_reports_it(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let ctx = mk_personal_context(&pool, "scratch", alice).await;
+
+        retire(&pool, alice, ctx).await.expect("retire");
+
+        // A new context claims the freed slug before the first one is restored.
+        create(&pool, alice, "kb_profiles", *alice, "scratch")
+            .await
+            .expect("the freed slug is immediately reusable");
+
+        let out = restore(&pool, alice, ctx).await.expect("restore");
+        assert_eq!(out.slug, "scratch-2", "got slug {:?}", out.slug);
+        assert!(
+            out.slug_changed,
+            "landing on a suffix must be reported, not applied silently"
+        );
+    }
+
+    /// Restoring a context that was never retired is a clean refusal.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn restoring_a_live_context_is_not_found(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let ctx = mk_personal_context(&pool, "scratch", alice).await;
+
+        let out = restore(&pool, alice, ctx).await;
+        assert!(
+            matches!(out, Err(ApiError::NotFound(ref msg)) if msg == CONTEXT_REFUSAL),
+            "expected NotFound, got {out:?}"
         );
     }
 }

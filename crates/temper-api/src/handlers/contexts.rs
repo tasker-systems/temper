@@ -14,8 +14,8 @@ use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult};
 use temper_services::services::context_service::{
     self, ContextCreateRequest, ContextRow, ContextRowWithCounts, ReassignContextOutcome,
-    ReassignContextRequest, RenameContextOutcome, RenameContextRequest, RetireContextOutcome,
-    ShareContextOutcome, ShareContextRequest, UnshareContextOutcome,
+    ReassignContextRequest, RenameContextOutcome, RenameContextRequest, RestoreContextOutcome,
+    RetireContextOutcome, ShareContextOutcome, ShareContextRequest, UnshareContextOutcome,
 };
 use temper_services::services::materialize_service;
 use temper_services::state::AppState;
@@ -120,6 +120,35 @@ pub async fn delete(
     )
     .await?;
     Ok(Json(outcome))
+}
+
+/// Restore a retired context
+#[utoipa::path(
+    post,
+    operation_id = "restore_context",
+    path = "/api/contexts/{id}/restore",
+    tag = "Contexts",
+    params(("id" = Uuid, Path, description = "Context ID")),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Context restored", body = RestoreContextOutcome),
+        (status = 403, description = "Caller may read but not administer this context"),
+        (status = 404, description = "Context not found, or not retired (uniform — no existence oracle)"),
+        (status = 409, description = "The restored address collided under a concurrent write"),
+    )
+)]
+pub async fn restore(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(context_id): Path<Uuid>,
+) -> ApiResult<Json<RestoreContextOutcome>> {
+    context_service::restore(
+        &state.pool,
+        ProfileId::from(auth.0.profile().id),
+        context_id,
+    )
+    .await
+    .map(Json)
 }
 
 /// Share a context with a team

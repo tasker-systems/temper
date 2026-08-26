@@ -601,6 +601,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/contexts/{id}/restore": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Restore a retired context */
+        post: operations["restore_context"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/contexts/{id}/shape": {
         parameters: {
             query?: never;
@@ -6038,6 +6058,30 @@ export interface components {
             updated: string;
         };
         /**
+         * @description What restore hands back — the reverse of [`RetireContextOutcome`], and the same four
+         *     fields, plus `slug_changed`. Restore re-derives the address from the untouched `name`
+         *     rather than trying to recover whatever retire mangled the slug to, so the returned slug
+         *     can differ from the one the caller retired under (spec §2.4).
+         */
+        RestoreContextOutcome: {
+            context_id: components["schemas"]["ContextId"];
+            /** @description The full decorated ref, `{owner_ref}/{slug}`. */
+            context_ref: string;
+            /** @description Unchanged by restore. The display label was never touched by retire either. */
+            name: string;
+            /**
+             * @description The address after restore — the name's canonical slug, suffixed only if something else
+             *     has since taken it.
+             */
+            slug: string;
+            /**
+             * @description True when the original address was taken and restore landed on a suffix.
+             *     Reported rather than applied silently: handing back a different address without
+             *     saying so is the failure mode `rename` explicitly refuses.
+             */
+            slug_changed: boolean;
+        };
+        /**
          * @description What retire hands back. The caller needs BOTH halves to undo it: the read floor hides the
          *     context and the slug moved, so the ref they arrived with no longer names the row (spec §2.4.1).
          */
@@ -8585,6 +8629,53 @@ export interface operations {
                 content?: never;
             };
             /** @description Another context under the same owner already holds the derived slug */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    restore_context: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Context ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Context restored */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoreContextOutcome"];
+                };
+            };
+            /** @description Caller may read but not administer this context */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Context not found, or not retired (uniform — no existence oracle) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The restored address collided under a concurrent write */
             409: {
                 headers: {
                     [name: string]: unknown;

@@ -103,6 +103,7 @@ fn gated_routes() -> OpenApiRouter<AppState> {
             handlers::contexts::create
         ))
         .routes(routes!(handlers::contexts::get, handlers::contexts::delete))
+        .routes(routes!(handlers::contexts::restore))
         .routes(routes!(handlers::contexts::share_team))
         .routes(routes!(handlers::contexts::unshare_team))
         .routes(routes!(handlers::contexts::reassign))
