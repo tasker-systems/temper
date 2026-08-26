@@ -99,6 +99,35 @@ pub fn decorated_ref(title: &str, id: ResourceId) -> String {
     format!("{}-{}", sluggify(title), id.0)
 }
 
+/// [`decorated_ref`] with the slug half bounded to `max_slug` bytes.
+///
+/// The same shape as [`decorated_ref`], resolved by the same
+/// trailing-UUID-only [`parse_ref`]. That is what makes truncating the
+/// decoration safe here: the identity contract at the top of this module
+/// already says the slug half is presentation and a wrong one is harmless, so
+/// a *shortened* one is too. This is not a second addressing scheme.
+///
+/// It exists for filesystem consumers. `sluggify` is unbounded, but a single
+/// path component is capped at 255 bytes on ext4, APFS and NTFS alike, so an
+/// undecorated `sluggify(title).md` can name a file the OS refuses to create —
+/// and long agent-authored titles do reach that length in practice. Carrying
+/// the uuid means the bound costs nothing that matters: the truncated half is
+/// for a human reading `ls`, and the identity is the 36 characters after it.
+///
+/// `sluggify` output is pure ASCII by construction, so a byte-index cut can
+/// never split a character. A cut landing inside a hyphen run would leave a
+/// trailing `-`, so the head is trimmed and the result stays
+/// `validate_slug`-conformant. A title that slugs to nothing (or a `max_slug`
+/// that leaves nothing) yields the bare uuid rather than a leading `-`.
+pub fn decorated_ref_bounded(title: &str, id: ResourceId, max_slug: usize) -> String {
+    let slug = sluggify(title);
+    let head = slug.get(..max_slug).unwrap_or(&slug).trim_end_matches('-');
+    if head.is_empty() {
+        return id.0.to_string();
+    }
+    format!("{head}-{}", id.0)
+}
+
 /// Resolve a ref string to a `ResourceId`. Accepts a bare UUID or a
 /// decorated `…-<uuid>` form; resolution is trailing-UUID-only (the
 /// decoration is ignored). No fuzzy/fragment matching — unparseable input
@@ -306,5 +335,68 @@ mod tests {
         // ftp is neither.
         assert!(!is_remote_url("ftp://h/x"));
         assert!(!is_remote_provenance_uri("ftp://h/x"));
+    }
+
+    // -- decorated_ref_bounded -------------------------------------------
+
+    fn an_id() -> ResourceId {
+        ResourceId(Uuid::parse_str("019fbb77-72a3-72e1-bbbd-13eb6aa64982").unwrap())
+    }
+
+    #[test]
+    fn bounded_ref_is_unchanged_when_the_slug_already_fits() {
+        // Under the bound, this must be byte-identical to the undecorated form —
+        // the bound is a cap, not a separate scheme.
+        let title = "A short enough title";
+        assert_eq!(
+            decorated_ref_bounded(title, an_id(), 120),
+            decorated_ref(title, an_id())
+        );
+    }
+
+    #[test]
+    fn bounded_ref_caps_the_slug_half_and_keeps_the_whole_uuid() {
+        let title = "word ".repeat(200); // slugs to ~999 chars
+        let out = decorated_ref_bounded(&title, an_id(), 120);
+        // Split on the uuid, NOT on the last hyphen — a uuid contains four of its own.
+        let uuid = an_id().0.to_string();
+        let head = out
+            .strip_suffix(&uuid)
+            .and_then(|h| h.strip_suffix('-'))
+            .unwrap_or_else(|| panic!("{out} must end in `-<uuid>`"));
+        assert!(head.len() <= 120, "slug half {} > 120", head.len());
+        assert!(!head.is_empty(), "a long title keeps a readable head");
+    }
+
+    #[test]
+    fn a_bounded_ref_still_resolves_to_its_resource() {
+        // The whole safety argument: resolution is trailing-UUID-only, so a
+        // truncated decoration resolves exactly as the full one does.
+        let title = "an extremely long agent authored title ".repeat(20);
+        let out = decorated_ref_bounded(&title, an_id(), 120);
+        assert_eq!(parse_ref(&out).unwrap(), an_id());
+    }
+
+    #[test]
+    fn a_cut_inside_a_hyphen_run_leaves_no_trailing_hyphen() {
+        // "aaaa-bbbb-..." cut at 5 lands on the hyphen; the head must not end in one,
+        // or the result would carry a doubled `-` before the uuid and stop being
+        // validate_slug-conformant.
+        let out = decorated_ref_bounded("aaaa bbbb cccc", an_id(), 5);
+        assert_eq!(out, format!("aaaa-{}", an_id().0));
+    }
+
+    #[test]
+    fn a_slug_that_empties_yields_the_bare_uuid_not_a_leading_hyphen() {
+        // A wholly non-Latin title slugs to "", and a zero bound empties any slug.
+        // Either way the filename must not begin with `-`.
+        assert_eq!(
+            decorated_ref_bounded("", an_id(), 120),
+            an_id().0.to_string()
+        );
+        assert_eq!(
+            decorated_ref_bounded("anything", an_id(), 0),
+            an_id().0.to_string()
+        );
     }
 }

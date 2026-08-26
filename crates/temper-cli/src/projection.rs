@@ -230,6 +230,38 @@ pub fn prune_context(vault_root: &Path, context: &str, keep: &HashSet<PathBuf>) 
     Ok(removed)
 }
 
+/// Bound on the slug half of a projection filename, in bytes.
+///
+/// A single path component is capped at 255 bytes on ext4, APFS and NTFS, and
+/// `sluggify` is unbounded — long agent-authored titles have produced names the
+/// OS refuses to create. 120 + `-` + a 36-byte uuid + `.md` is 160 bytes, which
+/// leaves the cap unreachable no matter how the title grows while keeping
+/// enough of the title to recognize the file in `ls`.
+///
+/// **The usable budget is 238, not 255.** `Frontmatter::write_to` writes through
+/// a sibling temp file named `.{filename}.frontmatter.tmp`
+/// (`temper-workflow/src/frontmatter/document.rs:390`), which is 17 bytes longer
+/// than the file it becomes — so the temp path hits the limit first, and the
+/// error names a path that does not exist afterwards. Any future raise of this
+/// constant must clear `238 - 1 - 36 - 3 = 198`.
+pub const PROJECTION_SLUG_MAX_BYTES: usize = 120;
+
+/// The filename stem for a resource's projection file: the resource's decorated
+/// ref with the slug half bounded.
+///
+/// The stem is deliberately the *same shape* as the ref printed by every
+/// `list`/`show` row, so a filename can be pasted straight into
+/// `temper resource show`. Identity lives in the trailing uuid — which is what
+/// resolution reads and what the delete path matches on — so the readable half
+/// is free to be cut.
+fn projection_stem(row: &ResourceView) -> String {
+    temper_workflow::operations::decorated_ref_bounded(
+        &row.title,
+        row.id,
+        PROJECTION_SLUG_MAX_BYTES,
+    )
+}
+
 /// Assemble and write a resource's projection file from an already-fetched
 /// row and content. The pure-write half of [`write_resource_file`] — it
 /// makes no network call. `pull_context` reaches it via `write_resource_file`
@@ -269,7 +301,7 @@ pub fn write_resource_file_from_parts(
     };
     let doc_type = row.doc_type_name.as_str();
 
-    let slug = ingest::slug_from_title(&row.title);
+    let stem = projection_stem(row);
 
     // Propagate a serialization failure rather than writing `null` into the projected file's
     // frontmatter — a silent `unwrap_or(Null)` here would corrupt the on-disk managed meta.
@@ -290,7 +322,7 @@ pub fn write_resource_file_from_parts(
         open_meta: content.open_meta.as_ref(),
     })?;
 
-    let path = Vault::new(vault_root).doc_file(owner, context, doc_type, &slug);
+    let path = Vault::new(vault_root).doc_file(owner, context, doc_type, &stem);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -331,8 +363,6 @@ pub fn remove_resource_file_for_row(
     config: &crate::config::Config,
     row: &ResourceView,
 ) -> Result<()> {
-    use crate::actions::ingest;
-
     // A cogmap-homed resource was never projected to disk (no context path),
     // so there is nothing to remove. Skip — same bounded edge as the writer.
     let Some(context) = row.context_name.as_deref() else {
@@ -344,8 +374,8 @@ pub fn remove_resource_file_for_row(
     };
 
     let owner = config.owner_for_context(context);
-    let slug = ingest::slug_from_title(&row.title);
-    remove_resource_file(vault_root, &owner, context, &row.doc_type_name, &slug)
+    let stem = projection_stem(row);
+    remove_resource_file(vault_root, &owner, context, &row.doc_type_name, &stem)
 }
 
 /// Remove a resource's projection file at its canonical vault path.
@@ -637,6 +667,131 @@ mod tests {
         remove_resource_file(root, "@me", "myctx", "task", "doomed").unwrap();
 
         assert!(!file.exists(), "projection file removed");
+    }
+
+    /// A row carrying only the fields the projection stem reads. Every other
+    /// field is defaulted — this witnesses the filename, not the frontmatter.
+    fn row_titled(title: &str, id: Uuid) -> ResourceView {
+        use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
+        ResourceView {
+            id: ResourceId(id),
+            r#ref: String::new(),
+            title: title.to_string(),
+            origin_uri: String::new(),
+            kb_context_id: Some(ContextId(Uuid::nil())),
+            context_name: Some("myctx".to_string()),
+            context_slug: Some("myctx".to_string()),
+            context_owner_ref: Some("@me".to_string()),
+            context_ref: Some("@me/myctx".to_string()),
+            cogmap_id: None,
+            cogmap_name: None,
+            doc_type_name: "research".to_string(),
+            owner_handle: "@me".to_string(),
+            owner_profile_id: ProfileId(Uuid::nil()),
+            originator_profile_id: ProfileId(Uuid::nil()),
+            is_active: true,
+            created: Utc::now(),
+            updated: Utc::now(),
+            body_hash: None,
+            ingest_state: None,
+            body_storage: None,
+            managed_meta: Default::default(),
+            open_meta: None,
+            content: None,
+        }
+    }
+
+    /// A `ContentResponse` carrying only a body — the projection writer reads
+    /// `markdown` plus the two meta tiers, and the tiers are not what these
+    /// filename tests are about.
+    fn body_only(markdown: &str) -> ContentResponse {
+        ContentResponse {
+            resource_id: temper_core::types::ids::ResourceId(Uuid::nil()),
+            markdown: markdown.to_string(),
+            managed_meta: None,
+            open_meta: None,
+        }
+    }
+
+    /// The property: a projection filename is writable on this filesystem, no
+    /// matter how long the title is.
+    ///
+    /// Agent-authored titles in enterprise rollouts have run past the point
+    /// where `sluggify(title).md` exceeds the 255-byte cap a single path
+    /// component gets on ext4/APFS/NTFS, and the writer then failed with
+    /// `ENAMETOOLONG`. Asserting the *byte length* rather than just "the write
+    /// succeeded" is deliberate: a filesystem with a looser cap (or none) would
+    /// let an unbounded name through and the test would pass while the bug
+    /// remained live for everyone else.
+    #[test]
+    fn a_projection_filename_stays_within_the_filesystem_component_limit() {
+        /// The POSIX `NAME_MAX` that ext4, APFS and NTFS all land on, less the 17
+        /// bytes `Frontmatter::write_to`'s `.{name}.frontmatter.tmp` sidecar adds —
+        /// the temp path is the component that hits the limit first.
+        const NAME_MAX: usize = 255 - 17;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        // ~999 slug bytes — comfortably past the cap on its own.
+        let title = "an extremely long agent authored resource title ".repeat(21);
+        let id = Uuid::now_v7();
+
+        let path = write_resource_file_from_parts(
+            dir.path(),
+            &row_titled(&title, id),
+            &body_only("# body\n"),
+        )
+        .expect("an over-long title must still project")
+        .expect("a context-homed resource projects to a path");
+
+        let name = path.file_name().unwrap().to_str().unwrap();
+        assert!(
+            name.len() <= NAME_MAX,
+            "projection filename is {} bytes, over the {NAME_MAX}-byte component limit: {name}",
+            name.len()
+        );
+        assert!(path.exists(), "the file was actually created at {name}");
+    }
+
+    /// The truncated half is decoration; the uuid is what identifies the file.
+    /// Two resources whose titles agree for the first 120 slug bytes must not
+    /// collide — under the old `sluggify(title).md` scheme they would have,
+    /// because truncation without a discriminator is a collision generator.
+    #[test]
+    fn two_long_titles_sharing_a_prefix_project_to_distinct_files() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let shared = "the same opening clause repeated until well past the bound ".repeat(4);
+        let content = body_only("# body\n");
+
+        let a = write_resource_file_from_parts(
+            dir.path(),
+            &row_titled(&format!("{shared} and then one ending"), Uuid::now_v7()),
+            &content,
+        )
+        .unwrap()
+        .unwrap();
+        let b = write_resource_file_from_parts(
+            dir.path(),
+            &row_titled(&format!("{shared} and then another"), Uuid::now_v7()),
+            &content,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_ne!(a, b, "distinct resources must not share a projection file");
+        assert!(a.exists() && b.exists(), "both files survive");
+    }
+
+    /// The stem is paste-able: the filename a reader sees in `ls` resolves to
+    /// the resource it holds, via the same trailing-UUID-only `parse_ref` that
+    /// every printed ref uses.
+    #[test]
+    fn a_projection_filename_resolves_back_to_its_resource() {
+        let id = Uuid::now_v7();
+        let stem = projection_stem(&row_titled(&"a long title ".repeat(30), id));
+        assert_eq!(
+            temper_workflow::operations::parse_ref(&stem).unwrap(),
+            temper_core::types::ids::ResourceId(id)
+        );
     }
 
     #[test]

@@ -1172,7 +1172,7 @@ async fn cloud_list_returns_remote_only_resources(pool: sqlx::PgPool) {
 /// 1. The projection file exists at the canonical vault path.
 /// 2. The file's frontmatter contains the correct `temper-slug`.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-#[ignore = "deferred (F1): readback drops temper-slug (KeyFate::Die), so row.slug=None and the projection path falls back to the non-date-prefixed slug_from_title (projection.rs), landing the file at @me/<ctx>/task/<title-slug>.md not the asserted {date}-{slug} path; frontmatter also omits temper-slug. Blocked on the unimplemented slug-readback identity injection (and the @me-vs-owner_handle projection-dir gap)"]
+#[ignore = "deferred (F1): readback drops temper-slug (KeyFate::Die), so row.slug=None and the projection path falls back to the non-date-prefixed slug_from_title (projection.rs), landing the file at @me/<ctx>/task/<title-slug>.md not the asserted {date}-{slug} path; frontmatter also omits temper-slug. ALSO now asserts a retired filename scheme: the projection stem is a bounded decorated ref (`sluggify(title)` capped at `projection::PROJECTION_SLUG_MAX_BYTES`, then `-<uuid>`), never `{date}-{slug}` — un-ignoring means deriving the expected path from the created resource's id, as `projection_pull_test.rs::projected` does."]
 async fn create_writes_canonical_projection_file(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;
 
@@ -1267,7 +1267,7 @@ async fn create_writes_canonical_projection_file(pool: sqlx::PgPool) {
 /// 2. After the meta-only update, the projection file's frontmatter contains
 ///    the new title, proving the projection was rewritten by `update`'s tail action.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-#[ignore = "deferred (F1): readback drops temper-slug (KeyFate::Die), so row.slug=None and the projection path falls back to the non-date-prefixed slug_from_title (projection.rs); the file does not exist at the asserted {date}-{slug} path. Blocked on the unimplemented slug-readback identity injection (and the @me-vs-owner_handle projection-dir gap)"]
+#[ignore = "deferred (F1): readback drops temper-slug (KeyFate::Die), so row.slug=None and the projection path falls back to the non-date-prefixed slug_from_title (projection.rs); the file does not exist at the asserted {date}-{slug} path. ALSO now asserts a retired filename scheme: the projection stem is a bounded decorated ref (`sluggify(title)` capped at `projection::PROJECTION_SLUG_MAX_BYTES`, then `-<uuid>`), never `{date}-{slug}` — un-ignoring means deriving the expected path from the created resource's id, as `projection_pull_test.rs::projected` does."]
 async fn update_rewrites_projection_file_on_success(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;
 
@@ -1427,7 +1427,7 @@ async fn update_rewrites_projection_file_on_success(pool: sqlx::PgPool) {
 /// 2. After `delete --force`, the projection file is gone from disk.
 /// 3. The resource is marked inactive in the database (server-side soft-delete).
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-#[ignore = "deferred (F1): readback drops temper-slug (KeyFate::Die), so row.slug=None and the projection path falls back to the non-date-prefixed slug_from_title (projection.rs); the file is not present at the asserted {date}-{slug} path to begin with, and the `kb_resources.slug` soft-delete assertion references the dropped slug column. Blocked on the unimplemented slug-readback identity injection (and the @me-vs-owner_handle projection-dir gap)"]
+#[ignore = "deferred (F1): readback drops temper-slug (KeyFate::Die), so row.slug=None and the projection path falls back to the non-date-prefixed slug_from_title (projection.rs); the file is not present at the asserted {date}-{slug} path to begin with, and the `kb_resources.slug` soft-delete assertion references the dropped slug column. ALSO now asserts a retired filename scheme: the projection stem is a bounded decorated ref (`sluggify(title)` capped at `projection::PROJECTION_SLUG_MAX_BYTES`, then `-<uuid>`), never `{date}-{slug}` — un-ignoring means deriving the expected path from the created resource's id, as `projection_pull_test.rs::projected` does."]
 async fn delete_removes_the_projection_file(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;
 

@@ -442,7 +442,9 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
     // Slug is §7-dissolved (never stored; addressing is trailing-UUID-only), so it is NOT a
     // caller input — always derived from the title. It seeds the client-side `validate_create`
     // temper-slug check; the server re-derives its own from the title (issue #307 Bug 2). The
-    // date-prefix for non-Concept/Goal doctypes is retained for the local projection filename.
+    // date-prefix for non-Concept/Goal doctypes is a property of THIS slug only — the local
+    // projection filename is `projection::projection_stem` (a bounded decorated ref) and has
+    // never carried the prefix.
     let doctype_enum = temper_workflow::frontmatter::DocType::from_str(doc_type).ok();
     let slug_resolved = derive_create_slug(title, doctype_enum);
 
@@ -691,7 +693,8 @@ fn resolve_create_body(
 /// are identified by name). `doctype` is `None` for an unrecognized (open-tail)
 /// label, which falls into the date-prefixed catch-all alongside every other
 /// non-Concept/Goal doctype. Used for the client-side `validate_create` temper-slug
-/// check and the local projection filename; the server re-derives its own.
+/// check only; the server re-derives its own, and the local projection filename is
+/// built by `projection::projection_stem` from the title and id, not from this.
 fn derive_create_slug(
     title: &str,
     doctype: Option<temper_workflow::frontmatter::DocType>,
@@ -1505,15 +1508,23 @@ pub(crate) fn build_show_document(
 ///
 /// Cloud-only and context-free: the ref resolves to a `ResourceId`, the view +
 /// content are fetched by id (no `resolve_by_uri`, no doctype dispatch — the
-/// three former per-doctype shows rendered identically), the canonical
-/// projection file is refreshed best-effort, and the view+body is rendered.
+/// three former per-doctype shows rendered identically), and the view+body is
+/// rendered.
+///
+/// **`show` touches no file.** It used to refresh the addressed resource's
+/// projection file as a side effect, which made a read a write: it created
+/// vault directories on a machine that had never run `pull`, and it was the
+/// path on which an over-long title's filename hit the filesystem's 255-byte
+/// cap. The local projection is now populated by `pull` and maintained only by
+/// the commands that themselves mutate the resource (create / update / delete).
+/// See `internal/vault-projection-cache-design.md`.
 ///
 /// **Sections decide what is fetched, not just what is printed.** `--without body` skips the
 /// `GET /content` round-trip entirely, which is the whole reason the old `--meta-only` was
 /// cheap; it is the same saving under a name that composes. `--without open-meta` is a
 /// render-time drop rather than a saving, because `GET /api/resources/{id}` carries both tiers
 /// unconditionally — one call either way, so there is nothing to skip.
-pub fn show(config: &Config, params: ShowParams<'_>) -> Result<()> {
+pub fn show(_config: &Config, params: ShowParams<'_>) -> Result<()> {
     let id = temper_workflow::operations::parse_ref(params.r#ref)?;
 
     let sections = resource_sections::resolve_sections(
@@ -1523,7 +1534,6 @@ pub fn show(config: &Config, params: ShowParams<'_>) -> Result<()> {
     )?;
     let want_body = sections.contains(ResourceSection::Body);
 
-    let config_clone = config.clone();
     let (mut metadata, body) = crate::actions::runtime::with_client(move |client| {
         Box::pin(async move {
             // `get` returns a `ResourceView` — the same shape a `list` row is, with the
@@ -1541,18 +1551,6 @@ pub fn show(config: &Config, params: ShowParams<'_>) -> Result<()> {
                     .content(uuid::Uuid::from(id))
                     .await
                     .map_err(crate::actions::runtime::client_err_to_temper)?;
-
-                // Per-resource projection refresh — best-effort, and only on the path that
-                // actually holds a body. The projection file IS the body plus frontmatter,
-                // so refreshing it from a body-less read would write a truncated file over a
-                // complete one: a cheap read must not damage the cache.
-                if let Err(e) = crate::projection::write_resource_file_from_parts(
-                    &config_clone.vault_root,
-                    &detail,
-                    &resp,
-                ) {
-                    crate::output::warning(format!("could not refresh projection file: {e}"));
-                }
                 Some(resp.markdown)
             } else {
                 None

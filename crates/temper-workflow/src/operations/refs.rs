@@ -12,7 +12,8 @@
 //! [`ResourceView`]: crate::types::ResourceView
 
 pub use temper_core::refs::{
-    decorated_ref, is_remote_url, parse_ref, resolve_provenance_source, sluggify,
+    decorated_ref, decorated_ref_bounded, is_remote_url, parse_ref, resolve_provenance_source,
+    sluggify,
 };
 
 #[cfg(test)]

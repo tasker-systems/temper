@@ -107,13 +107,3 @@ pub struct NormalizeSummary {
     pub frontmatter_fixed: u32,
     pub tasks_without_effort: u32,
 }
-
-/// A document in the vault with its content and metadata.
-#[derive(Debug, Clone)]
-pub struct VaultDocument {
-    pub path: String,
-    pub note_type: String,
-    pub title: String,
-    pub frontmatter: serde_yaml::Value,
-    pub body: String,
-}
