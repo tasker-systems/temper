@@ -72,11 +72,17 @@ pub struct WarmupTask {
 pub struct PendingSummary {
     /// Team invitations addressed to the caller's verified email.
     pub invitations: usize,
-    /// Join requests awaiting an admin — `None` when the caller is not an instance admin.
+    /// Join requests awaiting an admin — `None` when the queue was **not read**.
     ///
-    /// `None` and `Some(0)` are different facts and are never collapsed: `None` means nothing was
-    /// read, `Some(0)` means an admin read an empty queue. Collapsing them would make the field
-    /// useless to the only person it is for.
+    /// `None` and `Some(0)` are different facts and are never collapsed: `Some(0)` means an admin
+    /// read an empty queue, `None` means nothing was read at all. Collapsing them would make the
+    /// field useless to the only person it is for.
+    ///
+    /// Two things produce `None`, and they are not distinguished *in the field*: the caller is not
+    /// an instance admin (every `403` arm), or the read failed. The second always prints its reason
+    /// to stderr, so the stream — not the JSON — is what tells them apart. That is a deliberate
+    /// trade: the alternative was losing the whole block, invitation count included, whenever one
+    /// secondary queue was unavailable.
     pub join_requests: Option<usize>,
     /// Reconsideration requests awaiting an admin — same `None` semantics as `join_requests`.
     pub review_requests: Option<usize>,
@@ -219,6 +225,11 @@ struct CloudState {
 /// `Entitlements.is_admin` test would be a second copy, free to drift from the gate it predicts —
 /// the same shape this repo retired when the client-side goal-status filter became a query
 /// predicate (see [`goal_from_row`]).
+/// **Named remainder — this counts by fetching.** All three reads return full rows (handles,
+/// emails, messages, and for invitations the redemption `token`) so that `.len()` can be taken, on
+/// a command wired into the session-start hook. Three round trips per warmup, two of which are a
+/// refusal for every non-admin — and a non-admin cannot be identified without asking, which is the
+/// whole design. Count endpoints would fix it and are not built here.
 async fn fetch_pending(client: &temper_client::TemperClient) -> Result<PendingSummary> {
     let invitations = client
         .teams()
@@ -227,13 +238,19 @@ async fn fetch_pending(client: &temper_client::TemperClient) -> Result<PendingSu
         .map_err(runtime::client_err_to_temper)?
         .len();
 
-    let join_requests = admin_count(client.admin().list_requests().await.map(|r| r.len()))?;
-    let review_requests = admin_count(client.admin().list_reviews().await.map(|r| r.len()))?;
-
+    // The operator queues degrade to "not read" independently. Only the invitation read above is
+    // allowed to take the whole block down with it, because that count is what this block is FOR —
+    // if it is unknown there is nothing worth reporting, and the hint has nothing to say.
     Ok(PendingSummary {
         invitations,
-        join_requests,
-        review_requests,
+        join_requests: operator_count(
+            client.admin().list_requests().await.map(|r| r.len()),
+            "join request",
+        ),
+        review_requests: operator_count(
+            client.admin().list_reviews().await.map(|r| r.len()),
+            "reconsideration",
+        ),
     })
 }
 
@@ -251,8 +268,35 @@ fn admin_count(
     use temper_client::error::ClientError;
     match result {
         Ok(n) => Ok(Some(n)),
-        Err(ClientError::Forbidden | ClientError::ForbiddenDetail { .. }) => Ok(None),
+        Err(
+            ClientError::Forbidden
+            | ClientError::ForbiddenDetail { .. }
+            | ClientError::SystemAccessRequired(_),
+        ) => Ok(None),
         Err(e) => Err(runtime::client_err_to_temper(e)),
+    }
+}
+
+/// [`admin_count`], with a failed read degraded to "not read" and the reason put on stderr.
+///
+/// The split is deliberate: `admin_count` keeps the strict mapping so a transport failure can never
+/// silently wear a refusal's `None`, and this wrapper decides — separately, and out loud — that a
+/// primer should not lose the rest of its answer over one secondary queue.
+///
+/// The concrete case is version skew, which this very change guarantees for a window: a CLI that
+/// knows `/api/access/admin/reviews` pointed at an API that does not yet serve it gets a `404`, and
+/// without this the caller's own invitation count — read successfully, moments earlier — would be
+/// thrown away on every session start.
+fn operator_count(
+    result: std::result::Result<usize, temper_client::error::ClientError>,
+    queue: &str,
+) -> Option<usize> {
+    match admin_count(result) {
+        Ok(count) => count,
+        Err(e) => {
+            eprintln!("warning: could not read the {queue} queue: {e}");
+            None
+        }
     }
 }
 
@@ -463,6 +507,11 @@ fn in_progress_tasks(tasks: Vec<TaskInfo>) -> Vec<WarmupTask> {
 /// `warmup_reports_only_active_goals` in `tests/e2e/tests/cloud_warmup_e2e_test.rs` seeds
 /// goals across every status value and drives a real server, so it now exercises the
 /// filter that actually runs instead of a second copy of the rule.
+/// **Named remainder — what these tests do not reach.** `fetch_pending`'s behaviour under
+/// CLI/API version skew (invitations read, an operator queue `404`s, block survives with that
+/// field `None`) is asserted only at the `operator_count` seam. Driving the whole function through
+/// that state needs a server that serves one route and not another, which no fixture here builds.
+/// The seam is pinned; the composition is not.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -477,7 +526,34 @@ mod tests {
         }
     }
 
-    /// **Both `403` arms mean the same fact, and both must map to `None`.**
+    fn system_access_required() -> ClientError {
+        ClientError::SystemAccessRequired(Box::new(temper_core::error::CliAccessDetails {
+            email: None,
+            display_name: None,
+            refusal: None,
+            request_url: None,
+            cli_command: None,
+        }))
+    }
+
+    /// **The third `403` arm — and the one that matters most, because it is the newcomer's.**
+    ///
+    /// `handlers::invitations::list_mine` is mounted in `auth_only_routes()`, while the two operator
+    /// queues are in `gated_routes()` behind `require_system_access`. So a principal who has signed
+    /// in but holds no approved standing reads their invitations fine and gets
+    /// `403 SYSTEM_ACCESS_REQUIRED` from both queues — a *third* arm, checked before the other two
+    /// in `http.rs`.
+    ///
+    /// Propagating it collapsed the whole block to `None`, which then silenced
+    /// [`context_failure_hint`] — so the one population this feature exists for, the invited
+    /// newcomer who cannot yet read the team's context, got no invitation count and no hint.
+    /// Exactly the trap the hint was written to close, closed against them.
+    #[test]
+    fn no_system_access_reads_as_not_an_admin_too() {
+        assert_eq!(admin_count(Err(system_access_required())).unwrap(), None);
+    }
+
+    /// **Every `403` arm means the same fact, and all of them must map to `None`.**
     ///
     /// `None` on an operator count is a claim about the caller's ROLE: "the server refused to tell
     /// me". `require_system_admin` returns a bare `ApiError::Forbidden` today, so bare
@@ -520,6 +596,28 @@ mod tests {
         }))
         .is_err());
         assert!(admin_count(Err(ClientError::TokenExpired)).is_err());
+    }
+
+    /// **A failed operator read degrades to "not read" instead of taking the block with it.**
+    ///
+    /// The case this PR itself creates: `/api/access/admin/reviews` is a new route, so during any
+    /// rollout window a CLI that knows it can be pointed at an API that does not serve it yet, and
+    /// answers `404`. Before this, that discarded the caller's own invitation count — read
+    /// successfully moments earlier — on every single session start.
+    ///
+    /// Note what is NOT claimed here: this pins `operator_count`'s return, not the end-to-end
+    /// behaviour of `fetch_pending` under skew, which has no witness (see the test module's note).
+    #[test]
+    fn a_failed_operator_read_does_not_propagate() {
+        assert_eq!(
+            operator_count(
+                Err(ClientError::NotFound {
+                    message: "no such route".to_string(),
+                }),
+                "reconsideration",
+            ),
+            None,
+        );
     }
 
     /// The hint names the count, and reaches for the one command that needs no context.

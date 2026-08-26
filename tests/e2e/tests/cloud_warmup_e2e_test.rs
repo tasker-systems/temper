@@ -729,3 +729,68 @@ async fn warmup_names_the_waiting_invitation_when_it_fails_on_context(pool: sqlx
         "and points at the one command that needs no context: {stderr}"
     );
 }
+
+/// **The newcomer — the population this whole feature exists for — driven end to end.**
+///
+/// `handlers::invitations::list_mine` is mounted in `auth_only_routes()`; the two operator queues
+/// are in `gated_routes()` behind `require_system_access`. A principal who has signed in but holds
+/// no approved standing therefore reads their own invitations fine and gets
+/// `403 SYSTEM_ACCESS_REQUIRED` from both queues — a THIRD `403` arm, distinct from `Forbidden` and
+/// `ForbiddenDetail` and checked before either.
+///
+/// Propagating that arm collapsed `pending` to `null`, which silenced the hint — so the invited
+/// newcomer who cannot yet read the team's context got no count and no way out. The trap the hint
+/// was written to close, closed against precisely the person it was for.
+///
+/// Every other test in this file runs as `common::setup`'s already-approved principal, which is why
+/// none of them could see this. Standing is stripped here deliberately, and the assertion is the
+/// stderr of a real failed process.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn warmup_hints_the_newcomer_who_has_no_system_access_yet(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let me = app
+        .client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+
+    let inviter = common::provision_and_approve_second(&app).await;
+    seed_invitation(&pool, inviter, "e2e@test.example.com").await;
+
+    // Strip system access: signed in and provisioned, but not yet admitted — the state an invitee
+    // is in before anything has been accepted on their behalf.
+    sqlx::query("DELETE FROM kb_principal_standing WHERE profile_id = $1")
+        .bind(me.id)
+        .execute(&pool)
+        .await
+        .expect("strip standing");
+
+    let out = common::run_temper_cli(&app, &["warmup", "--context", "+acme-eng/work"])
+        .await
+        .expect("cli ran");
+
+    assert!(
+        !out.status.success(),
+        "the context is still unreadable, so the command still fails"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("1 team invitation waiting on you"),
+        "the newcomer must be told what is waiting: {stderr}"
+    );
+    assert!(
+        stderr.contains("temper invitations"),
+        "and pointed at the command that needs no context: {stderr}"
+    );
+    // And SILENTLY, which is the separate half. A 403 on an operator queue is a refusal — "not
+    // yours to see" — not a failure to read, so it must not surface as a warning. Without the
+    // `SystemAccessRequired` arm in `admin_count` this still yields the hint (the per-field
+    // degradation rescues it), but every newcomer's every session start also carries
+    // "could not read the join request queue: system access required". That is the noise the
+    // arm exists to prevent, and this assertion is what witnesses it.
+    assert!(
+        !stderr.contains("could not read the"),
+        "a refusal must not be reported as a failed read: {stderr}"
+    );
+}

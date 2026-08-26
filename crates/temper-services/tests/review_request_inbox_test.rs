@@ -282,3 +282,57 @@ async fn closing_an_already_closed_review_refuses(pool: PgPool) {
         "an already-decided review is not there to decide, got {err:?}"
     );
 }
+
+/// **The sequence the feature claims to fix — with no explicit close in it.**
+///
+/// Closing by hand releases the guard, which `closing_a_review_releases_the_one_open_guard` proves.
+/// But the operator path that actually happens is readmission: an admin approves the principal and
+/// never opens the reconsideration queue at all. If approval does not answer the request, the row
+/// stays open forever, the guard never releases on the likeliest path, and the stale row inflates
+/// the admin queue and warmup's count indefinitely — while `REVIEW_ALREADY_OPEN` tells the locked-out
+/// principal "an admin has not decided it yet", which by then is false.
+///
+/// **The direction is what makes this safe under D15.** The review must never be an admission
+/// INPUT — that is the conjunction D2 forbids, and nothing here reads the review to decide
+/// anything. This is the opposite arrow: the decision was already made, on the standing log where
+/// admission decisions belong, and the marker is being kept consistent with it afterwards.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn readmission_answers_the_open_review(pool: PgPool) {
+    let (admin_id, admin) = an_admin(&pool, "readmitting-admin").await;
+    let subject = a_revoked_principal(&pool, &admin, "returning").await;
+    file_a_review(&pool, subject, "first ask").await.unwrap();
+
+    // The admin readmits WITHOUT ever visiting `temper admin reviews`.
+    access_service::admin_approve(&pool, &admin, subject)
+        .await
+        .expect("approve from revoked is legal");
+
+    assert!(
+        access_service::list_open_review_requests(&pool, &admin)
+            .await
+            .unwrap()
+            .is_empty(),
+        "readmission answered the request, so it leaves the queue instead of inflating it forever"
+    );
+
+    let decided_by: Option<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT decided_by FROM kb_principal_review_requests WHERE profile_id=$1",
+    )
+    .bind(*subject)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        decided_by,
+        Some(admin_id),
+        "attributed to the admin whose approval answered it"
+    );
+
+    // And the guard released, so a second revocation can be appealed at all.
+    access_service::admin_revoke(&pool, &admin, subject, "relapse".to_string())
+        .await
+        .unwrap();
+    file_a_review(&pool, subject, "second ask")
+        .await
+        .expect("the guard releases on the operator path, not only the manual one");
+}

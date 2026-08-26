@@ -730,6 +730,48 @@ pub async fn admin_approve(
         },
     )
     .await?;
+
+    // Readmission ANSWERS an open reconsideration, so the marker stops claiming otherwise.
+    //
+    // The direction is what keeps this inside D15. The review is never an admission INPUT —
+    // nothing here reads it to decide anything, which is the conjunction D2 forbids. This is the
+    // opposite arrow: the decision was already taken, on the standing log where admission decisions
+    // belong, and the marker is reconciled to it afterwards.
+    //
+    // Without this, the guard released only for an admin who went to `temper admin reviews` — and
+    // the path actually taken is `temper admin access approve`, after which the row stayed open
+    // forever, permanently barring a second appeal and inflating every admin's queue.
+    //
+    // Sequential rather than transactional: `standing_service::apply` takes `&PgPool` and owns its
+    // own transaction. A failure here leaves the pre-existing stale-marker state, never a worse one,
+    // and never a principal whose standing moved without the caller learning.
+    close_open_reviews_for(pool, admin, subject).await?;
+
+    Ok(())
+}
+
+/// Close every open reconsideration held by `subject`. A no-op for the overwhelmingly common case
+/// of a principal who never filed one — zero rows affected is success, not a `NotFound`, because the
+/// caller asked to readmit someone, not to close a review.
+async fn close_open_reviews_for(
+    pool: &PgPool,
+    admin: &SystemAdmin,
+    subject: ProfileId,
+) -> ApiResult<()> {
+    sqlx::query!(
+        r#"
+        UPDATE kb_principal_review_requests
+           SET decided_at = now(), decided_by = $2, decision_note = $3
+         WHERE profile_id = $1
+           AND decided_at IS NULL
+        "#,
+        *subject,
+        *admin.actor(),
+        REVIEW_CLOSED_BY_READMISSION,
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 
@@ -1003,6 +1045,9 @@ pub async fn withdraw_request(pool: &PgPool, profile_id: ProfileId) -> ApiResult
 pub const REVIEW_ALREADY_OPEN: &str =
     "you already have an open reconsideration request — an admin has not decided it yet";
 
+/// Recorded on a review that readmission answered, rather than an admin closing it by hand.
+pub const REVIEW_CLOSED_BY_READMISSION: &str = "closed by readmission — the principal was approved";
+
 /// Parameters for a review request (spec D15 — a revoked principal asking for reconsideration).
 pub struct CreateReviewRequestParams {
     pub profile_id: ProfileId,
@@ -1063,6 +1108,19 @@ pub async fn create_review_request(
 ///
 /// Reads `kb_principal_review_requests` and nothing else. It is emphatically **not** consulted by
 /// the admission decision — see the table's own `COMMENT`, and `a_pending_review_does_not_change_admission`.
+///
+/// **Unpaginated, and structurally bounded rather than carelessly unbounded.**
+/// `idx_principal_review_one_open` is `UNIQUE (profile_id) WHERE decided_at IS NULL`, so this queue
+/// holds at most one row per profile and its size is capped by the number of principals *currently
+/// revoked with an unanswered appeal* — a population an operator is already expected to work
+/// through by hand. `admin_approve` closes the review it answers, so the set drains rather than
+/// accumulating. If revocations ever become bulk or automated, that premise dies and this needs a
+/// page.
+///
+/// **The audit trail is the row, not a ledger entry.** `decided_at` / `decided_by` /
+/// `decision_note` record who answered and when, exactly as `kb_join_requests` keeps its own
+/// decision history on the row (see this module's header: admin/operational events are firewalled
+/// from the cognition ledger).
 pub async fn list_open_review_requests(
     pool: &PgPool,
     _admin: &SystemAdmin,
