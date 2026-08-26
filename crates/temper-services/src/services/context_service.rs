@@ -436,6 +436,20 @@ pub(crate) fn canonical_name(name: &str) -> String {
 /// the same value, and the substrate's unique constraint is on the slug, not the
 /// name) appends a numeric suffix. The `(owner_table, owner_id, slug)` unique
 /// constraint is the backstop against the check-then-insert race.
+///
+/// **No self-exclusion, and that is a dependency rather than an oversight.** [`rename`] carries an
+/// `AND id <> $4` its own doc calls load-bearing; this has none, so a caller whose row already
+/// holds the candidate slug would be told its own address is taken and moved off it. That is
+/// unreachable today by exactly one argument: no caller ever asks this for a slug its own row
+/// already holds. [`create`] has no row yet; [`retire`] asks for `<slug>-retired` while the row
+/// holds `<slug>`; [`restore`] asks for `sluggify(name)` while the row holds the mangled form.
+///
+/// The third of those held only after `20260826000130` floored [`rename`] on `is_active`. Before
+/// it, a retired row could be renamed back to its name's canonical slug, and `restore` would then
+/// find its own address taken, relocate to `<slug>-2`, and report `slug_changed` for a restore that
+/// should not have moved. **A path that moves a retired row's slug to its canonical form re-opens
+/// this**, so the two live together: widen what may rename a retired context and this needs the
+/// exclusion.
 async fn next_unique_context_slug(
     pool: &PgPool,
     owner_table: &str,
@@ -1123,7 +1137,7 @@ pub async fn rename(
     // subject's existence (it probes the caller's governance grant), so a system admin naming a
     // context id that does not exist reaches here. That is the read refusal, not a 500.
     let cur = sqlx::query!(
-        r#"SELECT owner_table AS "owner_table!", owner_id AS "owner_id!", slug, name,
+        r#"SELECT owner_table AS "owner_table!", owner_id AS "owner_id!", slug, name, is_active,
               CASE owner_table
                 WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = owner_id)
                 ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = owner_id)
@@ -1134,6 +1148,20 @@ pub async fn rename(
     .fetch_optional(pool)
     .await?
     .ok_or_else(|| ApiError::NotFound(CONTEXT_REFUSAL.to_string()))?;
+
+    // 0. A retired context is not renameable. `context_rename` carries the same guard as an
+    //    in-transaction invariant (`20260826000130`), and this is its advisory half — the same
+    //    division the authorization gate uses: refuse here on the common path, let the SQL guard
+    //    close the window where a retirement lands between this read and the write.
+    //
+    //    **It must be here rather than only in SQL**, because two arms below return before the
+    //    write function is ever called: the idempotent no-op at step 2 answers `Ok` for a rename to
+    //    the name a context already has, so a retired context would report success from a path the
+    //    backstop never sees. `CONTEXT_REFUSAL` and nothing more specific — the refusal must not
+    //    tell a caller that a retired context sits behind this id when a plain miss would not.
+    if !cur.is_active {
+        return Err(ApiError::NotFound(CONTEXT_REFUSAL.to_string()));
+    }
 
     let to_name = canonical_name(name);
     let to_slug = sluggify(&to_name);

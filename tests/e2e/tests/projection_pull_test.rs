@@ -141,7 +141,6 @@ async fn events_cursor_returns_latest_event_for_context(pool: sqlx::PgPool) {
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-#[ignore = "deferred: vault projection path uses the real owner handle (reconstruct_resource_row returns p.owner_handle), not the '@me' self-segment `projected` builds. Blocked on the readback @me/identity-key follow-up (F6). NOT the filename any more — the stem is now derived from title+id via `projected`, so the old `row.slug is None` (temper-slug §7-Die) half of this reason is retired"]
 async fn write_resource_file_materializes_a_document(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
     app.client
@@ -168,10 +167,12 @@ async fn write_resource_file_materializes_a_document(pool: sqlx::PgPool) {
     let row = listed.rows.first().expect("one row");
 
     let vault_root = app.vault_dir.path();
-    let path = temper_cli::projection::write_resource_file(&app.client, vault_root, row)
-        .await
-        .expect("write_resource_file")
-        .expect("a context-homed resource projects to a path");
+    let me = temper_cli::projection::self_owner_ref(&app.client).await;
+    let path =
+        temper_cli::projection::write_resource_file(&app.client, vault_root, row, me.as_deref())
+            .await
+            .expect("write_resource_file")
+            .expect("a context-homed resource projects to a path");
 
     let expected = projected(vault_root, "wctx", "research", "Write Me", write_me);
     assert_eq!(path, expected);
@@ -193,7 +194,6 @@ fn projection_test_config(app: &common::E2eTestApp) -> temper_cli::config::Confi
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-#[ignore = "deferred: vault projection path uses the real owner handle (reconstruct_resource_row returns p.owner_handle), not the '@me' self-segment `projected` builds. Blocked on the readback @me/identity-key follow-up (F6). NOT the filename any more — the stem is now derived from title+id via `projected`, so the old `row.slug is None` (temper-slug §7-Die) half of this reason is retired"]
 async fn write_resource_file_from_parts_materializes_a_document(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
     app.client
@@ -226,9 +226,15 @@ async fn write_resource_file_from_parts_materializes_a_document(pool: sqlx::PgPo
         .expect("content");
 
     let vault_root = app.vault_dir.path();
-    let path = temper_cli::projection::write_resource_file_from_parts(vault_root, row, &content)
-        .expect("write_resource_file_from_parts")
-        .expect("a context-homed resource projects to a path");
+    let me = temper_cli::projection::self_owner_ref(&app.client).await;
+    let path = temper_cli::projection::write_resource_file_from_parts(
+        vault_root,
+        row,
+        &content,
+        me.as_deref(),
+    )
+    .expect("write_resource_file_from_parts")
+    .expect("a context-homed resource projects to a path");
 
     let expected = projected(vault_root, "fpctx", "research", "Parts Doc", row.id);
     assert_eq!(path, expected);
@@ -241,7 +247,6 @@ async fn write_resource_file_from_parts_materializes_a_document(pool: sqlx::PgPo
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-#[ignore = "deferred: vault projection path uses the real owner handle (reconstruct_resource_row returns p.owner_handle), not the '@me' self-segment `projected` builds. Blocked on the readback @me/identity-key follow-up (F6). NOT the filename any more — the stem is now derived from title+id via `projected`, so the old `row.slug is None` (temper-slug §7-Die) half of this reason is retired"]
 async fn pull_context_materializes_tree_and_writes_cursor(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
     app.client
@@ -258,7 +263,7 @@ async fn pull_context_materializes_tree_and_writes_cursor(pool: sqlx::PgPool) {
     let two = seed_resource(&app, "pctx", "research", "Doc Two").await;
 
     let config = projection_test_config(&app);
-    let summary = temper_cli::projection::pull_context(&app.client, &config, "pctx")
+    let summary = temper_cli::projection::pull_context(&app.client, &config, "@me/pctx")
         .await
         .expect("pull_context");
 
@@ -279,7 +284,6 @@ async fn pull_context_materializes_tree_and_writes_cursor(pool: sqlx::PgPool) {
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-#[ignore = "deferred: vault projection path uses the real owner handle (reconstruct_resource_row returns p.owner_handle), not the '@me' self-segment `projected` builds. Blocked on the readback @me/identity-key follow-up (F6). NOT the filename any more — the stem is now derived from title+id via `projected`, so the old `row.slug is None` (temper-slug §7-Die) half of this reason is retired"]
 async fn pull_prunes_resources_deleted_on_server(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
     app.client
@@ -296,7 +300,7 @@ async fn pull_prunes_resources_deleted_on_server(pool: sqlx::PgPool) {
     let doomed_id = seed_resource(&app, "dctx", "research", "Doomed").await;
 
     let config = projection_test_config(&app);
-    temper_cli::projection::pull_context(&app.client, &config, "dctx")
+    temper_cli::projection::pull_context(&app.client, &config, "@me/dctx")
         .await
         .expect("first pull");
 
@@ -312,7 +316,7 @@ async fn pull_prunes_resources_deleted_on_server(pool: sqlx::PgPool) {
         .delete(Uuid::from(doomed_id), &Default::default())
         .await
         .expect("delete");
-    let summary = temper_cli::projection::pull_context(&app.client, &config, "dctx")
+    let summary = temper_cli::projection::pull_context(&app.client, &config, "@me/dctx")
         .await
         .expect("second pull");
 
@@ -323,7 +327,6 @@ async fn pull_prunes_resources_deleted_on_server(pool: sqlx::PgPool) {
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-#[ignore = "deferred: vault projection path uses the real owner handle (reconstruct_resource_row returns p.owner_handle), not the '@me' self-segment `projected` builds. Blocked on the readback @me/identity-key follow-up (F6). NOT the filename any more — the stem is now derived from title+id via `projected`, so the old `row.slug is None` (temper-slug §7-Die) half of this reason is retired"]
 async fn pull_is_idempotent(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
     app.client
@@ -347,12 +350,12 @@ async fn pull_is_idempotent(pool: sqlx::PgPool) {
         stable,
     );
 
-    temper_cli::projection::pull_context(&app.client, &config, "ictx")
+    temper_cli::projection::pull_context(&app.client, &config, "@me/ictx")
         .await
         .expect("first pull");
     let first = std::fs::read_to_string(&path).unwrap();
 
-    let summary = temper_cli::projection::pull_context(&app.client, &config, "ictx")
+    let summary = temper_cli::projection::pull_context(&app.client, &config, "@me/ictx")
         .await
         .expect("second pull");
     let second = std::fs::read_to_string(&path).unwrap();
@@ -509,5 +512,205 @@ async fn pull_empty_context_writes_cursor_with_no_event_id(pool: sqlx::PgPool) {
     assert!(
         cursor.last_event_id.is_none(),
         "an empty context has no event id"
+    );
+}
+
+/// An emptied context prunes the directory the **writer** wrote to, whatever the
+/// context's name and slug are.
+///
+/// A context named `"Temper KB"` has slug `"temper-kb"` — `create` derives the
+/// slug with `sluggify` and stores the name canonicalized but otherwise intact.
+/// The writer builds `<vault>/@me/Temper KB/…` off `context_name`; the prune path
+/// used to fall back to the **slug** half of the ref whenever the context listed
+/// no rows, so emptying it swept a `temper-kb` directory that never existed while
+/// the real tree survived and looked live.
+///
+/// Emptying is what makes the two branches disagree: with a row in hand the name
+/// is right there, so only the no-rows path could be wrong, and only a context
+/// whose name and slug differ can show it. Both halves are load-bearing — a
+/// same-spelled context passes against the old code.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn pull_prunes_an_emptied_context_whose_name_and_slug_differ(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    let ctx = app
+        .client
+        .contexts()
+        .create("Temper KB", None)
+        .await
+        .expect("ctx");
+    assert_eq!(ctx.slug, "temper-kb", "the slug is derived, and differs");
+    assert_eq!(ctx.name, "Temper KB", "the name is stored intact");
+
+    let doomed = seed_resource(&app, "temper-kb", "research", "Only Doc").await;
+
+    let config = projection_test_config(&app);
+    temper_cli::projection::pull_context(&app.client, &config, "@me/temper-kb")
+        .await
+        .expect("first pull");
+
+    let vault_root = app.vault_dir.path();
+    // The writer keys the directory on the *name*, not the slug.
+    let file = projected(vault_root, "Temper KB", "research", "Only Doc", doomed);
+    assert!(
+        file.exists(),
+        "writer materialized the context under its name, at {}",
+        file.display()
+    );
+
+    // Empty the context on the server, then re-pull. The context now lists no
+    // rows, so the directory name has to come from somewhere other than a row.
+    app.client
+        .resources()
+        .delete(Uuid::from(doomed), &Default::default())
+        .await
+        .expect("delete");
+    let summary = temper_cli::projection::pull_context(&app.client, &config, "@me/temper-kb")
+        .await
+        .expect("second pull");
+
+    assert_eq!(summary.written, 0, "the context is empty");
+    assert_eq!(
+        summary.pruned, 1,
+        "the emptied context's file is pruned, not orphaned under its real directory"
+    );
+    assert!(
+        !file.exists(),
+        "the stale projection file survived at {}",
+        file.display()
+    );
+}
+
+/// `temper --vault <path> pull <ctx>` writes to `<path>`.
+///
+/// The one command whose entire job is writing to a vault root was also the one
+/// `config::load` call site that dropped the flag — `pull::run` called
+/// `config::load(None)`, so the write silently went to the *configured* vault
+/// instead. The type signature now holds the value (dropping it is a compile
+/// error), but nothing asserted it is honoured, and a parameter can be threaded
+/// and then ignored.
+///
+/// This drives the real binary, so it witnesses the whole chain — clap's global
+/// `--vault`, `main.rs`'s dispatch, `pull::run`, `config::load` — rather than any
+/// one link. `TEMPER_VAULT` is set to the configured vault deliberately: it is
+/// what masked the defect originally (`config::load` reads it directly), so the
+/// flag has to beat both the config file and the env var, and asserting the
+/// projection is absent from that directory is what makes a fallback visible
+/// rather than merely unasserted.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn pull_writes_to_the_vault_the_flag_names(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("vctx", None)
+        .await
+        .expect("ctx");
+    let doc = seed_resource(&app, "vctx", "research", "Flagged Doc").await;
+
+    let elsewhere = tempfile::TempDir::new().expect("override vault");
+    let configured = app.vault_dir.path().to_path_buf();
+
+    let out = common::run_temper_cli_with_env(
+        &app,
+        &[("TEMPER_VAULT", configured.to_str().expect("utf-8 path"))],
+        &[
+            "--vault",
+            elsewhere.path().to_str().expect("utf-8 path"),
+            "pull",
+            "@me/vctx",
+        ],
+    )
+    .await
+    .expect("run temper pull");
+    assert!(
+        out.status.success(),
+        "pull failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let honoured = projected(elsewhere.path(), "vctx", "research", "Flagged Doc", doc);
+    assert!(
+        honoured.exists(),
+        "--vault was not honoured: nothing at {}",
+        honoured.display()
+    );
+    let ignored = projected(&configured, "vctx", "research", "Flagged Doc", doc);
+    assert!(
+        !ignored.exists(),
+        "pull wrote to the configured vault despite --vault, at {}",
+        ignored.display()
+    );
+}
+
+/// Pulling a **retired** context leaves the local tree alone.
+///
+/// The two branches met here. Retirement (PR #777) makes a context invisible to
+/// every read path, so the address a caller still holds stops naming anything —
+/// and a pull is a command whose job is to delete local files that are no longer
+/// on the server. That combination is where a vault gets swept for a context
+/// whose every resource is still there, merely retired.
+///
+/// **Two independent things have to hold, and only the first fires today.** The
+/// resource list refuses an unresolvable ref outright, so the pull errors before
+/// it can prune anything. Behind that, the prune path can no longer guess a
+/// directory name: this branch removed the fallback to the ref's *slug* half, so
+/// a context it cannot name prunes nothing. Assert both — the error is what
+/// protects the tree now, and the surviving file is what still protects it if
+/// the list is ever softened to return zero rows instead of a 404.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn pulling_a_retired_context_leaves_its_projection_alone(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    let ctx = app
+        .client
+        .contexts()
+        .create("rctx", None)
+        .await
+        .expect("ctx");
+    let doc = seed_resource(&app, "rctx", "research", "Retired Doc").await;
+
+    let config = projection_test_config(&app);
+    temper_cli::projection::pull_context(&app.client, &config, "@me/rctx")
+        .await
+        .expect("first pull");
+
+    let file = projected(app.vault_dir.path(), "rctx", "research", "Retired Doc", doc);
+    assert!(file.exists(), "materialized at {}", file.display());
+
+    // Retire the context, then pull the address the caller still holds.
+    // Retirement also mangles the slug, so `@me/rctx` names nothing either way.
+    app.client
+        .contexts()
+        .delete(Uuid::from(ctx.id))
+        .await
+        .expect("retire");
+
+    let err = temper_cli::projection::pull_context(&app.client, &config, "@me/rctx")
+        .await
+        .expect_err("a retired context is not readable, and the pull must say so");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("not found or not readable"),
+        "the refusal must name the unreadable context, got: {msg}"
+    );
+
+    assert!(
+        file.exists(),
+        "pull deleted the projection of a retired context's still-live resource, at {}",
+        file.display()
     );
 }

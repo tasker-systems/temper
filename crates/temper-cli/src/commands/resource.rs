@@ -574,11 +574,16 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
     // Projection refresh: write the new resource to its canonical
     // projection path so the local copy reflects server state at once.
     // Best-effort — a projection write failure must not fail the create.
-    if let Err(e) = runtime.block_on(crate::projection::write_resource_file(
-        &client,
-        &config.vault_root,
-        &created_resource,
-    )) {
+    if let Err(e) = runtime.block_on(async {
+        let me = crate::projection::self_owner_ref(&client).await;
+        crate::projection::write_resource_file(
+            &client,
+            &config.vault_root,
+            &created_resource,
+            me.as_deref(),
+        )
+        .await
+    }) {
         output::warning(format!("could not write projection file: {e}"));
     }
 
@@ -1427,6 +1432,10 @@ pub fn delete(
 
     // Projection refresh: remove the resource's projection file. Best-effort
     // — a removal failure must not fail the (already-committed) delete.
+    // No identity round-trip here: the remover sweeps every spelling the file
+    // could be under, which the uuid in the stem makes unambiguous. Resolving
+    // `me` again would add a call that can fail on its own and leave the delete
+    // looking in the one directory the writer did not use.
     if let Err(e) = crate::projection::remove_resource_file_for_row(&config.vault_root, &row) {
         output::warning(format!("could not remove projection file: {e}"));
     }
@@ -2193,11 +2202,16 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     // 6. Projection refresh: rewrite the affected projection file from
     //    the returned server row. Best-effort — a projection write
     //    failure must not fail the update.
-    if let Err(e) = runtime.block_on(crate::projection::write_resource_file(
-        &client,
-        &config.vault_root,
-        &updated_row,
-    )) {
+    if let Err(e) = runtime.block_on(async {
+        let me = crate::projection::self_owner_ref(&client).await;
+        crate::projection::write_resource_file(
+            &client,
+            &config.vault_root,
+            &updated_row,
+            me.as_deref(),
+        )
+        .await
+    }) {
         output::warning(format!("could not rewrite projection file: {e}"));
     }
 

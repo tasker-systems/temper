@@ -17,6 +17,13 @@ use crate::output;
 /// override appeared to work whenever it was spelled as an env var rather than
 /// a flag. Taking the value as a parameter is what makes dropping it again a
 /// compile error rather than a silent redirect.
+///
+/// A compile error is not the whole guard, though: a parameter can be threaded
+/// and then ignored, and for a while nothing asserted the flag was *honoured*.
+/// `tests/e2e/tests/projection_pull_test.rs::pull_writes_to_the_vault_the_flag_names`
+/// spawns the real binary with `--vault` pointed away from both the config file
+/// and `TEMPER_VAULT`, and asserts at both ends — the tree appears where the flag
+/// said, and does not appear where it would have gone otherwise.
 pub fn run(context: &str, vault: Option<&str>) -> crate::error::Result<()> {
     let context = context.to_string();
     let vault = vault.map(str::to_owned);
