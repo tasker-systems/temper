@@ -210,7 +210,20 @@ pub async fn resolve_context_ref(
                 .ok_or_else(|| ApiError::NotFound(CONTEXT_REFUSAL.to_string()))
         }
         ContextRef::OwnerSlug { owner, slug } => match owner {
-            ContextOwnerRef::Me => lookup_profile_context(pool, *principal, slug).await,
+            // Gated like every other arm. `lookup_profile_context` reads `kb_contexts` by
+            // `(owner_id, slug)` and knows nothing about visibility, so on its own this arm
+            // resolves a context `context_visible_to` refuses — which since context retirement
+            // includes the caller's OWN retired contexts (verified: after retirement
+            // `context_visible_to(owner, ctx)` is false while the row is still there under its
+            // mangled slug). Nothing is stranded by refusing: `resources_visible_to`'s owner arm
+            // has no context floor, so the owner still reaches their own resources through an
+            // unscoped read — what they lose is using a retired ref as a SCOPE, which is what
+            // "addressed on the admin axis, never the read axis" means.
+            ContextOwnerRef::Me => {
+                let cid = lookup_profile_context(pool, *principal, slug).await?;
+                ensure_context_visible(pool, *principal, *cid).await?;
+                Ok(cid)
+            }
             ContextOwnerRef::Handle(handle) => {
                 // All three exits below render `CONTEXT_REFUSAL` and nothing else. An unresolvable
                 // handle must not be distinguishable from a resolvable one, or the arm becomes a
@@ -289,6 +302,13 @@ pub async fn resolve_context_ref(
                 .ok_or_else(|| {
                     ApiError::NotFound(format!("context {slug} not found or not readable"))
                 })?;
+                // Membership is not visibility. The check above admits ANY role — `watcher`
+                // included — and this lookup reads `kb_contexts` directly, so without this the arm
+                // resolves a retired team context for a member who never administered it. Every
+                // caller documents this function as visibility-gated (`substrate_read`,
+                // `handlers::ingest`, `handlers::graph`, `tools::cognitive_maps`), and the two
+                // sibling arms already end here; this one did not.
+                ensure_context_visible(pool, *principal, id).await?;
                 Ok(ContextId::from(id))
             }
         },

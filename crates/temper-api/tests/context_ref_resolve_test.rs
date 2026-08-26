@@ -11,6 +11,9 @@
 //! 3. `+team-slug/slug` — member resolves; non-member gets `Forbidden`
 //! 4. Bare UUID — visible resolves; not-visible gives `NotFound`
 //! 5. `@handle/slug` — team-shared resolves; not-shared gives `NotFound`
+//! 6. A RETIRED context resolves through no arm — not `@me/slug` for its own owner, and not
+//!    `+team/slug` for a member. Every caller documents this resolver as visibility-gated, so it
+//!    must agree with `context_visible_to`, which refuses a retired context for every principal.
 
 mod common;
 
@@ -353,5 +356,86 @@ async fn the_three_handle_slug_refusals_are_indistinguishable(pool: PgPool) {
         1,
         "all three @handle/slug refusals must be byte-identical: \
          absent-handle {absent_handle:?}, absent-slug {absent_slug:?}, unreadable {unreadable:?}"
+    );
+}
+
+// ─── Test 6: a retired context resolves through no arm ───────────────────────
+//
+// Both arms below read `kb_contexts` by `(owner, slug)`. Neither consulted the read predicate
+// before this change, so each resolved a context `context_visible_to` refuses.
+
+/// Retire a context the way the service does, without depending on `context_service::retire` —
+/// this file tests the resolver, not the verb, and the mangled slug is what an operator would
+/// actually hold afterwards.
+async fn retire(pool: &PgPool, context_id: Uuid, retired_slug: &str) {
+    sqlx::query("UPDATE kb_contexts SET is_active = false, slug = $2 WHERE id = $1")
+        .bind(context_id)
+        .bind(retired_slug)
+        .execute(pool)
+        .await
+        .expect("retire the context");
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn retired_context_does_not_resolve_by_at_me_slug_even_for_its_owner(pool: PgPool) {
+    let email = format!("me-retired-{}@example.com", Uuid::new_v4());
+    let (profile_id, context_id) =
+        common::fixtures::create_test_profile_with_context(&pool, &email).await;
+    let principal = ProfileId::from(profile_id);
+
+    // Precondition: it resolves while active, so the refusal below is the retirement and not a
+    // broken fixture.
+    let live = parse_context_ref("@me/temper").expect("valid ref");
+    assert_eq!(
+        *context_service::resolve_context_ref(&pool, principal, &live)
+            .await
+            .expect("resolves while active"),
+        context_id
+    );
+
+    retire(&pool, context_id, "temper-retired").await;
+
+    let r = parse_context_ref("@me/temper-retired").expect("valid ref");
+    let err = context_service::resolve_context_ref(&pool, principal, &r)
+        .await
+        .expect_err("a retired context is not addressable on the read axis, even by its owner");
+    assert!(
+        matches!(err, ApiError::NotFound(_)),
+        "expected NotFound for a retired @me context, got {err:?}"
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn retired_team_context_does_not_resolve_for_a_member(pool: PgPool) {
+    let email = format!("team-retired-{}@example.com", Uuid::new_v4());
+    let (profile_id, _) = common::fixtures::create_test_profile_with_context(&pool, &email).await;
+    let principal = ProfileId::from(profile_id);
+
+    let team_slug = format!("test-team-rt-{}", &Uuid::new_v4().simple().to_string()[..8]);
+    let (team_id, context_id) = insert_team_with_context(&pool, &team_slug, "notes").await;
+    add_team_member(&pool, team_id, profile_id).await;
+
+    // Precondition: membership resolves it while the context is active.
+    let live_ref = format!("+{team_slug}/notes");
+    let live = parse_context_ref(&live_ref).expect("valid team ref");
+    assert_eq!(
+        *context_service::resolve_context_ref(&pool, principal, &live)
+            .await
+            .expect("member resolves while active"),
+        context_id
+    );
+
+    retire(&pool, context_id, "notes-retired").await;
+
+    // Membership is unchanged and still admits; only visibility refuses. Without the gate the
+    // member — at ANY role, `watcher` included — still resolves the retired context.
+    let ref_str = format!("+{team_slug}/notes-retired");
+    let r = parse_context_ref(&ref_str).expect("valid team ref");
+    let err = context_service::resolve_context_ref(&pool, principal, &r)
+        .await
+        .expect_err("membership is not visibility: a retired team context must refuse");
+    assert!(
+        matches!(err, ApiError::NotFound(_)),
+        "expected NotFound for a retired team context, got {err:?}"
     );
 }
