@@ -413,6 +413,18 @@ mod tests {
         .is_some()
     }
 
+    /// Whether the row claims it was retired BY ROTATION — a claim only the AS may make.
+    async fn claims_rotation(pool: &PgPool, token_hash: &str) -> bool {
+        sqlx::query_scalar::<_, Option<chrono::DateTime<chrono::Utc>>>(
+            "SELECT rotated_at FROM kb_oauth_refresh_tokens WHERE token_hash = $1",
+        )
+        .bind(token_hash)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+        .is_some()
+    }
+
     /// Bring a principal to `Approved` through the seam, so the fixture is a real transition
     /// history rather than a hand-written row.
     async fn approved(pool: &PgPool, handle: &str, admin: ProfileId) -> ProfileId {
@@ -484,6 +496,19 @@ mod tests {
         assert!(
             !is_revoked(&pool, "hash-ownerless").await,
             "an ownerless chain is bounded by its absolute lifetime, not by this hook"
+        );
+
+        // This hook writes `revoked_at`, and so does the AS's rotation — which is exactly why the
+        // AS also writes `rotated_at`, so that a token presented again after being spent can be
+        // told from one an administrator ended (20260826000140). `revoked_at` has five writers and
+        // only one is rotation, so that distinction is only worth anything if each of the other
+        // four never makes the rotation claim. Asserted here, in the crate that owns this writer,
+        // because the AS's own suite cannot see it: a stray `rotated_at` added to the UPDATE above
+        // would turn every administrative revoke into a permanent, unfalsifiable report that the
+        // user's credential had been stolen.
+        assert!(
+            !claims_rotation(&pool, "hash-departing-a").await,
+            "an administrator's revoke must not present itself as a rotation"
         );
     }
 

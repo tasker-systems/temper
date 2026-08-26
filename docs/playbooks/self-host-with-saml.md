@@ -218,6 +218,7 @@ openssl genpkey -algorithm ed25519 -out as_signing_key.pem
 | `AS_ACCESS_TTL_SECONDS` | `900` (default) | Access-token lifetime. |
 | `AS_REFRESH_TTL_SECONDS` | `2592000` (default, 30d) | Refresh-token lifetime. Slides on every rotation. |
 | `AS_REFRESH_CHAIN_MAX_SECONDS` | `7776000` (default, 90d) | **Absolute** lifetime of a refresh chain, from the last full SAML login. Rotation never moves it, so this — not the two TTLs above — is the bound on how long IdP-removed reach can persist. See [Limitations](#limitations). |
+| `AS_REFRESH_REPLAY_GRACE_SECONDS` | `10` (default) | How soon after a rotation a client may present the spent refresh token again and be treated as a retry rather than a thief. Later than this and the whole chain is ended. `0` ends the chain on any replay; the widest value honoured is `3600`. See [Watch for replayed refresh tokens](#watch-for-replayed-refresh-tokens). |
 
 `AS_CLIENTS` registers the exact redirect URIs each client may use (exact string match — this
 is the control that prevents authorization-code exfiltration):
@@ -488,6 +489,72 @@ appliers interleave across the full install timeline.
   or an Auth0/OIDC instance, not both.
 - Role/team mapping from SAML attributes is available once groups are configured (see
   [Map IdP groups to Temper teams and roles](#map-idp-groups-to-temper-teams-and-roles)).
+
+## Watch for replayed refresh tokens
+
+Refresh tokens are single-use: exchanging one revokes it and issues a successor. If a **spent**
+token is presented again, one of two things happened — a client retried an exchange whose response
+it never received (or raced two refreshes at once), or **someone else has a copy of the chain**.
+RFC 6819 §5.2.2.3 treats the second as the more likely reading once enough time has passed, and
+temper acts on it: the whole chain is ended, so the copy and the original both stop working and the
+user signs in again.
+
+**`AS_REFRESH_REPLAY_GRACE_SECONDS` is where you set the line between the two readings.** Inside
+the window the replay is refused but the chain survives; outside it, the chain is ended.
+
+Ten seconds is the default, and the width is worth understanding before you change it. The server
+only ever sees the party that *lost* a rotation race, and cannot tell whether the one that won was
+your user or someone holding a copy — so inside the window it lets the winner keep the session and
+records the presentation as benign. Every second of width is a second in which a fresh theft gets
+that treatment. What the window buys is the client that had two refreshes in flight at once, which
+is one exchange still resolving and takes well under a second. A client that merely lost a response
+and retried holds no live token either way, so a narrow window costs it nothing but a row in the
+table below.
+
+Raise it if you run clients on unreliable networks and would rather read past those rows — **up to
+one hour, which is the widest value honoured**; anything larger, negative or non-numeric is read as
+a units slip, logged, and replaced by the ten-second default. Set it to `0` for the strictest
+reading, where any replay ends the chain.
+
+Either way **the event is recorded**, so you can answer "has any chain been replayed?" without
+having retained logs:
+
+```sql
+SELECT * FROM vw_oauth_refresh_replays;
+```
+
+A row means a spent refresh token came back. **Rows are not by themselves alarming** — a client
+that loses a response and retries produces one, so a healthy instance accumulates some. Read
+`hostile_count` first; it is the count of presentations that fell outside the grace window.
+
+An empty result means nothing was *recorded*. That is not quite the same as nothing having
+happened: if the server could not write the record it says so in its logs (`could not record or act
+on a refused rotation`), which is the one case where this table and the logs have to be read
+together.
+
+| Column | Read it as |
+| --- | --- |
+| `profile_handle` | Who held the chain. `NULL` if the AS could not record an owner — see the `INTERNAL_RESOLVE_URL` note above; the replay is still real. |
+| `first_replay_age` | How long after the rotation the token reappeared — the age the server judged it on, not a later reading. Hours or days has no benign explanation. **Seconds is *consistent with* a client retry, not proof of one**: a credential stolen and used immediately also reappears in seconds. |
+| `replay_count` / `hostile_count` | How many times it was presented, and how many of those fell outside the grace window. `hostile_count = 0` on a chain you did not expect to be racing is still worth a look. |
+| `chain_ended` / `chain_ended_at` | Whether the chain was ended in response, and when. |
+| `tokens_revoked` | How many live tokens the ending actually revoked. `0` alongside `chain_ended` means the chain held nothing live at that moment — it is still ended, and no successor can be minted into it. |
+
+A replay ends **that chain only** — not the principal's other sessions, and not their ability to
+sign in again. If you conclude a credential really was stolen, revoke the principal:
+
+```bash
+temper admin access revoke <profile-id> --reason "refresh chain replayed"
+```
+
+That ends **every** chain they hold and stops the next sign-in from minting a new one — see
+[Limitations](#limitations) for exactly what a revoked principal can still do.
+
+> [!NOTE]
+> **What this view covers:** chains issued by this instance from this version onward. Earlier
+> chains are bounded by `AS_REFRESH_CHAIN_MAX_SECONDS` and are gone within that window, so an empty
+> result means "nothing recorded", which becomes "nothing happened" once your longest chain has
+> turned over.
 
 ## Further reading
 
