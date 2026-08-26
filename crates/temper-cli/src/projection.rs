@@ -254,6 +254,43 @@ pub const PROJECTION_SLUG_MAX_BYTES: usize = 120;
 /// `temper resource show`. Identity lives in the trailing uuid — which is what
 /// resolution reads and what the delete path matches on — so the readable half
 /// is free to be cut.
+/// The owner directory segment for a resource's projection file.
+///
+/// **Sigiled, always.** `Vault::parse_rel` rejects an owner segment without a
+/// leading `@` or `+`, so the bare handle is not a legal vault path component —
+/// and `ResourceView.owner_handle` is exactly that: `p.handle` straight off the
+/// readback (`temper-substrate/src/readback/mod.rs`), e.g. `j-cole-taylor`. The
+/// writer used it anyway and produced a tree its own layout module could not
+/// parse.
+///
+/// `context_owner_ref` is sigiled *by construction* — `@<handle>` for a profile
+/// home, `+<team-slug>` for a team one — so it is the field to key on. The
+/// fallbacks sigil the handle rather than passing it through, so no branch can
+/// emit an unsigiled segment.
+///
+/// **This deliberately does not resolve `@me`.** The F1 follow-up
+/// (`internal/superpowers/specs/2026-06-25-ws6-rehome-temper-next-to-public-design.md`,
+/// "F6 `@me` projection dir") wants the requester's own resources under a
+/// self-relative `@me`. Answering "is this mine?" needs the authenticated
+/// profile, and the CLI has none locally — `~/.config/temper/auth.json` stores
+/// a token and a device id, and its `profile_id` is null. So `@me` needs the
+/// identity injection that follow-up is about; until then `@<handle>` is
+/// correct-and-stable rather than wrong, and the move to `@me` is a rename that
+/// one `pull` performs.
+fn projection_owner(row: &ResourceView) -> String {
+    if let Some(owner_ref) = row.context_owner_ref.as_deref() {
+        if !owner_ref.is_empty() {
+            return owner_ref.to_string();
+        }
+    }
+    if row.owner_handle.is_empty() {
+        // A sparse row with neither field: the self-relative segment is the only
+        // honest guess, and it is at least sigiled.
+        return "@me".to_string();
+    }
+    format!("@{}", row.owner_handle)
+}
+
 fn projection_stem(row: &ResourceView) -> String {
     temper_workflow::operations::decorated_ref_bounded(
         &row.title,
@@ -291,14 +328,7 @@ pub fn write_resource_file_from_parts(
         return Ok(None);
     };
 
-    // `owner_handle` is literal "@me" for the requester's own resources and
-    // "+team-slug" for team contexts — both are canonical vault directory
-    // components. Empty handle defends against a sparse server row.
-    let owner: &str = if row.owner_handle.is_empty() {
-        "@me"
-    } else {
-        &row.owner_handle
-    };
+    let owner = projection_owner(row);
     let doc_type = row.doc_type_name.as_str();
 
     let stem = projection_stem(row);
@@ -316,13 +346,13 @@ pub fn write_resource_file_from_parts(
         resource: row,
         context,
         doc_type,
-        canonical_owner: owner,
+        canonical_owner: &owner,
         body: ingest::normalize_body_for_vault(&content.markdown),
         managed_meta: managed_value.as_ref(),
         open_meta: content.open_meta.as_ref(),
     })?;
 
-    let path = Vault::new(vault_root).doc_file(owner, context, doc_type, &stem);
+    let path = Vault::new(vault_root).doc_file(&owner, context, doc_type, &stem);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -354,15 +384,17 @@ pub async fn write_resource_file(
 /// Remove a resource's projection file given a server [`ResourceView`].
 ///
 /// A by-row convenience over [`remove_resource_file`] for the id-addressed
-/// `temper resource delete` path: derives `owner` from the row's context
-/// subscription (`config.owner_for_context`) and `context`/`doctype`/`slug`
-/// from the row. A row with no slug falls back to the title-derived slug so
-/// the path matches what the projection writer would have produced.
-pub fn remove_resource_file_for_row(
-    vault_root: &Path,
-    config: &crate::config::Config,
-    row: &ResourceView,
-) -> Result<()> {
+/// `temper resource delete` path. **Every path component is derived by the same
+/// functions the writer uses** — `projection_owner` and `projection_stem` — so
+/// the remover cannot look somewhere the writer never wrote.
+///
+/// It could before. The owner segment came from `config.owner_for_context()`,
+/// which reads `Config::subscriptions` — a field hardcoded to `Vec::new()`, so
+/// it always answered `"@me"` while the writer used the bare `owner_handle`.
+/// Delete's cache cleanup was therefore a silent no-op on every machine: the
+/// removal targeted a path that never existed, and an absent file is a
+/// deliberate success here, so nothing reported it.
+pub fn remove_resource_file_for_row(vault_root: &Path, row: &ResourceView) -> Result<()> {
     // A cogmap-homed resource was never projected to disk (no context path),
     // so there is nothing to remove. Skip — same bounded edge as the writer.
     let Some(context) = row.context_name.as_deref() else {
@@ -373,7 +405,7 @@ pub fn remove_resource_file_for_row(
         return Ok(());
     };
 
-    let owner = config.owner_for_context(context);
+    let owner = projection_owner(row);
     let stem = projection_stem(row);
     remove_resource_file(vault_root, &owner, context, &row.doc_type_name, &stem)
 }
@@ -479,42 +511,59 @@ async fn write_projection_files(
     Ok(keep)
 }
 
-/// Prune projection files for resources no longer present in the context.
+/// The **on-disk key** for a context: its `context_name` (e.g. `"temper"`),
+/// never the raw ref the caller typed (which may be `"@me/temper"`).
 ///
-/// The on-disk directory component is the context's `context_name` field
-/// (e.g. `"temper"`), not the raw ref (which may be `"@me/temper"`). Derive
-/// it from any listed row; for an empty context fall back to parsing the
-/// slug from the ref so that a context that has been emptied server-side
-/// still prunes its local projection files.
-fn prune_absent_files(
-    vault_root: &Path,
-    context: &str,
-    rows: &[ResourceView],
-    keep: &HashSet<PathBuf>,
-) -> Result<usize> {
-    let context_dir_name: Option<String> = rows
-        .first()
+/// This is the one derivation, shared by everything that names a context on
+/// disk — the projection directory and the staleness cursor. They keyed
+/// differently before: pruning used this rule while the cursor used the ref
+/// verbatim, so a `pull @me/temper` wrote its cursor to
+/// `.temper/projection/@me/temper.json` and `temper status`, which looks a
+/// context up by bare name, found nothing and reported `not-projected` for a
+/// context it had just materialized.
+///
+/// Derived from any listed row; for an empty context, fall back to the slug
+/// half of the ref so a server-side-emptied context still prunes and still
+/// records a cursor.
+fn context_disk_key(context: &str, rows: &[ResourceView]) -> Option<String> {
+    rows.first()
         .and_then(|r| r.context_name.clone())
         .or_else(|| {
             parse_context_ref(context).ok().and_then(|r| match r {
                 ContextRef::OwnerSlug { slug, .. } => Some(slug),
                 ContextRef::Id(_) => None,
             })
-        });
-    match context_dir_name.as_deref() {
+        })
+}
+
+/// Prune projection files for resources no longer present in the context.
+fn prune_absent_files(
+    vault_root: &Path,
+    context: &str,
+    rows: &[ResourceView],
+    keep: &HashSet<PathBuf>,
+) -> Result<usize> {
+    match context_disk_key(context, rows).as_deref() {
         Some(name) => prune_context(vault_root, name, keep),
         None => Ok(0),
     }
 }
 
-/// Record the per-context staleness cursor. The context's UUID comes from
-/// any listed row; an empty context yields no event id.
+/// Record the per-context staleness cursor, keyed by `context_disk_key` — the
+/// same key the projection directory uses, so whoever reads the cursor back
+/// finds it. The context's UUID comes from any listed row; an empty context
+/// yields no event id.
 async fn record_context_cursor(
     client: &TemperClient,
     state_dir: &Path,
     context: &str,
     rows: &[ResourceView],
 ) -> Result<()> {
+    let Some(key) = context_disk_key(context, rows) else {
+        // No row and an id-shaped ref: nothing on disk is named after this
+        // context, so there is no key to file a cursor under.
+        return Ok(());
+    };
     let context_id = rows.first().and_then(|r| r.kb_context_id.map(Uuid::from));
     let last_event_id = match context_id {
         Some(cid) => client
@@ -526,7 +575,7 @@ async fn record_context_cursor(
     };
     write_cursor(
         state_dir,
-        context,
+        &key,
         &ProjectionCursor {
             last_event_id,
             pulled_at: Utc::now(),
@@ -791,6 +840,99 @@ mod tests {
         assert_eq!(
             temper_workflow::operations::parse_ref(&stem).unwrap(),
             temper_core::types::ids::ResourceId(id)
+        );
+    }
+
+    /// The pairing that was broken: whatever the writer wrote, the remover
+    /// must remove. Both derive every path component from the same row through
+    /// the same two functions, so this asserts the property end to end rather
+    /// than asserting each side's spelling.
+    ///
+    /// It failed before because the remover took the owner segment from
+    /// `config.owner_for_context()` — always `"@me"` — while the writer used the
+    /// bare `owner_handle`. `remove_resource_file` treats an absent file as
+    /// success, so `temper resource delete` reported ok and left the file.
+    #[test]
+    fn what_the_writer_wrote_is_what_the_remover_removes() {
+        let dir = tempfile::TempDir::new().unwrap();
+        // A row whose owner segment is NOT "@me" — the case the old remover missed.
+        let mut row = row_titled("A Projected Resource", Uuid::now_v7());
+        row.owner_handle = "j-cole-taylor".to_string();
+        row.context_owner_ref = Some("@j-cole-taylor".to_string());
+
+        let written = write_resource_file_from_parts(dir.path(), &row, &body_only("# body\n"))
+            .unwrap()
+            .unwrap();
+        assert!(written.exists(), "writer produced {}", written.display());
+
+        remove_resource_file_for_row(dir.path(), &row).unwrap();
+
+        assert!(
+            !written.exists(),
+            "remover must delete the file the writer wrote, at {}",
+            written.display()
+        );
+    }
+
+    /// The owner segment must be a legal vault path component. `Vault::parse_rel`
+    /// rejects one without an `@`/`+` sigil, and `owner_handle` is the bare
+    /// handle off `p.handle` — so passing it through produced a tree the layout
+    /// module could not parse.
+    #[test]
+    fn the_owner_segment_is_always_sigiled() {
+        let id = Uuid::now_v7();
+
+        // Sigiled context ref wins.
+        let mut team = row_titled("T", id);
+        team.context_owner_ref = Some("+platform-eng".to_string());
+        assert_eq!(projection_owner(&team), "+platform-eng");
+
+        // No context ref: the bare handle is sigiled, never passed through.
+        let mut bare = row_titled("B", id);
+        bare.context_owner_ref = None;
+        bare.owner_handle = "j-cole-taylor".to_string();
+        assert_eq!(projection_owner(&bare), "@j-cole-taylor");
+
+        // A sparse row still yields something sigiled.
+        let mut sparse = row_titled("S", id);
+        sparse.context_owner_ref = None;
+        sparse.owner_handle = String::new();
+        assert_eq!(projection_owner(&sparse), "@me");
+
+        // And every branch round-trips through the layout parser.
+        for row in [&team, &bare, &sparse] {
+            let owner = projection_owner(row);
+            let rel = Vault::new(Path::new("/x")).rel_path(&owner, "ctx", "task", "stem");
+            assert!(
+                Vault::parse_rel(&rel).is_some(),
+                "owner segment {owner:?} is not a parseable vault path component"
+            );
+        }
+    }
+
+    /// The cursor and the projection directory are named by the same key, so a
+    /// reader that looks a context up by name finds the cursor a pull wrote.
+    /// `pull @me/temper` used to file its cursor under the ref verbatim, and
+    /// `temper status` — which knows only `temper` — reported `not-projected`
+    /// for a context it had just materialized.
+    #[test]
+    fn the_cursor_key_and_the_directory_key_are_the_same() {
+        let row = row_titled("Any", Uuid::now_v7());
+        // `row_titled` homes the row in context "myctx".
+        assert_eq!(
+            context_disk_key("@me/myctx", std::slice::from_ref(&row)).as_deref(),
+            Some("myctx"),
+            "a decorated ref resolves to the bare on-disk name"
+        );
+        // Empty context: the ref's slug half still yields the on-disk name.
+        assert_eq!(
+            context_disk_key("@me/emptied", &[]).as_deref(),
+            Some("emptied")
+        );
+        // An id-shaped ref for an empty context names nothing on disk.
+        assert_eq!(
+            context_disk_key("019fbb77-72a3-72e1-bbbd-13eb6aa64982", &[]),
+            None
         );
     }
 

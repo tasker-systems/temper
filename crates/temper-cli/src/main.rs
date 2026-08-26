@@ -1513,7 +1513,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 }
             }
         },
-        Commands::Pull { context } => commands::pull::run(&context),
+        Commands::Pull { context } => commands::pull::run(&context, cli.vault.as_deref()),
         Commands::Config { action } => match action {
             ConfigAction::Edit => commands::config::edit(),
         },

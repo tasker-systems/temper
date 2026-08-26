@@ -65,7 +65,6 @@ scopes = ["openid"]
         vault_root: dir.path().to_path_buf(),
         state_dir,
         contexts: vec!["myapp".to_string()],
-        subscriptions: Vec::new(),
         skill_output: dir.path().join("skill-output"),
         profile_slug: None,
     };

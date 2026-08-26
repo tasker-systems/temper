@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 
 use temper_core::types::config::TemperConfig;
-use temper_core::types::vault_config::Subscription;
 
 use crate::error::{Result, TemperError};
 
@@ -28,27 +27,10 @@ pub struct Config {
     pub vault_root: PathBuf,
     pub state_dir: PathBuf,
     pub contexts: Vec<String>,
-    pub subscriptions: Vec<Subscription>,
     pub skill_output: PathBuf,
     /// The user's profile slug (cached from `client.profile().get()`).
     /// `None` until the first authenticated CLI invocation populates it.
     pub profile_slug: Option<String>,
-}
-
-impl Config {
-    /// Look up the subscription for a given context name.
-    /// Returns `None` if the context has no subscription configured.
-    pub fn subscription_for_context(&self, context: &str) -> Option<&Subscription> {
-        self.subscriptions.iter().find(|s| s.context == context)
-    }
-
-    /// Resolve the owner string for a given context via its subscription.
-    /// Falls back to `@me` if no subscription is configured for the context.
-    pub fn owner_for_context(&self, context: &str) -> String {
-        self.subscription_for_context(context)
-            .map(|s| s.resolved_owner())
-            .unwrap_or_else(|| "@me".to_string())
-    }
 }
 
 /// Load the device UUID from auth.json's `device_id` field.
@@ -105,9 +87,6 @@ pub fn load_from(global: &TemperConfig, cli_vault: Option<&str>) -> Config {
         state_dir: vault_root.join(".temper"),
         vault_root,
         contexts: global.sync.subscriptions.contexts.clone(),
-        // Populated in a future session once vault_config sync lands; until
-        // then owner_for_context falls back to "@me".
-        subscriptions: Vec::new(),
         skill_output: expand_tilde(&global.skill.output),
         profile_slug: None,
     }
@@ -133,9 +112,6 @@ pub fn load(cli_vault: Option<&str>) -> Result<Config> {
         state_dir: vault_root.join(".temper"),
         vault_root,
         contexts: global.sync.subscriptions.contexts.clone(),
-        // Populated in a future session once vault_config sync lands; until
-        // then owner_for_context falls back to "@me".
-        subscriptions: Vec::new(),
         skill_output: expand_tilde(&global.skill.output),
         profile_slug: None,
     })

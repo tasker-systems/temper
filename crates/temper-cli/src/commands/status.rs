@@ -95,9 +95,7 @@ pub fn run(config: &Config, _verbose: bool, fmt: crate::format::OutputFormat) ->
                                 &config.state_dir,
                                 ctx_name,
                             ));
-                            let owner = config.owner_for_context(ctx_name);
-                            let projected =
-                                count_projected_md_files(&config.vault_root, &owner, ctx_name);
+                            let projected = count_projected_md_files(&config.vault_root, ctx_name);
                             let server_count = server_ctxs
                                 .iter()
                                 .find(|c| c.name == *ctx_name)
@@ -156,8 +154,7 @@ fn degraded_items(config: &Config) -> Vec<ContextStatus> {
             } else {
                 "not-projected"
             };
-            let owner = config.owner_for_context(ctx_name);
-            let projected = count_projected_md_files(&config.vault_root, &owner, ctx_name);
+            let projected = count_projected_md_files(&config.vault_root, ctx_name);
             ContextStatus {
                 name: ctx_name.clone(),
                 staleness: staleness.to_string(),
@@ -168,36 +165,54 @@ fn degraded_items(config: &Config) -> Vec<ContextStatus> {
         .collect()
 }
 
-/// Count `.md` files under `<vault_root>/<owner>/<context>/<doc_type>/*.md`
-/// across every doc-type subdirectory. Returns 0 if the context directory
-/// does not exist (normal for a fresh user before `temper pull`).
-fn count_projected_md_files(vault_root: &Path, owner: &str, context: &str) -> usize {
-    // The vault layout is <vault_root>/<owner>/<context>/<doc_type>/<slug>.md.
-    // Walk every subdirectory of <context_dir> as a doc-type bucket.
-    let context_dir = vault_root.join(owner).join(context);
-
-    if !context_dir.exists() {
-        return 0;
-    }
-    let Ok(doctype_entries) = std::fs::read_dir(&context_dir) else {
+/// Count `.md` files projected for a context, across **every** owner directory.
+///
+/// The owner segment is not knowable from a context name. It comes off the
+/// server row (`projection::projection_owner`), so a caller holding only a name
+/// — which `status` is — cannot reconstruct it. This used to guess it via
+/// `config.owner_for_context()`, which always answered `"@me"` because
+/// `Config::subscriptions` is hardcoded empty; every context projected under a
+/// real handle therefore reported `projected: 0` while its files sat on disk.
+///
+/// `prune_context` already solved this by walking every owner directory rather
+/// than predicting one. Counting mirrors pruning, so the set counted is exactly
+/// the set pruned.
+///
+/// Returns 0 when nothing matches. Layout:
+/// `<vault_root>/<owner>/<context>/<doc_type>/*.md`.
+fn count_projected_md_files(vault_root: &Path, context: &str) -> usize {
+    let Ok(owner_entries) = std::fs::read_dir(vault_root) else {
         return 0;
     };
     let mut count = 0usize;
-    for doctype_entry in doctype_entries.flatten() {
-        if !doctype_entry
-            .file_type()
-            .map(|t| t.is_dir())
-            .unwrap_or(false)
-        {
+    for owner_entry in owner_entries.flatten() {
+        if !owner_entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
             continue;
         }
-        let Ok(file_entries) = std::fs::read_dir(doctype_entry.path()) else {
+        // Skip hidden dirs such as `.temper`, exactly as pruning does.
+        if owner_entry.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
+        let context_dir = owner_entry.path().join(context);
+        let Ok(doctype_entries) = std::fs::read_dir(&context_dir) else {
             continue;
         };
-        for file_entry in file_entries.flatten() {
-            let path = file_entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("md") {
-                count += 1;
+        for doctype_entry in doctype_entries.flatten() {
+            if !doctype_entry
+                .file_type()
+                .map(|t| t.is_dir())
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let Ok(file_entries) = std::fs::read_dir(doctype_entry.path()) else {
+                continue;
+            };
+            for file_entry in file_entries.flatten() {
+                let path = file_entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("md") {
+                    count += 1;
+                }
             }
         }
     }
@@ -225,7 +240,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let missing = dir.path().join("does-not-exist");
         assert_eq!(
-            count_projected_md_files(&missing, "@me", "default"),
+            count_projected_md_files(&missing, "default"),
             0,
             "non-existent vault root returns 0"
         );
@@ -245,7 +260,7 @@ mod tests {
         }
 
         assert_eq!(
-            count_projected_md_files(root, "@me", "default"),
+            count_projected_md_files(root, "default"),
             6,
             "should count all .md files across all doc-type subdirs"
         );
@@ -262,7 +277,7 @@ mod tests {
         std::fs::write(session_dir.join("file.json"), "skip").unwrap();
 
         assert_eq!(
-            count_projected_md_files(root, "@me", "ctx"),
+            count_projected_md_files(root, "ctx"),
             1,
             "only .md files counted"
         );

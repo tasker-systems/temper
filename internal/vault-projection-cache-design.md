@@ -76,16 +76,46 @@ doc-type-scoped tree:
 For example:
 
 ```text
-<vault_root>/@me/temper/task/pre-limb-1c-cleanup-sweep-019d6880-5c21-7bb2-86fb-a0cc612b5cf5.md
+<vault_root>/@j-cole-taylor/temper/task/pre-limb-1c-cleanup-sweep-019d6880-5c21-7bb2-86fb-a0cc612b5cf5.md
 <vault_root>/+platform-eng/temper/research/some-shared-spec-019f47e2-0126-7a23-a905-20dc97848af6.md
 ```
 
-The `<owner>` segment distinguishes personal resources (`@me`) from team-owned
-resources (`+<team-slug>`). The path is computed by
-`Vault::doc_file(owner, context, doc_type, stem)`
+The path is computed by `Vault::doc_file(owner, context, doc_type, stem)`
 (`crates/temper-workflow/src/vault.rs:53`), which the projection writer calls
 for every materialized file (`crates/temper-cli/src/projection.rs`,
 `write_resource_file_from_parts`).
+
+### Every on-disk key is derived once
+
+There are three of them, and each has exactly one derivation that the writer
+and every reader share. They did not, and each divergence was a live bug:
+
+| Key | Derivation | What it used to be |
+|---|---|---|
+| owner segment | `projection::projection_owner(row)` | writer used the bare `owner_handle`; the delete path used `config.owner_for_context()`, which always answered `"@me"` |
+| filename stem | `projection::projection_stem(row)` | `sluggify(title)` with no bound |
+| context name | `projection::context_disk_key(ref, rows)` | pruning used the row's `context_name`; the cursor used the ref verbatim |
+
+### The owner segment
+
+`<owner>` is `projection_owner(row)`: `context_owner_ref` when the row carries
+one — sigiled by construction, `@<handle>` for a profile home and
+`+<team-slug>` for a team one — otherwise the handle *with* a sigil added.
+
+**Sigiled always**, because `Vault::parse_rel` rejects an owner segment without
+a leading `@` or `+`, and `ResourceView.owner_handle` is the bare handle
+straight off the readback (`p.handle AS owner_handle`), e.g. `j-cole-taylor`.
+The writer used it anyway and produced a tree its own layout module could not
+parse.
+
+**Not `@me`, yet.** The F1 follow-up recorded in
+[`2026-06-25-ws6-rehome-temper-next-to-public-design.md`](./superpowers/specs/2026-06-25-ws6-rehome-temper-next-to-public-design.md)
+("F6 `@me` projection dir") wants the requester's own resources under a
+self-relative `@me`. Answering *is this mine?* needs the authenticated profile,
+and the CLI holds none locally — `~/.config/temper/auth.json` stores a token and
+a device id, and its `profile_id` is null. So `@me` waits on the identity
+injection that follow-up is about. `@<handle>` is correct-and-stable in the
+meantime, and the eventual move to `@me` is a rename one `pull` performs.
 
 ### The filename stem is a bounded decorated ref
 
@@ -306,9 +336,15 @@ What happens (`delete`, `crates/temper-cli/src/commands/resource.rs:527` →
    preserved server-side, and a delete event + audit record are written
    atomically (`:1194`).
 3. **Best-effort cache cleanup.** After the server confirms, the CLI removes the
-   local projected file via `projection::remove_resource_file`
-   (`crates/temper-cli/src/commands/resource.rs:553`). A failure here only warns;
-   the authoritative delete already committed.
+   local projected file via `projection::remove_resource_file_for_row`. A failure
+   here only warns; the authoritative delete already committed.
+
+   > This was a silent no-op until the owner segment was unified. The remover
+   > derived its owner from `config.owner_for_context()` — always `"@me"`, since
+   > `Config::subscriptions` was hardcoded empty — while the writer used the bare
+   > handle. The removal targeted a path that never existed, and an absent file
+   > is a deliberate success here, so nothing reported it. Both sides now call
+   > `projection_owner` and `projection_stem`, so they cannot diverge again.
 
 ### The `--force` flag is vestigial
 
@@ -362,7 +398,13 @@ pub struct ProjectionCursor {
 }
 ```
 
-(`crates/temper-cli/src/projection.rs`). It powers staleness *warnings* only —
+(`crates/temper-cli/src/projection.rs`). It is keyed by `context_disk_key` — the same name the projection directory
+uses — so a reader that knows only a context's name finds the cursor a `pull`
+wrote. It was keyed by the ref verbatim before, so `pull @me/temper` filed its
+cursor at `.temper/projection/@me/temper.json` and `temper status` reported
+`not-projected` for a context it had just materialized.
+
+It powers staleness *warnings* only —
 `check_context_staleness`, whose one caller is `temper status`
 (`crates/temper-cli/src/commands/status.rs`). Nothing enforces
 freshness: commands proceed regardless of cursor state, and reads go to the

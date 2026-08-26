@@ -1427,9 +1427,7 @@ pub fn delete(
 
     // Projection refresh: remove the resource's projection file. Best-effort
     // — a removal failure must not fail the (already-committed) delete.
-    if let Err(e) =
-        crate::projection::remove_resource_file_for_row(&config.vault_root, config, &row)
-    {
+    if let Err(e) = crate::projection::remove_resource_file_for_row(&config.vault_root, &row) {
         output::warning(format!("could not remove projection file: {e}"));
     }
 

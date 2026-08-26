@@ -22,12 +22,6 @@ use crate::config::Config;
 /// into `temper_client` API calls.
 pub struct CloudBackend {
     pub(crate) client: Arc<TemperClient>,
-    #[expect(
-        dead_code,
-        reason = "carried from CloudBackendCtx; addressing is by ResourceId now \
-                  so the resolve-by-uri owner is no longer read on the write path"
-    )]
-    pub(crate) owner: String,
     /// Context ref for the create path. Sent verbatim as `IngestPayload.context_ref`;
     /// the server parses+resolves it (UUID or @owner/slug) at the ingest boundary.
     pub(crate) context_ref: String,
@@ -43,7 +37,6 @@ impl CloudBackend {
     pub fn new(ctx: CloudBackendCtx) -> Self {
         Self {
             client: ctx.client,
-            owner: ctx.owner,
             context_ref: ctx.context_ref,
             config: ctx.config,
         }
@@ -463,7 +456,6 @@ mod embed_impl {
                 vault_root: vault_root.to_path_buf(),
                 state_dir: vault_root.join(".temper"),
                 contexts: vec!["temper".to_string()],
-                subscriptions: vec![],
                 skill_output: vault_root.join("skills"),
                 profile_slug: None,
             }
@@ -483,7 +475,6 @@ mod embed_impl {
             let temp = tempfile::tempdir().unwrap();
             let ctx = CloudBackendCtx {
                 client: make_test_client(),
-                owner: "@me".to_string(),
                 context_ref: "@me/temper".to_string(),
                 config: Arc::new(make_config(temp.path())),
             };
@@ -500,7 +491,6 @@ mod embed_impl {
             let temp = tempfile::tempdir().unwrap();
             let ctx = CloudBackendCtx {
                 client: client.clone(),
-                owner: "@me".to_string(),
                 context_ref: "@me/temper".to_string(),
                 config: Arc::new(make_config(temp.path())),
             };
@@ -797,7 +787,6 @@ mod non_embed_impl {
                 vault_root: vault_root.to_path_buf(),
                 state_dir: vault_root.join(".temper"),
                 contexts: vec!["temper".to_string()],
-                subscriptions: vec![],
                 skill_output: vault_root.join("skills"),
                 profile_slug: None,
             }
@@ -815,7 +804,6 @@ mod non_embed_impl {
             ));
             let ctx = CloudBackendCtx {
                 client,
-                owner: "@me".to_string(),
                 context_ref: "@me/temper".to_string(),
                 config: Arc::new(make_config(temp.path())),
             };
