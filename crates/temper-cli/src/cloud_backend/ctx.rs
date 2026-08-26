@@ -18,7 +18,6 @@ use crate::error::{Result, TemperError};
 /// project's "params structs at 5+ args" rule.
 pub struct CloudBackendCtx {
     pub client: Arc<TemperClient>,
-    pub owner: String,
     /// Context ref string for the create path. Passed verbatim as
     /// `IngestPayload.context_ref` — no synthesis, no sigil-prefixing.
     /// Bare names (no `@`/`+` sigil, no UUID) are intentionally NOT
@@ -52,8 +51,6 @@ pub fn assemble_cloud_backend(
         ));
     }
 
-    let owner = config.owner_for_context(context);
-
     // Pass the context value verbatim as the context ref — no synthesis, no
     // `@me/<name>` prefixing. Bare names intentionally reach the server where
     // `parse_context_ref` rejects them with BadRequest (spec Decision 1:
@@ -64,7 +61,6 @@ pub fn assemble_cloud_backend(
 
     let ctx = CloudBackendCtx {
         client: Arc::new(client),
-        owner,
         context_ref,
         config: Arc::new(config.clone()),
     };
@@ -81,7 +77,6 @@ mod tests {
             vault_root: vault_root.to_path_buf(),
             state_dir: vault_root.join(".temper"),
             contexts: vec!["temper".to_string()],
-            subscriptions: vec![],
             skill_output: vault_root.join("skills"),
             profile_slug: None,
         }

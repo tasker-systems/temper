@@ -33,7 +33,10 @@ pub use commands::{
 pub use events::{DomainEvent, PushDeferReason};
 pub use inputs::{BodyUpdate, ListFilter, SearchQuery};
 pub use output::CommandOutput;
-pub use refs::{decorated_ref, is_remote_url, parse_ref, resolve_provenance_source, sluggify};
+pub use refs::{
+    decorated_ref, decorated_ref_bounded, is_remote_url, parse_ref, resolve_provenance_source,
+    sluggify,
+};
 pub use surface::{Surface, SURFACE_HEADER};
 
 #[cfg(test)]

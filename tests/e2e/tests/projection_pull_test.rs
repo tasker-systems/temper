@@ -58,6 +58,32 @@ async fn seed_resource(
         .id
 }
 
+/// The canonical projection path for a seeded resource.
+///
+/// The filename is a **bounded decorated ref** — `sluggify(title)` capped at
+/// `PROJECTION_SLUG_MAX_BYTES`, then `-<uuid>` — so that an agent-authored title
+/// of any length names a file the OS will accept. Derive it here rather than
+/// spelling a stem out: a hardcoded literal drifts silently the next time the
+/// bound or the scheme moves.
+fn projected(
+    vault_root: &std::path::Path,
+    context: &str,
+    doc_type: &str,
+    title: &str,
+    id: ResourceId,
+) -> std::path::PathBuf {
+    let stem = temper_workflow::operations::decorated_ref_bounded(
+        title,
+        id,
+        temper_cli::projection::PROJECTION_SLUG_MAX_BYTES,
+    );
+    vault_root
+        .join("@me")
+        .join(context)
+        .join(doc_type)
+        .join(format!("{stem}.md"))
+}
+
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn events_cursor_returns_latest_event_for_context(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
@@ -115,7 +141,7 @@ async fn events_cursor_returns_latest_event_for_context(pool: sqlx::PgPool) {
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-#[ignore = "deferred: vault projection path uses the real owner handle (reconstruct_resource_row returns p.owner_handle), not the '@me' self-segment the projection expects; and row.slug is None (temper-slug §7-Die) so the filename slug falls back. Blocked on the readback @me/identity-key follow-up (F6/F1)"]
+#[ignore = "deferred: vault projection path uses the real owner handle (reconstruct_resource_row returns p.owner_handle), not the '@me' self-segment `projected` builds. Blocked on the readback @me/identity-key follow-up (F6). NOT the filename any more — the stem is now derived from title+id via `projected`, so the old `row.slug is None` (temper-slug §7-Die) half of this reason is retired"]
 async fn write_resource_file_materializes_a_document(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
     app.client
@@ -128,7 +154,7 @@ async fn write_resource_file_materializes_a_document(pool: sqlx::PgPool) {
         .create("wctx", None)
         .await
         .expect("ctx");
-    seed_resource(&app, "wctx", "research", "Write Me").await;
+    let write_me = seed_resource(&app, "wctx", "research", "Write Me").await;
 
     let listed = app
         .client
@@ -147,11 +173,7 @@ async fn write_resource_file_materializes_a_document(pool: sqlx::PgPool) {
         .expect("write_resource_file")
         .expect("a context-homed resource projects to a path");
 
-    let expected = vault_root
-        .join("@me")
-        .join("wctx")
-        .join("research")
-        .join("write-me.md");
+    let expected = projected(vault_root, "wctx", "research", "Write Me", write_me);
     assert_eq!(path, expected);
     assert!(path.exists(), "file written at canonical path");
 
@@ -171,7 +193,7 @@ fn projection_test_config(app: &common::E2eTestApp) -> temper_cli::config::Confi
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-#[ignore = "deferred: vault projection path uses the real owner handle (reconstruct_resource_row returns p.owner_handle), not the '@me' self-segment the projection expects; and row.slug is None (temper-slug §7-Die) so the filename slug falls back. Blocked on the readback @me/identity-key follow-up (F6/F1)"]
+#[ignore = "deferred: vault projection path uses the real owner handle (reconstruct_resource_row returns p.owner_handle), not the '@me' self-segment `projected` builds. Blocked on the readback @me/identity-key follow-up (F6). NOT the filename any more — the stem is now derived from title+id via `projected`, so the old `row.slug is None` (temper-slug §7-Die) half of this reason is retired"]
 async fn write_resource_file_from_parts_materializes_a_document(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
     app.client
@@ -208,11 +230,7 @@ async fn write_resource_file_from_parts_materializes_a_document(pool: sqlx::PgPo
         .expect("write_resource_file_from_parts")
         .expect("a context-homed resource projects to a path");
 
-    let expected = vault_root
-        .join("@me")
-        .join("fpctx")
-        .join("research")
-        .join("parts-doc.md");
+    let expected = projected(vault_root, "fpctx", "research", "Parts Doc", row.id);
     assert_eq!(path, expected);
     assert!(path.exists(), "file written at canonical path");
 
@@ -223,7 +241,7 @@ async fn write_resource_file_from_parts_materializes_a_document(pool: sqlx::PgPo
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-#[ignore = "deferred: vault projection path uses the real owner handle (reconstruct_resource_row returns p.owner_handle), not the '@me' self-segment the projection expects; and row.slug is None (temper-slug §7-Die) so the filename slug falls back. Blocked on the readback @me/identity-key follow-up (F6/F1)"]
+#[ignore = "deferred: vault projection path uses the real owner handle (reconstruct_resource_row returns p.owner_handle), not the '@me' self-segment `projected` builds. Blocked on the readback @me/identity-key follow-up (F6). NOT the filename any more — the stem is now derived from title+id via `projected`, so the old `row.slug is None` (temper-slug §7-Die) half of this reason is retired"]
 async fn pull_context_materializes_tree_and_writes_cursor(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
     app.client
@@ -236,8 +254,8 @@ async fn pull_context_materializes_tree_and_writes_cursor(pool: sqlx::PgPool) {
         .create("pctx", None)
         .await
         .expect("ctx");
-    seed_resource(&app, "pctx", "research", "Doc One").await;
-    seed_resource(&app, "pctx", "research", "Doc Two").await;
+    let one = seed_resource(&app, "pctx", "research", "Doc One").await;
+    let two = seed_resource(&app, "pctx", "research", "Doc Two").await;
 
     let config = projection_test_config(&app);
     let summary = temper_cli::projection::pull_context(&app.client, &config, "pctx")
@@ -248,8 +266,8 @@ async fn pull_context_materializes_tree_and_writes_cursor(pool: sqlx::PgPool) {
     assert_eq!(summary.pruned, 0, "nothing stale on a first pull");
 
     let vault_root = app.vault_dir.path();
-    assert!(vault_root.join("@me/pctx/research/doc-one.md").exists());
-    assert!(vault_root.join("@me/pctx/research/doc-two.md").exists());
+    assert!(projected(vault_root, "pctx", "research", "Doc One", one).exists());
+    assert!(projected(vault_root, "pctx", "research", "Doc Two", two).exists());
 
     let cursor = temper_cli::projection::read_cursor(&config.state_dir, "pctx")
         .expect("read_cursor")
@@ -261,7 +279,7 @@ async fn pull_context_materializes_tree_and_writes_cursor(pool: sqlx::PgPool) {
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-#[ignore = "deferred: vault projection path uses the real owner handle (reconstruct_resource_row returns p.owner_handle), not the '@me' self-segment the projection expects; and row.slug is None (temper-slug §7-Die) so the filename slug falls back. Blocked on the readback @me/identity-key follow-up (F6/F1)"]
+#[ignore = "deferred: vault projection path uses the real owner handle (reconstruct_resource_row returns p.owner_handle), not the '@me' self-segment `projected` builds. Blocked on the readback @me/identity-key follow-up (F6). NOT the filename any more — the stem is now derived from title+id via `projected`, so the old `row.slug is None` (temper-slug §7-Die) half of this reason is retired"]
 async fn pull_prunes_resources_deleted_on_server(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
     app.client
@@ -283,8 +301,10 @@ async fn pull_prunes_resources_deleted_on_server(pool: sqlx::PgPool) {
         .expect("first pull");
 
     let vault_root = app.vault_dir.path();
-    assert!(vault_root.join("@me/dctx/research/keeper.md").exists());
-    assert!(vault_root.join("@me/dctx/research/doomed.md").exists());
+    let keeper = projected(vault_root, "dctx", "research", "Keeper", keep_id);
+    let doomed = projected(vault_root, "dctx", "research", "Doomed", doomed_id);
+    assert!(keeper.exists());
+    assert!(doomed.exists());
 
     // Soft-delete one resource on the server, then re-pull.
     app.client
@@ -298,13 +318,12 @@ async fn pull_prunes_resources_deleted_on_server(pool: sqlx::PgPool) {
 
     assert_eq!(summary.written, 1, "only the survivor is written");
     assert_eq!(summary.pruned, 1, "the deleted resource's file is pruned");
-    assert!(vault_root.join("@me/dctx/research/keeper.md").exists());
-    assert!(!vault_root.join("@me/dctx/research/doomed.md").exists());
-    let _ = keep_id;
+    assert!(keeper.exists());
+    assert!(!doomed.exists());
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-#[ignore = "deferred: vault projection path uses the real owner handle (reconstruct_resource_row returns p.owner_handle), not the '@me' self-segment the projection expects; and row.slug is None (temper-slug §7-Die) so the filename slug falls back. Blocked on the readback @me/identity-key follow-up (F6/F1)"]
+#[ignore = "deferred: vault projection path uses the real owner handle (reconstruct_resource_row returns p.owner_handle), not the '@me' self-segment `projected` builds. Blocked on the readback @me/identity-key follow-up (F6). NOT the filename any more — the stem is now derived from title+id via `projected`, so the old `row.slug is None` (temper-slug §7-Die) half of this reason is retired"]
 async fn pull_is_idempotent(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
     app.client
@@ -317,10 +336,16 @@ async fn pull_is_idempotent(pool: sqlx::PgPool) {
         .create("ictx", None)
         .await
         .expect("ctx");
-    seed_resource(&app, "ictx", "research", "Stable Doc").await;
+    let stable = seed_resource(&app, "ictx", "research", "Stable Doc").await;
 
     let config = projection_test_config(&app);
-    let path = app.vault_dir.path().join("@me/ictx/research/stable-doc.md");
+    let path = projected(
+        app.vault_dir.path(),
+        "ictx",
+        "research",
+        "Stable Doc",
+        stable,
+    );
 
     temper_cli::projection::pull_context(&app.client, &config, "ictx")
         .await

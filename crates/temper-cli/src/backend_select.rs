@@ -52,7 +52,6 @@ mod tests {
             vault_root: vault_root.to_path_buf(),
             state_dir: vault_root.join(".temper"),
             contexts: vec!["temper".to_string()],
-            subscriptions: vec![],
             skill_output: vault_root.join("skills"),
             profile_slug: None,
         }
