@@ -11,6 +11,9 @@
 //! 3. `+team-slug/slug` — member resolves; non-member gets `Forbidden`
 //! 4. Bare UUID — visible resolves; not-visible gives `NotFound`
 //! 5. `@handle/slug` — team-shared resolves; not-shared gives `NotFound`
+//! 6. A RETIRED context resolves through no arm — not `@me/slug` for its own owner, and not
+//!    `+team/slug` for a member. Every caller documents this resolver as visibility-gated, so it
+//!    must agree with `context_visible_to`, which refuses a retired context for every principal.
 
 mod common;
 
@@ -353,5 +356,147 @@ async fn the_three_handle_slug_refusals_are_indistinguishable(pool: PgPool) {
         1,
         "all three @handle/slug refusals must be byte-identical: \
          absent-handle {absent_handle:?}, absent-slug {absent_slug:?}, unreadable {unreadable:?}"
+    );
+}
+
+// ─── Test 6: a retired context resolves through no arm ───────────────────────
+//
+// Both arms below read `kb_contexts` by `(owner, slug)`. Neither consulted the read predicate
+// before this change, so each resolved a context `context_visible_to` refuses.
+
+/// Retire a context the way the service does, without depending on `context_service::retire` —
+/// this file tests the resolver, not the verb, and the mangled slug is what an operator would
+/// actually hold afterwards.
+async fn retire(pool: &PgPool, context_id: Uuid, retired_slug: &str) {
+    sqlx::query("UPDATE kb_contexts SET is_active = false, slug = $2 WHERE id = $1")
+        .bind(context_id)
+        .bind(retired_slug)
+        .execute(pool)
+        .await
+        .expect("retire the context");
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn retired_context_does_not_resolve_by_at_me_slug_even_for_its_owner(pool: PgPool) {
+    let email = format!("me-retired-{}@example.com", Uuid::new_v4());
+    let (profile_id, context_id) =
+        common::fixtures::create_test_profile_with_context(&pool, &email).await;
+    let principal = ProfileId::from(profile_id);
+
+    // Precondition: it resolves while active, so the refusal below is the retirement and not a
+    // broken fixture.
+    let live = parse_context_ref("@me/temper").expect("valid ref");
+    assert_eq!(
+        *context_service::resolve_context_ref(&pool, principal, &live)
+            .await
+            .expect("resolves while active"),
+        context_id
+    );
+
+    retire(&pool, context_id, "temper-retired").await;
+
+    let r = parse_context_ref("@me/temper-retired").expect("valid ref");
+    let err = context_service::resolve_context_ref(&pool, principal, &r)
+        .await
+        .expect_err("a retired context is not addressable on the read axis, even by its owner");
+    assert!(
+        matches!(err, ApiError::NotFound(_)),
+        "expected NotFound for a retired @me context, got {err:?}"
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn retired_team_context_does_not_resolve_for_a_member(pool: PgPool) {
+    let email = format!("team-retired-{}@example.com", Uuid::new_v4());
+    let (profile_id, _) = common::fixtures::create_test_profile_with_context(&pool, &email).await;
+    let principal = ProfileId::from(profile_id);
+
+    let team_slug = format!("test-team-rt-{}", &Uuid::new_v4().simple().to_string()[..8]);
+    let (team_id, context_id) = insert_team_with_context(&pool, &team_slug, "notes").await;
+    add_team_member(&pool, team_id, profile_id).await;
+
+    // Precondition: membership resolves it while the context is active.
+    let live_ref = format!("+{team_slug}/notes");
+    let live = parse_context_ref(&live_ref).expect("valid team ref");
+    assert_eq!(
+        *context_service::resolve_context_ref(&pool, principal, &live)
+            .await
+            .expect("member resolves while active"),
+        context_id
+    );
+
+    retire(&pool, context_id, "notes-retired").await;
+
+    // Membership is unchanged and still admits; only visibility refuses. Without the gate the
+    // member — at ANY role, `watcher` included — still resolves the retired context.
+    let ref_str = format!("+{team_slug}/notes-retired");
+    let r = parse_context_ref(&ref_str).expect("valid team ref");
+    let err = context_service::resolve_context_ref(&pool, principal, &r)
+        .await
+        .expect_err("membership is not visibility: a retired team context must refuse");
+    assert!(
+        matches!(err, ApiError::NotFound(_)),
+        "expected NotFound for a retired team context, got {err:?}"
+    );
+}
+
+/// For ONE slug, "it is retired" and "it never existed" must be indistinguishable.
+///
+/// The comparison has to hold the SLUG constant and vary existence. An earlier draft of this test
+/// compared the refusals for two *different* slugs and failed — correctly: each refusal echoes the
+/// slug the caller supplied, so different inputs give different strings, and that difference
+/// discloses nothing. The oracle is narrower: ask for one name and learn from the answer whether a
+/// retired context sits behind it.
+///
+/// The pair above (`retired_context_does_not_resolve_*`) asserts only `matches!(err, NotFound(_))`,
+/// which a tuple variant satisfies whatever string it carries — the same blind spot
+/// `the_three_handle_slug_refusals_are_indistinguishable` was written for. Gating an arm with a
+/// bare refusal while its miss names the slug would reopen exactly this.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn one_slug_refuses_alike_whether_retired_or_absent(pool: PgPool) {
+    async fn refusal(pool: &PgPool, principal: ProfileId, ref_str: &str) -> String {
+        let r = parse_context_ref(ref_str).expect("valid ref");
+        match context_service::resolve_context_ref(pool, principal, &r).await {
+            Err(ApiError::NotFound(msg)) => msg,
+            other => panic!("{ref_str} must refuse with NotFound; got {other:?}"),
+        }
+    }
+
+    // ── @me: same ref, one principal where it is retired, one where it is absent ──
+    let email_r = format!("parity-retired-{}@example.com", Uuid::new_v4());
+    let (retired_owner, retired_ctx) =
+        common::fixtures::create_test_profile_with_context(&pool, &email_r).await;
+    retire(&pool, retired_ctx, "temper-retired").await;
+
+    let email_a = format!("parity-absent-{}@example.com", Uuid::new_v4());
+    let (absent_owner, _) =
+        common::fixtures::create_test_profile_with_context(&pool, &email_a).await;
+
+    let me_retired = refusal(&pool, ProfileId::from(retired_owner), "@me/temper-retired").await;
+    let me_absent = refusal(&pool, ProfileId::from(absent_owner), "@me/temper-retired").await;
+    assert_eq!(
+        me_retired, me_absent,
+        "@me/temper-retired must read alike whether the context is retired or was never there — \
+         retired {me_retired:?}, absent {me_absent:?}"
+    );
+
+    // ── +team: same ref shape against two teams the caller belongs to ─────────
+    let member = absent_owner;
+    let t_retired = format!("parity-rt-{}", &Uuid::new_v4().simple().to_string()[..8]);
+    let (retired_team, team_ctx) = insert_team_with_context(&pool, &t_retired, "notes").await;
+    add_team_member(&pool, retired_team, member).await;
+    retire(&pool, team_ctx, "notes-retired").await;
+
+    let t_absent = format!("parity-ab-{}", &Uuid::new_v4().simple().to_string()[..8]);
+    let (absent_team, _) = insert_team_with_context(&pool, &t_absent, "notes").await;
+    add_team_member(&pool, absent_team, member).await;
+
+    let principal = ProfileId::from(member);
+    let team_retired = refusal(&pool, principal, &format!("+{t_retired}/notes-retired")).await;
+    let team_absent = refusal(&pool, principal, &format!("+{t_absent}/notes-retired")).await;
+    assert_eq!(
+        team_retired, team_absent,
+        "+team/notes-retired must read alike whether retired or never there — \
+         retired {team_retired:?}, absent {team_absent:?}"
     );
 }
