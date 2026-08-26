@@ -10979,7 +10979,7 @@
       },
       "Entitlements": {
         "type": "object",
-        "description": "Entitlements included in the profile response — tells the client\nwhat this profile is allowed to do at the system level.",
+        "description": "Entitlements included in the profile response — tells the client\nwhat this profile is allowed to do at the system level.\n\n`Deserialize` is not decoration: `temper-client` reads this back off `GET /api/profile`, and\nbefore it was derived the client deserialized the response into a bare `Profile`, which has no\n`entitlements` field and no `deny_unknown_fields` — so serde dropped the whole object silently\non every call. The CLI was fetching the authoritative access answer and discarding it.\n\n**There is deliberately no narrowed `standing` field here.** One was built and removed: the\npremise was that a principal must not learn they were *revoked* rather than merely *denied*.\nThat is not this system's posture. Spec D15 grants a revoked principal the right to request\nreconsideration — `Act::RequestReview` is legal from `Revoked` and from nothing else\n(`temper-principal/src/transition.rs`) — and a right nobody may be told they hold is not a\nright. Accordingly the refusal type names the state on purpose\n(`temper-principal/src/refusal.rs`: *\"access was revoked; you may request a review\"*), and the\nCLI routes it to a different remedy than `denied` (`temper-cli/src/access_gate.rs`). Narrowing\nhere would have contradicted all of that while five other surfaces still disclosed it — and it\nalso hid legitimate *rejections*, since rejection returns standing to `denied`.",
         "required": [
           "system_access",
           "is_admin"
@@ -10995,6 +10995,17 @@
               },
               {
                 "$ref": "#/components/schemas/JoinRequestStatus"
+              }
+            ]
+          },
+          "standing": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Standing",
+                "description": "The caller's own standing, **as stored** — all five states, not a narrowed subset.\n\nReporting `revoked` and `deactivated` is deliberate and matches the rest of the system.\nSpec D15 grants a revoked principal the right to request reconsideration\n(`Act::RequestReview` is legal from `Revoked` and nothing else), so the refusal path names\nthe state on purpose and routes it to a different remedy than `denied`. A narrowed\nthree-variant version of this field was built and reverted: it contradicted that design\nwhile five other surfaces still disclosed the state, and it hid legitimate *rejections*,\nsince rejection returns standing to `denied`.\n\n**`None` means the server predates this field — never \"no standing\".** Absence of a\nstanding row denies, and the producer reports that as `Denied`, so `None` carries exactly\none meaning: this instance is older than the client asking. That matters because a CLI\nupgrades independently of the instance it talks to; a required field here would cost such a\nclient the whole object, `system_access` included, which older servers answer correctly.\n\nThe `Option` alone buys that — serde's derive already reads a missing `Option` field as\n`None`, so no `#[serde(default)]` is needed and one here would be inert. Verified by probe:\nremoving it changed nothing. `crates/temper-client/tests/profile_entitlements_test.rs`\ncovers the absent-field case against a real body rather than a constructed value.\n\n`Deactivated` is unreachable through `GET /api/profile`: a deactivated principal fails\nauthentication outright (`temper-services/src/auth/mod.rs` Level-1 kill-switch) and never\nreaches a handler. It is in the type because the type is the stored state, not this\nendpoint's reachable subset."
               }
             ]
           },
@@ -13050,7 +13061,8 @@
               }
             }
           }
-        ]
+        ],
+        "description": "`GET /api/profile` — the caller's own profile with their system-level entitlements.\n\n**Shared, not duplicated.** This lived in `temper-api`'s handler as a `Serialize`-only struct,\nwhich meant `temper-client` had nothing to deserialize into and read the response as a bare\n[`Profile`] instead — silently dropping `entitlements`, because `Profile` neither declares the\nfield nor denies unknown ones. Both ends now share this definition, which is what the shared-type\nrule is for: the drift it prevents had already happened.\n\n**No ts-rs derive, and that is forced.** The flattened profile cannot be codegen'd — see\n`resource_view.rs`, which records the same constraint: \"ts-rs cannot codegen a flattened\nfield\". The flatten is kept because it is the wire shape already in production; changing it to a\nnamed field to buy a TypeScript type would break every existing reader."
       },
       "PropertyOp": {
         "oneOf": [

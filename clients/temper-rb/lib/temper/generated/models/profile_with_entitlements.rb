@@ -14,6 +14,7 @@ require 'date'
 require 'time'
 
 module Temper::Generated
+  # `GET /api/profile` — the caller's own profile with their system-level entitlements.  **Shared, not duplicated.** This lived in `temper-api`'s handler as a `Serialize`-only struct, which meant `temper-client` had nothing to deserialize into and read the response as a bare [`Profile`] instead — silently dropping `entitlements`, because `Profile` neither declares the field nor denies unknown ones. Both ends now share this definition, which is what the shared-type rule is for: the drift it prevents had already happened.  **No ts-rs derive, and that is forced.** The flattened profile cannot be codegen'd — see `resource_view.rs`, which records the same constraint: \"ts-rs cannot codegen a flattened field\". The flatten is kept because it is the wire shape already in production; changing it to a named field to buy a TypeScript type would break every existing reader.
   class ProfileWithEntitlements < ApiModelBase
     attr_accessor :avatar_url
 

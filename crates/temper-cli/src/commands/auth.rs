@@ -11,8 +11,10 @@
 //! collaboration one. The gating *team* is only its implementation substrate.
 
 use temper_client::auth::{AuthStatus, DiskTokenStore, TokenStore};
+use temper_client::error::ClientError;
 use temper_client::TemperClient;
 use temper_core::types::access_gate::JoinRequestStatus;
+use temper_principal::Standing;
 
 use crate::actions::runtime;
 use crate::error::Result;
@@ -211,79 +213,201 @@ fn print_export_warning() {
 }
 
 /// Print the current auth status.
-/// System-access summary folded into `auth status`.
+/// **Axis 1 — did we get an answer.**
+///
+/// Kept strictly separate from what the answer *was*. The shape this replaced had one field
+/// carrying both, where `"unknown"` meant "could not reach the server" and `"none"` meant "you have
+/// no access" — so a reader could not tell *we could not ask* from *we asked and you are denied*,
+/// which are opposite facts with opposite next actions.
 #[derive(Debug, serde::Serialize)]
-struct SystemAccessReport {
-    /// `granted` | `pending` | `none` | `unknown`.
-    state: &'static str,
-    /// Human context (e.g. "open access", "requested 2026-07-01"), when useful.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    detail: Option<String>,
+#[serde(rename_all = "snake_case")]
+enum AccessQuery {
+    /// The server answered. Axis 2 is present.
+    Reachable,
+    /// The credential was rejected. Makes an expired token observable from the server side,
+    /// independently of the local expiry check on `authenticated`.
+    Unauthenticated,
+    /// The server could not be reached at all — DNS, connection refused, TLS, timeout.
+    Unreachable,
+    /// The server was reached and failed to answer (5xx, or anything unclassified).
+    Error,
 }
 
-/// Combined `auth status` payload: the local auth state plus, when
-/// authenticated, the system-access entitlement. `AuthStatus` is flattened so
-/// the top-level shape (`authenticated`, `provider`, …) is preserved and
-/// `system_access` is simply added.
+/// **Axis 2 — what the answer was.** Present only when axis 1 is [`AccessQuery::Reachable`].
+///
+/// Every field here comes from one `GET /api/profile` round trip.
+#[derive(Debug, serde::Serialize)]
+struct Entitlement {
+    /// The caller's own standing, as stored: `denied` · `requested` · `approved` · `revoked` ·
+    /// `deactivated`. Absent only when the server predates the field, in which case the boolean
+    /// below still carries the access answer.
+    ///
+    /// `revoked` is reported rather than folded into `denied` because the two carry **different
+    /// remedies** — see [`remedy_for`], and `access_gate.rs`, which has always drawn the same
+    /// distinction on the refusal path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    standing: Option<Standing>,
+    /// The `has_system_access` predicate, which reads `kb_principal_standing` — the authoritative
+    /// answer, and the one the old implementation failed to ask for.
+    system_access: bool,
+    is_admin: bool,
+    /// The caller's own join request, when the server discloses one. **Absent is normal** — a
+    /// principal admitted by any path other than the request queue has no row, which is precisely
+    /// the case the old implementation misread as denial.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    join_request: Option<JoinRequestStatus>,
+}
+
+/// System-access summary folded into `auth status`, as two orthogonal axes.
+#[derive(Debug, serde::Serialize)]
+struct SystemAccessReport {
+    query: AccessQuery,
+    /// Human context for a non-`reachable` outcome.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    entitlement: Option<Entitlement>,
+}
+
+/// Who the server says the caller is.
+///
+/// Resolved rather than read: the stored credential's `profile_id` is structurally absent under
+/// Auth0, so the only source for identity is the server. No extra round trip — `auth status`
+/// already had to call out for the access answer, and one `GET /api/profile` carries both.
+#[derive(Debug, serde::Serialize)]
+struct Identity {
+    profile_id: uuid::Uuid,
+    /// The `@handle` form, i.e. `'@' + profile.slug`. The same spelling the vault projection and
+    /// every context ref use, so it is directly comparable to what the user sees elsewhere.
+    handle: String,
+}
+
+/// One `GET /api/profile`, both answers.
+///
+/// Returns identity **and** the access report together because they come from the same response;
+/// splitting them into two resolvers would double the round trips and let the two disagree.
+async fn resolve_access(client: &TemperClient) -> (Option<Identity>, SystemAccessReport) {
+    match client.profile().get_with_entitlements().await {
+        Ok(p) => {
+            let e = p.entitlements;
+            (
+                Some(Identity {
+                    profile_id: p.profile.id,
+                    handle: format!("@{}", p.profile.slug),
+                }),
+                SystemAccessReport {
+                    query: AccessQuery::Reachable,
+                    detail: None,
+                    entitlement: Some(Entitlement {
+                        standing: e.standing,
+                        system_access: e.system_access,
+                        is_admin: e.is_admin,
+                        join_request: e.join_request_status,
+                    }),
+                },
+            )
+        }
+        Err(err) => {
+            // Classify onto axis 1 only. Note `is_network` is the client's own predicate for
+            // "could not reach the server" — asking it beats restating the match here, which would
+            // drift the moment a new transport variant is added.
+            let (query, detail) = if err.is_network() {
+                (AccessQuery::Unreachable, Some(err.to_string()))
+            } else {
+                match &err {
+                    ClientError::NotAuthenticated | ClientError::TokenExpired => {
+                        (AccessQuery::Unauthenticated, Some(err.to_string()))
+                    }
+                    _ => (AccessQuery::Error, Some(err.to_string())),
+                }
+            };
+            (
+                None,
+                SystemAccessReport {
+                    query,
+                    detail,
+                    entitlement: None,
+                },
+            )
+        }
+    }
+}
+
+/// Combined `auth status` payload: the local auth state, plus — when authenticated — who the server
+/// says we are and what we are entitled to. `AuthStatus` is flattened so the top-level shape
+/// (`authenticated`, `provider`, …) is preserved and the resolved fields are simply added.
 #[derive(Debug, serde::Serialize)]
 struct AuthStatusReport {
     #[serde(flatten)]
     auth: AuthStatus,
+    /// Absent when not logged in, or when the server could not be asked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    identity: Option<Identity>,
     #[serde(skip_serializing_if = "Option::is_none")]
     system_access: Option<SystemAccessReport>,
 }
 
-/// Resolve the caller's system-access state. Non-fatal: any server error
-/// degrades to `unknown` so `auth status` still reports the local auth state
-/// offline.
-async fn resolve_system_access(client: &TemperClient) -> SystemAccessReport {
-    // There is no ambient "open mode grants everyone" case any more: under D11 every principal is
-    // born denied and access is per-principal standing, not a global mode switch (spec §14 / D18).
-    // So the caller's own join request carries the state directly — no settings read is needed.
-    match client.access().get_own_request().await {
-        Ok(Some(req)) => match req.status {
-            JoinRequestStatus::Approved => SystemAccessReport {
-                state: "granted",
-                detail: None,
-            },
-            JoinRequestStatus::Pending => SystemAccessReport {
-                state: "pending",
-                detail: Some(format!("requested {}", req.created.format("%Y-%m-%d"))),
-            },
-            JoinRequestStatus::Rejected | JoinRequestStatus::Withdrawn => SystemAccessReport {
-                state: "none",
-                detail: None,
-            },
-        },
-        Ok(None) => SystemAccessReport {
-            state: "none",
-            detail: None,
-        },
-        Err(_) => SystemAccessReport {
-            state: "unknown",
-            detail: Some("could not reach server".to_string()),
-        },
+/// The next action a principal in this standing can actually take, or `None` when there is
+/// nothing to say.
+///
+/// This exists so `auth status` stops being the one surface that knows the state and withholds the
+/// remedy. The refusal path has always drawn this distinction — `access_gate.rs` sends `Denied` to
+/// `request-access` and `Revoked` to `request-review`, because `Act::RequestReview` is legal from
+/// `Revoked` and from nothing else. Reporting `revoked` without the remedy would tell a principal
+/// they are stuck when they are not.
+///
+/// Deliberately a **hint on stderr**, never part of the payload: stdout carries the rendered
+/// report and must stay parseable.
+fn remedy_for(standing: Standing) -> Option<&'static str> {
+    match standing {
+        // Born denied, and may ask.
+        Standing::Denied => Some(temper_core::types::access_gate::REQUEST_ACCESS_COMMAND),
+        // D15's reconsideration channel — the whole reason this state is reported rather than
+        // folded into `denied`.
+        Standing::Revoked => Some(crate::access_gate::REQUEST_REVIEW_COMMAND),
+        // Already asked, or already in. Nothing to do.
+        Standing::Requested | Standing::Approved => None,
+        // Unreachable here: a deactivated principal fails authentication before any handler runs,
+        // so `auth status` reports `authenticated: false` and never resolves entitlements. Matched
+        // explicitly rather than by wildcard so a sixth state is a compile error, not a silent None.
+        Standing::Deactivated => None,
     }
 }
 
+/// Print the current auth status.
 pub fn status(fmt: OutputFormat) -> Result<()> {
     runtime::with_client(move |client| {
         Box::pin(async move {
             let auth = client
                 .auth_status()
                 .map_err(|e| crate::error::TemperError::Config(e.to_string()))?;
-            // System access requires the server; only consult it when logged in.
-            let system_access = if auth.authenticated {
-                Some(resolve_system_access(client).await)
+            // Identity and entitlements both require the server; only consult it when the local
+            // credential is usable. An expired token would answer `unauthenticated` on axis 1, but
+            // spending a round trip to learn what `authenticated: false` already said is waste.
+            let (identity, system_access) = if auth.authenticated {
+                let (id, access) = resolve_access(client).await;
+                (id, Some(access))
             } else {
-                None
+                (None, None)
             };
             let report = AuthStatusReport {
                 auth,
+                identity,
                 system_access,
             };
             let rendered = crate::format::render(&report, fmt)?;
             println!("{rendered}");
+            // Stderr only — stdout is the payload. Emitted after the render so a caller piping
+            // stdout still sees the hint on their terminal.
+            if let Some(cmd) = report
+                .system_access
+                .as_ref()
+                .and_then(|a| a.entitlement.as_ref())
+                .and_then(|e| e.standing)
+                .and_then(remedy_for)
+            {
+                output::hint(format!("  {cmd}"));
+            }
             Ok(())
         })
     })
@@ -548,5 +672,84 @@ mod tests {
             !out.is_empty(),
             "token toon render should not be empty: {out}"
         );
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // The two-axes report.
+    //
+    // These are SHAPE tests, and saying so matters: they cannot fail against the code this task
+    // replaced, because the types they name did not exist there. The witness that actually bites —
+    // a revoked principal's surviving `approved` join request, suppressed — lives in
+    // `temper-services/tests/entitlements_disclosure_test.rs`, where it was bite-probed by removing
+    // the suppression. What these pin is the property that decides whether a *reader* can act on
+    // the output: that "we could not ask" and "we asked and you are denied" never render alike.
+    // -----------------------------------------------------------------------------------------
+
+    fn reachable(standing: Option<Standing>, system_access: bool) -> SystemAccessReport {
+        SystemAccessReport {
+            query: AccessQuery::Reachable,
+            detail: None,
+            entitlement: Some(Entitlement {
+                standing,
+                system_access,
+                is_admin: false,
+                join_request: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn could_not_ask_and_asked_and_denied_do_not_render_alike() {
+        // The bug the two axes exist to prevent: one field carrying both, where `"unknown"`
+        // (transport) and `"none"` (entitlement) sat side by side and a reader could not tell
+        // which had happened.
+        let unreachable = SystemAccessReport {
+            query: AccessQuery::Unreachable,
+            detail: Some("network error".into()),
+            entitlement: None,
+        };
+        let denied = reachable(Some(Standing::Denied), false);
+
+        let a = crate::format::render(&unreachable, crate::format::OutputFormat::Json).unwrap();
+        let b = crate::format::render(&denied, crate::format::OutputFormat::Json).unwrap();
+
+        assert_ne!(a, b, "the two must be distinguishable");
+        assert!(a.contains("unreachable"), "{a}");
+        assert!(
+            !a.contains("entitlement"),
+            "axis 2 must be absent when axis 1 is not reachable: {a}"
+        );
+        assert!(b.contains("reachable"), "{b}");
+        assert!(
+            b.contains("entitlement"),
+            "axis 2 must be present when reachable: {b}"
+        );
+    }
+
+    #[test]
+    fn an_absent_join_request_is_omitted_rather_than_reported_as_denial() {
+        // The shape half of this task's original complaint: an approved principal who never filed
+        // a request has nothing in the queue, and that absence must not read as a refusal.
+        let out = crate::format::render(
+            &reachable(Some(Standing::Approved), true),
+            crate::format::OutputFormat::Json,
+        )
+        .unwrap();
+
+        assert!(out.contains("\"system_access\": true"), "{out}");
+        assert!(
+            !out.contains("join_request"),
+            "an absent join request must be omitted, not rendered: {out}"
+        );
+    }
+
+    #[test]
+    fn a_null_profile_id_is_omitted_rather_than_rendered() {
+        // Under Auth0 the stored `profile_id` is structurally absent. Rendering it as `null` beside
+        // a resolved identity reads as "we do not know who you are" when we do.
+        let out =
+            crate::format::render(&make_auth_status(false), crate::format::OutputFormat::Json)
+                .unwrap();
+        assert!(!out.contains("profile_id"), "{out}");
     }
 }

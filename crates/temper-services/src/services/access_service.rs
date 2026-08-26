@@ -1409,14 +1409,38 @@ pub async fn review_request(
 // ---------------------------------------------------------------------------
 
 /// Build the entitlements object for a profile.
+///
+/// `GET /api/profile` is deliberately **not** behind the system-access gate (`routes.rs`:
+/// "Authenticated but NOT system-access-gated — profile and self-service access") — a denied
+/// principal must reach it to ask for access. So what this returns is readable by every
+/// population, denied ones included.
+///
+/// **`join_request_status` is reported as stored, including for a revoked principal**, whose row
+/// stays `approved` forever: both queries that move a row are guarded `WHERE status = 'pending'`
+/// and the standing transitions never touch `kb_join_requests`. Suppressing it was tried and
+/// reverted — see [`Entitlements`] for why the non-disclosure premise is not this system's
+/// posture, and note the suppression also hid genuine rejections, which a rejected principal is
+/// owed (the web surface renders the decision note to them).
 pub async fn get_entitlements(pool: &PgPool, profile_id: ProfileId) -> ApiResult<Entitlements> {
     let system_access = has_system_access(pool, profile_id).await?;
     let is_admin = is_system_admin(pool, profile_id).await?;
     let request = get_own_request(pool, profile_id).await?;
+    // Absence denies (`kb_principal_standing`'s table comment), and it is reported as `Denied`
+    // rather than as an absent field — `None` on the wire is reserved for "this server predates
+    // the field", which is a fact about the deployment, not about the principal.
+    //
+    // Deliberately NOT derived from `system_access`: that boolean is the SQL `has_system_access`
+    // predicate, the one owner of the access question (D2), and collapsing the two reads into one
+    // would quietly delete that ownership. The cost is that the two are separate reads and a
+    // concurrent revoke between them can emit a stale pair.
+    let standing = standing_service::load(pool, profile_id)
+        .await?
+        .unwrap_or(temper_principal::Standing::Denied);
 
     Ok(Entitlements {
         system_access,
         is_admin,
+        standing: Some(standing),
         join_request_status: request.map(|r| r.status),
     })
 }

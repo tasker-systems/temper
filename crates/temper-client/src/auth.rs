@@ -340,6 +340,19 @@ pub struct AuthStatus {
     pub authenticated: bool,
     pub provider: Option<Provider>,
     pub expires_at: Option<DateTime<Utc>>,
+    /// The profile id **as carried by the stored credential**, which under an Auth0-fronted
+    /// instance is always absent: it is populated only when the JWT `sub` parses as a UUID, and an
+    /// Auth0 `sub` (`google-oauth2|103079…`) never does.
+    ///
+    /// Omitted from the rendered output when absent rather than printed as `null`. A permanent
+    /// `profile_id: null` beside a resolved identity reads as *"we do not know who you are"* when
+    /// the caller is fully identified — the field is not a signal about the session, only about
+    /// which issuer minted the token. Identity itself is resolved from the server; see
+    /// `GET /api/profile`.
+    ///
+    /// `default` is paired with the skip so the round trip still holds: a value this skips on the
+    /// way out must deserialize on the way back in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile_id: Option<uuid::Uuid>,
 }
 
