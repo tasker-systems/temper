@@ -5,7 +5,6 @@ use crate::templates::{
 };
 use askama::Template;
 use std::path::Path;
-use std::path::PathBuf;
 use temper_workflow::frontmatter::DocType;
 
 // ---------------------------------------------------------------------------
@@ -188,18 +187,4 @@ pub fn read_stdin_if_piped() -> Option<String> {
     } else {
         Some(buf)
     }
-}
-
-/// Recursively collect all .md files under a directory
-pub fn collect_md_files_recursive(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            collect_md_files_recursive(&path, files)?;
-        } else if path.extension().is_some_and(|ext| ext == "md") {
-            files.push(path);
-        }
-    }
-    Ok(())
 }

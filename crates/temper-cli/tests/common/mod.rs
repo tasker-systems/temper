@@ -44,16 +44,10 @@ pub fn init_isolated_auth() {
 /// Create a goal via the canonical `commands::resource::create` path and return
 /// its slug. Goals use a plain slugified title (no date prefix).
 ///
-/// Pre-creates the `@me/{context}` directory so `resolve_context_with_fallback`
-/// does not redirect to "default" when the context hasn't been used yet.
-///
 /// This replaces the deleted `commands::goal::create` test-setup helper.
 #[allow(dead_code)]
 pub fn create_goal(config: &temper_cli::config::Config, context: &str, title: &str) -> String {
     use temper_cli::vault::slugify;
-    // Pre-create context dir so `resolve_context_with_fallback` doesn't
-    // redirect to "default" before the first write creates it.
-    std::fs::create_dir_all(config.vault_root.join("@me").join(context)).unwrap();
     let slug = slugify(title);
     temper_cli::commands::resource::create(
         config,

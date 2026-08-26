@@ -32,27 +32,3 @@ pub mod trail;
 pub mod update;
 pub mod version;
 pub mod warmup;
-
-use std::borrow::Cow;
-
-/// Resolve a context name, falling back to "default" with a warning if the
-/// context directory doesn't exist in the vault.
-///
-/// Checks for the context under its owner-scoped path
-/// (`<vault_root>/<owner>/<context>/`), not the legacy flat layout.
-pub fn resolve_context_with_fallback<'a>(
-    config: &crate::config::Config,
-    context: &'a str,
-) -> Cow<'a, str> {
-    let owner = config.owner_for_context(context);
-    let ctx_dir = config.vault_root.join(&owner).join(context);
-    if ctx_dir.exists() {
-        Cow::Borrowed(context)
-    } else {
-        crate::output::warning(format!(
-            "Context \"{context}\" not found in vault. Using \"default\" context.\n  \
-             To subscribe to this context locally: temper context subscribe {context}"
-        ));
-        Cow::Borrowed("default")
-    }
-}

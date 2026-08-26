@@ -1277,7 +1277,6 @@ mod tests {
             vault_root: PathBuf::from("/tmp/test-vault"),
             state_dir: PathBuf::from("/tmp/test-vault/.temper"),
             contexts: vec!["alpha".to_string(), "beta".to_string()],
-            subscriptions: Vec::new(),
             skill_output: PathBuf::from("/tmp/test-skill-output"),
             profile_slug: None,
         }

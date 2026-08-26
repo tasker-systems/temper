@@ -34,9 +34,33 @@ pub struct ProjectionCursor {
     pub pulled_at: DateTime<Utc>,
 }
 
+/// The cursor sidecar's key for a caller-supplied context string.
+///
+/// A decorated ref collapses to its slug half; anything else (a bare context
+/// name, a UUID) is the key verbatim. So `@me/temper`, `@j-cole-taylor/temper`
+/// and `temper` all name one sidecar, which is what lets `temper pull @me/temper`
+/// and a `temper status` that knows only `temper` agree.
+///
+/// **Derived from the ref, never from a row.** An empty context has no row to
+/// derive from, and a cursor is exactly what an empty context still needs — it
+/// is how "pulled, and there was nothing" stays distinct from "never pulled".
+fn cursor_key(context: &str) -> String {
+    match parse_context_ref(context) {
+        Ok(ContextRef::OwnerSlug { slug, .. }) => slug,
+        _ => context.to_string(),
+    }
+}
+
 /// Absolute path of a context's cursor sidecar.
+///
+/// Both [`read_cursor`] and [`write_cursor`] go through here, so the key can
+/// only be derived once. They did diverge: the write was rekeyed to the bare
+/// context name while the read still used the caller's raw string, so
+/// `pull @me/temper` filed a cursor that `check_context_staleness(.., "@me/temper")`
+/// could not find.
 fn cursor_path(state_dir: &Path, context: &str) -> PathBuf {
-    state_dir.join("projection").join(format!("{context}.json"))
+    let key = cursor_key(context);
+    state_dir.join("projection").join(format!("{key}.json"))
 }
 
 /// Read a context's cursor sidecar. Returns `None` when the file is absent
@@ -54,21 +78,21 @@ pub fn read_cursor(state_dir: &Path, context: &str) -> Result<Option<ProjectionC
 /// Atomically write a context's cursor sidecar using the standard
 /// temp-file-plus-rename pattern.
 ///
-/// The `context` key may be a decorated ref (`@owner/slug`) whose `/`
-/// causes `cursor_path` to introduce a subdirectory under the projection
-/// directory. The temp path is derived from the cursor `path` directly
-/// (via `set_extension`) rather than re-joining `context` as a string, so
-/// a ref containing `/` never creates an unexpected second level of nesting.
+/// `cursor_path` normalizes a decorated ref down to its slug half, so the key
+/// no longer carries a `/`. The temp path is still derived from the cursor
+/// `path` directly (via `set_extension`) rather than by re-joining `context` as
+/// a string — belt-and-braces, so that a key which somehow does contain a
+/// separator cannot silently create a second level of nesting that
+/// `create_dir_all(dir)` did not prepare.
 pub fn write_cursor(state_dir: &Path, context: &str, cursor: &ProjectionCursor) -> Result<()> {
     let path = cursor_path(state_dir, context);
     let dir = path.parent().ok_or_else(|| {
         TemperError::Config(format!("cursor path has no parent: {}", path.display()))
     })?;
     std::fs::create_dir_all(dir)?;
-    // Derive the temp path from `path` itself — do NOT re-join `context`
-    // because a decorated ref like `@me/slug` contains `/` and
-    // `dir.join("@me/slug.json.tmp")` would silently create a nested
-    // subdirectory that `create_dir_all(dir)` did not prepare.
+    // Derive the temp path from `path` itself — never by re-joining the key as
+    // a string, so a separator in it cannot create a nested subdirectory that
+    // `create_dir_all(dir)` did not prepare.
     let mut tmp_path = path.clone();
     tmp_path.set_extension("json.tmp");
     let content = serde_json::to_string_pretty(cursor)?;
@@ -230,11 +254,83 @@ pub fn prune_context(vault_root: &Path, context: &str, keep: &HashSet<PathBuf>) 
     Ok(removed)
 }
 
+/// Bound on the slug half of a projection filename, in bytes.
+///
+/// A single path component is capped at 255 bytes on ext4, APFS and NTFS, and
+/// `sluggify` is unbounded — long agent-authored titles have produced names the
+/// OS refuses to create. 120 + `-` + a 36-byte uuid + `.md` is 160 bytes, which
+/// leaves the cap unreachable no matter how the title grows while keeping
+/// enough of the title to recognize the file in `ls`.
+///
+/// **The usable budget is 238, not 255.** `Frontmatter::write_to` writes through
+/// a sibling temp file named `.{filename}.frontmatter.tmp`
+/// (`temper-workflow/src/frontmatter/document.rs:390`), which is 17 bytes longer
+/// than the file it becomes — so the temp path hits the limit first, and the
+/// error names a path that does not exist afterwards. Any future raise of this
+/// constant must clear `238 - 1 - 36 - 3 = 198`.
+pub const PROJECTION_SLUG_MAX_BYTES: usize = 120;
+
+/// The owner directory segment for a resource's projection file.
+///
+/// **Sigiled, always.** `Vault::parse_rel` rejects an owner segment without a
+/// leading `@` or `+`, so the bare handle is not a legal vault path component —
+/// and `ResourceView.owner_handle` is exactly that: `p.handle` straight off the
+/// readback (`temper-substrate/src/readback/mod.rs`), e.g. `j-cole-taylor`. The
+/// writer used it anyway and produced a tree its own layout module could not
+/// parse.
+///
+/// `context_owner_ref` is sigiled *by construction* — `@<handle>` for a profile
+/// home, `+<team-slug>` for a team one — so it is the field to key on. The
+/// fallbacks sigil the handle rather than passing it through, so no branch can
+/// emit an unsigiled segment.
+///
+/// **This deliberately does not resolve `@me`.** The F1 follow-up
+/// (`internal/superpowers/specs/2026-06-25-ws6-rehome-temper-next-to-public-design.md`,
+/// "F6 `@me` projection dir") wants the requester's own resources under a
+/// self-relative `@me`. Answering "is this mine?" needs the authenticated
+/// profile, and the CLI has none locally — `~/.config/temper/auth.json` stores
+/// a token and a device id, and its `profile_id` is null. So `@me` needs the
+/// identity injection that follow-up is about; until then `@<handle>` is
+/// correct-and-stable rather than wrong, and the move to `@me` is a rename that
+/// one `pull` performs.
+fn projection_owner(row: &ResourceView) -> String {
+    if let Some(owner_ref) = row.context_owner_ref.as_deref() {
+        if !owner_ref.is_empty() {
+            return owner_ref.to_string();
+        }
+    }
+    if row.owner_handle.is_empty() {
+        // A sparse row with neither field: the self-relative segment is the only
+        // honest guess, and it is at least sigiled.
+        return "@me".to_string();
+    }
+    format!("@{}", row.owner_handle)
+}
+
+/// The filename stem for a resource's projection file: the resource's decorated
+/// ref with the slug half bounded.
+///
+/// The stem is deliberately the *same shape* as the ref printed by every
+/// `list`/`show` row, so a filename can be pasted straight into
+/// `temper resource show`. Identity lives in the trailing uuid — which is what
+/// resolution reads and what the delete path matches on — so the readable half
+/// is free to be cut.
+fn projection_stem(row: &ResourceView) -> String {
+    temper_workflow::operations::decorated_ref_bounded(
+        &row.title,
+        row.id,
+        PROJECTION_SLUG_MAX_BYTES,
+    )
+}
+
 /// Assemble and write a resource's projection file from an already-fetched
 /// row and content. The pure-write half of [`write_resource_file`] — it
-/// makes no network call. `pull_context` reaches it via `write_resource_file`
-/// (which fetches first); `temper resource show` calls it directly, because
-/// its cloud branch already holds both the row and the content.
+/// makes no network call.
+///
+/// Every caller reaches it through [`write_resource_file`] (which fetches
+/// first): `pull_context`, and the create/update tails. `temper resource show`
+/// used to call it directly, holding both halves already — that is the read
+/// that no longer writes.
 ///
 /// Frontmatter assembly reuses `actions::ingest::build_frontmatter_from_resource`
 /// so projected files are byte-identical to sync-pulled ones. Returns the
@@ -259,17 +355,10 @@ pub fn write_resource_file_from_parts(
         return Ok(None);
     };
 
-    // `owner_handle` is literal "@me" for the requester's own resources and
-    // "+team-slug" for team contexts — both are canonical vault directory
-    // components. Empty handle defends against a sparse server row.
-    let owner: &str = if row.owner_handle.is_empty() {
-        "@me"
-    } else {
-        &row.owner_handle
-    };
+    let owner = projection_owner(row);
     let doc_type = row.doc_type_name.as_str();
 
-    let slug = ingest::slug_from_title(&row.title);
+    let stem = projection_stem(row);
 
     // Propagate a serialization failure rather than writing `null` into the projected file's
     // frontmatter — a silent `unwrap_or(Null)` here would corrupt the on-disk managed meta.
@@ -284,13 +373,13 @@ pub fn write_resource_file_from_parts(
         resource: row,
         context,
         doc_type,
-        canonical_owner: owner,
+        canonical_owner: &owner,
         body: ingest::normalize_body_for_vault(&content.markdown),
         managed_meta: managed_value.as_ref(),
         open_meta: content.open_meta.as_ref(),
     })?;
 
-    let path = Vault::new(vault_root).doc_file(owner, context, doc_type, &slug);
+    let path = Vault::new(vault_root).doc_file(&owner, context, doc_type, &stem);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -322,17 +411,17 @@ pub async fn write_resource_file(
 /// Remove a resource's projection file given a server [`ResourceView`].
 ///
 /// A by-row convenience over [`remove_resource_file`] for the id-addressed
-/// `temper resource delete` path: derives `owner` from the row's context
-/// subscription (`config.owner_for_context`) and `context`/`doctype`/`slug`
-/// from the row. A row with no slug falls back to the title-derived slug so
-/// the path matches what the projection writer would have produced.
-pub fn remove_resource_file_for_row(
-    vault_root: &Path,
-    config: &crate::config::Config,
-    row: &ResourceView,
-) -> Result<()> {
-    use crate::actions::ingest;
-
+/// `temper resource delete` path. **Every path component is derived by the same
+/// functions the writer uses** — `projection_owner` and `projection_stem` — so
+/// the remover cannot look somewhere the writer never wrote.
+///
+/// It could before. The owner segment came from `config.owner_for_context()`,
+/// which reads `Config::subscriptions` — a field hardcoded to `Vec::new()`, so
+/// it always answered `"@me"` while the writer used the bare `owner_handle`.
+/// Delete's cache cleanup was therefore a silent no-op on every machine: the
+/// removal targeted a path that never existed, and an absent file is a
+/// deliberate success here, so nothing reported it.
+pub fn remove_resource_file_for_row(vault_root: &Path, row: &ResourceView) -> Result<()> {
     // A cogmap-homed resource was never projected to disk (no context path),
     // so there is nothing to remove. Skip — same bounded edge as the writer.
     let Some(context) = row.context_name.as_deref() else {
@@ -343,9 +432,9 @@ pub fn remove_resource_file_for_row(
         return Ok(());
     };
 
-    let owner = config.owner_for_context(context);
-    let slug = ingest::slug_from_title(&row.title);
-    remove_resource_file(vault_root, &owner, context, &row.doc_type_name, &slug)
+    let owner = projection_owner(row);
+    let stem = projection_stem(row);
+    remove_resource_file(vault_root, &owner, context, &row.doc_type_name, &stem)
 }
 
 /// Remove a resource's projection file at its canonical vault path.
@@ -449,36 +538,56 @@ async fn write_projection_files(
     Ok(keep)
 }
 
-/// Prune projection files for resources no longer present in the context.
+/// The **projection directory** name for a context: its `context_name`
+/// (e.g. `"temper"`), never the raw ref the caller typed (`"@me/temper"`).
 ///
-/// The on-disk directory component is the context's `context_name` field
-/// (e.g. `"temper"`), not the raw ref (which may be `"@me/temper"`). Derive
-/// it from any listed row; for an empty context fall back to parsing the
-/// slug from the ref so that a context that has been emptied server-side
-/// still prunes its local projection files.
-fn prune_absent_files(
-    vault_root: &Path,
-    context: &str,
-    rows: &[ResourceView],
-    keep: &HashSet<PathBuf>,
-) -> Result<usize> {
-    let context_dir_name: Option<String> = rows
-        .first()
+/// This is the directory half only. The staleness cursor is keyed separately by
+/// [`cursor_key`], off the ref rather than off a row, because an empty context
+/// has no row and still needs a cursor.
+///
+/// **Caveat: the two branches are not the same field.** The primary branch
+/// returns `context_name` — which is what the writer used to build the
+/// directory — while the fallback returns the *slug* half of the ref. For a
+/// context whose name and slug differ (`"Temper KB"` vs `"temper-kb"`), an
+/// emptied context therefore prunes a directory the writer never wrote to, and
+/// the real one survives. Pre-existing, and left rather than papered over: the
+/// name is only obtainable from a row or a contexts fetch, and neither is
+/// available on the path that needs it.
+fn context_dir_name(context: &str, rows: &[ResourceView]) -> Option<String> {
+    rows.first()
         .and_then(|r| r.context_name.clone())
         .or_else(|| {
             parse_context_ref(context).ok().and_then(|r| match r {
                 ContextRef::OwnerSlug { slug, .. } => Some(slug),
                 ContextRef::Id(_) => None,
             })
-        });
-    match context_dir_name.as_deref() {
+        })
+}
+
+/// Prune projection files for resources no longer present in the context.
+fn prune_absent_files(
+    vault_root: &Path,
+    context: &str,
+    rows: &[ResourceView],
+    keep: &HashSet<PathBuf>,
+) -> Result<usize> {
+    match context_dir_name(context, rows).as_deref() {
         Some(name) => prune_context(vault_root, name, keep),
         None => Ok(0),
     }
 }
 
-/// Record the per-context staleness cursor. The context's UUID comes from
-/// any listed row; an empty context yields no event id.
+/// Record the per-context staleness cursor.
+///
+/// Keyed by the **ref the caller passed**, normalized by `cursor_key` inside
+/// `write_cursor` — the same normalization `read_cursor` applies, so the two
+/// ends cannot disagree however the context was spelled. Deriving it from a row
+/// instead would silently skip the write for an empty context addressed by
+/// UUID, which is the one case where "pulled, and there was nothing" most needs
+/// to stay distinct from "never pulled".
+///
+/// The context's UUID comes from any listed row; an empty context yields no
+/// event id, and that is a recorded `None`, not an absent cursor.
 async fn record_context_cursor(
     client: &TemperClient,
     state_dir: &Path,
@@ -637,6 +746,279 @@ mod tests {
         remove_resource_file(root, "@me", "myctx", "task", "doomed").unwrap();
 
         assert!(!file.exists(), "projection file removed");
+    }
+
+    /// A row carrying only the fields the projection stem reads. Every other
+    /// field is defaulted — this witnesses the filename, not the frontmatter.
+    fn row_titled(title: &str, id: Uuid) -> ResourceView {
+        use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
+        ResourceView {
+            id: ResourceId(id),
+            r#ref: String::new(),
+            title: title.to_string(),
+            origin_uri: String::new(),
+            kb_context_id: Some(ContextId(Uuid::nil())),
+            context_name: Some("myctx".to_string()),
+            context_slug: Some("myctx".to_string()),
+            context_owner_ref: Some("@me".to_string()),
+            context_ref: Some("@me/myctx".to_string()),
+            cogmap_id: None,
+            cogmap_name: None,
+            doc_type_name: "research".to_string(),
+            owner_handle: "@me".to_string(),
+            owner_profile_id: ProfileId(Uuid::nil()),
+            originator_profile_id: ProfileId(Uuid::nil()),
+            is_active: true,
+            created: Utc::now(),
+            updated: Utc::now(),
+            body_hash: None,
+            ingest_state: None,
+            body_storage: None,
+            managed_meta: Default::default(),
+            open_meta: None,
+            content: None,
+        }
+    }
+
+    /// A `ContentResponse` carrying only a body — the projection writer reads
+    /// `markdown` plus the two meta tiers, and the tiers are not what these
+    /// filename tests are about.
+    fn body_only(markdown: &str) -> ContentResponse {
+        ContentResponse {
+            resource_id: temper_core::types::ids::ResourceId(Uuid::nil()),
+            markdown: markdown.to_string(),
+            managed_meta: None,
+            open_meta: None,
+        }
+    }
+
+    /// The property: a projection filename is writable on this filesystem, no
+    /// matter how long the title is.
+    ///
+    /// Agent-authored titles in enterprise rollouts have run past the point
+    /// where `sluggify(title).md` exceeds the 255-byte cap a single path
+    /// component gets on ext4/APFS/NTFS, and the writer then failed with
+    /// `ENAMETOOLONG`. Asserting the *byte length* rather than just "the write
+    /// succeeded" is deliberate: a filesystem with a looser cap (or none) would
+    /// let an unbounded name through and the test would pass while the bug
+    /// remained live for everyone else.
+    #[test]
+    fn a_projection_filename_stays_within_the_filesystem_component_limit() {
+        /// The POSIX `NAME_MAX` that ext4, APFS and NTFS all land on, less the 17
+        /// bytes `Frontmatter::write_to`'s `.{name}.frontmatter.tmp` sidecar adds —
+        /// the temp path is the component that hits the limit first.
+        const NAME_MAX: usize = 255 - 17;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        // ~999 slug bytes — comfortably past the cap on its own.
+        let title = "an extremely long agent authored resource title ".repeat(21);
+        let id = Uuid::now_v7();
+
+        let path = write_resource_file_from_parts(
+            dir.path(),
+            &row_titled(&title, id),
+            &body_only("# body\n"),
+        )
+        .expect("an over-long title must still project")
+        .expect("a context-homed resource projects to a path");
+
+        let name = path.file_name().unwrap().to_str().unwrap();
+        assert!(
+            name.len() <= NAME_MAX,
+            "projection filename is {} bytes, over the {NAME_MAX}-byte component limit: {name}",
+            name.len()
+        );
+        assert!(path.exists(), "the file was actually created at {name}");
+    }
+
+    /// The truncated half is decoration; the uuid is what identifies the file.
+    /// Two resources whose titles agree for the first 120 slug bytes must not
+    /// collide — under the old `sluggify(title).md` scheme they would have,
+    /// because truncation without a discriminator is a collision generator.
+    #[test]
+    fn two_long_titles_sharing_a_prefix_project_to_distinct_files() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let shared = "the same opening clause repeated until well past the bound ".repeat(4);
+        let content = body_only("# body\n");
+
+        let a = write_resource_file_from_parts(
+            dir.path(),
+            &row_titled(&format!("{shared} and then one ending"), Uuid::now_v7()),
+            &content,
+        )
+        .unwrap()
+        .unwrap();
+        let b = write_resource_file_from_parts(
+            dir.path(),
+            &row_titled(&format!("{shared} and then another"), Uuid::now_v7()),
+            &content,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_ne!(a, b, "distinct resources must not share a projection file");
+        assert!(a.exists() && b.exists(), "both files survive");
+    }
+
+    /// The stem is paste-able: the filename a reader sees in `ls` resolves to
+    /// the resource it holds, via the same trailing-UUID-only `parse_ref` that
+    /// every printed ref uses.
+    #[test]
+    fn a_projection_filename_resolves_back_to_its_resource() {
+        let id = Uuid::now_v7();
+        let stem = projection_stem(&row_titled(&"a long title ".repeat(30), id));
+        assert_eq!(
+            temper_workflow::operations::parse_ref(&stem).unwrap(),
+            temper_core::types::ids::ResourceId(id)
+        );
+    }
+
+    /// The pairing that was broken: whatever the writer wrote, the remover
+    /// must remove. Both derive every path component from the same row through
+    /// the same two functions, so this asserts the property end to end rather
+    /// than asserting each side's spelling.
+    ///
+    /// It failed before because the remover took the owner segment from
+    /// `config.owner_for_context()` — always `"@me"` — while the writer used the
+    /// bare `owner_handle`. `remove_resource_file` treats an absent file as
+    /// success, so `temper resource delete` reported ok and left the file.
+    #[test]
+    fn what_the_writer_wrote_is_what_the_remover_removes() {
+        let dir = tempfile::TempDir::new().unwrap();
+        // A row whose owner segment is NOT "@me" — the case the old remover missed.
+        let mut row = row_titled("A Projected Resource", Uuid::now_v7());
+        row.owner_handle = "j-cole-taylor".to_string();
+        row.context_owner_ref = Some("@j-cole-taylor".to_string());
+
+        let written = write_resource_file_from_parts(dir.path(), &row, &body_only("# body\n"))
+            .unwrap()
+            .unwrap();
+        assert!(written.exists(), "writer produced {}", written.display());
+
+        remove_resource_file_for_row(dir.path(), &row).unwrap();
+
+        assert!(
+            !written.exists(),
+            "remover must delete the file the writer wrote, at {}",
+            written.display()
+        );
+    }
+
+    /// The owner segment must be a legal vault path component. `Vault::parse_rel`
+    /// rejects one without an `@`/`+` sigil, and `owner_handle` is the bare
+    /// handle off `p.handle` — so passing it through produced a tree the layout
+    /// module could not parse.
+    #[test]
+    fn the_owner_segment_is_always_sigiled() {
+        let id = Uuid::now_v7();
+
+        // Sigiled context ref wins.
+        let mut team = row_titled("T", id);
+        team.context_owner_ref = Some("+platform-eng".to_string());
+        assert_eq!(projection_owner(&team), "+platform-eng");
+
+        // No context ref: the bare handle is sigiled, never passed through.
+        let mut bare = row_titled("B", id);
+        bare.context_owner_ref = None;
+        bare.owner_handle = "j-cole-taylor".to_string();
+        assert_eq!(projection_owner(&bare), "@j-cole-taylor");
+
+        // A sparse row still yields something sigiled.
+        let mut sparse = row_titled("S", id);
+        sparse.context_owner_ref = None;
+        sparse.owner_handle = String::new();
+        assert_eq!(projection_owner(&sparse), "@me");
+
+        // And every branch round-trips through the layout parser.
+        for row in [&team, &bare, &sparse] {
+            let owner = projection_owner(row);
+            let rel = Vault::new(Path::new("/x")).rel_path(&owner, "ctx", "task", "stem");
+            assert!(
+                Vault::parse_rel(&rel).is_some(),
+                "owner segment {owner:?} is not a parseable vault path component"
+            );
+        }
+    }
+
+    /// However a context is spelled, the cursor lands in one place — so a
+    /// `pull @me/temper` is found by a `temper status` that knows only `temper`.
+    /// That is the whole point of the sidecar: it used to be written under the
+    /// ref verbatim and read back by bare name, and `status` reported
+    /// `not-projected` for a context it had just materialized.
+    #[test]
+    fn every_spelling_of_a_context_keys_one_cursor() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let state_dir = dir.path().join(".temper");
+        let cursor = ProjectionCursor {
+            last_event_id: Some(Uuid::nil()),
+            pulled_at: Utc::now(),
+        };
+
+        write_cursor(&state_dir, "@me/temper", &cursor).unwrap();
+
+        for spelling in [
+            "@me/temper",
+            "@j-cole-taylor/temper",
+            "+a-team/temper",
+            "temper",
+        ] {
+            assert!(
+                read_cursor(&state_dir, spelling).unwrap().is_some(),
+                "a cursor written as `@me/temper` must be readable as `{spelling}`"
+            );
+        }
+        // And exactly one sidecar exists — no `@me/` subdirectory beside it.
+        let files: Vec<_> = std::fs::read_dir(state_dir.join("projection"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(files, vec!["temper.json".to_string()]);
+    }
+
+    /// A UUID ref is not a decorated ref, so it keys verbatim — and it still
+    /// keys *something*. Deriving the cursor key from a row instead skipped the
+    /// write entirely for an empty context addressed by UUID, collapsing
+    /// "pulled, and there was nothing" into "never pulled".
+    #[test]
+    fn a_uuid_ref_keys_a_cursor_of_its_own() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let state_dir = dir.path().join(".temper");
+        let id = "019fbb77-72a3-72e1-bbbd-13eb6aa64982";
+        write_cursor(
+            &state_dir,
+            id,
+            &ProjectionCursor {
+                last_event_id: None,
+                pulled_at: Utc::now(),
+            },
+        )
+        .unwrap();
+        assert!(read_cursor(&state_dir, id).unwrap().is_some());
+    }
+
+    /// The directory name is a separate derivation from the cursor key, and
+    /// deliberately so: it comes off a row, because that is what the writer
+    /// used to build the path.
+    #[test]
+    fn the_projection_directory_name_comes_off_the_row() {
+        let row = row_titled("Any", Uuid::now_v7());
+        // `row_titled` homes the row in context "myctx".
+        assert_eq!(
+            context_dir_name("@me/myctx", std::slice::from_ref(&row)).as_deref(),
+            Some("myctx")
+        );
+        // Empty context: the ref's slug half is the fallback (see the caveat on
+        // `context_dir_name` — it is the slug, not the name).
+        assert_eq!(
+            context_dir_name("@me/emptied", &[]).as_deref(),
+            Some("emptied")
+        );
+        // An id-shaped ref for an empty context names no directory.
+        assert_eq!(
+            context_dir_name("019fbb77-72a3-72e1-bbbd-13eb6aa64982", &[]),
+            None
+        );
     }
 
     #[test]
