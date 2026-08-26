@@ -356,9 +356,22 @@ pub const SELF_OWNER_SEGMENT: &str = "@me";
 /// a pre-existing `@me` tree is then left standing, which is the end that loses
 /// no work.
 ///
+/// **`@me` can also be a real handle, and then the namespace is ambiguous.** Nothing reserves
+/// it: `generate_profile_handle` sluggifies the display name, so the profile called "Me" gets
+/// `handle = "me"` and its `context_owner_ref` is the literal string `@me`. On disk that is the
+/// same directory the caller's own contexts occupy, so pulling *their* context with the caller's
+/// tree underneath it would sweep the caller's files with a `keep` set that never mentioned them —
+/// the exact destruction the bound above exists to stop, re-entering through the name. When the
+/// segment is `@me` and the caller is not that profile (identity unknown included), this answers
+/// with **no** candidates: a stale file, never a deletion in a directory whose owner is ambiguous.
+///
 /// Contrast [`removal_owner_candidates`], which is deliberately less careful —
-/// and may be, because it is bounded by a filename rather than a directory.
+/// and may be, because it is bounded by a filename rather than a directory. A literal `@me` owner
+/// is safe there for the same reason: the stem carries the resource's uuid.
 fn owner_candidates(server_owner_ref: &str, me: Option<&str>) -> Vec<String> {
+    if server_owner_ref == SELF_OWNER_SEGMENT && me != Some(SELF_OWNER_SEGMENT) {
+        return Vec::new();
+    }
     let mut owners = vec![server_owner_ref.to_string()];
     if me == Some(server_owner_ref) && server_owner_ref != SELF_OWNER_SEGMENT {
         owners.push(SELF_OWNER_SEGMENT.to_string());
@@ -1004,6 +1017,46 @@ mod tests {
                 written.display()
             );
         }
+    }
+
+    /// `@me` is a sigil in the layout AND a possible handle, and the prune must not
+    /// confuse the two.
+    ///
+    /// Nothing reserves the handle: `generate_profile_handle` sluggifies the display
+    /// name, so the profile called "Me" is `@me`. Their context and the caller's own
+    /// then occupy one directory. Pulling theirs with a `keep` set that names only
+    /// their files would delete the caller's — the same cross-owner destruction
+    /// `pruning_one_owners_context_leaves_another_owners_namesake_alone` covers,
+    /// arriving through the namespace instead of through the name.
+    #[test]
+    fn a_literal_me_handle_never_licenses_sweeping_the_self_relative_tree() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path();
+        let shared_dir = root.join("@me/temper/task");
+        std::fs::create_dir_all(&shared_dir).unwrap();
+        let my_own_file = shared_dir.join("mine.md");
+        std::fs::write(&my_own_file, "my own work").unwrap();
+
+        // Pulling the OTHER profile's context: nothing of mine is in `keep`.
+        for me in [Some("@j-cole-taylor"), None] {
+            let owners = owner_candidates(SELF_OWNER_SEGMENT, me);
+            assert!(
+                owners.is_empty(),
+                "an ambiguous `@me` owner must offer no prune candidate (me={me:?})"
+            );
+            let pruned = prune_context(root, &owners, "temper", &HashSet::new()).unwrap();
+            assert_eq!(pruned, 0, "nothing swept (me={me:?})");
+            assert!(
+                my_own_file.exists(),
+                "the caller's own tree survived (me={me:?})"
+            );
+        }
+
+        // But the profile that IS `@me` still prunes its own tree normally.
+        let owners = owner_candidates(SELF_OWNER_SEGMENT, Some(SELF_OWNER_SEGMENT));
+        assert_eq!(owners, vec!["@me".to_string()]);
+        let pruned = prune_context(root, &owners, "temper", &HashSet::new()).unwrap();
+        assert_eq!(pruned, 1, "its own stale file is still swept");
     }
 
     #[test]

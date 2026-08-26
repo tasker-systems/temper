@@ -174,9 +174,16 @@ fn degraded_items(config: &Config) -> Vec<ContextStatus> {
 /// `Config::subscriptions` is hardcoded empty; every context projected under a
 /// real handle therefore reported `projected: 0` while its files sat on disk.
 ///
-/// `prune_context` already solved this by walking every owner directory rather
-/// than predicting one. Counting mirrors pruning, so the set counted is exactly
-/// the set pruned.
+/// So this walks every owner directory rather than predicting one, which is what
+/// `prune_context` did when this was written.
+///
+/// **It no longer mirrors pruning, and that sentence used to live here.**
+/// `prune_context` is now bounded by an explicit `owners` set (`projection.rs`) —
+/// a context name is not unique across owners, and sweeping every one of them
+/// deleted other owners' identically-named contexts. Counting kept the wide reach
+/// because it deletes nothing and because narrowing needs the owner segment,
+/// which is exactly what a context name does not carry. The two are now
+/// deliberately different widths, not one property stated twice.
 ///
 /// **This sums across owners, and same-named contexts under different owners
 /// are conflated.** With `@alice/temper` and `+platform-eng/temper` both
@@ -187,6 +194,15 @@ fn degraded_items(config: &Config) -> Vec<ContextStatus> {
 /// user-facing. Distinguishing them needs the owner segment, which is exactly
 /// what a context name does not carry — the previous attempt to guess it is
 /// what produced `projected: 0` for everything.
+///
+/// **The `@me` rename is a live instance of that conflation, not a hypothetical.**
+/// A vault carrying both the pre-rename `@<handle>/<ctx>/` tree and the new
+/// `@me/<ctx>/` tree counts both against a one-context `server` figure, so
+/// `projected` reads as roughly double. The window closes on the next `pull`,
+/// which prunes the old spelling — but it stays open indefinitely if
+/// `self_owner_ref` keeps answering `None` (offline), because the writer then
+/// keeps using the server's spelling and never produces the tree that would
+/// retire the other.
 ///
 /// Returns 0 when nothing matches. Layout:
 /// `<vault_root>/<owner>/<context>/<doc_type>/*.md`.
