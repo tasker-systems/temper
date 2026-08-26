@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COUNT(*) AS \"c!\" FROM kb_resource_homes\n                WHERE resource_id = $1 AND anchor_table = 'kb_contexts' AND anchor_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "c!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "b3d78f2c676647dec137a0b79bc3ff7aaf2155936748867d61381994f783d25a"
+}

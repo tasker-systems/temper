@@ -456,21 +456,21 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # Delete a context
+    # Retire a context
     # @param id [String] Context ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [nil]
+    # @return [RetireContextOutcome]
     def delete_context(id, opts = {})
-      delete_context_with_http_info(id, opts)
-      nil
+      data, _status_code, _headers = delete_context_with_http_info(id, opts)
+      data
     end
 
-    # Delete a context
+    # Retire a context
     # @param id [String] Context ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Array<(nil, Integer, Hash)>] nil, response status code and response headers
+    # @return [Array<(RetireContextOutcome, Integer, Hash)>] RetireContextOutcome data, response status code and response headers
     def delete_context_with_http_info(id, opts = {})
       if @api_client.config.debugging
         @api_client.config.logger.debug 'Calling API: ContextsApi.delete_context ...'
@@ -491,6 +491,8 @@ module Temper::Generated
 
       # header parameters
       header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
       header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
 
       # form parameters
@@ -500,7 +502,7 @@ module Temper::Generated
       post_body = opts[:debug_body]
 
       # return_type
-      return_type = opts[:debug_return_type]
+      return_type = opts[:debug_return_type] || 'RetireContextOutcome'
 
       # auth_names
       auth_names = opts[:debug_auth_names] || ['bearer_auth']

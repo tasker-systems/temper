@@ -238,3 +238,20 @@ pub struct RenameContextOutcome {
     /// already the stored one (no event emitted, nothing written).
     pub renamed: bool,
 }
+
+/// What retire hands back. The caller needs BOTH halves to undo it: the read floor hides the
+/// context and the slug moved, so the ref they arrived with no longer names the row (spec §2.4.1).
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "context.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetireContextOutcome {
+    pub context_id: ContextId,
+    /// The address after mangling — `<slug>-retired`, suffixed if that was taken.
+    pub slug: String,
+    /// The full decorated ref, `{owner_ref}/{slug}`, which is what `restore` accepts.
+    pub context_ref: String,
+    /// Unchanged by retirement. The display label is not an address.
+    pub name: String,
+}

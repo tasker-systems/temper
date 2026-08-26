@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kb_contexts\n              SET is_active = false, slug = $2\n            WHERE id = $1 AND is_active",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0dafc09765d659dac91dc474cf9f1dbb4ef60f17c65eb9b7a4701ec30b25d2f6"
+}

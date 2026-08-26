@@ -17,7 +17,7 @@
 - **Never edit an applied migration.** Not even a comment — sqlx checksum-verifies. If the local DB rejects it, reset the Docker volume rather than amending.
 - **`--all-features` on every build and clippy invocation.**
 - **`#[expect(lint, reason = "...")]`, never `#[allow]`.**
-- **After any SQL change, regenerate the offline cache:** `cargo sqlx prepare --workspace -- --all-features`. Commit only `.sqlx` entries that belong to queries this branch actually adds; deleting an entry whose last caller you removed is correct, deleting one main still uses is not.
+- **After any SQL change, regenerate the offline cache with the PER-CRATE task**, e.g. `cargo make prepare-services` for temper-services (and `cargo make prepare-e2e` for the e2e crate). Do **not** run `cargo sqlx prepare --workspace` — `Makefile.toml:114` says it clobbers the per-crate caches, and it leaves orphaned entries behind when a query's last caller is removed. Commit only `.sqlx` entries that belong to queries this branch actually adds; deleting an entry whose last caller you removed is correct, deleting one main still uses is not.
 - **Auth before writes.** The authorization gate runs at the top of any function that mutates, before any database write.
 - **CLI output goes through `crate::format::render(&value, fmt)`**, never `output::success`, for anything an agent must parse. Non-TTY stdout defaults to JSON.
 - **All generated artifacts are committed together** — `openapi.json`, `clients/temper-rb/`, `clients/temper-ts/`, ts-rs `.ts` trees. Note that ts-rs drift only clears after a **commit**, not after `git add`.

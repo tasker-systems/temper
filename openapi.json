@@ -1738,7 +1738,7 @@
         "tags": [
           "Contexts"
         ],
-        "summary": "Delete a context",
+        "summary": "Retire a context",
         "operationId": "delete_context",
         "parameters": [
           {
@@ -1753,17 +1753,21 @@
           }
         ],
         "responses": {
-          "204": {
-            "description": "Context deleted"
+          "200": {
+            "description": "Context retired (soft-deleted, and its slug freed for reuse)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetireContextOutcome"
+                }
+              }
+            }
           },
           "403": {
             "description": "Caller may read but not administer this context"
           },
           "404": {
             "description": "Context not found (uniform — no existence oracle)"
-          },
-          "409": {
-            "description": "Context still has dependent resources, or a connection, homed in it"
           }
         },
         "security": [
@@ -14672,6 +14676,33 @@
           "updated": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "RetireContextOutcome": {
+        "type": "object",
+        "description": "What retire hands back. The caller needs BOTH halves to undo it: the read floor hides the\ncontext and the slug moved, so the ref they arrived with no longer names the row (spec §2.4.1).",
+        "required": [
+          "context_id",
+          "slug",
+          "context_ref",
+          "name"
+        ],
+        "properties": {
+          "context_id": {
+            "$ref": "#/components/schemas/ContextId"
+          },
+          "context_ref": {
+            "type": "string",
+            "description": "The full decorated ref, `{owner_ref}/{slug}`, which is what `restore` accepts."
+          },
+          "name": {
+            "type": "string",
+            "description": "Unchanged by retirement. The display label is not an address."
+          },
+          "slug": {
+            "type": "string",
+            "description": "The address after mangling — `<slug>-retired`, suffixed if that was taken."
           }
         }
       },

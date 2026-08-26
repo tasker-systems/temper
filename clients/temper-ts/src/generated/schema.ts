@@ -453,7 +453,7 @@ export interface paths {
         get: operations["get_context"];
         put?: never;
         post?: never;
-        /** Delete a context */
+        /** Retire a context */
         delete: operations["delete_context"];
         options?: never;
         head?: never;
@@ -6037,6 +6037,19 @@ export interface components {
             /** Format: date-time */
             updated: string;
         };
+        /**
+         * @description What retire hands back. The caller needs BOTH halves to undo it: the read floor hides the
+         *     context and the slug moved, so the ref they arrived with no longer names the row (spec §2.4.1).
+         */
+        RetireContextOutcome: {
+            context_id: components["schemas"]["ContextId"];
+            /** @description The full decorated ref, `{owner_ref}/{slug}`, which is what `restore` accepts. */
+            context_ref: string;
+            /** @description Unchanged by retirement. The display label is not an address. */
+            name: string;
+            /** @description The address after mangling — `<slug>-retired`, suffixed if that was taken. */
+            slug: string;
+        };
         /** @description One stage whose rows come back, and how much of each row. */
         ReturnSpec: {
             stage: components["schemas"]["StageName"];
@@ -8286,12 +8299,14 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Context deleted */
-            204: {
+            /** @description Context retired (soft-deleted, and its slug freed for reuse) */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["RetireContextOutcome"];
+                };
             };
             /** @description Caller may read but not administer this context */
             403: {
@@ -8302,13 +8317,6 @@ export interface operations {
             };
             /** @description Context not found (uniform — no existence oracle) */
             404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Context still has dependent resources, or a connection, homed in it */
-            409: {
                 headers: {
                     [name: string]: unknown;
                 };

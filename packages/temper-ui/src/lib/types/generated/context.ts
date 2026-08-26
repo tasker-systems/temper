@@ -171,6 +171,24 @@ export type RenameContextRequest = {
 name: string, };
 
 /**
+ * What retire hands back. The caller needs BOTH halves to undo it: the read floor hides the
+ * context and the slug moved, so the ref they arrived with no longer names the row (spec §2.4.1).
+ */
+export type RetireContextOutcome = { context_id: ContextId, 
+/**
+ * The address after mangling — `<slug>-retired`, suffixed if that was taken.
+ */
+slug: string, 
+/**
+ * The full decorated ref, `{owner_ref}/{slug}`, which is what `restore` accepts.
+ */
+context_ref: string, 
+/**
+ * Unchanged by retirement. The display label is not an address.
+ */
+name: string, };
+
+/**
  * Result of sharing a context into a team. `shared` is `false` when the share already
  * existed (idempotent no-op).
  */

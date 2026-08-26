@@ -31,7 +31,7 @@ use temper_workflow::operations::sluggify;
 pub use temper_core::types::context::{
     ContextCreateRequest, ContextRow, ContextRowWithCounts, InheritedReadGrant, InheritedShare,
     ReassignContextOutcome, ReassignContextRequest, RenameContextOutcome, RenameContextRequest,
-    ShareContextOutcome, ShareContextRequest, UnshareContextOutcome,
+    RetireContextOutcome, ShareContextOutcome, ShareContextRequest, UnshareContextOutcome,
 };
 
 /// List all contexts visible to the profile (owned + team-shared), with resource counts.
@@ -956,125 +956,81 @@ pub async fn rename(
     })
 }
 
-/// How many live resources are homed in a context, broken down by `doc_type` — the shape
-/// [`delete`]'s refusal message reports so the caller knows exactly what to move before retrying.
-/// Internal only: never serialized, never crosses the API boundary as its own type.
-struct HomedResourceCount {
-    doc_type: String,
-    count: i64,
-}
-
-/// Delete a context — **a hard delete**, unlike every other context mutation in this file.
-/// `kb_contexts` carries no `is_active` column (creation is a plain INSERT with no event emission —
-/// product decision 5: contexts are infrastructure), so there is no soft-delete state to flip and
-/// nothing for `delete` to undo; once gone, the slug is free and a repeat call renders the same
-/// `NotFound` a never-existed context would.
+/// Retire a context — a soft delete. `kb_contexts.is_active` flips to `false`, which both
+/// floored predicates (`contexts_readable_by_teams`, `context_authorable_by_profile`) treat as
+/// zero read-reach and zero write authority, while every row it homes is preserved untouched.
+/// The slug is mangled in the same statement so the freed address is immediately reusable —
+/// `UNIQUE (owner_table, owner_id, slug)` is never relaxed, so the retired row keeps occupying
+/// its OLD slug forever unless it moves out of the way.
 ///
 /// **Auth before writes**, the same gate as [`rename`]: `ContextAdminAuthority` — own the context,
 /// or manage its owning team, or be an instance administrator.
 ///
-/// **Dependents block the delete; they are never swept.** `kb_resource_homes` is the polymorphic
-/// navigation table — "no real FK (can't FK two tables)" per its own migration comment — so an
-/// orphaned home would not fail at the database layer; it would just silently strand every resource
-/// still anchored here. This function checks for that explicitly and refuses with a `409` naming
-/// what is attached, grouped by `doc_type`, and pointing at the fix: `temper resource update <ref>
-/// --context-to <new-context>` moves a resource's home without touching its content. Only **live**
-/// (`is_active`) resources count — a soft-deleted resource's home row is inert, and let it ride the
-/// cascade rather than block a delete over data nobody can see.
-///
-/// `kb_team_contexts` (context shares) is deliberately **not** part of this check: it
-/// `ON DELETE CASCADE`s, and a share is reach metadata about the context, not data homed in it —
-/// deleting the context correctly takes its shares with it, the same way [`reassign`] correctly
-/// leaves them for the new owner to prune.
-///
-/// A `kb_connections` row homing here **is** checked explicitly, ahead of the DELETE: unlike
-/// `kb_resource_homes` it is a real `NOT NULL` FK with no cascade (a connection is temper's authed
-/// link to a remote system — silently orphaning that link would be worse than refusing the delete),
-/// so an unmapped `23503` would otherwise surface as a bare 500 instead of a clean, actionable 409.
-pub async fn delete(pool: &PgPool, caller: ProfileId, context_id: uuid::Uuid) -> ApiResult<()> {
+/// **No dependents guard.** This supersedes the hard delete of PR #777, whose guard existed only
+/// because a hard delete could strand a resource's home; retirement strands nothing; the whole
+/// point is that a context homing live resources can still be retired.
+pub async fn retire(
+    pool: &PgPool,
+    caller: ProfileId,
+    context_id: uuid::Uuid,
+) -> ApiResult<RetireContextOutcome> {
     crate::authz::authorize::<ContextAdminAuthority>(pool, caller, context_id).await?;
 
-    // `fetch_one` on an EXISTS, not `fetch_optional` on the row: mirrors `rename` — the gate's
-    // SystemAdmin arm admits without consulting the subject's existence, so a system admin naming a
-    // context id that does not exist reaches here. That is the read refusal, not a panic.
-    let exists = sqlx::query_scalar!(
-        r#"SELECT EXISTS(SELECT 1 FROM kb_contexts WHERE id = $1) AS "ok!""#,
-        context_id
+    // The current identity pair plus the already-sigil'd owner ref, in one read — copied verbatim
+    // from `rename` (`:867-880`). `fetch_optional`, not `fetch_one`: the gate's `SystemAdmin` arm
+    // admits without consulting the subject's existence, so a system admin naming a context id
+    // that does not exist reaches here. That is the read refusal, not a panic. The `CASE` is the
+    // incumbent both-kinds spelling (`:42-46`, `:77-80`, `:377-380`) — `team_owner_ref` is
+    // team-only and would `fetch_one`-panic on a profile-owned context.
+    let cur = sqlx::query!(
+        r#"SELECT owner_table AS "owner_table!", owner_id AS "owner_id!", slug, name,
+              CASE owner_table
+                WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = owner_id)
+                ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = owner_id)
+              END AS "owner_ref!"
+         FROM kb_contexts WHERE id = $1"#,
+        context_id,
     )
-    .fetch_one(pool)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| ApiError::NotFound(CONTEXT_REFUSAL.to_string()))?;
+
+    // The mangled address, computed through the incumbent rather than a second uniqueness rule.
+    // `next_unique_context_slug` is deliberately `is_active`-BLIND: retired rows keep their slugs
+    // in the same UNIQUE space, so a floor added there would hand out an address that collides
+    // with a retired row and fail at the INSERT. Do not "fix" it.
+    let retired_slug = next_unique_context_slug(
+        pool,
+        &cur.owner_table,
+        cur.owner_id,
+        &format!("{}-retired", cur.slug),
+    )
     .await?;
-    if !exists {
+
+    let updated = sqlx::query!(
+        r#"UPDATE kb_contexts
+              SET is_active = false, slug = $2
+            WHERE id = $1 AND is_active"#,
+        context_id,
+        retired_slug,
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| map_context_write_err(anyhow::Error::new(e)))?;
+
+    if updated.rows_affected() == 0 {
         return Err(ApiError::NotFound(CONTEXT_REFUSAL.to_string()));
     }
 
-    let dependents = sqlx::query_as!(
-        HomedResourceCount,
-        r#"
-        SELECT COALESCE(dt.property_value #>> '{}', 'untyped') AS "doc_type!",
-               COUNT(*) AS "count!"
-          FROM kb_resource_homes h
-          JOIN kb_resources r ON r.id = h.resource_id AND r.is_active
-          LEFT JOIN kb_properties dt
-                 ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id
-                AND dt.property_key = 'doc_type' AND NOT dt.is_folded
-         WHERE h.anchor_table = 'kb_contexts' AND h.anchor_id = $1
-         GROUP BY 1
-         ORDER BY 2 DESC, 1
-        "#,
-        context_id
-    )
-    .fetch_all(pool)
-    .await?;
-
-    if !dependents.is_empty() {
-        let total: i64 = dependents.iter().map(|d| d.count).sum();
-        let breakdown = dependents
-            .iter()
-            .map(|d| format!("{} {}", d.count, d.doc_type))
-            .collect::<Vec<_>>()
-            .join(", ");
-        return Err(ApiError::Conflict(format!(
-            "this context has {total} dependent resource(s) ({breakdown}); move them to another \
-             context with `temper resource update <ref> --context-to <new-context>` first, then \
-             try again"
-        )));
-    }
-
-    let connections = sqlx::query_scalar!(
-        r#"SELECT COUNT(*) AS "count!" FROM kb_connections WHERE home_context_id = $1"#,
-        context_id
-    )
-    .fetch_one(pool)
-    .await?;
-    if connections > 0 {
-        return Err(ApiError::Conflict(format!(
-            "this context is the home of {connections} connection(s); re-home them first, then \
-             try again"
-        )));
-    }
-
-    sqlx::query!("DELETE FROM kb_contexts WHERE id = $1", context_id)
-        .execute(pool)
-        .await
-        .map_err(map_context_delete_err)?;
-    Ok(())
-}
-
-/// Map a raw `DELETE FROM kb_contexts` failure to an [`ApiError`]. The two dependents checks in
-/// [`delete`] are meant to make `23503` unreachable, but they run as separate statements ahead of
-/// the DELETE rather than inside its transaction, so this is a caught TOCTOU — something got
-/// attached between the check and the write — not a dead arm. It renders the same class of refusal
-/// the pre-checks render, never a raw 500.
-fn map_context_delete_err(e: sqlx::Error) -> ApiError {
-    if let sqlx::Error::Database(db) = &e {
-        if db.code().as_deref() == Some("23503") {
-            return ApiError::Conflict(
-                "this context still has data referencing it; move or remove it, then try again"
-                    .to_string(),
-            );
-        }
-    }
-    ApiError::from(e)
+    // Composed from the already-decorated `cur.owner_ref` — never through `decorated_context_ref`,
+    // whose `owner_addressable` parameter is the *bare* handle/team slug and would yield
+    // `@@handle/slug` from this value. Same note `rename` carries at its own return.
+    Ok(RetireContextOutcome {
+        context_id: ContextId::from(context_id),
+        context_ref: format!("{}/{retired_slug}", cur.owner_ref),
+        slug: retired_slug,
+        name: cur.name,
+    })
 }
 
 /// The `23505` refusal both context write paths render when they lose the collision race.
@@ -2030,5 +1986,89 @@ mod tests {
             "and still not readable by anyone new"
         );
         assert!(can_modify(&pool, alice, r).await, "authorship unchanged");
+    }
+
+    // ── Context retirement ────────────────────────────────────────────────────
+
+    /// Retirement preserves everything. This is the whole difference from the hard delete it
+    /// replaces: the guard is gone because there is nothing to guard against.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn retire_preserves_every_row_it_homes(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let ctx = mk_personal_context(&pool, "proj", alice).await;
+        let r = mk_homed_resource(&pool, ctx, alice).await;
+
+        retire(&pool, alice, ctx)
+            .await
+            .expect("retire succeeds WITH a resource homed here");
+
+        let row = sqlx::query!(
+            r#"SELECT is_active AS "is_active!" FROM kb_contexts WHERE id = $1"#,
+            ctx
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("the kb_contexts row still exists");
+        assert!(
+            !row.is_active,
+            "retirement flips is_active, it does not delete the row"
+        );
+
+        let resource_active: bool = sqlx::query_scalar!(
+            r#"SELECT is_active AS "a!" FROM kb_resources WHERE id = $1"#,
+            r
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("the kb_resources row is untouched");
+        assert!(resource_active, "the homed resource stays live");
+
+        let home_count: i64 = sqlx::query_scalar!(
+            r#"SELECT COUNT(*) AS "c!" FROM kb_resource_homes
+                WHERE resource_id = $1 AND anchor_table = 'kb_contexts' AND anchor_id = $2"#,
+            r,
+            ctx
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(home_count, 1, "the home row is untouched");
+    }
+
+    /// The address is freed; the display label is not touched.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn retire_frees_the_slug_and_keeps_the_name(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let ctx = mk_personal_context(&pool, "scratch", alice).await;
+
+        let out = retire(&pool, alice, ctx).await.expect("retire");
+        assert!(
+            out.slug.starts_with("scratch-retired"),
+            "got slug {:?}",
+            out.slug
+        );
+        assert_eq!(out.name, "scratch");
+
+        let row = create(&pool, alice, "kb_profiles", *alice, "scratch")
+            .await
+            .expect("the freed slug is immediately reusable");
+        assert_eq!(row.slug, "scratch");
+    }
+
+    /// Retiring twice is a clean refusal, never a 500 and never a second mangle.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn retiring_an_already_retired_context_is_not_found(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let ctx = mk_personal_context(&pool, "temp", alice).await;
+
+        retire(&pool, alice, ctx)
+            .await
+            .expect("first retire succeeds");
+
+        let second = retire(&pool, alice, ctx).await;
+        assert!(
+            matches!(second, Err(ApiError::NotFound(ref msg)) if msg == CONTEXT_REFUSAL),
+            "expected NotFound, got {second:?}"
+        );
     }
 }
