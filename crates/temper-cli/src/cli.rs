@@ -1034,7 +1034,14 @@ pub enum ContextAction {
         owner: Option<String>,
     },
     /// List the contexts you can see on the server (with owner ref + resource counts)
-    List,
+    List {
+        /// List retired contexts you ADMINISTER, instead of the contexts you can read. A
+        /// retired context is invisible to the read path by construction (that is what
+        /// retirement means), so this is a different axis, not a filter over the same rows —
+        /// you see a retired context here only if you could have retired it yourself.
+        #[arg(long)]
+        retired: bool,
+    },
     /// Share a context into a team's read-reach. Requires that you administer the context
     /// (own it, or manage its owning team) AND manage the target team (owner/maintainer), OR
     /// that you are an instance administrator. The context ref is a UUID or the
@@ -1060,17 +1067,30 @@ pub enum ContextAction {
         /// Target team: a team slug (optionally `+`-prefixed) or a team UUID.
         team: String,
     },
-    /// Permanently delete a context.
+    /// Retire a context.
     ///
-    /// THIS IS A HARD DELETE. Contexts carry no `is_active` column (creation is a plain INSERT
-    /// with no event emission — contexts are infrastructure, not domain data), so unlike
-    /// `resource delete` there is nothing to undo and no `temper pull` that brings it back.
+    /// This is REVERSIBLE. The context stops being visible on the read path and stops being
+    /// writeable, but every row it homes is preserved untouched — nothing is deleted, and the
+    /// slug is freed for immediate reuse (a fresh context can be created under the old name
+    /// right away). `temper context restore` undoes it.
     ///
-    /// Refused with a message naming what is still attached when the context still homes live
-    /// resources (grouped by doc type) or a connection. Move resources first with `temper
-    /// resource update <ref> --context-to <new-context>`, then retry.
+    /// The command prints the context id and the mangled ref (`<slug>-retired`, suffixed if
+    /// that was taken) that `restore` accepts — the original `@owner/slug` no longer resolves
+    /// once the row is hidden and the slug has moved, so that printed ref is the only address
+    /// left for it.
     Delete {
         /// Context ref: a UUID or `@me/slug` / `@handle/slug` / `+team-slug/slug`.
+        context: String,
+    },
+    /// Restore a retired context, reversing `temper context delete`.
+    ///
+    /// `context` must be a UUID or the **mangled** ref that `delete` printed — NOT the original
+    /// ref the context had before retirement. The read floor hides a retired context by
+    /// construction and its slug has moved, so the original address no longer names the row;
+    /// only the mangled ref (or the bare id) still resolves. `temper context list --retired`
+    /// also prints it if you did not keep the output from `delete`.
+    Restore {
+        /// Context ref: a UUID, or the mangled ref `delete` printed (NOT the original ref).
         context: String,
     },
     /// Rename a context. The slug is derived from the new name — there is no separate

@@ -522,11 +522,14 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     })
                 })
             }
-            ContextAction::List => temper_cli::actions::runtime::with_client(|client| {
-                Box::pin(async move {
-                    temper_cli::commands::context_cmd::list(client, output_format).await
+            ContextAction::List { retired } => {
+                temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::context_cmd::list(client, retired, output_format)
+                            .await
+                    })
                 })
-            }),
+            }
             ContextAction::Share { context, team } => {
                 temper_cli::actions::runtime::with_client(|client| {
                     Box::pin(async move {
@@ -570,6 +573,18 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 temper_cli::actions::runtime::with_client(|client| {
                     Box::pin(async move {
                         temper_cli::commands::context_cmd::delete_remote(
+                            client,
+                            &context,
+                            output_format,
+                        )
+                        .await
+                    })
+                })
+            }
+            ContextAction::Restore { context } => {
+                temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::context_cmd::restore_remote(
                             client,
                             &context,
                             output_format,
