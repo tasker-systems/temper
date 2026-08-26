@@ -114,7 +114,7 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
 $$;
 
 SELECT declare_migration(
-    20260825000030,
+    20260826000110,
     'additive',
     'Context retirement: one defaulted column on kb_contexts plus CREATE OR REPLACE on two STABLE read functions whose signatures and return types are unchanged. A binary predating this migration keeps working -- it reads kb_contexts without the column, every existing row is born is_active = true, and both functions answer identically for an active context. Nothing is dropped: UNIQUE (owner_table, owner_id, slug) stays, and retire mangles the slug instead of relaxing the constraint, which is what keeps this class additive rather than shape-breaking (DEPLOYING.md:68-72). Supersedes the hard delete of PR #777, which could not ship: kb_contexts is a replay input table restored verbatim and both context projectors RAISE on a missing row. Design: internal/superpowers/specs/2026-08-25-context-retirement-design.md.'
 );

@@ -4,7 +4,7 @@
 //!
 //! `DELETE /api/contexts/{id}` used to be the one context mutation with no `is_active` to flip
 //! back — a hard delete, refused with `409` while anything was still homed in the context.
-//! `20260825000030_context_retirement.sql` supersedes that: `kb_contexts` is a replay INPUT table
+//! `20260826000110_context_retirement.sql` supersedes that: `kb_contexts` is a replay INPUT table
 //! restored verbatim (`crates/temper-substrate/src/replay.rs:101-125`) and both context
 //! projectors RAISE on a missing row, so a hard delete broke replay for any context that was ever
 //! renamed or reassigned. `retire` now flips `kb_contexts.is_active` to `false` and mangles the
@@ -423,7 +423,7 @@ async fn the_mangled_ref_the_cli_prints_is_what_restore_accepts(pool: sqlx::PgPo
 ///
 /// ⚠️ **The `403` arm is reachable on `restore` only while the context is still ACTIVE.**
 /// `ContextAdminAuthority`'s `ReadOnly` arm delegates entirely to `context_visible_to`
-/// (`context_service::context_visible`), and `20260825000030_context_retirement.sql` floors
+/// (`context_service::context_visible`), and `20260826000110_context_retirement.sql` floors
 /// EVERY arm of that predicate — including the explicit-read-grant arm — on `is_active`. Once a
 /// context is actually retired, a reader who could see it a moment ago resolves `Invisible`, not
 /// `ReadOnly`, so `restore` on an ALREADY-retired context answers the reader with `404`, not

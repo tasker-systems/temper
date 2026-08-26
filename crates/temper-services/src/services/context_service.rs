@@ -704,7 +704,7 @@ pub async fn list_retired_administered(
                  ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)
                END AS "owner_ref!",
                -- Always `false`: `context_authorable_by_profile` floors on `c.is_active`
-               -- (20260825000030), so a retired context is unwriteable by construction.
+               -- (20260826000110), so a retired context is unwriteable by construction.
                context_authorable_by_profile($1, c.id) AS "can_write!",
                NOT c.is_active AS "retired!",
                -- Carried VERBATIM from `list_visible` — counted through the caller's OWN read
@@ -1317,7 +1317,7 @@ pub async fn restore(
     // `restore_reports_no_change_when_it_lands_back_on_its_suffixed_address`.
     //
     // No ledger entry: the context was retired by the un-evented path that shipped earlier on this
-    // branch, before migration `20260825000040` added `context_retire`. The address it was retired
+    // branch, before migration `20260826000120` added `context_retire`. The address it was retired
     // under is recorded nowhere, so the answer that cannot mislead is "assume it moved" — `true`
     // sends the caller to the `slug` this same response carries, while `false` would assert an
     // address was preserved that nothing on disk can vouch for. The arm is bounded rather than

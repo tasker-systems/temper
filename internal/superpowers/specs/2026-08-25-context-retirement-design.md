@@ -418,7 +418,7 @@ wrong analogy.
 ledger, so nothing re-applies it. Both halves are required for replay to reproduce whichever of the
 two states the ledger actually ends on.
 
-`20260825000040_context_retire_fns.sql` adds two event types and four functions, mirroring
+`20260826000120_context_retire_fns.sql` adds two event types and four functions, mirroring
 `context_rename`'s shape exactly:
 
 | half | function | authorizes? |
@@ -508,7 +508,7 @@ This section originally rejected a `context_retired` event on the grounds that "
 in with the restore and an event would add a projector with nothing to project." The first half
 is true and the second is false, and the replay witness proved it: the FLAG rides in, but the
 MANGLED SLUG does not, because `_project_context_renamed` sets `slug` from its own payload and
-drives it back on replay. Migration `20260825000040_context_retire_fns.sql` adds
+drives it back on replay. Migration `20260826000120_context_retire_fns.sql` adds
 `context_retired` and `context_restored`.
 
 ### Deferred

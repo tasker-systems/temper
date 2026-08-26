@@ -2,7 +2,7 @@
 //! The witness a hard delete could not have passed: `create → rename → retire → replay`, plus
 //! its mirror, `create → rename → retire → restore → replay`.
 //!
-//! `20260825000030_context_retirement.sql`'s own rationale is exactly this: `kb_contexts` is a
+//! `20260826000110_context_retirement.sql`'s own rationale is exactly this: `kb_contexts` is a
 //! replay INPUT table restored verbatim (`INPUT_TABLES` in `replay.rs`), and
 //! `_project_context_renamed` `RAISE`s `context_rename: context % not found` on a missing row
 //! (`20260731000040_context_rename_fns.sql:48`), which `replay::replay`'s
@@ -49,7 +49,7 @@
 //!
 //! `kb_teams` gets away with an un-evented soft-delete because it does not touch an
 //! identity-bearing column. Retirement moves the slug, and identity-bearing columns are exactly
-//! what `rename` and `reassign` are evented for. Hence `20260825000040_context_retire_fns.sql`.
+//! what `rename` and `reassign` are evented for. Hence `20260826000120_context_retire_fns.sql`.
 //!
 //! So the retirement here fires through `writes::retire_context_with`, under real authority, the
 //! same standard `context_rename_replay.rs` holds its rename to. A raw `UPDATE` would pass this

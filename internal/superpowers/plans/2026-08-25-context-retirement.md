@@ -7,7 +7,7 @@
 >
 > | Plan says | What shipped | Where the real design lives |
 > |---|---|---|
-> | Task 4 Step 3: retire/restore are plain `UPDATE … WHERE id = $1 AND NOT is_active`, refusing on `rows_affected() == 0` | **Event-sourced.** `context_retire`/`context_restore` append + project in one transaction; the no-op refusal is `P0002` | Spec §2.8, migration `20260825000040_context_retire_fns.sql` |
+> | Task 4 Step 3: retire/restore are plain `UPDATE … WHERE id = $1 AND NOT is_active`, refusing on `rows_affected() == 0` | **Event-sourced.** `context_retire`/`context_restore` append + project in one transaction; the no-op refusal is `P0002` | Spec §2.8, migration `20260826000120_context_retire_fns.sql` |
 > | Task 5 Step 3: the retired listing scopes on ownership alone, with no system-admin arm | **Three arms** — own it, manage the owning team, or be a system admin | Spec §2.4.1, commit `dd0d39d1` |
 > | Task 5 Step 4: run `cargo sqlx prepare --workspace` | **Wrong task** — it writes the root cache and leaves per-crate caches stale. Use `cargo make prepare-services` | `Makefile.toml`'s own comment |
 >
@@ -48,7 +48,7 @@
 
 | File | Responsibility |
 |---|---|
-| `migrations/20260825000030_context_retirement.sql` | **Create.** The column, the two floored predicates, the declaration. |
+| `migrations/20260826000110_context_retirement.sql` | **Create.** The column, the two floored predicates, the declaration. |
 | `crates/temper-services/src/services/context_service.rs` | **Modify.** `delete` becomes retire; add `restore`, `list_retired_administered`, `get_retired_administered`. |
 | `crates/temper-api/src/handlers/contexts.rs` | **Modify.** Retire handler doc, new `restore` handler, `retired` query param on `list`. |
 | `crates/temper-api/src/routes.rs` | **Modify.** Register `restore`. |
@@ -145,7 +145,7 @@ git commit -m "chore(context): rebase onto main and regenerate contract artifact
 The whole enforcement surface. Nothing consumes it yet — every existing row is born `is_active = true`, so behavior is unchanged until Task 3 flips one.
 
 **Files:**
-- Create: `migrations/20260825000030_context_retirement.sql`
+- Create: `migrations/20260826000110_context_retirement.sql`
 - Modify: `crates/temper-services/tests/context_read_predicate_test.rs` — **both** floors' witnesses live here. This file already owns the two probes (`can_read` at `:216`, `can_author` at `:224`) and the whole fixture set, so splitting the write witness into `context_write_authority_test.rs` would duplicate a fixture tree to re-ask a question this file already asks.
 
 **Interfaces:**
@@ -303,7 +303,7 @@ raised by the `retire` helper. The file's pre-existing tests still pass.
 
 **AMEND** on the two functions (spec §2.2 authorizes the floor), **EXTEND** for the column.
 
-Create `migrations/20260825000030_context_retirement.sql`. The two function bodies below are the **live definitions printed from the database**, with the floor added — the four read arms and three write arms are carried verbatim so this is an edit, not a rewrite:
+Create `migrations/20260826000110_context_retirement.sql`. The two function bodies below are the **live definitions printed from the database**, with the floor added — the four read arms and three write arms are carried verbatim so this is an edit, not a rewrite:
 
 ```sql
 -- Context retirement: a context can be made invisible and unwriteable without losing a row.
@@ -401,7 +401,7 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
 $$;
 
 SELECT declare_migration(
-    20260825000030,
+    20260826000110,
     'additive',
     'Context retirement: one defaulted column on kb_contexts plus CREATE OR REPLACE on two STABLE read functions whose signatures and return types are unchanged. A binary predating this migration keeps working -- it reads kb_contexts without the column, every existing row is born is_active = true, and both functions answer identically for an active context. Nothing is dropped: UNIQUE (owner_table, owner_id, slug) stays, and retire mangles the slug instead of relaxing the constraint, which is what keeps this class additive rather than shape-breaking (DEPLOYING.md:68-72). Supersedes the hard delete of PR #777, which could not ship: kb_contexts is a replay input table restored verbatim and both context projectors RAISE on a missing row. Design: internal/superpowers/specs/2026-08-25-context-retirement-design.md.'
 );

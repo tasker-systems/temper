@@ -1,4 +1,4 @@
--- Context retirement, event-sourced: the two mutations `20260825000030_context_retirement.sql`
+-- Context retirement, event-sourced: the two mutations `20260826000110_context_retirement.sql`
 -- shipped as plain UPDATEs are re-cut here as evented acts, mirroring `context_rename`
 -- (`20260731000040_context_rename_fns.sql`) exactly.
 --
@@ -26,7 +26,7 @@
 -- on the ledger, so nothing re-applies it. Both halves are required for replay to reproduce
 -- whichever of the two states the ledger actually ends on.
 --
--- Does NOT touch `20260825000030_context_retirement.sql`: that migration is already applied, and
+-- Does NOT touch `20260826000110_context_retirement.sql`: that migration is already applied, and
 -- its two read-axis predicates (`contexts_readable_by_teams`, `context_authorable_by_profile`) are
 -- untouched here — this migration adds a write path, not a new read rule.
 
@@ -234,7 +234,7 @@ $$;
 -- — an older binary keeps calling the plain UPDATEs `context_service::retire`/`restore` used to run
 -- and never touches these functions or these event names.
 --
--- ADDITIVE rather than a rewrite of `20260825000030_context_retirement.sql`, which is already
+-- ADDITIVE rather than a rewrite of `20260826000110_context_retirement.sql`, which is already
 -- applied and therefore immutable: that migration is a schema-and-predicate change (one column,
 -- two `CREATE OR REPLACE` read functions) and shipped correctly as far as it went, but it could not
 -- have shipped the evented write path in the same breath, because the write path did not exist
@@ -245,7 +245,7 @@ $$;
 -- restore — see the header above for the exact defect this produces. Two new event types and four
 -- new functions; nothing pre-existing is altered or dropped.
 SELECT declare_migration(
-    20260825000040,
+    20260826000120,
     'additive',
-    'Two new CREATE FUNCTIONs per verb (projector + mutation) and two new event-type rows. Nothing pre-existing is altered or dropped, no signature or return type moves, and a binary that predates this migration calls none of it. Closes the replay hole left by the un-evented context_retire/restore shipped in 20260825000030: kb_contexts is a replay input table restored verbatim, so an un-evented slug mangle is invisible to the ledger walk, which then re-applies an earlier context_renamed event on top of the verbatim restore and drives the slug back to its pre-retirement value (worse, a freed-then-reclaimed slug collision aborts replay outright via UNIQUE (owner_table, owner_id, slug)). Eventing both retire and restore lets replay reproduce whichever of the two states the ledger actually ends on.'
+    'Two new CREATE FUNCTIONs per verb (projector + mutation) and two new event-type rows. Nothing pre-existing is altered or dropped, no signature or return type moves, and a binary that predates this migration calls none of it. Closes the replay hole left by the un-evented context_retire/restore shipped in 20260826000110: kb_contexts is a replay input table restored verbatim, so an un-evented slug mangle is invisible to the ledger walk, which then re-applies an earlier context_renamed event on top of the verbatim restore and drives the slug back to its pre-retirement value (worse, a freed-then-reclaimed slug collision aborts replay outright via UNIQUE (owner_table, owner_id, slug)). Eventing both retire and restore lets replay reproduce whichever of the two states the ledger actually ends on.'
 );
