@@ -648,13 +648,24 @@ fn manage_capable_roles() -> Vec<String> {
 ///
 /// A retired context is invisible to `context_visible_to` by construction (`is_active` floors
 /// every arm of `contexts_readable_by_teams`), so this is not `list_visible` with a flipped
-/// flag: it is a **different gate** over the same row shape. The predicate below is
-/// `caller_administers_context`'s point check, batched as a listing — own the context
-/// (`kb_profiles` arm), or hold a `manage_capable_roles` role on its owning team
-/// (`kb_teams` arm). No `EXISTS`/`IN` restates `can_manage`'s `Owner | Maintainer` split in SQL;
-/// the role list is a bound parameter derived from that one Rust function, so a role added there
-/// and forgotten here is structurally impossible to get out of sync (it just wouldn't be in the
-/// bound array).
+/// flag: it is a **different gate** over the same row shape. Three arms admit:
+///
+/// 1. own the context (`kb_profiles` arm);
+/// 2. hold a `manage_capable_roles` role on its owning team (`kb_teams` arm) — no `EXISTS`/`IN`
+///    restates `can_manage`'s `Owner | Maintainer` split in SQL; the role list is a bound
+///    parameter derived from that one Rust function, so a role added there and forgotten here is
+///    structurally impossible to get out of sync (it just wouldn't be in the bound array);
+/// 3. be a system admin (`access_service::is_system_admin`).
+///
+/// **Why arm 3 belongs here.** This is an admin-axis listing — the same category as
+/// `subscription_service::list`, which already ORs a system-admin bool into its own visibility
+/// WHERE — not a visibility predicate. Visibility predicates (`resources_visible_to`,
+/// `edges_visible_to`, `contexts_readable_by_teams`, `cogmaps_readable_by`) deliberately carry no
+/// system-admin arm, and that separation is untouched by this change: an admin sees every
+/// *retired* row through this door, but still sees only their own reach through the ordinary read
+/// predicates. Computed in Rust and passed as a bound bool, the same shape
+/// `subscription_service::list` uses — not `is_system_admin($1)` inlined into the SQL, which
+/// would be a second spelling of the same rule.
 ///
 /// `resource_count` carries `list_visible`'s subquery **verbatim**: it counts through the
 /// caller's OWN read predicate (`resources_visible_to`), not the admin predicate. That predicate
@@ -669,6 +680,7 @@ pub async fn list_retired_administered(
     profile_id: ProfileId,
 ) -> ApiResult<Vec<ContextRowWithCounts>> {
     let roles = manage_capable_roles();
+    let is_admin = crate::services::access_service::is_system_admin(pool, profile_id).await?;
     let rows = sqlx::query_as!(
         ContextRowWithCounts,
         r#"
@@ -696,8 +708,8 @@ pub async fn list_retired_administered(
                  WHERE rh.anchor_table = 'kb_contexts' AND rh.anchor_id = c.id) AS "resource_count!"
           FROM kb_contexts c
          WHERE NOT c.is_active
-           AND (
-                 (c.owner_table = 'kb_profiles' AND c.owner_id = $1)
+           AND ( $3
+                 OR (c.owner_table = 'kb_profiles' AND c.owner_id = $1)
                  OR (
                    c.owner_table = 'kb_teams'
                    AND EXISTS (
@@ -711,7 +723,8 @@ pub async fn list_retired_administered(
          ORDER BY c.name
         "#,
         *profile_id,
-        &roles
+        &roles,
+        is_admin,
     )
     .fetch_all(pool)
     .await?;
@@ -721,7 +734,10 @@ pub async fn list_retired_administered(
 
 /// Get one retired context by ID, scoped to the ADMIN axis — [`list_retired_administered`]'s
 /// same predicate over a single id, so anything reachable in that listing is reachable here too
-/// (an incoherent pair otherwise: a caller could see a row named but never inspect it).
+/// (an incoherent pair otherwise: a caller could see a row named but never inspect it). The same
+/// three arms admit: own the context, hold a `manage_capable_roles` role on its owning team, or
+/// be a system admin — see that function's doc for why the admin arm belongs on this axis and not
+/// on a visibility predicate.
 ///
 /// Refuses with the same `CONTEXT_REFUSAL` every other context lookup renders — a missing
 /// context, a live one, and one this caller does not administer are indistinguishable, for the
@@ -732,6 +748,7 @@ pub async fn get_retired_administered(
     context_id: ContextId,
 ) -> ApiResult<ContextRow> {
     let roles = manage_capable_roles();
+    let is_admin = crate::services::access_service::is_system_admin(pool, profile_id).await?;
     sqlx::query_as!(
         ContextRow,
         r#"
@@ -750,8 +767,8 @@ pub async fn get_retired_administered(
           FROM kb_contexts c
          WHERE c.id = $2
            AND NOT c.is_active
-           AND (
-                 (c.owner_table = 'kb_profiles' AND c.owner_id = $1)
+           AND ( $4
+                 OR (c.owner_table = 'kb_profiles' AND c.owner_id = $1)
                  OR (
                    c.owner_table = 'kb_teams'
                    AND EXISTS (
@@ -765,7 +782,8 @@ pub async fn get_retired_administered(
         "#,
         *profile_id,
         *context_id,
-        &roles
+        &roles,
+        is_admin,
     )
     .fetch_optional(pool)
     .await?
@@ -2441,5 +2459,47 @@ mod tests {
             matches!(denied, Err(ApiError::NotFound(ref msg)) if msg == CONTEXT_REFUSAL),
             "a non-administering member must be refused, got {denied:?}"
         );
+    }
+
+    /// The third admitting arm: a system admin sees a retired context through
+    /// [`list_retired_administered`] and [`get_retired_administered`] with **neither** ownership
+    /// **nor** team membership — the property the other two retired-listing tests above cannot
+    /// exercise, since their admins are also the context's owner or a manager of its owning team.
+    ///
+    /// `root` here has no row in `kb_contexts` naming it as owner and no row in
+    /// `kb_team_members` at all, so the first two arms of both queries' WHERE clause are false for
+    /// every context in this fixture — only the `$3`/`$4` system-admin bool can admit it. Without
+    /// that arm, `root_listing` would be empty (failing the `len() == 1` assertion below) and
+    /// `get_retired_administered` would return the `CONTEXT_REFUSAL` `NotFound` both non-admins get
+    /// above, rather than the row.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_system_admin_sees_a_retired_context_they_neither_own_nor_manage(pool: PgPool) {
+        let owner = mk_profile_ent(&pool, "owner").await;
+        let root = mk_profile_ent(&pool, "root").await;
+        // `root` is a system admin under D11 (a `kb_principal_governance` grant), and nothing
+        // else: no `kb_contexts` row it owns, no `kb_team_members` row at all — the fixture the
+        // other two retired-listing tests do not build, and the one this arm needs.
+        crate::test_support::grant_governance(&pool, *root).await;
+
+        let ctx = mk_personal_context(&pool, "priv", owner).await;
+        mk_homed_resource(&pool, ctx, owner).await;
+
+        retire(&pool, owner, ctx).await.expect("retire");
+
+        let root_listing = list_retired_administered(&pool, root).await.unwrap();
+        assert_eq!(
+            root_listing.len(),
+            1,
+            "a system admin with no ownership and no membership must still see the retired \
+             context: got {root_listing:?}"
+        );
+        assert_eq!(root_listing[0].id, ContextId::from(ctx));
+        assert!(root_listing[0].retired, "the listed row must say retired");
+
+        let shown = get_retired_administered(&pool, root, ContextId::from(ctx))
+            .await
+            .expect("a system admin can show a retired context they neither own nor manage");
+        assert_eq!(shown.id, ContextId::from(ctx));
+        assert!(shown.retired, "the shown row must say retired");
     }
 }
