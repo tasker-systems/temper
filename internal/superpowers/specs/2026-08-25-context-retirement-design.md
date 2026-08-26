@@ -262,8 +262,17 @@ So:
   prints both. An operator who retires something must leave with the handle they need to
   undo it; anything else makes retirement one-way in practice while claiming otherwise.
 - **Restore resolves on the admin axis, not the read axis.** It accepts a UUID or the
-  mangled ref, through the same admin-scoped door §2.5 builds for the retired listing —
-  one door, two callers, no second copy of the ownership rule.
+  mangled ref, resolved without going through the read predicate — which by construction
+  cannot see a retired context.
+
+  **Restore's gate and the listing's scope are adjacent, not identical, and deliberately so.**
+  Restore gates on `ContextAdminAuthority`, whose three arms include *system admin*. The
+  §2.5 listing scopes on ownership alone — own it, or manage the owning team — with **no**
+  system-admin arm. That asymmetry is not an oversight: `contexts_readable_by_teams` has no
+  system-admin branch either, so a system admin cannot enumerate *live* contexts they do not
+  otherwise read. Giving them the retired listing would make retired contexts more visible
+  than live ones. The consequence — a system admin can restore by UUID but cannot browse for
+  one — is the same shape `rename` already has today.
 - **`context show` on a retired context admits on the admin axis too**, reporting
   `retired: true`. Listing a thing you cannot then inspect is an incoherent pair, and the
   admin axis is already the answer for the listing.

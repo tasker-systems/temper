@@ -1,0 +1,83 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT c.id, c.name,\n               c.owner_table AS \"kb_owner_table!\",\n               c.owner_id AS \"kb_owner_id!\",\n               c.created,\n               c.created AS \"updated!\",\n               c.slug,\n               CASE c.owner_table\n                 WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = c.owner_id)\n                 ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)\n               END AS \"owner_ref!\",\n               -- Always `false`: `context_authorable_by_profile` floors on `c.is_active`\n               -- (20260825000030), so a retired context is unwriteable by construction.\n               context_authorable_by_profile($1, c.id) AS \"can_write!\",\n               NOT c.is_active AS \"retired!\",\n               -- Carried VERBATIM from `list_visible` — counted through the caller's OWN read\n               -- predicate, which can never admit a resource homed in a retired context. See the\n               -- doc comment above.\n               (SELECT count(*)\n                  FROM kb_resource_homes rh\n                  JOIN resources_visible_to($1) v ON v.resource_id = rh.resource_id\n                  JOIN kb_resources r ON r.id = rh.resource_id AND r.is_active\n                 WHERE rh.anchor_table = 'kb_contexts' AND rh.anchor_id = c.id) AS \"resource_count!\"\n          FROM kb_contexts c\n         WHERE NOT c.is_active\n           AND (\n                 (c.owner_table = 'kb_profiles' AND c.owner_id = $1)\n                 OR (\n                   c.owner_table = 'kb_teams'\n                   AND EXISTS (\n                     SELECT 1 FROM kb_team_members tm\n                      WHERE tm.team_id = c.owner_id\n                        AND tm.profile_id = $1\n                        AND tm.role::text = ANY($2)\n                   )\n                 )\n               )\n         ORDER BY c.name\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "kb_owner_table!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "kb_owner_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "created",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "updated!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "slug",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "owner_ref!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "can_write!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 9,
+        "name": "retired!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 10,
+        "name": "resource_count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "05c752bbfea860185113a5a70b843a916281191e85bd7ad96a098ec4bc88b462"
+}

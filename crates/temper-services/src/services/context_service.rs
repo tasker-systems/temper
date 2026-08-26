@@ -26,6 +26,7 @@ use crate::error::{ApiError, ApiResult};
 use crate::services::team_service;
 use temper_core::context_ref::{ContextOwnerRef, ContextRef};
 use temper_core::types::ids::{ContextId, ProfileId};
+use temper_core::types::team::TeamRole;
 use temper_workflow::operations::sluggify;
 
 pub use temper_core::types::context::{
@@ -92,6 +93,10 @@ pub async fn list_visible(
                -- Computed INSIDE the visibility-gated query (the WHERE below), so a context the
                -- caller cannot read is absent rather than present-and-false.
                context_authorable_by_profile($1, c.id) AS "can_write!",
+               -- Always `false` here: this is the read axis, and a retired context is invisible
+               -- to `context_visible_to` by construction, so this WHERE can never admit one. The
+               -- column stays in the select list anyway — one honest row shape for both doors.
+               NOT c.is_active AS "retired!",
                -- Counted through the caller's own read predicate, not off the home rows —
                -- the two joins are co-extensive on this anchor and neither is redundant by
                -- accident. The reasoning, and what the witness does NOT isolate, is above.
@@ -133,7 +138,10 @@ pub async fn get_visible(
                END AS "owner_ref!",
                -- Inside the same visibility gate as the WHERE below: an unreadable context is the
                -- one shared refusal, never a row saying `can_write: false`.
-               context_authorable_by_profile($1, c.id) AS "can_write!"
+               context_authorable_by_profile($1, c.id) AS "can_write!",
+               -- Always `false` here: the read axis never admits a retired context (see the same
+               -- note on `list_visible`). Kept in the select list for one honest row shape.
+               NOT c.is_active AS "retired!"
           FROM kb_contexts c
          WHERE c.id = $2
            AND context_visible_to($1, c.id)
@@ -505,7 +513,9 @@ pub async fn create(
                   -- `context_authorable_by_profile` is STABLE, so called here it would read the
                   -- snapshot from BEFORE this INSERT and could not see the row being created —
                   -- the personal-owned arm would answer `false` for the creator's own context.
-                  false AS "can_write!"
+                  false AS "can_write!",
+                  -- A freshly created context is never retired.
+                  false AS "retired!"
         "#,
         *id,
         owner_table,
@@ -596,6 +606,170 @@ pub(crate) async fn caller_administers_context(
         )),
         _ => Ok(false),
     }
+}
+
+/// The manage-capable roles, derived from `can_manage` rather than restated. This is the
+/// admin axis's team half, and it must stay pinned to the one Rust definition of "manage":
+/// a role added to `TeamRole` and forgotten here would silently widen or narrow who can see
+/// retired contexts.
+///
+/// No `TeamRole::iter()` exists (no `strum` in this workspace — checked; `Display`/`ToString`
+/// aren't derived either, so the stored spelling is spelled out below rather than borrowed from
+/// a trait that doesn't exist). The explicit four-variant array is exhaustive today but is NOT
+/// compiler-checked for it; if a fifth role is ever added, this is a call site that must be
+/// remembered, same as every other explicit `[TeamRole::A, TeamRole::B, ...]` in this crate.
+fn manage_capable_roles() -> Vec<String> {
+    [
+        TeamRole::Owner,
+        TeamRole::Maintainer,
+        TeamRole::Member,
+        TeamRole::Watcher,
+    ]
+    .into_iter()
+    .filter(|r| team_service::can_manage(*r))
+    .map(|r| {
+        // The spelling `kb_team_members.role` stores and every write path binds — see
+        // `team_service::create_team`'s `'owner'` literal and `add_member`'s `$3`
+        // (bound as `TeamRole` directly, via `#[sqlx(type_name = "team_role", rename_all =
+        // "snake_case")]`). Written out because `TeamRole` derives `Serialize` (JSON-facing,
+        // not SQL-facing) and nothing else that stringifies it.
+        match r {
+            TeamRole::Owner => "owner",
+            TeamRole::Maintainer => "maintainer",
+            TeamRole::Member => "member",
+            TeamRole::Watcher => "watcher",
+        }
+        .to_string()
+    })
+    .collect()
+}
+
+/// List contexts retired that `profile_id` administers — the admin axis, never the read axis.
+///
+/// A retired context is invisible to `context_visible_to` by construction (`is_active` floors
+/// every arm of `contexts_readable_by_teams`), so this is not `list_visible` with a flipped
+/// flag: it is a **different gate** over the same row shape. The predicate below is
+/// [`caller_administers_context`]'s point check, batched as a listing — own the context
+/// (`kb_profiles` arm), or hold a [`manage_capable_roles`] role on its owning team
+/// (`kb_teams` arm). No `EXISTS`/`IN` restates `can_manage`'s `Owner | Maintainer` split in SQL;
+/// the role list is a bound parameter derived from that one Rust function, so a role added there
+/// and forgotten here is structurally impossible to get out of sync (it just wouldn't be in the
+/// bound array).
+///
+/// `resource_count` carries `list_visible`'s subquery **verbatim**: it counts through the
+/// caller's OWN read predicate (`resources_visible_to`), not the admin predicate. That predicate
+/// can never admit a resource homed in a still-retired context (the context arm floors on
+/// `is_active` too), so this count is always `0` for every row this function returns. That is
+/// not a bug to "fix" by switching the join to the admin predicate: the count answers "how much
+/// of this can the caller currently read", and the honest answer for a retired context is
+/// nothing, on either axis, until it is restored. The comment on `list_visible` gives the fuller
+/// argument for why the subquery is shaped this way at all.
+pub async fn list_retired_administered(
+    pool: &PgPool,
+    profile_id: ProfileId,
+) -> ApiResult<Vec<ContextRowWithCounts>> {
+    let roles = manage_capable_roles();
+    let rows = sqlx::query_as!(
+        ContextRowWithCounts,
+        r#"
+        SELECT c.id, c.name,
+               c.owner_table AS "kb_owner_table!",
+               c.owner_id AS "kb_owner_id!",
+               c.created,
+               c.created AS "updated!",
+               c.slug,
+               CASE c.owner_table
+                 WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = c.owner_id)
+                 ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)
+               END AS "owner_ref!",
+               -- Always `false`: `context_authorable_by_profile` floors on `c.is_active`
+               -- (20260825000030), so a retired context is unwriteable by construction.
+               context_authorable_by_profile($1, c.id) AS "can_write!",
+               NOT c.is_active AS "retired!",
+               -- Carried VERBATIM from `list_visible` — counted through the caller's OWN read
+               -- predicate, which can never admit a resource homed in a retired context. See the
+               -- doc comment above.
+               (SELECT count(*)
+                  FROM kb_resource_homes rh
+                  JOIN resources_visible_to($1) v ON v.resource_id = rh.resource_id
+                  JOIN kb_resources r ON r.id = rh.resource_id AND r.is_active
+                 WHERE rh.anchor_table = 'kb_contexts' AND rh.anchor_id = c.id) AS "resource_count!"
+          FROM kb_contexts c
+         WHERE NOT c.is_active
+           AND (
+                 (c.owner_table = 'kb_profiles' AND c.owner_id = $1)
+                 OR (
+                   c.owner_table = 'kb_teams'
+                   AND EXISTS (
+                     SELECT 1 FROM kb_team_members tm
+                      WHERE tm.team_id = c.owner_id
+                        AND tm.profile_id = $1
+                        AND tm.role::text = ANY($2)
+                   )
+                 )
+               )
+         ORDER BY c.name
+        "#,
+        *profile_id,
+        &roles
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows)
+}
+
+/// Get one retired context by ID, scoped to the ADMIN axis — [`list_retired_administered`]'s
+/// same predicate over a single id, so anything reachable in that listing is reachable here too
+/// (an incoherent pair otherwise: a caller could see a row named but never inspect it).
+///
+/// Refuses with the same [`CONTEXT_REFUSAL`] every other context lookup renders — a missing
+/// context, a live one, and one this caller does not administer are indistinguishable, for the
+/// reason that constant's doc gives.
+pub async fn get_retired_administered(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    context_id: ContextId,
+) -> ApiResult<ContextRow> {
+    let roles = manage_capable_roles();
+    sqlx::query_as!(
+        ContextRow,
+        r#"
+        SELECT c.id, c.name,
+               c.owner_table AS "kb_owner_table!",
+               c.owner_id AS "kb_owner_id!",
+               c.created,
+               c.created AS "updated!",
+               c.slug,
+               CASE c.owner_table
+                 WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = c.owner_id)
+                 ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)
+               END AS "owner_ref!",
+               context_authorable_by_profile($1, c.id) AS "can_write!",
+               NOT c.is_active AS "retired!"
+          FROM kb_contexts c
+         WHERE c.id = $2
+           AND NOT c.is_active
+           AND (
+                 (c.owner_table = 'kb_profiles' AND c.owner_id = $1)
+                 OR (
+                   c.owner_table = 'kb_teams'
+                   AND EXISTS (
+                     SELECT 1 FROM kb_team_members tm
+                      WHERE tm.team_id = c.owner_id
+                        AND tm.profile_id = $1
+                        AND tm.role::text = ANY($3)
+                   )
+                 )
+               )
+        "#,
+        *profile_id,
+        *context_id,
+        &roles
+    )
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| ApiError::NotFound(CONTEXT_REFUSAL.to_string()))
 }
 
 /// Share a context into a team's read-reach (write a `kb_team_contexts` row).
@@ -2197,6 +2371,75 @@ mod tests {
         assert!(
             matches!(out, Err(ApiError::NotFound(ref msg)) if msg == CONTEXT_REFUSAL),
             "expected NotFound, got {out:?}"
+        );
+    }
+
+    // ── The admin axis (retired listing / show) ─────────────────────────────────
+
+    /// You can see a retired context only if you could have retired it. A team MEMBER who could
+    /// read and author a team-owned context before retirement sees NOTHING in the retired
+    /// listing; an owner/maintainer of that team sees it. This is the property that makes the
+    /// listing an admin-axis door and not `list_visible` with a flipped flag.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn the_retired_listing_rides_the_admin_axis_not_the_read_axis(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await; // team owner
+        let bob = mk_profile_ent(&pool, "bob").await; // plain member
+        let acme = mk_team(&pool, "acme").await;
+        add_member(&pool, acme, alice, "owner").await;
+        add_member(&pool, acme, bob, "member").await;
+        let ctx = mk_team_context(&pool, "proj", acme).await;
+
+        // Before retirement: bob (a plain member) can read AND author the context.
+        let r = mk_homed_resource(&pool, ctx, alice).await;
+        assert!(
+            context_visible(&pool, *bob, ctx).await.unwrap(),
+            "member can read before retirement"
+        );
+        assert!(
+            can_modify(&pool, bob, r).await,
+            "member can author before retirement"
+        );
+
+        retire(&pool, alice, ctx).await.expect("retire");
+
+        // After retirement: the member — who could read and author it a moment ago — sees
+        // nothing in the retired listing. This is the property under test.
+        let bob_listing = list_retired_administered(&pool, bob).await.unwrap();
+        assert!(
+            bob_listing.is_empty(),
+            "a member who could read/author before retirement must see nothing after: {bob_listing:?}"
+        );
+
+        // The owner, who manages the owning team, sees exactly the one retired context.
+        let alice_listing = list_retired_administered(&pool, alice).await.unwrap();
+        assert_eq!(alice_listing.len(), 1, "got {alice_listing:?}");
+        assert_eq!(alice_listing[0].id, ContextId::from(ctx));
+        assert!(alice_listing[0].retired, "the listed row must say retired");
+    }
+
+    /// Listing a thing you cannot then inspect is an incoherent pair: `get_retired_administered`
+    /// must answer for exactly what `list_retired_administered` lists.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn an_administrator_can_show_a_retired_context(pool: PgPool) {
+        let alice = mk_profile_ent(&pool, "alice").await;
+        let bob = mk_profile_ent(&pool, "bob").await; // plain member — must NOT be able to show it
+        let acme = mk_team(&pool, "acme").await;
+        add_member(&pool, acme, alice, "owner").await;
+        add_member(&pool, acme, bob, "member").await;
+        let ctx = mk_team_context(&pool, "proj", acme).await;
+
+        retire(&pool, alice, ctx).await.expect("retire");
+
+        let shown = get_retired_administered(&pool, alice, ContextId::from(ctx))
+            .await
+            .expect("the administrator can show the retired context");
+        assert_eq!(shown.id, ContextId::from(ctx));
+        assert!(shown.retired, "the shown row must say retired");
+
+        let denied = get_retired_administered(&pool, bob, ContextId::from(ctx)).await;
+        assert!(
+            matches!(denied, Err(ApiError::NotFound(ref msg)) if msg == CONTEXT_REFUSAL),
+            "a non-administering member must be refused, got {denied:?}"
         );
     }
 }

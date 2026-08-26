@@ -41,6 +41,17 @@ pub struct ContextRow {
     /// with the owner check (`ResourceView.owner_profile_id`) under the `is_active` floor, and
     /// accepts that a reader whose only authority is a per-resource grant is not covered.
     pub can_write: bool,
+    /// Whether this context is retired — invisible to every read path and unwriteable, with
+    /// every row it homes preserved.
+    ///
+    /// **Polarity is inverted from the column on purpose.** The database stores `is_active`,
+    /// mirroring `kb_teams`; the wire says `retired`, which is the word the product uses. The
+    /// inversion is written as the identical SQL literal `NOT c.is_active AS "retired!"` in
+    /// every query that selects this column — the two read-axis queries (`list_visible`,
+    /// `get_visible`, always `false` there by construction) and the two admin-axis queries
+    /// (`list_retired_administered`, `get_retired_administered`) — and is never re-derived any
+    /// other way, e.g. never inverted in Rust after the fact.
+    pub retired: bool,
 }
 
 /// Context with resource count — used by the list endpoint.
@@ -77,6 +88,17 @@ pub struct ContextRowWithCounts {
     /// with the owner check (`ResourceView.owner_profile_id`) under the `is_active` floor, and
     /// accepts that a reader whose only authority is a per-resource grant is not covered.
     pub can_write: bool,
+    /// Whether this context is retired — invisible to every read path and unwriteable, with
+    /// every row it homes preserved.
+    ///
+    /// **Polarity is inverted from the column on purpose.** The database stores `is_active`,
+    /// mirroring `kb_teams`; the wire says `retired`, which is the word the product uses. The
+    /// inversion is written as the identical SQL literal `NOT c.is_active AS "retired!"` in
+    /// every query that selects this column — the two read-axis queries (`list_visible`,
+    /// `get_visible`, always `false` there by construction) and the two admin-axis queries
+    /// (`list_retired_administered`, `get_retired_administered`) — and is never re-derived any
+    /// other way, e.g. never inverted in Rust after the fact.
+    pub retired: bool,
 }
 
 /// Request body for POST /api/contexts.

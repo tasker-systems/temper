@@ -1617,6 +1617,20 @@
         ],
         "summary": "List contexts you can see",
         "operationId": "list_contexts",
+        "parameters": [
+          {
+            "name": "retired",
+            "in": "query",
+            "description": "List retired contexts you administer instead of the contexts you can read.",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "List of visible contexts with resource counts",
@@ -10227,7 +10241,8 @@
           "updated",
           "slug",
           "owner_ref",
-          "can_write"
+          "can_write",
+          "retired"
         ],
         "properties": {
           "can_write": {
@@ -10255,6 +10270,10 @@
             "type": "string",
             "description": "The already-sigil'd owner addressable: `@<handle>` for profiles, `+<team-slug>` for teams.\nTogether with `slug`, forms the full decorated context ref `{owner_ref}/{slug}`."
           },
+          "retired": {
+            "type": "boolean",
+            "description": "Whether this context is retired — invisible to every read path and unwriteable, with\nevery row it homes preserved.\n\n**Polarity is inverted from the column on purpose.** The database stores `is_active`,\nmirroring `kb_teams`; the wire says `retired`, which is the word the product uses. The\ninversion is written as the identical SQL literal `NOT c.is_active AS \"retired!\"` in\nevery query that selects this column — the two read-axis queries (`list_visible`,\n`get_visible`, always `false` there by construction) and the two admin-axis queries\n(`list_retired_administered`, `get_retired_administered`) — and is never re-derived any\nother way, e.g. never inverted in Rust after the fact."
+          },
           "slug": {
             "type": "string",
             "description": "The context's per-owner-unique slug (the natural-key half of `@owner/slug`)."
@@ -10278,7 +10297,8 @@
           "resource_count",
           "slug",
           "owner_ref",
-          "can_write"
+          "can_write",
+          "retired"
         ],
         "properties": {
           "can_write": {
@@ -10309,6 +10329,10 @@
           "resource_count": {
             "type": "integer",
             "format": "int64"
+          },
+          "retired": {
+            "type": "boolean",
+            "description": "Whether this context is retired — invisible to every read path and unwriteable, with\nevery row it homes preserved.\n\n**Polarity is inverted from the column on purpose.** The database stores `is_active`,\nmirroring `kb_teams`; the wire says `retired`, which is the word the product uses. The\ninversion is written as the identical SQL literal `NOT c.is_active AS \"retired!\"` in\nevery query that selects this column — the two read-axis queries (`list_visible`,\n`get_visible`, always `false` there by construction) and the two admin-axis queries\n(`list_retired_administered`, `get_retired_administered`) — and is never re-derived any\nother way, e.g. never inverted in Rust after the fact."
           },
           "slug": {
             "type": "string",

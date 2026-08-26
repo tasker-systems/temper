@@ -594,6 +594,7 @@ module Temper::Generated
 
     # List contexts you can see
     # @param [Hash] opts the optional parameters
+    # @option opts [Boolean] :retired List retired contexts you administer instead of the contexts you can read.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<ContextRowWithCounts>]
     def list_contexts(opts = {})
@@ -603,6 +604,7 @@ module Temper::Generated
 
     # List contexts you can see
     # @param [Hash] opts the optional parameters
+    # @option opts [Boolean] :retired List retired contexts you administer instead of the contexts you can read.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<(Array<ContextRowWithCounts>, Integer, Hash)>] Array<ContextRowWithCounts> data, response status code and response headers
     def list_contexts_with_http_info(opts = {})
@@ -618,6 +620,7 @@ module Temper::Generated
 
       # query parameters
       query_params = opts[:query_params] || {}
+      query_params[:'retired'] = opts[:'retired'] if !opts[:'retired'].nil?
 
       # header parameters
       header_params = opts[:header_params] || {}

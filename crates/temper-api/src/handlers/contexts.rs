@@ -21,12 +21,22 @@ use temper_services::services::materialize_service;
 use temper_services::state::AppState;
 use temper_workflow::operations::{Backend, MaterializeOnThreshold};
 
+/// Query params for the context list. `retired = true` switches the read from the visibility
+/// axis to the ADMIN axis: a retired context is invisible to `contexts_readable_by_teams` by
+/// construction, so it can only be listed by someone who could have retired it.
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub struct ListContextsQuery {
+    /// List retired contexts you administer instead of the contexts you can read.
+    pub retired: Option<bool>,
+}
+
 /// List contexts you can see
 #[utoipa::path(
     get,
     operation_id = "list_contexts",
     path = "/api/contexts",
     tag = "Contexts",
+    params(ListContextsQuery),
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "List of visible contexts with resource counts", body = Vec<ContextRowWithCounts>),
@@ -35,10 +45,18 @@ use temper_workflow::operations::{Backend, MaterializeOnThreshold};
 pub async fn list(
     State(state): State<AppState>,
     auth: AuthUser,
+    Query(q): Query<ListContextsQuery>,
 ) -> ApiResult<Json<Vec<ContextRowWithCounts>>> {
-    context_service::list_visible(&state.pool, ProfileId::from(auth.0.profile().id))
-        .await
-        .map(Json)
+    let profile_id = ProfileId::from(auth.0.profile().id);
+    if q.retired == Some(true) {
+        context_service::list_retired_administered(&state.pool, profile_id)
+            .await
+            .map(Json)
+    } else {
+        context_service::list_visible(&state.pool, profile_id)
+            .await
+            .map(Json)
+    }
 }
 
 /// Create a context
@@ -85,13 +103,20 @@ pub async fn get(
     auth: AuthUser,
     Path(context_id): Path<Uuid>,
 ) -> ApiResult<Json<ContextRow>> {
-    context_service::get_visible(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        ContextId::from(context_id),
-    )
-    .await
-    .map(Json)
+    let profile_id = ProfileId::from(auth.0.profile().id);
+    let ctx_id = ContextId::from(context_id);
+    // A retired context is invisible on the read axis by construction, so the read-axis lookup
+    // renders `NotFound` for it — indistinguishable at this point from a context that never
+    // existed at all. Falling back to the admin axis is what makes `restore` reachable: an
+    // administrator who cannot read a context they just retired can still ask for it here.
+    match context_service::get_visible(&state.pool, profile_id, ctx_id).await {
+        Err(ApiError::NotFound(_)) => {
+            context_service::get_retired_administered(&state.pool, profile_id, ctx_id)
+                .await
+                .map(Json)
+        }
+        other => other.map(Json),
+    }
 }
 
 /// Retire a context

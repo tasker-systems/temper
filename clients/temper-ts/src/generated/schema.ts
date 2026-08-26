@@ -3238,6 +3238,19 @@ export interface components {
              *     Together with `slug`, forms the full decorated context ref `{owner_ref}/{slug}`.
              */
             owner_ref: string;
+            /**
+             * @description Whether this context is retired — invisible to every read path and unwriteable, with
+             *     every row it homes preserved.
+             *
+             *     **Polarity is inverted from the column on purpose.** The database stores `is_active`,
+             *     mirroring `kb_teams`; the wire says `retired`, which is the word the product uses. The
+             *     inversion is written as the identical SQL literal `NOT c.is_active AS "retired!"` in
+             *     every query that selects this column — the two read-axis queries (`list_visible`,
+             *     `get_visible`, always `false` there by construction) and the two admin-axis queries
+             *     (`list_retired_administered`, `get_retired_administered`) — and is never re-derived any
+             *     other way, e.g. never inverted in Rust after the fact.
+             */
+            retired: boolean;
             /** @description The context's per-owner-unique slug (the natural-key half of `@owner/slug`). */
             slug: string;
             /** Format: date-time */
@@ -3276,6 +3289,19 @@ export interface components {
             owner_ref: string;
             /** Format: int64 */
             resource_count: number;
+            /**
+             * @description Whether this context is retired — invisible to every read path and unwriteable, with
+             *     every row it homes preserved.
+             *
+             *     **Polarity is inverted from the column on purpose.** The database stores `is_active`,
+             *     mirroring `kb_teams`; the wire says `retired`, which is the word the product uses. The
+             *     inversion is written as the identical SQL literal `NOT c.is_active AS "retired!"` in
+             *     every query that selects this column — the two read-axis queries (`list_visible`,
+             *     `get_visible`, always `false` there by construction) and the two admin-axis queries
+             *     (`list_retired_administered`, `get_retired_administered`) — and is never re-derived any
+             *     other way, e.g. never inverted in Rust after the fact.
+             */
+            retired: boolean;
             /** @description The context's per-owner-unique slug (the natural-key half of `@owner/slug`). */
             slug: string;
             /** Format: date-time */
@@ -8240,7 +8266,10 @@ export interface operations {
     };
     list_contexts: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description List retired contexts you administer instead of the contexts you can read. */
+                retired?: boolean | null;
+            };
             header?: {
                 /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
                 "X-Temper-Surface"?: "cli" | "sdk";
