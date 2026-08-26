@@ -87,14 +87,21 @@ for every materialized file (`crates/temper-cli/src/projection.rs`,
 
 ### Every on-disk key is derived once
 
-There are three of them, and each has exactly one derivation that the writer
-and every reader share. They did not, and each divergence was a live bug:
+Each has exactly one derivation that its writer and every one of its readers
+share. They did not, and each divergence was a live bug:
 
 | Key | Derivation | What it used to be |
 |---|---|---|
 | owner segment | `projection::projection_owner(row)` | writer used the bare `owner_handle`; the delete path used `config.owner_for_context()`, which always answered `"@me"` |
 | filename stem | `projection::projection_stem(row)` | `sluggify(title)` with no bound |
-| context name | `projection::context_disk_key(ref, rows)` | pruning used the row's `context_name`; the cursor used the ref verbatim |
+| directory name | `projection::context_dir_name(ref, rows)` | unchanged — off the row, because that is what built the path |
+| cursor key | `projection::cursor_key(ref)`, applied inside `cursor_path` | the caller's raw string, so a write as `@me/temper` and a read as `temper` missed each other |
+
+**The directory name and the cursor key are deliberately two derivations, not
+one.** The directory comes off a row because a row is what the writer had. The
+cursor comes off the ref, because an empty context has no row — and a cursor is
+precisely what an empty context still needs, since it is the only thing
+separating *pulled, and there was nothing* from *never pulled*.
 
 ### The owner segment
 
@@ -398,11 +405,14 @@ pub struct ProjectionCursor {
 }
 ```
 
-(`crates/temper-cli/src/projection.rs`). It is keyed by `context_disk_key` — the same name the projection directory
-uses — so a reader that knows only a context's name finds the cursor a `pull`
-wrote. It was keyed by the ref verbatim before, so `pull @me/temper` filed its
-cursor at `.temper/projection/@me/temper.json` and `temper status` reported
-`not-projected` for a context it had just materialized.
+(`crates/temper-cli/src/projection.rs`). It is keyed by `cursor_key`, which collapses a decorated ref to its slug half
+and leaves anything else (a bare name, a UUID) verbatim. `cursor_path` applies
+it, so `read_cursor` and `write_cursor` cannot key differently: `@me/temper`,
+`@j-cole-taylor/temper` and `temper` all name `.temper/projection/temper.json`.
+
+Before, the raw string was the key, so `pull @me/temper` filed its cursor at
+`.temper/projection/@me/temper.json` and `temper status` — which knows only
+`temper` — reported `not-projected` for a context it had just materialized.
 
 It powers staleness *warnings* only —
 `check_context_staleness`, whose one caller is `temper status`

@@ -34,9 +34,33 @@ pub struct ProjectionCursor {
     pub pulled_at: DateTime<Utc>,
 }
 
+/// The cursor sidecar's key for a caller-supplied context string.
+///
+/// A decorated ref collapses to its slug half; anything else (a bare context
+/// name, a UUID) is the key verbatim. So `@me/temper`, `@j-cole-taylor/temper`
+/// and `temper` all name one sidecar, which is what lets `temper pull @me/temper`
+/// and a `temper status` that knows only `temper` agree.
+///
+/// **Derived from the ref, never from a row.** An empty context has no row to
+/// derive from, and a cursor is exactly what an empty context still needs — it
+/// is how "pulled, and there was nothing" stays distinct from "never pulled".
+fn cursor_key(context: &str) -> String {
+    match parse_context_ref(context) {
+        Ok(ContextRef::OwnerSlug { slug, .. }) => slug,
+        _ => context.to_string(),
+    }
+}
+
 /// Absolute path of a context's cursor sidecar.
+///
+/// Both [`read_cursor`] and [`write_cursor`] go through here, so the key can
+/// only be derived once. They did diverge: the write was rekeyed to the bare
+/// context name while the read still used the caller's raw string, so
+/// `pull @me/temper` filed a cursor that `check_context_staleness(.., "@me/temper")`
+/// could not find.
 fn cursor_path(state_dir: &Path, context: &str) -> PathBuf {
-    state_dir.join("projection").join(format!("{context}.json"))
+    let key = cursor_key(context);
+    state_dir.join("projection").join(format!("{key}.json"))
 }
 
 /// Read a context's cursor sidecar. Returns `None` when the file is absent
@@ -54,21 +78,21 @@ pub fn read_cursor(state_dir: &Path, context: &str) -> Result<Option<ProjectionC
 /// Atomically write a context's cursor sidecar using the standard
 /// temp-file-plus-rename pattern.
 ///
-/// The `context` key may be a decorated ref (`@owner/slug`) whose `/`
-/// causes `cursor_path` to introduce a subdirectory under the projection
-/// directory. The temp path is derived from the cursor `path` directly
-/// (via `set_extension`) rather than re-joining `context` as a string, so
-/// a ref containing `/` never creates an unexpected second level of nesting.
+/// `cursor_path` normalizes a decorated ref down to its slug half, so the key
+/// no longer carries a `/`. The temp path is still derived from the cursor
+/// `path` directly (via `set_extension`) rather than by re-joining `context` as
+/// a string — belt-and-braces, so that a key which somehow does contain a
+/// separator cannot silently create a second level of nesting that
+/// `create_dir_all(dir)` did not prepare.
 pub fn write_cursor(state_dir: &Path, context: &str, cursor: &ProjectionCursor) -> Result<()> {
     let path = cursor_path(state_dir, context);
     let dir = path.parent().ok_or_else(|| {
         TemperError::Config(format!("cursor path has no parent: {}", path.display()))
     })?;
     std::fs::create_dir_all(dir)?;
-    // Derive the temp path from `path` itself — do NOT re-join `context`
-    // because a decorated ref like `@me/slug` contains `/` and
-    // `dir.join("@me/slug.json.tmp")` would silently create a nested
-    // subdirectory that `create_dir_all(dir)` did not prepare.
+    // Derive the temp path from `path` itself — never by re-joining the key as
+    // a string, so a separator in it cannot create a nested subdirectory that
+    // `create_dir_all(dir)` did not prepare.
     let mut tmp_path = path.clone();
     tmp_path.set_extension("json.tmp");
     let content = serde_json::to_string_pretty(cursor)?;
@@ -246,14 +270,6 @@ pub fn prune_context(vault_root: &Path, context: &str, keep: &HashSet<PathBuf>) 
 /// constant must clear `238 - 1 - 36 - 3 = 198`.
 pub const PROJECTION_SLUG_MAX_BYTES: usize = 120;
 
-/// The filename stem for a resource's projection file: the resource's decorated
-/// ref with the slug half bounded.
-///
-/// The stem is deliberately the *same shape* as the ref printed by every
-/// `list`/`show` row, so a filename can be pasted straight into
-/// `temper resource show`. Identity lives in the trailing uuid — which is what
-/// resolution reads and what the delete path matches on — so the readable half
-/// is free to be cut.
 /// The owner directory segment for a resource's projection file.
 ///
 /// **Sigiled, always.** `Vault::parse_rel` rejects an owner segment without a
@@ -291,6 +307,14 @@ fn projection_owner(row: &ResourceView) -> String {
     format!("@{}", row.owner_handle)
 }
 
+/// The filename stem for a resource's projection file: the resource's decorated
+/// ref with the slug half bounded.
+///
+/// The stem is deliberately the *same shape* as the ref printed by every
+/// `list`/`show` row, so a filename can be pasted straight into
+/// `temper resource show`. Identity lives in the trailing uuid — which is what
+/// resolution reads and what the delete path matches on — so the readable half
+/// is free to be cut.
 fn projection_stem(row: &ResourceView) -> String {
     temper_workflow::operations::decorated_ref_bounded(
         &row.title,
@@ -301,9 +325,12 @@ fn projection_stem(row: &ResourceView) -> String {
 
 /// Assemble and write a resource's projection file from an already-fetched
 /// row and content. The pure-write half of [`write_resource_file`] — it
-/// makes no network call. `pull_context` reaches it via `write_resource_file`
-/// (which fetches first); `temper resource show` calls it directly, because
-/// its cloud branch already holds both the row and the content.
+/// makes no network call.
+///
+/// Every caller reaches it through [`write_resource_file`] (which fetches
+/// first): `pull_context`, and the create/update tails. `temper resource show`
+/// used to call it directly, holding both halves already — that is the read
+/// that no longer writes.
 ///
 /// Frontmatter assembly reuses `actions::ingest::build_frontmatter_from_resource`
 /// so projected files are byte-identical to sync-pulled ones. Returns the
@@ -511,21 +538,22 @@ async fn write_projection_files(
     Ok(keep)
 }
 
-/// The **on-disk key** for a context: its `context_name` (e.g. `"temper"`),
-/// never the raw ref the caller typed (which may be `"@me/temper"`).
+/// The **projection directory** name for a context: its `context_name`
+/// (e.g. `"temper"`), never the raw ref the caller typed (`"@me/temper"`).
 ///
-/// This is the one derivation, shared by everything that names a context on
-/// disk — the projection directory and the staleness cursor. They keyed
-/// differently before: pruning used this rule while the cursor used the ref
-/// verbatim, so a `pull @me/temper` wrote its cursor to
-/// `.temper/projection/@me/temper.json` and `temper status`, which looks a
-/// context up by bare name, found nothing and reported `not-projected` for a
-/// context it had just materialized.
+/// This is the directory half only. The staleness cursor is keyed separately by
+/// [`cursor_key`], off the ref rather than off a row, because an empty context
+/// has no row and still needs a cursor.
 ///
-/// Derived from any listed row; for an empty context, fall back to the slug
-/// half of the ref so a server-side-emptied context still prunes and still
-/// records a cursor.
-fn context_disk_key(context: &str, rows: &[ResourceView]) -> Option<String> {
+/// **Caveat: the two branches are not the same field.** The primary branch
+/// returns `context_name` — which is what the writer used to build the
+/// directory — while the fallback returns the *slug* half of the ref. For a
+/// context whose name and slug differ (`"Temper KB"` vs `"temper-kb"`), an
+/// emptied context therefore prunes a directory the writer never wrote to, and
+/// the real one survives. Pre-existing, and left rather than papered over: the
+/// name is only obtainable from a row or a contexts fetch, and neither is
+/// available on the path that needs it.
+fn context_dir_name(context: &str, rows: &[ResourceView]) -> Option<String> {
     rows.first()
         .and_then(|r| r.context_name.clone())
         .or_else(|| {
@@ -543,27 +571,29 @@ fn prune_absent_files(
     rows: &[ResourceView],
     keep: &HashSet<PathBuf>,
 ) -> Result<usize> {
-    match context_disk_key(context, rows).as_deref() {
+    match context_dir_name(context, rows).as_deref() {
         Some(name) => prune_context(vault_root, name, keep),
         None => Ok(0),
     }
 }
 
-/// Record the per-context staleness cursor, keyed by `context_disk_key` — the
-/// same key the projection directory uses, so whoever reads the cursor back
-/// finds it. The context's UUID comes from any listed row; an empty context
-/// yields no event id.
+/// Record the per-context staleness cursor.
+///
+/// Keyed by the **ref the caller passed**, normalized by `cursor_key` inside
+/// `write_cursor` — the same normalization `read_cursor` applies, so the two
+/// ends cannot disagree however the context was spelled. Deriving it from a row
+/// instead would silently skip the write for an empty context addressed by
+/// UUID, which is the one case where "pulled, and there was nothing" most needs
+/// to stay distinct from "never pulled".
+///
+/// The context's UUID comes from any listed row; an empty context yields no
+/// event id, and that is a recorded `None`, not an absent cursor.
 async fn record_context_cursor(
     client: &TemperClient,
     state_dir: &Path,
     context: &str,
     rows: &[ResourceView],
 ) -> Result<()> {
-    let Some(key) = context_disk_key(context, rows) else {
-        // No row and an id-shaped ref: nothing on disk is named after this
-        // context, so there is no key to file a cursor under.
-        return Ok(());
-    };
     let context_id = rows.first().and_then(|r| r.kb_context_id.map(Uuid::from));
     let last_event_id = match context_id {
         Some(cid) => client
@@ -575,7 +605,7 @@ async fn record_context_cursor(
     };
     write_cursor(
         state_dir,
-        &key,
+        context,
         &ProjectionCursor {
             last_event_id,
             pulled_at: Utc::now(),
@@ -910,28 +940,83 @@ mod tests {
         }
     }
 
-    /// The cursor and the projection directory are named by the same key, so a
-    /// reader that looks a context up by name finds the cursor a pull wrote.
-    /// `pull @me/temper` used to file its cursor under the ref verbatim, and
-    /// `temper status` — which knows only `temper` — reported `not-projected`
-    /// for a context it had just materialized.
+    /// However a context is spelled, the cursor lands in one place — so a
+    /// `pull @me/temper` is found by a `temper status` that knows only `temper`.
+    /// That is the whole point of the sidecar: it used to be written under the
+    /// ref verbatim and read back by bare name, and `status` reported
+    /// `not-projected` for a context it had just materialized.
     #[test]
-    fn the_cursor_key_and_the_directory_key_are_the_same() {
+    fn every_spelling_of_a_context_keys_one_cursor() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let state_dir = dir.path().join(".temper");
+        let cursor = ProjectionCursor {
+            last_event_id: Some(Uuid::nil()),
+            pulled_at: Utc::now(),
+        };
+
+        write_cursor(&state_dir, "@me/temper", &cursor).unwrap();
+
+        for spelling in [
+            "@me/temper",
+            "@j-cole-taylor/temper",
+            "+a-team/temper",
+            "temper",
+        ] {
+            assert!(
+                read_cursor(&state_dir, spelling).unwrap().is_some(),
+                "a cursor written as `@me/temper` must be readable as `{spelling}`"
+            );
+        }
+        // And exactly one sidecar exists — no `@me/` subdirectory beside it.
+        let files: Vec<_> = std::fs::read_dir(state_dir.join("projection"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(files, vec!["temper.json".to_string()]);
+    }
+
+    /// A UUID ref is not a decorated ref, so it keys verbatim — and it still
+    /// keys *something*. Deriving the cursor key from a row instead skipped the
+    /// write entirely for an empty context addressed by UUID, collapsing
+    /// "pulled, and there was nothing" into "never pulled".
+    #[test]
+    fn a_uuid_ref_keys_a_cursor_of_its_own() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let state_dir = dir.path().join(".temper");
+        let id = "019fbb77-72a3-72e1-bbbd-13eb6aa64982";
+        write_cursor(
+            &state_dir,
+            id,
+            &ProjectionCursor {
+                last_event_id: None,
+                pulled_at: Utc::now(),
+            },
+        )
+        .unwrap();
+        assert!(read_cursor(&state_dir, id).unwrap().is_some());
+    }
+
+    /// The directory name is a separate derivation from the cursor key, and
+    /// deliberately so: it comes off a row, because that is what the writer
+    /// used to build the path.
+    #[test]
+    fn the_projection_directory_name_comes_off_the_row() {
         let row = row_titled("Any", Uuid::now_v7());
         // `row_titled` homes the row in context "myctx".
         assert_eq!(
-            context_disk_key("@me/myctx", std::slice::from_ref(&row)).as_deref(),
-            Some("myctx"),
-            "a decorated ref resolves to the bare on-disk name"
+            context_dir_name("@me/myctx", std::slice::from_ref(&row)).as_deref(),
+            Some("myctx")
         );
-        // Empty context: the ref's slug half still yields the on-disk name.
+        // Empty context: the ref's slug half is the fallback (see the caveat on
+        // `context_dir_name` — it is the slug, not the name).
         assert_eq!(
-            context_disk_key("@me/emptied", &[]).as_deref(),
+            context_dir_name("@me/emptied", &[]).as_deref(),
             Some("emptied")
         );
-        // An id-shaped ref for an empty context names nothing on disk.
+        // An id-shaped ref for an empty context names no directory.
         assert_eq!(
-            context_disk_key("019fbb77-72a3-72e1-bbbd-13eb6aa64982", &[]),
+            context_dir_name("019fbb77-72a3-72e1-bbbd-13eb6aa64982", &[]),
             None
         );
     }

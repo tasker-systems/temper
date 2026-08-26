@@ -178,6 +178,16 @@ fn degraded_items(config: &Config) -> Vec<ContextStatus> {
 /// than predicting one. Counting mirrors pruning, so the set counted is exactly
 /// the set pruned.
 ///
+/// **This sums across owners, and same-named contexts under different owners
+/// are conflated.** With `@alice/temper` and `+platform-eng/temper` both
+/// projected, a subscribed context named `temper` reports the total of both
+/// trees while `server` beside it is one context's count — so `projected` can
+/// read as roughly double with nothing flagging it. `prune_context` carries the
+/// same cross-owner reach; the difference is that here the number is
+/// user-facing. Distinguishing them needs the owner segment, which is exactly
+/// what a context name does not carry — the previous attempt to guess it is
+/// what produced `projected: 0` for everything.
+///
 /// Returns 0 when nothing matches. Layout:
 /// `<vault_root>/<owner>/<context>/<doc_type>/*.md`.
 fn count_projected_md_files(vault_root: &Path, context: &str) -> usize {
