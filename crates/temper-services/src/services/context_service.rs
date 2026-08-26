@@ -649,8 +649,8 @@ fn manage_capable_roles() -> Vec<String> {
 /// A retired context is invisible to `context_visible_to` by construction (`is_active` floors
 /// every arm of `contexts_readable_by_teams`), so this is not `list_visible` with a flipped
 /// flag: it is a **different gate** over the same row shape. The predicate below is
-/// [`caller_administers_context`]'s point check, batched as a listing — own the context
-/// (`kb_profiles` arm), or hold a [`manage_capable_roles`] role on its owning team
+/// `caller_administers_context`'s point check, batched as a listing — own the context
+/// (`kb_profiles` arm), or hold a `manage_capable_roles` role on its owning team
 /// (`kb_teams` arm). No `EXISTS`/`IN` restates `can_manage`'s `Owner | Maintainer` split in SQL;
 /// the role list is a bound parameter derived from that one Rust function, so a role added there
 /// and forgotten here is structurally impossible to get out of sync (it just wouldn't be in the
@@ -723,7 +723,7 @@ pub async fn list_retired_administered(
 /// same predicate over a single id, so anything reachable in that listing is reachable here too
 /// (an incoherent pair otherwise: a caller could see a row named but never inspect it).
 ///
-/// Refuses with the same [`CONTEXT_REFUSAL`] every other context lookup renders — a missing
+/// Refuses with the same `CONTEXT_REFUSAL` every other context lookup renders — a missing
 /// context, a live one, and one this caller does not administer are indistinguishable, for the
 /// reason that constant's doc gives.
 pub async fn get_retired_administered(
