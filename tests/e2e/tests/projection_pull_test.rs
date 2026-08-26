@@ -651,3 +651,66 @@ async fn pull_writes_to_the_vault_the_flag_names(pool: sqlx::PgPool) {
         ignored.display()
     );
 }
+
+/// Pulling a **retired** context leaves the local tree alone.
+///
+/// The two branches met here. Retirement (PR #777) makes a context invisible to
+/// every read path, so the address a caller still holds stops naming anything —
+/// and a pull is a command whose job is to delete local files that are no longer
+/// on the server. That combination is where a vault gets swept for a context
+/// whose every resource is still there, merely retired.
+///
+/// **Two independent things have to hold, and only the first fires today.** The
+/// resource list refuses an unresolvable ref outright, so the pull errors before
+/// it can prune anything. Behind that, the prune path can no longer guess a
+/// directory name: this branch removed the fallback to the ref's *slug* half, so
+/// a context it cannot name prunes nothing. Assert both — the error is what
+/// protects the tree now, and the surviving file is what still protects it if
+/// the list is ever softened to return zero rows instead of a 404.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn pulling_a_retired_context_leaves_its_projection_alone(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    let ctx = app
+        .client
+        .contexts()
+        .create("rctx", None)
+        .await
+        .expect("ctx");
+    let doc = seed_resource(&app, "rctx", "research", "Retired Doc").await;
+
+    let config = projection_test_config(&app);
+    temper_cli::projection::pull_context(&app.client, &config, "@me/rctx")
+        .await
+        .expect("first pull");
+
+    let file = projected(app.vault_dir.path(), "rctx", "research", "Retired Doc", doc);
+    assert!(file.exists(), "materialized at {}", file.display());
+
+    // Retire the context, then pull the address the caller still holds.
+    // Retirement also mangles the slug, so `@me/rctx` names nothing either way.
+    app.client
+        .contexts()
+        .delete(Uuid::from(ctx.id))
+        .await
+        .expect("retire");
+
+    let err = temper_cli::projection::pull_context(&app.client, &config, "@me/rctx")
+        .await
+        .expect_err("a retired context is not readable, and the pull must say so");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("not found or not readable"),
+        "the refusal must name the unreadable context, got: {msg}"
+    );
+
+    assert!(
+        file.exists(),
+        "pull deleted the projection of a retired context's still-live resource, at {}",
+        file.display()
+    );
+}
