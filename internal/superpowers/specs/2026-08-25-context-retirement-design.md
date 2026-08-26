@@ -215,8 +215,31 @@ is unreachable; arm 3 takes the same spelling for symmetry with arm 4, where it 
 **Write** — inside `context_authorable_by_profile`, the same shape its team arm already
 uses for `kb_teams.is_active`.
 
-That is the entire enforcement surface. No new visibility function, and no second copy of
-the four read arms anywhere.
+That is the entire enforcement surface **on the profile axis**. No new visibility function, and
+no second copy of the four read arms anywhere.
+
+#### 2.2.1 Retirement is a profile-axis concept — the cogmap axis keeps its reach, deliberately
+
+Both chokepoints gate the **profile** axis. The **cogmap principal** axis is not floored and is not
+going to be: `vis_team` joins `kb_team_contexts` to `kb_resource_homes` without ever touching
+`kb_contexts`, `resources_accessible_to_cogmap` builds on it, and `resources_readable_by('context',
+…)` reads the interior directly. A hard review flagged this against the sibling precedent of
+`20260708000007_visibility_is_active_gate.sql`, which floored *both* axes and said so.
+
+**Ruled: keep it, and scope the claim instead.** The two axes exist for different reasons.
+Profile-axis reach is a person seeing a container. Cogmap-principal reach is a **steward agent
+curating its map against its charter** — and a retired context does not become irrelevant to a
+charter by being retired. It simply stops contributing new material.
+
+The write floor is what makes that safe rather than merely tolerable: nothing can author into a
+retired context, so no new content event is produced under it, so it stops advancing the steward
+watermark even though `steward_team_contexts` still returns it. The retire/restore/rename events do
+land in that window, but `steward_ingest_delta` gates real work on `new_resources`, which counts
+only `resource_created` — so they cost at most a no-op tick, never a curation pass.
+
+The cost accepted: retirement is **not** a containment or leak-stopping action, and must not be
+described as one. Anyone reaching for "make this unreachable" needs a different mechanism. The
+`COMMENT ON COLUMN kb_contexts.is_active` carries this same scope, so the database states it too.
 
 ### 2.3 Retire
 

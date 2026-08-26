@@ -13,11 +13,31 @@
 ALTER TABLE kb_contexts ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT true;
 
 COMMENT ON COLUMN kb_contexts.is_active IS
-'Retirement flag, mirroring kb_teams.is_active. false = retired: confers zero read-reach and zero
-write authority, while every row it homes is preserved. Enforced at exactly two chokepoints --
+'Retirement flag, mirroring kb_teams.is_active. false = retired: every row it homes is preserved,
+and the context is addressed on the ADMIN axis, never the read axis.
+
+SCOPED DELIBERATELY, and the scope is the whole design decision. Two chokepoints carry the floor:
 contexts_readable_by_teams (which context_visible_to, context_readable_by_profile,
 contexts_readable_by and resources_visible_to all delegate to) and context_authorable_by_profile.
-Retired contexts are addressed on the ADMIN axis, never the read axis.';
+Both are the PROFILE axis. Retirement closes reach for people; it is not a containment boundary.
+
+WHAT IS DELIBERATELY NOT FLOORED. The cogmap principal axis still reaches a retired context''s
+resources: vis_team joins kb_team_contexts to kb_resource_homes without touching kb_contexts, and
+resources_accessible_to_cogmap builds on it, as does resources_readable_by(''context'', ...). That is
+intent, not an oversight. Cogmap-principal reach exists so a steward agent can curate its map
+against its charter, and a retired context does not thereby become irrelevant to that charter -- it
+simply stops contributing new material. The write floor is what makes that true: no new content
+event can be produced under a retired context, so it stops advancing the steward watermark even
+though it stays in steward_team_contexts. (The retire/restore/rename events themselves do land in
+that window, but steward_ingest_delta gates real work on new_resources, which counts only
+resource_created, so they cause at most a no-op tick.)
+
+Two consequences worth stating rather than discovering: a resource OWNER keeps read, write, delete
+and grant over their own resources in a retired context -- resources_visible_to and
+can_modify_resource both have owner-first arms with no context floor, which is what lets an owner
+move work out. And reassign is floored (see reassign_service) precisely because it can CHANGE who
+the owner is, which would otherwise hand that owner-arm reach to someone retirement had just cut
+off.';
 
 -- ============================================================================
 -- Chokepoint 1 -- the read axis.
