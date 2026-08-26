@@ -27,6 +27,9 @@ function ctx(slug: string, ownerRef: string, count = 0): ContextRowWithCounts {
 		// Not what these fixtures exercise — nav grouping is a read concern. `false` so a
 		// fixture never implies authority it does not test.
 		can_write: false,
+		// Retirement is an admin-axis concept; these nav fixtures are read-axis rows,
+		// which can never be retired. Required by `ContextRowWithCounts` all the same.
+		retired: false,
 	};
 }
 
