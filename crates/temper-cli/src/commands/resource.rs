@@ -574,11 +574,16 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
     // Projection refresh: write the new resource to its canonical
     // projection path so the local copy reflects server state at once.
     // Best-effort — a projection write failure must not fail the create.
-    if let Err(e) = runtime.block_on(crate::projection::write_resource_file(
-        &client,
-        &config.vault_root,
-        &created_resource,
-    )) {
+    if let Err(e) = runtime.block_on(async {
+        let me = crate::projection::self_owner_ref(&client).await;
+        crate::projection::write_resource_file(
+            &client,
+            &config.vault_root,
+            &created_resource,
+            me.as_deref(),
+        )
+        .await
+    }) {
         output::warning(format!("could not write projection file: {e}"));
     }
 
@@ -1419,7 +1424,7 @@ pub fn delete(
         origin: temper_workflow::operations::Surface::CliCloud,
     };
 
-    let (runtime, backend, _client) = crate::backend_select::build_backend(
+    let (runtime, backend, client) = crate::backend_select::build_backend(
         config,
         row.context_name.as_deref().unwrap_or_default(),
     )?;
@@ -1427,7 +1432,13 @@ pub fn delete(
 
     // Projection refresh: remove the resource's projection file. Best-effort
     // — a removal failure must not fail the (already-committed) delete.
-    if let Err(e) = crate::projection::remove_resource_file_for_row(&config.vault_root, &row) {
+    // `me` is resolved the same way the writer resolves it, because the remover
+    // must look exactly where the writer wrote; an unresolvable identity makes
+    // both fall back together.
+    let me = runtime.block_on(crate::projection::self_owner_ref(&client));
+    if let Err(e) =
+        crate::projection::remove_resource_file_for_row(&config.vault_root, &row, me.as_deref())
+    {
         output::warning(format!("could not remove projection file: {e}"));
     }
 
@@ -2193,11 +2204,16 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     // 6. Projection refresh: rewrite the affected projection file from
     //    the returned server row. Best-effort — a projection write
     //    failure must not fail the update.
-    if let Err(e) = runtime.block_on(crate::projection::write_resource_file(
-        &client,
-        &config.vault_root,
-        &updated_row,
-    )) {
+    if let Err(e) = runtime.block_on(async {
+        let me = crate::projection::self_owner_ref(&client).await;
+        crate::projection::write_resource_file(
+            &client,
+            &config.vault_root,
+            &updated_row,
+            me.as_deref(),
+        )
+        .await
+    }) {
         output::warning(format!("could not rewrite projection file: {e}"));
     }
 
