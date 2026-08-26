@@ -60,6 +60,22 @@ impl E2eTestApp {
 /// `<workspace>/target/<profile>/` path would miss (the CLI-spawning e2e tests
 /// then fail with `NotFound` under coverage).
 ///
+/// # It runs whatever binary is already there — which `-p temper-e2e` does not rebuild
+///
+/// Nothing in this resolution *builds* `temper`. `cargo nextest run -p temper-e2e` builds this
+/// crate's test targets and its dependencies as libraries; the `temper` **bin target** is not
+/// among them, so a scoped local run happily executes a binary from some earlier build while the
+/// source says something else. Every assertion in this file that reads a `temper` process's
+/// stdout or stderr is then testing code that is not in the working tree.
+///
+/// This was **witnessed, not theorised**: a deliberate bite probe that reverted a fix in
+/// `warmup.rs` still passed the test written to catch it, because the 24-minute-old binary on
+/// disk still carried the fix. A green run proved nothing about the change under test.
+///
+/// CI is unaffected — it runs `cargo nextest run --workspace`, which builds every bin target —
+/// so this is a trap for scoped local runs only. **Before trusting a local run of these tests,
+/// and always before a bite probe, `cargo build -p temper-cli --bin temper`.**
+///
 /// The test executable lives in `<target>/<profile>/deps/`; the `temper` binary
 /// is one level up in `<target>/<profile>/`.
 fn temper_bin_path() -> std::path::PathBuf {

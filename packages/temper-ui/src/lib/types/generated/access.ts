@@ -47,7 +47,12 @@ export type PublicSystemSettings = { terms_version: string | null, terms_resourc
  * operator-only surface: those routes are mounted with a plain `.route(...)` and stay off the
  * documented contract on purpose.
  */
-export type QueueCount = { count: bigint, };
+export type QueueCount = { 
+/**
+ * `i32` for the same reason as [`crate::types::invitation::PendingInvitationCounts::count`]: a 64-bit count reaches
+ * TypeScript as `bigint` and does not survive `JSON.stringify`.
+ */
+count: number, };
 
 /**
  * An **open** reconsideration request, with the asking principal's identity (spec D15 admin

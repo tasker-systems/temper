@@ -72,13 +72,18 @@ export type InviteeInvitation = { id: string, team_id: string, team_slug: string
 export type PendingInvitationCounts = { 
 /**
  * Every pending invitation addressed to the caller.
+ *
+ * `i32`, not `i64`, and deliberately: these numbers cross to a browser, and ts-rs maps a
+ * 64-bit count to `bigint`, which cannot survive `JSON.stringify` on the boundary. The same
+ * reasoning `EntryBounds::drawn` carries. A principal's pending invitations are not a
+ * quantity that needs 64 bits.
  */
-count: bigint, 
+count: number, 
 /**
  * Of those, how many are to the team named by the `team_slug` query parameter —
  * `None` when the parameter was not supplied.
  */
-matching: bigint | null, };
+matching: number | null, };
 
 /**
  * A pending or resolved invitation to join a team.

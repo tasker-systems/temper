@@ -190,7 +190,7 @@ current_gates() {
 #
 # `gate <name> <fingerprint>` — code-only hash; see `fingerprint`.
 read -r -d '' BASELINE <<'EOF' || true
-claim crates/temper-api/src/handlers/access.rs 11 is_system_admin
+claim crates/temper-api/src/handlers/access.rs 13 is_system_admin
 claim crates/temper-api/src/handlers/cognitive_maps.rs 4 require_cogmap_write_admin
 claim crates/temper-api/src/handlers/connections.rs 1 connection
 claim crates/temper-api/src/handlers/slack_disconnect.rs 1 -
