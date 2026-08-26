@@ -668,13 +668,22 @@ fn manage_capable_roles() -> Vec<String> {
 /// would be a second spelling of the same rule.
 ///
 /// `resource_count` carries `list_visible`'s subquery **verbatim**: it counts through the
-/// caller's OWN read predicate (`resources_visible_to`), not the admin predicate. That predicate
-/// can never admit a resource homed in a still-retired context (the context arm floors on
-/// `is_active` too), so this count is always `0` for every row this function returns. That is
-/// not a bug to "fix" by switching the join to the admin predicate: the count answers "how much
-/// of this can the caller currently read", and the honest answer for a retired context is
-/// nothing, on either axis, until it is restored. The comment on `list_visible` gives the fuller
-/// argument for why the subquery is shaped this way at all.
+/// caller's OWN read predicate (`resources_visible_to`), not the admin predicate. The count
+/// answers "how much of this can the caller still read", and for a retired context that is a
+/// genuinely mixed number — **not** always zero, which is the tempting and wrong summary:
+///
+/// * Resources the caller **owns** still count. `resources_visible_to`'s first arm is
+///   `kb_resource_homes.owner_profile_id = p_profile` and carries no context floor, which is the
+///   same anti-trap property that lets an owner move their work out of a retired context. Verified
+///   against the live database: owner + own resource + retired context yields `1`, not `0`.
+/// * Resources the caller reached only **through the container** drop to zero, because that arm of
+///   `resources_visible_to` routes through `contexts_readable_by_teams`, which floors on
+///   `is_active`.
+///
+/// So a system admin listing someone else's retired context sees `0` while its owner sees their own
+/// resources still counted. That asymmetry is correct — it is the read predicate answering
+/// truthfully per caller — and it is why the subquery must NOT be switched to the admin predicate.
+/// The comment on `list_visible` gives the fuller argument for the subquery's shape.
 pub async fn list_retired_administered(
     pool: &PgPool,
     profile_id: ProfileId,
