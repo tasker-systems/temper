@@ -190,6 +190,7 @@ lib/temper/generated/models/open_meta_convention.rb
 lib/temper/generated/models/ord_op.rb
 lib/temper/generated/models/orphan_node.rb
 lib/temper/generated/models/outcome_declaration.rb
+lib/temper/generated/models/pending_invitation_counts.rb
 lib/temper/generated/models/plan_refusal.rb
 lib/temper/generated/models/plan_refusal_details.rb
 lib/temper/generated/models/polarity.rb

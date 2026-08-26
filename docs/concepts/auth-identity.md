@@ -39,6 +39,24 @@ Under an external IdP, there is no AS, so the AS-specific variables are unset en
 why the agreement rules are mode-dependent: an operator should not have to hold six independent
 knobs in their head when the instance carries two facts.
 
+## The mode decides which endpoints exist
+
+The two modes do not serve the same surface, because some endpoints only mean something in one
+of them. An endpoint that belongs to the other mode answers `404` — it is absent, not broken.
+
+| Endpoint | External IdP (AS issuer unset) | Temper AS (AS issuer set) |
+|---|---|---|
+| `/oauth/authorize`, `/oauth/token` | The loopback redirect proxy, which forwards to the IdP | The Temper AS |
+| `/api/auth/mcp-callback` | The proxy's relay, part of that forwarding | **`404`** — the AS runs the whole flow and redirects nothing here |
+| `/oauth/jwks` | **`404`** — the IdP publishes its own keys | The AS's public keys |
+| `/.well-known/oauth-authorization-server` | Describes the IdP | Describes the AS |
+| `/api/auth/cli-callback` | Served — the CLI login relay is mode-independent | Served |
+
+The loopback redirect proxy exists because some IdP tenants reject the ephemeral
+`http://127.0.0.1:<port>` callbacks that MCP CLI clients use. It encrypts the client's original
+callback into the `state` parameter, which is what `MCP_PROXY_SECRET` keys — so that variable is
+required under an external IdP and unused under the Temper AS.
+
 ## Boot failure is the control
 
 An incoherent auth config **refuses to start**. Both surfaces parse the identity once, at

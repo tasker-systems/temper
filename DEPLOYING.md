@@ -336,6 +336,14 @@ To stand up a new target (or document an existing one):
 1. **Create the Vercel project** and connect it to the repo (or fork / `v*` tag).
 2. **Set environment** on the project: `DATABASE_URL` (its Neon), Auth0 vars, and any
    other secrets the functions read. (The repo's `vercel.json` is target-agnostic.)
+   **Environment is bound to a deployment, so set variables before the deploy that
+   needs them — adding one afterwards takes effect only on the next redeploy.** On a
+   target that auto-deploys `main`, that means setting them ahead of the merge. A
+   target fronted by an external IdP needs `MCP_PROXY_SECRET` (≥ 32 chars) for MCP
+   CLI sign-in; see
+   [Self-hosting Temper](docs/playbooks/self-host-temper.md#environment-variable-contract).
+   If a deploy lands without a variable it needed, `vercel rollback` re-points the
+   alias with no rebuild.
    To move embedding off the request path, also set the async-embed vars — see
    [Async embedding](#async-embedding-off-request-embed-drain-issue-299) below.
 3. **Choose the production trigger** — git auto-deploy from a production branch

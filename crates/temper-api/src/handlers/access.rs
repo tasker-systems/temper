@@ -7,7 +7,8 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use temper_core::types::access_gate::{
-    JoinRequest, JoinRequestStatus, JoinRequestWithProfile, PublicSystemSettings, SystemSettings,
+    JoinRequest, JoinRequestStatus, JoinRequestWithProfile, PublicSystemSettings, QueueCount,
+    ReviewRequestWithProfile, SystemSettings,
 };
 use temper_core::types::admin::{DemoteAdminRequest, PromoteAdminRequest, UpdateSettingsRequest};
 use temper_core::types::ids::ProfileId;
@@ -37,6 +38,17 @@ pub struct CreateReviewBody {
 #[derive(Debug, Deserialize)]
 pub struct ReviewRequestBody {
     pub status: JoinRequestStatus,
+    pub decision_note: Option<String>,
+}
+
+/// Body for closing a reconsideration request.
+///
+/// It carries **only** a note, and that is the design rather than an omission. Closing a review
+/// records that an admin handled it; it grants nothing (D15). A `status` field here would invite
+/// exactly the conflation the table's `COMMENT ON TABLE` warns about — the admin's actual answer is
+/// a separate `POST /api/access/admin/approve`.
+#[derive(Debug, Deserialize)]
+pub struct CloseReviewBody {
     pub decision_note: Option<String>,
 }
 
@@ -196,6 +208,21 @@ pub async fn list_pending(
         .map(Json)
 }
 
+/// GET /api/access/admin/requests/count — how many join requests are outstanding (admin only).
+///
+/// [`list_pending`] without the rows, for `temper warmup`. Same admin proof, so a caller who may
+/// not read the queue still gets a `403` — never a `0`, which would tell them the queue is empty
+/// while refusing to let them see it.
+pub async fn count_pending(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> ApiResult<Json<QueueCount>> {
+    let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
+    access_service::count_pending_requests(&state.pool, &admin)
+        .await
+        .map(|count| Json(QueueCount { count }))
+}
+
 /// PATCH /api/access/admin/requests/:id — approve or reject a join request (admin only).
 pub async fn review_request(
     State(state): State<AppState>,
@@ -213,6 +240,55 @@ pub async fn review_request(
     access_service::review_request(&state.pool, &admin, params)
         .await
         .map(Json)
+}
+
+/// GET /api/access/admin/reviews — list undecided reconsideration requests.
+///
+/// The read half of the inbox `kb_principal_review_requests` always described itself as and never
+/// had. Same operator-only posture as the join-request queue above: no `#[utoipa::path]`, gate in
+/// the handler.
+pub async fn list_reviews(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> ApiResult<Json<Vec<ReviewRequestWithProfile>>> {
+    let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
+    access_service::list_open_review_requests(&state.pool, &admin)
+        .await
+        .map(Json)
+}
+
+/// GET /api/access/admin/reviews/count — how many reconsiderations are open (admin only).
+///
+/// [`list_reviews`] without the rows. Same admin proof, same `403`-not-`0` rule as its neighbour.
+pub async fn count_reviews(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> ApiResult<Json<QueueCount>> {
+    let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
+    access_service::count_open_review_requests(&state.pool, &admin)
+        .await
+        .map(|count| Json(QueueCount { count }))
+}
+
+/// PATCH /api/access/admin/reviews/:id — record that a reconsideration was handled.
+///
+/// Returns `204`: there is no updated resource worth handing back, because closing changes nothing
+/// the caller can act on further. It moves **no** standing — readmitting a principal is
+/// `POST /api/access/admin/approve`, deliberately a different call.
+pub async fn close_review(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(request_id): Path<Uuid>,
+    Json(body): Json<CloseReviewBody>,
+) -> ApiResult<StatusCode> {
+    let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
+    let params = access_service::CloseReviewRequestParams {
+        request_id,
+        decision_note: body.decision_note,
+    };
+
+    access_service::close_review_request(&state.pool, &admin, params).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// GET /api/access/admin/settings — read FULL system settings (admin only).

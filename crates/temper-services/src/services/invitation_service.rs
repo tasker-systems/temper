@@ -14,7 +14,8 @@ use crate::error::{ApiError, ApiResult};
 use crate::services::team_service::{can_manage, role_on_team};
 use temper_core::types::ids::ProfileId;
 use temper_core::types::invitation::{
-    AcceptInvitationResponse, InvitationStatus, InviteeInvitation, TeamInvitation,
+    AcceptInvitationResponse, InvitationStatus, InviteeInvitation, PendingInvitationCounts,
+    TeamInvitation,
 };
 use temper_core::types::team::TeamRole;
 
@@ -349,34 +350,64 @@ pub async fn list_for_profile(
     let rows = sqlx::query_as!(
         InviteeInvitation,
         r#"
-        SELECT i.id, i.team_id, t.slug AS team_slug, t.name AS team_name,
-               i.invited_email, i.invited_by_profile_id,
-               i.role AS "role: TeamRole", i.token,
-               i.status AS "status: InvitationStatus", i.expires_at, i.created
-          FROM kb_team_invitations i
-          JOIN kb_teams t ON t.id = i.team_id
-         WHERE i.status = 'pending'
-           AND i.expires_at > now()
-           AND i.revoked_at IS NULL
-           AND t.is_active
-           AND lower(i.invited_email) IN (
-                 SELECT lower(al.email)
-                   FROM kb_profile_auth_links al
-                  WHERE al.profile_id = $1
-                    AND al.email IS NOT NULL
-                    AND al.email_verified
-                    AND (SELECT COUNT(DISTINCT al2.profile_id)
-                           FROM kb_profile_auth_links al2
-                          WHERE lower(al2.email) = lower(al.email)
-                            AND al2.email_verified) = 1
-               )
-         ORDER BY i.created DESC
+        SELECT id as "id!", team_id as "team_id!",
+               team_slug as "team_slug!", team_name as "team_name!",
+               invited_email as "invited_email!", invited_by_profile_id as "invited_by_profile_id!",
+               role as "role!: TeamRole", token as "token!",
+               status as "status!: InvitationStatus",
+               expires_at as "expires_at!", created as "created!"
+          FROM vw_invitee_invitations
+         WHERE invitee_profile_id = $1
+         ORDER BY created DESC
         "#,
         *caller,
     )
     .fetch_all(pool)
     .await?;
     Ok(rows)
+}
+
+/// How many invitations are waiting on the caller — **without handing them over**.
+///
+/// The same set [`list_for_profile`] returns, counted in the database instead of in the client.
+/// That is the whole point: `temper warmup` runs from the `SessionStart` hook and wants an
+/// integer, and the rows it was fetching to get one each carry a redemption `token`. Counting
+/// here means no bearer capability crosses the wire to answer "how many?".
+///
+/// Both read `vw_invitee_invitations`, so the five clauses that decide what "waiting on me"
+/// means are stated once. A second inline copy would not fail loudly when it drifted — it would
+/// report a different number from the command it tells the reader to run.
+///
+/// `team_slug` asks a second question in the same round trip: *of those, how many are to this
+/// team?* `None` in, `matching: None` out — the caller had no team to ask about, and that is a
+/// different fact from asking and being told none. `temper warmup` is what needs the difference:
+/// it may say an invitation grants the context it could not read only when it has established
+/// that one does.
+pub async fn count_for_profile(
+    pool: &PgPool,
+    caller: ProfileId,
+    team_slug: Option<&str>,
+) -> ApiResult<PendingInvitationCounts> {
+    let row = sqlx::query!(
+        r#"
+        SELECT COUNT(*)::int4 as "count!",
+               (COUNT(*) FILTER (WHERE team_slug = $2))::int4 as "matching!"
+          FROM vw_invitee_invitations
+         WHERE invitee_profile_id = $1
+        "#,
+        *caller,
+        team_slug,
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(PendingInvitationCounts {
+        count: row.count,
+        // `Some` only when a team was named. The FILTER yields 0 for a NULL parameter, and
+        // returning that 0 would claim the caller holds no invitation to a team nobody asked
+        // about.
+        matching: team_slug.map(|_| row.matching),
+    })
 }
 
 #[cfg(all(test, feature = "test-db"))]
@@ -1077,5 +1108,142 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ApiError::Forbidden));
+    }
+
+    /// **The count and the list must describe the same set.** They are the two readers of
+    /// `vw_invitee_invitations`, and the reason the predicate moved into a view is that a second
+    /// inline copy would not fail loudly when it drifted — it would report a number that disagreed
+    /// with the command it tells the reader to run.
+    ///
+    /// So this asserts the agreement rather than a literal: the fixture seeds one invitation that
+    /// counts and three that must not (declined, expired, and one to a second team that the
+    /// caller is also invited to — which does count, so the arithmetic is not trivially 1).
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn the_count_and_the_list_never_disagree(pool: PgPool) {
+        let inviter = mk_profile(&pool, "inviter").await;
+        add_auth_email(&pool, inviter, "inviter-uid", Some("owner@x.com")).await;
+        let invitee = mk_profile(&pool, "invitee").await;
+        add_auth_email(&pool, invitee, "invitee-uid", Some("invitee@x.com")).await;
+
+        let acme = mk_team(&pool, "acme-eng").await;
+        add_member(&pool, acme, inviter, "owner").await;
+        let other = mk_team(&pool, "other-co").await;
+        add_member(&pool, other, inviter, "owner").await;
+
+        seed_invite(&pool, acme, "invitee@x.com", inviter, "pending", 7).await;
+        seed_invite(&pool, other, "invitee@x.com", inviter, "pending", 7).await;
+
+        // Neither of these is waiting on anyone. The expired one needs its own team:
+        // `idx_invitations_one_pending` is UNIQUE (team_id, invited_email) over live pending
+        // rows, so a team cannot hold a live invite and a lapsed one for the same address.
+        let stale = mk_team(&pool, "stale-co").await;
+        add_member(&pool, stale, inviter, "owner").await;
+        seed_invite(&pool, acme, "invitee@x.com", inviter, "declined", 7).await;
+        seed_invite(&pool, stale, "invitee@x.com", inviter, "pending", -1).await;
+
+        let listed = list_for_profile(&pool, invitee).await.expect("list");
+        let counted = count_for_profile(&pool, invitee, None)
+            .await
+            .expect("count");
+
+        assert_eq!(listed.len(), 2, "two invitations are actually waiting");
+        assert_eq!(
+            counted.count,
+            listed.len() as i32,
+            "the count is the length of the list it stands in for"
+        );
+        assert_eq!(
+            counted.matching, None,
+            "no team was asked about, so there is no answer about one"
+        );
+    }
+
+    /// **`matching` answers about one team, and `None` is not `0`.**
+    ///
+    /// This is the distinction `temper warmup` spends: `Some(0)` means it asked whether an
+    /// invitation grants the context that could not be read and was told no; `None` means it never
+    /// asked, because the ref named no team. Only a positive answer entitles the hint to name a
+    /// cause, so collapsing the two would let "I did not ask" license the claim.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn matching_answers_only_about_the_team_it_was_asked_about(pool: PgPool) {
+        let inviter = mk_profile(&pool, "inviter").await;
+        add_auth_email(&pool, inviter, "inviter-uid", Some("owner@x.com")).await;
+        let invitee = mk_profile(&pool, "invitee").await;
+        add_auth_email(&pool, invitee, "invitee-uid", Some("invitee@x.com")).await;
+
+        let acme = mk_team(&pool, "acme-eng").await;
+        add_member(&pool, acme, inviter, "owner").await;
+        seed_invite(&pool, acme, "invitee@x.com", inviter, "pending", 7).await;
+
+        let held = count_for_profile(&pool, invitee, Some("acme-eng"))
+            .await
+            .expect("count");
+        assert_eq!(
+            held.matching,
+            Some(1),
+            "the caller does hold one to acme-eng"
+        );
+
+        let unrelated = count_for_profile(&pool, invitee, Some("other-co"))
+            .await
+            .expect("count");
+        assert_eq!(
+            unrelated.count, 1,
+            "still one invitation waiting on them overall"
+        );
+        assert_eq!(
+            unrelated.matching,
+            Some(0),
+            "asked about a team they hold nothing for, and told so"
+        );
+
+        let unasked = count_for_profile(&pool, invitee, None)
+            .await
+            .expect("count");
+        assert_eq!(
+            unasked.matching, None,
+            "not asking is a different answer from being told none"
+        );
+    }
+
+    /// **One address on two auth links is one waiting invitation, not two.**
+    ///
+    /// The predicate this view replaced tested `lower(invited_email) IN (subquery)` — set
+    /// semantics, which matched a profile once however many links carried the address. A view
+    /// joining that subquery directly would match once per link, and a caller who signed in
+    /// through two providers with the same email would be told two invitations wait when one
+    /// does. `SELECT DISTINCT` in the view is what holds this, and this is its witness.
+    ///
+    /// Note the second link is a DIFFERENT provider uid with the SAME email: that is the ordinary
+    /// shape (one person, two identity providers), not a contrived duplicate.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn one_address_on_two_links_counts_once(pool: PgPool) {
+        let inviter = mk_profile(&pool, "inviter").await;
+        add_auth_email(&pool, inviter, "inviter-uid", Some("owner@x.com")).await;
+        let invitee = mk_profile(&pool, "invitee").await;
+        add_auth_email(&pool, invitee, "invitee-google", Some("invitee@x.com")).await;
+        add_auth_email(&pool, invitee, "invitee-github", Some("invitee@x.com")).await;
+
+        let acme = mk_team(&pool, "acme-eng").await;
+        add_member(&pool, acme, inviter, "owner").await;
+        seed_invite(&pool, acme, "invitee@x.com", inviter, "pending", 7).await;
+
+        let counted = count_for_profile(&pool, invitee, Some("acme-eng"))
+            .await
+            .expect("count");
+        assert_eq!(
+            counted.count, 1,
+            "one invitation, however many links carry the address"
+        );
+        assert_eq!(
+            counted.matching,
+            Some(1),
+            "and it is counted once for the team too"
+        );
+        assert_eq!(
+            list_for_profile(&pool, invitee).await.expect("list").len(),
+            1,
+            "the list agrees, as it must",
+        );
     }
 }

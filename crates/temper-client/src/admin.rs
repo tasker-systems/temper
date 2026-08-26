@@ -6,7 +6,8 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::access_gate::{
-    JoinRequest, JoinRequestStatus, JoinRequestWithProfile, SystemSettings,
+    JoinRequest, JoinRequestStatus, JoinRequestWithProfile, QueueCount, ReviewRequestWithProfile,
+    SystemSettings,
 };
 use temper_core::types::admin::{
     AdminLedgerQuery, AdminLedgerResponse, DemoteAdminRequest, PromoteAdminRequest, ReembedRequest,
@@ -100,6 +101,68 @@ impl<'a> AdminClient<'a> {
             .await
     }
 
+    /// List undecided reconsideration requests — the D15 inbox (admin only).
+    pub async fn list_reviews(&self) -> Result<Vec<ReviewRequestWithProfile>> {
+        let token = self.http.resolve_token()?;
+        let path = "/api/access/admin/reviews";
+        let req = self.http.get(path);
+        self.http
+            .send_json(&Method::GET, path, req, Some(&token))
+            .await
+    }
+
+    /// GET /api/access/admin/requests/count — how many join requests are outstanding.
+    ///
+    /// [`Self::list_requests`] without the rows, for callers that report that a queue has
+    /// something in it rather than answering it. A non-admin is refused with the same `403` the
+    /// list raises, so "not yours to see" never arrives as a `0`.
+    pub async fn count_requests(&self) -> Result<i32> {
+        let token = self.http.resolve_token()?;
+        let path = "/api/access/admin/requests/count";
+        let req = self.http.get(path);
+        let body: QueueCount = self
+            .http
+            .send_json(&Method::GET, path, req, Some(&token))
+            .await?;
+        Ok(body.count)
+    }
+
+    /// GET /api/access/admin/reviews/count — how many reconsiderations are open.
+    ///
+    /// [`Self::list_reviews`] without the rows; same refusal posture as [`Self::count_requests`].
+    pub async fn count_reviews(&self) -> Result<i32> {
+        let token = self.http.resolve_token()?;
+        let path = "/api/access/admin/reviews/count";
+        let req = self.http.get(path);
+        let body: QueueCount = self
+            .http
+            .send_json(&Method::GET, path, req, Some(&token))
+            .await?;
+        Ok(body.count)
+    }
+
+    /// Record that a reconsideration was handled (admin only).
+    ///
+    /// Closing grants nothing — readmitting the principal is [`Self::approve_principal`]'s job, deliberately a
+    /// separate call, so that a revocation can never be undone by the act of filing away the request
+    /// to undo it.
+    pub async fn close_review(
+        &self,
+        request_id: Uuid,
+        decision_note: Option<String>,
+    ) -> Result<()> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/access/admin/reviews/{request_id}");
+        let req = self
+            .http
+            .patch(&path)
+            .json(&CloseReviewBody { decision_note });
+        self.http
+            .send(&Method::PATCH, &path, req, Some(&token))
+            .await?;
+        Ok(())
+    }
+
     /// Trigger a re-embed for a scope of the index (admin only).
     ///
     /// Enqueues embed jobs for resources whose chunks were embedded with a model that is no longer the
@@ -184,5 +247,12 @@ struct RevokeBody<'a> {
 #[derive(serde::Serialize)]
 struct ReviewBody {
     status: JoinRequestStatus,
+    decision_note: Option<String>,
+}
+
+/// Mirrors `handlers::access::CloseReviewBody`. A note and nothing else — closing a
+/// reconsideration records that it was handled and moves no standing (D15).
+#[derive(serde::Serialize)]
+struct CloseReviewBody {
     decision_note: Option<String>,
 }

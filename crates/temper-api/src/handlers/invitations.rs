@@ -11,7 +11,7 @@
 //! every intermediary and recorded as a span attribute that leaves the building.
 //! See `InvitationTokenRequest` for the full rationale.
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use uuid::Uuid;
@@ -20,7 +20,7 @@ use crate::middleware::auth::AuthUser;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::invitation::{
     AcceptInvitationResponse, CreateInvitationRequest, InvitationTokenRequest, InviteeInvitation,
-    TeamInvitation,
+    PendingInvitationCounts, TeamInvitation,
 };
 use temper_services::error::ApiResult;
 use temper_services::services::invitation_service;
@@ -135,6 +135,46 @@ pub async fn list_mine(
     invitation_service::list_for_profile(&state.pool, ProfileId::from(auth.0.profile().id))
         .await
         .map(Json)
+}
+
+/// Query parameters for [`count_mine`].
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+pub struct CountMineQuery {
+    /// Restrict the `matching` half of the answer to invitations to this team.
+    pub team_slug: Option<String>,
+}
+
+/// Count the invitations addressed to you
+///
+/// The counting half of `list_mine`, for callers that want the number and not the rows —
+/// principally `temper warmup`, which runs at every session start. Its sibling returns each
+/// invitation's redemption `token`; this returns an integer, so no bearer capability moves
+/// across the wire to answer "how many?".
+///
+/// `team_slug` folds a second question into the same round trip: *of those, how many are to
+/// this team?* Absent parameter, absent answer — `matching` is `null`, not `0`.
+#[utoipa::path(
+    get,
+    path = "/api/invitations/mine/count",
+    tag = "Invitations",
+    params(CountMineQuery),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "How many invitations are waiting on the caller", body = PendingInvitationCounts),
+    )
+)]
+pub async fn count_mine(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(q): Query<CountMineQuery>,
+) -> ApiResult<Json<PendingInvitationCounts>> {
+    invitation_service::count_for_profile(
+        &state.pool,
+        ProfileId::from(auth.0.profile().id),
+        q.team_slug.as_deref(),
+    )
+    .await
+    .map(Json)
 }
 
 /// Accept a team invitation

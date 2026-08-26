@@ -13,7 +13,8 @@ export async function GET(req: Request): Promise<Response> {
   // repo root), but the target lives under temper-cloud, which is `"type":
   // "module"`. A static value import would compile to `require()` of an ESM file
   // (ERR_REQUIRE_ESM). See api/upload.ts for the same pattern.
-  if (process.env.AS_ISSUER) {
+  const { isTemperAsMode } = await import("../../packages/temper-cloud/src/oauth/env.js");
+  if (isTemperAsMode()) {
     const { handleAuthorize } = await import("../../packages/temper-cloud/src/oauth/endpoints.js");
     const { getDb } = await import("../../packages/temper-cloud/src/db.js");
     return handleAuthorize(req, getDb());

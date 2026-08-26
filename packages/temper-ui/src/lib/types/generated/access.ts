@@ -28,6 +28,48 @@ export type JoinRequestWithProfile = { id: string, team_id: string, requesting_p
 export type PublicSystemSettings = { terms_version: string | null, terms_resource_uri: string | null, instance_name: string | null, };
 
 /**
+ * How many principals are waiting in an operator queue — the count-shaped answer to
+ * `GET /api/access/admin/requests/count` and `GET /api/access/admin/reviews/count`.
+ *
+ * **A count, not a queue.** `temper warmup` reports that a queue has something in it; the
+ * queue itself is one command away (`temper admin requests list`, `temper admin reviews
+ * list`). Fetching every row with its handle, display name, email and message so that
+ * `.len()` could be taken made a session-start primer carry other people's identities
+ * through the client on every session.
+ *
+ * **A refusal is a `403`, never a zero.** These routes sit behind `require_system_admin`,
+ * exactly as their list siblings do, so a caller who may not see the queue is told so — and
+ * "not yours to see" stays distinguishable from "yours to see, and empty". A count endpoint
+ * that answered a non-admin with `0` would erase that difference silently, which is the one
+ * thing the primer's `Option` fields exist to prevent.
+ *
+ * No `utoipa` derive, matching [`ReviewRequestWithProfile`] and every other type on this
+ * operator-only surface: those routes are mounted with a plain `.route(...)` and stay off the
+ * documented contract on purpose.
+ */
+export type QueueCount = { 
+/**
+ * `i32` for the same reason as [`crate::types::invitation::PendingInvitationCounts::count`]: a 64-bit count reaches
+ * TypeScript as `bigint` and does not survive `JSON.stringify`.
+ */
+count: number, };
+
+/**
+ * An **open** reconsideration request, with the asking principal's identity (spec D15 admin
+ * inbox).
+ *
+ * There is deliberately no `decided_at` on this shape. The queue is what is *outstanding*, so a
+ * row reaching a reader is open by construction — carrying a column that is always `NULL` would
+ * invite a caller to filter on it and believe they had narrowed something.
+ *
+ * The identity join is the same one [`JoinRequestWithProfile`] does, for the same reason: the row
+ * on its own is a bare `profile_id`, and an admin weighing a reconsideration needs to know who is
+ * asking. It carries **no** decision field beyond the note — closing a review records that it was
+ * handled and moves no standing (D15); the admin's actual answer is a separate `Approve`.
+ */
+export type ReviewRequestWithProfile = { id: string, profile_id: string, message: string | null, created: string, handle: string, display_name: string, email: string | null, };
+
+/**
  * Details included in the SystemAccessRequired error response.
  *
  * SECURITY NOTE: The `email` and `display_name` fields are safe to include

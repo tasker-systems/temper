@@ -29,6 +29,7 @@ fn auth_only_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::access::create_review_request))
         .routes(routes!(handlers::access::get_settings))
         .routes(routes!(handlers::invitations::list_mine))
+        .routes(routes!(handlers::invitations::count_mine))
         .routes(routes!(handlers::invitations::accept))
         .routes(routes!(handlers::invitations::decline))
         .routes(routes!(handlers::slack_disconnect::disconnect_me))
@@ -193,9 +194,30 @@ fn gated_routes() -> OpenApiRouter<AppState> {
             "/api/access/admin/requests",
             get(handlers::access::list_pending),
         )
+        // The counting siblings of the two queue reads. Static `/count` beats the `{id}`
+        // pattern in the router, and they are GET while `{id}` is PATCH, so neither shadows
+        // the other. Same undocumented posture as the lists they count.
+        .route(
+            "/api/access/admin/requests/count",
+            get(handlers::access::count_pending),
+        )
         .route(
             "/api/access/admin/requests/{id}",
             patch(handlers::access::review_request),
+        )
+        // Same posture, same reason: the D15 reconsideration inbox is read and closed by an
+        // operator, never by a library caller administering their own access.
+        .route(
+            "/api/access/admin/reviews",
+            get(handlers::access::list_reviews),
+        )
+        .route(
+            "/api/access/admin/reviews/count",
+            get(handlers::access::count_reviews),
+        )
+        .route(
+            "/api/access/admin/reviews/{id}",
+            patch(handlers::access::close_review),
         )
         .route(
             "/api/access/admin/settings",

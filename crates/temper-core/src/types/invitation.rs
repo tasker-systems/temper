@@ -90,6 +90,38 @@ pub struct InviteeInvitation {
     pub created: DateTime<Utc>,
 }
 
+/// How many invitations are waiting on the caller — the count-shaped answer to
+/// `GET /api/invitations/mine/count`.
+///
+/// **This exists so that asking "how many?" does not require being handed them.** The
+/// sibling `GET /api/invitations/mine` returns [`InviteeInvitation`] rows, each carrying a
+/// redemption `token` — a bearer capability. It is legitimately the caller's to see, but
+/// `temper warmup` runs from the `SessionStart` hook and needs only `.len()`, so every
+/// session on every machine was moving credential material across the wire to produce an
+/// integer. Reporting how many things await someone does not require transferring them.
+///
+/// **`matching` is `Option` because absent and zero are different answers.** `None` means
+/// no team was asked about; `Some(0)` means one was and the caller holds no invitation to
+/// it. Collapsing them would let "I did not ask" wear the same shape as "I asked and the
+/// answer is no" — and the difference is exactly what decides whether `temper warmup` may
+/// tell a reader that an invitation explains the context it could not read.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "invitation.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PendingInvitationCounts {
+    /// Every pending invitation addressed to the caller.
+    ///
+    /// `i32`, not `i64`, and deliberately: these numbers cross to a browser, and ts-rs maps a
+    /// 64-bit count to `bigint`, which cannot survive `JSON.stringify` on the boundary. The same
+    /// reasoning `EntryBounds::drawn` carries. A principal's pending invitations are not a
+    /// quantity that needs 64 bits.
+    pub count: i32,
+    /// Of those, how many are to the team named by the `team_slug` query parameter —
+    /// `None` when the parameter was not supplied.
+    pub matching: Option<i32>,
+}
+
 /// Request body for `POST /api/teams/{id}/invite`.
 ///
 /// `role` cannot be `Owner` — the service rejects it (ownership is transferred,

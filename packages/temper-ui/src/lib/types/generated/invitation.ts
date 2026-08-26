@@ -53,6 +53,39 @@ export type InvitationTokenRequest = { token: string, };
 export type InviteeInvitation = { id: string, team_id: string, team_slug: string, team_name: string, invited_email: string, invited_by_profile_id: string, role: TeamRole, token: string, status: InvitationStatus, expires_at: string, created: string, };
 
 /**
+ * How many invitations are waiting on the caller — the count-shaped answer to
+ * `GET /api/invitations/mine/count`.
+ *
+ * **This exists so that asking "how many?" does not require being handed them.** The
+ * sibling `GET /api/invitations/mine` returns [`InviteeInvitation`] rows, each carrying a
+ * redemption `token` — a bearer capability. It is legitimately the caller's to see, but
+ * `temper warmup` runs from the `SessionStart` hook and needs only `.len()`, so every
+ * session on every machine was moving credential material across the wire to produce an
+ * integer. Reporting how many things await someone does not require transferring them.
+ *
+ * **`matching` is `Option` because absent and zero are different answers.** `None` means
+ * no team was asked about; `Some(0)` means one was and the caller holds no invitation to
+ * it. Collapsing them would let "I did not ask" wear the same shape as "I asked and the
+ * answer is no" — and the difference is exactly what decides whether `temper warmup` may
+ * tell a reader that an invitation explains the context it could not read.
+ */
+export type PendingInvitationCounts = { 
+/**
+ * Every pending invitation addressed to the caller.
+ *
+ * `i32`, not `i64`, and deliberately: these numbers cross to a browser, and ts-rs maps a
+ * 64-bit count to `bigint`, which cannot survive `JSON.stringify` on the boundary. The same
+ * reasoning `EntryBounds::drawn` carries. A principal's pending invitations are not a
+ * quantity that needs 64 bits.
+ */
+count: number, 
+/**
+ * Of those, how many are to the team named by the `team_slug` query parameter —
+ * `None` when the parameter was not supplied.
+ */
+matching: number | null, };
+
+/**
  * A pending or resolved invitation to join a team.
  *
  * **The flow is not link-based, and never has been.** `invited_email` is a

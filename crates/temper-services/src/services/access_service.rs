@@ -22,7 +22,7 @@ use temper_principal::{Act, ActorAuthority};
 
 use temper_core::types::access_gate::{
     Entitlements, JoinRequest, JoinRequestStatus, JoinRequestWithProfile, PublicSystemSettings,
-    SystemSettings,
+    ReviewRequestWithProfile, SystemSettings,
 };
 use temper_core::types::admin::UpdateSettingsRequest;
 use temper_core::types::cognitive_maps::{
@@ -730,6 +730,48 @@ pub async fn admin_approve(
         },
     )
     .await?;
+
+    // Readmission ANSWERS an open reconsideration, so the marker stops claiming otherwise.
+    //
+    // The direction is what keeps this inside D15. The review is never an admission INPUT —
+    // nothing here reads it to decide anything, which is the conjunction D2 forbids. This is the
+    // opposite arrow: the decision was already taken, on the standing log where admission decisions
+    // belong, and the marker is reconciled to it afterwards.
+    //
+    // Without this, the guard released only for an admin who went to `temper admin reviews` — and
+    // the path actually taken is `temper admin access approve`, after which the row stayed open
+    // forever, permanently barring a second appeal and inflating every admin's queue.
+    //
+    // Sequential rather than transactional: `standing_service::apply` takes `&PgPool` and owns its
+    // own transaction. A failure here leaves the pre-existing stale-marker state, never a worse one,
+    // and never a principal whose standing moved without the caller learning.
+    close_open_reviews_for(pool, admin, subject).await?;
+
+    Ok(())
+}
+
+/// Close every open reconsideration held by `subject`. A no-op for the overwhelmingly common case
+/// of a principal who never filed one — zero rows affected is success, not a `NotFound`, because the
+/// caller asked to readmit someone, not to close a review.
+async fn close_open_reviews_for(
+    pool: &PgPool,
+    admin: &SystemAdmin,
+    subject: ProfileId,
+) -> ApiResult<()> {
+    sqlx::query!(
+        r#"
+        UPDATE kb_principal_review_requests
+           SET decided_at = now(), decided_by = $2, decision_note = $3
+         WHERE profile_id = $1
+           AND decided_at IS NULL
+        "#,
+        *subject,
+        *admin.actor(),
+        REVIEW_CLOSED_BY_READMISSION,
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 
@@ -996,6 +1038,16 @@ pub async fn withdraw_request(pool: &PgPool, profile_id: ProfileId) -> ApiResult
     }
 }
 
+/// What a principal is told when they already have an undecided reconsideration on file.
+///
+/// Reachable only while a review is open — closing one releases `idx_principal_review_one_open`,
+/// which is what [`close_review_request`] exists to do.
+pub const REVIEW_ALREADY_OPEN: &str =
+    "you already have an open reconsideration request — an admin has not decided it yet";
+
+/// Recorded on a review that readmission answered, rather than an admin closing it by hand.
+pub const REVIEW_CLOSED_BY_READMISSION: &str = "closed by readmission — the principal was approved";
+
 /// Parameters for a review request (spec D15 — a revoked principal asking for reconsideration).
 pub struct CreateReviewRequestParams {
     pub profile_id: ProfileId,
@@ -1031,7 +1083,134 @@ pub async fn create_review_request(
         params.message,
     )
     .execute(pool)
+    .await
+    // `idx_principal_review_one_open` is the refusal, and the blanket `23505` mapping renders it as
+    // "Resource already exists" — which names neither the thing that exists nor anything to do
+    // about it. This refusal is one of the very few surfaces a revoked principal can still reach,
+    // so it is worth a sentence they can act on.
+    .map_err(|e| match &e {
+        sqlx::Error::Database(db) if db.code().as_deref() == Some("23505") => {
+            ApiError::Conflict(REVIEW_ALREADY_OPEN.to_string())
+        }
+        _ => ApiError::from(e),
+    })?;
+
+    Ok(())
+}
+
+/// List the reconsiderations nobody has decided yet (spec D15 — the inbox this signal always
+/// implied and never had). The `_admin` proof is the capability (admin-authz enclosure, spec §3.2).
+///
+/// Ordered **oldest first**, which is a deliberate divergence from [`list_pending_requests`]'s
+/// `created DESC`. A join request queue is a stream an operator skims; a reconsideration queue is a
+/// waiting-time queue, and the principal who has been locked out longest is the one whose request
+/// has been ignored longest.
+///
+/// Reads `kb_principal_review_requests` and nothing else. It is emphatically **not** consulted by
+/// the admission decision — see the table's own `COMMENT`, and `a_pending_review_does_not_change_admission`.
+///
+/// **Unpaginated, and structurally bounded rather than carelessly unbounded.**
+/// `idx_principal_review_one_open` is `UNIQUE (profile_id) WHERE decided_at IS NULL`, so this queue
+/// holds at most one row per profile and its size is capped by the number of principals *currently
+/// revoked with an unanswered appeal* — a population an operator is already expected to work
+/// through by hand. `admin_approve` closes the review it answers, so the set drains rather than
+/// accumulating. If revocations ever become bulk or automated, that premise dies and this needs a
+/// page.
+///
+/// **The audit trail is the row, not a ledger entry.** `decided_at` / `decided_by` /
+/// `decision_note` record who answered and when, exactly as `kb_join_requests` keeps its own
+/// decision history on the row (see this module's header: admin/operational events are firewalled
+/// from the cognition ledger).
+pub async fn list_open_review_requests(
+    pool: &PgPool,
+    _admin: &SystemAdmin,
+) -> ApiResult<Vec<ReviewRequestWithProfile>> {
+    let rows = sqlx::query_as!(
+        ReviewRequestWithProfile,
+        r#"
+        SELECT r.id as "id!", r.profile_id as "profile_id!", r.message,
+               r.created as "created!",
+               p.handle as "handle!", p.display_name as "display_name!", p.email
+          FROM kb_principal_review_requests r
+          JOIN kb_profiles p ON p.id = r.profile_id
+         WHERE r.decided_at IS NULL
+         ORDER BY r.created ASC
+        "#,
+    )
+    .fetch_all(pool)
     .await?;
+
+    Ok(rows)
+}
+
+/// How many reconsiderations are open — [`list_open_review_requests`] without the rows.
+///
+/// `decided_at IS NULL` is the same open-ness test the list applies, and the same one
+/// `idx_principal_review_one_open` enforces. Open-ness is not restated here as a second
+/// predicate; it is the one the index and the list already agree on.
+///
+/// Same `SystemAdmin` proof as its list sibling, so a refusal stays a `403` and never a `0`.
+pub async fn count_open_review_requests(pool: &PgPool, _admin: &SystemAdmin) -> ApiResult<i32> {
+    let count = sqlx::query_scalar!(
+        r#"
+        SELECT COUNT(*)::int4 as "count!"
+          FROM kb_principal_review_requests
+         WHERE decided_at IS NULL
+        "#,
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(count)
+}
+
+/// Parameters for closing a review request.
+pub struct CloseReviewRequestParams {
+    pub request_id: Uuid,
+    pub decision_note: Option<String>,
+}
+
+/// Close an open reconsideration — record that an admin handled it, and **move nothing** (D15).
+///
+/// This is the write that `idx_principal_review_one_open` was always waiting for. That index is
+/// `UNIQUE (profile_id) WHERE decided_at IS NULL`, so until something could set `decided_at` the
+/// duplicate guard never released: a principal who filed one review could never file another, for
+/// the life of the profile. `closing_a_review_releases_the_one_open_guard` is the witness.
+///
+/// **Closing grants nothing.** The temptation this function must keep refusing is to let "resolve
+/// the reconsideration" mean "readmit the principal" — which would make a revocation launderable by
+/// its own subject's request, the exact conjunction D2 forbids and the table's `COMMENT ON TABLE`
+/// warns about. The admin's actual answer is a separate [`admin_approve`], recorded on the standing
+/// log where admission decisions belong. `closing_a_review_moves_no_standing` pins it.
+///
+/// A close that matches no **open** row is [`ApiError::NotFound`], not a silent success: two admins
+/// working one queue is ordinary, and the one who lost the race should learn their click did
+/// nothing rather than believe they decided it.
+pub async fn close_review_request(
+    pool: &PgPool,
+    admin: &SystemAdmin,
+    params: CloseReviewRequestParams,
+) -> ApiResult<()> {
+    let closed = sqlx::query!(
+        r#"
+        UPDATE kb_principal_review_requests
+           SET decided_at = now(), decided_by = $2, decision_note = $3
+         WHERE id = $1
+           AND decided_at IS NULL
+        "#,
+        params.request_id,
+        *admin.actor(),
+        params.decision_note,
+    )
+    .execute(pool)
+    .await?
+    .rows_affected();
+
+    if closed == 0 {
+        return Err(ApiError::NotFound(
+            "no open review request with that id".to_string(),
+        ));
+    }
 
     Ok(())
 }
@@ -1071,6 +1250,38 @@ pub async fn list_pending_requests(
     .await?;
 
     Ok(rows)
+}
+
+/// How many join requests are outstanding — [`list_pending_requests`] without the rows.
+///
+/// Same `SystemAdmin` proof, so the gate is unchanged: a caller who may not read the queue is
+/// refused here exactly as they are refused there. **The refusal is the `403` the gate already
+/// raises — never a `0`.** A count that answered a non-admin with zero would report an empty
+/// queue to someone who is not permitted to know whether it is empty, and `temper warmup` would
+/// print that zero as a fact it had read.
+///
+/// The gating-team absence is carried the same way too: no gating team means no queue, which is
+/// a true `0` rather than a refusal.
+pub async fn count_pending_requests(pool: &PgPool, _admin: &SystemAdmin) -> ApiResult<i32> {
+    let settings = get_system_settings(pool).await?;
+
+    let Some(gating_slug) = settings.gating_team_slug else {
+        return Ok(0);
+    };
+
+    let count = sqlx::query_scalar!(
+        r#"
+        SELECT COUNT(*)::int4 as "count!"
+          FROM vw_join_requests
+         WHERE team_slug = $1
+           AND status = 'pending'
+        "#,
+        gating_slug,
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(count)
 }
 
 /// Parameters for reviewing (approving/rejecting) a join request. The reviewer is no longer carried

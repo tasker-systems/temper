@@ -1,9 +1,9 @@
 use clap::Parser;
 use temper_cli::cli::{
-    AdminAction, AdminConnectionAction, AdminMachineAction, AdminRequestsAction, AdminSamlAction,
-    AdminSlackAction, AdminSubscriptionAction, AuthAction, Cli, CogmapCmd, Commands, ConfigAction,
-    ContextAction, DataArtifactAction, InvocationCmd, MemoryAction, ResourceAction, SchemaAction,
-    SkillAction, SlackAction, StewardCmd, TeamAction,
+    AdminAction, AdminConnectionAction, AdminMachineAction, AdminRequestsAction,
+    AdminReviewsAction, AdminSamlAction, AdminSlackAction, AdminSubscriptionAction, AuthAction,
+    Cli, CogmapCmd, Commands, ConfigAction, ContextAction, DataArtifactAction, InvocationCmd,
+    MemoryAction, ResourceAction, SchemaAction, SkillAction, SlackAction, StewardCmd, TeamAction,
 };
 use temper_cli::commands;
 use temper_cli::format::OutputFormat;
@@ -923,6 +923,27 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         .await
                     })
                 }),
+            },
+            AdminAction::Reviews { action } => match action {
+                AdminReviewsAction::List => temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::admin::reviews_list_remote(client, output_format)
+                            .await
+                    })
+                }),
+                AdminReviewsAction::Close { id, note } => {
+                    temper_cli::actions::runtime::with_client(|client| {
+                        Box::pin(async move {
+                            temper_cli::commands::admin::reviews_close_remote(
+                                client,
+                                &id,
+                                note.as_deref(),
+                                output_format,
+                            )
+                            .await
+                        })
+                    })
+                }
             },
             AdminAction::Saml { action } => match action {
                 AdminSamlAction::Provision {
