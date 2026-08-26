@@ -1209,20 +1209,19 @@ pub async fn retire(
     )
     .await?;
 
-    let updated = sqlx::query!(
-        r#"UPDATE kb_contexts
-              SET is_active = false, slug = $2
-            WHERE id = $1 AND is_active"#,
-        context_id,
-        retired_slug,
+    let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    temper_substrate::writes::retire_context_with(
+        pool,
+        temper_substrate::ids::ContextId::from(context_id),
+        cur.slug.as_str(),
+        retired_slug.as_str(),
+        emitter,
+        temper_substrate::events::EventContext::default(),
     )
-    .execute(pool)
     .await
-    .map_err(|e| map_context_write_err(anyhow::Error::new(e)))?;
-
-    if updated.rows_affected() == 0 {
-        return Err(ApiError::NotFound(CONTEXT_REFUSAL.to_string()));
-    }
+    .map_err(map_context_write_err)?;
 
     // Composed from the already-decorated `cur.owner_ref` — never through `decorated_context_ref`,
     // whose `owner_addressable` parameter is the *bare* handle/team slug and would yield
@@ -1272,20 +1271,19 @@ pub async fn restore(
     let restored_slug =
         next_unique_context_slug(pool, &cur.owner_table, cur.owner_id, &cur.name).await?;
 
-    let updated = sqlx::query!(
-        r#"UPDATE kb_contexts
-              SET is_active = true, slug = $2
-            WHERE id = $1 AND NOT is_active"#,
-        context_id,
-        restored_slug,
+    let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    temper_substrate::writes::restore_context_with(
+        pool,
+        temper_substrate::ids::ContextId::from(context_id),
+        cur.slug.as_str(),
+        restored_slug.as_str(),
+        emitter,
+        temper_substrate::events::EventContext::default(),
     )
-    .execute(pool)
     .await
-    .map_err(|e| map_context_write_err(anyhow::Error::new(e)))?;
-
-    if updated.rows_affected() == 0 {
-        return Err(ApiError::NotFound(CONTEXT_REFUSAL.to_string()));
-    }
+    .map_err(map_context_write_err)?;
 
     // `slug_changed` compares against what the caller would expect back — the plain sluggification
     // of the name — not against whatever retire mangled it to.
@@ -1311,20 +1309,26 @@ pub async fn restore(
 /// one is reconstructed from a SQLSTATE and has nothing but the constraint that fired.
 const CONTEXT_SLUG_TAKEN: &str = "that owner already holds a context with this slug";
 
-/// Map a substrate write error from `reassign_context_with` / `rename_context_with` to an
-/// [`ApiError`]. **One mapper, two call sites** — the mapping is identical for both and would drift
+/// Map a substrate write error from `reassign_context_with` / `rename_context_with` /
+/// `retire_context_with` / `restore_context_with` to an [`ApiError`]. **One mapper, four call
+/// sites** — the mapping is identical for all of them and would drift
 /// if written twice.
 ///
-/// - `42501` (insufficient_privilege) — `context_reassign` and `context_rename` each carry their
-///   RBAC gate as an in-transaction invariant, not merely a caller pre-check. The Rust gate renders
-///   a clean refusal on the common path, so this arm only fires on a TOCTOU change between check and
-///   write; that lost race should still read as `403`, not `500`.
-/// - `23505` (unique_violation) — `UNIQUE (owner_table, owner_id, slug)` is the backstop behind both
-///   call sites' slug-collision pre-check. **The race path must render the same refusal as the
+/// - `42501` (insufficient_privilege) — `context_reassign`, `context_rename`, `context_retire`, and
+///   `context_restore` each carry their RBAC gate as an in-transaction invariant, not merely a
+///   caller pre-check. The Rust gate renders a clean refusal on the common path, so this arm only
+///   fires on a TOCTOU change between check and write; that lost race should still read as `403`,
+///   not `500`.
+/// - `23505` (unique_violation) — `UNIQUE (owner_table, owner_id, slug)` is the backstop behind
+///   every call site's slug-collision pre-check. **The race path must render the same refusal as the
 ///   pre-check**, or the caller's experience depends on how quickly they lost the race rather than
 ///   on the state of the system: the caller who won gets `409` and the caller who lost gets `500`
 ///   for the same conflict. `reassign` shipped with exactly this hole — a `42501`-only body — and
 ///   rename's tests are what surfaced it; it is fixed here rather than left beside a correct copy.
+/// - `P0002` (no_data_found) — `context_retire`/`context_restore` each refuse a no-op mutation
+///   (retiring an already-retired context, restoring an already-active one) rather than append a
+///   spurious event, raising `P0002`. Rendered as the same `CONTEXT_REFUSAL` `404` the pre-event
+///   `rows_affected() == 0` check used to render for this exact case.
 ///
 /// Everything else is a genuine internal error.
 fn map_context_write_err(e: anyhow::Error) -> ApiError {
@@ -1332,6 +1336,7 @@ fn map_context_write_err(e: anyhow::Error) -> ApiError {
         match db.code().as_deref() {
             Some("42501") => return ApiError::Forbidden,
             Some("23505") => return ApiError::Conflict(CONTEXT_SLUG_TAKEN.to_string()),
+            Some("P0002") => return ApiError::NotFound(CONTEXT_REFUSAL.to_string()),
             _ => {}
         }
     }
@@ -1409,6 +1414,17 @@ mod write_err_mapper_tests {
             map_context_write_err(substrate_err("42501")),
             ApiError::Forbidden
         ));
+    }
+
+    /// The no-op refusal `context_retire`/`context_restore` raise (retiring an already-retired
+    /// context, restoring an already-active one) renders the same `CONTEXT_REFUSAL` 404 the
+    /// pre-event `rows_affected() == 0` check used to render for this exact case.
+    #[test]
+    fn no_data_found_renders_the_same_not_found_the_old_rows_affected_check_rendered() {
+        match map_context_write_err(substrate_err("P0002")) {
+            ApiError::NotFound(msg) => assert_eq!(msg, CONTEXT_REFUSAL),
+            other => panic!("expected NotFound, got {other:?}"),
+        }
     }
 
     /// Everything else stays a genuine internal error — the arms are additive, not a catch-all.

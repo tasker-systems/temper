@@ -20,7 +20,22 @@ contexts_readable_by and resources_visible_to all delegate to) and context_autho
 Retired contexts are addressed on the ADMIN axis, never the read axis.';
 
 -- ============================================================================
--- Chokepoint 1 -- the read axis. Arms 1 and 2 select from kb_contexts and take the floor
+-- Chokepoint 1 -- the read axis.
+--
+-- ARMS 3 AND 4 USE `NOT EXISTS (... AND NOT c.is_active)`, NOT `EXISTS (... AND c.is_active)`.
+-- The double negative is deliberate and load-bearing. Those two arms read kb_team_contexts and
+-- kb_access_grants, neither of which has a foreign key to kb_contexts, so a share or a grant can
+-- name an id with NO row behind it -- and before this migration both arms admitted that id,
+-- because neither joined kb_contexts at all. The positive spelling would have SILENTLY REVOKED
+-- those dangling grants, which is a behaviour change nobody asked for and which
+-- `access_grants_read_wiring::explicit_context_read_grant_confers_context_and_resources` (a
+-- pre-existing test using a synthetic anchor) correctly caught. The requirement here is narrow:
+-- do not admit a context that is RETIRED. A context that does not exist is somebody else's
+-- question, and this migration must not answer it.
+--
+--   row active  -> no retired row  -> NOT EXISTS = true  -> admit   (unchanged)
+--   row retired -> retired row     -> NOT EXISTS = false -> deny    (the floor)
+--   no row      -> no retired row  -> NOT EXISTS = true  -> admit   (unchanged, deliberately) Arms 1 and 2 select from kb_contexts and take the floor
 -- directly; arms 3 and 4 read kb_team_contexts and kb_access_grants and never join the
 -- context row, so they need an EXISTS. Missing either of those two is the silent hole.
 -- ============================================================================
@@ -46,7 +61,7 @@ RETURNS TABLE(context_id uuid) LANGUAGE sql STABLE AS $$
     SELECT tc.context_id
     FROM kb_team_contexts tc
     WHERE tc.team_id = ANY(p_teams)
-      AND EXISTS (SELECT 1 FROM kb_contexts c WHERE c.id = tc.context_id AND c.is_active)
+      AND NOT EXISTS (SELECT 1 FROM kb_contexts c WHERE c.id = tc.context_id AND NOT c.is_active)
 
     UNION
 
@@ -56,7 +71,7 @@ RETURNS TABLE(context_id uuid) LANGUAGE sql STABLE AS $$
     WHERE g.subject_table = 'kb_contexts' AND g.can_read
       AND ( (g.principal_table = 'kb_profiles' AND g.principal_id = p_profile)
          OR (g.principal_table = 'kb_teams' AND g.principal_id = ANY(p_teams)) )
-      AND EXISTS (SELECT 1 FROM kb_contexts c WHERE c.id = g.subject_id AND c.is_active);
+      AND NOT EXISTS (SELECT 1 FROM kb_contexts c WHERE c.id = g.subject_id AND NOT c.is_active);
 $$;
 
 -- ============================================================================

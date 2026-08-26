@@ -21,8 +21,8 @@ real; the mechanism is wrong, for a reason the schema states plainly (§2 below)
 ## What we are building
 
 A context can be **retired**: it stops being visible, stops being writeable, and keeps
-every row it ever homed. It can be **restored**. Retirement is reversible, un-evented,
-and additive.
+every row it ever homed. It can be **restored**. Retirement is reversible, **event-sourced**
+(§2.8 — the design changed here after a witness falsified the un-evented version), and additive.
 
 ---
 
@@ -206,7 +206,8 @@ the four read arms anywhere.
 manages its owning team as owner/maintainer, or is an instance administrator. Auth runs
 before any write.
 
-One statement, un-evented, mirroring `team_service.rs:393`:
+One statement, which §2.8 later routes through the event ledger — the raw form is kept
+here because it is what the projector half still executes:
 
 ```sql
 UPDATE kb_contexts
@@ -236,7 +237,7 @@ Consequences, stated rather than discovered later:
 
 ### 2.4 Restore
 
-`POST /api/contexts/{id}/restore`, same gate, same un-evented shape. The address is
+`POST /api/contexts/{id}/restore`, same gate, same shape (evented — §2.8). The address is
 re-derived from the untouched `name` through `next_unique_context_slug`
 (`crates/temper-services/src/services/context_service.rs:374`) — the incumbent `create`
 already calls for exactly this collision, with its `notes` → `notes-2` auto-suffix.
@@ -402,10 +403,13 @@ could then get two rows where it structurally assumed one. That buys an operator
 cutover on every deployment target in exchange for a nicer retired-row address. Mangling
 achieves the same user-visible outcome additively.
 
-**An event for retirement.** No `context_retired` event type. Contexts are a replay input
-table restored verbatim, so the flag rides in with the restore and an event would add a
-projector with nothing to project. This matches teams, which emit nothing for their own
-soft-delete.
+**~~An event for retirement.~~ REVERSED — retirement IS event-sourced. See §2.8.**
+This section originally rejected a `context_retired` event on the grounds that "the flag rides
+in with the restore and an event would add a projector with nothing to project." The first half
+is true and the second is false, and the replay witness proved it: the FLAG rides in, but the
+MANGLED SLUG does not, because `_project_context_renamed` sets `slug` from its own payload and
+drives it back on replay. Migration `20260825000040_context_retire_fns.sql` adds
+`context_retired` and `context_restored`.
 
 ### Deferred
 
