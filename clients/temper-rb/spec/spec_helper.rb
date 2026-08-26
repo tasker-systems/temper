@@ -49,7 +49,13 @@ module Fixtures
       owner_ref: '@j-cole-taylor',
       # Whether the reader may author into this context. Required on the wire, so a
       # fixture without it fails validation -- the same lesson `ref` carries above.
-      can_write: true
+      can_write: true,
+      # Whether the context is retired. Required on the wire for the same reason
+      # `can_write` is -- third instance of this lesson. NOTE: no local tier runs
+      # these specs (`cargo make check` and `test-all` both skip Ruby), so a DTO
+      # field added without updating this fixture stays green locally and fails
+      # only in CI's test-ruby job.
+      retired: false
     }.merge(overrides)
   end
 

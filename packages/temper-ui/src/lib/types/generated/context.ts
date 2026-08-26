@@ -30,7 +30,20 @@ owner_ref: string,
  * with the owner check (`ResourceView.owner_profile_id`) under the `is_active` floor, and
  * accepts that a reader whose only authority is a per-resource grant is not covered.
  */
-can_write: boolean, };
+can_write: boolean, 
+/**
+ * Whether this context is retired — invisible to every read path and unwriteable, with
+ * every row it homes preserved.
+ *
+ * **Polarity is inverted from the column on purpose.** The database stores `is_active`,
+ * mirroring `kb_teams`; the wire says `retired`, which is the word the product uses. The
+ * inversion is written as the identical SQL literal `NOT c.is_active AS "retired!"` in
+ * every query that selects this column — the two read-axis queries (`list_visible`,
+ * `get_visible`, always `false` there by construction) and the two admin-axis queries
+ * (`list_retired_administered`, `get_retired_administered`) — and is never re-derived any
+ * other way, e.g. never inverted in Rust after the fact.
+ */
+retired: boolean, };
 
 /**
  * Context with resource count — used by the list endpoint.
@@ -61,7 +74,20 @@ owner_ref: string,
  * with the owner check (`ResourceView.owner_profile_id`) under the `is_active` floor, and
  * accepts that a reader whose only authority is a per-resource grant is not covered.
  */
-can_write: boolean, };
+can_write: boolean, 
+/**
+ * Whether this context is retired — invisible to every read path and unwriteable, with
+ * every row it homes preserved.
+ *
+ * **Polarity is inverted from the column on purpose.** The database stores `is_active`,
+ * mirroring `kb_teams`; the wire says `retired`, which is the word the product uses. The
+ * inversion is written as the identical SQL literal `NOT c.is_active AS "retired!"` in
+ * every query that selects this column — the two read-axis queries (`list_visible`,
+ * `get_visible`, always `false` there by construction) and the two admin-axis queries
+ * (`list_retired_administered`, `get_retired_administered`) — and is never re-derived any
+ * other way, e.g. never inverted in Rust after the fact.
+ */
+retired: boolean, };
 
 /**
  * An explicit context read-grant that survives the ownership flip — inherited residual reach.
@@ -167,6 +193,59 @@ export type RenameContextRequest = {
 /**
  * The new display name. Canonicalized (trimmed, internal whitespace collapsed) before it
  * is stored, and sluggified to derive the new addressable slug.
+ */
+name: string, };
+
+/**
+ * What restore hands back — the reverse of [`RetireContextOutcome`], and the same four
+ * fields, plus `slug_changed`. Restore re-derives the address from the untouched `name`
+ * rather than trying to recover whatever retire mangled the slug to, so the returned slug
+ * can differ from the one the caller retired under (spec §2.4).
+ */
+export type RestoreContextOutcome = { context_id: ContextId, 
+/**
+ * The address after restore — the name's canonical slug, suffixed only if something else
+ * has since taken it.
+ */
+slug: string, 
+/**
+ * The full decorated ref, `{owner_ref}/{slug}`.
+ */
+context_ref: string, 
+/**
+ * Unchanged by restore. The display label was never touched by retire either.
+ */
+name: string, 
+/**
+ * True when the address this restore hands back differs from the address the context
+ * was retired under. That includes the case where the original address had been freed
+ * meanwhile and restore landed on it — the caller still moves off the ref they retired
+ * with, so it is still a change to report.
+ *
+ * Reported rather than applied silently: handing back a different address without
+ * saying so is the failure mode `rename` explicitly refuses. The baseline is the
+ * `from_slug` recorded on the `context_retired` event; a context retired before that
+ * event existed has no recorded baseline and reports `true`, because nothing proves the
+ * address was preserved. Witness:
+ * `restore_reports_a_change_when_it_lands_on_a_freed_sibling_address`.
+ */
+slug_changed: boolean, };
+
+/**
+ * What retire hands back. The caller needs BOTH halves to undo it: the read floor hides the
+ * context and the slug moved, so the ref they arrived with no longer names the row (spec §2.4.1).
+ */
+export type RetireContextOutcome = { context_id: ContextId, 
+/**
+ * The address after mangling — `<slug>-retired`, suffixed if that was taken.
+ */
+slug: string, 
+/**
+ * The full decorated ref, `{owner_ref}/{slug}`, which is what `restore` accepts.
+ */
+context_ref: string, 
+/**
+ * Unchanged by retirement. The display label is not an address.
  */
 name: string, };
 

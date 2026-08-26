@@ -45,6 +45,13 @@ pub enum EventKind {
     ResourceReassigned,
     ContextReassigned,
     ContextRenamed,
+    /// A context flipped `is_active` to false and had its slug mangled to free the address
+    /// (spec 2026-08-25). Fires from `context_retire`; `_project_context_retired` is the pure
+    /// re-apply replay calls, matching `ContextRenamed`'s split.
+    ContextRetired,
+    /// The reverse of [`EventKind::ContextRetired`]: `is_active` back to true, slug re-derived.
+    /// Fires from `context_restore`.
+    ContextRestored,
     RelationshipAsserted,
     RelationshipRetyped,
     RelationshipReweighted,
@@ -135,6 +142,8 @@ impl EventKind {
             EventKind::ResourceReassigned => "resource_reassigned",
             EventKind::ContextReassigned => "context_reassigned",
             EventKind::ContextRenamed => "context_renamed",
+            EventKind::ContextRetired => "context_retired",
+            EventKind::ContextRestored => "context_restored",
             EventKind::RelationshipAsserted => "relationship_asserted",
             EventKind::RelationshipRetyped => "relationship_retyped",
             EventKind::RelationshipReweighted => "relationship_reweighted",
@@ -181,6 +190,8 @@ impl EventKind {
             "resource_reassigned" => EventKind::ResourceReassigned,
             "context_reassigned" => EventKind::ContextReassigned,
             "context_renamed" => EventKind::ContextRenamed,
+            "context_retired" => EventKind::ContextRetired,
+            "context_restored" => EventKind::ContextRestored,
             "relationship_asserted" => EventKind::RelationshipAsserted,
             "relationship_retyped" => EventKind::RelationshipRetyped,
             "relationship_reweighted" => EventKind::RelationshipReweighted,
@@ -479,6 +490,18 @@ pub enum SeedAction<'a> {
         to_slug: &'a str,
         emitter: EntityId,
     },
+    ContextRetire {
+        context: ContextId,
+        from_slug: &'a str,
+        to_slug: &'a str,
+        emitter: EntityId,
+    },
+    ContextRestore {
+        context: ContextId,
+        from_slug: &'a str,
+        to_slug: &'a str,
+        emitter: EntityId,
+    },
     RelationshipRetype {
         edge: EdgeId,
         kind: EdgeKind,
@@ -534,6 +557,8 @@ impl SeedAction<'_> {
             SeedAction::ResourceReassign { .. } => EventKind::ResourceReassigned,
             SeedAction::ContextReassign { .. } => EventKind::ContextReassigned,
             SeedAction::ContextRename { .. } => EventKind::ContextRenamed,
+            SeedAction::ContextRetire { .. } => EventKind::ContextRetired,
+            SeedAction::ContextRestore { .. } => EventKind::ContextRestored,
             SeedAction::RelationshipRetype { .. } => EventKind::RelationshipRetyped,
             SeedAction::RelationshipReweight { .. } => EventKind::RelationshipReweighted,
             SeedAction::InvocationOpen { .. } => EventKind::DelegatedLaunch,
@@ -1631,6 +1656,56 @@ pub async fn fire_with(
             .fetch_one(&mut *conn)
             .await?
             .context("context_rename returned null")?;
+            Ok(Fired::Context(ContextId::from(id)))
+        }
+
+        SeedAction::ContextRetire {
+            context,
+            from_slug,
+            to_slug,
+            emitter,
+        } => {
+            let payload = payloads::ContextRetired {
+                context_id: context,
+                from_slug: from_slug.to_string(),
+                to_slug: to_slug.to_string(),
+            };
+            let id = sqlx::query_scalar!(
+                "SELECT context_retire($1,$2,$3,$4,$5)",
+                serde_json::to_value(&payload)?,
+                emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
+                ctx_corr,
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .context("context_retire returned null")?;
+            Ok(Fired::Context(ContextId::from(id)))
+        }
+
+        SeedAction::ContextRestore {
+            context,
+            from_slug,
+            to_slug,
+            emitter,
+        } => {
+            let payload = payloads::ContextRestored {
+                context_id: context,
+                from_slug: from_slug.to_string(),
+                to_slug: to_slug.to_string(),
+            };
+            let id = sqlx::query_scalar!(
+                "SELECT context_restore($1,$2,$3,$4,$5)",
+                serde_json::to_value(&payload)?,
+                emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
+                ctx_corr,
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .context("context_restore returned null")?;
             Ok(Fired::Context(ContextId::from(id)))
         }
 

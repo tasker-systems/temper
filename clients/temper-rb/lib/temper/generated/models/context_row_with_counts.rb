@@ -35,6 +35,9 @@ module Temper::Generated
 
     attr_accessor :resource_count
 
+    # Whether this context is retired — invisible to every read path and unwriteable, with every row it homes preserved.  **Polarity is inverted from the column on purpose.** The database stores `is_active`, mirroring `kb_teams`; the wire says `retired`, which is the word the product uses. The inversion is written as the identical SQL literal `NOT c.is_active AS \"retired!\"` in every query that selects this column — the two read-axis queries (`list_visible`, `get_visible`, always `false` there by construction) and the two admin-axis queries (`list_retired_administered`, `get_retired_administered`) — and is never re-derived any other way, e.g. never inverted in Rust after the fact.
+    attr_accessor :retired
+
     # The context's per-owner-unique slug (the natural-key half of `@owner/slug`).
     attr_accessor :slug
 
@@ -51,6 +54,7 @@ module Temper::Generated
         :'name' => :'name',
         :'owner_ref' => :'owner_ref',
         :'resource_count' => :'resource_count',
+        :'retired' => :'retired',
         :'slug' => :'slug',
         :'updated' => :'updated'
       }
@@ -77,6 +81,7 @@ module Temper::Generated
         :'name' => :'String',
         :'owner_ref' => :'String',
         :'resource_count' => :'Integer',
+        :'retired' => :'Boolean',
         :'slug' => :'String',
         :'updated' => :'Time'
       }
@@ -152,6 +157,12 @@ module Temper::Generated
         self.resource_count = nil
       end
 
+      if attributes.key?(:'retired')
+        self.retired = attributes[:'retired']
+      else
+        self.retired = nil
+      end
+
       if attributes.key?(:'slug')
         self.slug = attributes[:'slug']
       else
@@ -202,6 +213,10 @@ module Temper::Generated
         invalid_properties.push('invalid value for "resource_count", resource_count cannot be nil.')
       end
 
+      if @retired.nil?
+        invalid_properties.push('invalid value for "retired", retired cannot be nil.')
+      end
+
       if @slug.nil?
         invalid_properties.push('invalid value for "slug", slug cannot be nil.')
       end
@@ -225,6 +240,7 @@ module Temper::Generated
       return false if @name.nil?
       return false if @owner_ref.nil?
       return false if @resource_count.nil?
+      return false if @retired.nil?
       return false if @slug.nil?
       return false if @updated.nil?
       true
@@ -311,6 +327,16 @@ module Temper::Generated
     end
 
     # Custom attribute writer method with validation
+    # @param [Object] retired Value to be assigned
+    def retired=(retired)
+      if retired.nil?
+        fail ArgumentError, 'retired cannot be nil'
+      end
+
+      @retired = retired
+    end
+
+    # Custom attribute writer method with validation
     # @param [Object] slug Value to be assigned
     def slug=(slug)
       if slug.nil?
@@ -343,6 +369,7 @@ module Temper::Generated
           name == o.name &&
           owner_ref == o.owner_ref &&
           resource_count == o.resource_count &&
+          retired == o.retired &&
           slug == o.slug &&
           updated == o.updated
     end
@@ -356,7 +383,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [can_write, created, id, kb_owner_id, kb_owner_table, name, owner_ref, resource_count, slug, updated].hash
+      [can_write, created, id, kb_owner_id, kb_owner_table, name, owner_ref, resource_count, retired, slug, updated].hash
     end
 
     # Builds the object from hash

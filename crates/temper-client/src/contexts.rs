@@ -9,8 +9,8 @@ use temper_core::context_ref::ContextOwnerRef;
 use temper_core::types::cognitive_maps::{AnchorShape, CogmapRegionMetricsRow, CogmapStaleness};
 use temper_core::types::context::{
     ContextCreateRequest, ContextRow, ContextRowWithCounts, ReassignContextOutcome,
-    ReassignContextRequest, RenameContextOutcome, RenameContextRequest, ShareContextOutcome,
-    ShareContextRequest, UnshareContextOutcome,
+    ReassignContextRequest, RenameContextOutcome, RenameContextRequest, RestoreContextOutcome,
+    RetireContextOutcome, ShareContextOutcome, ShareContextRequest, UnshareContextOutcome,
 };
 use temper_core::types::materialize::{MaterializeAck, MaterializeDelta, MaterializeRequest};
 
@@ -39,6 +39,19 @@ impl<'a> ContextClient<'a> {
             .await
     }
 
+    /// GET `/api/contexts?retired=true` — list retired contexts the caller ADMINISTERS, not the
+    /// ones they can read. This rides the admin axis, not `list`'s visibility axis: a retired
+    /// context is invisible to the read predicate by construction (that is what retirement
+    /// means), so it can only ever be listed by someone who could have retired it.
+    pub async fn list_retired(&self) -> Result<Vec<ContextRowWithCounts>> {
+        let token = self.http.resolve_token()?;
+        let path = "/api/contexts?retired=true";
+        let req = self.http.get(path);
+        self.http
+            .send_json(&Method::GET, path, req, Some(&token))
+            .await
+    }
+
     /// Get a single context by ID.
     pub async fn get(&self, id: Uuid) -> Result<ContextRow> {
         let token = self.http.resolve_token()?;
@@ -61,6 +74,33 @@ impl<'a> ContextClient<'a> {
         let req = self.http.post("/api/contexts").json(&body);
         self.http
             .send_json(&Method::POST, "/api/contexts", req, Some(&token))
+            .await
+    }
+
+    /// DELETE /api/contexts/{id} — retire the context (admin-gated). **Not a permanent
+    /// delete**: the context stops being visible on the read axis and stops being writeable,
+    /// but every row it homes is preserved untouched, and the slug is freed for immediate
+    /// reuse. The returned [`RetireContextOutcome`] carries the mangled `context_ref` —
+    /// `restore` accepts that ref (or the bare context id), not the original one, because the
+    /// original address no longer resolves once the row is hidden and the slug has moved.
+    pub async fn delete(&self, context_id: Uuid) -> Result<RetireContextOutcome> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/contexts/{context_id}");
+        let req = self.http.delete(&path);
+        self.http
+            .send_json(&Method::DELETE, &path, req, Some(&token))
+            .await
+    }
+
+    /// POST /api/contexts/{id}/restore — reverse a retirement. Re-derives the address from the
+    /// untouched name rather than trying to recover whatever `delete` mangled the slug to, so
+    /// the returned slug can differ from the one the caller retired under.
+    pub async fn restore(&self, context_id: Uuid) -> Result<RestoreContextOutcome> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/contexts/{context_id}/restore");
+        let req = self.http.post(&path);
+        self.http
+            .send_json(&Method::POST, &path, req, Some(&token))
             .await
     }
 

@@ -1,0 +1,82 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT c.id, c.name,\n               c.owner_table AS \"kb_owner_table!\",\n               c.owner_id AS \"kb_owner_id!\",\n               c.created,\n               c.created AS \"updated!\",\n               c.slug,\n               CASE c.owner_table\n                 WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = c.owner_id)\n                 ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)\n               END AS \"owner_ref!\",\n               -- Computed INSIDE the visibility-gated query (the WHERE below), so a context the\n               -- caller cannot read is absent rather than present-and-false.\n               context_authorable_by_profile($1, c.id) AS \"can_write!\",\n               -- Always `false` here: this is the read axis, and a retired context is invisible\n               -- to `context_visible_to` by construction, so this WHERE can never admit one. The\n               -- column stays in the select list anyway — one honest row shape for both doors.\n               NOT c.is_active AS \"retired!\",\n               -- Counted through the caller's own read predicate, not off the home rows —\n               -- the two joins are co-extensive on this anchor and neither is redundant by\n               -- accident. The reasoning, and what the witness does NOT isolate, is above.\n               (SELECT count(*)\n                  FROM kb_resource_homes rh\n                  JOIN resources_visible_to($1) v ON v.resource_id = rh.resource_id\n                  JOIN kb_resources r ON r.id = rh.resource_id AND r.is_active\n                 WHERE rh.anchor_table = 'kb_contexts' AND rh.anchor_id = c.id) AS \"resource_count!\"\n          FROM kb_contexts c\n         WHERE context_visible_to($1, c.id)\n         ORDER BY c.name\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "kb_owner_table!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "kb_owner_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "created",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "updated!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "slug",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "owner_ref!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "can_write!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 9,
+        "name": "retired!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 10,
+        "name": "resource_count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "cfcca1527672d44d76afc30592a29f3eba3e17459ecac83c2ebe20546984ac50"
+}

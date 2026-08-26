@@ -453,7 +453,8 @@ export interface paths {
         get: operations["get_context"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** Retire a context */
+        delete: operations["delete_context"];
         options?: never;
         head?: never;
         patch?: never;
@@ -594,6 +595,26 @@ export interface paths {
         put?: never;
         /** Rename a context */
         post: operations["rename"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/contexts/{id}/restore": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Restore a retired context */
+        post: operations["restore_context"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3246,6 +3267,19 @@ export interface components {
              *     Together with `slug`, forms the full decorated context ref `{owner_ref}/{slug}`.
              */
             owner_ref: string;
+            /**
+             * @description Whether this context is retired — invisible to every read path and unwriteable, with
+             *     every row it homes preserved.
+             *
+             *     **Polarity is inverted from the column on purpose.** The database stores `is_active`,
+             *     mirroring `kb_teams`; the wire says `retired`, which is the word the product uses. The
+             *     inversion is written as the identical SQL literal `NOT c.is_active AS "retired!"` in
+             *     every query that selects this column — the two read-axis queries (`list_visible`,
+             *     `get_visible`, always `false` there by construction) and the two admin-axis queries
+             *     (`list_retired_administered`, `get_retired_administered`) — and is never re-derived any
+             *     other way, e.g. never inverted in Rust after the fact.
+             */
+            retired: boolean;
             /** @description The context's per-owner-unique slug (the natural-key half of `@owner/slug`). */
             slug: string;
             /** Format: date-time */
@@ -3284,6 +3318,19 @@ export interface components {
             owner_ref: string;
             /** Format: int64 */
             resource_count: number;
+            /**
+             * @description Whether this context is retired — invisible to every read path and unwriteable, with
+             *     every row it homes preserved.
+             *
+             *     **Polarity is inverted from the column on purpose.** The database stores `is_active`,
+             *     mirroring `kb_teams`; the wire says `retired`, which is the word the product uses. The
+             *     inversion is written as the identical SQL literal `NOT c.is_active AS "retired!"` in
+             *     every query that selects this column — the two read-axis queries (`list_visible`,
+             *     `get_visible`, always `false` there by construction) and the two admin-axis queries
+             *     (`list_retired_administered`, `get_retired_administered`) — and is never re-derived any
+             *     other way, e.g. never inverted in Rust after the fact.
+             */
+            retired: boolean;
             /** @description The context's per-owner-unique slug (the natural-key half of `@owner/slug`). */
             slug: string;
             /** Format: date-time */
@@ -6100,6 +6147,51 @@ export interface components {
             /** Format: date-time */
             updated: string;
         };
+        /**
+         * @description What restore hands back — the reverse of [`RetireContextOutcome`], and the same four
+         *     fields, plus `slug_changed`. Restore re-derives the address from the untouched `name`
+         *     rather than trying to recover whatever retire mangled the slug to, so the returned slug
+         *     can differ from the one the caller retired under (spec §2.4).
+         */
+        RestoreContextOutcome: {
+            context_id: components["schemas"]["ContextId"];
+            /** @description The full decorated ref, `{owner_ref}/{slug}`. */
+            context_ref: string;
+            /** @description Unchanged by restore. The display label was never touched by retire either. */
+            name: string;
+            /**
+             * @description The address after restore — the name's canonical slug, suffixed only if something else
+             *     has since taken it.
+             */
+            slug: string;
+            /**
+             * @description True when the address this restore hands back differs from the address the context
+             *     was retired under. That includes the case where the original address had been freed
+             *     meanwhile and restore landed on it — the caller still moves off the ref they retired
+             *     with, so it is still a change to report.
+             *
+             *     Reported rather than applied silently: handing back a different address without
+             *     saying so is the failure mode `rename` explicitly refuses. The baseline is the
+             *     `from_slug` recorded on the `context_retired` event; a context retired before that
+             *     event existed has no recorded baseline and reports `true`, because nothing proves the
+             *     address was preserved. Witness:
+             *     `restore_reports_a_change_when_it_lands_on_a_freed_sibling_address`.
+             */
+            slug_changed: boolean;
+        };
+        /**
+         * @description What retire hands back. The caller needs BOTH halves to undo it: the read floor hides the
+         *     context and the slug moved, so the ref they arrived with no longer names the row (spec §2.4.1).
+         */
+        RetireContextOutcome: {
+            context_id: components["schemas"]["ContextId"];
+            /** @description The full decorated ref, `{owner_ref}/{slug}`, which is what `restore` accepts. */
+            context_ref: string;
+            /** @description Unchanged by retirement. The display label is not an address. */
+            name: string;
+            /** @description The address after mangling — `<slug>-retired`, suffixed if that was taken. */
+            slug: string;
+        };
         /** @description One stage whose rows come back, and how much of each row. */
         ReturnSpec: {
             stage: components["schemas"]["StageName"];
@@ -8246,7 +8338,10 @@ export interface operations {
     };
     list_contexts: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description List retired contexts you administer instead of the contexts you can read. */
+                retired?: boolean | null;
+            };
             header?: {
                 /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
                 "X-Temper-Surface"?: "cli" | "sdk";
@@ -8326,6 +8421,46 @@ export interface operations {
                 };
             };
             /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    delete_context: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Context ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Context retired (soft-deleted, and its slug freed for reuse) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetireContextOutcome"];
+                };
+            };
+            /** @description Caller may read but not administer this context */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Context not found (uniform — no existence oracle) */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -8595,6 +8730,53 @@ export interface operations {
                 content?: never;
             };
             /** @description Another context under the same owner already holds the derived slug */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    restore_context: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Context ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Context restored */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoreContextOutcome"];
+                };
+            };
+            /** @description Caller may read but not administer this context */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Context not found, or not retired (uniform — no existence oracle) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The restored address collided under a concurrent write */
             409: {
                 headers: {
                     [name: string]: unknown;

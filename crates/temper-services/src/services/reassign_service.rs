@@ -37,6 +37,13 @@ async fn home_of(pool: &PgPool, resource: Uuid) -> ApiResult<HomeRow> {
 
 /// Is there a team T where caller manages T, `resource` is homed in a context shared
 /// to T, and `to` is a member of T? (admin-path reach: from-scope + into-scope).
+///
+/// Both the team and the context must be live. A retired context closes this arm the
+/// same way it closes the team-share read arm in `contexts_readable_by_teams` — without
+/// that floor, an admin whose only reach was the team share could reassign a retired
+/// context's resource to themselves and then read it through the owner arm of
+/// `resources_visible_to`, which has no context floor. Witness:
+/// `admin_cannot_reassign_via_retired_context`.
 async fn admin_reach(
     pool: &PgPool,
     caller: ProfileId,
@@ -50,6 +57,8 @@ async fn admin_reach(
             FROM kb_team_contexts tc
             JOIN kb_teams t
               ON t.id = tc.team_id AND t.is_active
+            JOIN kb_contexts c
+              ON c.id = tc.context_id AND c.is_active
             JOIN kb_resource_homes h
               ON h.anchor_table = 'kb_contexts' AND h.anchor_id = tc.context_id
             JOIN kb_team_members cm
@@ -142,7 +151,11 @@ pub struct ScopedOwnedRow {
     pub context_ref: String,
 }
 
-/// Resources owned by `profile_id` and homed in a context shared to `team_id`.
+/// Resources owned by `profile_id` and homed in a *live* context shared to `team_id`.
+/// A retired context drops out of this scope, so the bulk handoff and `remove_member`'s
+/// residual surfacing both stop counting it. Witness:
+/// `bulk_excludes_a_retired_contexts_resources`.
+///
 /// Ordered by `(context slug, resource_id)` for stable output only — consumers
 /// that group by context MUST key on `context_id` (a slug is unique only per-owner,
 /// so two distinct contexts can share a slug and are NOT guaranteed to be adjacent).
@@ -163,7 +176,7 @@ pub async fn team_scoped_owned(
         FROM kb_team_contexts tc
         JOIN kb_resource_homes h
           ON h.anchor_table = 'kb_contexts' AND h.anchor_id = tc.context_id
-        JOIN kb_contexts c ON c.id = tc.context_id
+        JOIN kb_contexts c ON c.id = tc.context_id AND c.is_active
         LEFT JOIN kb_teams    t ON c.owner_table = 'kb_teams'    AND t.id = c.owner_id
         LEFT JOIN kb_profiles p ON c.owner_table = 'kb_profiles' AND p.id = c.owner_id
         WHERE tc.team_id = $1 AND h.owner_profile_id = $2
@@ -367,6 +380,14 @@ mod tests {
     async fn soft_delete_team(pool: &PgPool, team: Uuid) {
         sqlx::query("UPDATE kb_teams SET is_active = false WHERE id = $1")
             .bind(team)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    async fn retire_ctx(pool: &PgPool, ctx: Uuid) {
+        sqlx::query("UPDATE kb_contexts SET is_active = false WHERE id = $1")
+            .bind(ctx)
             .execute(pool)
             .await
             .unwrap();
@@ -592,6 +613,72 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, ApiError::Forbidden));
         assert_eq!(owner_of(&pool, r).await, *leaver, "owner unchanged");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn admin_cannot_reassign_via_retired_context(pool: PgPool) {
+        // Same shape as the passing admin case, but the CONTEXT is retired. Retirement
+        // revokes the team-share arm; the reassign must not hand it back as ownership.
+        let alice = mk_profile(&pool, "alice").await;
+        let admin = mk_profile(&pool, "admin").await;
+        let steward = mk_profile(&pool, "steward").await;
+        let team = mk_team(&pool, "acme").await;
+        add_member(&pool, team, admin, "owner").await;
+        add_member(&pool, team, steward, "member").await;
+        let ctx = mk_context(&pool, "shared", alice).await;
+        share_ctx(&pool, ctx, team).await;
+        let r = mk_homed_resource(&pool, ctx, alice).await;
+        retire_ctx(&pool, ctx).await;
+
+        let err = reassign_resource(&pool, admin, r, *steward)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ApiError::Forbidden));
+        assert_eq!(owner_of(&pool, r).await, *alice, "owner unchanged");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn owner_can_still_reassign_out_of_a_retired_context(pool: PgPool) {
+        // Anti-trap: retirement floors the ADMIN arm only. An owner must keep being able
+        // to hand off their own work after the context is retired.
+        let alice = mk_profile(&pool, "alice").await;
+        let bob = mk_profile(&pool, "bob").await;
+        let ctx = mk_context(&pool, "alice-ctx", alice).await;
+        let r = mk_homed_resource(&pool, ctx, alice).await;
+        retire_ctx(&pool, ctx).await;
+
+        reassign_resource(&pool, alice, r, *bob)
+            .await
+            .expect("owner reassigns out of a retired context");
+        assert_eq!(owner_of(&pool, r).await, *bob);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn bulk_excludes_a_retired_contexts_resources(pool: PgPool) {
+        // The team is live, so the call is authorized and succeeds — with a reduced scope.
+        let admin = mk_profile(&pool, "admin").await;
+        let leaver = mk_profile(&pool, "leaver").await;
+        let steward = mk_profile(&pool, "steward").await;
+        let team = mk_team(&pool, "acme").await;
+        add_member(&pool, team, admin, "owner").await;
+        add_member(&pool, team, steward, "member").await;
+
+        let live = mk_context(&pool, "live", leaver).await;
+        share_ctx(&pool, live, team).await;
+        let retired = mk_context(&pool, "retired", leaver).await;
+        share_ctx(&pool, retired, team).await;
+
+        let in_scope = mk_homed_resource(&pool, live, leaver).await; // live share → moves
+        let out_scope = mk_homed_resource(&pool, retired, leaver).await; // retired → stays
+        retire_ctx(&pool, retired).await;
+
+        let moved = reassign_team_resources(&pool, admin, team, *leaver, *steward)
+            .await
+            .expect("live team, reduced scope");
+
+        assert_eq!(moved, vec![in_scope]);
+        assert_eq!(owner_of(&pool, in_scope).await, *steward);
+        assert_eq!(owner_of(&pool, out_scope).await, *leaver, "retired stays");
     }
 
     #[sqlx::test(migrations = "../../migrations")]

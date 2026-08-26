@@ -1,0 +1,80 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name)\n        VALUES ($1, $2, $3, $4, $5)\n        RETURNING id, name,\n                  owner_table AS \"kb_owner_table!\",\n                  owner_id AS \"kb_owner_id!\",\n                  created,\n                  created AS \"updated!\",\n                  slug,\n                  CASE owner_table\n                    WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = owner_id)\n                    ELSE                   '@' || (SELECT handle FROM kb_profiles WHERE id = owner_id)\n                  END AS \"owner_ref!\",\n                  -- Placeholder: the real value is computed in a SEPARATE statement below.\n                  -- `context_authorable_by_profile` is STABLE, so called here it would read the\n                  -- snapshot from BEFORE this INSERT and could not see the row being created —\n                  -- the personal-owned arm would answer `false` for the creator's own context.\n                  false AS \"can_write!\",\n                  -- A freshly created context is never retired.\n                  false AS \"retired!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "kb_owner_table!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "kb_owner_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "created",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "updated!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "slug",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "owner_ref!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "can_write!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 9,
+        "name": "retired!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Varchar",
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "d5dd8c6e6f2bd0977c018b91ad8c4886bbef4153979c2229cf28885d8e098d75"
+}

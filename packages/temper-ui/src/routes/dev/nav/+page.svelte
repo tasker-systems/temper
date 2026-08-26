@@ -24,6 +24,9 @@
 			owner_ref: ownerRef,
 			// The harness renders the read surface; authority is not its subject.
 			can_write: false,
+			// Retirement is an admin-axis concept; these nav fixtures are read-axis rows,
+			// which can never be retired. Required by `ContextRowWithCounts` all the same.
+			retired: false,
 		};
 	}
 

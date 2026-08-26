@@ -777,6 +777,64 @@ pub async fn rename_context_with(
     Ok(())
 }
 
+/// Retire a context in place (event-sourced) under an explicit [`EventContext`]. Flips
+/// `kb_contexts.is_active` to false and rewrites its slug to the already-mangled address the
+/// caller computed (via `next_unique_context_slug`); `kb_contexts` is a replay input table, so the
+/// `context_retired` projector is an idempotent re-apply on replay. `from_slug` is the address
+/// before the mangle, `to_slug` after — `from_slug` is carried for the trail only (`kb_contexts`
+/// keeps no before-image), never read by the projector.
+pub async fn retire_context_with(
+    pool: &PgPool,
+    context: ContextId,
+    from_slug: &str,
+    to_slug: &str,
+    emitter: EntityId,
+    ctx: EventContext,
+) -> Result<()> {
+    let mut tx = begin_scoped(pool).await?;
+    fire_with(
+        &mut tx,
+        SeedAction::ContextRetire {
+            context,
+            from_slug,
+            to_slug,
+            emitter,
+        },
+        ctx,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Restore a retired context in place (event-sourced) under an explicit [`EventContext`]. The
+/// mirror of [`retire_context_with`]: flips `kb_contexts.is_active` back to true and writes the
+/// re-derived address; the `context_restored` projector is likewise an idempotent re-apply on
+/// replay.
+pub async fn restore_context_with(
+    pool: &PgPool,
+    context: ContextId,
+    from_slug: &str,
+    to_slug: &str,
+    emitter: EntityId,
+    ctx: EventContext,
+) -> Result<()> {
+    let mut tx = begin_scoped(pool).await?;
+    fire_with(
+        &mut tx,
+        SeedAction::ContextRestore {
+            context,
+            from_slug,
+            to_slug,
+            emitter,
+        },
+        ctx,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 // ── cogmap-homed kernel writes (L0 reconcile) ──────────────────────────────────
 
 /// Create a kernel resource homed to a **cogmap** (not a context) — the shape the L0 reconciler
