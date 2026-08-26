@@ -221,7 +221,25 @@ pub async fn check_context_staleness(
 /// e.g. `"temper"`), not a decorated ref like `@me/temper`. Callers should
 /// derive it from the listed rows' `context_name` field rather than forwarding
 /// the raw command-line ref.
-pub fn prune_context(vault_root: &Path, context: &str, keep: &HashSet<PathBuf>) -> Result<usize> {
+///
+/// **`owners` bounds the sweep, and it is load-bearing.** This walked *every*
+/// owner directory once, and `keep` only ever holds the paths written for the
+/// one context being pulled — so with `@me/temper` and `+acme/temper` both
+/// projected, pulling either deleted the other outright. A context name is not
+/// unique across owners; `temper`, `notes` and `planning` are exactly the names
+/// two owners both pick.
+///
+/// It cannot narrow to a single directory either, because one context legitimately
+/// has two spellings on disk: `@<handle>` from before identity was resolvable, and
+/// `@me` after. Pruning only the current one would leave the pre-rename tree
+/// standing forever. So the caller passes the set of segments *this* context can
+/// be under — see `owner_candidates` — and nothing outside it is touched.
+pub fn prune_context(
+    vault_root: &Path,
+    owners: &[String],
+    context: &str,
+    keep: &HashSet<PathBuf>,
+) -> Result<usize> {
     let mut removed = 0usize;
     let owner_iter = match std::fs::read_dir(vault_root) {
         Ok(iter) => iter,
@@ -236,6 +254,10 @@ pub fn prune_context(vault_root: &Path, context: &str, keep: &HashSet<PathBuf>) 
         }
         // Skip hidden dirs such as `.temper`.
         if owner_entry.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
+        let owner_name = owner_entry.file_name();
+        if !owners.iter().any(|o| o.as_str() == owner_name) {
             continue;
         }
         let context_dir = owner_entry.path().join(context);
@@ -318,6 +340,54 @@ fn projection_owner(row: &ResourceView, me: Option<&str>) -> String {
 
 /// The self-relative owner directory: the caller's own resources live here.
 pub const SELF_OWNER_SEGMENT: &str = "@me";
+
+/// Every owner directory one context may occupy, given who is asking.
+///
+/// A context has one owner but can have two *spellings* on disk, because the
+/// self-relative rewrite arrived after the tree did: files written before
+/// identity was resolvable sit under `@<handle>`, and files written after sit
+/// under `@me`. Both are the same context, so a prune must reach both — that is
+/// what makes the rename self-cleaning rather than a duplicate tree.
+///
+/// **`@me` is only ever a candidate for the caller's own context.** On disk
+/// `@me` means *this machine's user*, so offering it while pulling someone
+/// else's context would aim the prune at the caller's own identically-named
+/// tree. When identity is unknown the answer is the server's spelling alone:
+/// a pre-existing `@me` tree is then left standing, which is the end that loses
+/// no work.
+///
+/// Contrast [`removal_owner_candidates`], which is deliberately less careful —
+/// and may be, because it is bounded by a filename rather than a directory.
+fn owner_candidates(server_owner_ref: &str, me: Option<&str>) -> Vec<String> {
+    let mut owners = vec![server_owner_ref.to_string()];
+    if me == Some(server_owner_ref) && server_owner_ref != SELF_OWNER_SEGMENT {
+        owners.push(SELF_OWNER_SEGMENT.to_string());
+    }
+    owners
+}
+
+/// Every owner directory **one resource's file** may sit in.
+///
+/// This offers `@me` for any profile-owned context without asking who the caller
+/// is, where [`owner_candidates`] refuses to — and the difference is what each
+/// one is bounded by. A prune matches a *directory* and deletes everything
+/// unlisted inside it, so a wrong owner costs someone else's whole context. A
+/// removal matches one exact filename, and the stem carries the resource's uuid
+/// (`projection_stem`), so `@me/<ctx>/<type>/<title>-<uuid>.md` can only ever be
+/// *this* resource — projected under `@me` only if it was the caller's own.
+///
+/// That is what lets removal cover the case identity resolution cannot: the
+/// writer and the remover each resolve `me` over the network and can disagree,
+/// so the remover must reach the spelling the writer used even when its own
+/// profile call just failed. `@me` is skipped for a team context, where the
+/// writer could never have produced it.
+fn removal_owner_candidates(server_owner_ref: &str) -> Vec<String> {
+    let mut owners = vec![server_owner_ref.to_string()];
+    if server_owner_ref.starts_with('@') && server_owner_ref != SELF_OWNER_SEGMENT {
+        owners.push(SELF_OWNER_SEGMENT.to_string());
+    }
+    owners
+}
 
 /// The row's owner segment as the *server* names it — `@<handle>` or
 /// `+<team-slug>`, never self-relative. Split out from [`projection_owner`] so
@@ -468,8 +538,16 @@ pub async fn write_resource_file(
 ///
 /// A by-row convenience over [`remove_resource_file`] for the id-addressed
 /// `temper resource delete` path. **Every path component is derived by the same
-/// functions the writer uses** — `projection_owner` and `projection_stem` — so
+/// functions the writer uses** — `owner_segment` and `projection_stem` — so
 /// the remover cannot look somewhere the writer never wrote.
+///
+/// **It takes no identity, deliberately.** The writer's owner segment depends on
+/// who the caller is, but the remover does not have to re-answer that question:
+/// it sweeps every spelling the file could be under
+/// (`removal_owner_candidates`), which is sound because the stem carries the
+/// resource's uuid. Asking again would mean a second network call that can fail
+/// independently of the first, and a delete that quietly missed whenever the two
+/// answers disagreed.
 ///
 /// It could before. The owner segment came from `config.owner_for_context()`,
 /// which reads `Config::subscriptions` — a field hardcoded to `Vec::new()`, so
@@ -477,11 +555,7 @@ pub async fn write_resource_file(
 /// Delete's cache cleanup was therefore a silent no-op on every machine: the
 /// removal targeted a path that never existed, and an absent file is a
 /// deliberate success here, so nothing reported it.
-pub fn remove_resource_file_for_row(
-    vault_root: &Path,
-    row: &ResourceView,
-    me: Option<&str>,
-) -> Result<()> {
+pub fn remove_resource_file_for_row(vault_root: &Path, row: &ResourceView) -> Result<()> {
     // A cogmap-homed resource was never projected to disk (no context path),
     // so there is nothing to remove. Skip — same bounded edge as the writer.
     let Some(context) = row.context_name.as_deref() else {
@@ -492,9 +566,18 @@ pub fn remove_resource_file_for_row(
         return Ok(());
     };
 
-    let owner = projection_owner(row, me);
     let stem = projection_stem(row);
-    remove_resource_file(vault_root, &owner, context, &row.doc_type_name, &stem)
+    // Try every spelling this resource's context can be under, not just the one
+    // *this* invocation resolves to. The writer and the remover each resolve
+    // identity over the network, and they can disagree: a pull that reached
+    // `GET /api/profile` writes `@me/…`, and a later delete whose profile call
+    // fails would look under `@<handle>/…`, find nothing, and report success
+    // over a surviving file. An absent file is already a silent success here, so
+    // sweeping both costs nothing and removes the disagreement window.
+    for owner in removal_owner_candidates(&owner_segment(row)) {
+        remove_resource_file(vault_root, &owner, context, &row.doc_type_name, &stem)?;
+    }
+    Ok(())
 }
 
 /// Remove a resource's projection file at its canonical vault path.
@@ -635,19 +718,26 @@ async fn context_dir_name(
     context: &str,
     rows: &[ResourceView],
     me: Option<&str>,
-) -> Option<String> {
-    if let Some(name) = rows_dir_name(rows) {
-        return Some(name);
+) -> Option<(Vec<String>, String)> {
+    if let Some(found) = rows_dir_name(rows, me) {
+        return Some(found);
     }
     resolve_context_row(client, context, me)
         .await
-        .map(|c| c.name)
+        .map(|c| (owner_candidates(&c.owner_ref, me), c.name))
 }
 
-/// The row branch of [`context_dir_name`]: `context_name` off the first listed
-/// row. Split out so the no-server half stays a pure function.
-fn rows_dir_name(rows: &[ResourceView]) -> Option<String> {
-    rows.first().and_then(|r| r.context_name.clone())
+/// The row branch of [`context_dir_name`]: the owner segments and `context_name`
+/// off the first listed row. Split out so the no-server half stays a pure
+/// function.
+///
+/// The owner comes from [`owner_segment`], not [`projection_owner`] — the
+/// candidates are built from the **server's** spelling, and `owner_candidates`
+/// is the one place that decides whether `@me` joins it.
+fn rows_dir_name(rows: &[ResourceView], me: Option<&str>) -> Option<(Vec<String>, String)> {
+    let row = rows.first()?;
+    let name = row.context_name.clone()?;
+    Some((owner_candidates(&owner_segment(row), me), name))
 }
 
 /// Prune projection files for resources no longer present in the context.
@@ -659,8 +749,8 @@ async fn prune_absent_files(
     keep: &HashSet<PathBuf>,
     me: Option<&str>,
 ) -> Result<usize> {
-    match context_dir_name(client, context, rows, me).await.as_deref() {
-        Some(name) => prune_context(vault_root, name, keep),
+    match context_dir_name(client, context, rows, me).await {
+        Some((owners, name)) => prune_context(vault_root, &owners, &name, keep),
         None => Ok(0),
     }
 }
@@ -760,13 +850,160 @@ mod tests {
         let mut keep_set = HashSet::new();
         keep_set.insert(keep.clone());
 
-        let pruned = prune_context(root, "myctx", &keep_set).unwrap();
+        let pruned = prune_context(root, &["@me".to_string()], "myctx", &keep_set).unwrap();
 
         assert_eq!(pruned, 1, "exactly one stale .md removed");
         assert!(keep.exists(), "listed file kept");
         assert!(!stale.exists(), "unlisted .md removed");
         assert!(notes.exists(), "non-.md file untouched");
         assert!(other.exists(), "other context untouched");
+    }
+
+    /// A context name is not unique across owners, and the prune must not act as
+    /// though it were.
+    ///
+    /// `keep` only ever holds the paths written for the **one** context being
+    /// pulled, so a sweep that visited every owner directory deleted every other
+    /// owner's identically-named context outright — and `temper`, `notes` and
+    /// `planning` are precisely the names two owners both choose. Pulling my own
+    /// `temper` destroyed the team's.
+    #[test]
+    fn pruning_one_owners_context_leaves_another_owners_namesake_alone() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path();
+        let mine = root.join("@me/temper/task");
+        let theirs = root.join("+acme/temper/task");
+        std::fs::create_dir_all(&mine).unwrap();
+        std::fs::create_dir_all(&theirs).unwrap();
+        let my_file = mine.join("a.md");
+        let their_file = theirs.join("b.md");
+        std::fs::write(&my_file, "mine").unwrap();
+        std::fs::write(&their_file, "theirs").unwrap();
+
+        // A pull of my `temper`: `keep` holds only what it wrote.
+        let mut keep = HashSet::new();
+        keep.insert(my_file.clone());
+        let pruned =
+            prune_context(root, &owner_candidates("@j", Some("@j")), "temper", &keep).unwrap();
+
+        assert_eq!(pruned, 0, "nothing of mine was stale");
+        assert!(my_file.exists(), "my own listed file kept");
+        assert!(
+            their_file.exists(),
+            "another owner's identically-named context was swept, at {}",
+            their_file.display()
+        );
+    }
+
+    /// The other half of the same bound: both spellings of **my own** context are
+    /// reachable, so the `@<handle>` → `@me` rename cleans up after itself.
+    ///
+    /// This is why the prune cannot simply narrow to one directory. A tree written
+    /// before identity was resolvable sits under `@<handle>`; the pull that starts
+    /// writing `@me` must remove it, or the vault carries two copies forever.
+    ///
+    /// **Both directories hold something stale, deliberately.** An earlier draft
+    /// put the kept file under `@me` and the only stale one under `@<handle>` —
+    /// and passed with `@me` absent from the candidate set, because nothing it
+    /// asserted ever required reaching that directory. A bite probe caught it. The
+    /// name claimed a reach the assertions did not exercise.
+    #[test]
+    fn a_pull_prunes_both_spellings_of_my_own_context() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path();
+        let old_tree = root.join("@j-cole-taylor/temper/task");
+        let new_tree = root.join("@me/temper/task");
+        std::fs::create_dir_all(&old_tree).unwrap();
+        std::fs::create_dir_all(&new_tree).unwrap();
+        // The pre-rename copy, and a resource deleted server-side since the last
+        // pull — one stale file in each spelling, so reaching only one is visible.
+        let pre_rename = old_tree.join("a.md");
+        let deleted_upstream = new_tree.join("gone.md");
+        let current = new_tree.join("a.md");
+        std::fs::write(&pre_rename, "old").unwrap();
+        std::fs::write(&deleted_upstream, "gone").unwrap();
+        std::fs::write(&current, "new").unwrap();
+
+        let mut keep = HashSet::new();
+        keep.insert(current.clone());
+        let owners = owner_candidates("@j-cole-taylor", Some("@j-cole-taylor"));
+        let pruned = prune_context(root, &owners, "temper", &keep).unwrap();
+
+        assert_eq!(pruned, 2, "one stale file in each spelling of my context");
+        assert!(current.exists(), "the current file is kept");
+        assert!(
+            !pre_rename.exists(),
+            "the pre-rename tree is left standing at {}",
+            pre_rename.display()
+        );
+        assert!(
+            !deleted_upstream.exists(),
+            "the current spelling was not swept at {}",
+            deleted_upstream.display()
+        );
+    }
+
+    /// `@me` is offered only for the caller's OWN context.
+    ///
+    /// On disk `@me` names this machine's user, so offering it while pulling
+    /// someone else's context would aim the prune at the caller's own
+    /// identically-named tree. Identity-unknown answers with the server's
+    /// spelling alone — a stale `@me` tree survives, which loses no work.
+    #[test]
+    fn the_self_relative_segment_is_a_candidate_only_for_my_own_context() {
+        assert_eq!(
+            owner_candidates("@j-cole-taylor", Some("@j-cole-taylor")),
+            vec!["@j-cole-taylor".to_string(), "@me".to_string()]
+        );
+        assert_eq!(
+            owner_candidates("@some-other-human", Some("@j-cole-taylor")),
+            vec!["@some-other-human".to_string()]
+        );
+        assert_eq!(
+            owner_candidates("+platform-eng", Some("@j-cole-taylor")),
+            vec!["+platform-eng".to_string()]
+        );
+        assert_eq!(
+            owner_candidates("@j-cole-taylor", None),
+            vec!["@j-cole-taylor".to_string()]
+        );
+    }
+
+    /// The writer and the remover each resolve identity over the network, and a
+    /// delete must still find the file when they DISAGREE.
+    ///
+    /// `what_the_writer_wrote_is_what_the_remover_removes` runs both identity
+    /// states, but only ever in agreement — so it could not see this. A pull that
+    /// reached `GET /api/profile` writes `@me/…`; a later delete whose profile call
+    /// fails resolves `None`, looks under `@<handle>/…`, finds nothing, and reports
+    /// success over a file that is still there. An absent file is a silent success
+    /// by design, which is exactly what makes the miss invisible.
+    #[test]
+    fn the_remover_finds_the_file_when_identity_resolution_disagrees() {
+        for wrote_with in [Some("@j-cole-taylor"), None] {
+            let dir = tempfile::TempDir::new().unwrap();
+            let mut row = row_titled("A Projected Resource", Uuid::now_v7());
+            row.owner_handle = "j-cole-taylor".to_string();
+            row.context_owner_ref = Some("@j-cole-taylor".to_string());
+
+            let written = write_resource_file_from_parts(
+                dir.path(),
+                &row,
+                &body_only("# body\n"),
+                wrote_with,
+            )
+            .unwrap()
+            .unwrap();
+            assert!(written.exists());
+
+            remove_resource_file_for_row(dir.path(), &row).unwrap();
+
+            assert!(
+                !written.exists(),
+                "written with me={wrote_with:?}: the file survived at {}",
+                written.display()
+            );
+        }
     }
 
     #[test]
@@ -818,7 +1055,8 @@ mod tests {
     fn prune_returns_zero_when_vault_root_absent() {
         let dir = tempfile::TempDir::new().unwrap();
         let missing = dir.path().join("does-not-exist");
-        let pruned = prune_context(&missing, "anyctx", &HashSet::new()).unwrap();
+        let pruned =
+            prune_context(&missing, &["@me".to_string()], "anyctx", &HashSet::new()).unwrap();
         assert_eq!(pruned, 0, "absent vault root prunes nothing, no error");
     }
 
@@ -992,7 +1230,7 @@ mod tests {
                     .unwrap();
             assert!(written.exists(), "writer produced {}", written.display());
 
-            remove_resource_file_for_row(dir.path(), &row, me).unwrap();
+            remove_resource_file_for_row(dir.path(), &row).unwrap();
 
             assert!(
                 !written.exists(),
@@ -1145,11 +1383,17 @@ mod tests {
     fn the_projection_directory_name_comes_off_the_row() {
         let row = row_titled("Any", Uuid::now_v7());
         // `row_titled` homes the row in context "myctx".
+        let mut row = row;
+        row.context_owner_ref = Some("@j-cole-taylor".to_string());
+        let (owners, name) = rows_dir_name(std::slice::from_ref(&row), Some("@j-cole-taylor"))
+            .expect("a listed row names one");
+        assert_eq!(name, "myctx");
+        // The row is the caller's own, so both spellings of it are in play.
         assert_eq!(
-            rows_dir_name(std::slice::from_ref(&row)).as_deref(),
-            Some("myctx")
+            owners,
+            vec!["@j-cole-taylor".to_string(), "@me".to_string()]
         );
-        assert_eq!(rows_dir_name(&[]), None);
+        assert!(rows_dir_name(&[], None).is_none());
     }
 
     #[test]

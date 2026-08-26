@@ -1424,7 +1424,7 @@ pub fn delete(
         origin: temper_workflow::operations::Surface::CliCloud,
     };
 
-    let (runtime, backend, client) = crate::backend_select::build_backend(
+    let (runtime, backend, _client) = crate::backend_select::build_backend(
         config,
         row.context_name.as_deref().unwrap_or_default(),
     )?;
@@ -1432,13 +1432,11 @@ pub fn delete(
 
     // Projection refresh: remove the resource's projection file. Best-effort
     // — a removal failure must not fail the (already-committed) delete.
-    // `me` is resolved the same way the writer resolves it, because the remover
-    // must look exactly where the writer wrote; an unresolvable identity makes
-    // both fall back together.
-    let me = runtime.block_on(crate::projection::self_owner_ref(&client));
-    if let Err(e) =
-        crate::projection::remove_resource_file_for_row(&config.vault_root, &row, me.as_deref())
-    {
+    // No identity round-trip here: the remover sweeps every spelling the file
+    // could be under, which the uuid in the stem makes unambiguous. Resolving
+    // `me` again would add a call that can fail on its own and leave the delete
+    // looking in the one directory the writer did not use.
+    if let Err(e) = crate::projection::remove_resource_file_for_row(&config.vault_root, &row) {
         output::warning(format!("could not remove projection file: {e}"));
     }
 
