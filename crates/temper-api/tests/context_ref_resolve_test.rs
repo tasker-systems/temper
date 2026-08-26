@@ -439,3 +439,64 @@ async fn retired_team_context_does_not_resolve_for_a_member(pool: PgPool) {
         "expected NotFound for a retired team context, got {err:?}"
     );
 }
+
+/// For ONE slug, "it is retired" and "it never existed" must be indistinguishable.
+///
+/// The comparison has to hold the SLUG constant and vary existence. An earlier draft of this test
+/// compared the refusals for two *different* slugs and failed — correctly: each refusal echoes the
+/// slug the caller supplied, so different inputs give different strings, and that difference
+/// discloses nothing. The oracle is narrower: ask for one name and learn from the answer whether a
+/// retired context sits behind it.
+///
+/// The pair above (`retired_context_does_not_resolve_*`) asserts only `matches!(err, NotFound(_))`,
+/// which a tuple variant satisfies whatever string it carries — the same blind spot
+/// `the_three_handle_slug_refusals_are_indistinguishable` was written for. Gating an arm with a
+/// bare refusal while its miss names the slug would reopen exactly this.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn one_slug_refuses_alike_whether_retired_or_absent(pool: PgPool) {
+    async fn refusal(pool: &PgPool, principal: ProfileId, ref_str: &str) -> String {
+        let r = parse_context_ref(ref_str).expect("valid ref");
+        match context_service::resolve_context_ref(pool, principal, &r).await {
+            Err(ApiError::NotFound(msg)) => msg,
+            other => panic!("{ref_str} must refuse with NotFound; got {other:?}"),
+        }
+    }
+
+    // ── @me: same ref, one principal where it is retired, one where it is absent ──
+    let email_r = format!("parity-retired-{}@example.com", Uuid::new_v4());
+    let (retired_owner, retired_ctx) =
+        common::fixtures::create_test_profile_with_context(&pool, &email_r).await;
+    retire(&pool, retired_ctx, "temper-retired").await;
+
+    let email_a = format!("parity-absent-{}@example.com", Uuid::new_v4());
+    let (absent_owner, _) =
+        common::fixtures::create_test_profile_with_context(&pool, &email_a).await;
+
+    let me_retired = refusal(&pool, ProfileId::from(retired_owner), "@me/temper-retired").await;
+    let me_absent = refusal(&pool, ProfileId::from(absent_owner), "@me/temper-retired").await;
+    assert_eq!(
+        me_retired, me_absent,
+        "@me/temper-retired must read alike whether the context is retired or was never there — \
+         retired {me_retired:?}, absent {me_absent:?}"
+    );
+
+    // ── +team: same ref shape against two teams the caller belongs to ─────────
+    let member = absent_owner;
+    let t_retired = format!("parity-rt-{}", &Uuid::new_v4().simple().to_string()[..8]);
+    let (retired_team, team_ctx) = insert_team_with_context(&pool, &t_retired, "notes").await;
+    add_team_member(&pool, retired_team, member).await;
+    retire(&pool, team_ctx, "notes-retired").await;
+
+    let t_absent = format!("parity-ab-{}", &Uuid::new_v4().simple().to_string()[..8]);
+    let (absent_team, _) = insert_team_with_context(&pool, &t_absent, "notes").await;
+    add_team_member(&pool, absent_team, member).await;
+
+    let principal = ProfileId::from(member);
+    let team_retired = refusal(&pool, principal, &format!("+{t_retired}/notes-retired")).await;
+    let team_absent = refusal(&pool, principal, &format!("+{t_absent}/notes-retired")).await;
+    assert_eq!(
+        team_retired, team_absent,
+        "+team/notes-retired must read alike whether retired or never there — \
+         retired {team_retired:?}, absent {team_absent:?}"
+    );
+}

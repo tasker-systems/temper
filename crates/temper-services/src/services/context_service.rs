@@ -175,17 +175,40 @@ pub async fn get_visible(
 /// the read refusals above rather than a fourth copy of the same defence.
 pub(crate) const CONTEXT_REFUSAL: &str = "context not found or not readable";
 
+/// The refusal the two **self-namespace** arms render — `@me/slug` and `+team/slug`, where the
+/// caller either owns the namespace or is a member of it, so echoing the slug they supplied
+/// discloses nothing. [`CONTEXT_REFUSAL`]'s doc records that exemption for `@me`.
+///
+/// It exists because each of those arms now has **two** ways to fail — no such slug, and a slug
+/// whose context is retired — and they must be indistinguishable. Rendering one of them bare
+/// would let a member tell "never existed" from "retired", which is the one-bit existence oracle
+/// the `@handle` arm's three-way byte-identity exists to prevent. One function so the two arms
+/// cannot drift apart, for the reason the constant above gives.
+fn context_slug_refusal(slug: &str) -> ApiError {
+    ApiError::NotFound(format!("context {slug} not found or not readable"))
+}
+
 /// Resolve a context ref to a `ContextId`, gated to what `principal` may see.
 ///
 /// The single source of truth for context resolution. `@me` uses the caller's
 /// profile; `@handle`/`+team` resolve the owner then the `(owner, slug)` row;
-/// a bare UUID must be visible to the principal.
+/// a bare UUID names the row directly.
+///
+/// **All four arms end at `context_visible_to`.** Resolving the row is never the gate — each arm
+/// finds a `(owner, slug)` or an id and then asks the read predicate, so this function and
+/// `context_visible_to` cannot disagree. That matters since context retirement gave the predicate
+/// something to refuse for a row that is still present: a retired context resolves through no arm,
+/// including `@me` for its own owner and `+team` for a member. Retired contexts are addressed on
+/// the ADMIN axis (`get_retired_administered`, `resolve_context_id_for_restore`), never here.
 ///
 /// Error taxonomy:
 /// - `Id`/`Handle`/profile-context miss → `NotFound`
 /// - Team non-membership → `Forbidden` (existence of team/context not leaked)
 /// - Soft-deleted team → `NotFound`, byte-identical to a team that never existed (a soft-deleted
 ///   team is not a team you are being refused; it is not a team)
+/// - Retired context → `NotFound`, byte-identical to a slug that never existed **within the same
+///   arm** (plain backticks, not an intra-doc link: `context_slug_refusal` is private and this
+///   item is public, which `cargo doc` refuses)
 pub async fn resolve_context_ref(
     pool: &PgPool,
     principal: ProfileId,
@@ -221,7 +244,15 @@ pub async fn resolve_context_ref(
             // "addressed on the admin axis, never the read axis" means.
             ContextOwnerRef::Me => {
                 let cid = lookup_profile_context(pool, *principal, slug).await?;
-                ensure_context_visible(pool, *principal, *cid).await?;
+                // Refused through `context_slug_refusal`, not bare: `lookup_profile_context`'s own
+                // miss names the slug, so a bare refusal here would be a second, distinguishable
+                // answer on one arm.
+                ensure_context_visible(pool, *principal, *cid)
+                    .await
+                    .map_err(|e| match e {
+                        ApiError::NotFound(_) => context_slug_refusal(slug),
+                        other => other,
+                    })?;
                 Ok(cid)
             }
             ContextOwnerRef::Handle(handle) => {
@@ -299,16 +330,21 @@ pub async fn resolve_context_ref(
                 )
                 .fetch_optional(pool)
                 .await?
-                .ok_or_else(|| {
-                    ApiError::NotFound(format!("context {slug} not found or not readable"))
-                })?;
+                .ok_or_else(|| context_slug_refusal(slug))?;
                 // Membership is not visibility. The check above admits ANY role — `watcher`
                 // included — and this lookup reads `kb_contexts` directly, so without this the arm
                 // resolves a retired team context for a member who never administered it. Every
                 // caller documents this function as visibility-gated (`substrate_read`,
                 // `handlers::ingest`, `handlers::graph`, `tools::cognitive_maps`), and the two
                 // sibling arms already end here; this one did not.
-                ensure_context_visible(pool, *principal, id).await?;
+                // Same refusal as the miss directly above -- a member at ANY role, `watcher`
+                // included, must not be able to tell "no such slug" from "retired".
+                ensure_context_visible(pool, *principal, id)
+                    .await
+                    .map_err(|e| match e {
+                        ApiError::NotFound(_) => context_slug_refusal(slug),
+                        other => other,
+                    })?;
                 Ok(ContextId::from(id))
             }
         },
