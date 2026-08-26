@@ -75,7 +75,24 @@ Two things are worth understanding:
   a profile is provisioned automatically. They don't need the token handed to
   them.
 
-Once the newcomer has signed in, they discover the invitation themselves:
+Once the newcomer has signed in, the invitation finds them. `temper warmup` — the primer
+every session starts with — counts what is waiting on them:
+
+```json
+"pending": { "invitations": 1, "join_requests": null, "review_requests": null }
+```
+
+Counts only; the detail is one command away. Two nulls at different levels mean different
+things: `pending: null` means the block could not be read, while
+`pending.join_requests: null` means the caller is not an instance admin and nothing was
+read — as distinct from `0`, which means an admin read an empty queue.
+
+> **This closes the loop only for people who have already signed in.** A brand-new human
+> still has to be told once, out of band — the invitation can only resolve to a profile that
+> exists. That is the same reason the `invited_email` is a correlator: nothing here is
+> outbound delivery.
+
+They can also ask directly, at any time:
 
 ```bash
 temper invitations

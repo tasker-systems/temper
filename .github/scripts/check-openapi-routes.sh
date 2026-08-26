@@ -49,6 +49,8 @@ ROUTES_FILE="${1:-${REPO_ROOT}/crates/temper-api/src/routes.rs}"
 # carries a NULL payload_schema).
 ALLOWLIST='/api/access/admin/requests
 /api/access/admin/requests/{id}
+/api/access/admin/reviews
+/api/access/admin/reviews/{id}
 /api/access/admin/settings
 /api/access/admin/promote
 /api/access/admin/demote

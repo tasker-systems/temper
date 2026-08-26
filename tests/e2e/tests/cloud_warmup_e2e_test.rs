@@ -539,3 +539,258 @@ async fn warmup_capped_goal_list_still_reports_true_total(pool: sqlx::PgPool) {
          a cap that hides its own existence is silent truncation"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Test 6-8: the `pending` block — what is waiting on you
+// ---------------------------------------------------------------------------
+
+/// Run `build_warmup_result` against `@me/myapp` through the same env dance every test above uses.
+async fn build_for(
+    app: &common::E2eTestApp,
+    context: &str,
+) -> temper_cli::commands::warmup::WarmupResult {
+    let global_config = app.vault_dir.path().join("no-such-config.toml");
+    let api_url = format!("http://{}", app.addr);
+    let token = app.token.clone();
+    let global_config_str = global_config.to_str().unwrap().to_string();
+    let cli_config = app.cli_config.clone();
+    let context = context.to_string();
+
+    tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(cloud_env(&api_url, &token, &global_config_str), || {
+            temper_cli::commands::warmup::build_warmup_result(
+                &cli_config,
+                &context,
+                default_limits(),
+            )
+            .expect("build_warmup_result must succeed in cloud mode")
+        })
+    })
+    .await
+    .expect("spawn_blocking joined")
+}
+
+/// Seed a pending invitation to `email` from a team `inviter` owns.
+///
+/// Seeded directly rather than through `POST /teams/{id}/invite` because the thing under test is
+/// warmup's READ. What the read actually turns on is `list_for_profile`'s email correlation — the
+/// address must be verified and resolve to exactly one profile — and that predicate runs identically
+/// whichever way the row arrived.
+async fn seed_invitation(pool: &sqlx::PgPool, inviter: uuid::Uuid, email: &str) {
+    let team_id: uuid::Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_teams (slug, name) VALUES ('acme-eng', 'Acme Engineering') RETURNING id",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("create the inviting team");
+
+    sqlx::query(
+        "INSERT INTO kb_team_invitations
+             (id, team_id, invited_email, invited_by_profile_id, role, token)
+         VALUES (uuid_generate_v7(), $1, $2, $3, 'member', $4)",
+    )
+    .bind(team_id)
+    .bind(email)
+    .bind(inviter)
+    .bind(format!("tok-{}", uuid::Uuid::now_v7()))
+    .execute(pool)
+    .await
+    .expect("seed the invitation");
+}
+
+/// **Before/after on ONE principal**, so the only thing that changes between the two reads is the
+/// fact under test. Two principals would also have differed in whatever else distinguishes them.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn warmup_pending_counts_a_waiting_invitation(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("myapp", None)
+        .await
+        .expect("create myapp context");
+
+    let before = build_for(&app, "@me/myapp").await;
+    assert_eq!(
+        before
+            .pending
+            .expect("the pending block must be readable")
+            .invitations,
+        0,
+        "nothing is waiting yet"
+    );
+
+    let inviter = common::provision_and_approve_second(&app).await;
+    seed_invitation(&pool, inviter, "e2e@test.example.com").await;
+
+    let after = build_for(&app, "@me/myapp").await;
+    assert_eq!(
+        after.pending.expect("still readable").invitations,
+        1,
+        "the invitation surfaces in the primer without anyone knowing to ask for it"
+    );
+}
+
+/// **`None` is not `Some(0)`.** Before: not an instance admin, so the operator counts are absent —
+/// nothing was read. After: an admin who read an empty queue — which is a different fact, and the
+/// only one of the two that says anything about the queue.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn warmup_pending_tells_not_an_admin_apart_from_an_empty_queue(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let me = app
+        .client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("myapp", None)
+        .await
+        .expect("create myapp context");
+
+    let before = build_for(&app, "@me/myapp")
+        .await
+        .pending
+        .expect("readable");
+    assert_eq!(
+        before.join_requests, None,
+        "a non-admin read nothing, and must not be told the queue is empty"
+    );
+    assert_eq!(before.review_requests, None);
+
+    common::make_system_admin(&pool, me.id).await;
+
+    let after = build_for(&app, "@me/myapp")
+        .await
+        .pending
+        .expect("readable");
+    assert_eq!(
+        after.join_requests,
+        Some(0),
+        "an admin reading an empty queue is 0 — the server answered"
+    );
+    assert_eq!(after.review_requests, Some(0));
+}
+
+/// **The trap, through the real binary.** Someone invited to a team so they can work in that team's
+/// context asks for that context and is refused — because the invitation they have not accepted is
+/// what would grant it.
+///
+/// This drives `target/debug/temper` rather than calling in-process, because the thing under test IS
+/// the stderr of a failed process: exit status and stream are the assertion. The non-zero exit is
+/// asserted deliberately, so that a later change cannot quietly soften warmup's context contract and
+/// still pass.
+///
+/// NOTE: `cargo nextest run -p temper-e2e` builds this crate and temper-cli's *lib*, not the
+/// *binary* this execs. Run `cargo build -p temper-cli` first or you will test a stale binary.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn warmup_names_the_waiting_invitation_when_it_fails_on_context(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+
+    // Silence first: the same failing command, with nothing waiting, must say nothing extra.
+    let quiet = common::run_temper_cli(&app, &["warmup", "--context", "@me/nope"])
+        .await
+        .expect("cli ran");
+    assert!(!quiet.status.success(), "an unreadable context still fails");
+    let quiet_err = String::from_utf8_lossy(&quiet.stderr);
+    assert!(
+        !quiet_err.contains("temper invitations"),
+        "a hint on every failed warmup is noise: {quiet_err}"
+    );
+
+    let inviter = common::provision_and_approve_second(&app).await;
+    seed_invitation(&pool, inviter, "e2e@test.example.com").await;
+
+    let out = common::run_temper_cli(&app, &["warmup", "--context", "@me/nope"])
+        .await
+        .expect("cli ran");
+
+    assert!(
+        !out.status.success(),
+        "the command must STILL fail — the hint does not soften the contract"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("1 team invitation waiting on you"),
+        "the hint names what is waiting: {stderr}"
+    );
+    assert!(
+        stderr.contains("temper invitations"),
+        "and points at the one command that needs no context: {stderr}"
+    );
+}
+
+/// **The newcomer — the population this whole feature exists for — driven end to end.**
+///
+/// `handlers::invitations::list_mine` is mounted in `auth_only_routes()`; the two operator queues
+/// are in `gated_routes()` behind `require_system_access`. A principal who has signed in but holds
+/// no approved standing therefore reads their own invitations fine and gets
+/// `403 SYSTEM_ACCESS_REQUIRED` from both queues — a THIRD `403` arm, distinct from `Forbidden` and
+/// `ForbiddenDetail` and checked before either.
+///
+/// Propagating that arm collapsed `pending` to `null`, which silenced the hint — so the invited
+/// newcomer who cannot yet read the team's context got no count and no way out. The trap the hint
+/// was written to close, closed against precisely the person it was for.
+///
+/// Every other test in this file runs as `common::setup`'s already-approved principal, which is why
+/// none of them could see this. Standing is stripped here deliberately, and the assertion is the
+/// stderr of a real failed process.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn warmup_hints_the_newcomer_who_has_no_system_access_yet(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let me = app
+        .client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+
+    let inviter = common::provision_and_approve_second(&app).await;
+    seed_invitation(&pool, inviter, "e2e@test.example.com").await;
+
+    // Strip system access: signed in and provisioned, but not yet admitted — the state an invitee
+    // is in before anything has been accepted on their behalf.
+    sqlx::query("DELETE FROM kb_principal_standing WHERE profile_id = $1")
+        .bind(me.id)
+        .execute(&pool)
+        .await
+        .expect("strip standing");
+
+    let out = common::run_temper_cli(&app, &["warmup", "--context", "+acme-eng/work"])
+        .await
+        .expect("cli ran");
+
+    assert!(
+        !out.status.success(),
+        "the context is still unreadable, so the command still fails"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("1 team invitation waiting on you"),
+        "the newcomer must be told what is waiting: {stderr}"
+    );
+    assert!(
+        stderr.contains("temper invitations"),
+        "and pointed at the command that needs no context: {stderr}"
+    );
+    // And SILENTLY, which is the separate half. A 403 on an operator queue is a refusal — "not
+    // yours to see" — not a failure to read, so it must not surface as a warning. Without the
+    // `SystemAccessRequired` arm in `admin_count` this still yields the hint (the per-field
+    // degradation rescues it), but every newcomer's every session start also carries
+    // "could not read the join request queue: system access required". That is the noise the
+    // arm exists to prevent, and this assertion is what witnesses it.
+    assert!(
+        !stderr.contains("could not read the"),
+        "a refusal must not be reported as a failed read: {stderr}"
+    );
+}

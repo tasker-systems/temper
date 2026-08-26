@@ -226,7 +226,7 @@ pub enum Commands {
         #[command(subcommand)]
         action: ContextAction,
     },
-    /// Context primer for new sessions — active goals, in-progress tasks, recent session pointers
+    /// Context primer for new sessions — active goals, in-progress tasks, recent session pointers, and what is pending for you
     Warmup {
         /// Context ref (`@owner/slug` or UUID). Required — no context name is
         /// guaranteed to exist for a given principal, so there is no safe default.
@@ -1343,6 +1343,11 @@ pub enum AdminAction {
         #[command(subcommand)]
         action: AdminRequestsAction,
     },
+    /// Read and close reconsideration requests from revoked principals
+    Reviews {
+        #[command(subcommand)]
+        action: AdminReviewsAction,
+    },
     /// Read the admin ledger: who granted what, to whom, and when
     ///
     /// Exactly one axis. `--subject` asks what was done TO a thing; `--actor` asks what a
@@ -1738,6 +1743,27 @@ pub enum AdminRequestsAction {
         #[arg(long)]
         reject: bool,
         /// Optional decision note
+        #[arg(long)]
+        note: Option<String>,
+    },
+}
+
+/// The reconsideration inbox (spec D15). A revoked principal files one with
+/// `temper auth request-review`; until now nothing could read or close it.
+///
+/// There is no `approve`/`reject` here on purpose. Closing records that a reconsideration was
+/// handled and grants nothing — readmitting someone is `temper admin access approve`, a separate
+/// act on the standing log, so that filing away the request to undo a revocation can never itself
+/// undo it.
+#[derive(Subcommand)]
+pub enum AdminReviewsAction {
+    /// List undecided reconsideration requests, oldest first
+    List,
+    /// Record that a reconsideration was handled (grants nothing)
+    Close {
+        /// Review request ID (UUID)
+        id: String,
+        /// Optional decision note, recorded against the review
         #[arg(long)]
         note: Option<String>,
     },

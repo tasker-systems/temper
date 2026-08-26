@@ -196,6 +196,16 @@ fn gated_routes() -> OpenApiRouter<AppState> {
             "/api/access/admin/requests/{id}",
             patch(handlers::access::review_request),
         )
+        // Same posture, same reason: the D15 reconsideration inbox is read and closed by an
+        // operator, never by a library caller administering their own access.
+        .route(
+            "/api/access/admin/reviews",
+            get(handlers::access::list_reviews),
+        )
+        .route(
+            "/api/access/admin/reviews/{id}",
+            patch(handlers::access::close_review),
+        )
         .route(
             "/api/access/admin/settings",
             get(handlers::access::get_admin_settings).patch(handlers::access::update_settings),
