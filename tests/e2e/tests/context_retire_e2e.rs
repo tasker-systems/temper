@@ -540,3 +540,119 @@ async fn the_authorization_arms_hold_for_both_retire_and_restore(pool: sqlx::PgP
         "the stranger was always Invisible and stays that way"
     );
 }
+
+/// Wire-level status + body of `POST /api/contexts/{context}/rename` as `token`.
+async fn rename_status(
+    app: &common::E2eTestApp,
+    token: &str,
+    context_id: Uuid,
+    name: &str,
+) -> (StatusCode, Value) {
+    let resp = app
+        .reqwest_client
+        .post(app.url(&format!("/api/contexts/{context_id}/rename")))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({ "name": name }))
+        .send()
+        .await
+        .expect("rename request");
+    let status = resp.status();
+    let body: Value = resp.json().await.unwrap_or(Value::Null);
+    (status, body)
+}
+
+/// A retired context cannot be renamed — and that closes an address it could otherwise occupy
+/// where nothing able to see the address can see the row holding it.
+///
+/// Retirement floored both read predicates, both write predicates, `retire`, `restore` and
+/// `reassign`. `rename` predates it (`20260731000040`) and reads `kb_contexts` by primary key with
+/// no state guard, while `caller_administers_context` is `is_active`-blind **by design** — that
+/// blindness is what lets `restore` act on a retired row at all. So the admin axis reached through
+/// and took a **read-axis address**: `UNIQUE (owner_table, owner_id, slug)` is one space shared by
+/// active and retired rows, so an invisible row parks on a live slug and the next `create` under
+/// that name is silently suffixed against a competitor nobody can enumerate.
+///
+/// **Three assertions, and each covers a different arm.**
+/// 1. The *active* rename first, so a broken fixture cannot masquerade as the refusal under test.
+/// 2. A rename to a **new** name after retirement — the path that reaches `context_rename`'s
+///    in-transaction guard.
+/// 3. A rename to the name the context **already has** — the idempotent no-op, which returns from
+///    the service before the write function is ever called. Only the service-side floor covers it,
+///    which is why the guard is in both places rather than SQL alone.
+///
+/// The refusal is `CONTEXT_REFUSAL`, byte-identical to a context that is not there: telling an
+/// administrator "retired" where a miss says "not found" would hand back the one bit PR #784's
+/// refusal parity exists to withhold.
+///
+/// **What this does NOT cover, stated so a pass is not read as more than it is.** It witnesses the
+/// service-side floor only. Bite-probed both ways: deleting the Rust check leaves arm 2 refused by
+/// `context_rename`'s guard but turns arm 3 into a `200` disclosing the retired context's mangled
+/// slug, and deleting the SQL guard while keeping the Rust check leaves this test **green**. The
+/// SQL half exists for the check-then-act window — a retirement landing between the service's read
+/// and its write — and nothing here provokes that interleaving, so it is covered by construction
+/// and by the pattern `context_rename`'s authorization gate already sets, not by an assertion.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_retired_context_cannot_be_renamed_onto_a_live_address(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let admin_id = provision(&app, &app.token).await;
+    root_bootstrap_first_admin(&pool, admin_id).await;
+
+    let context = app
+        .client
+        .contexts()
+        .create("Rename Me", None)
+        .await
+        .expect("admin creates the context");
+
+    // 1. NON-VACUITY: while active, this exact call succeeds and moves the address.
+    let (ok, body) = rename_status(&app, &app.token, *context.id, "Renamed Already").await;
+    assert_eq!(ok, StatusCode::OK, "an active context renames: {body:?}");
+    assert_eq!(
+        body["slug"], "renamed-already",
+        "and the address moved: {body:?}"
+    );
+
+    let (retired, _) = retire_status(&app, &app.token, *context.id).await;
+    assert_eq!(retired, StatusCode::OK, "retire the context");
+
+    // 2. The guarded path: a rename to a NEW name reaches `context_rename`.
+    let (refused, body) = rename_status(&app, &app.token, *context.id, "Taking A Live Slug").await;
+    assert_eq!(
+        refused,
+        StatusCode::NOT_FOUND,
+        "a retired context must not be renameable onto a live address: {body:?}"
+    );
+
+    // 3. The arm that never reaches the SQL guard: renaming to the name it already carries is an
+    //    idempotent no-op that returns `Ok` from the service.
+    let (noop, body) = rename_status(&app, &app.token, *context.id, "Renamed Already").await;
+    assert_eq!(
+        noop,
+        StatusCode::NOT_FOUND,
+        "the idempotent no-op arm must refuse too — it returns before the write function: {body:?}"
+    );
+
+    // The address the rename tried to take is genuinely free: a new context claims it unsuffixed.
+    let fresh = app
+        .client
+        .contexts()
+        .create("Taking A Live Slug", None)
+        .await
+        .expect("the address was never occupied");
+    assert_eq!(
+        fresh.slug, "taking-a-live-slug",
+        "no retired row is squatting the slug, so no -2 suffix"
+    );
+
+    // And the retirement itself is intact — refusing the rename did not disturb the row.
+    let restored = app
+        .client
+        .contexts()
+        .restore(*context.id)
+        .await
+        .expect("restore still works");
+    assert_eq!(
+        restored.slug, "renamed-already",
+        "restore lands back on the address it was retired under, not a -2 relocation"
+    );
+}
