@@ -17,8 +17,12 @@ import {
   bindCodeToFlow,
   consumeCode,
   createPendingFlow,
+  endRefreshChain,
+  findRotatedToken,
+  recordRefreshReplay,
   rotateRefreshToken,
   storeRefreshToken,
+  unmarkRotation,
 } from "./flow.js";
 import { touchMachineLastSeen, verifyMachineSecret } from "./machine-clients.js";
 import {
@@ -52,6 +56,36 @@ const DEFAULT_REFRESH_CHAIN_MAX_SECONDS = 7776000;
  * deployment is not a bound.
  */
 const MAX_REFRESH_CHAIN_SECONDS = 315360000;
+/**
+ * Default grace window for a replayed refresh token, when AS_REFRESH_REPLAY_GRACE_SECONDS is unset
+ * or unusable. Ten seconds.
+ *
+ * **This is the boundary between a client and a thief, so it is stated rather than implied.** A
+ * rotated token that comes back is, per RFC 6819 §5.2.2.3, the canonical indication that a chain
+ * has been copied — but it is also what an ordinary client produces in two benign ways. It may
+ * have lost the response carrying the successor and retried; or it may have had two requests in
+ * flight at once, one of which lost the race. Both arrive within seconds of the rotation, because
+ * both are the same HTTP exchange still happening. A replay hours or days later has neither
+ * explanation available to it.
+ *
+ * **Ten and not sixty, because the two benign cases cost differently to get wrong, and only one of
+ * them is what this window is for.** A client that lost the response holds no live token and must
+ * re-authenticate whatever we do — ending its chain costs it nothing, and mislabelling its retry
+ * costs an operator one row to read past. The concurrent-refresh client is the one that actually
+ * holds the successor, and its two requests are one exchange still in flight: that resolves in well
+ * under a second, not in a minute.
+ *
+ * The width has a cost running the other way, which is why it is not generous. The AS only ever
+ * sees the LOSER of a rotation race and cannot tell whether the winner was the client or someone
+ * holding a copy. Inside the window it lets the winner keep the session and files the presentation
+ * as benign — so every second of width is a second in which a fresh theft is answered gently and
+ * recorded as a retry. Ten covers the case this exists for and leaves six times less of that.
+ *
+ * Zero is a legal setting and means the BCP's strictest reading: every replay ends the chain.
+ */
+const DEFAULT_REFRESH_REPLAY_GRACE_SECONDS = 10;
+/** Ceiling on a configured replay grace window — one hour. A units check, not a policy. */
+const MAX_REPLAY_GRACE_SECONDS = 3600;
 
 /** Validated refresh-token TTL, read from AS_REFRESH_TTL_SECONDS (mirrors mint.ts's accessTtlSeconds). */
 function refreshTtlSeconds(): number {
@@ -95,6 +129,93 @@ function refreshChainMaxSeconds(): number {
     );
   }
   return parsed;
+}
+
+/**
+ * Validated replay grace window, read from AS_REFRESH_REPLAY_GRACE_SECONDS.
+ *
+ * **Substitutes and warns rather than refusing**, which is the opposite of `refreshChainMaxSeconds`
+ * above, and the difference is what a refusal would actually cost. That one is read once per login,
+ * in a branch that answers 503 — the refusal reaches the operator, and a login is the thing being
+ * protected. This one is read on a path whose caller catches everything, precisely so a failed
+ * audit write cannot change the client's answer; a throw here would therefore surface as nothing at
+ * all, leaving the detector configured and inert while every refused refresh logged an error. A
+ * default that warns loudly and keeps detecting is the better failure.
+ *
+ * `MAX_REPLAY_GRACE_SECONDS` is a units check, not a policy: an hour is already orders of magnitude
+ * beyond any client retry, so a larger value is a seconds-vs-milliseconds slip, and honouring it
+ * would leave the detector configured and inert. What a wrong value here can cost is bounded by
+ * that ceiling; the widest chain bound that would pass `refreshChainMaxSeconds`' own validation
+ * outlives the deployment, which is why that one refuses instead of substituting.
+ */
+function refreshReplayGraceSeconds(): number {
+  const raw = process.env.AS_REFRESH_REPLAY_GRACE_SECONDS;
+  if (!raw) {
+    return DEFAULT_REFRESH_REPLAY_GRACE_SECONDS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > MAX_REPLAY_GRACE_SECONDS) {
+    logger.warn(
+      { configured: raw, using: DEFAULT_REFRESH_REPLAY_GRACE_SECONDS },
+      "token: AS_REFRESH_REPLAY_GRACE_SECONDS is not a usable number of seconds; using the default",
+    );
+    return DEFAULT_REFRESH_REPLAY_GRACE_SECONDS;
+  }
+  return parsed;
+}
+
+/**
+ * What a refused rotation means BEYOND the refusal, and what it costs.
+ *
+ * Every branch here ends in the same `invalid_grant` the caller was already going to send — this
+ * decides what the instance RECORDS and whether the chain survives, and deliberately not what the
+ * client is told. Telling a client which of "unknown", "expired", "revoked" and "already spent" it
+ * hit would hand an attacker holding a stolen token a probe for whether it is worth replaying.
+ *
+ * A token with no `rotated_at` is not a replay: unknown, expired, administratively revoked, or on
+ * a chain that reached its absolute end. None of those is evidence of anything and none is
+ * recorded here.
+ *
+ * Nothing in here can fail the request, which is why the whole body is wrapped by its caller. The
+ * ordering inside is chosen so the record cannot overstate: the chain is ended FIRST and the count
+ * it actually took is what gets written, rather than writing an intention and hoping.
+ */
+async function judgeRefusedRotation(db: NeonClient, token: string): Promise<void> {
+  const presented = await findRotatedToken(db, token);
+  if (!presented) {
+    return;
+  }
+
+  const grace = refreshReplayGraceSeconds();
+  const graced = presented.secondsSinceRotation <= grace;
+  const tokensRevoked = graced ? 0 : await endRefreshChain(db, presented.chainId);
+
+  // Logged BEFORE the record is written. The upsert below is the one statement here that can fail,
+  // and its caller's handler sees only an error — so emitting the identifying fields first is what
+  // leaves a trail on the single path where the table this feature exists for is unavailable.
+  logger.warn(
+    {
+      token_id: presented.tokenId,
+      chain_id: presented.chainId,
+      profile_id: presented.profileId,
+      client_id: presented.clientId,
+      seconds_since_rotation: presented.secondsSinceRotation,
+      grace_seconds: grace,
+      graced,
+      tokens_revoked: tokensRevoked,
+    },
+    graced
+      ? "token: a rotated refresh token was presented again inside the grace window — refused as a client retry, chain left live"
+      : tokensRevoked > 0
+        ? "token: a rotated refresh token was presented again — the chain has been ended"
+        : // Say which. The chain is ended either way — the marker went down in the same statement —
+          // but "we signed a user out" and "there was nothing live left to take" are different
+          // events, and reporting both in the words of the first is the failure
+          // `standing_service::apply` already refuses to make in the other direction.
+          "token: a rotated refresh token was presented again — the chain is ended, and held no live token to revoke",
+  );
+
+  await recordRefreshReplay(db, { presentation: presented, graced, tokensRevoked });
 }
 
 function badRequest(reason: string): Response {
@@ -325,29 +446,31 @@ function oauthError(error: string, status = 400): Response {
  * (scoped to `clientId`), and returns the RFC 6749 §5.1 success body. Shared by both the
  * authorization_code and refresh_token grants in `handleToken`.
  *
- * `chainExpiresAt` is the load-bearing parameter: the authorization_code grant computes a fresh one
- * (a new chain), and the refresh grant passes back the one it read off the token it rotated. There
- * is deliberately no default — a caller that omits it fails to compile rather than choosing a
- * deadline by accident.
+ * `chain` is the load-bearing parameter, and both of its inherited halves work the same way: the
+ * authorization_code grant computes a fresh deadline and passes `id: null` (start a chain), and the
+ * refresh grant passes back both the deadline and the identity it read off the token it rotated.
+ * There is deliberately no default on either — a caller that omits one fails to compile rather than
+ * choosing a deadline, or forking a chain, by accident.
  */
 async function issueTokenPair(
   db: NeonClient,
   claims: MintedClaims,
   clientId: string,
-  chain: { expiresAt: string; profileId: string | null },
+  chain: { id: string | null; expiresAt: string; profileId: string | null },
 ): Promise<TokenResponse> {
   const accessToken = await mintAccessToken(claims);
   const refreshToken = newOpaqueToken();
-  const minted = await storeRefreshToken(db, {
+  const chainId = await storeRefreshToken(db, {
     token: refreshToken,
     clientId,
     claims,
     expiresAt: new Date(Date.now() + refreshTtlSeconds() * 1000),
     chainExpiresAt: chain.expiresAt,
+    chainId: chain.id,
     profileId: chain.profileId,
   });
 
-  if (!minted) {
+  if (chainId === null) {
     // Say so. The Rust side warns when a terminal transition ends no chains precisely because a
     // refusal must not report success in the same words as a success; this is the same event seen
     // from the other end, and leaving it silent would make a non-renewable session indistinguishable
@@ -362,7 +485,7 @@ async function issueTokenPair(
     access_token: accessToken,
     token_type: "Bearer",
     expires_in: accessTtlSeconds(),
-    ...(minted ? { refresh_token: refreshToken } : {}),
+    ...(chainId !== null ? { refresh_token: refreshToken } : {}),
   };
 }
 
@@ -443,6 +566,9 @@ export async function handleToken(req: Request, db: NeonClient): Promise<Respons
     // by their next sign-in.
     return oauthJson(
       await issueTokenPair(db, consumed.claims, clientId, {
+        // A fresh login starts a chain, so it has no identity to inherit — `storeRefreshToken`
+        // roots the new one at this very token.
+        id: null,
         expiresAt: chainDeadline,
         profileId: consumed.profileId,
       }),
@@ -460,6 +586,20 @@ export async function handleToken(req: Request, db: NeonClient): Promise<Respons
     try {
       rotated = await rotateRefreshToken(db, String(refreshToken));
     } catch {
+      // The refusal is settled; what follows only decides what is RECORDED and whether a chain
+      // survives. It is wrapped because a failure to write an audit row must not convert a
+      // well-formed `invalid_grant` into an unattributed 500 — the client's answer is the same
+      // either way, and losing the signal is a smaller harm than answering the wrong error to
+      // every refused refresh. The loss is itself reported, because an audit surface that can go
+      // quiet without saying so is worse than one that is absent.
+      try {
+        await judgeRefusedRotation(db, String(refreshToken));
+      } catch (judgeErr) {
+        logger.error(
+          { err: judgeErr instanceof Error ? judgeErr.message : String(judgeErr) },
+          "token: could not record or act on a refused rotation — a replay may have gone unrecorded",
+        );
+      }
       return oauthError("invalid_grant");
     }
 
@@ -494,7 +634,9 @@ export async function handleToken(req: Request, db: NeonClient): Promise<Respons
     }
 
     const pair = await issueTokenPair(db, rotated.claims, rotated.clientId, {
-      // Handed back UNCHANGED. This is the line that makes the bound absolute.
+      // Handed back UNCHANGED — both of them. The deadline is what makes the bound absolute; the
+      // identity is what lets a later replay of ANY token in this chain reach the live one.
+      id: rotated.chainId,
       expiresAt: rotated.chainExpiresAt,
       profileId,
     });
@@ -504,6 +646,21 @@ export async function handleToken(req: Request, db: NeonClient): Promise<Respons
     // token would later meet. `denied` and `requested` principals pass that predicate on purpose;
     // it asks whether admission has ENDED, not whether it was ever granted.
     if (!pair.refresh_token) {
+      // Withdraw the rotation mark before answering. The guard above already revoked and marked the
+      // presented token, and the admission predicate declined only afterwards — so the row is left
+      // claiming a rotation that produced no successor. A de-provisioned user whose client retries
+      // once would then be reported as a replay, naming them in the operator's view under a hostile
+      // count: the same false theft report the administrative revokers are held away from, arrived
+      // at from the other side. Best-effort — this answer is settled, and failing to tidy the mark
+      // must not turn it into a 500.
+      try {
+        await unmarkRotation(db, rotated.tokenId);
+      } catch (unmarkErr) {
+        logger.error(
+          { err: unmarkErr instanceof Error ? unmarkErr.message : String(unmarkErr) },
+          "token: could not withdraw the rotation mark from a refused rotation — a later retry may be reported as a replay",
+        );
+      }
       return oauthError("invalid_grant");
     }
 

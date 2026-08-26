@@ -17,7 +17,11 @@ export function makeTestDb(): { sql: postgres.Sql; db: NeonClient } {
   return { sql, db: sql as unknown as NeonClient };
 }
 
-/** Clears all OAuth/SAML AS tables between tests. */
+/**
+ * Clears all OAuth/SAML AS tables between tests. `kb_oauth_refresh_replays` is named explicitly
+ * even though CASCADE would reach it through its foreign key — a test that reads a replay count
+ * should be able to see, here, that it starts from zero.
+ */
 export async function truncateOauthTables(sql: postgres.Sql): Promise<void> {
-  await sql`TRUNCATE kb_oauth_flow, kb_oauth_refresh_tokens, kb_saml_replay, kb_saml_idp RESTART IDENTITY CASCADE`;
+  await sql`TRUNCATE kb_oauth_flow, kb_oauth_refresh_tokens, kb_oauth_refresh_replays, kb_saml_replay, kb_saml_idp RESTART IDENTITY CASCADE`;
 }

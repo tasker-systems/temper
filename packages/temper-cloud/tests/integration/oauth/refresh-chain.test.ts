@@ -1,12 +1,16 @@
-import { createHash } from "node:crypto";
 import { exportPKCS8, generateKeyPair } from "jose";
 import type postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NeonClient } from "../../../src/db.js";
-import { handleToken } from "../../../src/oauth/endpoints.js";
-import { bindCodeToFlow, createPendingFlow } from "../../../src/oauth/flow.js";
 import { hashToken } from "../../../src/oauth/mint.js";
 import { makeTestDb, truncateOauthTables } from "../helpers/oauth-db.js";
+import {
+  attemptLogin,
+  login,
+  refresh,
+  type TokenErrorBody,
+  type TokenSuccessBody,
+} from "../helpers/oauth-flows.js";
 
 /**
  * The refresh chain's absolute bound, and the admission gate in front of rotation.
@@ -17,68 +21,6 @@ import { makeTestDb, truncateOauthTables } from "../helpers/oauth-db.js";
  * login (which reconciles against the IdP) moves it. The gate is the admission terminal set, asked
  * at the token endpoint rather than left entirely to the API gate the minted token later meets.
  */
-
-const VERIFIER = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
-const CHALLENGE = createHash("sha256").update(VERIFIER).digest("base64url");
-
-interface TokenSuccessBody {
-  access_token: string;
-  token_type: string;
-  expires_in: number;
-  refresh_token?: string;
-}
-
-interface TokenErrorBody {
-  error: string;
-}
-
-/** Runs one full login, returning the first refresh token of a brand-new chain. */
-async function login(
-  db: NeonClient,
-  opts: { relay: string; code: string; profileId: string | null },
-): Promise<TokenSuccessBody> {
-  await createPendingFlow(db, {
-    relayState: opts.relay,
-    clientId: "cli",
-    redirectUri: "http://localhost/cb",
-    codeChallenge: CHALLENGE,
-    codeChallengeMethod: "S256",
-    oauthState: "st",
-    audience: "aud",
-    expiresAt: new Date(Date.now() + 600000),
-  });
-  await bindCodeToFlow(db, opts.relay, {
-    code: opts.code,
-    claims: { sub: "u1", email: "u1@example.com", email_verified: true },
-    expiresAt: new Date(Date.now() + 300000),
-    profileId: opts.profileId,
-  });
-
-  const res = await handleToken(
-    new Request("https://as/oauth/token", {
-      method: "POST",
-      body: new URLSearchParams({
-        grant_type: "authorization_code",
-        code: opts.code,
-        code_verifier: VERIFIER,
-        client_id: "cli",
-      }),
-    }),
-    db,
-  );
-  expect(res.status).toBe(200);
-  return (await res.json()) as TokenSuccessBody;
-}
-
-function refresh(db: NeonClient, refreshToken: string | undefined): Promise<Response> {
-  return handleToken(
-    new Request("https://as/oauth/token", {
-      method: "POST",
-      body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshToken ?? "" }),
-    }),
-    db,
-  );
-}
 
 describe("refresh chain bound + admission gate", () => {
   let sql: postgres.Sql;
@@ -227,35 +169,11 @@ describe("refresh chain bound + admission gate", () => {
     // impossible to trace back to a typo in an environment variable.
     process.env.AS_REFRESH_CHAIN_MAX_SECONDS = "7d";
     try {
-      await createPendingFlow(db, {
-        relayState: "rs-badcfg",
-        clientId: "cli",
-        redirectUri: "http://localhost/cb",
-        codeChallenge: CHALLENGE,
-        codeChallengeMethod: "S256",
-        oauthState: "st",
-        audience: "aud",
-        expiresAt: new Date(Date.now() + 600000),
-      });
-      await bindCodeToFlow(db, "rs-badcfg", {
+      const res = await attemptLogin(db, {
+        relay: "rs-badcfg",
         code: "c-badcfg",
-        claims: { sub: "u1", email: "u1@example.com", email_verified: true },
-        expiresAt: new Date(Date.now() + 300000),
         profileId: null,
       });
-
-      const res = await handleToken(
-        new Request("https://as/oauth/token", {
-          method: "POST",
-          body: new URLSearchParams({
-            grant_type: "authorization_code",
-            code: "c-badcfg",
-            code_verifier: VERIFIER,
-            client_id: "cli",
-          }),
-        }),
-        db,
-      );
       expect(res.status, "a misconfiguration is the server's fault, not the client's").toBe(503);
       expect((await res.json()) as TokenErrorBody).toEqual({ error: "temporarily_unavailable" });
     } finally {

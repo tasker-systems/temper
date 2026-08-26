@@ -1070,8 +1070,11 @@ mod tests {
             "the ledger must record the revocation that actually succeeded",
         );
 
-        let revoked_at: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
-            "SELECT revoked_at FROM kb_oauth_refresh_tokens WHERE token_hash = $1",
+        let (revoked_at, rotated_at): (
+            Option<chrono::DateTime<chrono::Utc>>,
+            Option<chrono::DateTime<chrono::Utc>>,
+        ) = sqlx::query_as(
+            "SELECT revoked_at, rotated_at FROM kb_oauth_refresh_tokens WHERE token_hash = $1",
         )
         .bind("9d16e5d809978fbc29ae240d1b95273fc1ff0de968d8e4f98cadfa0b5802e199")
         .fetch_one(&pool)
@@ -1080,6 +1083,14 @@ mod tests {
         assert!(
             revoked_at.is_some(),
             "the AS row must be marked revoked, asserted on the row not the return value"
+        );
+        // `revoked_at` is written by five things and only one of them is rotation, which is why
+        // the AS records `rotated_at` separately: a spent token presented again is a replay, and a
+        // token an administrator ended is not (20260826000140). The distinction only survives if
+        // the other four writers never make the rotation claim, and this is one of them.
+        assert!(
+            rotated_at.is_none(),
+            "a disconnect must not present itself as a rotation — that would report a theft"
         );
     }
 
