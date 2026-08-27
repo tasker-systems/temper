@@ -653,11 +653,9 @@ tables if you want to know how long.
 | `kb_oauth_refresh_tokens` | issued refresh token | 30 days past **both** its own expiry **and** its chain's `chain_expires_at` |
 
 > [!IMPORTANT]
-> **Apply migrations before the first sweep runs.** The sweep's indexes and its `ON DELETE
-> RESTRICT` on replay evidence ship as a migration, and the cron ships with the deployment. If the
-> cron fires first, that run scans instead of seeking — it will exceed the function's 300s limit,
-> commit whatever it managed, and try again the next night — and for that window the evidence
-> guarantee above rests on the sweep's filter alone rather than on the constraint beneath it.
+> **Apply migrations before the first sweep runs.** The sweep's indexes and its evidence constraint
+> ship as a migration and it is built to run with them in place; run it first and it will simply
+> make less progress per night.
 
 **Two of these floors are security properties, not housekeeping.**
 
