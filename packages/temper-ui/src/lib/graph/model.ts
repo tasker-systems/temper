@@ -15,7 +15,7 @@ import { whereOf } from './presentation';
  * because {@link hitsOf} discriminates on `StageOutput.produced` and drops the `regions` variant —
  * a structural guarantee rather than a rule someone remembers.
  *
- * @see internal/superpowers/specs/2026-08-20-graph-successor-surface-design.md §3
+ * @see temper-artifacts:specs/2026-08-20-graph-successor-surface-design.md §3
  */
 
 /**
@@ -42,7 +42,7 @@ import { whereOf } from './presentation';
  * That is why reader-facing strings live in this file rather than in `presentation.ts`: they are
  * not a shared vocabulary any more, they are part of what a read returns.
  *
- * @see internal/superpowers/specs/2026-08-21-the-handoff-and-the-arm-vocabulary-design.md §1, §2
+ * @see temper-artifacts:specs/2026-08-21-the-handoff-and-the-arm-vocabulary-design.md §1, §2
  */
 export interface GraphArm {
 	/**
@@ -101,7 +101,7 @@ export interface GraphNode {
 	 * {@link buildGraph} genuinely cannot supply one — and a screen built from it must not borrow
 	 * the entry read's sentence for a fact its own read never measured.
 	 *
-	 * @see internal/superpowers/specs/2026-08-21-hub-stranding-is-a-telling-failure-design.md §4, §5.1
+	 * @see temper-artifacts:specs/2026-08-21-hub-stranding-is-a-telling-failure-design.md §4, §5.1
 	 */
 	corpusDegree: number | null;
 	excerpt: string | null;
@@ -294,7 +294,7 @@ export const edgeIdentity = (
  * coloured by it would be `no-derived-thing-poses-as-authored` — the clause that got the tier model
  * deleted. `degree` may drive a channel because it counts the reader's own edges.
  *
- * @see internal/superpowers/specs/2026-08-20-grounding-and-navigation-split-design.md §5.1, §5.3, §8
+ * @see temper-artifacts:specs/2026-08-20-grounding-and-navigation-split-design.md §5.1, §5.3, §8
  */
 /**
  * The entry read's own arm — **one**, because it made one pass.
@@ -367,7 +367,7 @@ export function buildEntryGraph(entry: AtlasEntry, homes: Map<string, string>): 
  * {@link coreOf} encode the standing point without knowing this read's words — §2.1: *"Ringed = the
  * mark(s) this view was built from; bare = what following edges reached from them."*
  *
- * @see internal/superpowers/specs/2026-08-21-the-handoff-and-the-arm-vocabulary-design.md §2, §2.1
+ * @see temper-artifacts:specs/2026-08-21-the-handoff-and-the-arm-vocabulary-design.md §2, §2.1
  */
 export const TRAVERSAL_ARMS: GraphArm[] = [
 	{ key: 'from', label: 'Where you hopped from', reached: false },
@@ -397,7 +397,7 @@ export const TRAVERSAL_ARMS: GraphArm[] = [
  * only through `corpusDegree`), `salience` is dropped as region-derived, and `AtlasEdge.weight` is
  * carried because it is really stored.
  *
- * @see internal/superpowers/specs/2026-08-21-the-handoff-and-the-arm-vocabulary-design.md §4
+ * @see temper-artifacts:specs/2026-08-21-the-handoff-and-the-arm-vocabulary-design.md §4
  */
 export function buildTraversal(
 	sub: AtlasSubgraph,

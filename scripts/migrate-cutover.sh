@@ -50,7 +50,7 @@
 #
 #   What escapes is **adding a new file**. The macro watches only the paths it read, never
 #   the directory, so a set that gained a migration since the last build runs silently
-#   short. (`internal/superpowers/plans/2026-08-21-data-artifact-shape-registry.md:45-47`
+#   short. (`temper-artifacts:plans/2026-08-21-data-artifact-shape-registry.md:45-47`
 #   prescribes the `touch` below as the mitigation, though it states the cause too broadly
 #   as "editing"; the dep file above is the counter-evidence.)
 #

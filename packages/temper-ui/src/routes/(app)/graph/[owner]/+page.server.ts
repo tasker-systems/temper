@@ -39,7 +39,7 @@ import type { PageServerLoad } from './$types';
  * **No backend change in this arc.** Everything here is `/api/query` plus reads that already
  * existed, through the wholesale `/api` proxy.
  *
- * @see internal/superpowers/specs/2026-08-20-graph-successor-surface-design.md §1, §2, §3
+ * @see temper-artifacts:specs/2026-08-20-graph-successor-surface-design.md §1, §2, §3
  */
 
 /**

@@ -24,7 +24,7 @@
 	 * What this canvas draws is therefore exactly **what this answer connected**, and the core has the
 	 * whole height back. A row of that list opens the same rail a mark's click opened.
 	 *
-	 * @see internal/superpowers/specs/2026-08-20-graph-successor-surface-design.md §3, §7
+	 * @see temper-artifacts:specs/2026-08-20-graph-successor-surface-design.md §3, §7
 	 */
 	import { onDestroy, onMount } from 'svelte';
 	import { type Camera, attachCamera } from '$lib/graph/camera';

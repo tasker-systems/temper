@@ -32,7 +32,11 @@ session lifecycle, grounding, and outcome registers — read it after install.
 
 ## Where specs and plans go
 
-**Specs: `internal/superpowers/specs/`. Plans: `internal/superpowers/plans/`.**
+**Not in this repository.** Specs, plans, reviews, spikes and handoffs live in the
+private [`tasker-systems/temper-artifacts`](https://github.com/tasker-systems/temper-artifacts)
+repository, under `specs/`, `plans/`, `reviews/`, `spikes/` and `handoffs/`. Write
+them in a clone of that repo.
 
-Not `docs/` — everything in `docs/` is public and synced to the documentation
-site. See `internal/README.md`.
+Not `docs/` either — everything in `docs/` is public and synced to the documentation
+site. `.github/scripts/check-no-process-artifacts.sh` fails CI if those trees appear
+here. See `internal/README.md`.

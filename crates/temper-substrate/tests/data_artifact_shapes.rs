@@ -1,6 +1,6 @@
 #![cfg(feature = "artifact-tests")]
 //! Data-artifact shape registry — the Beat A substrate (Task 1, plan
-//! `internal/superpowers/plans/2026-08-21-data-artifact-shape-registry.md`).
+//! `temper-artifacts:plans/2026-08-21-data-artifact-shape-registry.md`).
 //!
 //! A shape is a declared JSON Schema governing a data-artifact family within ONE home, keyed per
 //! home so a shape never verdicts data its declarer cannot read. The registry revises by

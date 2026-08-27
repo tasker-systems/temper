@@ -22,7 +22,7 @@ import { apiGet, apiPost } from './api';
  * endpoints the predecessor uses, which lose their only caller when this surface replaces it. Two
  * files means the deletion is a file rather than an excavation.
  *
- * @see internal/superpowers/specs/2026-08-20-graph-successor-surface-design.md §0, §2
+ * @see temper-artifacts:specs/2026-08-20-graph-successor-surface-design.md §0, §2
  */
 
 export const runComposition = (token: string, composition: Composition): Promise<QueryResponse> =>
@@ -44,7 +44,7 @@ export const runComposition = (token: string, composition: Composition): Promise
  * The response carries its own bounds, because there is no composition trace here to borrow them
  * from.
  *
- * @see internal/superpowers/specs/2026-08-20-grounding-and-navigation-split-design.md §5.1
+ * @see temper-artifacts:specs/2026-08-20-grounding-and-navigation-split-design.md §5.1
  */
 export const readEntry = (token: string, anchorIds: string[]): Promise<AtlasEntry> => {
 	const params = new URLSearchParams();
@@ -73,7 +73,7 @@ export const readEntry = (token: string, anchorIds: string[]): Promise<AtlasEntr
  * **This endpoint has had no caller since chunk B landed it.** Chunk A shipped in the same shape —
  * green tests, zero callers — and three defects fell out the moment its output met a real server.
  *
- * @see internal/superpowers/specs/2026-08-21-the-handoff-and-the-arm-vocabulary-design.md §4
+ * @see temper-artifacts:specs/2026-08-21-the-handoff-and-the-arm-vocabulary-design.md §4
  */
 export const traversePath = (seeds: string[], depth: number | null): string => {
 	const params = new URLSearchParams({ from: seeds.join(',') });

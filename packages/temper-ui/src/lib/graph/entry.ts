@@ -10,7 +10,7 @@ import type { Anchor } from './composition';
  * does the I/O. That split is what lets the entries of spec §2 be tested without a browser or a
  * server, which is the same reason Beat A's builder is pure.
  *
- * @see internal/superpowers/specs/2026-08-20-graph-successor-surface-design.md §1, §2
+ * @see temper-artifacts:specs/2026-08-20-graph-successor-surface-design.md §1, §2
  */
 
 /**

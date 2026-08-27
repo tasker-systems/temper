@@ -298,7 +298,7 @@ describe('the composition path reports no corpus degree, and says so', () => {
 	 * This is what stops the entry read's band sentence — *"but each connects to N things
 	 * elsewhere in your corpus"* — from appearing on a screen whose read never measured it.
 	 *
-	 * @see internal/superpowers/specs/2026-08-21-hub-stranding-is-a-telling-failure-design.md §5.2
+	 * @see temper-artifacts:specs/2026-08-21-hub-stranding-is-a-telling-failure-design.md §5.2
 	 */
 	test('a node from a composition answer reports its corpus degree as absent', () => {
 		const model = buildGraph({

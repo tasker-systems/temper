@@ -53,7 +53,7 @@ from a scalar blended with the visible ones.
 
 The alternative is per-reader metric recomputation: five SQL aggregates and a 768-dimension centroid,
 per region, per reader, on a read path that today serves them from a stored column. The spec priced
-that and declined. `internal/superpowers/specs/2026-07-13-unified-visibility-semantics-design.md` §D5
+that and declined. `temper-artifacts:specs/2026-07-13-unified-visibility-semantics-design.md` §D5
 states the invariant and, under *Trade-offs accepted*, the carve-out:
 
 > **Invariant: no returned value is computed over members the caller cannot see.**

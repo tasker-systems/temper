@@ -1,8 +1,8 @@
 # Cogmap Telos-Differentiation Experiment — Run Log
 
 Live capture of produced ids, per-phase observations, and verification outputs.
-Plan: `internal/superpowers/plans/2026-07-06-cogmap-telos-differentiation-experiment.md`
-Spec: `internal/superpowers/specs/2026-07-06-cogmap-telos-differentiation-experiment-design.md`
+Plan: `temper-artifacts:plans/2026-07-06-cogmap-telos-differentiation-experiment.md`
+Spec: `temper-artifacts:specs/2026-07-06-cogmap-telos-differentiation-experiment-design.md`
 
 ## Baseline (Task 0)
 

@@ -855,7 +855,7 @@ describe('the entry read tells the truth about its band', () => {
 	 * cannot reach these nodes at a drawable size — `Maintenance` needs K=739, all 26 need K=2499.
 	 * The repair is therefore to the TELLING, and this is what witnesses it at the render.
 	 *
-	 * @see internal/superpowers/specs/2026-08-21-hub-stranding-is-a-telling-failure-design.md
+	 * @see temper-artifacts:specs/2026-08-21-hub-stranding-is-a-telling-failure-design.md
 	 */
 	const entryNode = (id: string, degree: number, title = id.toUpperCase()) => ({
 		id,
@@ -948,7 +948,7 @@ describe('the entry read tells the truth about its band', () => {
 	 * `GraphA11yList`, `NodeRail` and `nodeMeta` no longer know any arm's name — they read the
 	 * label off `model.arms`, and the entry read declares its own.
 	 *
-	 * @see internal/superpowers/specs/2026-08-21-the-handoff-and-the-arm-vocabulary-design.md §1, §2
+	 * @see temper-artifacts:specs/2026-08-21-the-handoff-and-the-arm-vocabulary-design.md §1, §2
 	 */
 	it('asserts NOTHING about a question, anywhere on the unaddressed entry', async () => {
 		const { container } = await painted(entryView());

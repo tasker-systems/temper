@@ -21,7 +21,7 @@ resource/edge knowledge graph — while remaining faithful to the event-ledger s
 > **Do not take its framing, its roadmap (§11), or its open questions (§10) as current.** Several of
 > those "open questions" were operational questions in architectural costume and are now settled;
 > the retention answer in §9 is sized for the wrong access pattern. The current design is
-> [`internal/superpowers/specs/2026-07-12-scip-code-graph-integration-spec.md`](../superpowers/specs/2026-07-12-scip-code-graph-integration-spec.md).
+> `temper-artifacts:specs/2026-07-12-scip-code-graph-integration-spec.md`.
 
 ---
 
@@ -638,7 +638,7 @@ Suggested phasing (each phase an additive, independently-shippable slice — mat
 wave/phase convention and additive-migration discipline):
 
 - **Phase 0 — Spec & schema.** Ratify §3 tables, §4.1 event types, and the membrane invariant (§7,
-  §10.7) as a design doc under `internal/superpowers/specs/`. Decide the §10 open questions (esp.
+  §10.7) as a design doc under `temper-artifacts:specs/`. Decide the §10 open questions (esp.
   occurrence retention, vantage default, diff semantics).
 - **Phase 1 — Decoder + ingest.** `temper-scip` crate (prost decode + symbol-string parser +
   validation); `code_index_ingested` event + projector; CAS blob storage; idempotent upload path
@@ -677,12 +677,12 @@ grammar §1.2; roles/relationships §1.3.
   `migrations/20260712000010_context_read_predicates.sql:84-124,171-199`.
 - Cogmaps & regions: `kb_cogmaps` `:243-251`; region tables `:684-755`; producer
   `crates/temper-substrate/src/{substrate,write,affinity}.rs`;
-  `(public)/cognitive-maps/`; wayfinding `internal/superpowers/specs/2026-07-11-context-regions-and-wayfinding-design.md`.
+  `(public)/cognitive-maps/`; wayfinding `temper-artifacts:specs/2026-07-11-context-regions-and-wayfinding-design.md`.
 - Ingest, blocks, provenance, embeddings, search: `crates/temper-ingest/src/{embed,chunk,pipeline}.rs`;
   streaming ingest `migrations/20260708000012_streaming_ingest.sql`,
   `crates/temper-mcp/src/tools/ingest.rs`; annotate-only provenance + span locators (issue #355)
   `migrations/20260710000001_block_provenance_annotate.sql`,
-  `internal/superpowers/specs/2026-07-10-issue-355-annotate-only-provenance-and-span-locators-design.md`;
+  `temper-artifacts:specs/2026-07-10-issue-355-annotate-only-provenance-and-span-locators-design.md`;
   `unified_search` `migrations/20260711000050_search_vector_scope_aware.sql`,
   `crates/temper-substrate/src/readback/mod.rs`.
 - Machine principals: `migrations/20260711000010_machine_clients.sql`.

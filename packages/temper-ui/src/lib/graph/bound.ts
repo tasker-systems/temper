@@ -18,7 +18,7 @@ import type { GraphPlan } from './composition';
  * `Extent` draws exactly that line truthfully. Where a source genuinely HAS a denominator, refusing
  * to state it would be the same failure in the other direction.
  *
- * @see internal/superpowers/specs/2026-08-20-graph-successor-surface-design.md §3
+ * @see temper-artifacts:specs/2026-08-20-graph-successor-surface-design.md §3
  */
 
 /**
@@ -85,7 +85,7 @@ export interface OrientationAxis {
  * {@link OrientationAxis} states a ratio because the entry read genuinely ranks and cuts; this read
  * does neither.
  *
- * @see internal/superpowers/specs/2026-08-21-the-handoff-and-the-arm-vocabulary-design.md §5
+ * @see temper-artifacts:specs/2026-08-21-the-handoff-and-the-arm-vocabulary-design.md §5
  */
 export interface TraversedAxis {
 	/** Marks on this screen. Not `of` anything — see above. */

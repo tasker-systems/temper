@@ -69,7 +69,7 @@ describe('the arm is said without naming an act, by the read that produced it', 
 	 * produced a new false label per view. What survives is the RULE it carried —
 	 * `no-internal-vocabulary-is-load-bearing` — applied to every arm any read declares.
 	 *
-	 * @see internal/superpowers/specs/2026-08-21-the-handoff-and-the-arm-vocabulary-design.md §1, §2
+	 * @see temper-artifacts:specs/2026-08-21-the-handoff-and-the-arm-vocabulary-design.md §1, §2
 	 */
 	const declared = [...ENTRY_ARMS, ...COMPOSITION_ARMS];
 
@@ -228,7 +228,7 @@ describe('the band on the ENTRY read is the hub band, and the caption says so', 
 	 * K=130: 26 stranded, min 11, max 87, and `Maintenance` (the most-connected resource in the
 	 * corpus) among them. The old sentence is true and reads as *"connected to nothing"*.
 	 *
-	 * @see internal/superpowers/specs/2026-08-21-hub-stranding-is-a-telling-failure-design.md §2.1
+	 * @see temper-artifacts:specs/2026-08-21-hub-stranding-is-a-telling-failure-design.md §2.1
 	 */
 	test('with corpus evidence it says what they ARE connected to', () => {
 		// The production band at K=130: 26 marks, min 11 (the cut), max 87 (`Maintenance`).
@@ -273,7 +273,7 @@ describe('the two reads do not say the same sentence', () => {
 	 * entry read's wording would put a claim on it that nothing measured: the same defect one
 	 * surface over. The function is TOLD what it holds; it does not assume.
 	 *
-	 * @see internal/superpowers/specs/2026-08-21-hub-stranding-is-a-telling-failure-design.md §5.2
+	 * @see temper-artifacts:specs/2026-08-21-hub-stranding-is-a-telling-failure-design.md §5.2
 	 */
 	test('no evidence keeps the answer-scoped sentence, byte for byte', () => {
 		expect(describeUnconnected(80, 155, [])).toBe(
@@ -368,7 +368,7 @@ describe('a channel that encodes a constant encodes nothing', () => {
 	 *
 	 * Deliberately not repurposed to mark the band — the arm vocabulary is chunk D's subject.
 	 *
-	 * @see internal/superpowers/specs/2026-08-21-hub-stranding-is-a-telling-failure-design.md §5.5
+	 * @see temper-artifacts:specs/2026-08-21-hub-stranding-is-a-telling-failure-design.md §5.5
 	 */
 	test('one arm across every mark distinguishes nothing', () => {
 		expect(armsDistinguish([node({ arm: 'seed' }), node({ arm: 'seed' })])).toBe(false);

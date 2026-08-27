@@ -13,7 +13,7 @@ import type { QueryResponse, RegionDisclosure } from '$lib/types/generated/query
  * without the words *region*, *salience*, *wayfind* or *survey* — it says *"these came from N
  * groupings of your work"*, not *"3 regions by region_score"*.
  *
- * @see internal/superpowers/specs/2026-08-20-graph-successor-surface-design.md §3
+ * @see temper-artifacts:specs/2026-08-20-graph-successor-surface-design.md §3
  */
 
 /**

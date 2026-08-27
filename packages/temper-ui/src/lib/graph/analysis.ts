@@ -41,7 +41,7 @@ import { relativeTime } from './relativeTime';
  * range, and a metric that turns out to be constant is **said** rather than ranked — an ordering
  * over 501 identical zeroes manufactures a rank that does not exist.
  *
- * @see internal/superpowers/specs/2026-08-20-graph-successor-surface-design.md §4 (Beat C)
+ * @see temper-artifacts:specs/2026-08-20-graph-successor-surface-design.md §4 (Beat C)
  */
 
 /** The quantities this surface reports. Two come from the surface tier, five from the analytics tier. */
@@ -400,7 +400,7 @@ export function describeRegulation(n: number): string {
  * outright that the reader must not read it as missing access — because a reader told only the
  * second half would conclude exactly that, and a reader told only the first would be misinformed.
  * The reasoning is recorded at the SQL arm and in
- * `internal/superpowers/specs/2026-08-23-anchor-shape-envelope-design.md`. **Do not add a fifth
+ * `temper-artifacts:specs/2026-08-23-anchor-shape-envelope-design.md`. **Do not add a fifth
  * case here.** The ambiguity reads like a gap and is load-bearing.
  *
  * **Each sentence names a next move, because the four causes differ in what to DO, not in tone.**
