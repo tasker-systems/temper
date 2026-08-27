@@ -31,6 +31,8 @@ describe("e2e: full mock-IdP SAML login", () => {
   let db: NeonClient;
   let idpCertPem: string;
   let idpKeyPem: string;
+  let nextCertPem: string;
+  let nextKeyPem: string;
 
   beforeAll(async () => {
     const { privateKey } = await generateKeyPair("Ed25519", { extractable: true });
@@ -45,6 +47,8 @@ describe("e2e: full mock-IdP SAML login", () => {
 
     idpCertPem = loadIdpFixtureCert(`${CERTS_DIR}idp-cert.pem`);
     idpKeyPem = loadIdpFixtureCert(`${CERTS_DIR}idp-key.pem`);
+    nextCertPem = loadIdpFixtureCert(`${CERTS_DIR}idp-cert-secondary.pem`);
+    nextKeyPem = loadIdpFixtureCert(`${CERTS_DIR}idp-key-secondary.pem`);
   });
 
   afterAll(async () => {
@@ -138,6 +142,173 @@ describe("e2e: full mock-IdP SAML login", () => {
     expect(payload.sub).toBe("persistent-user-xyz");
     expect(payload.email).toBe("e2e@example.com");
     expect(payload.email_verified).toBe(true);
+  });
+
+  /**
+   * The unit tests in `tests/saml/` prove `toSamlConfig` offers both certs to node-saml. They
+   * cannot prove `loadActiveIdp` READS the second one — a SELECT that omits the column would leave
+   * every one of them green. This drives the overlap through the real ACS handler against the real
+   * table, so the column has to survive the round-trip for the login to complete.
+   */
+  it("ACS accepts an assertion signed by the incoming cert once an overlap window is open", async () => {
+    async function acsWith(keyPem: string, certPem: string): Promise<Response> {
+      const challenge = createHash("sha256")
+        .update(`rollover-verifier-${"a".repeat(50)}`)
+        .digest("base64url");
+      const authRes = await handleAuthorize(
+        new Request(
+          "https://as.example.com/oauth/authorize?response_type=code" +
+            "&client_id=cli&redirect_uri=" +
+            encodeURIComponent(REDIRECT_URI) +
+            `&code_challenge=${challenge}` +
+            "&code_challenge_method=S256&state=rollover-state",
+        ),
+        db,
+      );
+      const rs = new URLSearchParams(
+        new URL(authRes.headers.get("location") as string, "https://as.example.com").search,
+      ).get("rs");
+      const { samlResponseB64 } = makeSignedSamlResponse({
+        spEntityId: SP_ENTITY_ID,
+        acsUrl: ACS_URL,
+        nameId: "rollover-user",
+        nameIdFormat: "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
+        attributes: { email: "rollover@example.com", uid: "rollover-user" },
+        idpKeyPem: keyPem,
+        idpCertPem: certPem,
+      });
+      return handleSamlAcs(
+        new Request("https://sp.example.com/saml/acs", {
+          method: "POST",
+          body: new URLSearchParams({ SAMLResponse: samlResponseB64, RelayState: rs as string }),
+        }),
+        db,
+      );
+    }
+
+    // Before the incoming cert is added, it is just an unknown signer.
+    expect((await acsWith(nextKeyPem, nextCertPem)).status).toBe(400);
+
+    // Open the overlap window — the one write an operator makes to start a rotation.
+    await sql`UPDATE kb_saml_idp SET idp_cert_secondary = ${nextCertPem} WHERE idp_key = 'test'`;
+
+    // Both keys now complete a login, which is what makes the IdP's cutover a non-event.
+    expect((await acsWith(idpKeyPem, idpCertPem)).status).toBe(302);
+    expect((await acsWith(nextKeyPem, nextCertPem)).status).toBe(302);
+
+    // Cut over and drop the outgoing cert. The write IS the revocation: `loadActiveIdp` runs per
+    // request, so there is no window in which the retired key still works.
+    await sql`UPDATE kb_saml_idp
+              SET idp_cert = idp_cert_secondary, idp_cert_secondary = NULL
+              WHERE idp_key = 'test'`;
+    expect((await acsWith(nextKeyPem, nextCertPem)).status).toBe(302);
+    expect((await acsWith(idpKeyPem, idpCertPem)).status).toBe(400);
+  });
+
+  /**
+   * The trap this feature is one careless line away from. Collecting certs "for the active IdP" is
+   * a widening of ONE row's signer set; relaxing `WHERE is_active = true LIMIT 1` instead would
+   * make every configured IdP's certificate a valid signer, and nothing on the happy path would
+   * notice — a second IdP's assertions would simply start working.
+   *
+   * So this pins the boundary from the outside: a second IdP row exists, holding a real cert, and
+   * an assertion signed by it is refused. It stays refused when that row is `is_active = true`,
+   * which is the state a relaxed predicate would silently start accepting.
+   */
+  it("refuses an assertion signed by another IdP's certificate, active or not", async () => {
+    async function acsSignedByOtherIdp(): Promise<Response> {
+      const challenge = createHash("sha256")
+        .update(`other-idp-verifier-${"a".repeat(50)}`)
+        .digest("base64url");
+      const authRes = await handleAuthorize(
+        new Request(
+          "https://as.example.com/oauth/authorize?response_type=code" +
+            "&client_id=cli&redirect_uri=" +
+            encodeURIComponent(REDIRECT_URI) +
+            `&code_challenge=${challenge}` +
+            "&code_challenge_method=S256&state=other-idp-state",
+        ),
+        db,
+      );
+      const rs = new URLSearchParams(
+        new URL(authRes.headers.get("location") as string, "https://as.example.com").search,
+      ).get("rs");
+      const { samlResponseB64 } = makeSignedSamlResponse({
+        spEntityId: SP_ENTITY_ID,
+        acsUrl: ACS_URL,
+        nameId: "other-idp-user",
+        nameIdFormat: "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
+        attributes: { email: "other@example.com", uid: "other-idp-user" },
+        idpKeyPem: nextKeyPem,
+        idpCertPem: nextCertPem,
+      });
+      return handleSamlAcs(
+        new Request("https://sp.example.com/saml/acs", {
+          method: "POST",
+          body: new URLSearchParams({ SAMLResponse: samlResponseB64, RelayState: rs as string }),
+        }),
+        db,
+      );
+    }
+
+    async function acsWithFirstIdp(): Promise<Response> {
+      const challenge = createHash("sha256")
+        .update(`first-idp-verifier-${"a".repeat(50)}`)
+        .digest("base64url");
+      const authRes = await handleAuthorize(
+        new Request(
+          "https://as.example.com/oauth/authorize?response_type=code" +
+            "&client_id=cli&redirect_uri=" +
+            encodeURIComponent(REDIRECT_URI) +
+            `&code_challenge=${challenge}` +
+            "&code_challenge_method=S256&state=first-idp-state",
+        ),
+        db,
+      );
+      const rs = new URLSearchParams(
+        new URL(authRes.headers.get("location") as string, "https://as.example.com").search,
+      ).get("rs");
+      const { samlResponseB64 } = makeSignedSamlResponse({
+        spEntityId: SP_ENTITY_ID,
+        acsUrl: ACS_URL,
+        nameId: "first-idp-user",
+        nameIdFormat: "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
+        attributes: { email: "first@example.com", uid: "first-idp-user" },
+        idpKeyPem,
+        idpCertPem,
+      });
+      return handleSamlAcs(
+        new Request("https://sp.example.com/saml/acs", {
+          method: "POST",
+          body: new URLSearchParams({ SAMLResponse: samlResponseB64, RelayState: rs as string }),
+        }),
+        db,
+      );
+    }
+
+    // A second IdP, configured with its own certificate, inactive.
+    await sql`INSERT INTO kb_saml_idp (
+      idp_key, is_active, idp_cert, idp_sso_url, idp_entity_id, sp_entity_id, acs_url,
+      nameid_format, email_attr, stable_id_attr
+    ) VALUES (
+      'other', false, ${nextCertPem}, ${IDP_SSO_URL}, ${IDP_ENTITY_ID}, ${SP_ENTITY_ID}, ${ACS_URL},
+      'urn:oasis:names:tc:SAML:2.0:nameid-format:persistent', 'email', 'uid'
+    )`;
+    expect((await acsSignedByOtherIdp()).status).toBe(400);
+
+    // An open overlap window on the first IdP does not change that answer.
+    await sql`UPDATE kb_saml_idp SET idp_cert_secondary = idp_cert WHERE idp_key = 'test'`;
+    expect((await acsSignedByOtherIdp()).status).toBe(400);
+
+    // Now make the second row active too. This is a state the one-active-IdP invariant forbids and
+    // `temper admin saml verify --db` refuses, and `WHERE is_active = true LIMIT 1` carries no
+    // ORDER BY — so WHICH row loads is undetermined and must not be asserted. What must hold
+    // regardless is the property the trap is about: the signer sets of two rows are never unioned.
+    // Exactly one of these two assertions succeeds, whichever row won.
+    await sql`UPDATE kb_saml_idp SET is_active = true WHERE idp_key = 'other'`;
+    const otherAccepted = (await acsSignedByOtherIdp()).status === 302;
+    const testAccepted = (await acsWithFirstIdp()).status === 302;
+    expect(otherAccepted).not.toBe(testAccepted);
   });
 
   it("ACS issues a reconcile call carrying the asserted groups (fail-open)", async () => {

@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import type { Profile } from "@node-saml/node-saml";
 import { describe, expect, it } from "vitest";
-import type { SamlIdpRow } from "../../src/saml/config.js";
+import { type SamlIdpRow, toSamlConfig } from "../../src/saml/config.js";
 import {
   buildSpMetadata,
   extractGroups,
@@ -17,12 +17,16 @@ import {
 const CERTS_DIR = fileURLToPath(new URL("../../test-fixtures/certs/", import.meta.url));
 const idpCertPem = loadIdpFixtureCert(`${CERTS_DIR}idp-cert.pem`);
 const idpKeyPem = loadIdpFixtureCert(`${CERTS_DIR}idp-key.pem`);
+// The incoming key of a rollover: a *different* signer, same logical IdP.
+const nextCertPem = loadIdpFixtureCert(`${CERTS_DIR}idp-cert-secondary.pem`);
+const nextKeyPem = loadIdpFixtureCert(`${CERTS_DIR}idp-key-secondary.pem`);
 
 function fakeIdp(overrides: Partial<SamlIdpRow> = {}): SamlIdpRow {
   return {
     idp_key: "primary",
     is_active: true,
     idp_cert: "-----BEGIN CERTIFICATE-----\nFAKE\n-----END CERTIFICATE-----",
+    idp_cert_secondary: null,
     idp_sso_url: "https://idp.example.com/sso",
     idp_entity_id: "https://idp.example.com/entity",
     sp_entity_id: "https://temper.example.com/sp",
@@ -236,5 +240,159 @@ describe("extractGroups", () => {
     expect(extractGroups(profileWith({ groups: [] }), fakeIdp({ groups_attr: "groups" }))).toEqual(
       [],
     );
+  });
+});
+
+/**
+ * The three states an IdP signing-key rollover passes through, in order. The middle state is the
+ * whole point: it is the only one in which both the outgoing and the incoming key are acceptable,
+ * and it is what lets each step of the operator procedure be taken independently and reversed.
+ *
+ * `nextKeyPem`/`nextCertPem` stand for the incoming key. In the only-old and only-new states it is
+ * simultaneously the "signer configured for no active IdP" case, which is why the rejection
+ * assertions below are not a separate fixture: an unconfigured signer and a not-yet-configured one
+ * are the same thing to the SP, and must stay that way.
+ */
+describe("validateAssertion across an IdP signing-key rollover", () => {
+  function signedBy(idp: SamlIdpRow, keyPem: string, certPem: string) {
+    return makeSignedSamlResponse({
+      spEntityId: idp.sp_entity_id,
+      acsUrl: idp.acs_url,
+      nameId: "the-persistent-id",
+      nameIdFormat: idp.nameid_format,
+      attributes: {
+        [idp.email_attr]: "jane@example.com",
+        [idp.stable_id_attr]: "stable-123",
+      },
+      idpKeyPem: keyPem,
+      idpCertPem: certPem,
+    }).samlResponseB64;
+  }
+
+  // State 1 — only the outgoing cert is configured. The incoming key has not been added yet.
+  it("only-old: accepts the outgoing signer and rejects the incoming one", async () => {
+    const idp = fakeIdp({ idp_cert: idpCertPem, idp_cert_secondary: null });
+
+    await expect(
+      validateAssertion(idp, signedBy(idp, idpKeyPem, idpCertPem)),
+    ).resolves.toBeTruthy();
+    await expect(validateAssertion(idp, signedBy(idp, nextKeyPem, nextCertPem))).rejects.toThrow();
+  });
+
+  // State 2 — the overlap window. Both keys sign acceptably, so the IdP may cut over at any moment
+  // without coordination, and may cut back.
+  it("both: accepts an assertion signed by either configured cert", async () => {
+    const idp = fakeIdp({ idp_cert: idpCertPem, idp_cert_secondary: nextCertPem });
+
+    await expect(
+      validateAssertion(idp, signedBy(idp, idpKeyPem, idpCertPem)),
+    ).resolves.toBeTruthy();
+    await expect(
+      validateAssertion(idp, signedBy(idp, nextKeyPem, nextCertPem)),
+    ).resolves.toBeTruthy();
+  });
+
+  // State 3 — the outgoing cert has been removed. Acceptance of it must stop at that moment, not
+  // at some later cache expiry: `loadActiveIdp` reads the row per request, so the write IS the
+  // revocation.
+  it("only-new: removing the outgoing cert immediately stops accepting assertions signed by it", async () => {
+    const idp = fakeIdp({ idp_cert: nextCertPem, idp_cert_secondary: null });
+
+    await expect(
+      validateAssertion(idp, signedBy(idp, nextKeyPem, nextCertPem)),
+    ).resolves.toBeTruthy();
+    await expect(validateAssertion(idp, signedBy(idp, idpKeyPem, idpCertPem))).rejects.toThrow();
+  });
+
+  // Adding rollover support must not make an unknown signer acceptable. A cert that is configured
+  // for NO active IdP is rejected whether or not an overlap window is open — the overlap widens the
+  // accepted set by exactly one named cert, never by "some other valid-looking certificate".
+  it("rejects a signer configured for no active IdP, including mid-overlap", async () => {
+    const overlapping = fakeIdp({ idp_cert: idpCertPem, idp_cert_secondary: idpCertPem });
+
+    await expect(
+      validateAssertion(overlapping, signedBy(overlapping, nextKeyPem, nextCertPem)),
+    ).rejects.toThrow();
+  });
+});
+
+/**
+ * node-saml resolves every entry of `idpCert` before it verifies anything, and throws on the first
+ * one it cannot parse. So a slot holding something that is not a certificate does not merely fail
+ * to help — it refuses assertions the OTHER slot legitimately signed. That turns staging an
+ * incoming cert, the step of a rollover that is supposed to change nothing, into a total
+ * authentication outage.
+ *
+ * The escaped-newline case is the one that matters in practice: a SQL literal written
+ * `'-----BEGIN CERTIFICATE-----\n...'` stores a literal backslash-n under the default
+ * `standard_conforming_strings`, which is exactly the shape node-saml rejects.
+ */
+describe("a malformed slot never vetoes a usable one", () => {
+  const unusable: Array<[string, string]> = [
+    [
+      "an escaped-newline PEM, as a plain SQL literal stores it",
+      "-----BEGIN CERTIFICATE-----\\nMIIC\\n-----END CERTIFICATE-----",
+    ],
+    ["whitespace only", "   "],
+    ["a PEM with no line breaks at all", idpCertPem.replace(/\n/g, "")],
+    ["unrelated text", "not a certificate"],
+  ];
+
+  for (const [label, junk] of unusable) {
+    it(`still accepts the primary's signature when the secondary holds ${label}`, async () => {
+      const idp = fakeIdp({ idp_cert: idpCertPem, idp_cert_secondary: junk });
+      const signed = makeSignedSamlResponse({
+        spEntityId: idp.sp_entity_id,
+        acsUrl: idp.acs_url,
+        nameId: "the-persistent-id",
+        nameIdFormat: idp.nameid_format,
+        attributes: { [idp.email_attr]: "jane@example.com", [idp.stable_id_attr]: "stable-123" },
+        idpKeyPem,
+        idpCertPem,
+      }).samlResponseB64;
+
+      await expect(validateAssertion(idp, signed)).resolves.toBeTruthy();
+    });
+  }
+
+  // Dropping an unusable slot must not drop the guarantee: the junk is not a signer either.
+  it("and the discarded slot confers nothing on whoever holds its key", async () => {
+    const idp = fakeIdp({ idp_cert: idpCertPem, idp_cert_secondary: "   " });
+    const signedByOther = makeSignedSamlResponse({
+      spEntityId: idp.sp_entity_id,
+      acsUrl: idp.acs_url,
+      nameId: "the-persistent-id",
+      nameIdFormat: idp.nameid_format,
+      attributes: { [idp.email_attr]: "jane@example.com", [idp.stable_id_attr]: "stable-123" },
+      idpKeyPem: nextKeyPem,
+      idpCertPem: nextCertPem,
+    }).samlResponseB64;
+
+    await expect(validateAssertion(idp, signedByOther)).rejects.toThrow();
+  });
+
+  // A row with nothing usable is a configuration fault and says so, rather than presenting as
+  // every assertion having a bad signature.
+  it("names the configuration fault when no slot holds a certificate", () => {
+    expect(() => toSamlConfig(fakeIdp({ idp_cert: "   ", idp_cert_secondary: null }))).toThrow(
+      /no usable signing certificate/,
+    );
+  });
+
+  // An IdP-exported chain in one slot must contribute every certificate in it: node-saml reads only
+  // the first block of a multi-cert string, so a leaf that is not first would validate nothing.
+  it("honours every certificate in a PEM bundle, not just the first", async () => {
+    const idp = fakeIdp({ idp_cert: `${nextCertPem}\n${idpCertPem}`, idp_cert_secondary: null });
+    const signedBySecond = makeSignedSamlResponse({
+      spEntityId: idp.sp_entity_id,
+      acsUrl: idp.acs_url,
+      nameId: "the-persistent-id",
+      nameIdFormat: idp.nameid_format,
+      attributes: { [idp.email_attr]: "jane@example.com", [idp.stable_id_attr]: "stable-123" },
+      idpKeyPem,
+      idpCertPem,
+    }).samlResponseB64;
+
+    await expect(validateAssertion(idp, signedBySecond)).resolves.toBeTruthy();
   });
 });

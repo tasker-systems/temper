@@ -16,7 +16,7 @@ use temper_services::auth::AuthenticatedProfile;
 use temper_services::auth::{AuthzError, RawJwtClaims};
 use temper_services::error::ApiError;
 use temper_services::services::{slack_grant_vault_service, slack_link_service, standing_service};
-use temper_services::state::AppState;
+use temper_services::state::{AppState, KeyLookupError};
 use temper_services::{link_provider, oauth_client};
 
 /// How long a link URL stays usable. Long enough for a human to notice the ephemeral
@@ -358,10 +358,24 @@ async fn resolve_existing(
     state: &AppState,
     access_token: &str,
 ) -> Result<AuthenticatedProfile, ApiError> {
-    let vk = state.jwks_store.get_decoding_key().await.map_err(|e| {
-        tracing::error!("slack link: JWKS key retrieval failed: {e}");
-        ApiError::Unauthorized("Authentication service unavailable".to_string())
-    })?;
+    let vk = state
+        .jwks_store
+        .get_decoding_key_for_token(access_token)
+        .await
+        .map_err(|e| match e {
+            // Same split as `middleware::auth::require_auth`, and for the same reason. Lower risk
+            // here — this token came from our own back-channel exchange rather than from a caller
+            // — but the two walk the identical JWKS path deliberately, and a divergence in how
+            // they classify a refusal is how they start answering the same question differently.
+            KeyLookupError::UnknownKid(kid) => {
+                tracing::debug!("slack link: token names an unpublished kid: {kid}");
+                ApiError::Unauthorized("Invalid or expired token".to_string())
+            }
+            e => {
+                tracing::error!("slack link: JWKS key retrieval failed: {e}");
+                ApiError::Unauthorized("Authentication service unavailable".to_string())
+            }
+        })?;
 
     let issuer = &state.config.auth.issuer;
     let audience = state.config.auth.audience.as_str();

@@ -9,7 +9,7 @@ use std::future::Future;
 use temper_services::auth::AuthenticatedProfile;
 
 use temper_services::error::ApiError;
-use temper_services::state::AppState;
+use temper_services::state::{AppState, KeyLookupError};
 
 /// Newtype carrying the value of the `X-Temper-Device-Id` request header.
 #[derive(Debug, Clone)]
@@ -54,11 +54,30 @@ pub async fn require_auth(
     // 1. Extract "Authorization: Bearer <token>"
     let token = extract_bearer_token(&request)?;
 
-    // 2. Get the current decoding key (and its algorithm family) from the JWKS store (cached).
-    let vk = state.jwks_store.get_decoding_key().await.map_err(|e| {
-        tracing::error!("JWKS key retrieval failed: {e}");
-        ApiError::Unauthorized("Authentication service unavailable".to_string())
-    })?;
+    // 2. Get the decoding key this token names in its `kid` (and its algorithm family) from the
+    //    JWKS store (cached; an unrecognised `kid` refreshes once before being refused).
+    let vk = state
+        .jwks_store
+        .get_decoding_key_for_token(&token)
+        .await
+        .map_err(|e| match e {
+            // A `kid` naming no key this instance trusts is a fact about the TOKEN, and it takes
+            // the same refusal as any other bad token — the one `decode` produces three lines
+            // down, so the two are indistinguishable on the wire. Telling this caller the service
+            // is unavailable would send a client whose signing key just rotated away to retry
+            // later instead of to authenticate again.
+            //
+            // `debug!`, not `error!`: the whole input is caller-written, so an error-level line
+            // here is a log-volume lever anyone can pull, on every route this middleware covers.
+            KeyLookupError::UnknownKid(kid) => {
+                tracing::debug!("token names an unpublished kid: {kid}");
+                ApiError::Unauthorized("Invalid or expired token".to_string())
+            }
+            e => {
+                tracing::error!("JWKS key retrieval failed: {e}");
+                ApiError::Unauthorized("Authentication service unavailable".to_string())
+            }
+        })?;
 
     // 3. Decode and verify the JWT. The allow-list is scoped to exactly the
     //    loaded key's algorithm (see `JwksKeyStore::validation`).
