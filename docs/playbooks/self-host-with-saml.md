@@ -652,6 +652,13 @@ tables if you want to know how long.
 | `kb_oauth_flow` | authorization-code flow (including abandoned ones) | 1 day past `expires_at` |
 | `kb_oauth_refresh_tokens` | issued refresh token | 30 days past **both** its own expiry **and** its chain's `chain_expires_at` |
 
+> [!IMPORTANT]
+> **Apply migrations before the first sweep runs.** The sweep's indexes and its `ON DELETE
+> RESTRICT` on replay evidence ship as a migration, and the cron ships with the deployment. If the
+> cron fires first, that run scans instead of seeking — it will exceed the function's 300s limit,
+> commit whatever it managed, and try again the next night — and for that window the evidence
+> guarantee above rests on the sweep's filter alone rather than on the constraint beneath it.
+
 **Two of these floors are security properties, not housekeeping.**
 
 A `kb_saml_replay` row is what stops a captured assertion being presented twice. Temper does not
@@ -671,11 +678,15 @@ is answered with a plain `invalid_grant`, logs nothing and records nothing. Befo
 existed nothing was ever deleted, so that reach was unbounded; 30 days past a dead chain is the
 bound it now has.
 
-Evidence already recorded in `kb_oauth_refresh_replays` is a different matter and is **never**
-deleted — not by this sweep, and not by anything else. The sweep filters those rows out, and
-underneath that the foreign key is `ON DELETE RESTRICT`, so the database refuses the delete even if
-some future caller forgets the filter. Nothing you can see through
+Evidence already recorded in `kb_oauth_refresh_replays` is a different matter: **the sweep never
+deletes it, at any age.** It filters those rows out, and underneath that the foreign key is
+`ON DELETE RESTRICT`, so the database refuses the delete even if some future caller forgets the
+filter. Nothing you can see through
 [`vw_oauth_refresh_replays`](#watch-for-replayed-refresh-tokens) is aged out from under you.
+
+Deleting the **profile** a replay belongs to does remove that row, because it cascades from
+`kb_profiles` — retention and erasure are different acts, and only the first is what this sweep
+does.
 
 Every run logs what it deleted per table, including a run that deleted nothing. Server logs are
 JSON, so the record looks like this (fields elided):
