@@ -7,6 +7,7 @@ import temper
 from temper import BearerToken, Client, NotFound, ServerError, TransportError, Unauthorized
 from temper.credentials import ClientCredentials
 from temper.generated.api.profile_api import ProfileApi
+from temper.generated.exceptions import ApiException
 from tests.fixtures import profile_with_entitlements, search_response
 
 
@@ -187,3 +188,13 @@ class TestConcurrency:
         assert sent == ["Bearer tok-a", "Bearer tok-b"]
         # The scope is unwound on the way out, in every thread.
         assert seen == {"a": None, "b": None}
+
+
+def test_the_underlying_failure_stays_on_the_traceback(configured):
+    # `call` maps the generated core's exception into the tree and raises the mapped
+    # one, which loses the original unless it is chained explicitly — and the original
+    # is the frame that says what actually happened on the wire.
+    configured.always(status=503, body="boom")
+    with pytest.raises(ServerError) as excinfo:
+        Client(BearerToken("tok"), backoff=no_sleep).call(profile)
+    assert isinstance(excinfo.value.__cause__, ApiException)

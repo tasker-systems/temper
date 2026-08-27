@@ -82,15 +82,21 @@ class Client:
             try:
                 with _connection.with_token(self._credentials.token()):
                     return fn(api)
-            except (ApiException, urllib3.exceptions.HTTPError) as raw:
-                error = map_error(raw)
+            except (ApiException, urllib3.exceptions.HTTPError) as caught:
+                # Bound outside the `except` so the retry/repair decisions below read as
+                # straight-line code rather than as branches nested in a handler. The
+                # cost is that Python's implicit chaining does not apply out here — hence
+                # the explicit `from raw` on the raise, without which the caller's
+                # traceback would stop at the mapped error and lose the urllib3 or
+                # ApiException frame that says what actually happened.
+                error, raw = map_error(caught), caught
 
             if self._repair_credentials(error, reminted):
                 reminted = True
                 continue
 
             if not self._retryable_read(error, idempotent, attempt):
-                raise error
+                raise error from raw
 
             self._backoff(attempt)
 
