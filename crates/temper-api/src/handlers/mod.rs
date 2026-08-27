@@ -1,5 +1,6 @@
 pub mod access;
 pub mod admin_ledger;
+pub mod as_reap;
 pub mod auditor;
 pub mod citation_audits;
 pub mod cognitive_maps;

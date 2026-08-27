@@ -466,4 +466,62 @@ describe("replayed refresh token", () => {
       ).toBe(1);
     }
   });
+
+  /**
+   * A replay record is attributed to whoever the TOKEN was attributed to — never to nobody when
+   * the token had an owner, and never to somebody when it did not.
+   *
+   * This looks like a detail of one INSERT and is load-bearing somewhere else entirely. Deleting a
+   * profile cascades into `kb_oauth_refresh_tokens`, and since the AS retention sweep landed,
+   * `kb_oauth_refresh_replays.token_id` is `ON DELETE RESTRICT` — so evidence cannot be swept away,
+   * and equally a token cannot be deleted while evidence points at it. Those two facts only
+   * coexist because this one holds: an OWNED token's evidence is owned too and cascades beside it,
+   * and an UNOWNED token is not reachable from a profile delete at all. Break the agreement in
+   * either direction and a profile delete meets a 23001 it has no way past.
+   *
+   * `recordRefreshReplay` gets `profile_id` from the token row it is recording against, so this
+   * holds by construction rather than by care — which is exactly why it is asserted here and not
+   * assumed. Nothing else in the schema enforces it (`profile_id` is nullable on both tables by
+   * design, for the fail-open login that records no owner), so this test is the whole guard.
+   */
+  it("attributes a replay to exactly whoever the token was attributed to", async () => {
+    const owner = await principal("approved");
+
+    for (const [label, profileId] of [
+      ["an owned chain", owner],
+      ["a chain from a fail-open login, which records no owner", null],
+    ] as const) {
+      await truncateOauthTables(sql);
+      const first = await login(db, {
+        relay: `rs-attr-${profileId ?? "null"}`,
+        code: `c-attr-${profileId ?? "null"}`,
+        profileId,
+      });
+      await refresh(db, first.refresh_token);
+      const rotated = await tokenRow(first.refresh_token);
+
+      // The rotated predecessor, presented again — this is what writes the replay row.
+      expect((await refresh(db, first.refresh_token)).status).toBe(400);
+
+      const rows = await sql`
+        SELECT t.profile_id AS token_owner, r.profile_id AS evidence_owner
+          FROM kb_oauth_refresh_replays r
+          JOIN kb_oauth_refresh_tokens t ON t.id = r.token_id
+         WHERE r.token_id = ${rotated.id}`;
+      const [row] = rows as unknown as Array<{
+        token_owner: string | null;
+        evidence_owner: string | null;
+      }>;
+
+      expect(row, `${label}: the replay must have been recorded at all`).toBeDefined();
+      expect(row.token_owner, `${label}: the token carries the owner the login resolved`).toBe(
+        profileId,
+      );
+      expect(
+        row.evidence_owner,
+        `${label}: the evidence must carry the SAME owner — a mismatch here is what would make a ` +
+          `profile delete fail against the RESTRICT protecting this row`,
+      ).toBe(row.token_owner);
+    }
+  });
 });

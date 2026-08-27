@@ -298,6 +298,7 @@ openssl genpkey -algorithm ed25519 -out as_signing_key.pem
 | `AS_ACCESS_TTL_SECONDS` | `900` (default) | Access-token lifetime. |
 | `AS_REFRESH_TTL_SECONDS` | `2592000` (default, 30d) | Refresh-token lifetime. Slides on every rotation. |
 | `AS_REFRESH_CHAIN_MAX_SECONDS` | `7776000` (default, 90d) | **Absolute** lifetime of a refresh chain, from the last full SAML login. Rotation never moves it, so this — not the two TTLs above — is the bound on how long IdP-removed reach can persist. See [Limitations](#limitations). |
+| `AS_SAML_ASSERTION_MAX_SECONDS` | `3600` (default, 1h) | **The widest assertion validity window your IdP issues** — read it off the IdP, not off Temper. It is the floor below which a consumed assertion is never forgotten, so the retention sweep cannot delete a replay row that could still be replayed. Too large costs a little storage; too small re-opens replay. A value that is present but not a usable number of seconds **fails the sweep rather than substituting the default** — rows stay on disk until you fix it; unset or blank uses the default. **Read by `temper-api`, not by the AS** — if you run the two as separate processes, set it on `temper-api`. See [What is kept, and for how long](#what-is-kept-and-for-how-long). |
 | `AS_REFRESH_REPLAY_GRACE_SECONDS` | `10` (default) | How soon after a rotation a client may present the spent refresh token again and be treated as a retry rather than a thief. Later than this and the whole chain is ended. `0` ends the chain on any replay; the widest value honoured is `3600`. See [Watch for replayed refresh tokens](#watch-for-replayed-refresh-tokens). |
 
 `AS_CLIENTS` registers the exact redirect URIs each client may use (exact string match — this
@@ -635,6 +636,68 @@ That ends **every** chain they hold and stops the next sign-in from minting a ne
 > chains are bounded by `AS_REFRESH_CHAIN_MAX_SECONDS` and are gone within that window, so an empty
 > result means "nothing recorded", which becomes "nothing happened" once your longest chain has
 > turned over.
+
+## What is kept, and for how long
+
+Three tables back the authorization server, and a row lands in one of them on **every** login. A
+daily sweep (`/api/as/reap`, gated by the same `EMBED_DISPATCH_SECRET` bearer as the other internal
+crons — no separate secret to set) deletes rows once they are past a floor. It deletes **at most
+50,000 rows per table per night**, so a backlog accumulated before you upgraded drains over as many
+nights as that arithmetic gives you rather than in one statement — check `count(*)` on the three
+tables if you want to know how long.
+
+| Table | A row per | Deleted once |
+| --- | --- | --- |
+| `kb_saml_replay` | consumed SAML assertion | `AS_SAML_ASSERTION_MAX_SECONDS` has passed since the row's stamped `expires_at` — so never sooner than that long after the assertion was consumed |
+| `kb_oauth_flow` | authorization-code flow (including abandoned ones) | 1 day past `expires_at` |
+| `kb_oauth_refresh_tokens` | issued refresh token | 30 days past **both** its own expiry **and** its chain's `chain_expires_at` |
+
+> [!IMPORTANT]
+> **Apply migrations before the first sweep runs.** The sweep's indexes and its evidence constraint
+> ship as a migration and it is built to run with them in place; run it first and it will simply
+> make less progress per night.
+
+**Two of these floors are security properties, not housekeeping.**
+
+A `kb_saml_replay` row is what stops a captured assertion being presented twice. Temper does not
+read your IdP's `NotOnOrAfter`, so the row's own `expires_at` is an assumption about it rather than a
+statement of it — which is why the sweep subtracts `AS_SAML_ASSERTION_MAX_SECONDS` instead of
+trusting that stamp. **If your IdP issues assertions valid for longer than an hour, raise this
+variable before the first sweep runs.** Leaving it too low deletes assertion ids that are still
+replayable; leaving it too high costs you an assertion id and a timestamp per login.
+
+A spent refresh token is kept until its whole chain is dead because that is what makes a **stolen**
+one detectable: a rotated token presented again is recognised however long ago it expired, and the
+chain is ended in response. Reaping on the token's own expiry would quietly turn that into an
+ordinary "invalid grant".
+
+**Detection does end when the row does.** A replay of a token whose chain died more than 30 days ago
+is answered with a plain `invalid_grant`, logs nothing and records nothing. Before this sweep
+existed nothing was ever deleted, so that reach was unbounded; 30 days past a dead chain is the
+bound it now has.
+
+Evidence already recorded in `kb_oauth_refresh_replays` is a different matter: **the sweep never
+deletes it, at any age.** It filters those rows out, and underneath that the foreign key is
+`ON DELETE RESTRICT`, so the database refuses the delete even if some future caller forgets the
+filter. Nothing you can see through
+[`vw_oauth_refresh_replays`](#watch-for-replayed-refresh-tokens) is aged out from under you.
+
+Deleting the **profile** a replay belongs to does remove that row, because it cascades from
+`kb_profiles` — retention and erasure are different acts, and only the first is what this sweep
+does.
+
+Every run logs what it deleted per table, including a run that deleted nothing. Server logs are
+JSON, so the record looks like this (fields elided):
+
+```json
+{"level":"INFO","fields":{"message":"AS retention sweep complete","saml_replay":1204,
+ "oauth_flow":880,"refresh_tokens":0,"more_pending":false,"assertion_window_seconds":3600.0}}
+```
+
+`more_pending` is `true` when a table stopped because it hit the 50,000-row cap rather than because
+it ran out — the next night's run continues from there. `assertion_window_seconds` echoes the floor
+the run actually used, which is the quickest way to confirm a change to
+`AS_SAML_ASSERTION_MAX_SECONDS` reached the process.
 
 ## Further reading
 

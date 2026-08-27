@@ -83,6 +83,7 @@ ALLOWLIST='/api/access/admin/requests
 /api/embed/warm
 /api/embed/admin/reembed
 /api/slack/intents/reap
+/api/as/reap
 /api/region/dispatch
 /api/intake/webhook'
 
