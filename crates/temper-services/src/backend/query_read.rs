@@ -56,10 +56,18 @@ pub async fn run_composition(
     // A refusal from here is a compiler/validator contradiction, never a caller error — `validate`
     // has already refused everything a caller can get wrong. Rendering it as a 500 rather than a
     // 400 says so: telling a caller to fix a plan that is correct would send them in circles.
+    //
+    // **That reasoning governs the STATUS; it never governed the message.** `[fixed — 2026-08-26]`
+    // This arm formatted `reason` and `detail` straight into `ApiError::Internal`, whose string is
+    // the response body — the fourth site of the class `opaque` was written for on 2026-08-09, and
+    // the only one that pass left standing. MCP forwards the message verbatim, so a compiler
+    // contradiction handed an agent internal variant names. The detail still reaches the logs,
+    // which is `opaque`'s whole job; only what the caller is told changes.
     let compiled = compile(v, principal).map_err(|r: PlanRefusal| {
-        ApiError::Internal(format!(
+        opaque(anyhow::anyhow!(
             "compiler refused a validated plan ({:?}): {}",
-            r.reason, r.detail
+            r.reason,
+            r.detail
         ))
     })?;
     let rows = execute(pool, &compiled).await.map_err(opaque)?;

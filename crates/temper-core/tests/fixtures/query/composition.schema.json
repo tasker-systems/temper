@@ -602,7 +602,7 @@
       "$ref": "#/$defs/OutcomeDeclaration"
     },
     "stages": {
-      "description": "The DAG's nodes. Each references its inputs explicitly by stage name — there is no\nprev-else-fallback, and no single execution order (a DAG has none). Beat B's topological\nsort derives the order; there is deliberately no `act_sequence` method, which would be a\nfalse claim that a DAG has one sequence.",
+      "description": "The DAG's nodes. Each references its inputs explicitly by stage name — there is no\nprev-else-fallback, and no single execution order (a DAG has none). Beat B's topological\nsort derives the order; there is deliberately no `act_sequence` method, which would be a\nfalse claim that a DAG has one sequence.\n\nAt most [`MAX_STAGES`] of them, refused as\n[`super::disposition::RefusalReason::TooManyStages`].",
       "items": {
         "$ref": "#/$defs/StageNode"
       },

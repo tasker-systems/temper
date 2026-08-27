@@ -124,6 +124,12 @@ fn the_shape_pass_emits_exactly_these_reasons() {
         ("MissingProvenance", 1),
         ("NoReturns", 1),
         ("NoStages", 1),
+        // `TooManyStages` `[added — 2026-08-26]`. A new entry, and this guard's own message names
+        // the bar it has to clear: "asserting it cannot change without a wire-contract change".
+        // It clears it — the ceiling is `max_items` on `Composition::stages`, so raising the cap
+        // is an `openapi.json` change the drift gates see, not a per-deployment choice a stale
+        // `temper query --check` could contradict.
+        ("TooManyStages", 1),
         ("UnknownAct", 1),
         ("UnknownReturnStage", 1),
     ]

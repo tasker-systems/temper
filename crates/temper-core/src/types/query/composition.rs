@@ -317,8 +317,43 @@ pub struct Composition {
     /// prev-else-fallback, and no single execution order (a DAG has none). Beat B's topological
     /// sort derives the order; there is deliberately no `act_sequence` method, which would be a
     /// false claim that a DAG has one sequence.
+    ///
+    /// At most [`MAX_STAGES`] of them, refused as
+    /// [`super::disposition::RefusalReason::TooManyStages`].
+    // `max_items` is not decoration here — it is what makes the refusal legal where it is raised.
+    // The seam guard (`tests/query_validate_seam.rs`) admits a reason into the SHAPE pass only if
+    // "asserting it cannot change without a wire-contract change", and the shape module's own rule
+    // is that a client running against a NEWER server must not refuse a plan that server would
+    // run. A cap enforced but unpublished would fail both: raising it later would silently turn
+    // every stale `temper query --check` into a false refusal. Published, widening it is an
+    // ordinary contract change that `openapi.json` and the drift gates see.
+    //
+    // No `min_items = 1` beside it, and that gap is NOT a ruling — nobody has taken one. `validate`
+    // refuses an empty list as `no_stages`, so the contract admits a request the server always
+    // rejects, which is the exact argument the `returns` field's own `min_items` comment makes one
+    // struct up. It is untouched here only so this change carries one bound rather than two.
+    #[cfg_attr(feature = "web-api", schema(max_items = 64))]
     pub stages: Vec<StageNode>,
 }
+
+/// The most stages one composition may declare.
+///
+/// # Chosen against the scale the code already assumes, in both directions
+///
+/// The lower anchor is written down two hundred lines above: [`StageNode`]'s `large_enum_variant`
+/// exemption argues from "a handful-of-nodes-per-composition scale", and the widest plan anything
+/// in this repo builds is three. 64 is an order of magnitude above that — far above any question
+/// anyone has asked, so no real caller meets it.
+///
+/// The upper anchor is what a stage list costs to run. Every declared stage executes whether or
+/// not `returns` names it, so the count is the plan's cost, and 64 sits orders of magnitude below
+/// where that cost becomes interesting.
+///
+/// Same method as `MAX_PER_CANDIDATE_PREDICATES`: far above the question, far below the harm. It
+/// is a starting point rather than a measured cliff, and unlike the per-candidate caps it has no
+/// measurement behind it — widening it is a contract change, which is where the argument for a
+/// different number should be made.
+pub const MAX_STAGES: usize = 64;
 
 #[cfg(test)]
 mod tests {

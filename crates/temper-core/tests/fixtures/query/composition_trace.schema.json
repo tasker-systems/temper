@@ -261,6 +261,11 @@
           "type": "string"
         },
         {
+          "const": "too_many_stages",
+          "description": "The composition declares more stages than the contract admits.\n\n`[added — 2026-08-26]` The counterpart to [`RefusalReason::NoStages`]: a plan has a floor\nand now a ceiling, and the ceiling is\n[`Composition::stages`](super::composition::Composition::stages)' published `max_items`.\nEvery declared stage is executed whether or not `returns` names it, so the stage count is\nwhat a composition costs — the bound makes that cost legible up front instead of a caller\ndiscovering it in a latency number.\n\n**The repair is decomposition, not persuasion.** A question needing more stages than this\nis more than one question: ask them as separate compositions and combine the answers, which\nis also what makes each one's trace readable. The ceiling is far above anything a\nhand-authored plan reaches; a plan meeting it is usually generated in a loop.\n\nRaised in the SHAPE pass, so it costs nothing to receive — refused before any embedding or\ndatabase contact, on every door. That placement is only legal because the number is\npublished: a client refuses what the CONTRACT forbids, never what one deployment chose, and\nwidening it is a wire-contract change visible in `openapi.json`.",
+          "type": "string"
+        },
+        {
           "const": "no_returns",
           "description": "The composition returns no stages, so it answers nothing.",
           "type": "string"

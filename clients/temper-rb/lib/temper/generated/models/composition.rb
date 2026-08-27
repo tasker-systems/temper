@@ -18,7 +18,7 @@ module Temper::Generated
   class Composition < ApiModelBase
     attr_accessor :outcome
 
-    # The DAG's nodes. Each references its inputs explicitly by stage name — there is no prev-else-fallback, and no single execution order (a DAG has none). Beat B's topological sort derives the order; there is deliberately no `act_sequence` method, which would be a false claim that a DAG has one sequence.
+    # The DAG's nodes. Each references its inputs explicitly by stage name — there is no prev-else-fallback, and no single execution order (a DAG has none). Beat B's topological sort derives the order; there is deliberately no `act_sequence` method, which would be a false claim that a DAG has one sequence.  At most [`MAX_STAGES`] of them, refused as [`super::disposition::RefusalReason::TooManyStages`].
     attr_accessor :stages
 
     # Attribute mapping from ruby-style variable name to JSON key.
@@ -97,6 +97,10 @@ module Temper::Generated
         invalid_properties.push('invalid value for "stages", stages cannot be nil.')
       end
 
+      if @stages.length > 64
+        invalid_properties.push('invalid value for "stages", number of items must be less than or equal to 64.')
+      end
+
       invalid_properties
     end
 
@@ -106,6 +110,7 @@ module Temper::Generated
       warn '[DEPRECATED] the `valid?` method is obsolete'
       return false if @outcome.nil?
       return false if @stages.nil?
+      return false if @stages.length > 64
       true
     end
 
@@ -124,6 +129,10 @@ module Temper::Generated
     def stages=(stages)
       if stages.nil?
         fail ArgumentError, 'stages cannot be nil'
+      end
+
+      if stages.length > 64
+        fail ArgumentError, 'invalid value for "stages", number of items must be less than or equal to 64.'
       end
 
       @stages = stages
