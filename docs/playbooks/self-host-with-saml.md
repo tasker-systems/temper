@@ -277,6 +277,26 @@ attribute entirely** (e.g. a transient IdP misconfiguration), reconcile is **ski
 memberships are revoked; only an assertion that carries the attribute with **no values** ("in no
 mapped groups now") revokes all of the user's `idp` memberships.
 
+**Seeing when each user's reach was last reconciled.** Because reconcile runs on login, how
+current a user's `idp` memberships are depends on when they last signed in — and, if the
+assertion carried no groups attribute, on whether there was anything to reconcile against.
+Both are recorded per user in `kb_saml_principal_reconcile`, and `vw_saml_reconcile_staleness`
+reads them together with the reach each user actually holds:
+
+```sql
+-- Who holds idp-derived reach, and when was it last brought into agreement?
+-- last_reconciled_at NULL  => no reconcile recorded for this user yet
+-- last_signal_was_missing  => their most recent login carried no groups attribute,
+--                             so nothing was compared on that login
+SELECT handle, idp_memberships, last_reconciled_at, last_skipped_at, last_signal_was_missing
+  FROM vw_saml_reconcile_staleness
+ ORDER BY last_reconciled_at ASC NULLS FIRST;
+```
+
+Users whose reach predates the record show `last_reconciled_at` as NULL: the column is not
+backfilled, because there is nothing on disk to backfill it from and a synthesized timestamp
+would report agreement that was never performed. They take a real value on their next login.
+
 ## Environment variables
 
 ### Authorization Server (temper-cloud / the API deployment)
