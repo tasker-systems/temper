@@ -214,6 +214,7 @@ describe("oauth flow store", () => {
         claims: CLAIMS,
         expiresAt: futureDate(60 * 60),
         chainExpiresAt: futureDate(90 * 24 * 60 * 60).toISOString(),
+        chainId: null,
         profileId: null,
       });
 
@@ -232,6 +233,7 @@ describe("oauth flow store", () => {
         claims: CLAIMS,
         expiresAt: futureDate(60 * 60),
         chainExpiresAt: futureDate(90 * 24 * 60 * 60).toISOString(),
+        chainId: null,
         profileId: null,
       });
 

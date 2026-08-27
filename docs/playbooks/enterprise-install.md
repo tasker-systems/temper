@@ -93,6 +93,7 @@ Sources: [Self-hosting Temper](./self-host-temper.md),
 | `AS_ACCESS_TTL_SECONDS` | Optional (default `900`) | — | — | Access-token lifetime |
 | `AS_REFRESH_TTL_SECONDS` | Optional (default `2592000`, 30d) | — | — | Refresh-token lifetime (slides on rotation) |
 | `AS_REFRESH_CHAIN_MAX_SECONDS` | Optional (default `7776000`, 90d) | — | — | **Absolute** refresh-chain lifetime from the last full login — the real bound on IdP-removed reach |
+| `AS_REFRESH_REPLAY_GRACE_SECONDS` | Optional (default `10`) | — | — | How soon after a rotation a spent refresh token may be presented again and be read as a client retry rather than a stolen chain. Later, the chain is ended. `0` = strictest; max `3600`, and out-of-range or non-numeric values fall back to the default. Not emitted by `temper admin saml provision`; set it only to move the default |
 | **Group provisioning / reconcile channel (SAML Phase 2)** | | | | |
 | `INTERNAL_RECONCILE_SECRET` | Yes (SAML path; shared AS+API) | — | — | Same value on both; unset disables reconcile (auth still works) |
 | `INTERNAL_RECONCILE_URL` | Yes (SAML path; AS side) | — | — | Full URL of the API's `/internal/saml/reconcile` |

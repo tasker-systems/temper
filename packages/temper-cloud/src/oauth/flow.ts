@@ -159,13 +159,25 @@ export interface StoreRefreshTokenArgs {
    * bound absolute rather than sliding.
    */
   chainExpiresAt: string;
+  /**
+   * The chain this token joins. `null` STARTS a new chain rooted at this token, which the
+   * authorization_code grant is the only caller entitled to do — every rotation passes back the
+   * identity it read off the token it rotated, unchanged, so a chain keeps one name for its whole
+   * life and the response to a replay can reach all of it.
+   */
+  chainId: string | null;
   /** The principal who owns this chain, so an administrator can end it. `null` if unresolved. */
   profileId: string | null;
 }
 
 /**
- * Persists a newly-issued opaque refresh token (hashed at rest). Answers whether a chain was
- * actually minted.
+ * Persists a newly-issued opaque refresh token (hashed at rest). Answers with the identity of the
+ * chain the token joined, or `null` when no chain was minted at all.
+ *
+ * The id is supplied by the statement rather than left to the column default, because a chain
+ * that is being BORN takes its identity from its own first token — `COALESCE(chainId, new_id)`.
+ * Generating it here in SQL rather than in the caller keeps the whole of a chain's identity on the
+ * database clock and out of the token endpoint's bundle.
  *
  * **The admission predicate lives in this INSERT, not in a statement before it**, and that placement
  * is doing two jobs. It makes the check atomic with the write, closing the window in which a
@@ -177,6 +189,13 @@ export interface StoreRefreshTokenArgs {
  *
  * A NULL owner passes deliberately — an unresolved principal cannot be asked, and is not refused
  * for it.
+ *
+ * **The second predicate is what makes a chain-ending stick.** Rotation is two statements with no
+ * transaction across them, so a chain-ending can land between a rotation's guard and this INSERT —
+ * finding every row of the chain momentarily dead, revoking nothing, and then watching this insert
+ * bring the chain back to life behind it. Reading `kb_oauth_refresh_chain_ends` here closes that
+ * gap, because the marker records the ENDING and not merely its effect. A new chain passes it for
+ * free: `chain_id = NULL` matches no row, so `NOT EXISTS` holds.
  *
  * `expires_at` is `LEAST(requested, chain_expires_at)`, so a stored token never outlives the chain
  * it belongs to and the rotation guard never has to choose between two disagreeing bounds.
@@ -192,23 +211,33 @@ export interface StoreRefreshTokenArgs {
 export async function storeRefreshToken(
   db: NeonClient,
   args: StoreRefreshTokenArgs,
-): Promise<boolean> {
+): Promise<string | null> {
   const rows = await db`
     INSERT INTO kb_oauth_refresh_tokens (
-      token_hash, client_id, claims, expires_at, chain_expires_at, profile_id
+      id, token_hash, client_id, claims, expires_at, chain_expires_at, chain_id, profile_id
     )
     SELECT
-      ${hashToken(args.token)}, ${args.clientId}, ${JSON.stringify(args.claims)}::jsonb,
+      g.new_id, ${hashToken(args.token)}, ${args.clientId}, ${JSON.stringify(args.claims)}::jsonb,
       LEAST(${args.expiresAt.toISOString()}::timestamptz, ${args.chainExpiresAt}::timestamptz),
-      ${args.chainExpiresAt}::timestamptz, ${args.profileId}
-    WHERE ${args.profileId}::uuid IS NULL
-       OR principal_may_refresh(${args.profileId}::uuid)
-    RETURNING id
+      ${args.chainExpiresAt}::timestamptz,
+      COALESCE(${args.chainId}::uuid, g.new_id),
+      ${args.profileId}
+    FROM (SELECT uuid_generate_v7() AS new_id) g
+    WHERE (${args.profileId}::uuid IS NULL
+           OR principal_may_refresh(${args.profileId}::uuid))
+      AND NOT EXISTS (
+            SELECT 1 FROM kb_oauth_refresh_chain_ends
+             WHERE chain_id = ${args.chainId}::uuid
+          )
+    RETURNING chain_id
   `;
-  return rows.length > 0;
+  const row = rows[0] as { chain_id: string } | undefined;
+  return row?.chain_id ?? null;
 }
 
 export interface RotateRefreshTokenResult {
+  /** The row that was just spent, so a caller that mints no successor can withdraw its mark. */
+  tokenId: string;
   claims: MintedClaims;
   // The token endpoint needs the original client_id to store the successor
   // refresh token, since a public client's refresh-token request carries no
@@ -216,6 +245,8 @@ export interface RotateRefreshTokenResult {
   clientId: string;
   /** The chain's absolute end, to be handed to the successor UNCHANGED. */
   chainExpiresAt: string;
+  /** The chain's identity, to be handed to the successor UNCHANGED. */
+  chainId: string;
   /** The chain's owner, if one was resolved when it was minted. */
   profileId: string | null;
 }
@@ -224,9 +255,19 @@ export interface RotateRefreshTokenResult {
  * Redeems a refresh token exactly once: atomically marks it revoked (guarded
  * by `revoked_at IS NULL AND expires_at > now()`) and returns its claims plus
  * owning client_id so the caller can mint a new access token and store a
- * successor refresh token. `rotated_to` is intentionally left unset in Phase
- * 1 — `revoked_at` alone enforces single-use; linking successors is deferred.
- * Throws if the token is unknown, already revoked, or expired.
+ * successor refresh token. Throws if the token is unknown, already revoked, or expired.
+ *
+ * **`rotated_at` is set in this statement and not a later one.** It is the mark that says this row
+ * was retired BY ROTATION. Rotation is one of FIVE writers of `revoked_at`: three administrative
+ * revokers (`revokeRefreshToken` below, `standing_service::apply`'s terminal hook,
+ * `slack_disconnect_service::revoke_as_refresh_token`) and this file's own `endRefreshChain`. All
+ * four of the others leave `rotated_at` NULL, each held to it by a test in the module that owns it,
+ * so the pair of columns says which happened. Setting it here makes that claim atomic with the
+ * guard that earns it.
+ *
+ * It is a timestamp rather than a `rotated_to` descent link because such a link can only be stamped
+ * once the successor row exists — necessarily a later statement — where this word is part of the
+ * guard itself and cannot be interrupted.
  */
 export async function rotateRefreshToken(
   db: NeonClient,
@@ -234,16 +275,18 @@ export async function rotateRefreshToken(
 ): Promise<RotateRefreshTokenResult> {
   const rows = await db`
     UPDATE kb_oauth_refresh_tokens
-    SET revoked_at = now()
+    SET revoked_at = now(), rotated_at = now()
     WHERE token_hash = ${hashToken(token)} AND revoked_at IS NULL AND expires_at > now()
       AND chain_expires_at > now()
-    RETURNING claims, client_id, chain_expires_at, profile_id
+    RETURNING id, claims, client_id, chain_expires_at, chain_id, profile_id
   `;
   const row = rows[0] as
     | {
+        id: string;
         claims: unknown;
         client_id: string;
         chain_expires_at: unknown;
+        chain_id: string;
         profile_id: string | null;
       }
     | undefined;
@@ -251,9 +294,11 @@ export async function rotateRefreshToken(
     throw new Error("refresh token is unknown, revoked, expired, or its chain has ended");
   }
   return {
+    tokenId: row.id,
     claims: normalizeClaims(row.claims),
     clientId: row.client_id,
     chainExpiresAt: normalizeTimestamp(row.chain_expires_at),
+    chainId: row.chain_id,
     profileId: row.profile_id ?? null,
   };
 }
@@ -264,5 +309,180 @@ export async function revokeRefreshToken(db: NeonClient, token: string): Promise
     UPDATE kb_oauth_refresh_tokens
     SET revoked_at = now()
     WHERE token_hash = ${hashToken(token)} AND revoked_at IS NULL
+  `;
+}
+
+/** A rotated token that was presented again — the record needed to judge and log the replay. */
+export interface RotatedTokenPresentation {
+  /** The row that was presented, so the replay record has a subject. */
+  tokenId: string;
+  /** The chain it belonged to. */
+  chainId: string;
+  profileId: string | null;
+  clientId: string;
+  /** When the rotation happened, as recorded. */
+  rotatedAt: string;
+  /**
+   * How long ago that was, **computed on the database clock**. The grace window is judged from
+   * this rather than from `Date.now() - rotatedAt`, because the two operands would otherwise come
+   * from different clocks: `rotated_at` is the database's `now()` and the AS host's is its own.
+   * `storeRefreshToken` already names that skew where it compares two host-clock values; here it
+   * would decide whether a user is treated as a thief, so both operands are taken from one clock.
+   */
+  secondsSinceRotation: number;
+}
+
+/**
+ * Identifies a refused rotation that is a REPLAY — a token this instance itself retired by
+ * rotation, presented again — as opposed to one that is unknown, expired, administratively
+ * revoked, or on a chain that has reached its absolute end.
+ *
+ * Answers `null` for every one of those other cases, and that is the point: they are all answered
+ * `invalid_grant` and none of them is evidence of anything. Only a token bearing this instance's
+ * own `rotated_at` says the client presented a credential that was already spent, which RFC 6819
+ * §5.2.2.3 reads as the chain having been copied.
+ *
+ * The mark is read, never inferred. A row that does not carry one is not reported as a replay on
+ * the strength of anything else it says, which is what keeps an administrator's revoke from being
+ * filed as a theft.
+ */
+export async function findRotatedToken(
+  db: NeonClient,
+  token: string,
+): Promise<RotatedTokenPresentation | null> {
+  const rows = await db`
+    SELECT id, chain_id, profile_id, client_id, rotated_at,
+           EXTRACT(EPOCH FROM (now() - rotated_at))::float8 AS seconds_since_rotation
+      FROM kb_oauth_refresh_tokens
+     WHERE token_hash = ${hashToken(token)}
+       AND rotated_at IS NOT NULL
+  `;
+  const row = rows[0] as
+    | {
+        id: string;
+        chain_id: string;
+        profile_id: string | null;
+        client_id: string;
+        rotated_at: unknown;
+        seconds_since_rotation: number | string;
+      }
+    | undefined;
+  if (!row) {
+    return null;
+  }
+  return {
+    tokenId: row.id,
+    chainId: row.chain_id,
+    profileId: row.profile_id ?? null,
+    clientId: row.client_id,
+    rotatedAt: normalizeTimestamp(row.rotated_at),
+    secondsSinceRotation: Number(row.seconds_since_rotation),
+  };
+}
+
+/**
+ * Ends a whole refresh chain, and answers how many LIVE tokens that actually took.
+ *
+ * The count is the answer, not a diagnostic. Single-use rotation means a healthy chain has exactly
+ * one live token, so `1` is the ordinary result and `0` means the chain was already dead when the
+ * replay arrived — a distinction the replay record keeps, because "we ended their session" and "we
+ * judged a replay hostile but there was nothing left to end" are different events with the same
+ * refusal in front of them. `standing_service::apply` counts its own chain-endings for the same
+ * reason and refuses to report a no-op in the words of a success.
+ *
+ * Reaches the chain and not the principal. Ending every chain a principal owns is what an
+ * administrator's revoke does; a replay is evidence about ONE copied chain, and answering it by
+ * signing the user out of their other devices would punish them for someone else's theft.
+ *
+ * **The marker is written in the same statement, and it — not the count — is what ends the chain.**
+ * Rotation is two statements with no transaction across them, so this can run at a moment when
+ * every row of the chain is momentarily dead: the predecessor revoked by a guard that has already
+ * passed, the successor not yet inserted. Revoking rows would then take nothing and the successor
+ * would arrive behind us. `kb_oauth_refresh_chain_ends` records the ENDING rather than its effect,
+ * and `storeRefreshToken` refuses to mint into a chain that carries one — so the count below is an
+ * honest report of what this statement took, and never the thing the ending depends on.
+ *
+ * Written by this responder only. The administrative revokers keep the one-token-pair excursion
+ * `standing_service::apply` states for itself; widening the marker to them would change a
+ * documented behaviour in another crate.
+ */
+export async function endRefreshChain(db: NeonClient, chainId: string): Promise<number> {
+  const rows = await db`
+    WITH marked AS (
+      INSERT INTO kb_oauth_refresh_chain_ends (chain_id)
+      VALUES (${chainId}::uuid)
+      ON CONFLICT (chain_id) DO NOTHING
+    )
+    UPDATE kb_oauth_refresh_tokens
+       SET revoked_at = now()
+     WHERE chain_id = ${chainId}::uuid
+       AND revoked_at IS NULL
+    RETURNING id
+  `;
+  return rows.length;
+}
+
+/**
+ * Withdraws the rotation mark from a token whose rotation minted no successor.
+ *
+ * The refresh grant runs its admission check AFTER the rotation guard — `storeRefreshToken`'s
+ * predicate is what declines, and by then the presented token is already revoked and marked. Left
+ * marked, that row is a replay waiting to be reported: the next time the client retries, an
+ * ordinary de-provisioned user appears in the operator's view under a hostile count, which is
+ * exactly the false theft report the administrative revokers are held away from.
+ *
+ * `rotated_at` means *retired by a rotation that produced a successor*. When none was produced the
+ * chain was ended, not rotated, and the row should say what actually happened.
+ */
+export async function unmarkRotation(db: NeonClient, tokenId: string): Promise<void> {
+  await db`
+    UPDATE kb_oauth_refresh_tokens
+       SET rotated_at = NULL
+     WHERE id = ${tokenId}::uuid
+  `;
+}
+
+export interface RecordRefreshReplayArgs {
+  presentation: RotatedTokenPresentation;
+  /** Whether THIS presentation fell inside the grace window and was treated as a client retry. */
+  graced: boolean;
+  /** How many live tokens the chain-ending revoked — 0 when graced, or when nothing was left. */
+  tokensRevoked: number;
+}
+
+/**
+ * Records the replay where an operator can find it without log retention.
+ *
+ * **Upserted per token, not appended per presentation.** The write is reachable by anyone holding
+ * a retired token, so an append-shaped table would let a replay loop grow it without bound; the
+ * primary key caps the table at the token table's own size and the counters carry everything an
+ * append would have. `first_seen` is left to the row's default on insert and untouched on conflict.
+ *
+ * **`first_age_seconds` is carried, not re-derived.** It is the value the grace judgement was
+ * actually made on, computed in one expression from one clock. Storing only `first_seen` and
+ * letting the view subtract would read a SECOND clock a statement later, so a presentation graced
+ * at 9.8 seconds under a 10-second window could be rendered as 10.2 — the operator would find the
+ * detector disagreeing with its own record.
+ */
+export async function recordRefreshReplay(
+  db: NeonClient,
+  args: RecordRefreshReplayArgs,
+): Promise<void> {
+  const { presentation: p } = args;
+  await db`
+    INSERT INTO kb_oauth_refresh_replays (
+      token_id, chain_id, profile_id, client_id, rotated_at, first_age_seconds,
+      replay_count, graced_count, tokens_revoked
+    )
+    VALUES (
+      ${p.tokenId}::uuid, ${p.chainId}::uuid, ${p.profileId}::uuid, ${p.clientId},
+      ${p.rotatedAt}::timestamptz, ${p.secondsSinceRotation},
+      1, ${args.graced ? 1 : 0}, ${args.tokensRevoked}
+    )
+    ON CONFLICT (token_id) DO UPDATE
+       SET last_seen      = now(),
+           replay_count   = kb_oauth_refresh_replays.replay_count + 1,
+           graced_count   = kb_oauth_refresh_replays.graced_count + EXCLUDED.graced_count,
+           tokens_revoked = kb_oauth_refresh_replays.tokens_revoked + EXCLUDED.tokens_revoked
   `;
 }
