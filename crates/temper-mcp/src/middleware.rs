@@ -17,6 +17,7 @@ use jsonwebtoken::decode;
 use std::sync::Arc;
 
 use temper_services::auth::RawJwtClaims;
+use temper_services::state::KeyLookupError;
 
 use crate::router::McpAppState;
 
@@ -44,8 +45,22 @@ pub async fn require_mcp_auth(
         None => return unauthorized(&state),
     };
 
-    let vk = match state.api_state.jwks_store.get_decoding_key().await {
+    let vk = match state
+        .api_state
+        .jwks_store
+        .get_decoding_key_for_token(&token)
+        .await
+    {
         Ok(k) => k,
+        // A `kid` this instance does not publish is a bad TOKEN, so it takes the same 401 +
+        // `WWW-Authenticate` path as any other bad token — which is what makes an MCP client
+        // re-run its OAuth flow after the signing key rotates. Reporting it as 503 would tell the
+        // client to come back later and never re-authenticate, and would let anyone make this
+        // surface claim it is down by naming a `kid` at random.
+        Err(KeyLookupError::UnknownKid(kid)) => {
+            tracing::debug!("token names an unpublished kid: {kid}");
+            return unauthorized(&state);
+        }
         Err(e) => {
             tracing::error!("JWKS retrieval failed: {e}");
             return StatusCode::SERVICE_UNAVAILABLE.into_response();

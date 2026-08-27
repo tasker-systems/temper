@@ -130,7 +130,9 @@ IdPs that accept SP metadata XML.
 ## Configure the active IdP (`kb_saml_idp`)
 
 The IdP configuration lives in the database, not env. Insert exactly **one** active row (flip
-`is_active` to rotate to a replacement):
+`is_active` to rotate to a replacement). To roll the IdP's *signing certificate* without an
+authentication outage, see [Rotate the IdP's signing certificate](#rotate-the-idps-signing-certificate)
+below — that is a different operation and it does not involve `is_active`:
 
 ```sql
 INSERT INTO kb_saml_idp (
@@ -139,7 +141,11 @@ INSERT INTO kb_saml_idp (
 ) VALUES (
   'acme-okta',                                    -- idp_key: your label for this IdP
   true,
-  '-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----',  -- idp_cert: the IdP's signing cert (PEM)
+  -- idp_cert: the IdP's signing cert. Dollar-quoted so the line breaks are real -- a plain SQL
+  -- literal does not interpret \n, and a certificate in that shape is not usable.
+  $cert$-----BEGIN CERTIFICATE-----
+MIIC...
+-----END CERTIFICATE-----$cert$,
   'https://idp.acme.com/app/xxx/sso/saml',        -- idp_sso_url: the IdP SSO (redirect) endpoint
   'http://www.okta.com/xxx',                       -- idp_entity_id: the IdP's entity id
   'https://<instance>/saml/metadata',              -- sp_entity_id: MUST match the Audience you set above
@@ -149,6 +155,80 @@ INSERT INTO kb_saml_idp (
   'uid'                                             -- stable_id_attr: fallback sub source
 );
 ```
+
+## Rotate the IdP's signing certificate
+
+Your IdP will re-key on its own schedule, and the SAML ACS is the only human authentication door on
+an AS-mode instance. `kb_saml_idp` therefore holds **two** certificate slots: `idp_cert` and
+`idp_cert_secondary`. An assertion signed by **either** is accepted, and that overlap is what lets
+the IdP cut over whenever it likes instead of at a moment you have to coordinate.
+
+`idp_cert_secondary` is `NULL` outside a rotation. Requires migration `20260827000010`; on an
+instance that has not run it the column does not exist and step 1 fails saying so.
+
+> [!IMPORTANT]
+> **Paste the PEM with real line breaks.** A plain SQL literal does not interpret `\n` — under the
+> default `standard_conforming_strings` you get the two characters, not a newline, and a
+> certificate in that shape is not usable. Use a dollar-quoted literal, as the examples below do,
+> or paste the PEM across real lines. A slot that does not hold a usable certificate is refused by
+> a constraint on write, so you will hear about it here rather than at step 3.
+
+**1. Add the incoming certificate.**
+
+```sql
+UPDATE kb_saml_idp
+   SET idp_cert_secondary = $cert$-----BEGIN CERTIFICATE-----
+MIIC...
+-----END CERTIFICATE-----$cert$
+ WHERE idp_key = 'acme-okta';
+```
+
+**2. Check that what landed is the certificate you meant**, by fingerprint. This is the step that
+catches a wrong or truncated paste, and it matters because nothing later will: logins are still
+being signed by the *outgoing* key, so a login test at this point passes no matter what is in the
+second slot. Compare against the fingerprint your IdP publishes.
+
+```bash
+psql "$DATABASE_URL" -tAc \
+  "SELECT idp_cert_secondary FROM kb_saml_idp WHERE idp_key = 'acme-okta'" \
+  | openssl x509 -noout -fingerprint -sha256
+```
+
+Sign in once as well, to confirm step 1 broke nothing. To undo: `SET idp_cert_secondary = NULL`.
+
+**3. Let the IdP cut over.** Do this at the IdP, on its schedule. Logins keep working throughout,
+signed by whichever key the IdP happens to be using, and they keep working if it cuts back.
+
+**4. Drop the outgoing certificate.**
+
+```sql
+UPDATE kb_saml_idp
+   SET idp_cert = idp_cert_secondary,
+       idp_cert_secondary = NULL
+ WHERE idp_key = 'acme-okta'
+   AND idp_cert_secondary IS NOT NULL;
+```
+
+The `AND` matters: without it, running this a second time would try to move a `NULL` into
+`idp_cert`. Steps 1–3 are each reversible on their own. **Step 4 is not** — it discards the
+outgoing certificate, and putting it back means having kept a copy outside the database. Keep one
+until you are sure.
+
+Step 4 stops the retired certificate being accepted at that write, with no cache to wait out —
+`loadActiveIdp` reads the row on every request. **That bounds new logins only.** Sessions already
+issued continue: an access token for up to `AS_ACCESS_TTL_SECONDS`, and a refresh chain for up to
+`AS_REFRESH_CHAIN_MAX_SECONDS` from its last full login. If you are rotating because a signing key
+was *compromised*, step 4 is not the control you need — revoke the affected principals, which ends
+their chains in the same transaction (see [Deactivating an account](#deactivating-an-account-authn-control)).
+
+> [!NOTE]
+> Two slots widen the accepted signers by **exactly one named certificate**, and only for this IdP.
+> A certificate belonging to some other IdP, or to none, is refused during an overlap window exactly
+> as it is outside one, and the instance still has a single active IdP throughout.
+>
+> `temper admin saml verify --db` checks that there is exactly one active IdP row. It does **not**
+> inspect either certificate, so it stays green through every step above, including a rotation you
+> have half-finished. It is not a check on the rotation.
 
 ## Map IdP groups to Temper teams and roles
 

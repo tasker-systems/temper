@@ -121,11 +121,18 @@ async fn verify_inbound_impl(
         .unwrap_or(raw)
         .trim();
 
-    // 2. Fetch the JWKS key + its algorithm (same seam the auth middleware uses).
+    // 2. Fetch the JWKS key this token names + its algorithm (same seam the auth middleware uses).
     let vk = jwks
-        .get_decoding_key()
+        .get_decoding_key_for_token(token)
         .await
-        .map_err(|e| BrokerError::Transport(format!("JWKS unavailable: {e}")))?;
+        .map_err(|e| match e {
+            // The attestation named a signing key Connect does not publish. That is a verdict on
+            // the attestation, not a report that the JWKS is down.
+            crate::state::KeyLookupError::UnknownKid(kid) => {
+                BrokerError::Verification(format!("attestation names an unpublished kid {kid}"))
+            }
+            e => BrokerError::Transport(format!("JWKS unavailable: {e}")),
+        })?;
 
     // 3. Verify signature + standard claims. `validation` carries the hard-won
     //    `set_required_spec_claims` fix, so a token missing `exp`/`iss`/`aud` is
