@@ -86,6 +86,7 @@ REVIEW_GROUPS='public_routes|embed_internal_routes|internal_routes|slack_link_in
 # at the middleware and carries its own control (see the table above). A change here means a new or
 # removed unauthenticated/self-gated/signature route — confirm the control, then UPDATE_BASELINE=1.
 read -r -d '' BASELINE <<'EOF' || true
+embed_internal_routes	handlers::as_reap::reap_as_tables
 embed_internal_routes	handlers::embed::dispatch
 embed_internal_routes	handlers::embed::warm
 embed_internal_routes	handlers::region::dispatch

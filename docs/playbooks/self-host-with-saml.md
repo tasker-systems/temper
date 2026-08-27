@@ -298,6 +298,7 @@ openssl genpkey -algorithm ed25519 -out as_signing_key.pem
 | `AS_ACCESS_TTL_SECONDS` | `900` (default) | Access-token lifetime. |
 | `AS_REFRESH_TTL_SECONDS` | `2592000` (default, 30d) | Refresh-token lifetime. Slides on every rotation. |
 | `AS_REFRESH_CHAIN_MAX_SECONDS` | `7776000` (default, 90d) | **Absolute** lifetime of a refresh chain, from the last full SAML login. Rotation never moves it, so this — not the two TTLs above — is the bound on how long IdP-removed reach can persist. See [Limitations](#limitations). |
+| `AS_SAML_ASSERTION_MAX_SECONDS` | `3600` (default, 1h) | **The widest assertion validity window your IdP issues** — read it off the IdP, not off Temper. It is the floor below which a consumed assertion is never forgotten, so the retention sweep cannot delete a replay row that could still be replayed. Too large costs a little storage; too small re-opens replay. An unusable value **fails the sweep rather than substituting the default** — rows stay on disk until you fix it. See [What is kept, and for how long](#what-is-kept-and-for-how-long). |
 | `AS_REFRESH_REPLAY_GRACE_SECONDS` | `10` (default) | How soon after a rotation a client may present the spent refresh token again and be treated as a retry rather than a thief. Later than this and the whole chain is ended. `0` ends the chain on any replay; the widest value honoured is `3600`. See [Watch for replayed refresh tokens](#watch-for-replayed-refresh-tokens). |
 
 `AS_CLIENTS` registers the exact redirect URIs each client may use (exact string match — this
@@ -635,6 +636,44 @@ That ends **every** chain they hold and stops the next sign-in from minting a ne
 > chains are bounded by `AS_REFRESH_CHAIN_MAX_SECONDS` and are gone within that window, so an empty
 > result means "nothing recorded", which becomes "nothing happened" once your longest chain has
 > turned over.
+
+## What is kept, and for how long
+
+Three tables back the authorization server, and a row lands in one of them on **every** login. A
+daily sweep (`/api/as/reap`, gated by the same `EMBED_DISPATCH_SECRET` bearer as the other internal
+crons — no separate secret to set) deletes rows once they are past a floor. It is capped per run, so
+the first sweep after upgrading drains a long backlog over several nights rather than in one
+statement.
+
+| Table | A row per | Deleted once |
+| --- | --- | --- |
+| `kb_saml_replay` | consumed SAML assertion | `AS_SAML_ASSERTION_MAX_SECONDS` has passed since the row could last have been replayed |
+| `kb_oauth_flow` | authorization-code flow (including abandoned ones) | 1 day past `expires_at` |
+| `kb_oauth_refresh_tokens` | issued refresh token | 30 days past **both** its own expiry **and** its chain's `chain_expires_at` |
+
+**Two of these floors are security properties, not housekeeping.**
+
+A `kb_saml_replay` row is what stops a captured assertion being presented twice. Temper does not
+read your IdP's `NotOnOrAfter`, so the row's own `expires_at` is an assumption about it rather than a
+statement of it — which is why the sweep subtracts `AS_SAML_ASSERTION_MAX_SECONDS` instead of
+trusting that stamp. **If your IdP issues assertions valid for longer than an hour, raise this
+variable before the first sweep runs.** Leaving it too low deletes assertion ids that are still
+replayable; leaving it too high costs you an assertion id and a timestamp per login.
+
+A spent refresh token is kept until its whole chain is dead because that is what makes a **stolen**
+one detectable: a rotated token presented again is recognised however long ago it expired, and the
+chain is ended in response. Reaping on the token's own expiry would quietly turn that into an
+ordinary "invalid grant". Rows already recorded in `kb_oauth_refresh_replays` are exempt from the
+sweep entirely and are never deleted by it, so nothing you can see through
+[`vw_oauth_refresh_replays`](#watch-for-replayed-refresh-tokens) is aged out from under you.
+
+Every run logs what it deleted per table, including a run that deleted nothing:
+
+```
+AS retention sweep complete saml_replay=1204 oauth_flow=880 refresh_tokens=0 more_pending=false
+```
+
+`more_pending=true` means a table hit its per-run cap and the next night's run will continue.
 
 ## Further reading
 

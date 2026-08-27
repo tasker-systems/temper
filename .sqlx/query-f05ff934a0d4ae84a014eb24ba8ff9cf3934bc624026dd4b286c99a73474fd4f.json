@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            DELETE FROM kb_oauth_flow\n             WHERE id IN (\n                   SELECT id\n                     FROM kb_oauth_flow\n                    WHERE expires_at < now() - make_interval(secs => $1::double precision)\n                    LIMIT $2\n             )\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Float8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f05ff934a0d4ae84a014eb24ba8ff9cf3934bc624026dd4b286c99a73474fd4f"
+}
