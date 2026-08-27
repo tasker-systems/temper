@@ -71,7 +71,7 @@ CLAUDE.md" \
     "RUN_TEST_RUST=false" \
     "RUN_TEST_TYPESCRIPT=false" \
     "RUN_TEST_RUBY=false" \
-    "SCOPE_SUMMARY=docs-only: skipping test-rust, test-typescript, test-ruby, test-agents-ts and the rust-quality job; running code-quality for its pure-bash guard-tests (the docs/ and internal/ gates)"
+    "SCOPE_SUMMARY=docs-only: skipping test-rust, test-typescript, test-ruby, test-python, test-agents-ts and the rust-quality job; running code-quality for its pure-bash guard-tests (the docs/ and internal/ gates)"
 
 # --- per-crate doc files are still docs-only ---
 run_test "crate-dir docs only: docs-only scope" \
@@ -89,7 +89,7 @@ run_test "rust source change: full CI" \
     "RUN_CODE_QUALITY=true" \
     "RUN_TEST_RUST=true" \
     "RUN_TEST_TYPESCRIPT=true" \
-    "SCOPE_SUMMARY=full-ci: code change detected — running full pipeline (test-ruby=false, test-agents-ts=false)"
+    "SCOPE_SUMMARY=full-ci: code change detected — running full pipeline (test-ruby=false, test-python=false, test-agents-ts=false)"
 
 # --- typescript source change: rust-inert (the corpus is inert to it), but
 # --- code-quality is still invoked (its TS + guard jobs) and TS tests run.
@@ -259,6 +259,65 @@ run_test "temper-ts drift script changed: runs the job it gates" \
 run_test "temper-ts generator changed: runs the job it gates" \
     ".github/scripts/generate-temper-ts.sh" \
     "DOCS_ONLY=false" "RUN_TEST_AGENTS_TS=true"
+
+# --- the Python SDK: path-scoped exactly as the gem is ---
+run_test "temper-py source: runs test-python, rust corpus stays off" \
+    "clients/temper-py/temper/client.py" \
+    "DOCS_ONLY=false" \
+    "RUST_INERT=true" \
+    "RUN_TEST_PYTHON=true" \
+    "RUN_TEST_RUBY=false" \
+    "RUN_TEST_AGENTS_TS=false"
+
+run_test "temper-py generated tree: runs test-python" \
+    "clients/temper-py/temper/generated/api/resources_api.py" \
+    "RUN_TEST_PYTHON=true"
+
+# The contract restales every SDK at once, so it must run every SDK's drift gate.
+# An openapi.json change that ran only two of the three would be a contract change
+# whose third gate never fires — the exact gap that bit #354 for the gem.
+run_test "openapi.json: runs every SDK job, not just some" \
+    "openapi.json" \
+    "RUN_TEST_PYTHON=true" \
+    "RUN_TEST_RUBY=true" \
+    "RUN_TEST_AGENTS_TS=true"
+
+# credentials are pinned against the shared M2M contract, like the gem's and the
+# TS client's.
+run_test "M2M wire contract: runs test-python too" \
+    "tests/contracts/m2m-token-request.json" \
+    "RUN_TEST_PYTHON=true" \
+    "RUN_TEST_RUBY=true" \
+    "RUN_TEST_AGENTS_TS=true"
+
+run_test "temper-py drift script changed: runs the job it gates" \
+    ".github/scripts/check-temper-py-drift.sh" \
+    "DOCS_ONLY=false" "RUN_TEST_PYTHON=true"
+
+run_test "temper-py generator changed: runs the job it gates" \
+    ".github/scripts/generate-temper-py.sh" \
+    "DOCS_ONLY=false" "RUN_TEST_PYTHON=true"
+
+run_test "test-python workflow changed: runs itself" \
+    ".github/workflows/test-python.yml" \
+    "DOCS_ONLY=false" "RUN_TEST_PYTHON=true"
+
+# A Rust change cannot reach the Python SDK except through the contract, which is
+# keyed above — so the job stays off and the runner minutes stay unspent.
+run_test "rust source alone: test-python stays off" \
+    "crates/temper-services/src/services/search_service.rs" \
+    "RUN_TEST_PYTHON=false"
+
+run_test "temper-py README alone: docs, so nothing runs" \
+    "clients/temper-py/README.md" \
+    "DOCS_ONLY=true" \
+    "RUN_TEST_PYTHON=false"
+
+run_test "self-edit forces every path-scoped job on" \
+    ".github/scripts/detect-ci-scope.sh" \
+    "RUN_TEST_PYTHON=true" \
+    "RUN_TEST_RUBY=true" \
+    "RUN_TEST_AGENTS_TS=true"
 
 run_test "temper-rb drift script changed: runs the job it gates" \
     ".github/scripts/check-temper-rb-drift.sh" \
@@ -869,6 +928,74 @@ assert_typescript_quality_is_scoped() {
 }
 
 assert_typescript_quality_is_scoped
+
+# ---------------------------------------------------------------------------
+# EVERY PATH-SCOPED JOB MUST BE GATED *AND* VALIDATED.
+#
+# ci-success runs `if: always()`, so a job that fails does not fail the gate by
+# itself — the gate's verdict comes entirely from its own `check_job` calls. A job
+# listed in `needs:` but never passed to `check_job` is therefore a job whose red is
+# read by nobody: the pipeline goes green with a failing SDK in it.
+#
+# The symmetric hole is a job wired into `needs:` with no `if:` — it would run on
+# every PR, quietly restoring the bill the scoping exists to avoid.
+#
+# Asserted per LINK and per JOB rather than once, and derived from a list, so the
+# fourth SDK is covered by adding one word here rather than by remembering three
+# separate edits.
+# ---------------------------------------------------------------------------
+assert_scoped_jobs_are_gated_and_validated() {
+    local repo_root ci
+    repo_root="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+    ci="${repo_root}/.github/workflows/ci.yml"
+
+    local job output
+    for job in test-ruby test-python test-agents-ts; do
+        output="run-${job}"
+
+        # link 1: the detector emits the flag at all.
+        if bash "$DETECT_SCRIPT" --stdin </dev/null 2>/dev/null \
+            | grep -q "^$(echo "$output" | tr 'a-z-' 'A-Z_')="; then
+            echo "  PASS: detect-ci-scope emits ${output}"
+            PASS=$((PASS + 1))
+        else
+            echo "  FAIL: detect-ci-scope emits no ${output} — ci.yml's gate reads an"
+            echo "        empty string, which is never 'true', so ${job} never runs"
+            FAIL=$((FAIL + 1))
+        fi
+
+        # link 2: ci.yml gates the job on THAT output, not on a constant or a typo.
+        if grep -qE "^[[:space:]]*if: needs\.detect-scope\.outputs\.${output} == 'true'$" "$ci"; then
+            echo "  PASS: ci.yml gates ${job} on ${output}"
+            PASS=$((PASS + 1))
+        else
+            echo "  FAIL: ci.yml does not gate ${job} on ${output} — it runs on every PR"
+            FAIL=$((FAIL + 1))
+        fi
+
+        # link 3: ci-success reads the job's result. Without this its red is invisible.
+        if grep -qE "^[[:space:]]*check_job \"${job}\" " "$ci"; then
+            echo "  PASS: ci-success validates ${job}"
+            PASS=$((PASS + 1))
+        else
+            echo "  FAIL: ci-success never calls check_job for ${job} — it runs \`always()\`,"
+            echo "        so an unvalidated job failing leaves the pipeline green"
+            FAIL=$((FAIL + 1))
+        fi
+
+        # link 4: and it must be in `needs:`, or `needs.<job>.result` is empty and
+        # check_job compares against nothing.
+        if grep -qE "^[[:space:]]*needs: \[.*\b${job}\b.*\]$" "$ci"; then
+            echo "  PASS: ci-success needs ${job}"
+            PASS=$((PASS + 1))
+        else
+            echo "  FAIL: ci-success does not list ${job} in needs — its result is empty"
+            FAIL=$((FAIL + 1))
+        fi
+    done
+}
+
+assert_scoped_jobs_are_gated_and_validated
 
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed (total: $((PASS + FAIL)))"

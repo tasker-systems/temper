@@ -36,7 +36,8 @@ cargo make run
 # Generate TypeScript types from Rust structs
 cargo make generate-ts-types
 
-# Regenerate openapi.json AND the temper-rb gem AND temper-ts's schema.ts (all products of the router)
+# Regenerate openapi.json AND all three SDKs — the temper-rb gem, temper-ts's schema.ts,
+# and temper-py's generated package (every one a product of the router)
 cargo make openapi
 ```
 

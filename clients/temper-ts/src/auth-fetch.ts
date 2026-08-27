@@ -17,9 +17,10 @@ export type FetchLike = (input: Request) => Promise<Response>;
 /**
  * The attribution marker, sent on every request. It names the KIND of surface, never the client's
  * language — the gem sends this same `sdk` (clients/temper-rb/lib/temper/connection.rb), and so
- * will temper-py. There is deliberately no override: the server trusts `{sdk, cli}` and attributes
- * a `cli` write to the `<handle>@cli` emitter, so a knob here would be a knob for writing a lie
- * into the event ledger. There is no TypeScript CLI to tell the truth with.
+ * does temper-py (clients/temper-py/temper/connection.py). There is deliberately no override: the
+ * server trusts `{sdk, cli}` and attributes a `cli` write to the `<handle>@cli` emitter, so a knob
+ * here would be a knob for writing a lie into the event ledger. There is no TypeScript CLI to tell
+ * the truth with.
  */
 const SURFACE = "sdk";
 

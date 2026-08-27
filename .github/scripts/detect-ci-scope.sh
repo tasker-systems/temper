@@ -60,13 +60,17 @@
 #   consume it (packages/agent-workflows/**), plus the wire contracts both are
 #   asserted against (tests/contracts/**), its own workflow, and the scripts
 #   implementing its codegen drift gate.
+# - test-python: the Python SDK (clients/temper-py/**), the contract it is
+#   generated from (openapi.json), the M2M wire contract its mint is pinned
+#   against (tests/contracts/**), its own workflow, and the scripts implementing
+#   its codegen drift gate.
 #
-# Both scopings are safe for the same reason: each project is inert to both
+# All three scopings are safe for the same reason: each project is inert to both
 # cargo (`members = ["crates/*", "tests/e2e"]`) and bun (an explicit two-entry
 # `workspaces` list) — no Rust or TS change can reach it except through a
 # contract, which is in its trigger set.
 #
-# Both trigger sets include their own gate's SCRIPTS for a sharper reason: a gate
+# Every trigger set includes its own gate's SCRIPTS for a sharper reason: a gate
 # can be disarmed by editing it, and a disarmed gate passes. Leave those scripts
 # out and the PR that breaks a gate is precisely the PR that never runs it — it
 # merges green and every later PR inherits a dead check.
@@ -87,7 +91,8 @@
 # Output (stdout, eval-safe KEY=VALUE):
 #   DOCS_ONLY, SKIP_ALL, NON_PRODUCT, RUST_INERT, RUN_CODE_QUALITY,
 #   RUN_RUST_QUALITY, RUN_TEST_RUST,
-#   RUN_TEST_TYPESCRIPT, RUN_TEST_RUBY, RUN_TEST_AGENTS_TS, SCOPE_SUMMARY
+#   RUN_TEST_TYPESCRIPT, RUN_TEST_RUBY, RUN_TEST_PYTHON, RUN_TEST_AGENTS_TS,
+#   SCOPE_SUMMARY
 #
 # Bash 3.2 compatible (macOS default): no ${var^^}, no mapfile, no assoc arrays.
 
@@ -269,8 +274,9 @@ fi
 # reach a crate, so a change confined to them cannot change a Rust build/test/
 # quality-gate outcome. The Ruby gem is here too: it is inert to cargo for the
 # same reason, and its own drift gate rides test-ruby (keyed below), not the
-# Rust corpus.
-RUST_INERT_ROOTS='^packages/temper-cloud/|^packages/temper-ui/|^packages/agent-workflows/|^clients/temper-ts/|^clients/temper-telemetry-ts/|^clients/temper-rb/'
+# Rust corpus. The Python SDK is here for the identical reason, riding
+# test-python.
+RUST_INERT_ROOTS='^packages/temper-cloud/|^packages/temper-ui/|^packages/agent-workflows/|^clients/temper-ts/|^clients/temper-telemetry-ts/|^clients/temper-rb/|^clients/temper-py/'
 
 # RUST_COUPLED: files a Rust gate OWNS — either it regenerates and diffs them,
 # or it compiles them in and asserts against them. Two of them live UNDER an
@@ -430,6 +436,26 @@ if changes_match '^clients/temper-rb/|^tests/contracts/|^openapi\.json$|^\.githu
     HAS_RUBY=true
 fi
 
+# Python SDK: the package's own tree, the contract it is generated from, the M2M wire
+# contract its mint is pinned against, its CI workflow, and the scripts that IMPLEMENT
+# its codegen drift gate. Every clause is here for the reason spelled out above
+# test-ruby, which this job is a near-copy of; the one difference is what it costs when
+# it runs. test-ruby is path-scoped because it pulls a ~1GB generator image, and
+# test-python does not — ubuntu-latest ships the JDK the pinned generator needs. It is
+# scoped anyway: the reason to key a job is that nothing outside the set can move its
+# outcome, and cheapness is not a reason to run a job on PRs it cannot answer anything
+# about.
+#
+# tests/contracts/ is in the set because tests/test_contract.py reads
+# m2m-token-request.json and asserts the client emits that shape — the obligation the
+# contract file's own $comment records for exactly this client.
+#
+# The no-diff safety fallback must run everything, this job included.
+HAS_PYTHON=false
+if changes_match '^clients/temper-py/|^tests/contracts/|^openapi\.json$|^\.github/workflows/test-python\.yml$|^\.github/scripts/(generate-temper-py|check-temper-py-drift)\.sh$|^__force_full_ci__$'; then
+    HAS_PYTHON=true
+fi
+
 # TypeScript SDK + agent workflows: clients/temper-ts (the TS client) and
 # packages/agent-workflows/** (the eve agents that consume it), plus BOTH wire
 # contracts they are asserted against.
@@ -491,7 +517,7 @@ if [ -z "$LOAD_BEARING_FILES" ] && [ "$HAS_SELF" = "false" ] && \
     SKIP_ALL=true
 fi
 
-debug "HAS_DOCS=$HAS_DOCS HAS_SELF=$HAS_SELF HAS_NON_DOC=$HAS_NON_DOC HAS_NON_PRODUCT=$HAS_NON_PRODUCT HAS_RUBY=$HAS_RUBY HAS_AGENTS_TS=$HAS_AGENTS_TS HAS_RUST_COUPLED=$HAS_RUST_COUPLED HAS_DOCS_GATED=$HAS_DOCS_GATED ALL_NON_DOC_INERT=$ALL_NON_DOC_INERT -> DOCS_ONLY=$DOCS_ONLY SKIP_ALL=$SKIP_ALL RUST_INERT=$RUST_INERT"
+debug "HAS_DOCS=$HAS_DOCS HAS_SELF=$HAS_SELF HAS_NON_DOC=$HAS_NON_DOC HAS_NON_PRODUCT=$HAS_NON_PRODUCT HAS_RUBY=$HAS_RUBY HAS_PYTHON=$HAS_PYTHON HAS_AGENTS_TS=$HAS_AGENTS_TS HAS_RUST_COUPLED=$HAS_RUST_COUPLED HAS_DOCS_GATED=$HAS_DOCS_GATED ALL_NON_DOC_INERT=$ALL_NON_DOC_INERT -> DOCS_ONLY=$DOCS_ONLY SKIP_ALL=$SKIP_ALL RUST_INERT=$RUST_INERT"
 
 # ---------------------------------------------------------------------------
 # Compute job flags.
@@ -509,11 +535,13 @@ debug "HAS_DOCS=$HAS_DOCS HAS_SELF=$HAS_SELF HAS_NON_DOC=$HAS_NON_DOC HAS_NON_PR
 #                   gates the rust-quality job *inside* it.
 #   otherwise    -> full pipeline.
 #
-# test-ruby and test-agents-ts are the PATH-SCOPED jobs: test-ruby pulls a
-# ~1GB openapi-generator image for the codegen drift gate, so it stays off the
-# critical path of PRs that cannot possibly affect the gem; test-agents-ts
-# runs two `npm install`s across two projects that most PRs never touch. A
-# self-referential change to this script forces both on, matching the
+# test-ruby, test-python and test-agents-ts are the PATH-SCOPED jobs: test-ruby
+# pulls a ~1GB openapi-generator image for the codegen drift gate, so it stays off
+# the critical path of PRs that cannot possibly affect the gem; test-agents-ts
+# runs two `npm install`s across two projects that most PRs never touch;
+# test-python is the cheap one of the three (no image pull — the runner's JDK runs
+# the generator) and is scoped for correctness rather than for cost. A
+# self-referential change to this script forces all three on, matching the
 # conservative posture above.
 # ---------------------------------------------------------------------------
 if [ "$SKIP_ALL" = "true" ]; then
@@ -521,6 +549,7 @@ if [ "$SKIP_ALL" = "true" ]; then
     RUN_TEST_RUST=false
     RUN_TEST_TYPESCRIPT=false
     RUN_TEST_RUBY=false
+    RUN_TEST_PYTHON=false
     RUN_TEST_AGENTS_TS=false
     if [ "$DOCS_ONLY" = "true" ]; then
         SKIP_REASON="docs-only"
@@ -534,10 +563,10 @@ if [ "$SKIP_ALL" = "true" ]; then
     # entire cost — every heavy job above stays off. See DOCS_GATED_ROOTS.
     if [ "$HAS_DOCS_GATED" = "true" ]; then
         RUN_CODE_QUALITY=true
-        SCOPE_SUMMARY="${SKIP_REASON}: skipping test-rust, test-typescript, test-ruby, test-agents-ts and the rust-quality job; running code-quality for its pure-bash guard-tests (the docs/ and internal/ gates)"
+        SCOPE_SUMMARY="${SKIP_REASON}: skipping test-rust, test-typescript, test-ruby, test-python, test-agents-ts and the rust-quality job; running code-quality for its pure-bash guard-tests (the docs/ and internal/ gates)"
     else
         RUN_CODE_QUALITY=false
-        SCOPE_SUMMARY="${SKIP_REASON}: skipping code-quality, test-rust, test-typescript, test-ruby, test-agents-ts"
+        SCOPE_SUMMARY="${SKIP_REASON}: skipping code-quality, test-rust, test-typescript, test-ruby, test-python, test-agents-ts"
     fi
 else
     # code-quality.yml is invoked for every non-docs change so its TypeScript
@@ -549,6 +578,11 @@ else
     else
         RUN_TEST_RUBY=false
     fi
+    if [ "$HAS_PYTHON" = "true" ] || [ "$HAS_SELF" = "true" ]; then
+        RUN_TEST_PYTHON=true
+    else
+        RUN_TEST_PYTHON=false
+    fi
     if [ "$HAS_AGENTS_TS" = "true" ] || [ "$HAS_SELF" = "true" ]; then
         RUN_TEST_AGENTS_TS=true
     else
@@ -557,11 +591,11 @@ else
     if [ "$RUST_INERT" = "true" ]; then
         RUN_RUST_QUALITY=false
         RUN_TEST_RUST=false
-        SCOPE_SUMMARY="rust-inert: change confined to Rust-inert trees — skipping test-rust + rust-quality; running TypeScript + guards (test-ruby=${RUN_TEST_RUBY}, test-agents-ts=${RUN_TEST_AGENTS_TS})"
+        SCOPE_SUMMARY="rust-inert: change confined to Rust-inert trees — skipping test-rust + rust-quality; running TypeScript + guards (test-ruby=${RUN_TEST_RUBY}, test-python=${RUN_TEST_PYTHON}, test-agents-ts=${RUN_TEST_AGENTS_TS})"
     else
         RUN_RUST_QUALITY=true
         RUN_TEST_RUST=true
-        SCOPE_SUMMARY="full-ci: code change detected — running full pipeline (test-ruby=${RUN_TEST_RUBY}, test-agents-ts=${RUN_TEST_AGENTS_TS})"
+        SCOPE_SUMMARY="full-ci: code change detected — running full pipeline (test-ruby=${RUN_TEST_RUBY}, test-python=${RUN_TEST_PYTHON}, test-agents-ts=${RUN_TEST_AGENTS_TS})"
     fi
 fi
 
@@ -577,6 +611,7 @@ printf 'RUN_RUST_QUALITY=%s\n' "$RUN_RUST_QUALITY"
 printf 'RUN_TEST_RUST=%s\n' "$RUN_TEST_RUST"
 printf 'RUN_TEST_TYPESCRIPT=%s\n' "$RUN_TEST_TYPESCRIPT"
 printf 'RUN_TEST_RUBY=%s\n' "$RUN_TEST_RUBY"
+printf 'RUN_TEST_PYTHON=%s\n' "$RUN_TEST_PYTHON"
 printf 'RUN_TEST_AGENTS_TS=%s\n' "$RUN_TEST_AGENTS_TS"
 printf 'SCOPE_SUMMARY=%s\n' "$SCOPE_SUMMARY"
 
@@ -591,6 +626,7 @@ if [ "$USE_GITHUB_OUTPUT" = "true" ] && [ -n "${GITHUB_OUTPUT:-}" ]; then
         echo "run-test-rust=${RUN_TEST_RUST}"
         echo "run-test-typescript=${RUN_TEST_TYPESCRIPT}"
         echo "run-test-ruby=${RUN_TEST_RUBY}"
+        echo "run-test-python=${RUN_TEST_PYTHON}"
         echo "run-test-agents-ts=${RUN_TEST_AGENTS_TS}"
         echo "scope-summary=${SCOPE_SUMMARY}"
     } >> "$GITHUB_OUTPUT"

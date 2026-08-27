@@ -62,6 +62,7 @@ jobs:
       run-test-rust: ${{ steps.detect.outputs.run-test-rust }}
       run-test-typescript: ${{ steps.detect.outputs.run-test-typescript }}
       run-test-ruby: ${{ steps.detect.outputs.run-test-ruby }}
+      run-test-python: ${{ steps.detect.outputs.run-test-python }}
       run-test-agents-ts: ${{ steps.detect.outputs.run-test-agents-ts }}
       scope-summary: ${{ steps.detect.outputs.scope-summary }}
     steps:
@@ -115,6 +116,19 @@ jobs:
     if: needs.detect-scope.outputs.run-test-ruby == 'true'
     uses: ./.github/workflows/test-ruby.yml
 
+  # Path-scoped: runs only for clients/temper-py/**, openapi.json, and its own
+  # workflow + gate scripts. Inert to cargo and to bun, exactly as the gem is, and
+  # scoped for the same reason: nothing outside that set can move its outcome.
+  #
+  # `[corrected — measured on the first run]` This claimed the job pulls no container
+  # image because the generator runs from the runner's JDK. It does not: the runner has
+  # a Docker daemon and generate-temper-py.sh prefers it, so this job takes the same
+  # container path test-ruby does. See the note in test-python.yml.
+  test-python:
+    needs: detect-scope
+    if: needs.detect-scope.outputs.run-test-python == 'true'
+    uses: ./.github/workflows/test-python.yml
+
   # Path-scoped: runs only for clients/temper-ts/**, packages/agent-workflows/**,
   # tests/contracts/**, and its own workflow. Both projects are inert to cargo and
   # to bun, so nothing else can reach them. See detect-ci-scope.sh.
@@ -133,7 +147,7 @@ jobs:
   # ==========================================================================
   ci-success:
     name: CI Success
-    needs: [detect-scope, code-quality, test-rust, test-typescript, test-ruby, test-agents-ts]
+    needs: [detect-scope, code-quality, test-rust, test-typescript, test-ruby, test-python, test-agents-ts]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -185,6 +199,10 @@ jobs:
           check_job "test-ruby" \
             "${{ needs.test-ruby.result }}" \
             "${{ needs.detect-scope.outputs.run-test-ruby }}"
+
+          check_job "test-python" \
+            "${{ needs.test-python.result }}" \
+            "${{ needs.detect-scope.outputs.run-test-python }}"
 
           check_job "test-agents-ts" \
             "${{ needs.test-agents-ts.result }}" \

@@ -1,7 +1,7 @@
 # temper-ts
 
-TypeScript client for the Temper knowledge base API. Sibling of `temper-rb` (and the coming
-`temper-py`) — all three are pinned to the same OpenAPI contract. Workspace-isolated: this package
+TypeScript client for the Temper knowledge base API. Sibling of `temper-rb` and `temper-py` — all
+three are pinned to the same OpenAPI contract. Workspace-isolated: this package
 is **not** a bun workspace member and **not** a cargo member, so it never collides with
 `temper-cloud`'s TS 5.8 or the root pre-commit. Run npm commands from inside this directory
 (`cd clients/temper-ts && npm install`) — a root `npm install` inherits the root's bun `overrides`

@@ -1,6 +1,6 @@
 /**
- * The TypeScript client for the Temper knowledge base API. Sibling of `temper-rb`
- * (and the coming `temper-py`); the three are pinned to the same wire contracts.
+ * The TypeScript client for the Temper knowledge base API. Sibling of `temper-rb` and
+ * `temper-py`; the three are pinned to the same wire contracts.
  */
 
 export {
