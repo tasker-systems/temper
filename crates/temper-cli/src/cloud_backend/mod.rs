@@ -8,7 +8,7 @@
 //! Cloud mode has no offline path — if no token resolves,
 //! `assemble_cloud_backend` errors immediately.
 //!
-//! See `internal/superpowers/specs/2026-05-18-wave1-phase5-surface-dispatch-unification-design.md`.
+//! See `temper-artifacts:specs/2026-05-18-wave1-phase5-surface-dispatch-unification-design.md`.
 
 mod backend;
 pub mod ctx;

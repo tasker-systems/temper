@@ -16,21 +16,38 @@ got wrong: internal security audits were published because the tree contained
 them, not because anyone chose to publish them. Moving non-public material out
 of `docs/` means no configuration mistake can expose it.
 
-See [the design spec](./superpowers/specs/2026-08-19-docs-surface-rebuild-design.md).
+See the design spec (`temper-artifacts:specs/2026-08-19-docs-surface-rebuild-design.md`).
 
 ## Writing plans and specs
 
-**Specs go in `internal/superpowers/specs/`. Plans go in `internal/superpowers/plans/`.**
+**They are not written here.** Specs, plans, reviews, spikes and handoffs live in the
+private `tasker-systems/temper-artifacts` repository, under `specs/`, `plans/`,
+`reviews/`, `spikes/` and `handoffs/`. Write them in a clone of that repo.
 
-The superpowers skills default to `docs/superpowers/...`; that default is wrong
-for this repo. It is overridden here and by the two in-repo agent entry points,
-`CLAUDE.md` and `AGENTS.md`, which every session reads and which are tracked, so
-the override is reviewable and travels with a clone.
+They moved because they are verbose by design — reconstructing prior state,
+enumerating residuals, naming what a guard does not catch — and in a public tree
+each of those habits is also a disclosure primitive. The alternative was classifying
+496 documents and keeping that classification right on every edit. Categorical
+absence is a checkable invariant; per-document classification is configuration that
+has to be got right every time, which is the same reasoning that put `docs/` behind
+a structural rule rather than an allowlist.
+
+`.github/scripts/check-no-process-artifacts.sh` enforces the absence. That gate is
+not ceremony: the way this regresses is a session reading a **stale** copy of the
+instruction and re-creating the directory, one document at a time.
+
+Which is why the instruction lives in more than one place. The superpowers skills
+default to `docs/superpowers/...`; that default is wrong for this repo. It is
+overridden here and by the two in-repo agent entry points, `CLAUDE.md` and
+`AGENTS.md`, which every session reads and which are tracked, so the override is
+reviewable and travels with a clone.
 
 The temper skill's own `fundamentals.md` carries the same override, but it is a
 machine-local file (`~/.claude/skills/temper/guidance/fundamentals.md`) — it is
-not in this repository, no gate protects it, and it has to be re-applied per
-machine. Treat the two files above as the durable statement.
+not in this repository, no gate protects it, and **it has to be re-applied per
+machine**. After this move that file does not merely lag; it actively misdirects,
+naming a directory this repository no longer carries. Treat the files above as the
+durable statement, and fix `fundamentals.md` by hand on each machine.
 
 ## Attributing a decision to a person
 

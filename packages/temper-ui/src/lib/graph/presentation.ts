@@ -153,7 +153,7 @@ export function partitionByConnection<T extends { degree: number }>(
  * band is a list now and every member is in it, so there is no remainder to report — the clause
  * would have had no true value to take.
  *
- * @see internal/superpowers/specs/2026-08-21-hub-stranding-is-a-telling-failure-design.md §5.2
+ * @see temper-artifacts:specs/2026-08-21-hub-stranding-is-a-telling-failure-design.md §5.2
  */
 export function describeUnconnected(
 	unconnected: number,
@@ -204,7 +204,7 @@ function corpusElsewhere(unconnected: number, corpusDegrees: (number | null)[]):
  * derived count is what the reader can verify by looking, and §5.3 stands everywhere the drawn
  * figure is not zero.
  *
- * @see internal/superpowers/specs/2026-08-21-hub-stranding-is-a-telling-failure-design.md §5.3
+ * @see temper-artifacts:specs/2026-08-21-hub-stranding-is-a-telling-failure-design.md §5.3
  */
 export function describeNodeLinks(node: Pick<GraphNode, 'degree' | 'corpusDegree'>): string {
 	if (node.degree > 0) return `${node.degree} ${node.degree === 1 ? 'link' : 'links'}`;
@@ -228,8 +228,8 @@ export function describeNodeLinks(node: Pick<GraphNode, 'degree' | 'corpusDegree
  * load-bearing: a read may declare an arm and return nothing for it, and a legend count would then
  * light a channel that distinguishes nothing — which is the defect, restaged one level up.
  *
- * @see internal/superpowers/specs/2026-08-21-hub-stranding-is-a-telling-failure-design.md §5.5
- * @see internal/superpowers/specs/2026-08-21-the-handoff-and-the-arm-vocabulary-design.md §2
+ * @see temper-artifacts:specs/2026-08-21-hub-stranding-is-a-telling-failure-design.md §5.5
+ * @see temper-artifacts:specs/2026-08-21-the-handoff-and-the-arm-vocabulary-design.md §2
  */
 export const armsDistinguish = (nodes: Pick<GraphNode, 'arm'>[]): boolean =>
 	new Set(nodes.map((n) => n.arm)).size > 1;

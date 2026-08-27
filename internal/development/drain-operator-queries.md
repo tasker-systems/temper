@@ -4,7 +4,7 @@ The queries an operator runs to answer *is the drain keeping up?* for the two `a
 region materialization and embedding.
 
 Companion to the drain instrumentation design
-(`internal/superpowers/specs/2026-08-03-drain-instrumentation-design.md`)
+(`temper-artifacts:specs/2026-08-03-drain-instrumentation-design.md`)
 and [OpenTelemetry setup](../../docs/playbooks/send-traces-to-an-otlp-backend.md). Datasource: the Tempo datasource
 (`grafanacloud-traces`).
 
