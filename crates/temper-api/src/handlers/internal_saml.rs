@@ -10,6 +10,7 @@ use axum::Json;
 use temper_core::types::{ReconcileRequest, ResolvePrincipalRequest, ResolvePrincipalResponse};
 use temper_services::error::ApiError;
 use temper_services::services::saml_provisioning_service;
+use temper_services::services::saml_provisioning_service::ReconcileOutcome;
 use temper_services::state::AppState;
 
 /// `POST /internal/saml/reconcile` — resolve/JIT the profile, then reconcile its idp memberships.
@@ -35,19 +36,30 @@ pub async fn reconcile(
         &state.pool,
         profile.id,
         &req.idp_key,
-        &req.groups,
+        req.groups.as_deref(),
     )
     .await?;
 
-    tracing::info!(
-        profile_id = %profile.id,
-        idp_key = %req.idp_key,
-        added = outcome.added,
-        updated = outcome.updated,
-        revoked = outcome.revoked,
-        skipped_native = outcome.skipped_native,
-        "saml reconcile complete",
-    );
+    // Two events, said differently, because they mean different things. A reconcile that changed
+    // nothing is evidence that this principal's reach is in agreement; a skip is evidence only that
+    // nothing was compared. Emitting the counts for both — all zeroes either way — would have made
+    // the more consequential of the two the harder one to find.
+    match outcome {
+        ReconcileOutcome::SignalMissing => tracing::info!(
+            profile_id = %profile.id,
+            idp_key = %req.idp_key,
+            "saml reconcile skipped: assertion carried no group signal",
+        ),
+        ReconcileOutcome::Reconciled(counts) => tracing::info!(
+            profile_id = %profile.id,
+            idp_key = %req.idp_key,
+            added = counts.added,
+            updated = counts.updated,
+            revoked = counts.revoked,
+            skipped_native = counts.skipped_native,
+            "saml reconcile complete",
+        ),
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }

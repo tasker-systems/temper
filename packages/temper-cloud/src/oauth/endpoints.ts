@@ -9,6 +9,7 @@ import {
   buildLoginRedirect,
   buildSpMetadata,
   extractGroups,
+  groupProvisioningConfigured,
   mapProfileToClaims,
   validateAssertion,
 } from "../saml/sp.js";
@@ -334,19 +335,35 @@ export async function handleSamlAcs(req: Request, db: NeonClient): Promise<Respo
     // error must never block authentication (design spec §3.8). Its own try/catch so a reconcile
     // failure is NOT misreported as an assertion rejection by the outer catch.
     try {
-      const groups = extractGroups(profile, idp);
-      // Signal-missing guard: null means the assertion carried no group signal (groups_attr not
-      // configured, or the attribute absent from THIS assertion). Skip reconcile so a transient
-      // IdP attribute-drop never revokes memberships. A present-but-empty list ([]) IS a signal
-      // ("in no mapped groups now") and DOES reconcile, revoking stale idp rows.
-      if (groups !== null) {
+      // TWO QUESTIONS, ASKED IN ORDER, AND THEY ARE NOT THE SAME QUESTION.
+      //
+      // First: does this IdP do group provisioning at all? `groups_attr` left NULL is the supported
+      // authentication-only posture — no team membership is derived from this IdP, ever. There is
+      // no reconcile to perform and nothing about that is a finding, so no call is made. Calling
+      // anyway would manufacture a permanent false alarm on a whole class of deployment: the
+      // reconcile channel's env vars are group-provisioning configuration, so an authentication-only
+      // instance may legitimately not have them, and every login would log a reconcile failure that
+      // means nothing is wrong.
+      //
+      // Second, only for an IdP where it IS configured: did THIS assertion carry the attribute?
+      // `null` here is the narrow, actionable case — the operator configured group provisioning and
+      // it did not arrive — and it is PASSED ON rather than used to skip the call. Skipping made
+      // that refusal indistinguishable from a principal who never logged in: no call, no span,
+      // nothing to find, and de-provisioning quietly suspended with nothing failing. The API refuses
+      // the null exactly as a local branch would (`reconcile_idp_memberships` takes an `Option` and
+      // returns early on `None`, adjacent to the DELETE it protects) and records that it refused, so
+      // the silence becomes a queryable fact rather than an absence.
+      //
+      // A present-but-empty list ([]) is a signal, not the absence of one — "in no mapped groups
+      // now" — and DOES revoke stale idp rows.
+      if (groupProvisioningConfigured(idp)) {
         await reconcileMemberships({
           provider: `saml:${idp.idp_key}`,
           external_user_id: claims.sub,
           email: claims.email,
           email_verified: claims.email_verified,
           idp_key: idp.idp_key,
-          groups,
+          groups: extractGroups(profile, idp),
         });
       }
     } catch (reconcileErr) {

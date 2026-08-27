@@ -99,6 +99,33 @@ describe("ReconcileRequest wire contract (mirrors Rust temper_core::types::Recon
     const nulls: ReconcileRequest = { ...value, provider: null, email_verified: null };
     expect(nulls.provider).toBeNull();
   });
+
+  /**
+   * `groups: null` is a payload the AS actually sends, not merely a type that permits null.
+   *
+   * It is the wire form of "the assertion carried no group signal", and it is a DIFFERENT
+   * instruction from `groups: []` ("the provider named this principal's groups and there are
+   * none") — the first must never revoke reach, the second must. The Rust side is
+   * `Option<Vec<String>>` and branches on exactly that distinction, so a change here that
+   * collapsed null into `[]` would silently turn a transient IdP attribute-drop into a
+   * revocation. The key is always present; only its value varies.
+   */
+  it("carries the no-group-signal case as null rather than as an empty list", () => {
+    const noSignal: ReconcileRequest = {
+      provider: "saml:acme",
+      external_user_id: "nid-1",
+      email: "a@corp.io",
+      email_verified: true,
+      idp_key: "acme",
+      groups: null,
+    };
+    expect(noSignal.groups).toBeNull();
+    expect(noSignal.groups).not.toEqual([]);
+    // The key is sent, not omitted — which is what keeps the Rust side's `Option` reading an
+    // explicit null rather than a missing field.
+    expect(Object.keys(noSignal)).toContain("groups");
+    expect(JSON.parse(JSON.stringify(noSignal)).groups).toBeNull();
+  });
 });
 
 describe("ResolvePrincipalRequest wire contract (mirrors Rust temper_core::types)", () => {

@@ -51,17 +51,38 @@ export function mapProfileToClaims(profile: Profile, idp: SamlIdpRow): MintedCla
 }
 
 /**
+ * Does this IdP do group provisioning at all?
+ *
+ * A DEPLOYMENT-level fact, and the reason it has a name: it is a different question from "did this
+ * assertion carry groups", and conflating the two costs something real. `groups_attr` left NULL is
+ * the supported authentication-only posture — the IdP asserts identity and nothing about team
+ * membership, permanently and on purpose. An assertion that omits a `groups_attr` the operator DID
+ * configure is the opposite: something that was expected to arrive did not.
+ *
+ * `extractGroups` answers `null` to both, because for its own purpose — may we act on groups? —
+ * they are the same. Anything that wants to tell them apart asks this instead, and asks it here
+ * rather than re-testing `idp.groups_attr` at each site, so the two readings cannot drift.
+ */
+export function groupProvisioningConfigured(
+  idp: SamlIdpRow,
+): idp is SamlIdpRow & { groups_attr: string } {
+  return Boolean(idp.groups_attr);
+}
+
+/**
  * Reads the multi-valued group attribute named by `idp.groups_attr` from a validated assertion.
  *
  * Returns `null` when there is NO group signal — either no `groups_attr` is configured for this
- * IdP, or the named attribute is absent from THIS assertion (e.g. a transient IdP misconfig). The
- * ACS caller skips the reconcile entirely on `null`, so a missing attribute never revokes
- * memberships. Returns an array (possibly empty `[]`) when the attribute IS present: `[]` is a
- * genuine "member of no mapped groups now" signal and the caller DOES reconcile (revoking stale
- * `idp` rows). This null-vs-empty split is the signal-missing guard.
+ * IdP, or the named attribute is absent from THIS assertion (e.g. a transient IdP misconfig).
+ * `null` never revokes memberships. Returns an array (possibly empty `[]`) when the attribute IS
+ * present: `[]` is a genuine "member of no mapped groups now" signal and the caller DOES reconcile
+ * (revoking stale `idp` rows). This null-vs-empty split is the signal-missing guard.
+ *
+ * The ACS reaches this only for an IdP where [`groupProvisioningConfigured`] holds, so a `null`
+ * from here reaching the API means the narrower, actionable thing: configured, and did not arrive.
  */
 export function extractGroups(profile: Profile, idp: SamlIdpRow): string[] | null {
-  if (!idp.groups_attr) {
+  if (!groupProvisioningConfigured(idp)) {
     return null;
   }
   const attrs = (profile.attributes ?? {}) as Record<string, unknown>;

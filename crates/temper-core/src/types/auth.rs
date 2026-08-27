@@ -82,8 +82,22 @@ pub struct ReconcileRequest {
     pub email_verified: Option<bool>,
     /// Which IdP's group mappings to apply.
     pub idp_key: String,
-    /// Asserted group values (possibly empty).
-    pub groups: Vec<String>,
+    /// The asserted group values, or `None` when the assertion carried **no group signal**.
+    ///
+    /// Three states, and the middle one is the one a `Vec<String>` could not express: `None` (the
+    /// IdP has no `groups_attr` configured, or the attribute was absent from this assertion),
+    /// `Some([])` (the provider named this principal's groups and there are none), and
+    /// `Some([..])`. The first must never revoke reach; the second must. Mirrors the AS-side
+    /// `extractGroups(): string[] | null` (`packages/temper-cloud/src/saml/sp.ts:63-77`) exactly,
+    /// so the distinction survives the wire instead of being collapsed at it.
+    ///
+    /// NOTE on a serde subtlety worth knowing rather than rediscovering: an `Option` field that is
+    /// **omitted** deserializes to `None`, so a caller that drops `groups` entirely gets the
+    /// no-signal path rather than a rejection. That direction is the safe one — it declines to
+    /// revoke — and it is no longer silent, because the no-signal path writes
+    /// `kb_saml_principal_reconcile.last_skipped_at`. The AS always sends the key
+    /// (`packages/temper-cloud/src/oauth/reconcile.ts`), pinned by the wire-contract test.
+    pub groups: Option<Vec<String>>,
 }
 
 /// Wire payload for the internal principal-resolve call (AS → temper-api).
@@ -123,4 +137,44 @@ pub struct ResolvePrincipalRequest {
 pub struct ResolvePrincipalResponse {
     /// The resolved (or just-provisioned) profile id.
     pub profile_id: uuid::Uuid,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ReconcileRequest;
+
+    fn parse(groups_field: &str) -> ReconcileRequest {
+        let json = format!(
+            r#"{{"provider":"saml:acme","external_user_id":"nid","email":"a@b.io",
+                 "email_verified":true,"idp_key":"acme"{groups_field}}}"#
+        );
+        serde_json::from_str(&json).expect("a well-formed reconcile payload")
+    }
+
+    /// The three group states survive the wire as three states.
+    ///
+    /// `[]` and `null` are the pair that matters: they are opposite instructions — "revoke what the
+    /// provider no longer confers" and "the provider said nothing, act on nothing" — and a payload
+    /// that collapsed them would revoke reach on a transient attribute drop.
+    #[test]
+    fn null_groups_and_empty_groups_are_different_payloads() {
+        assert_eq!(parse(r#","groups":null"#).groups, None);
+        assert_eq!(parse(r#","groups":[]"#).groups, Some(vec![]));
+        assert_eq!(
+            parse(r#","groups":["eng"]"#).groups,
+            Some(vec!["eng".to_string()])
+        );
+    }
+
+    /// An OMITTED `groups` key deserializes to `None`, not to an error.
+    ///
+    /// Asserted rather than assumed, because it is a genuine serde subtlety and the wrong belief
+    /// about it is load-bearing: a reader who thinks a missing key is rejected would conclude that
+    /// only an explicit `null` can reach the no-signal path. It cannot be rejected here without a
+    /// custom deserializer, and it does not need to be — the direction is the safe one (decline to
+    /// revoke) and it is no longer silent, since that path records `last_skipped_at`.
+    #[test]
+    fn an_omitted_groups_key_is_read_as_no_signal_rather_than_refused() {
+        assert_eq!(parse("").groups, None);
+    }
 }
