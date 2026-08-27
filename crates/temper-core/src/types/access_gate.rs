@@ -128,13 +128,55 @@ impl From<SystemSettings> for PublicSystemSettings {
 
 /// Entitlements included in the profile response — tells the client
 /// what this profile is allowed to do at the system level.
+///
+/// `Deserialize` is not decoration: `temper-client` reads this back off `GET /api/profile`, and
+/// before it was derived the client deserialized the response into a bare `Profile`, which has no
+/// `entitlements` field and no `deny_unknown_fields` — so serde dropped the whole object silently
+/// on every call. The CLI was fetching the authoritative access answer and discarding it.
+///
+/// **There is deliberately no narrowed `standing` field here.** One was built and removed: the
+/// premise was that a principal must not learn they were *revoked* rather than merely *denied*.
+/// That is not this system's posture. Spec D15 grants a revoked principal the right to request
+/// reconsideration — `Act::RequestReview` is legal from `Revoked` and from nothing else
+/// (`temper-principal/src/transition.rs`) — and a right nobody may be told they hold is not a
+/// right. Accordingly the refusal type names the state on purpose
+/// (`temper-principal/src/refusal.rs`: *"access was revoked; you may request a review"*), and the
+/// CLI routes it to a different remedy than `denied` (`temper-cli/src/access_gate.rs`). Narrowing
+/// here would have contradicted all of that while five other surfaces still disclosed it — and it
+/// also hid legitimate *rejections*, since rejection returns standing to `denied`.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "access.ts"))]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entitlements {
     pub system_access: bool,
     pub is_admin: bool,
+    /// The caller's own standing, **as stored** — all five states, not a narrowed subset.
+    ///
+    /// Reporting `revoked` and `deactivated` is deliberate and matches the rest of the system.
+    /// Spec D15 grants a revoked principal the right to request reconsideration
+    /// (`Act::RequestReview` is legal from `Revoked` and nothing else), so the refusal path names
+    /// the state on purpose and routes it to a different remedy than `denied`. A narrowed
+    /// three-variant version of this field was built and reverted: it contradicted that design
+    /// while five other surfaces still disclosed the state, and it hid legitimate *rejections*,
+    /// since rejection returns standing to `denied`.
+    ///
+    /// **`None` means the server predates this field — never "no standing".** Absence of a
+    /// standing row denies, and the producer reports that as `Denied`, so `None` carries exactly
+    /// one meaning: this instance is older than the client asking. That matters because a CLI
+    /// upgrades independently of the instance it talks to; a required field here would cost such a
+    /// client the whole object, `system_access` included, which older servers answer correctly.
+    ///
+    /// The `Option` alone buys that — serde's derive already reads a missing `Option` field as
+    /// `None`, so no `#[serde(default)]` is needed and one here would be inert. Verified by probe:
+    /// removing it changed nothing. `crates/temper-client/tests/profile_entitlements_test.rs`
+    /// covers the absent-field case against a real body rather than a constructed value.
+    ///
+    /// `Deactivated` is unreachable through `GET /api/profile`: a deactivated principal fails
+    /// authentication outright (`temper-services/src/auth/mod.rs` Level-1 kill-switch) and never
+    /// reaches a handler. It is in the type because the type is the stored state, not this
+    /// endpoint's reachable subset.
+    pub standing: Option<temper_principal::Standing>,
     pub join_request_status: Option<JoinRequestStatus>,
 }
 

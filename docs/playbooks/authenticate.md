@@ -51,6 +51,26 @@ Check your status at any time:
 temper auth status
 ```
 
+It answers in two independent parts. `query` says whether the server could be reached at all;
+`entitlement` — present only when it could — says what the answer was. That separation matters:
+"we could not ask" and "we asked and you are denied" are opposite facts with opposite next steps.
+
+```json
+{
+  "authenticated": true,
+  "expires_at": "2026-08-27T11:20:24Z",
+  "identity": { "profile_id": "019d4add-…", "handle": "@your-handle" },
+  "system_access": {
+    "query": "reachable",
+    "entitlement": { "standing": "denied", "system_access": false, "is_admin": false }
+  }
+}
+```
+
+`authenticated` is a local check of the cached token against its expiry; `identity` and
+`entitlement` come from the server. `standing` is the authoritative state, and when there is
+something you can do about it the command prints the command to run on stderr.
+
 ### 3. Request access
 
 **This step is required for every new user.** A brand-new signup is born *denied* —
@@ -72,7 +92,18 @@ an admin approves you. Poll with:
 temper auth status
 ```
 
-Once your standing shows `approved`, you can proceed.
+Once `standing` reads `approved`, you can proceed.
+
+### If your access is revoked later
+
+Revocation is a distinct state from never having been granted, and it has its own remedy:
+
+```bash
+temper auth request-review --message "Why you'd like it reconsidered"
+```
+
+`auth status` shows `standing: "revoked"` and points you at that command. Filing the request does
+not restore access by itself — it asks an admin to look again.
 
 ### 5. Warm up
 

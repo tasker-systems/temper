@@ -116,7 +116,7 @@ pub use materialize::{
 };
 pub use merge::{MergeResult, MergeStrategy, PushKind};
 pub use ownership::ResourceOwnership;
-pub use profile::{DeactivationCheck, Profile, ProfileAuthLink};
+pub use profile::{DeactivationCheck, Profile, ProfileAuthLink, ProfileWithEntitlements};
 pub use reassign::{BulkReassignAck, BulkReassignRequest, ReassignAck, ReassignResourceRequest};
 pub use resource::{BodyStorage, IngestState};
 pub use resource_view::{ResourceSection, ResourceView, SectionSet};

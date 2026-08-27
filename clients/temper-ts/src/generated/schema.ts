@@ -3761,10 +3761,27 @@ export interface components {
         /**
          * @description Entitlements included in the profile response — tells the client
          *     what this profile is allowed to do at the system level.
+         *
+         *     `Deserialize` is not decoration: `temper-client` reads this back off `GET /api/profile`, and
+         *     before it was derived the client deserialized the response into a bare `Profile`, which has no
+         *     `entitlements` field and no `deny_unknown_fields` — so serde dropped the whole object silently
+         *     on every call. The CLI was fetching the authoritative access answer and discarding it.
+         *
+         *     **There is deliberately no narrowed `standing` field here.** One was built and removed: the
+         *     premise was that a principal must not learn they were *revoked* rather than merely *denied*.
+         *     That is not this system's posture. Spec D15 grants a revoked principal the right to request
+         *     reconsideration — `Act::RequestReview` is legal from `Revoked` and from nothing else
+         *     (`temper-principal/src/transition.rs`) — and a right nobody may be told they hold is not a
+         *     right. Accordingly the refusal type names the state on purpose
+         *     (`temper-principal/src/refusal.rs`: *"access was revoked; you may request a review"*), and the
+         *     CLI routes it to a different remedy than `denied` (`temper-cli/src/access_gate.rs`). Narrowing
+         *     here would have contradicted all of that while five other surfaces still disclosed it — and it
+         *     also hid legitimate *rejections*, since rejection returns standing to `denied`.
          */
         Entitlements: {
             is_admin: boolean;
             join_request_status?: null | components["schemas"]["JoinRequestStatus"];
+            standing?: null | components["schemas"]["Standing"];
             system_access: boolean;
         };
         /**
@@ -5057,6 +5074,20 @@ export interface components {
             preferences?: unknown;
             vault_config?: null | components["schemas"]["VaultConfig"];
         };
+        /**
+         * @description `GET /api/profile` — the caller's own profile with their system-level entitlements.
+         *
+         *     **Shared, not duplicated.** This lived in `temper-api`'s handler as a `Serialize`-only struct,
+         *     which meant `temper-client` had nothing to deserialize into and read the response as a bare
+         *     [`Profile`] instead — silently dropping `entitlements`, because `Profile` neither declares the
+         *     field nor denies unknown ones. Both ends now share this definition, which is what the shared-type
+         *     rule is for: the drift it prevents had already happened.
+         *
+         *     **No ts-rs derive, and that is forced.** The flattened profile cannot be codegen'd — see
+         *     `resource_view.rs`, which records the same constraint: "ts-rs cannot codegen a flattened
+         *     field". The flatten is kept because it is the wire shape already in production; changing it to a
+         *     named field to buy a TypeScript type would break every existing reader.
+         */
         ProfileWithEntitlements: components["schemas"]["Profile"] & {
             entitlements: components["schemas"]["Entitlements"];
         };

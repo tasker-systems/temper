@@ -1,21 +1,13 @@
 use axum::extract::State;
 use axum::Json;
 
-use temper_core::types::access_gate::Entitlements;
 use temper_core::types::ids::ProfileId;
-use temper_core::types::{Profile, ProfileAuthLink, ProfileUpdateRequest};
+use temper_core::types::{Profile, ProfileAuthLink, ProfileUpdateRequest, ProfileWithEntitlements};
 
 use crate::middleware::auth::AuthUser;
 use temper_services::error::{ApiResult, ErrorBody};
 use temper_services::services::{access_service, profile_service};
 use temper_services::state::AppState;
-
-#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
-pub struct ProfileWithEntitlements {
-    #[serde(flatten)]
-    pub profile: Profile,
-    pub entitlements: Entitlements,
-}
 
 /// Read your profile
 #[utoipa::path(

@@ -81,7 +81,7 @@ use temper_workflow::types::resource::{
         temper_principal::Refusal,
         temper_principal::Standing,
         temper_principal::ActorAuthority,
-        crate::handlers::profiles::ProfileWithEntitlements,
+        temper_core::types::ProfileWithEntitlements,
         temper_core::types::relationship_requests::AssertRelationshipRequest,
         temper_core::types::relationship_requests::RetypeRelationshipRequest,
         temper_core::types::relationship_requests::ReweightRelationshipRequest,
