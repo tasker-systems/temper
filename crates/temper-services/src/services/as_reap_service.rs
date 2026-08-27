@@ -66,10 +66,20 @@ pub struct AsReapSummary {
     pub saml_replay: i64,
     pub oauth_flow: i64,
     pub refresh_tokens: i64,
-    /// True when any table hit its per-run cap — there is more to delete and the next
-    /// scheduled pass will take it. Reported rather than inferred from the counts: a caller
-    /// comparing a count to a constant is reconstructing something this already knows.
+    /// True when any table stopped because it hit its per-run cap rather than because it ran
+    /// out of rows — there is more to delete and the next scheduled pass will take it.
+    ///
+    /// Carried out of each sweep's own exit, not inferred by comparing its count to the cap.
+    /// Those two differ at exactly one point, and it is a reachable one: a table holding
+    /// precisely `MAX_ROWS_PER_TABLE` eligible rows drains completely on the last batch, and a
+    /// count comparison would still report more to come.
     pub more_pending: bool,
+}
+
+/// What one table's sweep deleted, and whether it stopped early because of the per-run cap.
+struct Swept {
+    rows: i64,
+    hit_cap: bool,
 }
 
 /// The configured IdP assertion window, in seconds.
@@ -111,12 +121,10 @@ pub async fn reap_expired_as_rows(pool: &PgPool) -> ApiResult<AsReapSummary> {
     let refresh_tokens = reap_refresh_tokens(pool).await?;
 
     let summary = AsReapSummary {
-        saml_replay,
-        oauth_flow,
-        refresh_tokens,
-        more_pending: saml_replay >= MAX_ROWS_PER_TABLE
-            || oauth_flow >= MAX_ROWS_PER_TABLE
-            || refresh_tokens >= MAX_ROWS_PER_TABLE,
+        saml_replay: saml_replay.rows,
+        oauth_flow: oauth_flow.rows,
+        refresh_tokens: refresh_tokens.rows,
+        more_pending: saml_replay.hit_cap || oauth_flow.hit_cap || refresh_tokens.hit_cap,
     };
 
     // Emitted every run, including the all-zero one. A reaper that logs only when it deletes is
@@ -144,27 +152,43 @@ pub async fn reap_expired_as_rows(pool: &PgPool) -> ApiResult<AsReapSummary> {
 /// than ten minutes.
 ///
 /// **So the window is subtracted rather than trusted.** The predicate is
-/// `expires_at < now() - window`, and because `expires_at >= created` for any positive TTL, no row
-/// can be deleted before `created + window` **whatever the writer stamped on it**. That is what
-/// makes the floor derived rather than hard-coded, and it holds without the AS being changed at
-/// all: rows already on disk, and rows written by a lagging binary carrying the old literal, are
-/// covered by the same arithmetic as rows written by a current one.
+/// `expires_at < now() - window`, and because `expires_at` is stamped at or after the row was
+/// consumed, no row can be deleted before `consumed + window` **whatever the writer stamped on
+/// it**. That is what makes the floor derived rather than hard-coded, and it holds without the AS
+/// being changed at all: rows already on disk, and rows written by a lagging binary carrying the
+/// old literal, are covered by the same arithmetic as rows written by a current one.
+///
+/// **The two clocks are not the same clock**, and the guarantee is stated with that in rather than
+/// asserted around it. `expires_at` is computed on the AS host (`Date.now()` at the `guardReplay`
+/// call site) while `now()` here is the database's, so host/DB skew shifts the floor by that skew
+/// — the same caveat `flow.ts` already names for `chain_expires_at`. The stamped TTL is the
+/// margin absorbing it: the floor is `window` past a stamp that is itself `REPLAY_TTL_SECONDS`
+/// past consumption, so the inequality survives up to that much clock disagreement.
 ///
 /// The direction of the existing bug is preserved deliberately. Unbounded retention was **fail-safe
 /// for replay** — a consumed assertion id was never forgotten, so the guard never weakened. This
 /// bounds the growth without inverting that.
-async fn reap_saml_replay(pool: &PgPool, window_seconds: f64) -> ApiResult<i64> {
+async fn reap_saml_replay(pool: &PgPool, window_seconds: f64) -> ApiResult<Swept> {
     let mut total = 0i64;
     loop {
-        // No ORDER BY. On a table that has never been reaped almost every row matches, so an
-        // unordered LIMIT lets the scan stop as soon as it has a batch, where an ORDER BY would
-        // sort the backlog first. `idx_kb_saml_replay_expires` remains available to the planner for
-        // the range predicate itself — this is the first thing that has ever asked for it.
+        // Two choices here, and both were measured rather than reasoned about.
+        //
+        // No ORDER BY: on a table that has never been reaped almost every row matches, so an
+        // unordered LIMIT lets the scan stop as soon as it has a batch (161 buffers, ~2 ms) where
+        // an ORDER BY would sort the whole backlog first. In steady state, when nothing matches,
+        // it is the `expires_at` index that keeps the pass cheap instead.
+        //
+        // `ctid`, not the primary key: handing the DELETE ids made it re-find them, and the plan
+        // for that was a join whose outer side sequentially scanned the entire table — 13,334
+        // buffers to delete 5,000 rows the subquery had already located. `ctid` makes the outer
+        // node a Tid Scan straight to the rows. A ctid can go stale under a concurrent UPDATE, in
+        // which case the row is simply missed and swept next run; for a reaper that is the
+        // harmless direction.
         let deleted = sqlx::query!(
             r#"
             DELETE FROM kb_saml_replay
-             WHERE assertion_id IN (
-                   SELECT assertion_id
+             WHERE ctid IN (
+                   SELECT ctid
                      FROM kb_saml_replay
                     WHERE expires_at < now() - make_interval(secs => $1::double precision)
                     LIMIT $2
@@ -178,8 +202,19 @@ async fn reap_saml_replay(pool: &PgPool, window_seconds: f64) -> ApiResult<i64> 
         .rows_affected() as i64;
 
         total += deleted;
-        if deleted < BATCH_ROWS || total >= MAX_ROWS_PER_TABLE {
-            return Ok(total);
+        // Two different reasons to stop, and the caller needs to tell them apart: a short batch
+        // means the table is drained, the cap means there is more waiting for tomorrow.
+        if deleted < BATCH_ROWS {
+            return Ok(Swept {
+                rows: total,
+                hit_cap: false,
+            });
+        }
+        if total >= MAX_ROWS_PER_TABLE {
+            return Ok(Swept {
+                rows: total,
+                hit_cap: true,
+            });
         }
     }
 }
@@ -192,14 +227,14 @@ async fn reap_saml_replay(pool: &PgPool, window_seconds: f64) -> ApiResult<i64> 
 /// reads a spent row. `status` is not in the predicate — a `pending_saml` flow whose user simply
 /// abandoned the login is as dead as a `consumed` one once it has expired, and keying on status
 /// would leak exactly the abandoned ones forever.
-async fn reap_oauth_flows(pool: &PgPool) -> ApiResult<i64> {
+async fn reap_oauth_flows(pool: &PgPool) -> ApiResult<Swept> {
     let mut total = 0i64;
     loop {
         let deleted = sqlx::query!(
             r#"
             DELETE FROM kb_oauth_flow
-             WHERE id IN (
-                   SELECT id
+             WHERE ctid IN (
+                   SELECT ctid
                      FROM kb_oauth_flow
                     WHERE expires_at < now() - make_interval(secs => $1::double precision)
                     LIMIT $2
@@ -213,8 +248,19 @@ async fn reap_oauth_flows(pool: &PgPool) -> ApiResult<i64> {
         .rows_affected() as i64;
 
         total += deleted;
-        if deleted < BATCH_ROWS || total >= MAX_ROWS_PER_TABLE {
-            return Ok(total);
+        // Two different reasons to stop, and the caller needs to tell them apart: a short batch
+        // means the table is drained, the cap means there is more waiting for tomorrow.
+        if deleted < BATCH_ROWS {
+            return Ok(Swept {
+                rows: total,
+                hit_cap: false,
+            });
+        }
+        if total >= MAX_ROWS_PER_TABLE {
+            return Ok(Swept {
+                rows: total,
+                hit_cap: true,
+            });
         }
     }
 }
@@ -226,9 +272,9 @@ async fn reap_oauth_flows(pool: &PgPool) -> ApiResult<i64> {
 /// followed that make that predicate wrong.
 ///
 /// **1. Detection does not stop at expiry.** `findRotatedToken`
-/// (`packages/temper-cloud/src/oauth/flow.ts:353`) matches on `rotated_at IS NOT NULL` and nothing
-/// else — no expiry filter — and `judgeRefusedRotation` runs after *any* refused rotation, expiry
-/// included. A stolen token presented after its own TTL is therefore recognised as a replay today,
+/// (`packages/temper-cloud/src/oauth/flow.ts:349`) matches the presented `token_hash` and
+/// `rotated_at IS NOT NULL` — and **carries no expiry filter of any kind** — while
+/// `judgeRefusedRotation` runs after *any* refused rotation, expiry included. A stolen token presented after its own TTL is therefore recognised as a replay today,
 /// and the chain is ended. Deleting the row is precisely what would turn that into an unremarkable
 /// "unknown token" refusal. So the floor is `chain_expires_at`, not `expires_at`: while a chain can
 /// still be replayed into, its tokens stay.
@@ -240,18 +286,20 @@ async fn reap_oauth_flows(pool: &PgPool) -> ApiResult<i64> {
 /// destroyed by a retention job. It is deliberately unconditional on age: evidence of a copied
 /// credential does not stop being evidence.
 ///
-/// Both timestamps are required past their margin, rather than `chain_expires_at` alone. They can
-/// disagree — an operator who raised `AS_REFRESH_TTL_SECONDS` above the chain maximum has tokens
-/// outliving their own chain — and requiring both means the sweep waits for whichever says "still
-/// live", in either direction.
-async fn reap_refresh_tokens(pool: &PgPool) -> ApiResult<i64> {
+/// Both timestamps are required past their margin, rather than `chain_expires_at` alone. Today
+/// that is redundant: `storeRefreshToken` stamps `expires_at` as `LEAST(requested,
+/// chain_expires_at)` (`flow.ts:200`), so a token cannot outlive its own chain and the chain arm
+/// always decides. It is kept because the redundancy is free and points the safe way — if that
+/// `LEAST` is ever relaxed, this predicate waits for whichever bound still says "live" rather than
+/// silently reaping against the shorter one.
+async fn reap_refresh_tokens(pool: &PgPool) -> ApiResult<Swept> {
     let mut total = 0i64;
     loop {
         let deleted = sqlx::query!(
             r#"
             DELETE FROM kb_oauth_refresh_tokens
-             WHERE id IN (
-                   SELECT t.id
+             WHERE ctid IN (
+                   SELECT t.ctid
                      FROM kb_oauth_refresh_tokens t
                     WHERE t.expires_at       < now() - make_interval(secs => $1::double precision)
                       AND t.chain_expires_at < now() - make_interval(secs => $1::double precision)
@@ -270,8 +318,19 @@ async fn reap_refresh_tokens(pool: &PgPool) -> ApiResult<i64> {
         .rows_affected() as i64;
 
         total += deleted;
-        if deleted < BATCH_ROWS || total >= MAX_ROWS_PER_TABLE {
-            return Ok(total);
+        // Two different reasons to stop, and the caller needs to tell them apart: a short batch
+        // means the table is drained, the cap means there is more waiting for tomorrow.
+        if deleted < BATCH_ROWS {
+            return Ok(Swept {
+                rows: total,
+                hit_cap: false,
+            });
+        }
+        if total >= MAX_ROWS_PER_TABLE {
+            return Ok(Swept {
+                rows: total,
+                hit_cap: true,
+            });
         }
     }
 }
@@ -322,6 +381,14 @@ mod tests {
     use sqlx::PgPool;
     use uuid::Uuid;
 
+    // **These tests assert on SURVIVORS, never on a swept count**, and that is a correctness
+    // property of the suite rather than a style choice. A reaper has no scoping predicate a test
+    // can narrow — it deletes from the whole table by construction — so `assert_eq!(swept, 1)` is
+    // an assertion about every row in the database, including rows the test did not create. Under
+    // `cargo nextest`'s parallelism that made the suite flaky, failing 5-of-9 in the direction of
+    // "more rows than I seeded". The survivor assertions carry the identical evidence, name the
+    // rows they mean, and cannot be moved by a row belonging to someone else.
+
     /// A consumed assertion, `age_seconds` old, stamped the way `guardReplay` stamps one: an
     /// `expires_at` of `created + REPLAY_TTL_SECONDS`, where that TTL is the AS's literal 600.
     async fn seed_replay(pool: &PgPool, id: &str, age_seconds: i64) {
@@ -360,12 +427,8 @@ mod tests {
         // Not even past its stamp.
         seed_replay(&pool, "unexpired", 60).await;
 
-        let swept = reap_saml_replay(&pool, window).await.expect("sweep");
+        reap_saml_replay(&pool, window).await.expect("sweep");
 
-        assert_eq!(
-            swept, 1,
-            "only the row past the assertion window may be swept"
-        );
         assert_eq!(
             replay_ids(&pool).await,
             vec!["inside-window".to_string(), "unexpired".to_string()],
@@ -380,14 +443,21 @@ mod tests {
     async fn widening_the_configured_window_spares_rows_already_stamped(pool: PgPool) {
         seed_replay(&pool, "two-hours-old", 7200).await;
 
-        let swept = reap_saml_replay(&pool, 10_800.0).await.expect("sweep");
-        assert_eq!(
-            swept, 0,
-            "a 3h window must spare a 2h-old row whatever its stamp says"
+        reap_saml_replay(&pool, 10_800.0).await.expect("sweep");
+        assert!(
+            replay_ids(&pool)
+                .await
+                .contains(&"two-hours-old".to_string()),
+            "a 3h window must spare a 2h-old row whatever its stamp says",
         );
 
-        let swept = reap_saml_replay(&pool, 3600.0).await.expect("sweep");
-        assert_eq!(swept, 1, "a 1h window reaps the same row");
+        reap_saml_replay(&pool, 3600.0).await.expect("sweep");
+        assert!(
+            !replay_ids(&pool)
+                .await
+                .contains(&"two-hours-old".to_string()),
+            "a 1h window reaps the same row",
+        );
     }
 
     /// Seeds a refresh token. `expired` and `chain_dead` are ages in days past the respective
@@ -440,26 +510,21 @@ mod tests {
         // Chain long dead, token itself only just expired.
         seed_token(&pool, "fresh-token", 1, 400, false).await;
 
-        let swept = reap_refresh_tokens(&pool).await.expect("sweep");
+        reap_refresh_tokens(&pool).await.expect("sweep");
 
-        assert_eq!(
-            swept, 1,
-            "only the token past BOTH deadlines by the forensic margin"
-        );
         assert_eq!(
             token_hashes(&pool).await,
             vec!["fresh-token".to_string(), "live-chain".to_string()],
-            "a token whose chain can still be replayed into must survive the sweep",
+            "a token whose chain can still be replayed into must survive the sweep, and only the \
+             one past BOTH deadlines by the forensic margin may go",
         );
     }
 
-    /// **FAILS IF: collected forensics are cascaded away by a retention job.**
+    /// **FAILS IF: the sweep's predicate stops holding evidence-bearing tokens out.**
     ///
-    /// `kb_oauth_refresh_replays.token_id` is `ON DELETE CASCADE`, so deleting the token row takes
-    /// the replay record with it — the row `vw_oauth_refresh_replays` shows an operator. This
-    /// asserts on the replay table, not on the token table: a sweep that deleted the token would
-    /// leave the token assertion satisfiable by a NOT EXISTS bug while silently emptying the
-    /// evidence.
+    /// This is the NORMAL path — the `NOT EXISTS` arm keeping the sweep away from a token that
+    /// carries a recorded replay. It is not the guarantee; see
+    /// `recorded_evidence_cannot_be_deleted_even_bypassing_the_predicate` for that.
     #[sqlx::test(migrations = "../../migrations")]
     async fn a_token_with_recorded_evidence_is_never_swept(pool: PgPool) {
         let token_id = seed_token(&pool, "replayed", 400, 400, true).await;
@@ -474,11 +539,11 @@ mod tests {
         .await
         .expect("seed replay evidence");
 
-        let swept = reap_refresh_tokens(&pool).await.expect("sweep");
+        reap_refresh_tokens(&pool).await.expect("sweep");
 
-        assert_eq!(
-            swept, 0,
-            "an evidence-bearing token is out of scope however old it is"
+        assert!(
+            token_hashes(&pool).await.contains(&"replayed".to_string()),
+            "an evidence-bearing token is out of scope however old it is",
         );
         let evidence: i64 =
             sqlx::query_scalar("SELECT count(*) FROM kb_oauth_refresh_replays WHERE token_id = $1")
@@ -490,6 +555,97 @@ mod tests {
             evidence, 1,
             "the replay record must survive the retention sweep"
         );
+    }
+
+    /// **The guarantee the predicate could not give.**
+    ///
+    /// FAILS IF: `kb_oauth_refresh_replays.token_id` is `ON DELETE CASCADE`. Under that FK,
+    /// deleting a token silently destroys any replay recorded against it — the row an operator
+    /// reads through `vw_oauth_refresh_replays` when asking whether a credential was copied.
+    ///
+    /// The sweep's own `NOT EXISTS` arm is *not* what this asserts, and deliberately so. That
+    /// filter races: under READ COMMITTED its subquery is evaluated against the statement's
+    /// snapshot, so a replay recorded while the sweep waits on the row's FK `KEY SHARE` lock is
+    /// cascaded away by a delete that had already decided to proceed. Reproduced before this
+    /// constraint existed. So this deletes DIRECTLY, bypassing the predicate exactly the way the
+    /// race does, and asserts the database itself refuses.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn recorded_evidence_cannot_be_deleted_even_bypassing_the_predicate(pool: PgPool) {
+        let token_id = seed_token(&pool, "replayed", 400, 400, true).await;
+        sqlx::query(
+            "INSERT INTO kb_oauth_refresh_replays \
+                 (token_id, chain_id, client_id, rotated_at, first_age_seconds) \
+             VALUES ($1, gen_random_uuid(), 'test-client', now() - interval '1 hour', 3600)",
+        )
+        .bind(token_id)
+        .execute(&pool)
+        .await
+        .expect("seed replay evidence");
+
+        let err = sqlx::query("DELETE FROM kb_oauth_refresh_tokens WHERE id = $1")
+            .bind(token_id)
+            .execute(&pool)
+            .await
+            .expect_err("the database must refuse to delete a token that carries evidence");
+
+        // 23001 `restrict_violation`, NOT 23503 `foreign_key_violation` — and the distinction is
+        // the assertion, not a detail. RESTRICT raises 23001 and is checked immediately; NO ACTION
+        // raises 23503 and is deferrable, so a future migration relaxing this constraint to NO
+        // ACTION would change the code and fail here. That is the intent: evidence must be
+        // unloseable at the instant of the delete, not at some later commit.
+        assert_eq!(
+            err.as_database_error().and_then(|e| e.code()).as_deref(),
+            Some("23001"),
+            "must be RESTRICT refusing immediately, not some other failure; got {err:?}",
+        );
+    }
+
+    /// FAILS IF: the `RESTRICT` that protects evidence also blocks deleting a **profile**.
+    ///
+    /// `kb_profiles` cascades into `kb_oauth_refresh_tokens`, so a profile delete deletes its
+    /// tokens — and meets that constraint if one carries evidence. It does not, because
+    /// `recordRefreshReplay` takes the replay's `profile_id` from the token row, so an owned
+    /// token's evidence is owned too and cascades beside it. This pins that: it is an invariant
+    /// held by one line of TypeScript and by no constraint, and an erasure path is the obvious
+    /// thing to build next.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn deleting_a_profile_still_works_when_its_token_carries_evidence(pool: PgPool) {
+        let profile_id = Uuid::now_v7();
+        sqlx::query("INSERT INTO kb_profiles (id, handle, display_name) VALUES ($1, $2, 'Probe')")
+            .bind(profile_id)
+            .bind(format!("probe-{profile_id}"))
+            .execute(&pool)
+            .await
+            .expect("seed profile");
+
+        let token_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_oauth_refresh_tokens \
+                 (token_hash, client_id, claims, expires_at, chain_expires_at, profile_id) \
+             VALUES ('owned-h', 'c', '{}'::jsonb, now(), now(), $1) RETURNING id",
+        )
+        .bind(profile_id)
+        .fetch_one(&pool)
+        .await
+        .expect("seed owned token");
+
+        // Attributed exactly the way `recordRefreshReplay` attributes it: the replay inherits the
+        // token's owner. Writing NULL here instead would construct a state the AS cannot produce.
+        sqlx::query(
+            "INSERT INTO kb_oauth_refresh_replays \
+                 (token_id, chain_id, profile_id, client_id, rotated_at, first_age_seconds) \
+             VALUES ($1, gen_random_uuid(), $2, 'c', now(), 1)",
+        )
+        .bind(token_id)
+        .bind(profile_id)
+        .execute(&pool)
+        .await
+        .expect("seed attributed evidence");
+
+        sqlx::query("DELETE FROM kb_profiles WHERE id = $1")
+            .bind(profile_id)
+            .execute(&pool)
+            .await
+            .expect("deleting a profile must not be blocked by its own token's evidence");
     }
 
     /// FAILS IF: `status` leaks into the flow predicate. An abandoned `pending_saml` flow is as
@@ -518,18 +674,18 @@ mod tests {
             .expect("seed flow");
         }
 
-        let swept = reap_oauth_flows(&pool).await.expect("sweep");
+        reap_oauth_flows(&pool).await.expect("sweep");
 
-        assert_eq!(
-            swept, 3,
-            "every flow a day past expiry, regardless of status"
-        );
         let survivors: Vec<String> =
             sqlx::query_scalar("SELECT relay_state FROM kb_oauth_flow ORDER BY relay_state")
                 .fetch_all(&pool)
                 .await
                 .expect("read back flows");
-        assert_eq!(survivors, vec!["recent-consumed".to_string()]);
+        assert_eq!(
+            survivors,
+            vec!["recent-consumed".to_string()],
+            "every flow a day past expiry goes regardless of status; the recent one stays",
+        );
     }
 
     /// FAILS IF: the sweep is not idempotent. A second pass over the same state must delete nothing
@@ -539,10 +695,11 @@ mod tests {
         seed_replay(&pool, "ancient", 100_000).await;
         seed_token(&pool, "ancient-token", 400, 400, true).await;
 
-        let first = reap_expired_as_rows(&pool).await.expect("first sweep");
-        assert_eq!(first.saml_replay, 1);
-        assert_eq!(first.refresh_tokens, 1);
-        assert!(!first.more_pending);
+        reap_expired_as_rows(&pool).await.expect("first sweep");
+        assert!(
+            replay_ids(&pool).await.is_empty() && token_hashes(&pool).await.is_empty(),
+            "the first sweep clears what is past every floor",
+        );
 
         let second = reap_expired_as_rows(&pool).await.expect("second sweep");
         assert_eq!(second, AsReapSummary::default(), "a re-run is a no-op");
