@@ -334,21 +334,26 @@ export async function handleSamlAcs(req: Request, db: NeonClient): Promise<Respo
     // error must never block authentication (design spec §3.8). Its own try/catch so a reconcile
     // failure is NOT misreported as an assertion rejection by the outer catch.
     try {
-      const groups = extractGroups(profile, idp);
       // Signal-missing guard: null means the assertion carried no group signal (groups_attr not
-      // configured, or the attribute absent from THIS assertion). Skip reconcile so a transient
-      // IdP attribute-drop never revokes memberships. A present-but-empty list ([]) IS a signal
-      // ("in no mapped groups now") and DOES reconcile, revoking stale idp rows.
-      if (groups !== null) {
-        await reconcileMemberships({
-          provider: `saml:${idp.idp_key}`,
-          external_user_id: claims.sub,
-          email: claims.email,
-          email_verified: claims.email_verified,
-          idp_key: idp.idp_key,
-          groups,
-        });
-      }
+      // configured, or the attribute absent from THIS assertion), and must never revoke
+      // memberships on a transient IdP attribute-drop. A present-but-empty list ([]) IS a signal
+      // ("in no mapped groups now") and DOES revoke stale idp rows.
+      //
+      // The null is PASSED ON rather than used to skip the call. Skipping made the guard's refusal
+      // indistinguishable from a principal who simply never logged in — no call, no span, nothing
+      // to find — and a de-provisioning that quietly stops happening is the case with no failure
+      // signal to catch it. The API refuses the null exactly as this branch did
+      // (`saml_provisioning_service::reconcile_idp_memberships` takes an `Option` and returns early
+      // on `None`, adjacent to the DELETE it protects) and records that it refused, so the silence
+      // becomes a queryable fact.
+      await reconcileMemberships({
+        provider: `saml:${idp.idp_key}`,
+        external_user_id: claims.sub,
+        email: claims.email,
+        email_verified: claims.email_verified,
+        idp_key: idp.idp_key,
+        groups: extractGroups(profile, idp),
+      });
     } catch (reconcileErr) {
       logger.error(
         { err: reconcileErr instanceof Error ? reconcileErr.message : String(reconcileErr) },

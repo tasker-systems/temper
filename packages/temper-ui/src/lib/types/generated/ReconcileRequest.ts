@@ -29,6 +29,20 @@ email_verified: boolean | null,
  */
 idp_key: string, 
 /**
- * Asserted group values (possibly empty).
+ * The asserted group values, or `None` when the assertion carried **no group signal**.
+ *
+ * Three states, and the middle one is the one a `Vec<String>` could not express: `None` (the
+ * IdP has no `groups_attr` configured, or the attribute was absent from this assertion),
+ * `Some([])` (the provider named this principal's groups and there are none), and
+ * `Some([..])`. The first must never revoke reach; the second must. Mirrors the AS-side
+ * `extractGroups(): string[] | null` (`packages/temper-cloud/src/saml/sp.ts:63-77`) exactly,
+ * so the distinction survives the wire instead of being collapsed at it.
+ *
+ * NOTE on a serde subtlety worth knowing rather than rediscovering: an `Option` field that is
+ * **omitted** deserializes to `None`, so a caller that drops `groups` entirely gets the
+ * no-signal path rather than a rejection. That direction is the safe one — it declines to
+ * revoke — and it is no longer silent, because the no-signal path writes
+ * `kb_saml_principal_reconcile.last_skipped_at`. The AS always sends the key
+ * (`packages/temper-cloud/src/oauth/reconcile.ts`), pinned by the wire-contract test.
  */
-groups: Array<string>, };
+groups: Array<string> | null, };

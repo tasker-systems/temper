@@ -564,7 +564,17 @@ describe("e2e: full mock-IdP SAML login", () => {
     }
   });
 
-  it("skips reconcile when the assertion omits the configured groups attribute", async () => {
+  /**
+   * An assertion with no group signal reaches the API as `groups: null` — it is not swallowed here.
+   *
+   * This test previously asserted the opposite (`expect(fetchMock).not.toHaveBeenCalled()`), and
+   * that assertion was pinning the defect rather than a property: skipping the call locally made a
+   * declined de-provisioning indistinguishable from a principal who never logged in. Nothing
+   * failed, nothing was logged, and no span existed whose absence meant anything. The refusal
+   * itself is unchanged and still correct — the API refuses a null as an input to revocation — but
+   * it now happens somewhere it can be recorded.
+   */
+  it("sends the no-group-signal case to the API as null rather than skipping the call", async () => {
     await sql`UPDATE kb_saml_idp SET groups_attr = 'groups' WHERE idp_key = 'test'`;
     process.env.INTERNAL_RECONCILE_URL = "https://api.internal/internal/saml/reconcile";
     process.env.INTERNAL_RECONCILE_SECRET = "s3cr3t";
@@ -606,7 +616,77 @@ describe("e2e: full mock-IdP SAML login", () => {
       expect(
         new URL(acsRes.headers.get("location") as string).searchParams.get("code"),
       ).toBeTruthy();
-      expect(fetchMock).not.toHaveBeenCalled();
+
+      // The reconcile POST fired, and its body says "no signal" in the one form the Rust side
+      // distinguishes from an empty group set.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe("https://api.internal/internal/saml/reconcile");
+      const body = JSON.parse(init.body as string);
+      expect(body.groups).toBeNull();
+      expect(body.groups).not.toEqual([]);
+      expect(body.idp_key).toBe("test");
+    } finally {
+      vi.unstubAllGlobals();
+      delete process.env.INTERNAL_RECONCILE_URL;
+      delete process.env.INTERNAL_RECONCILE_SECRET;
+    }
+  });
+
+  /**
+   * The new call is on the login path, so it inherits the fail-open rule rather than testing it by
+   * analogy with its sibling.
+   *
+   * "ACS completes login even when reconcile fails" above covers the branch that was already there
+   * — an assertion WITH groups. This covers the branch this change created: a login carrying no
+   * group signal now makes a call that did not exist before, and a principal must still be able to
+   * sign in when it fails. Recording staleness is bookkeeping; authentication is not (design spec
+   * §3.8).
+   */
+  it("completes login when the no-group-signal reconcile call fails (fail-open)", async () => {
+    await sql`UPDATE kb_saml_idp SET groups_attr = 'groups' WHERE idp_key = 'test'`;
+    process.env.INTERNAL_RECONCILE_URL = "https://api.internal/internal/saml/reconcile";
+    process.env.INTERNAL_RECONCILE_SECRET = "s3cr3t";
+    const fetchMock = vi.fn(async () => new Response(null, { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const verifier = `e2e-nosigfail-verifier-${"a".repeat(50)}`;
+      const challenge = createHash("sha256").update(verifier).digest("base64url");
+      const authRes = await handleAuthorize(
+        new Request(
+          "https://as.example.com/oauth/authorize?response_type=code&client_id=cli&redirect_uri=" +
+            encodeURIComponent(REDIRECT_URI) +
+            "&code_challenge=" +
+            challenge +
+            "&code_challenge_method=S256&state=nosigfail-state",
+        ),
+        db,
+      );
+      const rs = new URLSearchParams(
+        new URL(authRes.headers.get("location") as string, "https://as.example.com").search,
+      ).get("rs");
+      // Again no multiValuedAttributes → no 'groups' attribute on the assertion.
+      const { samlResponseB64 } = makeSignedSamlResponse({
+        spEntityId: SP_ENTITY_ID,
+        acsUrl: ACS_URL,
+        nameId: "nosigfail-user-1",
+        attributes: { email: "nosigfail@example.com", uid: "nosigfail-user-1" },
+        idpKeyPem,
+        idpCertPem,
+      });
+      const acsRes = await handleSamlAcs(
+        new Request("https://sp.example.com/saml/acs", {
+          method: "POST",
+          body: new URLSearchParams({ SAMLResponse: samlResponseB64, RelayState: rs as string }),
+        }),
+        db,
+      );
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(acsRes.status).toBe(302);
+      expect(
+        new URL(acsRes.headers.get("location") as string).searchParams.get("code"),
+      ).toBeTruthy();
     } finally {
       vi.unstubAllGlobals();
       delete process.env.INTERNAL_RECONCILE_URL;
