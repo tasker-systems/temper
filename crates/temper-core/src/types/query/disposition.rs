@@ -212,6 +212,25 @@ pub enum RefusalReason {
     // breaking change to a published 400 body a week later.
     /// The composition declares no stages, so it asks nothing.
     NoStages,
+    /// The composition declares more stages than the contract admits.
+    ///
+    /// `[added — 2026-08-26]` The counterpart to [`RefusalReason::NoStages`]: a plan has a floor
+    /// and now a ceiling, and the ceiling is
+    /// [`Composition::stages`](super::composition::Composition::stages)' published `max_items`.
+    /// Every declared stage is executed whether or not `returns` names it, so the stage count is
+    /// what a composition costs — the bound makes that cost legible up front instead of a caller
+    /// discovering it in a latency number.
+    ///
+    /// **The repair is decomposition, not persuasion.** A question needing more stages than this
+    /// is more than one question: ask them as separate compositions and combine the answers, which
+    /// is also what makes each one's trace readable. The ceiling is far above anything a
+    /// hand-authored plan reaches; a plan meeting it is usually generated in a loop.
+    ///
+    /// Raised in the SHAPE pass, so it costs nothing to receive — refused before any embedding or
+    /// database contact, on every door. That placement is only legal because the number is
+    /// published: a client refuses what the CONTRACT forbids, never what one deployment chose, and
+    /// widening it is a wire-contract change visible in `openapi.json`.
+    TooManyStages,
     /// The composition returns no stages, so it answers nothing.
     NoReturns,
     /// Two stages share a name.
@@ -427,6 +446,7 @@ mod tests {
         // two conventions. Recorded in review and deferred to the door, which is now.
         for reason in [
             RefusalReason::NoStages,
+            RefusalReason::TooManyStages,
             RefusalReason::NoReturns,
             RefusalReason::DuplicateStageName,
             RefusalReason::CombinatorArity,

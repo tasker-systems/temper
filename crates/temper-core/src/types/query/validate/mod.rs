@@ -365,7 +365,7 @@ mod tests {
     use crate::types::graph::EdgeKind;
     use crate::types::ids::CogmapId;
     use crate::types::query::composition::{
-        CombineNode, CombineOp, Composition, Intention, OutcomeDeclaration,
+        CombineNode, CombineOp, Composition, Intention, OutcomeDeclaration, MAX_STAGES,
     };
     use crate::types::query::envelope::ActInvocation;
     use crate::types::query::filter::{
@@ -1101,6 +1101,85 @@ mod tests {
             errs.iter().any(|e| e.reason == RefusalReason::NoStages),
             "got: {errs:?}"
         );
+    }
+
+    /// The ceiling the floor never had — and the property that makes it worth having is that it
+    /// costs nothing to raise: no declaration is read, no order is computed, and through
+    /// `query_read::prepare` no embedding is paid for.
+    #[test]
+    fn a_composition_above_the_stage_cap_is_refused() {
+        let over: Vec<StageNode> = (0..=MAX_STAGES)
+            .map(|i| {
+                act(
+                    &format!("s{i}"),
+                    ActName::FindExact,
+                    Some(caller_ids(IdKind::Resource)),
+                )
+            })
+            .collect();
+        let c = plan_with_intention(over, vec!["s0"]);
+        let errs = validate(&c).unwrap_err();
+
+        // Composition-level, like no-stages — the excess belongs to no single stage.
+        assert!(
+            errs.iter()
+                .any(|e| e.reason == RefusalReason::TooManyStages && e.stage.is_none()),
+            "got: {errs:?}"
+        );
+
+        // **The refusal list does not grow with the plan.** That is the bound one level up: an
+        // over-cap plan must not answer with an over-cap 400 body, which is the same unbounded
+        // response this cap exists to close. The shape pass returns here rather than walking on.
+        assert_eq!(
+            errs.len(),
+            1,
+            "an over-cap plan answers with the cap alone; got: {errs:?}"
+        );
+    }
+
+    /// Exactly at the cap is admitted. The bound is `>`, not `>=`, and a test that only ever sends
+    /// an over-cap plan cannot tell those apart — it passes against a cap off by one in the
+    /// direction that refuses work the contract publishes as legal.
+    #[test]
+    fn a_composition_exactly_at_the_stage_cap_is_not_refused_for_its_size() {
+        let at: Vec<StageNode> = (0..MAX_STAGES)
+            .map(|i| {
+                act(
+                    &format!("s{i}"),
+                    ActName::FindExact,
+                    Some(caller_ids(IdKind::Resource)),
+                )
+            })
+            .collect();
+        let c = plan_with_intention(at, vec!["s0"]);
+        let size_refusals = validate(&c)
+            .err()
+            .into_iter()
+            .flatten()
+            .filter(|e| e.reason == RefusalReason::TooManyStages)
+            .count();
+        assert_eq!(
+            size_refusals, 0,
+            "MAX_STAGES stages is at the cap, not over"
+        );
+    }
+
+    /// The cap the shape pass enforces and the cap the contract publishes are one number.
+    ///
+    /// `max_items` is what makes raising the refusal in the shape pass legal at all — a client may
+    /// refuse what the CONTRACT forbids, never what one deployment chose. Two literals could drift
+    /// silently: the enforced cap would tighten while `openapi.json` kept promising the old one, and
+    /// the refusal would stop being a contract fact without a single test going red.
+    #[cfg(feature = "web-api")]
+    #[test]
+    fn the_published_ceiling_is_the_enforced_one() {
+        use utoipa::PartialSchema;
+        let schema = serde_json::to_value(Composition::schema()).expect("Composition has a schema");
+        let published = schema
+            .pointer("/properties/stages/maxItems")
+            .and_then(serde_json::Value::as_u64)
+            .expect("`Composition::stages` publishes a `maxItems`");
+        assert_eq!(published as usize, MAX_STAGES);
     }
 
     /// A composition with no returns answers nothing — the contract's `returns: minItems 1`,

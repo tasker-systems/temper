@@ -38,7 +38,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::types::query::act::ActName;
-use crate::types::query::composition::{Composition, StageNode};
+use crate::types::query::composition::{Composition, StageNode, MAX_STAGES};
 use crate::types::query::disposition::RefusalReason;
 use crate::types::query::envelope::ActInvocation;
 use crate::types::query::filter::PropertyOp;
@@ -113,6 +113,38 @@ pub(super) fn validate_shape_indexed(
             RefusalReason::NoStages,
             "a composition must declare at least one stage; this one asks nothing",
         ));
+    }
+
+    // **And the ceiling the floor never had.** `[added — 2026-08-26]` Composition-level like
+    // `no-stages`, and raised BEFORE anything else so an oversized plan is not first walked,
+    // indexed and topologically sorted in order to be told it is too large.
+    //
+    // **This is the pass that costs nothing, and that is the point of raising it here.**
+    // `query_read::prepare` runs the shape pass as the gate before `embed_missing_intentions`, so
+    // a plan refused here pays no ONNX and never reaches a connection. It covers the HTTP API, MCP
+    // `run_query` and `temper query --check` from one site, because all three route through
+    // `validate`.
+    //
+    // Legal in shape only because [`MAX_STAGES`] is published as `max_items` on the field — see
+    // the comment there. Without that, a server that raised its cap would leave every stale
+    // `--check` refusing plans the server runs, which is the one thing this module may not do.
+    //
+    // **The early return is the one place this module answers with the first refusal rather than
+    // every one**, and it is the same bound one level up: the remaining checks are per-stage, so
+    // an over-cap plan produces an over-cap REFUSAL LIST, and a 400 body grows without limit in
+    // exactly the direction being closed. Returning `None` for the order is not a special case
+    // either — it is what a cycle already returns, so `validate` handles this plan on the path it
+    // already has: `validate_returns` still runs, the per-stage half does not.
+    if c.stages.len() > MAX_STAGES {
+        errs.push(refusal(
+            None,
+            RefusalReason::TooManyStages,
+            format!(
+                "a composition may declare at most {MAX_STAGES} stages; this one declares {}",
+                c.stages.len()
+            ),
+        ));
+        return (errs, None);
     }
 
     // **A composition with no returns answers nothing.** `[added — 2026-08-10]` The contract

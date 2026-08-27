@@ -3169,6 +3169,9 @@ export interface components {
              *     prev-else-fallback, and no single execution order (a DAG has none). Beat B's topological
              *     sort derives the order; there is deliberately no `act_sequence` method, which would be a
              *     false claim that a DAG has one sequence.
+             *
+             *     At most [`MAX_STAGES`] of them, refused as
+             *     [`super::disposition::RefusalReason::TooManyStages`].
              */
             stages: components["schemas"]["StageNode"][];
         };
@@ -5410,7 +5413,7 @@ export interface components {
          *     change. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,
          *     matched exhaustively.
          */
-        RefusalReason: "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | string;
+        RefusalReason: "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | string;
         /**
          * @description One region a `survey` stage matched, and the score it matched at.
          *
