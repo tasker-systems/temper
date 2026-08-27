@@ -11,8 +11,13 @@
 # That is a stricter skip than its own generator needs, and the reason it is tolerable
 # there is that `test-ruby` pulls the image anyway. This gate runs whichever path the
 # host HAS — Docker or a JVM — and skips only when BOTH are missing, which is the
-# weakest form that still catches the artifact's failure mode. GitHub runners ship a
-# JDK, so in CI it never skips; the `test-python` job is the backstop either way.
+# weakest form that still catches the artifact's failure mode.
+#
+# On a GitHub runner that resolves to the DOCKER path (the runner has a daemon, and the
+# generator script prefers it), so in CI this is the same container run the gem's gate
+# does and it never skips. The JVM fallback is what the weaker skip rule actually buys:
+# a developer machine with no Docker daemon still gets a real gate here, where the gem's
+# equivalent prints SKIP.
 #
 # Usage: bash .github/scripts/check-temper-py-drift.sh
 

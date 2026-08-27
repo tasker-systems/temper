@@ -593,7 +593,8 @@ description = "Fail if the committed temper-py package drifts from openapi.json 
 # The local mirror of the test-python CI job's drift step, and the third sibling of
 # openapi-rb-drift / openapi-ts-drift. It shares the gem's pinned generator but not the
 # gem's skip rule: it runs on whichever of Docker or a JVM the host has, and skips only
-# when both are absent. GitHub runners ship a JDK, so in CI it never skips.
+# when both are absent — which on a GitHub runner resolves to the Docker path the gem's
+# gate uses, and on a Docker-less dev machine to the JVM, where the gem's gate skips.
 script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-temper-py-drift.sh"]
 
 [tasks.openapi-check]

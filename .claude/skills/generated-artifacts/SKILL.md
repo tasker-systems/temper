@@ -36,6 +36,11 @@ failure mode:**
 | `openapi-ts-drift` | never — `openapi-typescript` needs only Node | `test-agents-ts` CI job |
 | `openapi-py-drift` | only when **both** Docker and a JVM are absent | `test-python` CI job |
 
+The Python gate's weaker skip rule is not about CI — on a GitHub runner it resolves to
+the same Docker path the gem's gate takes. What it buys is a **developer machine with no
+Docker daemon**: there the JVM fallback keeps `cargo make check` a real gate, where
+`openapi-rb-drift` prints SKIP.
+
 Never assume that because one SDK's gate is best-effort, the others are too.
 
 Each generator's pin + params live in exactly one place, shared by every caller:

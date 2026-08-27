@@ -117,9 +117,13 @@ jobs:
     uses: ./.github/workflows/test-ruby.yml
 
   # Path-scoped: runs only for clients/temper-py/**, openapi.json, and its own
-  # workflow + gate scripts. Inert to cargo and to bun, exactly as the gem is. Unlike
-  # test-ruby it pulls no container image — the pinned generator runs from the JDK the
-  # runner already has — so its scoping buys runner minutes rather than a 1GB pull.
+  # workflow + gate scripts. Inert to cargo and to bun, exactly as the gem is, and
+  # scoped for the same reason: nothing outside that set can move its outcome.
+  #
+  # `[corrected — measured on the first run]` This claimed the job pulls no container
+  # image because the generator runs from the runner's JDK. It does not: the runner has
+  # a Docker daemon and generate-temper-py.sh prefers it, so this job takes the same
+  # container path test-ruby does. See the note in test-python.yml.
   test-python:
     needs: detect-scope
     if: needs.detect-scope.outputs.run-test-python == 'true'

@@ -63,9 +63,16 @@ jobs:
       # `detect-ci-scope.sh` runs this job for an openapi.json change precisely so this
       # step fires on the PR that would break it.
       #
-      # No `docker` here and none needed: ubuntu-latest ships a JDK, so the pinned
-      # generator runs from the jar. That is why this job does NOT pay the ~1GB image
-      # pull that makes test-ruby expensive.
+      # `[corrected — measured on the first run]` This said the gate runs from the
+      # runner's JDK and pays no image pull. It does neither: ubuntu-latest HAS a Docker
+      # daemon, and generate-temper-py.sh prefers Docker, so in CI this takes the same
+      # container path the gem's `rake drift` does — the `/local/...` paths in the run
+      # log are the tell. That is the right outcome (same runner path as the gem, so the
+      # same bytes), but it is not what the comment claimed.
+      #
+      # The JVM fallback earns its keep off the runner: it is what lets
+      # `cargo make openapi-py-drift` be a real gate on a developer machine with no
+      # Docker daemon, where the gem's equivalent skips.
       - name: Codegen drift gate
         run: bash ../../.github/scripts/check-temper-py-drift.sh
 
