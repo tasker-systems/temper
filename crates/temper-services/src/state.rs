@@ -140,6 +140,23 @@ pub struct JwksKeyStore {
     /// single-flight — concurrent misses queue here, and all but the first find a recent stamp and
     /// return without fetching.
     unknown_kid_gate: tokio::sync::Mutex<Option<Instant>>,
+    /// Collapses refreshes triggered by an absent or expired cache, and carries the outcome of the
+    /// last such attempt.
+    ///
+    /// Separate from `unknown_kid_gate` because the two need **opposite** behaviour when contended,
+    /// and merging them would silently give one of them the other's. On an unknown `kid` the cache
+    /// still holds usable keys, so a waiter gains nothing and returns at once. Here the cache holds
+    /// nothing this store may serve, so a waiter must take the in-flight fetch's result — returning
+    /// early would either fail a request that was about to succeed, or serve a key the TTL has
+    /// already retired.
+    stale_refresh_gate: tokio::sync::Mutex<Option<(Instant, Result<(), String>)>>,
+    /// How long a failed refresh answers for the requests behind it.
+    ///
+    /// Without this, single-flight alone turns a concurrent herd into a serial one against a
+    /// failing endpoint: each waiter takes the lock, finds the cache still stale, and starts its
+    /// own fetch, so the queue costs one full timeout per request. An endpoint that failed a moment
+    /// ago has not recovered since, and saying so immediately is both truer and cheaper.
+    failed_refresh_backoff: Duration,
     /// Floor on how often an unresolvable `kid` may trigger a fetch. `kid` is attacker-supplied, so
     /// without a floor anyone could turn one request into one JWKS fetch, indefinitely.
     ///
@@ -224,6 +241,8 @@ impl JwksKeyStore {
             client: jwks_http_client(),
             cache: RwLock::new(None),
             ttl: Duration::from_secs(3600),
+            stale_refresh_gate: tokio::sync::Mutex::new(None),
+            failed_refresh_backoff: Duration::from_secs(5),
             unknown_kid_gate: tokio::sync::Mutex::new(None),
             unknown_kid_refresh_interval: Duration::from_secs(60),
         }
@@ -250,6 +269,8 @@ impl JwksKeyStore {
             cache: RwLock::new(Some(cached)),
             // Very long TTL; the pre-loaded cache will never be refreshed.
             ttl: Duration::from_secs(u32::MAX as u64),
+            stale_refresh_gate: tokio::sync::Mutex::new(None),
+            failed_refresh_backoff: Duration::from_secs(5),
             unknown_kid_gate: tokio::sync::Mutex::new(None),
             unknown_kid_refresh_interval: Duration::from_secs(60),
         }
@@ -297,8 +318,12 @@ impl JwksKeyStore {
 
         match next {
             Next::Serve(vk) => return Ok(vk),
-            // A stale cache still refreshes exactly as it always did, error and all.
-            Next::Stale => self.refresh().await.map_err(KeyLookupError::Unavailable)?,
+            // Nothing in the cache may be served, so this must refresh before it can answer, and a
+            // failure is the endpoint's rather than the token's.
+            Next::Stale => self
+                .refresh_stale()
+                .await
+                .map_err(KeyLookupError::Unavailable)?,
             Next::UnknownKid => {
                 // Best-effort. The cache still holds usable keys, so a JWKS blip must not be
                 // reported as a fetch failure for a token whose `kid` may simply not exist.
@@ -323,6 +348,42 @@ impl JwksKeyStore {
                 // is the endpoint's problem rather than this token's.
                 None => KeyLookupError::Unavailable("JWKS holds no supported key".to_string()),
             })
+    }
+
+    /// Refresh because the cache is absent or its TTL has lapsed.
+    ///
+    /// True single-flight: concurrent requests collapse onto **one** fetch and take its result,
+    /// rather than each starting its own. Every request whose cache is stale reaches this — a cold
+    /// process answers its first burst here, and so does every instance of a rolling deploy — so
+    /// the fan-out is one outbound fetch per inbound request unless something collapses it.
+    ///
+    /// Waiting on the lock is correct here, unlike in [`Self::refresh_for_unknown_kid`]: a waiter
+    /// has nothing it could serve instead, and one shared fetch is strictly better for it than its
+    /// own. The wait is bounded by the client's timeout, and the fast path — a fresh cache that
+    /// answers the token — never reaches this function at all.
+    async fn refresh_stale(&self) -> Result<(), String> {
+        let mut gate = self.stale_refresh_gate.lock().await;
+
+        // A flight that finished while we waited for the lock has already done this work.
+        {
+            let guard = self.cache.read().await;
+            if let Some(cached) = guard.as_ref() {
+                if cached.fetched_at.elapsed() < self.ttl {
+                    return Ok(());
+                }
+            }
+        }
+
+        // ...or it may have just failed, in which case its answer is ours too.
+        if let Some((at, Err(why))) = gate.as_ref() {
+            if at.elapsed() < self.failed_refresh_backoff {
+                return Err(why.clone());
+            }
+        }
+
+        let result = self.refresh().await;
+        *gate = Some((Instant::now(), result.clone()));
+        result
     }
 
     /// Refresh because a token named a `kid` the cache could not resolve.
@@ -766,6 +827,124 @@ mod tests {
         assert!(
             matches!(&err, KeyLookupError::UnknownKid(k) if k == "attacker-chosen"),
             "the refusal names the kid it could not resolve: {err:?}"
+        );
+    }
+
+    /// Serve the JWKS with a delay, so a concurrent test is actually concurrent: without one the
+    /// first fetch can finish before the others reach the gate, and the test would pass on a store
+    /// that collapses nothing.
+    async fn slow_jwks_server(
+        keys: Vec<serde_json::Value>,
+        delay: Duration,
+    ) -> wiremock::MockServer {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, ResponseTemplate};
+        let server = wiremock::MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/.well-known/jwks.json"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "keys": keys }))
+                    .set_delay(delay),
+            )
+            .mount(&server)
+            .await;
+        server
+    }
+
+    /// Every request whose cache is cold or expired must fetch before it can answer anything, so
+    /// without single-flight the fan-out is one outbound fetch per inbound request — at process
+    /// start, on every instance of a rolling deploy, and at each TTL boundary.
+    #[tokio::test]
+    async fn a_cold_cache_under_load_fetches_the_jwks_once() {
+        let server = slow_jwks_server(
+            vec![ed25519_jwk("key-1", TEST_PUBLIC_PEM)],
+            Duration::from_millis(150),
+        )
+        .await;
+        let store = Arc::new(JwksKeyStore::new(format!(
+            "{}/.well-known/jwks.json",
+            server.uri()
+        )));
+
+        let token = sign_with(Some("key-1"), TEST_PRIVATE_PEM);
+        let mut handles = Vec::new();
+        for _ in 0..32 {
+            let store = Arc::clone(&store);
+            let token = token.clone();
+            handles.push(tokio::spawn(async move {
+                store.get_decoding_key_for_token(&token).await.is_ok()
+            }));
+        }
+        for h in handles {
+            // Every waiter takes the shared fetch's RESULT — collapsing must not cost anyone their
+            // answer, which is what separates this from the unknown-kid gate's early return.
+            assert!(
+                h.await.expect("task"),
+                "a collapsed request still gets its key"
+            );
+        }
+
+        let fetches = server.received_requests().await.expect("recording").len();
+        assert_eq!(
+            fetches, 1,
+            "32 concurrent cold-cache requests must buy one fetch"
+        );
+    }
+
+    /// The failure direction. Single-flight alone would turn the herd serial rather than removing
+    /// it: each waiter finds the cache still stale and starts its own fetch, so a failing endpoint
+    /// costs one full timeout per queued request.
+    #[tokio::test]
+    async fn a_failing_jwks_answers_the_whole_queue_from_one_attempt() {
+        // A server with no mount answers 404, so `refresh` fails.
+        let server = wiremock::MockServer::start().await;
+        let store = Arc::new(JwksKeyStore::new(format!(
+            "{}/.well-known/jwks.json",
+            server.uri()
+        )));
+
+        let token = sign_with(Some("key-1"), TEST_PRIVATE_PEM);
+        for _ in 0..8 {
+            let err = store
+                .get_decoding_key_for_token(&token)
+                .await
+                .expect_err("nothing is published");
+            // The refusal stays the endpoint's, never the token's — a caller must not be told its
+            // token is bad because the JWKS is down.
+            assert!(matches!(err, KeyLookupError::Unavailable(_)), "{err:?}");
+        }
+
+        let fetches = server.received_requests().await.expect("recording").len();
+        assert_eq!(
+            fetches, 1,
+            "a recent failure answers for the requests behind it"
+        );
+    }
+
+    /// Collapsing must never be achieved by serving what the TTL retired. A key that has expired is
+    /// refetched, and a document that changed underneath is picked up.
+    #[tokio::test]
+    async fn an_expired_cache_is_refetched_rather_than_served() {
+        let server = jwks_server(vec![ed25519_jwk("key-1", TEST_PUBLIC_PEM)]).await;
+        let mut store = JwksKeyStore::new(format!("{}/.well-known/jwks.json", server.uri()));
+        // A TTL of zero makes every read stale, which is the condition under test.
+        store.ttl = Duration::ZERO;
+
+        let token = sign_with(Some("key-1"), TEST_PRIVATE_PEM);
+        store
+            .get_decoding_key_for_token(&token)
+            .await
+            .expect("first read fetches");
+        store
+            .get_decoding_key_for_token(&token)
+            .await
+            .expect("second read refetches");
+
+        assert_eq!(
+            server.received_requests().await.expect("recording").len(),
+            2,
+            "an expired cache must not be served as if it were fresh"
         );
     }
 
