@@ -1,6 +1,6 @@
 ---
 name: generated-artifacts
-description: Regenerating the router-derived artifacts (openapi.json, the temper-rb gem, temper-ts's schema.ts), the ts-rs TypeScript type trees, and the committed agent-skills/ projection. Use when a response DTO, route, ts-rs-derived Rust type, or shared skill template changes, or when `cargo make check` fails on openapi-check, openapi-rb-drift, openapi-ts-drift, ts-rs-drift, or skills-drift.
+description: Regenerating the router-derived artifacts (openapi.json and all three SDKs — the temper-rb gem, temper-ts's schema.ts, temper-py's generated package), the ts-rs TypeScript type trees, and the committed agent-skills/ projection. Use when a response DTO, route, ts-rs-derived Rust type, or shared skill template changes, or when `cargo make check` fails on openapi-check, openapi-rb-drift, openapi-ts-drift, openapi-py-drift, ts-rs-drift, or skills-drift.
 ---
 
 # Generated artifacts: OpenAPI SDKs, ts-rs type trees, and the agent-skills projection
@@ -9,46 +9,75 @@ Three independent codegen pipelines hang off the Rust source. All are gated by
 `cargo make check`, and all fail in ways that read as "you forgot to regenerate"
 when in fact you forgot to `git add` — or, for two of them, to `git commit`.
 
-## OpenAPI + the temper-rb gem + temper-ts's `schema.ts` are all products of the router
+## OpenAPI + all three SDKs are products of the router
 
-A new/changed response DTO (a new field, a renamed type) restales **three** committed
+A new/changed response DTO (a new field, a renamed type) restales **four** committed
 artifacts: `openapi.json`, the generated Ruby gem under
-`clients/temper-rb/lib/temper/generated`, and `clients/temper-ts/src/generated/schema.ts`
+`clients/temper-rb/lib/temper/generated`, `clients/temper-ts/src/generated/schema.ts`
 (emitted by `openapi-typescript`, pinned exactly — no caret — in temper-ts's
-devDependencies).
+devDependencies), and `clients/temper-py/temper/generated` (emitted by the SAME pinned
+`openapi-generator` the gem uses).
 
 ```bash
-cargo make openapi   # regenerates all three in one step
+cargo make openapi   # regenerates all four in one step
 ```
 
-Gem regen needs Docker; the TS schema needs only Node.
+Gem regen needs Docker; the TS schema needs only Node; the Python package runs on Docker
+**or** a JVM.
 
-`cargo make check` gates all three: `openapi-check` (spec), `openapi-rb-drift` (gem —
-Docker-based, **skips** without Docker; the `test-ruby` CI job is the never-skipping
-backstop), and `openapi-ts-drift` (schema — and unlike the gem's gate, this one **never
-skips**: `openapi-typescript` needs only Node, so there is no environment in which
-`cargo make check` would rather guess than check). Never assume that because one SDK's
-gate is best-effort, the other is too — they have different skip semantics for different
-reasons, and `openapi-ts-drift` is the strict one.
+`cargo make check` gates all four: `openapi-check` (spec), `openapi-rb-drift`,
+`openapi-ts-drift` and `openapi-py-drift`. **The three SDK gates have three different skip
+rules, and that is deliberate — each is the weakest form that still catches its artifact's
+failure mode:**
 
-The generator pin + params for the gem live in one place —
-`.github/scripts/generate-temper-rb.sh` — shared by cargo-make and the gem's Rakefile;
-the TS equivalent is `.github/scripts/generate-temper-ts.sh`, shared by
-`cargo make openapi-ts`, `check-temper-ts-drift.sh`, and the `test-agents-ts` CI job's
-drift step. `detect-ci-scope.sh` carries `^openapi\.json$` in **both** `test-ruby`'s and
-`test-agents-ts`'s trigger sets, for the identical reason: a contract change that does not
-run the job whose gate catches the stale artifact is a gate that runs nowhere.
-(`test-agents-ts` got this later than `test-ruby` did — the same rot the gem discovered in
-`tests/contracts/`.)
+| gate | skips when | never-skipping backstop |
+|---|---|---|
+| `openapi-rb-drift` | Docker is absent — even on a host that could run the pinned jar, because `test-ruby` pulls the image anyway | `test-ruby` CI job |
+| `openapi-ts-drift` | never — `openapi-typescript` needs only Node | `test-agents-ts` CI job |
+| `openapi-py-drift` | only when **both** Docker and a JVM are absent | `test-python` CI job |
+
+Never assume that because one SDK's gate is best-effort, the others are too.
+
+Each generator's pin + params live in exactly one place, shared by every caller:
+
+| SDK | one definition | callers |
+|---|---|---|
+| temper-rb | `.github/scripts/generate-temper-rb.sh` | `cargo make openapi{,-rb}`, `check-temper-rb-drift.sh`, the gem's Rakefile |
+| temper-ts | `.github/scripts/generate-temper-ts.sh` | `cargo make openapi{,-ts}`, `check-temper-ts-drift.sh`, `npm run generate`, the `test-agents-ts` job |
+| temper-py | `.github/scripts/generate-temper-py.sh` | `cargo make openapi{,-py}`, `check-temper-py-drift.sh`, the `test-python` job |
+
+`detect-ci-scope.sh` carries `^openapi\.json$` in **all three** SDK jobs' trigger sets, for
+the identical reason: a contract change that does not run the job whose gate catches the
+stale artifact is a gate that runs nowhere. (`test-agents-ts` got this later than
+`test-ruby` did — the same rot the gem discovered in `tests/contracts/`.) The end-to-end
+wiring — detector output → `ci.yml` gate → `ci-success`'s `check_job` → `needs` — is itself
+asserted, per job and per link, by `test-detect-ci-scope.sh`: `ci-success` runs
+`if: always()`, so a job in `needs` that nothing passes to `check_job` is a job whose red
+nobody reads.
+
+### The gem's gate is blind to an ORPHAN, and the Python one is not
+
+`git diff` over the generated directory sees a file that CHANGED and a file that was
+ADDED. It cannot see a file the generator has **stopped writing**: the orphan just sits
+there, tracked, importable, and looking current. The gem has two such files today —
+`lib/temper/generated/api/reassign_api.rb` (a `Reassign` tag the contract no longer
+carries) and `lib/temper/generated/models/artifact_count_row.rb` — and
+`cargo make openapi-rb-drift` is green with both in the tree.
+
+`check-temper-py-drift.sh` closes this by diffing the generator's own manifest
+(`.openapi-generator/FILES`, where a retired file shows up as a deletion) and then
+comparing that list against `git ls-files`. If you touch the gem's gate, this is the hole
+worth porting across.
 
 ### The drift gates compare against git, not against a fresh build — and they do not all want the same thing
 
-Both `check-temper-rb-drift.sh` and `check-temper-ts-drift.sh` regenerate their artifact
-and then run `git diff --exit-code` over it. So an artifact you have *just correctly
-regenerated* still fails `cargo make check` while it sits unstaged — the error reads
-"generated core/schema is out of date with openapi.json", which sounds like you forgot to
-run `cargo make openapi` when in fact you need to `git add` its output. Stage the
-regenerated files, then re-run `check`.
+All three of `check-temper-rb-drift.sh`, `check-temper-ts-drift.sh` and
+`check-temper-py-drift.sh` regenerate their artifact and then run `git diff --exit-code`
+over it. So an artifact you have *just correctly regenerated* still fails
+`cargo make check` while it sits unstaged — the error reads "generated core/schema/package
+is out of date with openapi.json", which sounds like you forgot to run `cargo make openapi`
+when in fact you need to `git add` its output. Stage the regenerated files, then re-run
+`check`.
 
 **`check-ts-rs-drift.sh` needs a `git commit`, not just a `git add`** — do not generalize
 the paragraph above onto it. `git diff --exit-code` compares the worktree against the

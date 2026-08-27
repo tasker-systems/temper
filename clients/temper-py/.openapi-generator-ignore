@@ -1,0 +1,35 @@
+# The generator's ONLY output is temper/generated/** (plus the
+# .openapi-generator/ manifest).
+#
+# Everything below is hand-written and must never be overwritten. The skin lives
+# OUTSIDE the generated package, so this file is defense-in-depth, not the only
+# thing standing between `generate-temper-py.sh` and your code.
+#
+# `temper/__init__.py` is the ONE path where the two trees touch. The generator
+# emits an empty namespace __init__ there because `packageName=temper.generated`
+# makes `temper` its parent package; ours is the SDK's public surface. Without
+# this line every regeneration would silently empty the client's exports — the
+# gem has no equivalent hazard, because Ruby's generated tree is reached through
+# a `generated.rb` aggregator rather than through a shared parent directory.
+temper/__init__.py
+
+# Packaging, tooling and prose: all hand-written, none of it generated.
+pyproject.toml
+setup.py
+setup.cfg
+requirements.txt
+test-requirements.txt
+tox.ini
+README.md
+git_push.sh
+.gitignore
+.gitlab-ci.yml
+.travis.yml
+.github/**
+
+# The generator's own pytest scaffolding (`test/`) and per-model markdown
+# (`docs/`) are ~1200 files of no-op stubs. The gem drops both for the same
+# reason: hand-written tests live in `tests/`, and the contract's own
+# documentation is openapi.json.
+test/**
+docs/**

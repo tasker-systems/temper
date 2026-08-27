@@ -12,10 +12,12 @@
     "Consumed by:",
     "  - clients/temper-rb/spec/temper/credentials_spec.rb  (the client emits this shape)",
     "  - clients/temper-ts/tests/contract.test.ts           (the client emits this shape)",
+    "  - clients/temper-py/tests/test_contract.py           (the client emits this shape)",
     "  - clients/temper-ts/src/testing/mock-issuer.ts       (the mock issuer IS this shape)",
     "  - packages/temper-cloud/tests/integration/oauth/client-credentials.test.ts  (the server accepts it)",
     "",
-    "Adding a client (temper-py) means pinning it against this file too."
+    "temper-py was the third, and it was pinned here on the day it landed. Adding a fourth client",
+    "means pinning it against this file too."
   ],
 
   "content_type": "application/x-www-form-urlencoded",

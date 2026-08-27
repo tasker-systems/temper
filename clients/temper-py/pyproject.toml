@@ -1,0 +1,127 @@
+# Hand-written, and listed in .openapi-generator-ignore so it stays that way. The
+# generator emits a pyproject of its own (Poetry-flavoured, naming the package
+# `temper.generated`); ours describes the SDK, whose distribution is `temper-py`
+# and whose import package is `temper`.
+[project]
+name = "temper-py"
+dynamic = ["version"]
+description = "Python SDK for the Temper knowledge-base API"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Pete Taylor", email = "pete.jc.taylor@hey.com" }]
+keywords = ["temper", "knowledge-base", "openapi", "sdk"]
+
+# ABOVE the generated package's own >= 3.9, deliberately. 3.9 reached end of life in
+# October 2025, so promising it would be promising a version that receives no security
+# fixes — and the dev toolchain has already moved: mypy 2.x requires >= 3.10, so a 3.9
+# floor makes the type-check ungettable rather than merely generous. The dev pin in
+# .python-version is newer again, exactly as the gem's >= 3.1 floor sits under a 3.4.10
+# pin: a floor is a promise to callers, a pin is a statement about this checkout.
+requires-python = ">=3.10"
+
+# Every one of these is imported by the GENERATED tree, not by the skin — the
+# floors are the generator's own (see the pyproject it emits and we ignore).
+# urllib3 is the `--library=urllib3` transport; the skin reuses it to mint M2M
+# tokens rather than pulling in a second HTTP client for one POST.
+dependencies = [
+  "urllib3>=2.1,<3.0",
+  "python-dateutil>=2.8.2",
+  "pydantic>=2.11",
+  "typing-extensions>=4.7.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/tasker-systems/temper"
+Source = "https://github.com/tasker-systems/temper/tree/main/clients/temper-py"
+Issues = "https://github.com/tasker-systems/temper/issues"
+
+# ruff and mypy are pinned EXACTLY — no caret, no floor — for the reason temper-ts
+# pins openapi-typescript exactly: a linter that moves on its own redden CI on a day
+# when nothing in this repo changed, and the fix is then somebody else's release notes
+# rather than the diff under review. Bump them deliberately, in their own commit.
+# pytest and the stubs get floors: neither can fail a build by gaining an opinion.
+#
+# There is no committed lockfile, matching the gem (whose Gemfile.lock is gitignored)
+# and the library convention it follows: a library's job is to state what it works
+# with, not to freeze what its consumers resolve. The two tools that CAN break a build
+# on their own schedule are pinned above instead, which is the part a lockfile would
+# have been buying.
+[dependency-groups]
+dev = [
+  "pytest>=8.0",
+  "mypy==2.3.1",
+  "ruff==0.16.5",
+  "types-python-dateutil>=2.8.19.14",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# Read, not imported. `temper/version.py` must stand alone for the same reason the
+# gem's `lib/temper/version.rb` must: a build that imported `temper` to learn its
+# version would drag in pydantic and urllib3 at build time, and a regression there
+# is invisible to pytest and fatal to `python -m build`. Hatchling regexes the file.
+[tool.hatch.version]
+path = "temper/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["temper"]
+
+[tool.hatch.build.targets.sdist]
+include = ["temper", "README.md", "LICENSE", "pyproject.toml"]
+
+# ---------------------------------------------------------------------------
+# ruff
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+# `generate-temper-py.sh` is the only writer of the generated tree. Linting it
+# would mean hand-editing it — the same exclusion, for the same reason, that
+# .rubocop.yml carves out for lib/temper/generated/**.
+extend-exclude = ["temper/generated"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# Asserting on a private module attribute is the point of some of these tests.
+"tests/*" = ["SLF001"]
+
+# ---------------------------------------------------------------------------
+# mypy
+# ---------------------------------------------------------------------------
+[tool.mypy]
+# The package's own floor, so the checker sees what the oldest supported interpreter
+# sees.
+python_version = "3.10"
+files = ["temper", "tests"]
+strict = true
+# The generated tree is excluded for the ruff reason above, and re-admitted as an
+# untyped-but-followed import so the skin's own annotations still resolve against
+# real generated classes rather than against Any.
+exclude = ["^temper/generated/"]
+
+# `silent`, not `skip`. Skipping makes every generated symbol `Any`, which quietly
+# turns the skin's own annotations into no-ops — `TokenScopedConfiguration` would be
+# subclassing `Any`, and the property it overrides would be checked against nothing.
+# Silent still analyses the tree (so the skin is checked against the REAL generated
+# classes) while suppressing errors inside code no human may edit.
+[[tool.mypy.overrides]]
+module = "temper.generated.*"
+follow_imports = "silent"
+ignore_missing_imports = true
+
+# Strict typing is a promise this package makes to CALLERS; a test body annotating
+# every `def test_x() -> None` buys nothing and hides the errors that matter under
+# a hundred that do not. The strict checks that still apply here are the ones about
+# using the package wrongly.
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

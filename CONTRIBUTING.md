@@ -84,7 +84,7 @@ a response DTO, a route, a ts-rs-derived type, or a shared skill template, regen
 result:
 
 ```bash
-cargo make openapi             # openapi.json + the temper-rb gem + temper-ts's schema.ts
+cargo make openapi             # openapi.json + all three SDKs (temper-rb, temper-ts, temper-py)
 cargo make generate-ts-types   # ts-rs TypeScript type trees
 ```
 
