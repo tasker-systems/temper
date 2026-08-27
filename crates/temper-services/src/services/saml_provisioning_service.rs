@@ -60,11 +60,16 @@ struct DesiredMembership {
 ///
 /// # `groups` is an `Option`, and that is the guard
 ///
-/// `None` means the assertion carried **no group signal** — the IdP has no `groups_attr`
-/// configured, or the named attribute was absent from this particular assertion
-/// (`packages/temper-cloud/src/saml/sp.ts:63-77`). It is NOT a provider saying "this principal is
-/// in no groups", and it must never revoke anything. `Some(&[])` IS that second statement, and
-/// does revoke.
+/// `None` means the assertion carried **no group signal** — the named attribute was absent from
+/// this particular assertion (`packages/temper-cloud/src/saml/sp.ts`). It is NOT a provider saying
+/// "this principal is in no groups", and it must never revoke anything. `Some(&[])` IS that second
+/// statement, and does revoke.
+///
+/// The caller reaches this function only for an IdP that has group provisioning configured
+/// (`groupProvisioningConfigured`), so a `None` arriving here carries the actionable reading: it
+/// was expected to arrive and did not. An authentication-only IdP has no reconcile to perform and
+/// makes no call, which is why the record this writes stays free of a whole deployment class that
+/// has no de-provisioning to suspend.
 ///
 /// The distinction is carried by the type rather than by a convention about empty slices, and it
 /// is carried *here* rather than at the caller, because this is the function that holds the
@@ -214,7 +219,7 @@ pub async fn reconcile_idp_memberships(
     Ok(ReconcileOutcome::Reconciled(out))
 }
 
-/// Record that a reconcile was declined for want of a group signal.
+/// Record that a reconcile was declined for want of a group signal the IdP was configured to send.
 ///
 /// Autonomous (not in any transaction) because there is no membership work to be atomic with — the
 /// point of this path is that none was done. Touches only `last_skipped_at`: any

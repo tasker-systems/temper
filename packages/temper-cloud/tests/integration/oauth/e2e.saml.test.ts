@@ -634,6 +634,75 @@ describe("e2e: full mock-IdP SAML login", () => {
   });
 
   /**
+   * An authentication-only IdP makes no reconcile call at all, and that is not a silence worth
+   * recording.
+   *
+   * `groups_attr` left NULL is a supported posture, not a misconfiguration: the IdP asserts identity
+   * and nothing about team membership, so there is no reconcile to perform and no de-provisioning to
+   * suspend. Calling anyway would be worse than useless — the reconcile channel's env vars are
+   * group-provisioning configuration, so such a deployment may legitimately not have them, and every
+   * login would log a failure meaning nothing is wrong. A record built to surface real problems must
+   * not manufacture a permanent fake one.
+   *
+   * Note this is NOT the sibling above it, though both start from an assertion carrying no groups.
+   * There, the operator configured group provisioning and it did not arrive — actionable, and sent.
+   * Here, nobody asked for it — and nothing is sent. Same assertion shape, opposite meanings, which
+   * is exactly why the two questions are asked separately.
+   */
+  it("makes no reconcile call for an authentication-only IdP (groups_attr NULL)", async () => {
+    await sql`UPDATE kb_saml_idp SET groups_attr = NULL WHERE idp_key = 'test'`;
+    process.env.INTERNAL_RECONCILE_URL = "https://api.internal/internal/saml/reconcile";
+    process.env.INTERNAL_RECONCILE_SECRET = "s3cr3t";
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const verifier = `e2e-authonly-verifier-${"a".repeat(50)}`;
+      const challenge = createHash("sha256").update(verifier).digest("base64url");
+      const authRes = await handleAuthorize(
+        new Request(
+          "https://as.example.com/oauth/authorize?response_type=code&client_id=cli&redirect_uri=" +
+            encodeURIComponent(REDIRECT_URI) +
+            "&code_challenge=" +
+            challenge +
+            "&code_challenge_method=S256&state=authonly-state",
+        ),
+        db,
+      );
+      const rs = new URLSearchParams(
+        new URL(authRes.headers.get("location") as string, "https://as.example.com").search,
+      ).get("rs");
+      // The assertion even CARRIES a groups attribute — it is the IdP config, not the payload,
+      // that decides there is nothing to reconcile.
+      const { samlResponseB64 } = makeSignedSamlResponse({
+        spEntityId: SP_ENTITY_ID,
+        acsUrl: ACS_URL,
+        nameId: "authonly-user-1",
+        attributes: { email: "authonly@example.com", uid: "authonly-user-1" },
+        multiValuedAttributes: { groups: ["engineering"] },
+        idpKeyPem,
+        idpCertPem,
+      });
+      const acsRes = await handleSamlAcs(
+        new Request("https://sp.example.com/saml/acs", {
+          method: "POST",
+          body: new URLSearchParams({ SAMLResponse: samlResponseB64, RelayState: rs as string }),
+        }),
+        db,
+      );
+
+      expect(acsRes.status).toBe(302);
+      expect(
+        new URL(acsRes.headers.get("location") as string).searchParams.get("code"),
+      ).toBeTruthy();
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      delete process.env.INTERNAL_RECONCILE_URL;
+      delete process.env.INTERNAL_RECONCILE_SECRET;
+    }
+  });
+
+  /**
    * The new call is on the login path, so it inherits the fail-open rule rather than testing it by
    * analogy with its sibling.
    *

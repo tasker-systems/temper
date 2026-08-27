@@ -279,15 +279,19 @@ mapped groups now") revokes all of the user's `idp` memberships.
 
 **Seeing when each user's reach was last reconciled.** Because reconcile runs on login, how
 current a user's `idp` memberships are depends on when they last signed in — and, if the
-assertion carried no groups attribute, on whether there was anything to reconcile against.
-Both are recorded per user in `kb_saml_principal_reconcile`, and `vw_saml_reconcile_staleness`
-reads them together with the reach each user actually holds:
+assertion omitted the groups attribute you configured, on whether there was anything to
+reconcile against. Both are recorded per user in `kb_saml_principal_reconcile`, and
+`vw_saml_reconcile_staleness` reads them together with the reach each user actually holds.
+
+This applies only once `groups_attr` is set. With it left NULL the IdP is authentication-only,
+no team membership is derived from it, and no reconcile is attempted or recorded — so these
+tables stay empty, which is the correct reading rather than a gap:
 
 ```sql
 -- Who holds idp-derived reach, and when was it last brought into agreement?
 -- last_reconciled_at NULL  => no reconcile recorded for this user yet
--- last_signal_was_missing  => their most recent login carried no groups attribute,
---                             so nothing was compared on that login
+-- last_signal_was_missing  => their most recent login carried no groups attribute even though
+--                             one is configured, so nothing was compared on that login
 SELECT handle, idp_memberships, last_reconciled_at, last_skipped_at, last_signal_was_missing
   FROM vw_saml_reconcile_staleness
  ORDER BY last_reconciled_at ASC NULLS FIRST;
