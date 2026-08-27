@@ -4,7 +4,7 @@
 //! on-disk markdown file and records a per-context staleness cursor. The
 //! projection is read-only by convention: editing a projected file changes
 //! nothing on the server. See
-//! `internal/superpowers/specs/2026-05-21-cloud-only-vault-deprecation-design.md`.
+//! `temper-artifacts:specs/2026-05-21-cloud-only-vault-deprecation-design.md`.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -319,7 +319,7 @@ pub const PROJECTION_SLUG_MAX_BYTES: usize = 120;
 ///
 /// **`me` is what turns the caller's own handle into `@me`** — the self-relative
 /// segment the layout was designed around
-/// (`internal/superpowers/specs/2026-06-25-ws6-rehome-temper-next-to-public-design.md`,
+/// (`temper-artifacts:specs/2026-06-25-ws6-rehome-temper-next-to-public-design.md`,
 /// "F6 `@me` projection dir"). Answering *is this mine?* needs the authenticated
 /// profile, which the CLI holds no copy of locally — `~/.config/temper/auth.json`
 /// stores a token and a device id and its `profile_id` is structurally null under

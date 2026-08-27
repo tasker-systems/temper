@@ -57,16 +57,21 @@ echo "Running detect-ci-scope.sh tests..."
 echo ""
 
 # --- docs-only: skip everything ---
-run_test "docs-only: all jobs skipped" \
+# `internal/` is gate-owned since check-no-process-artifacts.sh landed, so a change
+# touching it invokes code-quality for guard-tests. Every heavy job stays off —
+# that is the whole point of the DOCS_GATED class. The fixture names a SURVIVING
+# internal path deliberately: the old one pointed into internal/superpowers/, which
+# moved to temper-artifacts.
+run_test "docs-only: heavy jobs skipped, guard-tests still reached" \
     "README.md
-internal/superpowers/plans/2026-07-03-t7-block-provenance-write-path.md
+internal/agents/architecture.md
 CLAUDE.md" \
     "DOCS_ONLY=true" \
-    "RUN_CODE_QUALITY=false" \
+    "RUN_CODE_QUALITY=true" \
     "RUN_TEST_RUST=false" \
     "RUN_TEST_TYPESCRIPT=false" \
     "RUN_TEST_RUBY=false" \
-    "SCOPE_SUMMARY=docs-only: skipping code-quality, test-rust, test-typescript, test-ruby, test-python, test-agents-ts"
+    "SCOPE_SUMMARY=docs-only: skipping test-rust, test-typescript, test-ruby, test-python, test-agents-ts and the rust-quality job; running code-quality for its pure-bash guard-tests (the docs/ and internal/ gates)"
 
 # --- per-crate doc files are still docs-only ---
 run_test "crate-dir docs only: docs-only scope" \
@@ -636,15 +641,20 @@ run_test "a register reprojection alone: whole pipeline skipped (cc280f98)" \
     "SKIP_ALL=true" \
     "DOCS_ONLY=false" \
     "NON_PRODUCT=true" \
-    "RUN_CODE_QUALITY=false" \
+    "RUN_CODE_QUALITY=true" \
     "RUN_TEST_RUST=false" \
     "RUN_TEST_TYPESCRIPT=false"
 
-run_test "an internal spec alone: skipped, and reported as docs" \
+# THE GATE'S OWN FAILURE MODE. A session re-creating internal/superpowers/ from a
+# stale instruction produces exactly this change: one markdown file under a
+# non-product root. Before internal/ joined DOCS_GATED this scoped to
+# RUN_CODE_QUALITY=false, so check-no-process-artifacts.sh would have been present
+# and unreachable on the one change class it exists for.
+run_test "an internal spec alone: heavy jobs skipped, but the process-artifact gate is reached" \
     "internal/superpowers/specs/2026-07-30-schema-binary-pairing-design.md" \
     "SKIP_ALL=true" \
     "DOCS_ONLY=true" \
-    "RUN_CODE_QUALITY=false" \
+    "RUN_CODE_QUALITY=true" \
     "RUN_TEST_RUST=false"
 
 # The load-bearing direction, asserted for this root as for every other: the

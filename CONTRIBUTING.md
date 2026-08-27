@@ -134,8 +134,10 @@ describe a settled choice or an open one?* A decision we hold deliberately can b
 weakness we intend to fix belongs with the work, written once the work has landed and describes
 something closed.
 
-Specs go in `internal/superpowers/specs/`, plans in `internal/superpowers/plans/`, decision records
-in `internal/decisions/` — see that directory's README for the conventions.
+Specs and plans are not kept in this repository — they live in the private
+`tasker-systems/temper-artifacts` repo, under `specs/` and `plans/`. Decision records
+do stay here, in `internal/decisions/` — see that directory's README for the
+conventions.
 
 ## Submitting changes
 

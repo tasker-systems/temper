@@ -7,7 +7,7 @@ project that consumes this repo on its own schedule, with its own database and
 configuration. The repo's CI does **not** deploy any site.
 
 Design rationale:
-[internal/superpowers/specs/2026-06-25-multi-target-deployment-model-design.md](internal/superpowers/specs/2026-06-25-multi-target-deployment-model-design.md).
+`temper-artifacts:specs/2026-06-25-multi-target-deployment-model-design.md`.
 
 ## The deployment unit: an independent Vercel project
 
@@ -390,7 +390,7 @@ resources are full-text-searchable but not vector-searchable until the drain cat
 A failed embed is retried by the queue's reaper and marked `dead` after max attempts;
 `dead` jobs are the re-drive signal (a `reindex`/sweep follow-up). Operator guidance on
 bulk vs interactive ingest lives in [internal/upload-lifecycle.md](internal/upload-lifecycle.md#choosing-an-ingest-surface-cli-vs-mcp);
-the full design is [internal/superpowers/specs/2026-07-07-async-embedding-off-request-path-design.md](internal/superpowers/specs/2026-07-07-async-embedding-off-request-path-design.md).
+the full design is `temper-artifacts:specs/2026-07-07-async-embedding-off-request-path-design.md`.
 
 ## Server-side query-embed cold starts (issue #427)
 

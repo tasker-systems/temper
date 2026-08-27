@@ -46,6 +46,7 @@ dependencies = [
   "cli-reference-drift",
   "config-reference-drift",
   "docs-public-only",
+  "no-process-artifacts",
   "docs-coverage",
   "ts-check"
 ]
@@ -104,6 +105,10 @@ script = ["python3 ${CARGO_MAKE_WORKING_DIRECTORY}/scripts/docs-coverage.py --st
 [tasks.docs-public-only]
 description = "Fail if docs/ contains internal material — the publish-safety invariant"
 script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-docs-public-only.sh"]
+
+[tasks.no-process-artifacts]
+description = "Fail if specs/plans/reviews/spikes/handoffs are tracked here — they live in temper-artifacts"
+script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-no-process-artifacts.sh"]
 
 [tasks.register-coverage-drift]
 description = "Fail if internal/registers/coverage.yaml has drifted from the projection that produces it"

@@ -33,8 +33,8 @@ import type { PageServerLoad } from './$types';
  * measurements stream, so the page can say **which place it is measuring** before any measurement
  * arrives.
  *
- * @see internal/superpowers/specs/2026-08-20-graph-successor-surface-design.md §4 (Beat C)
- * @see internal/superpowers/specs/2026-08-21-the-rendering-approach-design.md §3, §5
+ * @see temper-artifacts:specs/2026-08-20-graph-successor-surface-design.md §4 (Beat C)
+ * @see temper-artifacts:specs/2026-08-21-the-rendering-approach-design.md §3, §5
  */
 export const load: PageServerLoad = async ({ locals, params, url }): Promise<AnalysisViewData> => {
 	const token = locals.accessToken!;

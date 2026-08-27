@@ -15,7 +15,7 @@
 	 * every figure appears raw, beside the span this place actually measures. `analysis.ts` carries
 	 * the measurements and the reasoning.
 	 *
-	 * @see internal/superpowers/specs/2026-08-20-graph-successor-surface-design.md §4 (Beat C)
+	 * @see temper-artifacts:specs/2026-08-20-graph-successor-surface-design.md §4 (Beat C)
 	 */
 	import RegionState from '$lib/components/RegionState.svelte';
 	import GroupingStrips from './GroupingStrips.svelte';

@@ -529,15 +529,15 @@ a person has to write, and it is the part that has never been written for them.
 - **The cognitive-maps set & its register/discipline:** `(public)/cognitive-maps/the-set` (the genre
   split, the threaded seed, cross-reference-by-concept, partner-not-lecturer voice).
 - **The middle-tier grounding (extensibility, the neutral contract):**
-  `internal/superpowers/plans/2026-06-18-invocation-envelope-and-authorship-metadata.md` and
-  `internal/superpowers/plans/2026-06-18-temper-agents-neutral-contract-crate.md`; the Eve/CMA
+  `temper-artifacts:plans/2026-06-18-invocation-envelope-and-authorship-metadata.md` and
+  `temper-artifacts:plans/2026-06-18-temper-agents-neutral-contract-crate.md`; the Eve/CMA
   comparison research under `internal/research/`.
 - **Operator runbook (the deployment floor):** the self-hosting playbook under `docs/`.
 - **Superseded:** `docs/theory-ia-proposal.md` (removed; see the scar above).
 
 Grounding for Surfaces 2 and 3, added with the scope widening:
 
-- **The docs surface design:** `internal/superpowers/specs/2026-08-19-docs-surface-rebuild-design.md` —
+- **The docs surface design:** `temper-artifacts:specs/2026-08-19-docs-surface-rebuild-design.md` —
   the kind-shaped tree, the invariant, the doors-are-pages argument, and the decision to
   retire `docs/cognitive-maps/` in favour of `temperkb.io`.
 - **The derivation layer:** `scripts/docs-coverage.py`, `scripts/emit-cli-reference.py`,
