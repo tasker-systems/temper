@@ -33,7 +33,14 @@ export interface ReconcileRequest {
   email: string;
   email_verified: boolean | null;
   idp_key: string;
-  groups: string[];
+  /**
+   * The asserted group values, or `null` when the assertion carried NO group signal — mirrors
+   * `extractGroups`'s own return type (`../saml/sp.ts`) rather than collapsing it at the wire.
+   * `null` and `[]` are opposite instructions: "the provider said nothing, act on nothing" and
+   * "the provider named this principal's groups and there are none". The API refuses the first as
+   * an input to revocation and records that it did.
+   */
+  groups: string[] | null;
 }
 
 /**
@@ -68,5 +75,11 @@ export async function reconcileMemberships(payload: ReconcileRequest): Promise<v
   if (!res.ok) {
     throw new Error(`reconcile endpoint returned ${res.status}`);
   }
-  logger.info({ idp_key: payload.idp_key, groups: payload.groups.length }, "saml reconcile ok");
+  // `null` stays null in the log line rather than becoming 0: a login that carried no group signal
+  // and one that asserted an empty group set are the two cases this whole path exists to keep
+  // apart, and `groups: 0` would have read as the second.
+  logger.info(
+    { idp_key: payload.idp_key, groups: payload.groups?.length ?? null },
+    "saml reconcile ok",
+  );
 }

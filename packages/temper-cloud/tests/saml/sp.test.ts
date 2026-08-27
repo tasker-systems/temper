@@ -5,6 +5,7 @@ import { type SamlIdpRow, toSamlConfig } from "../../src/saml/config.js";
 import {
   buildSpMetadata,
   extractGroups,
+  groupProvisioningConfigured,
   mapProfileToClaims,
   validateAssertion,
 } from "../../src/saml/sp.js";
@@ -203,6 +204,18 @@ describe("buildSpMetadata", () => {
     expect(metadata.length).toBeGreaterThan(0);
     expect(metadata).toContain("<EntityDescriptor");
     expect(metadata).toContain(idp.sp_entity_id);
+  });
+});
+
+describe("groupProvisioningConfigured", () => {
+  /**
+   * The predicate exists to separate two facts `extractGroups` deliberately answers `null` to
+   * alike. Asserted here because the ACS branches on it: true means an assertion carrying no groups
+   * is worth reporting, false means there was never anything to report.
+   */
+  it("is false for an authentication-only IdP and true once groups_attr is set", () => {
+    expect(groupProvisioningConfigured(fakeIdp({ groups_attr: null }))).toBe(false);
+    expect(groupProvisioningConfigured(fakeIdp({ groups_attr: "groups" }))).toBe(true);
   });
 });
 

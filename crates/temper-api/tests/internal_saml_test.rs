@@ -9,6 +9,7 @@ mod common;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use chrono::{DateTime, Utc};
 use reqwest::RequestBuilder;
 use sqlx::PgPool;
 use temper_core::internal_sig::{sign, SIGNATURE_HEADER, TIMESTAMP_HEADER};
@@ -72,7 +73,7 @@ fn reconcile_body() -> ReconcileRequest {
         email: "a@corp.io".to_string(),
         email_verified: Some(true),
         idp_key: "acme".to_string(),
-        groups: vec!["engineering".to_string()],
+        groups: Some(vec!["engineering".to_string()]),
     }
 }
 
@@ -192,7 +193,7 @@ async fn reconcile_endpoint_rejects_tampered_body(pool: PgPool) {
     let timestamp = now_secs();
     let signature = sign("s3cr3t".as_bytes(), timestamp, signed_body.as_bytes());
     let tampered = serde_json::to_string(&ReconcileRequest {
-        groups: vec!["temper-admins".to_string()],
+        groups: Some(vec!["temper-admins".to_string()]),
         ..reconcile_body()
     })
     .unwrap();
@@ -204,4 +205,83 @@ async fn reconcile_endpoint_rejects_tampered_body(pool: PgPool) {
         .header(SIGNATURE_HEADER, signature)
         .body(tampered);
     assert_rejected_and_no_provisioning(&pool, builder).await;
+}
+
+/// A `groups: null` payload takes the no-signal path end to end — over HTTP, through serde, into
+/// the record.
+///
+/// The service-level witnesses in `temper-services` prove the guard refuses to revoke. This one
+/// proves the distinction SURVIVES THE WIRE, which is the half they cannot see: `null` and `[]`
+/// are one JSON character apart and land in the same field, and a `Vec<String>` on this side would
+/// have deserialized both to the same value with no error anywhere. The endpoint still answers 204
+/// — declining to act on a signal that was not sent is a well-formed outcome, not a failure, and
+/// the AS treats a non-2xx as a reconcile failure.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn reconcile_endpoint_records_a_null_group_signal_as_a_skip(pool: PgPool) {
+    seed(&pool).await;
+    let app = common::setup_test_app_with_config(pool.clone(), |c| {
+        c.auth_provider_name = "saml:acme".to_string();
+        c.internal_reconcile_secret = Some("s3cr3t".to_string());
+    })
+    .await;
+
+    let body = serde_json::to_string(&ReconcileRequest {
+        groups: None,
+        ..reconcile_body()
+    })
+    .unwrap();
+    assert!(
+        body.contains(r#""groups":null"#),
+        "the payload must carry an explicit null, not an omitted key: {body}"
+    );
+
+    let resp = signed_post(
+        app.client.post(app.url("/internal/saml/reconcile")),
+        "s3cr3t",
+        now_secs(),
+        &body,
+    )
+    .send()
+    .await
+    .expect("request failed");
+    assert_eq!(resp.status().as_u16(), 204);
+
+    let profile_id: Uuid = sqlx::query_scalar(
+        "SELECT profile_id FROM kb_profile_auth_links WHERE auth_provider = $1 AND auth_provider_user_id = $2",
+    )
+    .bind("saml:acme")
+    .bind("nid-1")
+    .fetch_one(&pool)
+    .await
+    .expect("JIT auth link must exist");
+
+    let (reconciled, skipped): (Option<DateTime<Utc>>, Option<DateTime<Utc>>) = sqlx::query_as(
+        "SELECT last_reconciled_at, last_skipped_at FROM kb_saml_principal_reconcile
+          WHERE profile_id = $1 AND idp_key = 'acme'",
+    )
+    .bind(profile_id)
+    .fetch_one(&pool)
+    .await
+    .expect("the declined attempt is recorded");
+
+    assert!(skipped.is_some(), "the skip is timestamped");
+    assert!(
+        reconciled.is_none(),
+        "and reads as no agreement, not a fresh one"
+    );
+
+    // Scoped to source='idp' deliberately: resolving the principal JITs a profile, and profile
+    // provisioning gives it a native membership of its own. That row is not what the guard is
+    // about, and counting it would make this assertion fail for a reason unrelated to the claim.
+    let idp_memberships: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_team_members WHERE profile_id = $1 AND source = 'idp'",
+    )
+    .bind(profile_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        idp_memberships, 0,
+        "and no idp-derived reach was conferred from no signal"
+    );
 }
