@@ -99,7 +99,7 @@ describe('folding the entry read', () => {
 		// `describeArm`'s sentence for a composition — *"In the places you asked about"* — on a
 		// screen where the box was empty, on all 130 cards and on the single a11y heading.
 		//
-		// @see internal/superpowers/specs/2026-08-21-the-handoff-and-the-arm-vocabulary-design.md §1.3a
+		// @see temper-artifacts:specs/2026-08-21-the-handoff-and-the-arm-vocabulary-design.md §1.3a
 		const model = buildEntryGraph(entry, homes);
 
 		expect(model.arms).toHaveLength(1);
@@ -187,7 +187,7 @@ describe('the corpus figure is kept beside the derived one, never merged into it
 	 *
 	 * The two quantities keep two names. That is the whole of what §5.3 was protecting.
 	 *
-	 * @see internal/superpowers/specs/2026-08-21-hub-stranding-is-a-telling-failure-design.md §4, §5.1
+	 * @see temper-artifacts:specs/2026-08-21-hub-stranding-is-a-telling-failure-design.md §4, §5.1
 	 */
 	const strandedHub: AtlasEntry = {
 		// `a`—`b` is the only edge, so `c` is drawn with 87 corpus connections and no stroke: the

@@ -116,7 +116,7 @@ The writer used it anyway and produced a tree its own layout module could not
 parse.
 
 **Not `@me`, yet.** The F1 follow-up recorded in
-[`2026-06-25-ws6-rehome-temper-next-to-public-design.md`](./superpowers/specs/2026-06-25-ws6-rehome-temper-next-to-public-design.md)
+`temper-artifacts:specs/2026-06-25-ws6-rehome-temper-next-to-public-design.md`
 ("F6 `@me` projection dir") wants the requester's own resources under a
 self-relative `@me`. Answering *is this mine?* needs the authenticated profile,
 and the CLI holds none locally — `~/.config/temper/auth.json` stores a token and

@@ -18,7 +18,7 @@ import type {
  * - **a question, 0 anchors** — `find-about-anywhere` → `follow-from`
  * - **no question** — N × `find-resources-with` → (`union`) → `follow-from`; only the walk returned
  *
- * @see internal/superpowers/specs/2026-08-20-graph-successor-surface-design.md §2, §3
+ * @see temper-artifacts:specs/2026-08-20-graph-successor-surface-design.md §2, §3
  */
 
 /**

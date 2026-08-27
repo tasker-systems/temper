@@ -8,7 +8,7 @@ near-isomorphic — see
 ## Agents
 
 - `steward/` — the team self-cognition steward (Eve). Design:
-  `internal/superpowers/specs/2026-07-01-t5-eve-steward-agent-directory-design.md`.
+  `temper-artifacts:specs/2026-07-01-t5-eve-steward-agent-directory-design.md`.
 
 ## Why this package is workspace-isolated
 

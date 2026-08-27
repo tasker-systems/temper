@@ -33,9 +33,18 @@ outcome registers — read it after install.
 
 ## Where specs and plans go
 
-**Specs: `internal/superpowers/specs/`. Plans: `internal/superpowers/plans/`.**
+**Not in this repository.** Specs, plans, reviews, spikes and handoffs live in
+the private [`tasker-systems/temper-artifacts`](https://github.com/tasker-systems/temper-artifacts)
+repository, under `specs/`, `plans/`, `reviews/`, `spikes/` and `handoffs/`.
 
-Not `docs/`. `docs/` is synced to the public documentation site, and everything
-in it is public — so process artifacts must not be written there. The
-superpowers skills default to `docs/superpowers/...`; this instruction overrides
-that default. See `internal/README.md`.
+Write them there, in a clone of that repo — not into `docs/`, which is public and
+synced to the documentation site, and not into `internal/`, which no longer holds
+them. The superpowers skills default to `docs/superpowers/...`; this instruction
+overrides that default. The temper skill's own `fundamentals.md` carries an older
+override naming `internal/superpowers/` — it is machine-local, no gate reaches it,
+and until it is corrected by hand on each machine it points at a directory this
+repository no longer has. This file wins.
+
+`.github/scripts/check-no-process-artifacts.sh` fails CI if any of those trees
+appears here, because the way this regresses is a session acting on a stale copy of
+this instruction and helpfully re-creating the directory. See `internal/README.md`.

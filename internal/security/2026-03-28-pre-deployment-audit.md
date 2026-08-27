@@ -65,7 +65,7 @@ which every token carries the claim can never discover that the claim is optiona
 now bite-tested: `token_with_no_audience_claim_is_refused_on_both_surfaces` and
 `foreign_audience_token_is_refused_on_both_surfaces`
 (`tests/e2e/tests/auth_seam_parity_e2e.rs`). See
-[the design spec](../superpowers/specs/2026-07-12-audience-issuer-env-coherence-design.md).
+the design spec (`temper-artifacts:specs/2026-07-12-audience-issuer-env-coherence-design.md`).
 
 **Two lessons worth keeping.** First: this finding was correctly identified, correctly rated High,
 and then answered with a doc change. A security control that depends on someone remembering to set an

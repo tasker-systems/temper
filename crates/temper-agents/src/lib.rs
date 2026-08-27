@@ -4,7 +4,7 @@
 //! [`profile::DeploymentProfile`] policy object and re-exports the
 //! invocation-envelope + agent-authorship contract from `temper-substrate`
 //! ([`envelope`]). See the design spec under
-//! `internal/superpowers/specs/2026-06-18-temper-agents-neutral-contract-crate-design.md`.
+//! `temper-artifacts:specs/2026-06-18-temper-agents-neutral-contract-crate-design.md`.
 
 pub mod envelope;
 pub mod profile;

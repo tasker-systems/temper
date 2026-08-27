@@ -16,7 +16,7 @@
 > read as coverage over a corpus they cannot see.
 
 `[observed — 2026-07-30]` Input to step 3 of
-[the schema/binary pairing design](../superpowers/specs/2026-07-30-schema-binary-pairing-design.md#6-the-macro-is-the-rule-exceptions-are-an-allow-list-not-a-habit),
+the schema/binary pairing design (`temper-artifacts:specs/2026-07-30-schema-binary-pairing-design.md#6-the-macro-is-the-rule-exceptions-are-an-allow-list-not-a-habit`),
 which builds the allow-list this classification decides the contents of. It builds nothing itself.
 
 **Why this matters.** The `.sqlx` cache is a faithful record of the binary↔schema wire contract only

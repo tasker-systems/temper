@@ -363,7 +363,15 @@ fi
 # RUN_CODE_QUALITY=true for a docs-only change — so the two cannot drift apart
 # silently.
 # ---------------------------------------------------------------------------
-DOCS_GATED_ROOTS='^docs/'
+# `^internal/` joins this class for the same reason and with the same shape.
+# check-no-process-artifacts.sh asserts that no specs/plans/reviews/spikes/handoffs
+# tree is tracked here — and the regression it exists to catch is a session
+# re-creating `internal/superpowers/specs/*.md` from a stale instruction, which is
+# markdown under a NON_PRODUCT root and therefore skipped the entire pipeline. The
+# gate would have been present and unreachable on precisely its own failure mode.
+# Same one-second bash, same ungated guard-tests job, same single cost:
+# RUN_CODE_QUALITY=true with every heavy job still off.
+DOCS_GATED_ROOTS='^docs/|^internal/'
 
 HAS_DOCS_GATED=false
 if changes_match "$DOCS_GATED_ROOTS"; then
@@ -490,7 +498,7 @@ debug "HAS_DOCS=$HAS_DOCS HAS_SELF=$HAS_SELF HAS_NON_DOC=$HAS_NON_DOC HAS_NON_PR
 #
 #   docs-only    -> nothing runs, with ONE exception: a change touching `docs/`
 #                   still invokes code-quality (RUN_CODE_QUALITY=true) so its
-#                   ungated, pure-bash guard-tests job reaches the docs/ gate.
+#                   ungated, pure-bash guard-tests job reaches the docs/ and internal/ gates.
 #                   rust-quality, test-rust and test-typescript stay OFF — the
 #                   gate is bash, so it does not need them.
 #   rust-inert   -> the Rust corpus (test-rust + the rust-quality job) is off,
@@ -526,7 +534,7 @@ if [ "$SKIP_ALL" = "true" ]; then
     # entire cost — every heavy job above stays off. See DOCS_GATED_ROOTS.
     if [ "$HAS_DOCS_GATED" = "true" ]; then
         RUN_CODE_QUALITY=true
-        SCOPE_SUMMARY="${SKIP_REASON}: skipping test-rust, test-typescript, test-ruby, test-agents-ts and the rust-quality job; running code-quality for its pure-bash guard-tests (the docs/ gate)"
+        SCOPE_SUMMARY="${SKIP_REASON}: skipping test-rust, test-typescript, test-ruby, test-agents-ts and the rust-quality job; running code-quality for its pure-bash guard-tests (the docs/ and internal/ gates)"
     else
         RUN_CODE_QUALITY=false
         SCOPE_SUMMARY="${SKIP_REASON}: skipping code-quality, test-rust, test-typescript, test-ruby, test-agents-ts"

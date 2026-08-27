@@ -16,11 +16,11 @@ artifact for M2M (machine-to-machine) agent principals — the auth-seam plan's 
 > Operator-facing companion (mint / reach / rotate / revoke):
 > [../../docs/playbooks/standing-up-a-machine-credential.md](../../docs/playbooks/standing-up-a-machine-credential.md). Implementation
 > designs: Stage 4
-> (spec: `internal/superpowers/specs/2026-07-02-auth-seam-stage-4-m2m-implementation-design.md`),
+> (spec: `temper-artifacts:specs/2026-07-02-auth-seam-stage-4-m2m-implementation-design.md`),
 > registration Phase A
-> (spec: `internal/superpowers/specs/2026-07-10-machine-principal-registration-design.md`), the
+> (spec: `temper-artifacts:specs/2026-07-10-machine-principal-registration-design.md`), the
 > issuer grant Phase B1
-> (spec: `internal/superpowers/specs/2026-07-10-machine-principal-phase-b1-issuer-grant-design.md`).
+> (spec: `temper-artifacts:specs/2026-07-10-machine-principal-phase-b1-issuer-grant-design.md`).
 
 ## The boundary: who mints vs. who validates
 
@@ -373,7 +373,7 @@ still works with temper-mcp (one-time browser consent) and was the pre-Stage-4 b
 an escape hatch. **Avoid** the `user`-subject-as-a-human path — it proxies as that human and
 conflates authorship.
 
-Spec: `internal/superpowers/specs/2026-07-02-shared-auth-orchestration-seam-design.md`
+Spec: `temper-artifacts:specs/2026-07-02-shared-auth-orchestration-seam-design.md`
 (Stage 4). Creating the *Auth0 application* is an operator/console step outside the repo;
 registering it with Temper (`temper admin machine provision`) is not — without it the token
 is a 401.
