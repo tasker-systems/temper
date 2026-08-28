@@ -142,9 +142,27 @@ import {
  *
  * **Cadence is the budget mechanism, not a tuning preference.** The AI Gateway gets a fixed monthly
  * allowance and that allowance IS the ceiling — topping it up is not the plan. Cadence is how the
- * auditor is made to fit inside it: hourly spends the month in a few days of real work, daily makes
- * the same allowance last it. Hourly was also ~24x this corpus's own rate of change, so the extra 23
- * ticks bought re-derivation rather than coverage.
+ * auditor is made to fit inside it. Hourly was also ~24x this corpus's own rate of change, so the
+ * extra 23 ticks bought re-derivation rather than coverage.
+ *
+ * Two costs, and cadence bounds them differently. The **sweep** runs as phase 2 of every dispatch
+ * whatever the queue holds, so cadence bounds it unconditionally. **Model spend** is proportional to
+ * jobs actually claimed — a tick that claims none starts no session and spends nothing — so cadence
+ * bounds it only while there is standing work. There was, which is why this mattered.
+ *
+ * **Cadence and `DEFAULT_AUDITOR_DISPATCH_CAP` are one knob in two halves, and the second is not
+ * set here.** That cap (50, `temper-core::types::workflow_job`) is a per-tick *finding* budget and
+ * simultaneously the sweep's `p_limit` and the claim's batch limit, so ticks/day × cap is the
+ * ceiling on audit throughput — daily at 50 admits 50 findings/day where hourly admitted up to 1200.
+ * It does not bind here: measured mid-outage with ~19 days of backlog standing, `audit_drift_sweep`
+ * at `p_limit` 50 returned **15** rows. A fork whose steward drifts more than ~50 findings a day
+ * needs the cap raised or the cadence raised, or its backlog grows behind a green cron. Raising the
+ * cap costs model sessions but NOT sweep time — `p_limit` applies after every candidate is scored.
+ *
+ * The same coupling slows recovery, and that was accepted rather than missed: reaping happens on any
+ * tick but only an auditor tick re-claims, so a crashed job retries in ≤24h instead of ≤1h and takes
+ * three days rather than three hours to exhaust `max_attempts`. That is the churn-coalescing the
+ * spec's §4.2 named as a reason backoff is *less* urgent at this cadence, seen from the other side.
  *
  * **The committed value is every fork's default, so moving it is an operator decision.** It was
  * hourly at :30 from 2026-07-29 until 2026-08-28. The MINUTE is load-bearing and unchanged: :30
@@ -212,6 +230,12 @@ export default defineSchedule({
       (async () => {
         const correlationId = crypto.randomUUID();
         console.log(`[auditor-dispatch] tick ${correlationId} starting (temper-ts ${TEMPER_TS_VERSION})`);
+        // Whether the dispatch call got far enough to claim and LEASE work server-side. The quiet
+        // skip below asserts that it did not, and this is what makes that assertion structural
+        // rather than a claim about which frames can raise a mint failure. If one ever arrives after
+        // the claim, it goes loud — the safe direction, because the alternative is a log line saying
+        // nothing was claimed while N cogmap jobs sit leased.
+        let workClaimed = false;
         try {
           const apiUrl = requireEnv("TEMPER_API_URL").replace(/\/+$/, "");
 
@@ -231,6 +255,9 @@ export default defineSchedule({
           if (!res.ok) {
             throw new Error(`auditor dispatch failed: ${res.status} ${await res.text()}`);
           }
+          // The server ran reap → sweep → group → enqueue → claim before answering, so anything
+          // claimed is claimed and leased by the time this line runs.
+          workClaimed = true;
 
           const dispatchVercelId = res.headers.get("x-vercel-id") ?? "unknown";
 
@@ -302,11 +329,20 @@ export default defineSchedule({
           // — so the 402, and every other in-session failure, is raised past this frame in a
           // separate durable run. The same is true of the auditor subagent's own mint. Only not
           // making the model call quiets those, which is the cadence and the toggle above.
-          if (tokenIssuanceUnavailable(err)) {
-            console.log(
+          //
+          // `console.warn`, where the other two skips log — deliberately, and the difference is
+          // their epistemic status. An absent credential and an explicit toggle are RESTING states:
+          // the deployment is configured that way and nothing is wrong. This is a DEGRADED one —
+          // somebody configured an auditor, it worked, and it is not working now. It must not redden
+          // the cron, but it must not read as normal either, and at a daily cadence there is one
+          // line a day to notice. Quiet is not the same as invisible.
+          if (!workClaimed && tokenIssuanceUnavailable(err)) {
+            console.warn(
               `[auditor-dispatch] tick ${correlationId}: the token endpoint will not mint for this ` +
                 "credential right now (issuance quota). Agent maintenance is optional; skipping " +
-                "this tick. This is a deliberate no-op, not a failure — no work was claimed.",
+                "this tick. This is a deliberate no-op, not a failure — no work was claimed. It " +
+                "resumes on its own when the quota does; a run of these means the auditor has not " +
+                "audited for as long as they have been appearing.",
             );
             return;
           }

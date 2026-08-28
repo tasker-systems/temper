@@ -365,11 +365,15 @@ describe("cadence — the auditor's budget mechanism", () => {
     // inside it. The assertion is the SHAPE (a fixed hour), not which hour: the hour is an
     // operator's to move, but a wildcard hour field would restore the spend this exists to bound.
     const schedule = (await import("../agent/schedules/auditor.js")).default;
-    const hour = (schedule.cron ?? "").split(" ")[1];
+    const [, hour, dayOfMonth, month, dayOfWeek] = (schedule.cron ?? "").split(" ");
 
     expect(schedule.cron).toBeDefined();
     expect(hour).not.toBe("*");
     expect(hour).toMatch(/^\d{1,2}$/);
+    // ONCE a day means every day: a fixed hour alone also describes `30 3 * * 1` (weekly) and
+    // `30 3 1 * *` (monthly). Both would pass a test by this name, and both drift the audit further
+    // from its corpus than anything argued for here — so pin the remaining fields open.
+    expect([dayOfMonth, month, dayOfWeek]).toEqual(["*", "*", "*"]);
   });
 
   it("still trails a steward tick rather than colliding with one", async () => {
@@ -515,6 +519,7 @@ describe("capacity — correct credentials are not sufficient credentials", () =
     const receive = vi.fn();
     const waitUntil = vi.fn();
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     await schedule.run?.({ receive, waitUntil, appAuth: {} as never });
 
@@ -525,7 +530,12 @@ describe("capacity — correct credentials are not sufficient credentials", () =
     await expect(waitUntil.mock.calls[0]?.[0]).resolves.toBeUndefined();
     expect(receive).not.toHaveBeenCalled();
     expect(error).not.toHaveBeenCalled();
+    // Quiet is not invisible. A degraded auditor that logged at the same level as a deployment which
+    // never had one would be indistinguishable from the resting state in a log stream.
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toMatch(/issuance quota/);
     error.mockRestore();
+    warn.mockRestore();
   });
 
   it("the tick still FAILS LOUDLY when the token endpoint rejects the credential", async () => {
