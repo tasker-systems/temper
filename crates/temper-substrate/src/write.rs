@@ -200,7 +200,7 @@ pub async fn materialize(
     let zero = zero_centroid();
     let work: Vec<(&ComponentWork, &Vec<RegionAssignment>)> =
         comp_refs.iter().copied().zip(&assignments).collect();
-    assert_component_regions(&mut tx, anchor, &s, &zero, ev, &work).await?;
+    assert_component_regions(&mut tx, anchor, &s, &zero, ev, &work, telos.as_deref()).await?;
     // (the materialization watermark on the anchor row is set by _project_region_materialized — the
     // event's projection half — not here.)
     tx.commit().await?;
@@ -298,9 +298,21 @@ pub async fn incremental_materialize(
     let zero = zero_centroid();
     let work: Vec<(&ComponentWork, &Vec<RegionAssignment>)> =
         changed.iter().copied().zip(&assignments).collect();
-    assert_component_regions(&mut tx, anchor, &s, &zero, ev, &work).await?;
+    assert_component_regions(&mut tx, anchor, &s, &zero, ev, &work, telos.as_deref()).await?;
 
-    refresh_moved_region_readouts(pool, &mut tx, anchor, &s, &zero, &diff.unchanged, ev).await?;
+    refresh_moved_region_readouts(
+        &mut tx,
+        MovedReadoutsCtx {
+            pool,
+            anchor,
+            sub: &s,
+            zero_centroid: &zero,
+            unchanged: &diff.unchanged,
+            ev,
+            telos: telos.as_deref(),
+        },
+    )
+    .await?;
 
     tx.commit().await?;
 
@@ -394,6 +406,7 @@ async fn assert_component_regions(
     zero_centroid: &str,
     ev: EventId,
     work: &[(&ComponentWork, &Vec<RegionAssignment>)],
+    telos: Option<&str>,
 ) -> Result<()> {
     for &(comp, comp_assignments) in work {
         let comp_id = create_component(&mut *tx, anchor, sub.lens_id, comp, ev).await?;
@@ -408,12 +421,27 @@ async fn assert_component_regions(
                     ev,
                     sub,
                     zero_centroid,
+                    telos,
                 },
             )
             .await?;
         }
     }
     Ok(())
+}
+
+/// Parameters for [`refresh_moved_region_readouts`].
+struct MovedReadoutsCtx<'a> {
+    pool: &'a PgPool,
+    anchor: HomeAnchor,
+    /// The whole substrate: `populate_readouts` needs the lens weights for the salience blend.
+    sub: &'a Substrate,
+    zero_centroid: &'a str,
+    /// The reused components — the regions whose membership survived this pass.
+    unchanged: &'a [Uuid],
+    ev: EventId,
+    /// The anchor's telos, evaluated once by the calling act. See [`populate_readouts`].
+    telos: Option<&'a str>,
 }
 
 /// Readout-refresh (drift §1, slice 3b): reused components keep their membership AND their region
@@ -425,14 +453,18 @@ async fn assert_component_regions(
 /// decomposition removed — while still matching full (an untouched region's stored readouts already
 /// equal a recompute). Only reached when `priors` is non-empty (the empty case is a full pass).
 async fn refresh_moved_region_readouts(
-    pool: &PgPool,
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    anchor: HomeAnchor,
-    s: &Substrate,
-    zero_centroid: &str,
-    unchanged: &[Uuid],
-    ev: EventId,
+    ctx: MovedReadoutsCtx<'_>,
 ) -> Result<()> {
+    let MovedReadoutsCtx {
+        pool,
+        anchor,
+        sub: s,
+        zero_centroid,
+        unchanged,
+        ev,
+        telos,
+    } = ctx;
     let prior_watermark = last_materialize_watermark(tx, anchor, s.lens_id, ev).await?;
     let touched_resources = match prior_watermark {
         Some(w) => crate::replay::content_touched_resources_since(pool, anchor, w).await?,
@@ -452,7 +484,7 @@ async fn refresh_moved_region_readouts(
         .fetch_all(&mut **tx)
         .await?;
         for rid in &region_ids {
-            populate_readouts(tx, *rid, s, zero_centroid).await?;
+            populate_readouts(tx, *rid, s, zero_centroid, telos).await?;
         }
         // one batched last_event_id stamp for every refreshed region (same `ev` for all).
         if !region_ids.is_empty() {
@@ -623,6 +655,8 @@ struct AssertRegionCtx<'a> {
     /// each member against its peers.
     sub: &'a Substrate,
     zero_centroid: &'a str,
+    /// The anchor's telos, evaluated once by the calling act. See [`populate_readouts`].
+    telos: Option<&'a str>,
 }
 
 /// How CORE a member is to its region: its average-link affinity to the region's other members.
@@ -679,6 +713,7 @@ async fn assert_region(tx: &mut PgConnection, ctx: AssertRegionCtx<'_>) -> Resul
         ev,
         sub,
         zero_centroid,
+        telos,
     } = ctx;
     let region = assignment.region_id().uuid();
     match assignment {
@@ -731,7 +766,7 @@ async fn assert_region(tx: &mut PgConnection, ctx: AssertRegionCtx<'_>) -> Resul
         }
     }
     write_region_members(&mut *tx, region, members, sub).await?;
-    populate_readouts(tx, region, sub, zero_centroid).await
+    populate_readouts(tx, region, sub, zero_centroid, telos).await
 }
 
 /// The anchor's telos RIGHT NOW, in pgvector's text form — the value an act records so its projection
@@ -986,14 +1021,21 @@ async fn write_region_members(
 /// calls it on a freshly-asserted region. Membership must already be inserted.
 /// Recompute a region's readouts and its blended salience.
 ///
-/// Takes the whole [`Substrate`] rather than just its [`crate::affinity::Lens`] because the telos readout needs the
-/// lens **id**, not only its weights: the goal-liveness constants (halflife, stage weights, dampers)
-/// are lens-resident columns that `anchor_region_telos_alignment` reads from the row (spec §3.4).
+/// `telos` is the anchor's telos in pgvector text form, evaluated ONCE by the calling act and handed
+/// down — see the statement-2 comment below for why this is a parameter rather than a per-region
+/// function call. `None` is a legitimate value (an anchor with no live, embedded telos), and stores
+/// NULL.
+///
+/// Takes the whole [`Substrate`] rather than just its [`crate::affinity::Lens`] for the blend weights
+/// in statement 3. It no longer needs the lens **id**: the goal-liveness constants (halflife, stage
+/// weights, dampers) are lens-resident columns, but they are read by `anchor_telos_embedding` when
+/// the act evaluates `telos`, so they are already baked into the value handed in.
 async fn populate_readouts(
     tx: &mut PgConnection,
     region: Uuid,
     sub: &Substrate,
     zero_centroid: &str,
+    telos: Option<&str>,
 ) -> Result<()> {
     let lens = &sub.lens;
     // Centroid FIRST, in its own statement — Postgres evaluates all SET right-hand sides against the
@@ -1015,25 +1057,38 @@ async fn populate_readouts(
     .bind(zero_centroid)
     .execute(&mut *tx)
     .await?;
-    // Readouts now read the correct stored centroid. nullif guards the zero-centroid edge (a
-    // memberless/unembedded region → cosine-vs-zero = NaN) so telos_alignment stores NULL, not NaN;
-    // the salience UPDATE below already coalesces NULL telos_alignment to 0.
+    // Readouts now read the correct stored centroid, written by the statement above.
     //
-    // The telos readout dispatches on the region's own ANCHOR (spec §3.4), not on `r.cogmap_id` —
-    // which is NULL for a context region, so the old call silently returned NULL for every one of
-    // them. The cogmap branch of `anchor_region_telos_alignment` delegates to the unchanged
-    // `cogmap_region_telos_alignment`, so a cogmap's readouts are byte-identical to before.
+    // The telos readout is INLINED against a pre-computed telos rather than calling
+    // `anchor_region_telos_alignment(r.id, …)`, which is per-region by signature and therefore
+    // recomputes `anchor_telos_embedding` — a whole goal census — once per region. This function is
+    // called in a loop over every region of a pass, so that call was an N+1 over a single
+    // anchor-level answer: `anchor_telos_embedding` depends only on (anchor, lens). `refresh_salience`
+    // made the same hoist on 2026-08-03; measured in production on a 429-region context, 23.186s
+    // per-region vs 0.027s hoisted, same values.
+    //
+    // Both branches of `anchor_region_telos_alignment` reduce to `1 - (stored centroid <=> anchor
+    // telos)`, and both return NULL when the telos is NULL (`WHERE … t.v IS NOT NULL` yields no row)
+    // — which `$2` reproduces, since `centroid <=> NULL` is NULL. The function is deliberately left
+    // in place: it is now the ORACLE the equivalence tests in `tests/salience_telos_hoist.rs` hold
+    // both hoisted statements to, and it has no remaining production caller.
+    //
+    // `telos` is the same value the act recorded in its ledger payload, so the readout and the
+    // anchor's telos snapshot are the identical evaluation by construction rather than two reads
+    // that ought to agree.
+    //
+    // nullif guards the zero-centroid edge (a memberless/unembedded region → cosine-vs-zero = NaN)
+    // so telos_alignment stores NULL, not NaN; the salience UPDATE below coalesces NULL to 0.
     sqlx::query!(
         "UPDATE kb_cogmap_regions r SET \
            content_cohesion   = cogmap_region_content_cohesion(r.id), \
-           telos_alignment    = nullif(anchor_region_telos_alignment(\
-                                  r.id, r.home_anchor_table, r.home_anchor_id, $2), 'NaN'::double precision), \
+           telos_alignment    = nullif(1 - (r.centroid <=> ($2::text)::vector), 'NaN'::double precision), \
            reference_standing = cogmap_region_reference_standing(r.id), \
            centrality         = cogmap_region_centrality(r.id), \
            internal_tension   = cogmap_region_internal_tension(r.id, ARRAY['contradicts']) \
          WHERE r.id=$1",
         region,
-        sub.lens_id.uuid(),
+        telos,
     )
     .execute(&mut *tx)
     .await?;
