@@ -6,18 +6,17 @@
 # what is committed — the local mirror of the `test-python` CI job's drift step, and
 # the sibling of check-temper-rb-drift.sh and check-temper-ts-drift.sh.
 #
-# WHEN THIS SKIPS, AND WHY IT IS NOT THE GEM'S RULE. The gem's gate skips whenever
-# Docker is absent, even on a host that could run the pinned generator from the jar.
-# That is a stricter skip than its own generator needs, and the reason it is tolerable
-# there is that `test-ruby` pulls the image anyway. This gate runs whichever path the
-# host HAS — Docker or a JVM — and skips only when BOTH are missing, which is the
-# weakest form that still catches the artifact's failure mode.
+# WHEN THIS SKIPS. It runs whichever generator path the host HAS — Docker or a JVM — and
+# skips only when BOTH are missing, which is the weakest form that still catches the
+# artifact's failure mode. On a GitHub runner that resolves to the DOCKER path (the runner
+# has a daemon, and the generator script prefers it), so in CI this is the same container
+# run the gem's gate does and it never skips. The JVM fallback is what the weaker skip rule
+# buys: a developer machine with no Docker daemon still gets a real gate.
 #
-# On a GitHub runner that resolves to the DOCKER path (the runner has a daemon, and the
-# generator script prefers it), so in CI this is the same container run the gem's gate
-# does and it never skips. The JVM fallback is what the weaker skip rule actually buys:
-# a developer machine with no Docker daemon still gets a real gate here, where the gem's
-# equivalent prints SKIP.
+# The gem's gate now uses this same rule. It used to skip whenever Docker was absent —
+# stricter than its own generator needs, since that script has had a pinned-jar fallback all
+# along — and the cost was not theoretical: two retired files sat in the gem while a
+# Docker-less `cargo make check` printed SKIP.
 #
 # Usage: bash .github/scripts/check-temper-py-drift.sh
 
@@ -49,8 +48,9 @@ bash "$REPO_ROOT/.github/scripts/generate-temper-py.sh"
 # The manifest is a diff target and not merely a witness: `.openapi-generator/FILES` is the
 # generator's own list of what it wrote, so a file that STOPS being generated shows up there
 # as a deletion. `git diff` over $GENERATED alone would never see it — the orphan just sits
-# on disk, tracked and stale, matching nothing the generator emits. (The gem has exactly that
-# hole today: `reassign_api.rb` survives from a tag the contract no longer carries.)
+# on disk, tracked and stale, matching nothing the generator emits. (The gem had exactly that
+# hole: `reassign_api.rb` survived from a tag the contract no longer carries, until the gem's
+# gate was given both halves of this fix.)
 if ! git -C "$REPO_ROOT" ls-files --error-unmatch -- "$GENERATED" "$MANIFEST" >/dev/null 2>&1; then
   echo "ERROR: $GENERATED or $MANIFEST is not tracked by git, so there is nothing to" >&2
   echo "       diff against. Either it is gitignored or the paths here have drifted from" >&2
@@ -69,8 +69,8 @@ fi
 
 # An orphan is a file the generator no longer writes but git still tracks: the manifest
 # above catches its REMOVAL from the list, and this catches the file itself, which no
-# diff of generated content can see. Cheap, and it is the one failure mode the gem's
-# equivalent gate is blind to.
+# diff of generated content can see. Cheap, and it is the failure mode the gem's equivalent
+# gate was blind to until it was ported there.
 ORPHANS="$(
   comm -23 \
     <(git -C "$REPO_ROOT" ls-files -- "$GENERATED" | sed 's|^clients/temper-py/||' | sort) \

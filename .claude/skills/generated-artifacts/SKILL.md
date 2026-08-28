@@ -22,24 +22,29 @@ devDependencies), and `clients/temper-py/temper/generated` (emitted by the SAME 
 cargo make openapi   # regenerates all four in one step
 ```
 
-Gem regen needs Docker; the TS schema needs only Node; the Python package runs on Docker
-**or** a JVM.
+The TS schema needs only Node; the gem and the Python package share one pinned
+`openapi-generator` and run on Docker **or** a JVM (each generator script prefers Docker
+and falls back to the pinned jar, emitting identical bytes either way).
 
 `cargo make check` gates all four: `openapi-check` (spec), `openapi-rb-drift`,
-`openapi-ts-drift` and `openapi-py-drift`. **The three SDK gates have three different skip
-rules, and that is deliberate — each is the weakest form that still catches its artifact's
-failure mode:**
+`openapi-ts-drift` and `openapi-py-drift`. **Each skip rule is the weakest form that still
+catches its artifact's failure mode** — which comes to two rules, not three:
 
 | gate | skips when | never-skipping backstop |
 |---|---|---|
-| `openapi-rb-drift` | Docker is absent — even on a host that could run the pinned jar, because `test-ruby` pulls the image anyway | `test-ruby` CI job |
+| `openapi-rb-drift` | only when **both** Docker and a JVM are absent | `test-ruby` CI job |
 | `openapi-ts-drift` | never — `openapi-typescript` needs only Node | `test-agents-ts` CI job |
 | `openapi-py-drift` | only when **both** Docker and a JVM are absent | `test-python` CI job |
 
-The Python gate's weaker skip rule is not about CI — on a GitHub runner it resolves to
-the same Docker path the gem's gate takes. What it buys is a **developer machine with no
-Docker daemon**: there the JVM fallback keeps `cargo make check` a real gate, where
-`openapi-rb-drift` prints SKIP.
+The Docker-or-JVM rule is not about CI — on a GitHub runner both gates resolve to the same
+Docker path. What it buys is a **developer machine with no Docker daemon**: there the JVM
+fallback keeps `cargo make check` a real gate.
+
+`[corrected — 2026-08-28]` This table used to give the gem a third, stricter rule: skip
+whenever Docker is absent, on the grounds that `test-ruby` pulls the image anyway. That was
+stricter than `generate-temper-rb.sh` ever needed — it has had the pinned-jar fallback all
+along — and the cost was real, not theoretical: the two orphans described below sat in the
+tree while a Docker-less `cargo make check` printed SKIP over them.
 
 Never assume that because one SDK's gate is best-effort, the others are too.
 
@@ -48,6 +53,7 @@ Each generator's pin + params live in exactly one place, shared by every caller:
 | SDK | one definition | callers |
 |---|---|---|
 | temper-rb | `.github/scripts/generate-temper-rb.sh` | `cargo make openapi{,-rb}`, `check-temper-rb-drift.sh`, the gem's Rakefile |
+| temper-rb drift | `.github/scripts/check-temper-rb-drift.sh` | `cargo make openapi-rb-drift`, the gem's `rake drift` (so the `test-ruby` job) |
 | temper-ts | `.github/scripts/generate-temper-ts.sh` | `cargo make openapi{,-ts}`, `check-temper-ts-drift.sh`, `npm run generate`, the `test-agents-ts` job |
 | temper-py | `.github/scripts/generate-temper-py.sh` | `cargo make openapi{,-py}`, `check-temper-py-drift.sh`, the `test-python` job |
 
@@ -60,19 +66,30 @@ asserted, per job and per link, by `test-detect-ci-scope.sh`: `ci-success` runs
 `if: always()`, so a job in `needs` that nothing passes to `check_job` is a job whose red
 nobody reads.
 
-### The gem's gate is blind to an ORPHAN, and the Python one is not
+### A drift gate is blind to an ORPHAN unless you check the manifest
 
 `git diff` over the generated directory sees a file that CHANGED and a file that was
-ADDED. It cannot see a file the generator has **stopped writing**: the orphan just sits
-there, tracked, importable, and looking current. The gem has two such files today —
-`lib/temper/generated/api/reassign_api.rb` (a `Reassign` tag the contract no longer
-carries) and `lib/temper/generated/models/artifact_count_row.rb` — and
-`cargo make openapi-rb-drift` is green with both in the tree.
+ADDED. It cannot see a file the generator has **stopped writing**: openapi-generator does
+not delete output it no longer emits, so the orphan just sits there, tracked, loadable, and
+looking current, and `git diff` reports no change because nothing changed it.
 
-`check-temper-py-drift.sh` closes this by diffing the generator's own manifest
-(`.openapi-generator/FILES`, where a retired file shows up as a deletion) and then
-comparing that list against `git ls-files`. If you touch the gem's gate, this is the hole
-worth porting across.
+Both openapi-generator gates now close this in two complementary halves:
+
+1. **Diff the generator's own manifest.** `.openapi-generator/FILES` is its list of what it
+   wrote, so a retired file shows up there as a deletion. Red on the commit that retires it.
+2. **Cross-check `git ls-files` against that manifest** (`comm -23`), failing with the
+   offending paths named. Stays red for as long as the file is tracked — so an orphan that
+   landed before half 1 existed is still caught.
+
+If you add a fourth SDK, port both halves; neither alone is sufficient.
+
+`[corrected — 2026-08-28]` This section used to say the gem's gate was blind to this and
+name two live orphans — `lib/temper/generated/api/reassign_api.rb` (from a `Reassign` tag
+the contract no longer carries) and `lib/temper/generated/models/artifact_count_row.rb`.
+Both have been deleted and the gem's gate has both halves. The gem's CI backstop was the
+half that stayed blind longest: `rake drift` hand-rolled its own `git diff` rather than
+calling `check-temper-rb-drift.sh`, so the two copies were free to disagree, and did. It
+now delegates.
 
 ### The drift gates compare against git, not against a fresh build — and they do not all want the same thing
 

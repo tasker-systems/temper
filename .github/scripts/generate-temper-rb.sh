@@ -9,9 +9,9 @@
 # This script is the single source of truth for the generator pin + parameters.
 # Invoked three ways, so the docker invocation lives here rather than in any caller:
 #   - `cargo make openapi` / `cargo make openapi-rb` (local dev, regen)
-#   - `cargo make openapi-rb-drift` → check-temper-rb-drift.sh (local dev, verify)
-#   - the temper-rb Rakefile's `generate` task, which the `test-ruby` CI job drives
-#     via `rake drift`
+#   - the temper-rb Rakefile's `generate` task (regen from inside the gem)
+#   - check-temper-rb-drift.sh (verify), which both `cargo make openapi-rb-drift` and
+#     the `test-ruby` CI job's `rake drift` delegate to
 #
 # Ruby is NOT required — this path is deliberately toolchain-light so a Rust dev
 # who changed a DTO can regenerate the gem without standing up the gem's Ruby 3.4

@@ -5,8 +5,8 @@
 # Regenerates the schema (via generate-temper-ts.sh) and diffs the result against what
 # is committed — the local mirror of the temper-ts CI job's drift step.
 #
-# Unlike check-temper-rb-drift.sh this NEVER skips. That one needs a Docker daemon and
-# exits 0 when it is absent (the test-ruby CI job being the never-skipping backstop);
+# Unlike check-temper-rb-drift.sh and check-temper-py-drift.sh this NEVER skips. Those two
+# drive the pinned openapi-generator and exit 0 on a host with neither Docker nor a JVM;
 # openapi-typescript needs only Node, so there is no environment in which we would
 # rather guess. `cargo make check` therefore gains a gate that is a real gate.
 #

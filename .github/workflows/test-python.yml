@@ -72,7 +72,8 @@ jobs:
       #
       # The JVM fallback earns its keep off the runner: it is what lets
       # `cargo make openapi-py-drift` be a real gate on a developer machine with no
-      # Docker daemon, where the gem's equivalent skips.
+      # Docker daemon. The gem's gate has since adopted the same rule, for the same
+      # reason -- it shares this generator, jar fallback and all.
       - name: Codegen drift gate
         run: bash ../../.github/scripts/check-temper-py-drift.sh
 
