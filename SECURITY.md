@@ -89,6 +89,30 @@ The same reasoning governs how changes are described. A pull request or release 
 change establishes going forward. It is not the place for an account of what was wrong beforehand,
 because that account is actionable against everyone who has not yet upgraded.
 
+### Who may set aside a security finding
+
+Two different acts, deliberately kept apart, because conflating them is how a finding disappears
+while everyone believes it was handled.
+
+**Releasing a merge** — the `codeql-override` label on a pull request. It says *this analysis did
+not pass and the merge proceeds anyway*, and it exists because CodeQL is separate compute that
+sometimes stalls; a stalled required check blocks a pull request indefinitely, since pending is not
+failed. It overrides the merge and **not** the finding: any alert raised stays open, and the label
+stays on the merged pull request, so what was released and when is answerable afterwards from the
+pull request itself.
+
+**Dismissing an alert** — closing the finding in the Security tab as a false positive, as won't-fix,
+or as used-in-tests. This is the one that ends a finding rather than deferring it, and the
+convention is that it is the project owner's, or an agent the owner has explicitly authorized for
+it. Every dismissal records a reason; "won't fix" with no stated reason is not a dismissal, it is a
+deletion.
+
+**This is a convention, not a control, and the difference matters.** GitHub grants alert dismissal
+to anyone with write access to the repository, and offers no finer-grained permission for it — so
+nothing mechanically prevents a dismissal outside this convention. What is available is detection
+after the fact: every alert records who dismissed it and why. Stating that here is the point, since
+a convention documented as though it were enforced is worse than one documented as a convention.
+
 ## What the project does to hold its ground
 
 - **Fail-closed authorization.** Absence denies. A principal with no standing row has no access, and
@@ -102,7 +126,8 @@ because that account is actionable against everyone who has not yet upgraded.
   with sha256-pinned native dependencies. `temper attest` verifies an installed binary.
 - **Dependency and secret scanning.** `cargo audit` blocking in CI, Dependabot, GitHub secret
   scanning with push protection.
-- **CodeQL** static analysis.
+- **CodeQL** static analysis, **blocking**. It gates merges through the same single required
+  check every other CI job reports to, and analyzes only the languages a change can reach.
 
 None of these is a guarantee, and several of them say so in their own documentation. They are what
 makes a regression loud rather than silent.
