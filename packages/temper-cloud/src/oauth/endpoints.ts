@@ -34,6 +34,11 @@ import {
   newOpaqueToken,
 } from "./mint.js";
 import { reconcileMemberships } from "./reconcile.js";
+import {
+  RECONCILE_CHANNEL,
+  recordChannelFailure,
+  recordChannelSuccess,
+} from "./reconcile-health.js";
 import { resolvePrincipal } from "./resolve.js";
 
 /** How long a pending flow (awaiting the IdP round-trip) stays valid. */
@@ -365,12 +370,26 @@ export async function handleSamlAcs(req: Request, db: NeonClient): Promise<Respo
           idp_key: idp.idp_key,
           groups: extractGroups(profile, idp),
         });
+        // The heartbeat, and it is the half that is easy to leave out. Without a recorded success
+        // the reader cannot tell a channel that has been failing for a week from one that failed
+        // once a moment ago, because "how long has this been going on" is answered by the gap since
+        // the last success and by nothing else. Only inside the `groupProvisioningConfigured`
+        // branch: an authentication-only IdP makes no call, so it has no health to report and must
+        // not appear to.
+        await recordChannelSuccess(db, RECONCILE_CHANNEL);
       }
     } catch (reconcileErr) {
       logger.error(
         { err: reconcileErr instanceof Error ? reconcileErr.message : String(reconcileErr) },
         "SAML ACS: membership reconcile failed (fail-open, login proceeds)",
       );
+      // The log line is unchanged, deliberately: enriching it was rejected twice — `idp_key` by a
+      // security review as unnecessary, and per-principal detail because these failures are not
+      // per-principal. This records the SYSTEMIC fact instead, at grain (channel), where something
+      // reads it. `recordChannelFailure` cannot throw (see reconcile-health.ts); if it could, an
+      // observability write inside this catch would escape to the outer handler and answer
+      // `400 SAML assertion rejected` — a login failure caused by the thing watching for failures.
+      await recordChannelFailure(db, RECONCILE_CHANNEL, reconcileErr);
     }
 
     // Who this login is, so the refresh chain the token endpoint is about to mint carries an owner
