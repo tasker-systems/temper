@@ -17,7 +17,8 @@
     { "path": "/api/embed/warm", "schedule": "*/2 * * * *" },
     { "path": "/api/slack/intents/reap", "schedule": "0 * * * *" },
     { "path": "/api/region/dispatch", "schedule": "* * * * *" },
-    { "path": "/api/as/reap", "schedule": "17 3 * * *" }
+    { "path": "/api/as/reap", "schedule": "17 3 * * *" },
+    { "path": "/api/internal-calls/health", "schedule": "*/15 * * * *" }
   ],
   "functions": {
     "api/axum.rs": { "memory": 3009, "maxDuration": 60 },
@@ -33,6 +34,7 @@
     { "src": "/api/slack/intents/reap", "dest": "/api/internal" },
     { "src": "/api/region/dispatch", "dest": "/api/internal" },
     { "src": "/api/as/reap", "dest": "/api/internal" },
+    { "src": "/api/internal-calls/health", "dest": "/api/internal" },
     { "src": "/internal/(.*)", "dest": "/api/internal" },
     { "src": "/.well-known/oauth-authorization-server", "dest": "/api/oauth/authorization-server" },
     { "src": "/oauth/jwks", "dest": "/api/oauth/jwks" },
