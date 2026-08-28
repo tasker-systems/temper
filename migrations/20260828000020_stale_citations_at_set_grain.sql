@@ -1,87 +1,30 @@
--- Staleness moves to set grain, because the sweep's cost was never where anyone looked.
+-- Staleness moves to set grain: the sweep called a scalar predicate once per candidate row.
 --
--- =================================================================================================
--- THE MEASUREMENT
--- =================================================================================================
+-- THE COST. `EXPLAIN (ANALYZE, BUFFERS)`, production, 2026-08-28: the `scored` CTE that
+-- `20260724000130` and `20260727000010` both treat as the cost is 83.6 ms of 3,090. The staleness
+-- disjunct is 3,004 ms and 236,516 buffers -- 97% of the runtime, 92% of the buffers. Its 363
+-- buffers per evaluation are named by the incumbent itself: `resource_stale_citations`
+-- (`20260727000050`) re-derives `resources_visible_to` from base tables once per finding.
 --
--- Production, 2026-08-28, `EXPLAIN (ANALYZE, BUFFERS)` on `audit_drift_sweep(principal, 50)` — the
--- first such plan taken of this function:
+-- WHY IT WENT UNSEEN, AND WHAT NOT TO UNDO. `20260727000010` moved `stale` into the disjunct so it
+-- would be reached only for findings the cheap `coverage < magnitude` arm had not already admitted.
+-- That short-circuit does not fire: `kb_citation_audits` has no supersession (`20260724000110`), so
+-- coverage is MONOTONE and full coverage is the steady state of any corpus audited once -- which is
+-- where an hourly cron lives. Measured the same day: 0 of 651 candidates took the cheap arm. The
+-- `stale` CTE below carries that short-circuit SET-WISE; do not "restore" the scalar form.
 --
---   Limit  (actual time=3123.803..3123.831 rows=15)   Buffers: shared hit=256972
---     CTE scored
---       ->  Hash Join  (actual time=14.446..83.635 rows=754)   Buffers: shared hit=20456
---     ->  CTE Scan on scored s  (actual time=609.266..3088.078 rows=15)
---           Filter: ((s.magnitude > 0) AND ((s.coverage < s.magnitude)
---                    OR resource_has_stale_citation(s.finding_id, '019fa583-…'::uuid)))
---           Rows Removed by Filter: 739
---   Execution Time: 3090.423 ms
---
--- `scored` -- the CTE `20260724000130` and `20260727000010` both treat as the cost, and which
--- `20260727000010` MATERIALIZED specifically to bound -- is **83.6 ms of 3,090**. The staleness
--- disjunct is 3,004 ms and 236,516 buffers: 97% of the time and 92% of the buffers, at 363 buffers
--- per evaluation.
---
--- =================================================================================================
--- WHY: THE SHORT-CIRCUIT `20260727000010` WAS BUILT ON NEVER FIRES
--- =================================================================================================
---
--- That migration moved `stale` out of `scored` and into the disjunct so it would be "reached only
--- when `s.coverage < s.magnitude` is false" and would "keep paying only for fully-covered findings."
--- The reasoning is right. The premise is not. Measured on the same day, for the sole auditor
--- principal:
---
---   candidates | magnitude > 0 | coverage < magnitude | fully covered | Σ magnitude | Σ coverage
---          754 |           651 |                    0 |           651 |       1,079 |      1,079
---
--- The cheap arm admits NOTHING, so the expensive arm runs for every candidate, every tick. And this
--- is not a transient state to wait out: `kb_citation_audits` has no supersession (`20260724000110`),
--- so coverage is MONOTONE, and full coverage is therefore the steady state of any corpus that has
--- been audited once -- which is the state an hourly cron spends essentially all of its life in.
--- `20260727000010`'s own 221-candidate fixture was measured on a corpus whose uncovered arm was not
--- empty, which is why the shape looked cheap there and is not cheap here.
---
--- The 363 buffers are named by the incumbent itself: `resource_stale_citations` (`20260727000050`)
--- opens with `WHERE p_finding IN (SELECT resource_id FROM resources_visible_to(p_principal))`,
--- recomputing the principal's whole visible-resource set from base tables -- once per finding.
---
--- =================================================================================================
--- THE FIX, AND WHAT IT DELIBERATELY IS NOT
--- =================================================================================================
---
--- ONE LINE OF THE PREDICATE CHANGES: the gate filters an ARRAY instead of a scalar, so
--- `resources_visible_to` is derived once per sweep instead of once per finding. Everything else is
--- `20260727000050`'s body verbatim, with `g.fid` where `p_finding` stood.
---
--- NOT a threshold, NOT a cursor, NOT a watermark, and NOT the terminal-verdict gap. Each was
--- considered against the measurement and rejected; the reasoning is in
--- `temper-artifacts:specs/2026-08-28-audit-drift-sweep-set-orientation-design.md` §6. The one worth
--- repeating here, because a future reader will reach for it exactly as this arc's task did:
--- `steward_drift_sweep` does NOT "cull before the expensive per-map work". Its
+-- NOT A BOUND. A threshold, a cursor, a watermark and the terminal-verdict gap were each considered
+-- against the measurement and rejected -- argued in `temper-artifacts:specs/2026-08-28-audit-drift-
+-- sweep-set-orientation-design.md`. One correction belongs here, because the next reader will reach
+-- for it: `steward_drift_sweep` does NOT cull before its expensive per-map work. Its
 -- `WHERE d.new_resources >= p_threshold` filters the OUTPUT of the `CROSS JOIN LATERAL
--- steward_ingest_delta(...)` that IS the work -- structurally the same position as `p_limit`. A
--- threshold here would have bought nothing, and on the live corpus (every candidate at
--- `magnitude - coverage = 0`) would have returned zero rows at unchanged cost.
+-- steward_ingest_delta(...)` that IS the work -- structurally the same position as `p_limit`.
 --
--- INVERTED, NOT FORKED. The body moves INTO the set form and the per-finding form becomes a
--- one-element call into it. `resource_has_stale_citation` is untouched and stays `EXISTS` over the
--- per-finding form. So all three arities keep answering identically BY CONSTRUCTION -- which is the
--- property `20260727000050` established when it moved the body the other way ("so the two cannot
--- answer differently"), preserved one arity further out. An inlined copy in the sweep would have
--- been faster to write and would have forked the predicate into two definitions nothing links.
---
--- VERIFIED AGAINST PRODUCTION BEFORE BEING WRITTEN. The set body below was executed over all 754
--- candidate findings and compared to `resource_stale_citations` called per finding, at
--- (finding, block, source) grain:
---
---   incumbent_rows | setform_rows | only_incumbent | only_setform
---               15 |           15 |              0 |            0
---
---   at 60 ms / 27,762 buffers, against the incumbent sweep's 3,090 ms / 256,972.
---
--- ADDITIVE. One new function; two `CREATE OR REPLACE`s whose signatures and return columns are
--- unchanged, so no deployed binary can disagree with this schema across the apply, and no dependency
--- is dropped. `auditor_service::drift_sweep` calls `audit_drift_sweep($1, $2)` positionally and keeps
--- resolving; no `.sqlx` entry changes because no query text does.
+-- INVERTED, NOT FORKED. The body moves into the set form; the per-finding form becomes a
+-- one-element call into it and `resource_has_stale_citation` is untouched, so all three arities
+-- agree by construction -- the property `20260727000050` established, one arity further out.
+-- Verified against production over all 754 candidates before being written: identical rows at
+-- (finding, block, source) grain, at 3,090 ms / 256,972 buffers -> 60 ms / 27,762.
 
 -- ── 1. The staleness set, at set grain ──────────────────────────────────────────────────────────
 -- Body from `20260727000050`. Its four load-bearing decisions are documented at `20260726000010` and
@@ -234,19 +177,18 @@ buffers -> 60 ms / 27,762, identical rows at (finding, block, source) grain acro
 CORRECTION TO THIS FUNCTION'S OWN PRIOR COMMENTS, and it cuts the other way from `20260727000010`'s.
 `20260724000130` and `20260727000010` both name a missing terminal "cannot assess" verdict, or a
 per-finding backoff, as "the reason the stuck population is unbounded". That reasoning still stands on
-its own terms and the gap is still unbuilt. But it is NOT what the production queue evidences. Measured
-2026-08-28: 143 dead auditor jobs, zero verdicts written since 2026-08-09, and every model call
-returning HTTP 402 from the AI Gateway for want of budget. The auditor never reached a judgment, so it
-never declined to record one — those dead jobs are an optional subsystem asked to run more often than
-it is funded for, and must not be cited as evidence for the verdict gap. Nor would closing that gap
-have removed one buffer of the cost above: the 3,004 ms was staleness over the 651 FULLY COVERED
-findings, while the stuck population was 15.
+its own terms and the gap is still unbuilt. But a stuck queue is NOT evidence for it. When the auditor's
+sessions cannot complete for a reason upstream of any judgment — the agent runtime being unavailable,
+whatever the cause — every finding it was dispatched re-heads the queue on the next tick, and that
+looks identical to a finding the auditor examined and declined. Only the second is what those comments
+describe. Before citing a stuck population as evidence for the verdict gap, establish that the auditor
+actually reached a judgment.
 
-STILL NOT FIXED HERE, and each is still its own task:
-  * `resource_live_citations` has no `ingest_state` gate on the FINDING side (the source side gained
-    one in `20260727000020`).
-  * The source-side clause fires on ANY block of the cited source, including a telos.
-  * An edit landing DURING an audit run still under-triggers by one tick.$c$;
+Nor would closing that gap have removed one buffer of the cost above: the 3,004 ms was staleness over
+the 651 FULLY COVERED findings, and a stuck population is a rounding error beside that.
+
+`20260727000010`'s three recorded caveats are carried forward unchanged; read them there rather than
+here, since nothing in this migration touches any of them.$c$;
 
 SELECT declare_migration(
     20260828000020,

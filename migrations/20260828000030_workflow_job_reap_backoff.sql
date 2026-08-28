@@ -1,65 +1,26 @@
 -- `next_visible_at` has been read by every claim since `20260705000001` and written by nothing.
 --
--- =================================================================================================
--- THE DEFECT
--- =================================================================================================
+-- THE DEFECT. The column exists, defaults to `now()`, is the third column of
+-- `idx_workflow_jobs_claimable`, and is filtered by all four claim variants (`20260705000001`,
+-- `20260707000001`, `20260802000020`, `20260724000130`) as `AND c.next_visible_at <= now()`.
+-- `workflow_job_reap` never advanced it, so a reaped job was claimable again the instant the reaper
+-- committed -- the column, the index and the filter described a backoff the system did not perform.
+-- With `embed` (four shards) and `region` both on `* * * * *` and every persona leasing 600 s, three
+-- attempts against an unavailable upstream burned in roughly half an hour, and the sweep that
+-- enqueued the job deterministically replaced it with the same work.
 --
--- `kb_workflow_jobs.next_visible_at` exists (`20260705000001:31`), defaults to `now()`, is the third
--- column of `idx_workflow_jobs_claimable`, and is filtered by EVERY claim variant -- the cogmap one
--- (`20260705000001`), the resource twin (`20260707000001`), the anchor twin (`20260802000020`), and
--- the principal-scoped re-creation (`20260724000130`), each carrying `AND c.next_visible_at <= now()`.
+-- THE CURVE. attempts=1 -> 300 s, attempts=2 -> 600 s, cap 3600 s. Half a lease first: the job
+-- already waited a full 600 s lease to be noticed, so a materially shorter delay is noise against a
+-- one-minute cron. The cap does not bind at `max_attempts = 3` -- it is there so that raising that
+-- constant stays bounded, which nobody re-derives when bumping a retry count.
 --
--- Nothing ever advanced it. `workflow_job_reap` sets `status`, `last_error`, `lease_expires_at` and
--- `completed_at`, and leaves `next_visible_at` at its insert-time default -- so a reaped job is
--- claimable again the instant the reaper commits. The column, the index and the filter described a
--- backoff the system did not perform.
+-- THE DYING ARM IS UNTOUCHED, deliberately: a terminal row deferred into the future reads as
+-- scheduled work that will never run.
 --
--- WHAT THAT COST, measured rather than supposed. `embed` runs four shards at `* * * * *` and `region`
--- at `* * * * *` (root `vercel.json`), and every persona leases for 600 s. So a job failing against a
--- persistently-unavailable upstream burned all three attempts in roughly thirty minutes of pure lease
--- time, went `dead`, released `uq_workflow_jobs_in_flight`, and was re-enqueued by the next sweep to
--- do it again. Observed on the citation auditor across 2026-07-29..08-28: 143 dead jobs, one every
--- three hours, each carrying the same fifteen citations of the same cogmap.
---
--- =================================================================================================
--- THE CURVE, AND WHY THESE NUMBERS
--- =================================================================================================
---
---   attempts=1 -> 300 s      attempts=2 -> 600 s      cap 3600 s
---
--- FIRST RETRY = HALF A LEASE. Below ~60 s a delay is invisible against a one-minute cron, and the job
--- already waited a full 600 s lease to be noticed at all -- so a delay materially shorter than the
--- lease is noise. Half a lease is a real gap for the minute-cadence personas while still letting a
--- transient upstream blip drain inside the same hour for every persona, including the hourly auditor.
---
--- BOUNDED, and the cap does NOT bind at `max_attempts = 3`. It exists so that raising that constant
--- stays safe: an unbounded doubling on a queue whose jobs are re-created by their own sweep every
--- tick is a leak, not a backoff, and nobody re-derives a bound when bumping a retry count.
---
--- THE DYING ARM IS UNTOUCHED. A job at `max_attempts` goes `dead` with `completed_at` stamped,
--- exactly as before. Deferring a terminal row would leave it looking scheduled forever, and `dead` is
--- not a state anything retries out of.
---
--- =================================================================================================
--- HONEST BOUND ON WHAT THIS BUYS -- read this before citing it as the fix for anything
--- =================================================================================================
---
--- THIS DOES NOT RESCUE A SUSTAINED OUTAGE. Three attempts are exhausted regardless; they are merely
--- exhausted more slowly. The auditor's 143 dead jobs were caused by an external funding ceiling (the
--- AI Gateway returning HTTP 402 for want of budget, 335 occurrences through 2026-08-28), and this
--- migration would have turned 143 dead jobs into perhaps 120. It is not the remedy for that, and the
--- remedy -- an optional agent that skips quietly when it cannot afford to run -- lives in
--- `schedules/auditor.ts`, not here.
---
--- What it does buy is real but modest: a failing job holds `uq_workflow_jobs_in_flight` for longer,
--- so a sweep's re-enqueue coalesces instead of the queue thrashing dead rows; and a genuinely
--- transient upstream gets a gap in which to recover instead of being retried inside the same minute.
--- It is worth doing because it is correct independently of any of that -- a written column that
--- nothing writes is a latent defect across all five personas that share this reaper.
---
--- ADDITIVE. `CREATE OR REPLACE`; signature (`p_error text DEFAULT 'lease expired'`) and return type
--- (`int`) unchanged, so no deployed binary can disagree with this schema across the apply. Body is
--- verbatim from `20260705000001` apart from the one added `SET` term.
+-- NOT A REMEDY FOR A SUSTAINED OUTAGE. Three attempts are exhausted either way, only more slowly. A
+-- persona that cannot run at all should decline at the dispatcher rather than enqueue work nothing
+-- can take. This is worth doing regardless: a column every claim reads and nothing writes is a
+-- latent defect across all five personas sharing this reaper.
 
 CREATE OR REPLACE FUNCTION workflow_job_reap(p_error text DEFAULT 'lease expired') RETURNS int
 LANGUAGE sql AS $$
