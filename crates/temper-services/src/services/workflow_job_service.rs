@@ -63,6 +63,16 @@ pub async fn enqueue_with_payload(
 /// with the `correlation` of the dispatch tick that claimed it (`None` → NULL; the tick sent no
 /// `x-steward-correlation-id`). The stamp is what `invocation_open` later inherits, so a session's
 /// invocation joins back to its tick without the agent threading anything.
+///
+/// `principal` does two things, exactly as it does in [`claim_audit`]: it is the claimant stamped
+/// into `claimed_by_profile_id`, AND it scopes the claimable set to
+/// `steward_candidate_cogmaps(principal)`. Passing this tick's own `self.profile_id` cannot narrow
+/// what the tick just enqueued — spec §3.3 is why: the sweep that enqueues already runs as the same
+/// principal against `steward_authorable_cogmaps`, which is candidates ∩ authorable, strictly
+/// narrower than the candidate set the claim filters through. Before this parameter existed the
+/// steward's claim passed no principal at all, so `claimed_by_profile_id` defaulted NULL on every
+/// steward job — the asymmetry [`claim_audit`]'s own doc comment names, and which `20260724000130`
+/// recorded as fixed for the auditor but not for the steward.
 pub async fn claim(
     pool: &PgPool,
     persona: &str,
@@ -70,17 +80,19 @@ pub async fn claim(
     limit: i32,
     lease_seconds: i32,
     correlation: Option<CorrelationId>,
+    principal: ProfileId,
 ) -> ApiResult<Vec<ClaimedJob>> {
     let rows = sqlx::query!(
         r#"
         SELECT id AS "id!: Uuid", cogmap_id AS "cogmap_id!: Uuid", attempts AS "attempts!: i32"
-          FROM workflow_job_claim($1, $2, $3, $4, $5)
+          FROM workflow_job_claim($1, $2, $3, $4, $5, $6)
         "#,
         persona,
         dispatch_type,
         limit,
         lease_seconds,
         correlation.map(|c| c.uuid()),
+        *principal,
     )
     .fetch_all(pool)
     .await?;
@@ -482,8 +494,10 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn claim_leases_and_increments_attempts(pool: PgPool) {
         let c = a_cogmap(&pool).await;
+        let principal = a_profile(&pool, "wjs-claim-leases").await;
+        reach(&pool, c, principal, "wjs-claim-leases-team").await;
         enqueue(&pool, c, "steward", "steward").await.unwrap();
-        let claimed = claim(&pool, "steward", "steward", 10, 600, None)
+        let claimed = claim(&pool, "steward", "steward", 10, 600, None, principal)
             .await
             .unwrap();
         assert_eq!(claimed.len(), 1);
@@ -491,7 +505,7 @@ mod tests {
         assert_eq!(claimed[0].attempts, 1, "attempts incremented at claim");
         assert_eq!(status_of(&pool, claimed[0].id).await, "in_progress");
         // A second claim finds nothing — it is no longer claimable.
-        let again = claim(&pool, "steward", "steward", 10, 600, None)
+        let again = claim(&pool, "steward", "steward", 10, 600, None, principal)
             .await
             .unwrap();
         assert!(again.is_empty(), "in_progress is not re-claimable");
@@ -508,11 +522,13 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn claim_stamps_the_tick_correlation(pool: PgPool) {
         let c = a_cogmap(&pool).await;
+        let principal = a_profile(&pool, "wjs-claim-correlation").await;
+        reach(&pool, c, principal, "wjs-claim-correlation-team").await;
         enqueue(&pool, c, "steward", "steward").await.unwrap();
         // The steward cron mints a v4 uuid per tick; CorrelationId carries whatever the caller sends
         // (the column has no version requirement — see the design doc's "do not fix it to v7" note).
         let tick = CorrelationId::new();
-        let claimed = claim(&pool, "steward", "steward", 10, 600, Some(tick))
+        let claimed = claim(&pool, "steward", "steward", 10, 600, Some(tick), principal)
             .await
             .unwrap();
         assert_eq!(claimed.len(), 1);
@@ -528,8 +544,10 @@ mod tests {
         // A caller that sends no `x-steward-correlation-id` claims exactly as before — NULL, never an
         // error. Correlation is provenance; nothing gates on it.
         let c = a_cogmap(&pool).await;
+        let principal = a_profile(&pool, "wjs-claim-no-correlation").await;
+        reach(&pool, c, principal, "wjs-claim-no-correlation-team").await;
         enqueue(&pool, c, "steward", "steward").await.unwrap();
-        let claimed = claim(&pool, "steward", "steward", 10, 600, None)
+        let claimed = claim(&pool, "steward", "steward", 10, 600, None, principal)
             .await
             .unwrap();
         assert_eq!(correlation_of(&pool, claimed[0].id).await, None);
@@ -542,9 +560,11 @@ mod tests {
         // haunt every subsequent retry, and the invocation would inherit a correlation whose logs
         // describe a different run.
         let c = a_cogmap(&pool).await;
+        let principal = a_profile(&pool, "wjs-reclaim-after-reap").await;
+        reach(&pool, c, principal, "wjs-reclaim-after-reap-team").await;
         enqueue(&pool, c, "steward", "steward").await.unwrap();
         let first = CorrelationId::new();
-        let claimed = claim(&pool, "steward", "steward", 10, -1, Some(first))
+        let claimed = claim(&pool, "steward", "steward", 10, -1, Some(first), principal)
             .await
             .unwrap();
         let id = claimed[0].id;
@@ -555,7 +575,7 @@ mod tests {
 
         // Re-claim with an expiring lease again, so the row can be reaped once more below.
         let second = CorrelationId::new();
-        claim(&pool, "steward", "steward", 10, -1, Some(second))
+        claim(&pool, "steward", "steward", 10, -1, Some(second), principal)
             .await
             .unwrap();
         assert_eq!(correlation_of(&pool, id).await, Some(second.uuid()));
@@ -564,7 +584,7 @@ mod tests {
         // (attempts is 2 here, below max_attempts=3, so the reap retries rather than killing it.)
         reap(&pool, "lease expired").await.unwrap();
         elapse_backoff(&pool).await;
-        claim(&pool, "steward", "steward", 10, 600, None)
+        claim(&pool, "steward", "steward", 10, 600, None, principal)
             .await
             .unwrap();
         assert_eq!(correlation_of(&pool, id).await, None);
@@ -573,8 +593,10 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn complete_marks_done_and_frees_the_slot(pool: PgPool) {
         let c = a_cogmap(&pool).await;
+        let principal = a_profile(&pool, "wjs-complete-frees-slot").await;
+        reach(&pool, c, principal, "wjs-complete-frees-slot-team").await;
         enqueue(&pool, c, "steward", "steward").await.unwrap();
-        claim(&pool, "steward", "steward", 10, 600, None)
+        claim(&pool, "steward", "steward", 10, 600, None, principal)
             .await
             .unwrap();
         let done = complete(&pool, c, "steward", "steward").await.unwrap();
@@ -700,12 +722,21 @@ mod tests {
         )
         .await
         .unwrap();
-        let claimed = claim(&pool, "auditor", "citation-audit", 10, 600, None)
-            .await
-            .unwrap();
-        // The steward-shaped `claim` passes no principal, so the row is claimed by nobody and
-        // `complete_claimed` must decline it — proving the predicate is the CLAIMANT, not merely
-        // "some in-flight job exists".
+        // A principal-less claim is no longer reachable through the Rust `claim` wrapper after Beat A
+        // (its `principal` parameter is now mandatory, exactly as `claim_audit`'s always was), so this
+        // constructs the pre-Beat-A "unscoped claim" scenario directly against the SQL primitive,
+        // which still accepts `p_principal DEFAULT NULL` for callers outside this crate. The row it
+        // leaves is claimed by nobody, and `complete_claimed` must decline it — proving the predicate
+        // is the CLAIMANT, not merely "some in-flight job exists".
+        let claimed_id: Uuid =
+            sqlx::query_scalar("SELECT id FROM workflow_job_claim($1, $2, $3, $4)")
+                .bind("auditor")
+                .bind("citation-audit")
+                .bind(10i32)
+                .bind(600i32)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert!(
             complete_claimed(&pool, c, "auditor", "citation-audit", auditor)
                 .await
@@ -713,7 +744,7 @@ mod tests {
                 .is_none(),
             "an unclaimed-by-anyone in-flight job is not this principal's to complete"
         );
-        assert_eq!(status_of(&pool, claimed[0].id).await, "in_progress");
+        assert_eq!(status_of(&pool, claimed_id).await, "in_progress");
 
         // Re-claim it under the auditor (reap first so it is claimable again).
         sqlx::query("UPDATE kb_workflow_jobs SET lease_expires_at = now() - interval '1 minute'")
@@ -808,9 +839,11 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn reap_expired_lease_retries_then_dead(pool: PgPool) {
         let c = a_cogmap(&pool).await;
+        let principal = a_profile(&pool, "wjs-reap-retries-then-dead").await;
+        reach(&pool, c, principal, "wjs-reap-retries-then-dead-team").await;
         enqueue(&pool, c, "steward", "steward").await.unwrap();
         // Claim with an already-past lease (negative seconds → lease_expires_at in the past).
-        let claimed = claim(&pool, "steward", "steward", 10, -1, None)
+        let claimed = claim(&pool, "steward", "steward", 10, -1, None, principal)
             .await
             .unwrap();
         let id = claimed[0].id;
@@ -821,12 +854,12 @@ mod tests {
         // Each re-claim needs the `20260828000030` backoff to have elapsed; this test asserts the
         // attempt ladder, and `the_backoff_grows_with_attempts_and_is_capped` asserts the delay.
         elapse_backoff(&pool).await;
-        claim(&pool, "steward", "steward", 10, -1, None)
+        claim(&pool, "steward", "steward", 10, -1, None, principal)
             .await
             .unwrap();
         reap(&pool, "boom").await.unwrap();
         elapse_backoff(&pool).await;
-        claim(&pool, "steward", "steward", 10, -1, None)
+        claim(&pool, "steward", "steward", 10, -1, None, principal)
             .await
             .unwrap();
         reap(&pool, "boom").await.unwrap();
@@ -859,8 +892,16 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn a_reaped_job_is_not_immediately_claimable_again(pool: PgPool) {
         let c = a_cogmap(&pool).await;
+        let principal = a_profile(&pool, "wjs-reaped-not-immediately-claimable").await;
+        reach(
+            &pool,
+            c,
+            principal,
+            "wjs-reaped-not-immediately-claimable-team",
+        )
+        .await;
         enqueue(&pool, c, "steward", "steward").await.unwrap();
-        let claimed = claim(&pool, "steward", "steward", 10, -1, None)
+        let claimed = claim(&pool, "steward", "steward", 10, -1, None, principal)
             .await
             .unwrap();
         let id = claimed[0].id;
@@ -882,7 +923,7 @@ mod tests {
 
         // The column moving is not the same claim as the BEHAVIOUR changing. This is the half that
         // would still fail if a future claim variant forgot the `next_visible_at <= now()` filter.
-        let too_soon = claim(&pool, "steward", "steward", 10, 600, None)
+        let too_soon = claim(&pool, "steward", "steward", 10, 600, None, principal)
             .await
             .unwrap();
         assert!(
@@ -891,7 +932,7 @@ mod tests {
         );
 
         elapse_backoff(&pool).await;
-        let now_claimable = claim(&pool, "steward", "steward", 10, 600, None)
+        let now_claimable = claim(&pool, "steward", "steward", 10, 600, None, principal)
             .await
             .unwrap();
         assert!(
@@ -908,11 +949,13 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn the_backoff_grows_with_attempts_and_is_capped(pool: PgPool) {
         let c = a_cogmap(&pool).await;
+        let principal = a_profile(&pool, "wjs-backoff-grows-and-capped").await;
+        reach(&pool, c, principal, "wjs-backoff-grows-and-capped-team").await;
         enqueue(&pool, c, "steward", "steward").await.unwrap();
 
         let mut delays: Vec<f64> = Vec::new();
         for _ in 0..2 {
-            claim(&pool, "steward", "steward", 10, -1, None)
+            claim(&pool, "steward", "steward", 10, -1, None, principal)
                 .await
                 .unwrap();
             reap(&pool, "lease expired").await.unwrap();
@@ -950,8 +993,10 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn backoff_does_not_defer_a_job_that_dies(pool: PgPool) {
         let c = a_cogmap(&pool).await;
+        let principal = a_profile(&pool, "wjs-backoff-no-defer-on-death").await;
+        reach(&pool, c, principal, "wjs-backoff-no-defer-on-death-team").await;
         enqueue(&pool, c, "steward", "steward").await.unwrap();
-        let id = claim(&pool, "steward", "steward", 10, -1, None)
+        let id = claim(&pool, "steward", "steward", 10, -1, None, principal)
             .await
             .unwrap()[0]
             .id;
@@ -959,7 +1004,7 @@ mod tests {
         for _ in 0..2 {
             reap(&pool, "boom").await.unwrap();
             elapse_backoff(&pool).await;
-            claim(&pool, "steward", "steward", 10, -1, None)
+            claim(&pool, "steward", "steward", 10, -1, None, principal)
                 .await
                 .unwrap();
         }
@@ -1023,9 +1068,12 @@ mod tests {
         assert_eq!(claimed[0].resource_id, r, "claim surfaces the embed scope");
         assert_eq!(claimed[0].attempts, 1);
         assert_eq!(status_of(&pool, claimed[0].id).await, "in_progress");
-        // A steward claim never picks up a resource-keyed job (disjoint scopes).
+        // A steward claim never picks up a resource-keyed job (disjoint scopes). The principal here
+        // reaches nothing — irrelevant to this assertion, since a resource-keyed job is invisible to
+        // the cogmap-claim regardless of scoping.
+        let principal = a_profile(&pool, "wjs-resource-cogmap-disjoint").await;
         assert!(
-            claim(&pool, "embed", "embed", 10, 600, None)
+            claim(&pool, "embed", "embed", 10, 600, None, principal)
                 .await
                 .unwrap()
                 .is_empty(),
