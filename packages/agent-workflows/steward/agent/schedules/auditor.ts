@@ -2,6 +2,7 @@ import { defineSchedule } from "eve/schedules";
 import { TEMPER_TS_VERSION, type components } from "temper-ts";
 
 import auditorWorker from "../channels/auditor-worker.js";
+import { AUDITOR_ENABLED, agentEnabled, tokenIssuanceUnavailable } from "../lib/optional-agent.js";
 import {
   AUDITOR_CREDENTIALS,
   auditorFetch,
@@ -17,10 +18,12 @@ import {
  * carrying a cron expression"*), so this file's LOCATION is the on/off switch. It lived outside
  * the agent root from 2026-07-25 until now for exactly that reason.
  *
- * **Turning this off again means moving the file back out, not guarding `run`.** The
- * unconfigured-skip below is not an off switch: on a deployment that HAS an auditor credential the
- * cron fires and works. Withdrawing the capability is a `git mv` plus an operator decision, the
- * same way restoring it was.
+ * **Withdrawing the CAPABILITY still means moving the file back out.** That is a repo-wide decision
+ * — it unregisters the cron for every deployment — and it stays a `git mv` plus an operator
+ * decision, the same way restoring it was. The guards in `run` answer a narrower question: whether
+ * THIS deployment's tick does work. `TEMPER_AUDITOR_ENABLED` is the per-deployment off switch, and
+ * it deliberately leaves the auditor runnable on demand, which is exactly what unsetting a
+ * credential cannot do. Neither guard is a substitute for the other.
  *
  * **The history this file exists to not repeat.** It shipped enabled in PR #531 and began firing in
  * production on 2026-07-24T23:16Z. Every tick died at `requireEnv("TEMPER_AUDITOR_TOKEN")` before
@@ -137,9 +140,38 @@ import {
  *   (`lib/tool-allowlists.ts`). That held by accident of two separately-authored lists until
  *   `tests/auditor.test.ts` started asserting it; treat the assertion as load-bearing, not tidiness.
  *
- * Cadence: hourly at :30, half an hour behind the steward's `0 * * * *`. Citations authored by a
- * steward tick are then auditable within the same hour without the two ticks writing concurrently
- * over one map. Single-flight and lease-reaping live in the server, so a fixed cadence is safe.
+ * **Cadence is the budget mechanism, not a tuning preference.** The AI Gateway gets a fixed monthly
+ * allowance and that allowance IS the ceiling — topping it up is not the plan. Cadence is how the
+ * auditor is made to fit inside it. Hourly was also ~24x this corpus's own rate of change, so the
+ * extra 23 ticks bought re-derivation rather than coverage.
+ *
+ * Two costs, and cadence bounds them differently. The **sweep** runs as phase 2 of every dispatch
+ * whatever the queue holds, so cadence bounds it unconditionally. **Model spend** is proportional to
+ * jobs actually claimed — a tick that claims none starts no session and spends nothing — so cadence
+ * bounds it only while there is standing work. There was, which is why this mattered.
+ *
+ * **Cadence and `DEFAULT_AUDITOR_DISPATCH_CAP` are one knob in two halves, and the second is not
+ * set here.** That cap (50, `temper-core::types::workflow_job`) is a per-tick *finding* budget and
+ * simultaneously the sweep's `p_limit` and the claim's batch limit, so ticks/day × cap is the
+ * ceiling on audit throughput — daily at 50 admits 50 findings/day where hourly admitted up to 1200.
+ * It does not bind at this corpus's scale: with a substantial backlog standing, `audit_drift_sweep`
+ * at `p_limit` 50 has been measured returning **15** eligible findings — demand well under supply,
+ * which is the comparison that matters. A fork whose steward drifts more than ~50 findings a day
+ * needs the cap raised or the cadence raised, or its backlog grows behind a green cron. Raising the
+ * cap costs model sessions but NOT sweep time — `p_limit` applies after every candidate is scored.
+ *
+ * The same coupling slows recovery, and that was accepted rather than missed: reaping happens on any
+ * tick but only an auditor tick re-claims, so a crashed job retries in ≤24h instead of ≤1h and takes
+ * three days rather than three hours to exhaust `max_attempts`. That is the churn-coalescing the
+ * spec's §4.2 named as a reason backoff is *less* urgent at this cadence, seen from the other side.
+ *
+ * **The committed value is every fork's default, so moving it is an operator decision.** It was
+ * hourly at :30 from 2026-07-29 until 2026-08-28. The MINUTE is load-bearing and unchanged: :30
+ * trails the steward's `0 * * * *` so citations authored by a steward tick stay auditable without
+ * the two ticks writing concurrently over one map. The HOUR is not load-bearing — an operator with a
+ * larger allowance may raise the frequency, and one with none should reach for the enable toggle
+ * below rather than a cron nobody can read as deliberate. Single-flight and lease-reaping live in
+ * the server, so any fixed cadence is safe.
  */
 /**
  * The claimed-job wire shape, taken from the generated OpenAPI client rather than hand-mirrored.
@@ -151,13 +183,30 @@ import {
 type ClaimedAuditJob = components["schemas"]["ClaimedAuditJob"];
 
 export default defineSchedule({
-  cron: "30 * * * *", // hourly at :30, UTC — trailing the steward's tick; the server gates the rest
+  cron: "30 3 * * *", // daily at 03:30 UTC — trailing a steward tick; see "Cadence" above
   async run({ receive, waitUntil, appAuth }) {
+    // An operator may hold auditor credentials and still want agent maintenance off — the credential
+    // axis cannot express that, because unsetting the credential also removes the ability to run the
+    // auditor on demand. This is checked FIRST because it is the only axis that carries an EXPLICIT
+    // decision: an operator who wrote the variable outranks anything inferred from absence, and the
+    // credential guard's log line below would otherwise tell them to set a credential they already
+    // have. **Absence means ENABLED** — see `optional-agent.ts` for why that polarity is deliberate.
+    if (!agentEnabled(AUDITOR_ENABLED)) {
+      console.log(
+        `[auditor-dispatch] ${AUDITOR_ENABLED} turns agent maintenance off on this deployment — ` +
+          "skipping tick. Unset it, or set it to 1/true/on, to resume. This is a deliberate no-op, " +
+          "not a failure.",
+      );
+      return;
+    }
+
     // The auditor is OPTIONAL; the steward is not. This file ships in the repo, and eve registers
     // one Vercel Cron Job per file here — so every fork and self-hosted deploy of this agent gets
     // this cron whether or not it runs an auditor. Without this guard each of those deployments
-    // fails hourly, forever, on a credential they never intended to set. That is not a signal, it
-    // is noise that teaches people to ignore a red cron.
+    // fails on every tick, forever, on a credential they never intended to set. That is not a
+    // signal, it is noise that teaches people to ignore a red cron. (Stated per-tick rather than
+    // per-hour deliberately: the cadence above is an operator's to move, and this argument does not
+    // depend on it.)
     //
     // **This is a skip, never a fallback.** It does not widen what may authenticate as the auditor:
     // `auditorFetch` still throws rather than borrowing the steward's credential, and
@@ -182,6 +231,12 @@ export default defineSchedule({
       (async () => {
         const correlationId = crypto.randomUUID();
         console.log(`[auditor-dispatch] tick ${correlationId} starting (temper-ts ${TEMPER_TS_VERSION})`);
+        // Whether the dispatch call got far enough to claim and LEASE work server-side. The quiet
+        // skip below asserts that it did not, and this is what makes that assertion structural
+        // rather than a claim about which frames can raise a mint failure. If one ever arrives after
+        // the claim, it goes loud — the safe direction, because the alternative is a log line saying
+        // nothing was claimed while N cogmap jobs sit leased.
+        let workClaimed = false;
         try {
           const apiUrl = requireEnv("TEMPER_API_URL").replace(/\/+$/, "");
 
@@ -201,6 +256,9 @@ export default defineSchedule({
           if (!res.ok) {
             throw new Error(`auditor dispatch failed: ${res.status} ${await res.text()}`);
           }
+          // The server ran reap → sweep → group → enqueue → claim before answering, so anything
+          // claimed is claimed and leased by the time this line runs.
+          workClaimed = true;
 
           const dispatchVercelId = res.headers.get("x-vercel-id") ?? "unknown";
 
@@ -257,6 +315,38 @@ export default defineSchedule({
             ),
           );
         } catch (err) {
+          // The THIRD axis of the optional-agent guard, and the one the credential check above
+          // cannot see. `credentialConfigured` reads environment variables: it establishes that
+          // somebody INTENDED to run an auditor, never that the auditor CAN run. A deployment whose
+          // issuance quota is spent holds credentials that are entirely correct and still gets them
+          // refused — configured-and-cannot-mint passes the guard and then fails here.
+          //
+          // Classified rather than pre-checked: minting a probe token to ask whether a token can be
+          // minted spends the very quota being probed.
+          //
+          // **This `catch` cannot be taught to handle the AI Gateway's 402, and adding a branch for
+          // it would be dead code.** `receive()` above resolves when a session's workflow run is
+          // STARTED, not when it completes — eve's `Session` is an inert, non-thenable result value
+          // — so the 402, and every other in-session failure, is raised past this frame in a
+          // separate durable run. The same is true of the auditor subagent's own mint. Only not
+          // making the model call quiets those, which is the cadence and the toggle above.
+          //
+          // `console.warn`, where the other two skips log — deliberately, and the difference is
+          // their epistemic status. An absent credential and an explicit toggle are RESTING states:
+          // the deployment is configured that way and nothing is wrong. This is a DEGRADED one —
+          // somebody configured an auditor, it worked, and it is not working now. It must not redden
+          // the cron, but it must not read as normal either, and at a daily cadence there is one
+          // line a day to notice. Quiet is not the same as invisible.
+          if (!workClaimed && tokenIssuanceUnavailable(err)) {
+            console.warn(
+              `[auditor-dispatch] tick ${correlationId}: the token endpoint will not mint for this ` +
+                "credential right now (issuance quota). Agent maintenance is optional; skipping " +
+                "this tick. This is a deliberate no-op, not a failure — no work was claimed. It " +
+                "resumes on its own when the quota does; a run of these means the auditor has not " +
+                "audited for as long as they have been appearing.",
+            );
+            return;
+          }
           console.error(`[auditor-dispatch] tick ${correlationId} failed:`, err);
           throw err;
         }

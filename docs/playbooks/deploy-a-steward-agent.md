@@ -256,6 +256,7 @@ Set these on the Vercel project (dashboard, or `vercel env add <NAME>`) **before
 | `TEMPER_AUDITOR_M2M_TOKEN_URL` | auditor, prod | Same issuer as the steward's — one instance, one issuer. Only the credential differs. |
 | `TEMPER_AUDITOR_M2M_AUDIENCE` | **external IdP only** | Same rule as `TEMPER_M2M_AUDIENCE`: required for Auth0, **omitted** for a `tmpr_` credential. |
 | `TEMPER_AUDITOR_TOKEN` | dev only | Static auditor bearer for `eve dev`. The unset-with-no-`CLIENT_ID` case **throws** rather than silently falling back to the steward's identity. |
+| `TEMPER_AUDITOR_ENABLED` | optional | **Opt-OUT.** Turns agent maintenance off on a deployment that holds auditor credentials and still wants the cron idle. **Absence means ENABLED**, as does a declared-but-empty value. Only `0`/`false`/`off`/`no` turn it off; `1`/`true`/`on`/`yes` turn it on explicitly and say nothing. Any OTHER value runs the auditor and logs a warning naming the variable — a typo must not be read as an instruction to stop. Deliberately the inverse polarity of every other variable here: a merge may not turn a production cron off any more than on. |
 | `AUDITOR_MODEL` | optional | The auditor's primary model. Defaults to `anthropic/claude-haiku-4.5` — deliberately **not** the steward's default. Same build-time freeze and redeploy-to-change semantics. |
 | `AUDITOR_MODEL_FALLBACKS` | optional | Defaults to `minimax/minimax-m3` (the steward's primary — a documented availability trade). Set to `""` to make the tick fail rather than collapse the two personas onto one model. |
 
@@ -332,12 +333,24 @@ vercel connect create https://<instance>/mcp --name steward
 
 Vercel → *Settings → Cron Jobs*: every `defineSchedule` becomes a Vercel Cron Job,
 evaluated in **UTC**. Expect **three**: the steward dispatch tick and the region-materialize
-tick, both hourly at `0 * * * *`, and the auditor dispatch tick at `30 * * * *` — half an
-hour behind, so citations a steward tick authors are auditable within the same hour without
-the two writing concurrently over one map. **The auditor's cron exists whether or not you run
-an auditor**; with no auditor credential it logs `no auditor credential on this deployment —
-skipping tick` and returns green. That is the intended resting state for a deployment that
-does not use one.
+tick, both hourly at `0 * * * *`, and the auditor dispatch tick **daily at `30 3 * * *`** — on
+the half hour, so citations a steward tick authors are auditable without the two writing
+concurrently over one map. The auditor's *hour* is a budget decision rather than a protocol one:
+each dispatched job spends an AI Gateway model session, and a deployment with a larger allowance
+may raise it.
+
+**The auditor's cron exists whether or not you run an auditor**, and there are three separate
+reasons it may do nothing on a given tick. All three log and return **green** — none is a
+failure, and none makes the auditor authenticate as anything else:
+
+| log line says | what it means |
+|---|---|
+| `no auditor credential on this deployment` | You do not run an auditor. The intended resting state for most deployments. |
+| `TEMPER_AUDITOR_ENABLED turns agent maintenance off` | You do run one, and have deliberately paused it. Unset the variable to resume. |
+| `the token endpoint will not mint … right now (issuance quota)` | Your credentials are correct and your IdP is refusing to issue more M2M tokens this period. No work was claimed. It resumes on its own when the quota does. |
+
+A **wrong** credential is none of these: it stays a loud failing tick, because a deployment that
+believes it is auditing and is not is the worse failure.
 
 ### Logs
 
