@@ -16,7 +16,7 @@
 //! twice. (`input_contributed` was a second derived number until ratification ⟨6⟩/9d removed the
 //! field — see the tombstone on `StageResult`.)
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -25,16 +25,16 @@ use crate::backend::substrate_read::{embed_query_texts, QueryEmbedBatch};
 use crate::error::{ApiError, ApiResult};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::query::{
-    applied_terms, declaration, emitted_fragment_for, validate, ActName, ActRefusal, CombineNode,
-    Composition, Extent, NarrowedBy, PlanRefusal, QueryResponse, RegionDisclosure, ResourceHit,
-    ReturnSpec, Scoring, StageDisposition, StageInput, StageNode, StageOutput, StageResult,
-    StageTrace, ValidatedComposition, ViaEntry,
+    applied_terms, declaration, text_to_embed, texts_to_embed, validate, ActName, ActRefusal,
+    CombineNode, Composition, Extent, NarrowedBy, PlanRefusal, QueryResponse, RegionDisclosure,
+    ResourceHit, ReturnSpec, Scoring, StageDisposition, StageInput, StageNode, StageOutput,
+    StageResult, StageTrace, ValidatedComposition, ViaEntry,
 };
 use temper_core::types::query::{BoundTerm, CompositionTrace, InputSource, StageInputTrace};
 use temper_core::types::resource_view::{ResourceSection, ResourceView};
 use temper_substrate::readback;
 use temper_substrate::readback::query_exec::{execute, QueryRows, StageIndex};
-use temper_substrate::readback::query_plan::{compile, EMIT_FIND_WIDE, EMIT_SURVEY};
+use temper_substrate::readback::query_plan::compile;
 
 /// Run a validated composition and answer in the shape `POST /api/query` publishes.
 ///
@@ -113,9 +113,10 @@ fn opaque(e: anyhow::Error) -> ApiError {
 /// refused an over-budget plan only after paying the ONNX cost the gate exists to avoid. The
 /// original decision is unchanged; the set of things that cost something grew.
 ///
-/// So [`validate()`] is evaluated twice. A pure function over a small struct, and it reads none of
-/// what the embed writes, so the two runs cannot disagree — named so it is not later "discovered"
-/// as a defect, and asserted by `the_gate_and_the_seal_agree_across_the_embed`.
+/// So [`validate()`] is evaluated twice. A pure function over a small struct, and the embed can only
+/// REMOVE stages from the one check that reads what it writes — so the seal never refuses what the
+/// gate admitted. Named so it is not later "discovered" as a defect, and asserted by
+/// `the_gate_and_the_seal_agree_across_the_embed`.
 ///
 /// **Parse-don't-validate is our line, not an external law, and this is where we put the seal.**
 /// `[2026-08-13]` The alternative was to leave the seal ahead of the embed and hand `compile` a
@@ -128,9 +129,20 @@ pub async fn prepare(mut c: Composition) -> Result<ValidatedComposition, Vec<Pla
     // `IntentionBudgetExceeded` lives in capability, and a gate that could not see capability would
     // refuse the over-budget plan only AFTER paying the ONNX cost it exists to avoid.
     //
-    // Safe because the two runs of `validate` answer identically: it is pure, and it never reads
-    // `intention.embedding` — the only field the embed writes. `EmbeddingUnavailable` is `compile`'s
-    // refusal, not this pass's. `the_gate_and_the_seal_agree_across_the_embed` holds that.
+    // **Safe by MONOTONICITY, not by purity** `[corrected — 2026-08-28, found in review]`. The
+    // first version of this comment said `validate` "never reads `intention.embedding` — the only
+    // field the embed writes", and the same commit made that false:
+    // `capability::validate_intention_budget` counts stages whose `embedding.is_none()`, and is the
+    // ONLY read of that field anywhere in temper-core.
+    //
+    // What holds instead, and holds strictly: the embed only ever sets `embedding` to `Some`, so
+    // the embedded set can only SHRINK across it. A plan the gate admits is under the budget, and
+    // the seal's count is no larger — so the seal cannot newly refuse. The other direction cannot
+    // arise at all: a gate refusal short-circuits before any mutation.
+    //
+    // `the_gate_and_the_seal_agree_across_the_embed` holds it, over a composition near the cap —
+    // its first fixture asked one ten-byte question, so the budget check could not fire and the
+    // test certified the invariant its own commit had broken.
     if validate(&c).is_ok() {
         let phase = embed_missing_intentions(&mut c).await;
         tracing::debug!(
@@ -141,60 +153,6 @@ pub async fn prepare(mut c: Composition) -> Result<ValidatedComposition, Vec<Pla
         );
     }
     validate(&c)
-}
-
-/// The query text this node needs the SERVER to embed, trimmed — or `None`, for any of four
-/// different reasons that must not be collapsed.
-///
-/// One definition, read twice by [`embed_missing_intentions`] (once to collect, once to write
-/// back), because a predicate spelled at both ends of that function is a predicate that can
-/// disagree with itself about which stages it just embedded for.
-///
-/// `None` means, in order: this act does not search by vector ([`wants_a_vector`]); it carries no
-/// question at all; the caller already sent a vector; or the question is empty. The last two of
-/// those are the properties `resolve_embedding` had and this had to keep:
-///
-///   * **Embed only when some stage would USE the vector.** A composition of `find-exact` stages
-///     paying ONNX produces a value nothing binds, and a failure then refuses nothing, having spent
-///     the budget.
-///   * **An empty or whitespace-only query is NOT an embedding attempt.** `shape.rs`'s
-///     `[widened — 2026-08-09]` note records what happens when it is: the caller is told
-///     `embedding_unavailable` — a server fault, for a question they never asked. Through
-///     [`prepare`] the shape pass has already refused that plan and no embed runs at all, so this
-///     arm is the property held **structurally**; it is spelled here anyway because it is this
-///     function's contract, not its caller's.
-///
-/// The text is TRIMMED, matching `substrate_read::embed_query_if_missing`. Two questions differing
-/// only in surrounding whitespace are one question, and embedding them separately would be two
-/// vectors for one string.
-fn text_to_embed(node: &StageNode) -> Option<&str> {
-    if !wants_a_vector(node) {
-        return None;
-    }
-    let StageNode::Act(inv) = node else {
-        return None;
-    };
-    let intention = inv.intention.as_ref()?;
-    if intention.embedding.is_some() {
-        return None;
-    }
-    let query = intention.query.trim();
-    (!query.is_empty()).then_some(query)
-}
-
-/// Every DISTINCT question this composition needs embedded, in a stable order.
-///
-/// **Distinct query TEXT, not per stage** — the property this collection exists to hold, and it is
-/// two properties rather than one. Two stages naming the same string must not pay ONNX twice; and
-/// they must not be able to receive two *different* vectors for one question, which would make
-/// paraphrase-stability unmeasurable in exactly the way the retired envelope placement was trying
-/// to protect. A `BTreeSet` gives both, and gives a deterministic embed order for free.
-fn texts_to_embed(c: &Composition) -> BTreeSet<String> {
-    c.stages
-        .iter()
-        .filter_map(text_to_embed)
-        .map(str::to_string)
-        .collect()
 }
 
 /// Fill in the vectors the caller could not compute, in place, before the plan is sealed.
@@ -239,7 +197,25 @@ async fn embed_missing_intentions(c: &mut Composition) -> EmbedPhase {
     // ONE attempt for the whole distinct set, so the phase costs one budget however many questions
     // the plan asks. `embed_query_texts` carries why that is the property and batching is not.
     let vectors: HashMap<String, Vec<f32>> = match embed_query_texts(queries.clone()).await {
-        QueryEmbedBatch::Embedded(embeddings) => queries.into_iter().zip(embeddings).collect(),
+        // **A short vector list is a fault, not a partial success** `[added — 2026-08-28, found in
+        // review]`. `zip` truncates to the shorter side, so N questions and N-1 vectors would leave
+        // the last stages silently un-embedded — correctly refused as `EmbeddingUnavailable`, but
+        // with nothing in the logs saying the embedder had answered short. `embed_query_text`, the
+        // singular wrapper, already guards exactly this rather than trusting the count; this is the
+        // same guard on the plural path. `embed_texts` does not do it today; that is a fact about
+        // today's embedder, and the pairing of a question to its vector is not a thing to infer.
+        QueryEmbedBatch::Embedded(embeddings) if embeddings.len() == queries.len() => {
+            queries.into_iter().zip(embeddings).collect()
+        }
+        QueryEmbedBatch::Embedded(embeddings) => {
+            tracing::error!(
+                asked = queries.len(),
+                returned = embeddings.len(),
+                "server-side query embedding returned fewer vectors than questions; refusing them \
+                 all rather than pairing by position"
+            );
+            HashMap::new()
+        }
         QueryEmbedBatch::Unavailable => HashMap::new(),
     };
     let phase = EmbedPhase {
@@ -287,33 +263,6 @@ struct EmbedPhase {
     /// How many vectors landed. Zero with `budget_windows: 1` is the attempt failing, which every
     /// stage renders as its own `EmbeddingUnavailable`.
     embedded: usize,
-}
-
-/// Whether this node's act searches by vector. Read off the declared mechanic rather than a
-/// hardcoded act list, so a new act served by the wide arm is covered without an edit here.
-///
-/// **Two hops, and the second one is why this is not a string comparison against `served_by`.**
-/// `[fixed — 2026-08-12]` This asked `served_by == "search_wide"`. `served_by` names what the
-/// deployed `/api/search` door calls, and that moved to `query_find_wide` when the door gained a
-/// resource bound — so this returned `false` for BOTH wide acts, [`text_to_embed`] found nothing to
-/// embed, `compile` took its `None` arm, and every find-about stage refused
-/// `EmbeddingUnavailable` for any caller that cannot precompute a vector. Which is the whole class
-/// of caller this module's own header says the server embeds on behalf of.
-///
-/// The repair is not a newer literal. `served_by` is a name that is ALLOWED to move — it follows the
-/// deployed door — so anything comparing it to a spelling here is a copy waiting to go stale a third
-/// time. Going through [`emitted_fragment_for`] asks the question the answer actually depends on:
-/// *does the compiler emit the wide core for this act?* Both hops are then single-sourced —
-/// `CALLABLE_FRAGMENTS` owns the mapping, [`EMIT_FIND_WIDE`] owns the core's name — and this
-/// function holds no name of its own.
-fn wants_a_vector(node: &StageNode) -> bool {
-    match node {
-        StageNode::Act(inv) => declaration(&inv.act)
-            .and_then(|d| d.served_by)
-            .and_then(|mechanic| emitted_fragment_for(&mechanic))
-            .is_some_and(|fragment| fragment == EMIT_FIND_WIDE || fragment == EMIT_SURVEY),
-        StageNode::Combine(_) => false,
-    }
 }
 
 /// Hydrate the RETURNED stages' rows, one batched read for the whole response.
@@ -1032,6 +981,12 @@ mod tests {
         ResourceFilter, ReturnSpec, StageName, StageRelation,
     };
     use temper_substrate::readback::query_exec::{HitRow, TallyRow};
+    // Reached only by the tests below: `wants_a_vector` and the embed-set predicates moved into
+    // temper-core `[2026-08-28]` so the capability pass could bound the SAME set the embedder
+    // builds, and their coverage moved with neither — these still assert against the registry.
+    use std::collections::BTreeSet;
+    use temper_core::types::query::{emitted_fragment_for, wants_a_vector};
+    use temper_substrate::readback::query_plan::EMIT_FIND_WIDE;
 
     fn name(s: &str) -> StageName {
         StageName::parse(s).unwrap()
@@ -2471,6 +2426,23 @@ mod tests {
                 .iter()
                 .any(|r| r.reason == RefusalReason::IntentionBudgetExceeded),
             "got: {refusals:?}"
+        );
+    }
+
+    /// **The contract's declared vector dimension and the model's are one number.**
+    ///
+    /// `[added — 2026-08-28]` `MAX_EMBEDDING_DIM` is published on `Intention::embedding` so a
+    /// wrong-shaped vector is a typed refusal instead of pgvector's complaint redacted to a 500.
+    /// It is a repeated literal, because temper-core cannot depend on temper-ingest — and a
+    /// repeated literal with no test is how the contract comes to describe a model nobody runs.
+    /// This crate links both, so this is where the two can be compared at all.
+    #[test]
+    fn the_published_vector_dimension_is_the_model_that_produces_it() {
+        assert_eq!(
+            temper_core::types::query::composition::MAX_EMBEDDING_DIM,
+            temper_ingest::embed::EMBEDDING_DIM,
+            "the dimension `/api/query` publishes and the one the embedder emits have diverged; a \
+             caller obeying the contract would now be refused by the database"
         );
     }
 

@@ -495,6 +495,11 @@
           "type": "string"
         },
         {
+          "const": "malformed_embedding",
+          "description": "A caller-supplied query vector is not the shape this server's vector space has.\n\n`[added — 2026-08-28, found in review]` `Intention::embedding` carried no bound at all,\nwhich made it the largest unbounded field on the contract — a million floats on one stage is\n4 MB that validates cleanly, times [`super::composition::MAX_STAGES`] stages.\n\n**Not a `TooMany…`**, and the difference is what a caller can act on. A wrong-length vector\nis not a large question; it is a vector for a different space, and 767 floats is exactly as\nwrong as 769. Before this it reached pgvector, whose dimension complaint the door redacts to\nan opaque 500 — a caller told nothing at all, by the surface whose contract is that every\nrefusal arrives at once and in their own vocabulary.",
+          "type": "string"
+        },
+        {
           "const": "no_returns",
           "description": "The composition returns no stages, so it answers nothing.",
           "type": "string"

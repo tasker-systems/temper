@@ -44,6 +44,6 @@ pub use trace::{CompositionTrace, InputSource, StageInputTrace, StageTrace};
 // against a server whose binary it does not share — and a public item reachable only by its full
 // module path, while every sibling has a short one, reads as an oversight rather than as a choice.
 pub use validate::{
-    emitted_fragment_for, validate, validate_shape, PlanRefusal, ValidatedComposition,
-    ValidationOutcome, WillReturn,
+    emitted_fragment_for, text_to_embed, texts_to_embed, validate, validate_shape, wants_a_vector,
+    PlanRefusal, ValidatedComposition, ValidationOutcome, WillReturn,
 };

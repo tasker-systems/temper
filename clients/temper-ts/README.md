@@ -144,7 +144,8 @@ uses them for its own auth tests).
 4096 bytes per question, 256 ids per set, 64 values per narrowing list. `schema.ts` carries
 them as types only; there is no runtime validator in this package, so an over-cap plan is
 sent and the server answers `400 PLAN_REFUSED` with the typed reason
-(`too_many_stages`, `intention_too_long`, `too_many_ids`, `too_many_filter_values`).
+(`too_many_stages`, `intention_too_long`, `too_many_ids`, `too_many_filter_values`,
+`duplicate_set_member`, `malformed_embedding`, `intention_budget_exceeded`).
 
 That is a deliberate difference from the Ruby gem and the Python package, whose generated
 models raise locally. Handle the refusal; do not assume a client-side guard.

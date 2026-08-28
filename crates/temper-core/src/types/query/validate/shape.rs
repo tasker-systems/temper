@@ -39,7 +39,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::types::query::act::ActName;
 use crate::types::query::composition::{
-    Composition, StageNode, MAX_INTENTION_QUERY_BYTES, MAX_STAGES,
+    Composition, StageNode, MAX_EMBEDDING_DIM, MAX_INTENTION_QUERY_BYTES, MAX_STAGES,
 };
 use crate::types::query::disposition::RefusalReason;
 use crate::types::query::envelope::ActInvocation;
@@ -48,7 +48,7 @@ use crate::types::query::id_set::{IdKind, MAX_ID_SET_IDS};
 use crate::types::query::stage::{StageInput, StageName, StageRelation};
 use crate::types::resource_view::ResourceSection;
 
-use super::{index_by_name, refusal, term_wire_name, PlanRefusal};
+use super::{index_by_name, refusal, term_wire_name, wire_name, PlanRefusal};
 
 /// Kahn's topological sort over the resolvable edges. `None` iff a cycle prevents a total order.
 fn topo_order(by_name: &BTreeMap<&str, &StageNode>) -> Option<Vec<StageNode>> {
@@ -212,6 +212,35 @@ pub(super) fn validate_shape_indexed(
                 ));
             }
         }
+        // **A combinator naming one stage twice combines it once.** `[added — 2026-08-28, found in
+        // review]` `CombineNode::inputs` carries no `max_items`, and cannot: the ceiling is
+        // per-op and only the ordered ops have one — so for `union` and `intersect` a repeat was
+        // the one way to make an unbounded list out of a bounded vocabulary: inputs must name
+        // DECLARED stages, of which there are at most `MAX_STAGES`, so refusing repeats is what
+        // bounds the field. A million repeated inputs validated cleanly at 4 MB.
+        //
+        // Exactly the argument `DuplicateSetMember` was invented for one field over, and missed
+        // here because this list holds names rather than a closed enum. `break` for the same reason
+        // the sibling checks do: an over-long list must not answer with an over-long refusal list.
+        if let StageNode::Combine(cn) = node {
+            let mut inputs_once: BTreeSet<&str> = BTreeSet::new();
+            for input in &cn.inputs {
+                if !inputs_once.insert(input.as_str()) {
+                    errs.push(refusal(
+                        Some(node.name()),
+                        RefusalReason::DuplicateSetMember,
+                        format!(
+                            "stage `{}` names `{}` more than once among its inputs; combining a \
+                             set with itself yields the set",
+                            node.name().as_str(),
+                            input.as_str()
+                        ),
+                    ));
+                    break;
+                }
+            }
+        }
+
         for up in node.upstream_names() {
             if !declared.contains(up.as_str()) {
                 errs.push(refusal(
@@ -246,6 +275,16 @@ pub(super) fn validate_shape_indexed(
         // whatever this door hydrates. WHICH sections it offers is capability's question
         // (`SectionNotAvailable`), and the two compose — a caller repeating an unoffered section is
         // told both things at once, which is this contract's rule.
+        //
+        // **ONE refusal per `returns` entry, and the `break` is the whole reason this is not a
+        // regression** `[added — 2026-08-28, found in review]`. Without it a repeated section
+        // produces a refusal PER ELEMENT: `[open-meta; 350_000]` fits inside the declared body
+        // limit and would answer with 350,000 refusals carrying a 110-character detail each — tens
+        // of megabytes of 400, built in memory and serialized whole. That is the stage cap's own
+        // argument turned against the caller (*"an over-cap plan produces an over-cap REFUSAL LIST,
+        // and a 400 body grows without limit in exactly the direction being closed"*), and the
+        // first draft of this check made exactly that mistake while the `edge_kinds` sibling
+        // twenty lines down broke correctly.
         let mut sections_once: BTreeSet<&ResourceSection> = BTreeSet::new();
         for section in &ret.with {
             if !sections_once.insert(section) {
@@ -253,11 +292,13 @@ pub(super) fn validate_shape_indexed(
                     Some(&ret.stage),
                     RefusalReason::DuplicateSetMember,
                     format!(
-                        "stage `{}` names the `{section:?}` section more than once in `with`; \
-                         hydrating a section twice hydrates it once",
-                        ret.stage.as_str()
+                        "stage `{}` names the `{}` section more than once in `with`; hydrating a \
+                         section twice hydrates it once",
+                        ret.stage.as_str(),
+                        wire_name(section)
                     ),
                 ));
+                break;
             }
         }
 
@@ -539,34 +580,6 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
         }
     }
 
-    // Every find act refuses without a threaded intention. For `find-about-*` the reason is that
-    // the server does not supply the QUESTION on the caller's behalf — "no question was asked" and
-    // "the question could not be embedded" stay distinct. `find-exact` needs the intention for a
-    // different reason: its query TEXT is `query_find_exact`'s `p_query`, and there is nowhere else
-    // to get it.
-    //
-    // `[corrected — 2026-08-12]` This said the server "does not embed on the caller's behalf",
-    // which is false in the other direction: the server DOES embed, which is why
-    // `RefusalReason::EmbeddingUnavailable` exists for its failed attempt
-    // (`disposition.rs:94-96`: *"It does not fire for a missing embedding — the server computes
-    // one, because API callers structurally cannot"*) and why the `[widened — 2026-08-09]` note
-    // further down this same block describes `compile` reading a `None` as "the server tried and
-    // failed". What it will not supply is the question itself.
-    //
-    // `[widened at beat D — 2026-08-08]` `FindExact` was missing here, which was invisible while
-    // the find acts were `NotSeparablyReachable` and became a real defect the moment the compiler
-    // could emit them: `validate` returned Ok and `compile` returned Err(MissingIntention) for the
-    // same plan. That is precisely the validator/emitter disagreement `CALLABLE_FRAGMENTS` was
-    // reshaped into a shared map to make impossible, reappearing on a different axis — the map
-    // makes the two agree about WHICH ACTS are reachable, and nothing was making them agree about
-    // WHAT EACH ACT REQUIRES.
-    //
-    // Shape rather than capability, and NOT because the check happens to read no declaration —
-    // that test is the one the header at the top of this file names as insufficient. The argument
-    // is about published meaning: a find act's need for a question is part of what the act IS on
-    // the contract, not something this server has yet to build. `find-exact`'s query text becomes
-    // `p_query` and has no other source, and the `find-about-*` acts refuse rather than let the
-    // server invent the question. No server builds its way out of either.
     // **The question's LENGTH, checked wherever the field appears.** `[added — 2026-08-28]` It is
     // not gated on the act, and that follows from where the ceiling is published rather than being
     // a separate choice: `max_length` sits on `Intention::query`, so it is a property of the FIELD
@@ -598,6 +611,60 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
         }
     }
 
+    // **A caller-supplied vector must be this space's shape.** `[added — 2026-08-28, found in
+    // review]` It was the one field on the contract with no bound of any kind, and the largest:
+    // a million floats on one stage is 4 MB that validated cleanly, times `MAX_STAGES`.
+    //
+    // Shape, and published as `max_items` on the field like its neighbours — but the refusal names
+    // the SHAPE rather than a maximum, because 767 floats is exactly as wrong as 769 and a caller
+    // told about a ceiling would fix the wrong end. What it replaces is worse than a bad message:
+    // the vector reached pgvector, and this door redacts that dimension complaint to an opaque 500.
+    if let Some(intention) = inv.intention.as_ref() {
+        if let Some(embedding) = intention.embedding.as_ref() {
+            if embedding.len() != MAX_EMBEDDING_DIM {
+                errs.push(refusal(
+                    Some(name),
+                    RefusalReason::MalformedEmbedding,
+                    format!(
+                        "a query vector must carry exactly {MAX_EMBEDDING_DIM} floats, the \
+                         dimension of the space this corpus is embedded in; this stage supplied \
+                         {}. A vector of another length is not a longer question, it is a vector \
+                         for a different model — omit it and the server will embed on your behalf",
+                        embedding.len()
+                    ),
+                ));
+            }
+        }
+    }
+
+    // Every find act refuses without a threaded intention. For `find-about-*` the reason is that
+    // the server does not supply the QUESTION on the caller's behalf — "no question was asked" and
+    // "the question could not be embedded" stay distinct. `find-exact` needs the intention for a
+    // different reason: its query TEXT is `query_find_exact`'s `p_query`, and there is nowhere else
+    // to get it.
+    //
+    // `[corrected — 2026-08-12]` This said the server "does not embed on the caller's behalf",
+    // which is false in the other direction: the server DOES embed, which is why
+    // `RefusalReason::EmbeddingUnavailable` exists for its failed attempt
+    // (`disposition.rs:94-96`: *"It does not fire for a missing embedding — the server computes
+    // one, because API callers structurally cannot"*) and why the `[widened — 2026-08-09]` note
+    // further down this same block describes `compile` reading a `None` as "the server tried and
+    // failed". What it will not supply is the question itself.
+    //
+    // `[widened at beat D — 2026-08-08]` `FindExact` was missing here, which was invisible while
+    // the find acts were `NotSeparablyReachable` and became a real defect the moment the compiler
+    // could emit them: `validate` returned Ok and `compile` returned Err(MissingIntention) for the
+    // same plan. That is precisely the validator/emitter disagreement `CALLABLE_FRAGMENTS` was
+    // reshaped into a shared map to make impossible, reappearing on a different axis — the map
+    // makes the two agree about WHICH ACTS are reachable, and nothing was making them agree about
+    // WHAT EACH ACT REQUIRES.
+    //
+    // Shape rather than capability, and NOT because the check happens to read no declaration —
+    // that test is the one the header at the top of this file names as insufficient. The argument
+    // is about published meaning: a find act's need for a question is part of what the act IS on
+    // the contract, not something this server has yet to build. `find-exact`'s query text becomes
+    // `p_query` and has no other source, and the `find-about-*` acts refuse rather than let the
+    // server invent the question. No server builds its way out of either.
     if matches!(
         inv.act,
         ActName::FindExact
@@ -708,8 +775,9 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
                     Some(name),
                     RefusalReason::DuplicateSetMember,
                     format!(
-                        "`edge_filter.edge_kinds` names `{kind:?}` more than once; walking an edge \
-                         kind twice walks it once"
+                        "`edge_filter.edge_kinds` names `{}` more than once; walking an edge kind \
+                         twice walks it once",
+                        wire_name(kind)
                     ),
                 ));
                 break;

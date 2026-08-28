@@ -50,7 +50,7 @@ use std::collections::BTreeMap;
 
 use crate::types::query::act::{ActName, BuildState};
 use crate::types::query::composition::{
-    Composition, ReturnSpec, StageNode, MAX_COMPOSITION_INTENTION_BYTES,
+    intention_budget_bytes, Composition, ReturnSpec, StageNode,
 };
 use crate::types::query::disposition::RefusalReason;
 use crate::types::query::envelope::ActInvocation;
@@ -64,36 +64,36 @@ use super::{act_wire_name, emitted_fragment_for, refusal, term_wire_name, PlanRe
 
 /// How much question text this composition asks the SERVER to embed, in bytes.
 ///
-/// **Counts only the stages carrying no vector**, because a caller who precomputed one has already
-/// paid the cost this bounds. It over-counts against
-/// [`super::super::composition::MAX_COMPOSITION_INTENTION_BYTES`]'s true subject: `temper-services`
-/// narrows further — a question only reaches the embedder if its act searches by vector and the
-/// text is non-empty — and restating those conditions here would be a second spelling of a
-/// predicate that lives there. Over-counting is the safe direction: this can refuse a plan whose
-/// real embed cost is lower, never admit one whose cost is higher.
+/// **The same set the embedder builds, not an approximation of it** `[corrected — 2026-08-28,
+/// found in review]`. This summed `intention.query.len()` over every stage carrying no vector,
+/// which over-counted in two ways that both refuse legal plans the server would answer cheaply:
+///
+/// - **Duplicates.** [`super::texts_to_embed`] collects into a `BTreeSet` precisely so two stages
+///   naming the same string pay ONNX once. Seventeen stages asking one 4,096-byte question cost
+///   4,096 bytes and were counted as 69,632 — over the budget, refused.
+/// - **Acts that never embed.** `follow-from` may carry an intention and is served by a walk, so
+///   its question reaches no embedder. `find-exact` carries one too, and its text becomes the
+///   fragment's `p_query` rather than a vector. Both were counted.
+///
+/// Fan-out — one question, many narrowings — is an ordinary composition shape, so this was
+/// reachable by callers rather than adversaries. Over-counting is not "the safe direction" when
+/// what it costs is a refusal for work nobody does.
 fn server_embedded_bytes(c: &Composition) -> usize {
-    c.stages
-        .iter()
-        .filter_map(|node| match node {
-            StageNode::Act(inv) => inv.intention.as_ref(),
-            StageNode::Combine(_) => None,
-        })
-        .filter(|intention| intention.embedding.is_none())
-        .map(|intention| intention.query.len())
-        .sum()
+    super::texts_to_embed(c).iter().map(String::len).sum()
 }
 
 /// The composition-level embed bound. Reads no stage graph, so [`super::validate`] runs it whatever
 /// the plan's shape — the same placement and the same reason as [`validate_returns`].
 pub(super) fn validate_intention_budget(c: &Composition, errs: &mut Vec<PlanRefusal>) {
+    let budget = intention_budget_bytes();
     let bytes = server_embedded_bytes(c);
-    if bytes > MAX_COMPOSITION_INTENTION_BYTES {
+    if bytes > budget {
         errs.push(refusal(
             None,
             RefusalReason::IntentionBudgetExceeded,
             format!(
-                "this composition asks the server to embed {bytes} bytes of question text, and it \
-                 can embed at most {MAX_COMPOSITION_INTENTION_BYTES} inside one request's budget. \
+                "this composition asks the server to embed {bytes} bytes of question text, and \
+                 this deployment can embed at most {budget} inside one request's budget. \
                  Ask fewer or shorter questions, split the plan, or send your own vectors — over \
                  the budget NO stage receives one, so this refusal is the alternative to every \
                  find stage failing at once"

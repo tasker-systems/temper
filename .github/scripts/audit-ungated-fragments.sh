@@ -236,7 +236,7 @@ EOF
 #     its own region visibility by principal. The `PRINCIPAL_BIND` is the compiler's `$1`, not a
 #     second id set, so the one-emitter security property holds.
 read -r -d '' RUST_BASELINE <<'EOF' || true
-5 crates/temper-core/src/types/query/validate/mod.rs
+6 crates/temper-core/src/types/query/validate/mod.rs
 5 crates/temper-substrate/src/readback/query_plan.rs
 EOF
 
@@ -314,6 +314,25 @@ sql_relations_current() {
 # act framing is that a narrowing expressed as a SET needs a new function rather than new parameters
 # on the shipped find fragments, which would have been shape-breaking and halted the deploy.
 #
+# REVIEWED 2026-08-28 (`wants_a_vector` moves into temper-core, same task) — the RUST set grows by
+# one file; the SQL halves do not move at all.
+#
+#   NOT A CALL SITE, and that distinction is the whole review. `validate/mod.rs` now names
+#   `__temper_ungated_find_wide` and `__temper_ungated_survey` in a `VECTOR_FRAGMENTS` constant, to
+#   answer "does this act search by vector, and therefore does the server embed its question". It
+#   calls neither. No `p_visible_ids` is assembled, no principal is read, no SQL is emitted — the
+#   strings are compared against `emitted_fragment_for`'s output and discarded.
+#   VERDICT / EMITTER / RESIDUE: all unchanged, and unchangeable from here, because nothing in this
+#   crate can reach a database.
+#
+#   IT IS A THIRD COPY OF TWO NAMES, AND THE COPIES MUST STAY. `CALLABLE_FRAGMENTS` (temper-core)
+#   and `EMIT_*` (temper-substrate) already carried them. Collapsing the substrate constants into
+#   temper-core aliases was considered and REJECTED `[2026-08-28]`: this script derives the Rust
+#   half from the literal `__temper_ungated_` prefix, so aliasing would remove every literal from
+#   `query_plan.rs` — the file that holds the actual call sites — and the guard would stop watching
+#   the emitter entirely. The duplication is what makes the audit see the thing it exists to see.
+#   A future reader tempted to DRY these three lists should read this paragraph first.
+
 # REVIEWED 2026-08-28 (`20260828000040`, the follow-from depth clamp, task
 # 01a035f1-0614-7483-9043-6d96aa181158) — the SQL-file set grows by one; the function-NAME set does
 # not, and neither does the Rust half.
@@ -326,15 +345,22 @@ sql_relations_current() {
 #   RESIDUE: unchanged and accepted.
 #
 #   BODY-ONLY, and the diff against `20260817000020`'s body is **one predicate**: the recursive
-#   arm's `WHERE w.hop < p_depth` becomes `WHERE w.hop < LEAST(p_depth, 3)`. Nothing else in the
+#   arm's `WHERE w.hop < p_depth` becomes `WHERE w.hop < p_depth AND w.hop < 3`. Nothing else in the
 #   84-line body moves, which is what makes the three answers above carryable rather than re-derived.
+#
+#   NOT `LEAST(p_depth, 3)`, which is what this note said in its first version and what the
+#   migration deliberately does not write. `LEAST` IGNORES NULL — `LEAST(NULL::int, 3)` is `3` — so
+#   that spelling reads a NULL depth as three hops where the incumbent walked none, turning an empty
+#   answer into a maximal one. A reviewer trusting the earlier wording would have "restored" the
+#   widening this file exists to catch.
 #
 #   IT TIGHTENS A RECURSION BOUND AND TOUCHES NO CANDIDATE SET, which is the direction that cannot
 #   widen: `admitted` is upstream of `adj`, `adj` is upstream of `undirected`, and the clamp sits on
 #   the join predicate below all three. There is no reading of it under which a node outside
 #   `p_visible_ids` becomes reachable — the clamp can only stop the walk sooner. The shape a reviewer
 #   should look for in a future edit is the opposite one: a change that moved the depth predicate
-#   ABOVE `admitted`, or replaced `LEAST` with `GREATEST`, which would widen rather than clamp.
+#   ABOVE `admitted`, or collapsed the two conjuncts back into `LEAST(p_depth, 3)`, or wrote
+#   `GREATEST` — each of which widens rather than clamps.
 
 # REVIEWED 2026-08-15 (`20260815000030`, the element relation and the §7 tags ruling, task
 # 01a00502) — the SQL-file set grows by one; the function-NAME set does not, and neither does the

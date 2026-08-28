@@ -313,6 +313,18 @@ pub enum RefusalReason {
     /// De-duplicating is also what makes the bound disappear — the count would be silently
     /// clamped to the vocabulary size, which is a cost decision taken by omission.
     DuplicateSetMember,
+    /// A caller-supplied query vector is not the shape this server's vector space has.
+    ///
+    /// `[added — 2026-08-28, found in review]` `Intention::embedding` carried no bound at all,
+    /// which made it the largest unbounded field on the contract — a million floats on one stage is
+    /// 4 MB that validates cleanly, times [`super::composition::MAX_STAGES`] stages.
+    ///
+    /// **Not a `TooMany…`**, and the difference is what a caller can act on. A wrong-length vector
+    /// is not a large question; it is a vector for a different space, and 767 floats is exactly as
+    /// wrong as 769. Before this it reached pgvector, whose dimension complaint the door redacts to
+    /// an opaque 500 — a caller told nothing at all, by the surface whose contract is that every
+    /// refusal arrives at once and in their own vocabulary.
+    MalformedEmbedding,
     /// The composition returns no stages, so it answers nothing.
     NoReturns,
     /// Two stages share a name.
@@ -534,6 +546,7 @@ mod tests {
             RefusalReason::IntentionBudgetExceeded,
             RefusalReason::TooManyFilterValues,
             RefusalReason::DuplicateSetMember,
+            RefusalReason::MalformedEmbedding,
             RefusalReason::NoReturns,
             RefusalReason::DuplicateStageName,
             RefusalReason::CombinatorArity,

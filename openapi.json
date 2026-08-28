@@ -11940,7 +11940,8 @@
               "type": "number",
               "format": "float"
             },
-            "description": "The query vector, when the caller computed one. Mirrors `SearchParams.embedding`: the CLI\nlinks temper-ingest and embeds locally, which is faster than making the server do it; the\nruby gem, the TypeScript package and MCP structurally cannot, so the server embeds on their\nbehalf and its absence is not a refusal.\n\n**It rides beside the text it was computed FROM, and that pairing is the point.** At\ncomposition level a vector and its query could drift apart; here they cannot.\n\nThis never reaches a response: [`super::trace::CompositionTrace`] carries only `stages` and\nechoes no intention. Should a trace ever carry one, that stops being incidental and becomes\na constraint — a 768-float array must not serialize back to the caller."
+            "description": "The query vector, when the caller computed one. Mirrors `SearchParams.embedding`: the CLI\nlinks temper-ingest and embeds locally, which is faster than making the server do it; the\nruby gem, the TypeScript package and MCP structurally cannot, so the server embeds on their\nbehalf and its absence is not a refusal.\n\n**It rides beside the text it was computed FROM, and that pairing is the point.** At\ncomposition level a vector and its query could drift apart; here they cannot.\n\nThis never reaches a response: [`super::trace::CompositionTrace`] carries only `stages` and\nechoes no intention. Should a trace ever carry one, that stops being incidental and becomes\na constraint — a 768-float array must not serialize back to the caller.\n\n**At most [`MAX_EMBEDDING_DIM`] floats**, refused as\n[`super::disposition::RefusalReason::MalformedEmbedding`]. `[added — 2026-08-28, found in\nreview]` This carried no bound of any kind, which made it the largest unbounded field on the\ncontract: a million floats on one stage is 4 MB that validates cleanly, and there are\n[`MAX_STAGES`] stages. A wrong-sized vector also reached pgvector and came back as an\n**opaque 500** — the caller told nothing, in the door whose promise is a typed refusal.",
+            "maxItems": 768
           },
           "query": {
             "type": "string",
@@ -13916,6 +13917,13 @@
             "description": "A list that means a SET names the same member twice.\n\n`[added — 2026-08-28, found in review]` `ReturnSpec::with` and `EdgeFilter::edge_kinds` are\nboth closed vocabularies carried as lists, and a repeat in either changes nothing about the\nanswer — hydrating a section twice hydrates it once, and walking `leads_to` twice walks it\nonce. Left admitted, the repeat is a caller's only way to make an unbounded body out of a\nbounded vocabulary: `with: [open_meta; 10_000]` per return validated `Ok` at **9.6 MB**\n`[measured — 2026-08-28]`.\n\n**Refusing rather than deduplicating**, which is this contract's standing choice and the\nsame one [`RefusalReason::DuplicateReturnStage`] made one field over: silently collapsing a\ncaller's list answers a question they did not quite ask, and says nothing about it.\nDe-duplicating is also what makes the bound disappear — the count would be silently\nclamped to the vocabulary size, which is a cost decision taken by omission.",
             "enum": [
               "duplicate_set_member"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "A caller-supplied query vector is not the shape this server's vector space has.\n\n`[added — 2026-08-28, found in review]` `Intention::embedding` carried no bound at all,\nwhich made it the largest unbounded field on the contract — a million floats on one stage is\n4 MB that validates cleanly, times [`super::composition::MAX_STAGES`] stages.\n\n**Not a `TooMany…`**, and the difference is what a caller can act on. A wrong-length vector\nis not a large question; it is a vector for a different space, and 767 floats is exactly as\nwrong as 769. Before this it reached pgvector, whose dimension complaint the door redacts to\nan opaque 500 — a caller told nothing at all, by the surface whose contract is that every\nrefusal arrives at once and in their own vocabulary.",
+            "enum": [
+              "malformed_embedding"
             ]
           },
           {

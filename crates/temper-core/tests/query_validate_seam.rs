@@ -124,11 +124,16 @@ fn the_shape_pass_emits_exactly_these_reasons() {
         // `CombinatorArity` above, and the rule it set is that a shared reason bumps the count here
         // rather than earning a variant.
         //
+        // **3 as of 2026-08-28**, the third being `CombineNode::inputs` — found in review, and
+        // missed first time because this list holds stage NAMES rather than a closed enum while
+        // the argument is identical: inputs must name declared stages, so a repeat is the one way
+        // to make an unbounded list out of a bounded vocabulary.
+        //
         // Both clear the shape bar without needing anything published, and that is worth stating
         // because the neighbouring caps DID need it: this refuses a list that is malformed against
         // ANY vocabulary, so no server can widen its way out of it. A server that admitted a new
         // section would still not admit that section twice.
-        ("DuplicateSetMember", 2),
+        ("DuplicateSetMember", 3),
         ("DuplicateStageName", 1),
         ("EmptyContains", 1),
         ("EmptyPropertyKey", 1),
@@ -146,6 +151,11 @@ fn the_shape_pass_emits_exactly_these_reasons() {
         // 1 — its zero arm — and a migration of the many arm into this module would still show up
         // as that count going to 2.
         ("IntentionTooLong", 1),
+        // `MalformedEmbedding` `[added — 2026-08-28]`. Published as `max_items` on
+        // `Intention::embedding`, so it clears the bar the same way — but the refusal names the
+        // SHAPE rather than the ceiling, because a vector of any other length belongs to a
+        // different space and a caller told about a maximum would fix the wrong end.
+        ("MalformedEmbedding", 1),
         ("MissingIntention", 1),
         ("MissingProvenance", 1),
         ("NoReturns", 1),

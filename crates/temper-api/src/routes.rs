@@ -572,13 +572,17 @@ fn query_routes() -> OpenApiRouter<AppState> {
 ///
 /// So the coherence property below holds over every field whose COUNT the contract fixes, and
 /// `the_largest_legal_composition_fits_inside_the_declared_body_limit` measures that maximum at
-/// **2,405,028 bytes** — 1.74x under this number.
+/// **2,406,820 bytes** — 1.74x under this number.
 ///
-/// What it does not bound is the LENGTH of the strings inside those counted lists: a facet key, a
-/// property value, a label, a `title_contains`. Reaching 4 MB now takes ~400 bytes per label across
-/// every stage rather than one byte, which is the difference between a caller and an adversary —
-/// but it is still reachable, and this is what stands behind it. That residue is why the limit is a
-/// backstop and not a sum, and it is the thing to bound next if a 413 is ever actually observed.
+/// What it does not bound is SIZE, and there are two kinds `[both named — 2026-08-28, after review]`:
+/// the LENGTH of a string inside a counted list (a facet key, a label, a `title_contains`), and the
+/// serialized size of a single `Contains` VALUE — `probe_count` charges one probe per value however
+/// large, so one value holding a million-element JSON array is 6.9 MB and validates `Ok`.
+///
+/// Through the counted lists, reaching 4 MB now takes ~400 bytes per label across every stage
+/// rather than one byte, which is the difference between a caller and an adversary. Through a
+/// `Contains` value it takes a single field. That second one is the thing to bound next, and it is
+/// why this limit is a backstop and not a sum.
 pub const QUERY_MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
 
 pub fn create_app(state: AppState) -> Router {
@@ -785,12 +789,19 @@ mod tests {
     /// fixture is 907,408 bytes, comfortably inside the inherited limit, so they are what carries
     /// it past.
     ///
-    /// **What it does NOT prove**, stated because a green here reads like completeness: it is a
-    /// floor on the largest legal body, not the maximum. Every COUNT the contract admits is bounded
-    /// as of 2026-08-28, so what escapes it is string LENGTH — a facet key, a property value, a
-    /// label, a `title_contains`. Reaching the limit now takes ~400 bytes per label across every
-    /// stage instead of one, which is the difference between a caller and an adversary, and
-    /// `QUERY_MAX_BODY_BYTES` is what stands behind the difference.
+    /// **What it does NOT prove**, stated because a green here reads like completeness. Two things:
+    ///
+    /// - **It is a floor, not the maximum.** Every COUNT the contract admits is bounded as of
+    ///   2026-08-28, so what escapes is SIZE: the length of a string inside a counted list (a facet
+    ///   key, a label, a `title_contains`), and the serialized size of a `Contains` VALUE, which
+    ///   `probe_count` counts as one probe however large — a single value holding a million-element
+    ///   JSON array is 6.9 MB and validates `Ok` `[measured — 2026-08-28]`. Reaching the limit
+    ///   through the counted lists now takes ~400 bytes per label across every stage instead of
+    ///   one; through a `Contains` value it takes one.
+    /// - **The headline number is the WALK shape, which admits no `ResourceFilter`** — so
+    ///   `doc_type` and `tags` at their cap appear only in the selection shape, which is half the
+    ///   size. No single act admits every bounded field, which is why both are measured; but the
+    ///   maximum reported is not maximal in those two fields.
     ///
     #[test]
     fn the_largest_legal_composition_fits_inside_the_declared_body_limit() {
@@ -945,10 +956,15 @@ mod tests {
 
     fn full_edge_filter() -> EdgeFilter {
         EdgeFilter {
-            // A closed vocabulary carried as a list, and repeats are refused — so its ceiling is
-            // the vocabulary, and one member is as many as this fixture may name distinctly
-            // without asserting which kinds exist.
-            edge_kinds: vec![EdgeKind::LeadsTo],
+            // A closed vocabulary carried as a list, and repeats are refused — so its ceiling IS
+            // the vocabulary, and naming every member is what makes this maximal. `[widened from
+            // one — 2026-08-28, found in review]`
+            edge_kinds: vec![
+                EdgeKind::Express,
+                EdgeKind::Contains,
+                EdgeKind::LeadsTo,
+                EdgeKind::Near,
+            ],
             labels: vec!["l".to_string(); MAX_FILTER_VALUES],
             // No facets on an edge container, so all 32 predicates and all 256 probes are the
             // property list's.
