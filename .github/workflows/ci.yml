@@ -137,6 +137,39 @@ jobs:
     if: needs.detect-scope.outputs.run-test-agents-ts == 'true'
     uses: ./.github/workflows/test-agents-ts.yml
 
+  # CodeQL, scoped to the languages this change can reach. Its own workflow carries the reasoning
+  # for why it fans in here instead of becoming a second required status check — the short version
+  # is that a required check which does not run is pending forever, so "scoped" and "separately
+  # required" cannot both be true.
+  #
+  # INVOKED unconditionally, like code-quality and for the same reason: it decides internally, and a
+  # change reaching no analyzed language still produces a green job (its matrix is empty and
+  # `analyze` skips). That keeps the decision in one place instead of splitting it between an `if:`
+  # here and a matrix there.
+  #
+  # PERMISSIONS ARE GRANTED HERE, and they must be. The workflow-level `permissions: contents: read`
+  # above zeroes every unlisted scope, and a reusable workflow can never exceed its CALLER's — so
+  # without this block the analysis runs, finds things, and 403s on upload, which reads as a broken
+  # analysis rather than a missing scope.
+  codeql:
+    needs: detect-scope
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    uses: ./.github/workflows/codeql.yml
+    with:
+      # `actions` is the cheapest of the five and has no scope flag of its own; rather than add an
+      # output that would need its own harness cases, it rides run-code-quality, which is true for
+      # any change with something load-bearing in it — workflow edits included.
+      run-actions: ${{ needs.detect-scope.outputs.run-code-quality }}
+      # One CodeQL analysis covers both, so either project reaching it is enough.
+      run-javascript-typescript: ${{ (needs.detect-scope.outputs.run-test-typescript == 'true' || needs.detect-scope.outputs.run-test-agents-ts == 'true') && 'true' || 'false' }}
+      run-python: ${{ needs.detect-scope.outputs.run-test-python }}
+      run-ruby: ${{ needs.detect-scope.outputs.run-test-ruby }}
+      # Both flags, because a change can be rust-inert for tests and still owe rust-quality.
+      run-rust: ${{ (needs.detect-scope.outputs.run-rust-quality == 'true' || needs.detect-scope.outputs.run-test-rust == 'true') && 'true' || 'false' }}
+
   # ==========================================================================
   # Stage 2: CI Success Gate
   # The single check meant for branch protection. Always runs and validates
@@ -147,7 +180,7 @@ jobs:
   # ==========================================================================
   ci-success:
     name: CI Success
-    needs: [detect-scope, code-quality, test-rust, test-typescript, test-ruby, test-python, test-agents-ts]
+    needs: [detect-scope, code-quality, test-rust, test-typescript, test-ruby, test-python, test-agents-ts, codeql]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -184,6 +217,32 @@ jobs:
             fi
           }
 
+          # The eject.
+          #
+          # CodeQL is separate compute that sometimes stalls, and it is now the difference between a
+          # mergeable PR and an unmergeable one. `codeql-override` on the PR releases THIS job and
+          # nothing else — the ruleset keeps `bypass_actors: []`, so no actor gains a blanket bypass
+          # of every other gate to get past a flaky analysis.
+          #
+          # It is a MERGE decision, not a dismissal: the alert stays on the PR and in the security
+          # tab, and the label stays on the merged PR, so "who ejected what, and when" is answerable
+          # afterwards from the PR itself. That is the same shape `cargo audit` got when it became
+          # blocking — a reviewed lane where each entry carries a reason — because a gate that cannot
+          # be triaged is a gate that gets disabled the first time it is inconvenient.
+          #
+          # Fails closed off a PR: `github.event.pull_request.labels` is empty on a push to main, so
+          # the override cannot apply to the post-merge run.
+          check_job_overridable() {
+            name="$1"; result="$2"; should_run="$3"; override="$4"; label="$5"
+            if [ "$should_run" = "true" ] && [ "$result" != "success" ] && [ "$result" != "skipped" ] \
+               && [ "$override" = "true" ]; then
+              echo "  EJECT: ${name} (result=${result}) — released by the '${label}' label"
+              echo "::warning title=${name} gate ejected::${name} did not pass (${result}) and was released by the '${label}' label on this PR. Any alert it raised is still open — this overrode the MERGE, not the finding."
+              return 0
+            fi
+            check_job "$name" "$result" "$should_run"
+          }
+
           check_job "code-quality" \
             "${{ needs.code-quality.result }}" \
             "${{ needs.detect-scope.outputs.run-code-quality }}"
@@ -207,6 +266,16 @@ jobs:
           check_job "test-agents-ts" \
             "${{ needs.test-agents-ts.result }}" \
             "${{ needs.detect-scope.outputs.run-test-agents-ts }}"
+
+          # Always "should run": the job is invoked for every change and decides internally whether
+          # any language is reachable, so an out-of-scope change reaches here as a green job rather
+          # than a skipped one. Reporting it as scope-gated here would duplicate that decision in a
+          # second place, and the two copies would drift.
+          check_job_overridable "codeql" \
+            "${{ needs.codeql.result }}" \
+            "true" \
+            "${{ contains(github.event.pull_request.labels.*.name, 'codeql-override') }}" \
+            "codeql-override"
 
           echo ""
           if [ -n "$FAILED" ]; then
