@@ -20,7 +20,28 @@ honest model gates on the explicit grant and records the actual actor on every m
 |---|---|
 | `cogmap_authorable_by_profile` | May this profile author *into* this map? — explicit write grant only |
 | `context_authorable_by_profile` | May this profile author *into* this context? — owner, reachable team member, or explicit grant |
-| `can_modify_resource` | May this profile modify this *existing* resource? — owner/originator, explicit grant, or container-write cascade |
+| `can_modify_resource` | May this profile modify this *existing* resource? — owner, explicit grant, or container-write cascade |
+
+## Ownership is not a grant from a team
+
+`kb_resource_homes.owner_profile_id` is one profile, and it is the only access-bearing profile
+key — `originator_profile_id` is recorded provenance and confers nothing. Both gates read the
+owner directly: neither team membership nor a context share enters that arm. Ownership is not a
+grant, so nothing revokes it in place.
+
+The consequence is deliberate. **Withdrawing a share withdraws only what the share conferred.**
+Removing someone from a team, or unsharing a context, does not move ownership — so anything they
+still own keeps them as its owner, and therefore as its reader and writer. Ownership moves only by
+an act that names a successor: [`temper resource reassign`](../reference/cli/resource.md) for one
+resource, [`temper team reassign`](../reference/cli/team.md) for everything one person owns in a
+team's shared contexts.
+
+So a departure **surfaces** what is still owned rather than sweeping it. `temper team remove-member`
+reports the removed member's residual, computed by the same query the handoff moves, so the report
+and the handoff cannot disagree. What actually ends a departing person's reach is the prior
+question — admission — and it is answered before any predicate on this page runs: see
+[The Trust Boundary](./trust-boundary.md), and
+[Offboard a Departure](../playbooks/offboard-a-departure.md) for the sequence an operator runs.
 
 ## The container-write cascade
 

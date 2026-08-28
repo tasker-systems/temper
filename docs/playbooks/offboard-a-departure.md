@@ -116,7 +116,9 @@ them:
   owned, and both reassign paths refuse them.
 
 There is no command that sweeps the first of those. A personal context is theirs, and moving it
-is a decision rather than an offboarding step.
+is a decision rather than an offboarding step. That is the general rule and not a gap in this
+sequence: ownership is held directly, so withdrawing a share never moves it. See
+[Ownership is not a grant from a team](../concepts/authoring-authorization.md#ownership-is-not-a-grant-from-a-team).
 
 Finally, the membership row itself. Which command applies — or whether one does — depends on
 how the membership was created, and `temper team show` prints a `source` for each member.
