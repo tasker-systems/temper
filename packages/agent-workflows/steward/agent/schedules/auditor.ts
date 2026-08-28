@@ -154,8 +154,9 @@ import {
  * set here.** That cap (50, `temper-core::types::workflow_job`) is a per-tick *finding* budget and
  * simultaneously the sweep's `p_limit` and the claim's batch limit, so ticks/day × cap is the
  * ceiling on audit throughput — daily at 50 admits 50 findings/day where hourly admitted up to 1200.
- * It does not bind here: measured mid-outage with ~19 days of backlog standing, `audit_drift_sweep`
- * at `p_limit` 50 returned **15** rows. A fork whose steward drifts more than ~50 findings a day
+ * It does not bind at this corpus's scale: with a substantial backlog standing, `audit_drift_sweep`
+ * at `p_limit` 50 has been measured returning **15** eligible findings — demand well under supply,
+ * which is the comparison that matters. A fork whose steward drifts more than ~50 findings a day
  * needs the cap raised or the cadence raised, or its backlog grows behind a green cron. Raising the
  * cap costs model sessions but NOT sweep time — `p_limit` applies after every candidate is scored.
  *
