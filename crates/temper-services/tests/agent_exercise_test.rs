@@ -2,6 +2,7 @@
 //! Integration tests for agent exercise: claim attribution (Beat A) and `vw_agent_exercise` (Beat B).
 //! Each test runs on an isolated `#[sqlx::test]` database with the workspace migrations applied.
 
+use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use temper_core::types::ProfileId;
 use uuid::Uuid;
@@ -146,5 +147,98 @@ async fn a_claim_does_not_take_another_principals_queued_work(pool: PgPool) {
     assert_eq!(
         claimed[0].cogmap_id, my_cogmap,
         "and it is this principal's own, never the cogmap it cannot reach"
+    );
+}
+
+/// Register `principal` in the `kb_machine_clients` allowlist and return the new row's `id`.
+///
+/// `client_id` is UNIQUE, so it is minted fresh per call from a `Uuid::now_v7()` rather than
+/// derived from `principal` — unlike the sibling helpers in `standing_clock_test.rs` and
+/// `citation_audit_handler_test.rs`, which key it off the profile because each of their tests
+/// registers a given profile only once. `label` and `client_id` share the mint, exactly as those
+/// two helpers share `client_id` and `label` off their own key.
+async fn seed_machine_client(pool: &PgPool, principal: ProfileId) -> Uuid {
+    sqlx::query_scalar(
+        "INSERT INTO kb_machine_clients (client_id, label, profile_id, registered_by_profile_id) \
+         VALUES ($1, $1, $2, $2) RETURNING id",
+    )
+    .bind(format!("agent-exercise-{}", Uuid::now_v7()))
+    .bind(*principal)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// A principal that has authenticated but never claimed is visible, with the later rungs empty.
+///
+/// This is the population an inner join would drop, and it is the shape the #809 case actually takes:
+/// reached, then nothing. It is also the shape a healthy idle agent takes, which is why the view
+/// reports the rungs rather than judging them.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_view_shows_a_principal_that_reached_but_never_claimed(pool: PgPool) {
+    let (principal, _cogmap) = seed_steward_reach(&pool).await;
+    let client = seed_machine_client(&pool, principal).await;
+    sqlx::query("UPDATE kb_machine_clients SET last_seen_at = now() WHERE id = $1")
+        .bind(client)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let row = sqlx::query_as::<
+        _,
+        (
+            Option<DateTime<Utc>>,
+            Option<DateTime<Utc>>,
+            Option<String>,
+            Option<DateTime<Utc>>,
+        ),
+    >(
+        "SELECT last_seen_at, last_claim_at, last_persona_claimed, last_emitted_at
+           FROM vw_agent_exercise WHERE profile_id = $1",
+    )
+    .bind(*principal)
+    .fetch_one(&pool)
+    .await
+    .expect("the principal is visible despite never having claimed");
+
+    assert!(row.0.is_some(), "it reached");
+    assert!(row.1.is_none(), "but claimed nothing");
+    assert!(row.2.is_none(), "so no persona is observed");
+    assert!(row.3.is_none(), "and nothing moved");
+}
+
+/// The claim rung fills in for a steward claim, and reports the persona it observed.
+///
+/// This is what Beat A bought: before it, `claimed_by_profile_id` was NULL for every steward job and
+/// this row's rung 2 would be empty no matter how much the steward ran.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_view_fills_the_claim_rung_for_a_steward_claim(pool: PgPool) {
+    let (principal, cogmap) = seed_steward_reach(&pool).await;
+    seed_machine_client(&pool, principal).await;
+
+    sqlx::query("SELECT workflow_job_enqueue($1, 'steward', 'steward')")
+        .bind(cogmap)
+        .execute(&pool)
+        .await
+        .unwrap();
+    temper_services::services::workflow_job_service::claim(
+        &pool, "steward", "steward", 10, 600, None, principal,
+    )
+    .await
+    .expect("the claim succeeds");
+
+    let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, Option<String>)>(
+        "SELECT last_claim_at, last_persona_claimed FROM vw_agent_exercise WHERE profile_id = $1",
+    )
+    .bind(*principal)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert!(row.0.is_some(), "the claim rung is filled");
+    assert_eq!(
+        row.1.as_deref(),
+        Some("steward"),
+        "and the observed persona is the steward's"
     );
 }
