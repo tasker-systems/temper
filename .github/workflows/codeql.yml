@@ -1,0 +1,174 @@
+name: CodeQL
+
+# CodeQL, scoped to the languages a change can actually affect.
+#
+# ## Why this exists instead of default setup
+#
+# Default setup ran all seven configured languages on every push, with no path filters and no
+# per-change language selection — so a docs-only PR, and a PR touching only `clients/temper-rb`,
+# both paid for a full Rust analysis, which is by far the largest surface here. Default setup has
+# no control surface for that: scoping is only reachable from an in-repo workflow.
+#
+# ## Why it is NOT a required status check of its own
+#
+# It fans into `CI Success` (`ci.yml`) like every other job, and that is load-bearing rather than
+# stylistic. **A required check that does not run is pending forever, not passing** — so the moment
+# CodeQL is both scoped and separately required, the first docs-only PR becomes unmergeable. The
+# fan-in already knows how to read a correctly-skipped job as a pass, so routing through it is what
+# makes scoping and gating compatible at all. It also keeps the ruleset at exactly one required
+# context and leaves `bypass_actors: []` intact.
+#
+# ## Deltas from the default setup this replaces, stated so they are choices and not drift
+#
+# - **Query suite stays `default`**, not `security-extended`. Changing the suite in the same change
+#   that makes CodeQL blocking would mix "we now gate on this" with "we now find more", and a jump
+#   in alert volume would be indistinguishable from the gate misbehaving.
+# - **Threat model is left unset**, which is `remote` — what default setup reported.
+# - **The seven configured languages collapse to five.** `javascript`, `typescript` and
+#   `javascript-typescript` are one analysis; the first two were aliases.
+# - **The weekly scan is preserved** by the `schedule` trigger below. Default setup ran weekly and
+#   losing that silently is exactly the kind of thing a migration drops.
+# - **Actions are tag-pinned** (`@v3`), matching ordinary CI here. The SHA pinning elsewhere in this
+#   repo guards the release-signing path specifically; this workflow holds `security-events: write`
+#   and nothing that reaches a signing oracle.
+
+on:
+  workflow_call:
+    inputs:
+      run-actions:
+        description: Analyze GitHub Actions workflows.
+        type: string
+        required: false
+        default: "false"
+      run-javascript-typescript:
+        description: Analyze JavaScript/TypeScript. One analysis covers both.
+        type: string
+        required: false
+        default: "false"
+      run-python:
+        description: Analyze Python.
+        type: string
+        required: false
+        default: "false"
+      run-ruby:
+        description: Analyze Ruby.
+        type: string
+        required: false
+        default: "false"
+      run-rust:
+        description: Analyze Rust. The largest surface here by a wide margin.
+        type: string
+        required: false
+        default: "false"
+      rust-timeout-minutes:
+        description: >-
+          Wall-clock ceiling for the Rust analysis. UNMEASURED first cut — set generously on purpose.
+          A stalled analysis on a required gate blocks a PR forever, because pending is not failed
+          and an override cannot act on a check that never reported; the timeout is what converts a
+          stall into a failure the `codeql-override` label can release. Too LOW is the expensive
+          direction, since it fails legitimate runs and teaches people to reach for the override.
+          Re-set this from the first ten real runs rather than leaving the guess in place.
+        type: number
+        required: false
+        default: 45
+      other-timeout-minutes:
+        description: Wall-clock ceiling for every non-Rust analysis. Same reasoning, smaller surface.
+        type: number
+        required: false
+        default: 20
+
+  # Replaces default setup's weekly scan. On this trigger every input is unset, and `plan` below
+  # analyzes everything — a periodic full scan is the whole point, and scoping it to "what changed"
+  # would make it a second PR run rather than a sweep.
+  schedule:
+    - cron: "24 5 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  # ==========================================================================
+  # Which languages does this change actually reach?
+  #
+  # A separate job rather than an expression in `ci.yml`, because the mapping from scope flags to
+  # CodeQL languages is a claim worth reading in one place with its reasoning attached — and because
+  # an empty result has to be expressible. `analyze` is skipped on `[]`, and this workflow still
+  # succeeds, which is what lets a docs-only PR pass the gate without CodeQL having run.
+  # ==========================================================================
+  plan:
+    name: Plan CodeQL matrix
+    runs-on: ubuntu-latest
+    outputs:
+      languages: ${{ steps.plan.outputs.languages }}
+    steps:
+      - name: Select languages
+        id: plan
+        env:
+          RUN_ACTIONS: ${{ inputs.run-actions }}
+          RUN_JS_TS: ${{ inputs.run-javascript-typescript }}
+          RUN_PYTHON: ${{ inputs.run-python }}
+          RUN_RUBY: ${{ inputs.run-ruby }}
+          RUN_RUST: ${{ inputs.run-rust }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          langs=""
+          add() { langs="${langs}${langs:+,}\"$1\""; }
+
+          if [ "${EVENT_NAME}" = "schedule" ]; then
+            # The weekly sweep is unscoped by design. Inputs are unset on this trigger anyway, so
+            # falling through to the per-flag branch would analyze nothing at all — a scheduled scan
+            # that silently covers zero languages is worse than no scheduled scan, because the run
+            # is green either way.
+            add actions; add javascript-typescript; add python; add ruby; add rust
+          else
+            if [ "${RUN_ACTIONS}" = "true" ]; then add actions; fi
+            if [ "${RUN_JS_TS}"   = "true" ]; then add javascript-typescript; fi
+            if [ "${RUN_PYTHON}"  = "true" ]; then add python; fi
+            if [ "${RUN_RUBY}"    = "true" ]; then add ruby; fi
+            if [ "${RUN_RUST}"    = "true" ]; then add rust; fi
+          fi
+
+          echo "languages=[${langs}]" >> "$GITHUB_OUTPUT"
+          if [ -z "${langs}" ]; then
+            echo "::notice title=CodeQL::No analyzed language is reachable from this change — skipping."
+          else
+            echo "::notice title=CodeQL::Analyzing [${langs}]"
+          fi
+
+  analyze:
+    name: Analyze
+    needs: plan
+    if: needs.plan.outputs.languages != '[]'
+    runs-on: ubuntu-latest
+    # Granted here rather than at workflow level so only the job that writes alerts holds the scope.
+    # NOTE: a reusable workflow can never exceed the CALLER's permissions, so `ci.yml`'s `codeql`
+    # job grants the same three; without that this is silently downgraded and the upload 403s.
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    timeout-minutes: ${{ matrix.language == 'rust' && inputs.rust-timeout-minutes || inputs.other-timeout-minutes }}
+    strategy:
+      # One language failing must not cancel the others: a partial result still files real alerts,
+      # and cancelling siblings would make one flaky analysis look like four broken ones.
+      fail-fast: false
+      matrix:
+        language: ${{ fromJSON(needs.plan.outputs.languages) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # No compilation for any language here. Rust supports it, and requiring a build would put
+          # a full cargo compile — plus whatever a build.rs wants — inside a job holding
+          # `security-events: write`, on every PR that touches Rust.
+          build-mode: none
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:${{ matrix.language }}
