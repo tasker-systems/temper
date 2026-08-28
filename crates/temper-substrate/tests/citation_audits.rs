@@ -2316,6 +2316,98 @@ async fn stale_predicate_refuses_a_finding_the_principal_cannot_read(pool: sqlx:
         "the watermark still exists but the finding is no longer readable — the `gated` CTE must \
          refuse it rather than answer a question about a resource this principal cannot see"
     );
+
+    // THE SAME GATE, AT ARRAY GRAIN. `20260828000020` moved the body to a set-taking form whose
+    // `gated` CTE filters `unnest(p_findings)` instead of a scalar. That is the one line that
+    // changed, so it is the one line that could have changed the answer — an array arity is exactly
+    // where a gate gets written as a join that admits rows it should drop.
+    let via_multi_without_reach: Vec<(Uuid, Uuid, Uuid)> = sqlx::query_as(
+        "SELECT finding_id, block_id, source_id \
+           FROM resource_stale_citations_multi(ARRAY[$1]::uuid[], $2)",
+    )
+    .bind(f.finding.uuid())
+    .bind(f.principal.uuid())
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(
+        via_multi_without_reach.is_empty(),
+        "the set form's gate must refuse an unreadable finding too, or the array arity is a way \
+         around the predicate the scalar arity enforces"
+    );
+}
+
+/// ONE FINDING'S STALENESS MUST NOT LEAK ONTO ANOTHER'S ROWS — the risk the array arity introduces
+/// and the scalar arity could not have.
+///
+/// `20260727000050`'s body is correlated to a single `p_finding` in three places: the audit
+/// watermark's `ab.resource_id = g.fid`, the live-citation lateral, and the block join. Driving it
+/// from `unnest()` makes each of those a per-row correlation instead of a constant, and a body that
+/// dropped any one of them would still return the right rows for a one-element array — so the
+/// agreement test above cannot catch it. This can: two findings, one stale, one not.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_set_form_attributes_each_stale_citation_to_its_own_finding(pool: sqlx::PgPool) {
+    let f = stale_fixture(&pool, "ads-multi-attrib").await;
+    let block = first_block(&pool, f.finding).await;
+
+    // A second finding in the same cogmap, citing the same source, reachable by the same principal.
+    let quiet = make_cogmap_finding(
+        &pool,
+        f.owner,
+        f.emitter,
+        CogmapId::from(f.cogmap),
+        "quiet finding",
+        "temper://ads-multi-attrib/quiet",
+        Some(f.source),
+    )
+    .await;
+    let quiet_block = first_block(&pool, quiet).await;
+
+    // Weigh BOTH, so both have a watermark and `finding_wm IS NOT NULL` cannot be what separates
+    // them. Then mutate only the first — staleness is now the only difference.
+    fire_audit(&pool, f.auditor, block, f.source.uuid(), 0.5)
+        .await
+        .unwrap();
+    fire_audit(&pool, f.auditor, quiet_block, f.source.uuid(), 0.5)
+        .await
+        .unwrap();
+    mutate_block(&pool, block, f.emitter, "revised after the audit").await;
+
+    let rows: Vec<(Uuid, Uuid, Uuid)> = sqlx::query_as(
+        "SELECT finding_id, block_id, source_id \
+           FROM resource_stale_citations_multi(ARRAY[$1, $2]::uuid[], $3) ORDER BY 1, 2, 3",
+    )
+    .bind(f.finding.uuid())
+    .bind(quiet.uuid())
+    .bind(f.principal.uuid())
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    assert!(
+        rows.iter().any(|(fid, _, _)| *fid == f.finding.uuid()),
+        "the mutated finding is stale and must be returned"
+    );
+    assert!(
+        rows.iter().all(|(fid, _, _)| *fid != quiet.uuid()),
+        "the untouched finding shares a source and a watermark with the stale one, but nothing \
+         material happened to it — returning it means the correlation to `p_finding` was lost"
+    );
+
+    // And each arity must still agree per finding, which is what proves the leak is absent rather
+    // than merely invisible at this array size.
+    for (finding, expect_stale) in [(f.finding, true), (quiet, false)] {
+        let alone: bool = sqlx::query_scalar("SELECT resource_has_stale_citation($1, $2)")
+            .bind(finding.uuid())
+            .bind(f.principal.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            alone, expect_stale,
+            "the scalar arity must give the same verdict the array arity did"
+        );
+    }
 }
 
 // ── Citation-grain dispatch — `resource_auditable_citations` ────────────────────────────────────
@@ -2515,6 +2607,39 @@ async fn the_staleness_boolean_agrees_with_the_staleness_set(pool: sqlx::PgPool)
         assert_eq!(
             boolean, set_nonempty,
             "boolean and set must agree ({stage}) — they are one definition since 20260727000050"
+        );
+
+        // THE THIRD ARITY, since `20260828000020`. The body now lives in the set-taking form and the
+        // per-finding one is a one-element call into it, so a disagreement here is the two
+        // definitions of "stale" having drifted apart — the exact failure `20260727000050` collapsed
+        // the boolean into the set to prevent, one arity further out.
+        let via_multi: Vec<(Uuid, Uuid)> = sqlx::query_as(
+            "SELECT block_id, source_id FROM resource_stale_citations_multi(ARRAY[$1]::uuid[], $2) \
+              ORDER BY block_id, source_id",
+        )
+        .bind(f.finding.uuid())
+        .bind(f.principal.uuid())
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        let via_single: Vec<(Uuid, Uuid)> = sqlx::query_as(
+            "SELECT block_id, source_id FROM resource_stale_citations($1, $2) \
+              ORDER BY block_id, source_id",
+        )
+        .bind(f.finding.uuid())
+        .bind(f.principal.uuid())
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            via_multi, via_single,
+            "the set form must return exactly the per-finding set ({stage}), rows and all — \
+             agreeing on emptiness alone would let the two drift on WHICH citations are stale"
+        );
+        assert_eq!(
+            !via_multi.is_empty(),
+            boolean,
+            "the boolean must agree with the set form ({stage})"
         );
 
         match stage {
