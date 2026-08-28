@@ -549,6 +549,9 @@ mod tests {
             .unwrap();
         let id = claimed[0].id;
         reap(&pool, "lease expired").await.unwrap();
+        // Since `20260828000030` a reap defers the row; this test is about correlation rebinding,
+        // not about timing, so let the backoff elapse rather than assert around it.
+        elapse_backoff(&pool).await;
 
         // Re-claim with an expiring lease again, so the row can be reaped once more below.
         let second = CorrelationId::new();
@@ -560,6 +563,7 @@ mod tests {
         // …and a subsequent uncorrelated re-claim clears it rather than preserving the stale id.
         // (attempts is 2 here, below max_attempts=3, so the reap retries rather than killing it.)
         reap(&pool, "lease expired").await.unwrap();
+        elapse_backoff(&pool).await;
         claim(&pool, "steward", "steward", 10, 600, None)
             .await
             .unwrap();
@@ -717,6 +721,7 @@ mod tests {
             .await
             .unwrap();
         reap(&pool, "lease expired").await.unwrap();
+        elapse_backoff(&pool).await;
         let mine = claim_audit(&pool, "auditor", "citation-audit", 10, 600, None, auditor)
             .await
             .unwrap();
@@ -813,10 +818,14 @@ mod tests {
         assert_eq!(reap(&pool, "boom").await.unwrap(), 1);
         assert_eq!(status_of(&pool, id).await, "waiting_for_retry");
         // Two more claim+reap cycles (attempts 2, then 3) → dead at attempts >= max_attempts.
+        // Each re-claim needs the `20260828000030` backoff to have elapsed; this test asserts the
+        // attempt ladder, and `the_backoff_grows_with_attempts_and_is_capped` asserts the delay.
+        elapse_backoff(&pool).await;
         claim(&pool, "steward", "steward", 10, -1, None)
             .await
             .unwrap();
         reap(&pool, "boom").await.unwrap();
+        elapse_backoff(&pool).await;
         claim(&pool, "steward", "steward", 10, -1, None)
             .await
             .unwrap();
@@ -825,6 +834,151 @@ mod tests {
             status_of(&pool, id).await,
             "dead",
             "attempts hit max_attempts → dead"
+        );
+    }
+
+    /// Simulate the retry backoff elapsing, so a test about something OTHER than timing can
+    /// re-claim. `20260828000030` pushes `next_visible_at` forward on every retry, and every claim
+    /// variant filters `next_visible_at <= now()` — so without this, a reap-then-claim sequence
+    /// silently claims nothing and the assertion that follows it fails for the wrong reason.
+    async fn elapse_backoff(pool: &PgPool) {
+        sqlx::query("UPDATE kb_workflow_jobs SET next_visible_at = now()")
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    /// **A REAPED JOB MUST NOT BE INSTANTLY RE-CLAIMABLE.** `next_visible_at` has existed since
+    /// `20260705000001` and every claim variant filters on it, but until `20260828000030` NOTHING
+    /// EVER WROTE IT — so the column, its index (`idx_workflow_jobs_claimable`) and the filter
+    /// described a backoff the system did not perform.
+    ///
+    /// The cost was measured: `embed` (four shards) and `region` both tick `* * * * *`, so a job
+    /// failing against a persistently-unavailable upstream burned all three attempts as fast as the
+    /// lease could expire, then died and was re-enqueued to do it again.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_reaped_job_is_not_immediately_claimable_again(pool: PgPool) {
+        let c = a_cogmap(&pool).await;
+        enqueue(&pool, c, "steward", "steward").await.unwrap();
+        let claimed = claim(&pool, "steward", "steward", 10, -1, None)
+            .await
+            .unwrap();
+        let id = claimed[0].id;
+
+        reap(&pool, "lease expired").await.unwrap();
+        assert_eq!(status_of(&pool, id).await, "waiting_for_retry");
+
+        let deferred: bool = sqlx::query_scalar(
+            "SELECT next_visible_at > now() FROM kb_workflow_jobs WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            deferred,
+            "reap must push next_visible_at forward, or the retry is immediate"
+        );
+
+        // The column moving is not the same claim as the BEHAVIOUR changing. This is the half that
+        // would still fail if a future claim variant forgot the `next_visible_at <= now()` filter.
+        let too_soon = claim(&pool, "steward", "steward", 10, 600, None)
+            .await
+            .unwrap();
+        assert!(
+            too_soon.iter().all(|j| j.id != id),
+            "a backed-off job must not be claimable yet"
+        );
+
+        elapse_backoff(&pool).await;
+        let now_claimable = claim(&pool, "steward", "steward", 10, 600, None)
+            .await
+            .unwrap();
+        assert!(
+            now_claimable.iter().any(|j| j.id == id),
+            "once the backoff elapses the job must be claimable again — a backoff that never \
+             clears is a leak, not a delay"
+        );
+    }
+
+    /// **THE BACKOFF GROWS, AND IT IS BOUNDED.** An unbounded doubling on a queue whose jobs are
+    /// re-created by their own sweep every tick is a leak rather than a backoff, so the curve is
+    /// capped. The cap does not bind at `max_attempts = 3`; it exists so raising that constant
+    /// stays safe, which is exactly the kind of change nobody re-derives a bound for.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn the_backoff_grows_with_attempts_and_is_capped(pool: PgPool) {
+        let c = a_cogmap(&pool).await;
+        enqueue(&pool, c, "steward", "steward").await.unwrap();
+
+        let mut delays: Vec<f64> = Vec::new();
+        for _ in 0..2 {
+            claim(&pool, "steward", "steward", 10, -1, None)
+                .await
+                .unwrap();
+            reap(&pool, "lease expired").await.unwrap();
+            let secs: f64 = sqlx::query_scalar(
+                "SELECT extract(epoch FROM (next_visible_at - now()))::float8 \
+                   FROM kb_workflow_jobs WHERE cogmap_id = $1",
+            )
+            .bind(c)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            delays.push(secs);
+            elapse_backoff(&pool).await;
+        }
+
+        assert!(
+            delays[1] > delays[0],
+            "the second retry must wait longer than the first: {delays:?}"
+        );
+        assert!(
+            delays.iter().all(|d| *d <= 3600.0),
+            "no retry may be deferred past the cap: {delays:?}"
+        );
+        assert!(
+            delays[0] >= 60.0,
+            "the first retry must be a real gap against a one-minute cron, not a rounding error: \
+             {delays:?}"
+        );
+    }
+
+    /// **A DYING JOB IS NOT DELAYED.** The two arms are independent: backoff belongs to
+    /// `waiting_for_retry`, and a job at `max_attempts` goes `dead` and `completed_at` immediately,
+    /// exactly as `20260705000001` had it. Deferring a terminal row would leave it looking
+    /// scheduled forever.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn backoff_does_not_defer_a_job_that_dies(pool: PgPool) {
+        let c = a_cogmap(&pool).await;
+        enqueue(&pool, c, "steward", "steward").await.unwrap();
+        let id = claim(&pool, "steward", "steward", 10, -1, None)
+            .await
+            .unwrap()[0]
+            .id;
+
+        for _ in 0..2 {
+            reap(&pool, "boom").await.unwrap();
+            elapse_backoff(&pool).await;
+            claim(&pool, "steward", "steward", 10, -1, None)
+                .await
+                .unwrap();
+        }
+        reap(&pool, "boom").await.unwrap();
+
+        let (status, completed, deferred): (String, bool, bool) = sqlx::query_as(
+            "SELECT status, completed_at IS NOT NULL, next_visible_at > now() \
+               FROM kb_workflow_jobs WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(status, "dead", "attempts hit max_attempts → dead");
+        assert!(completed, "a dead job is stamped completed_at");
+        assert!(
+            !deferred,
+            "a dead job must not carry a future next_visible_at — it is terminal, not scheduled"
         );
     }
 
