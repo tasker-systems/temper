@@ -407,39 +407,61 @@ Three things that read as bugs but aren't:
 
 ### Has this agent actually run?
 
-`vw_agent_exercise` answers it in one query, one row per registered machine credential:
+`vw_agent_exercise` answers it in one query, **one row per registered machine principal** — not per
+credential. A principal can hold several `kb_machine_clients` rows (reactivation is a new
+registration, never an update), so the view aggregates them into a count and reports one ladder:
 
 ```sql
-SELECT label, last_seen_at, last_claim_at, last_persona_claimed,
-       last_completion_at, last_death_at, last_emitted_at
+SELECT label, credentials, credentials_live, last_seen_at,
+       last_session_opened_at, last_session_closed_at, last_session_status,
+       last_emitted_at
   FROM vw_agent_exercise
- WHERE revoked_at IS NULL
  ORDER BY last_seen_at DESC NULLS FIRST;
 ```
 
-Read it as a ladder and find **where the signal stops** — each gap means something the rungs
-either side of it cannot tell you:
+There is deliberately no `WHERE` clause on revocation. A principal whose credentials have all been
+revoked is exactly the one you are looking for when an agent goes quiet, and `credentials_live = 0`
+names that state without hiding the row.
 
-| Stops after | Reading |
+Read it as a ladder and find **which rungs are stale** — each gap means something the rungs either
+side of it cannot tell you:
+
+| What is stale | Reading |
 |---|---|
-| nothing (`last_seen_at` NULL) | the credential has never authenticated — check registration and admission |
-| `last_seen_at` | authenticated, took no work. Benign if the queue was empty; **this is also what a quota-exhausted agent looks like**, because it is refused at the IdP's token endpoint and never arrives |
-| `last_claim_at` | claimed and did not finish — reaped on lease expiry and now backing off |
-| `last_completion_at` | ran clean and changed nothing in the corpus |
+| `last_seen_at` was never set at all | the credential has never authenticated — check registration and admission |
+| **every rung together, `last_seen_at` included** | the credential is not reaching this instance. Either it has been revoked (`credentials_live = 0`) or its issuer is refusing to mint for it, and the agent skipped quietly — see below |
+| `last_session_opened_at`, while `last_seen_at` is fresh | authenticating and not running. Benign if the queue was empty; a fault if it was not |
+| `last_session_closed_at`, with `last_session_status = open` | a session started and never finished — a function timeout, or a tick that died mid-loop |
+| `last_emitted_at`, while the session rungs are fresh | ran clean and changed nothing in the corpus |
 
 The view deliberately states **no** threshold: what counts as "recently" depends on the agent's
 cadence — the steward ticks hourly, the auditor daily at 03:30 UTC — so compare against the cron
 you configured rather than against a number baked into a column.
 
-Two readings that look like failures but are not:
+**Why a quiet agent is hard to see, and what it actually looks like.** The two ways a token request
+fails are treated as two different facts, on purpose. A **401** means the credential is wrong: the
+agent believes it is working and is not, so it fails loudly. A **429** means the issuer will not mint
+right now for a credential it otherwise accepts — a capacity answer, not a misconfiguration — and an
+*optional* agent turns that into a logged skip and a green cron, because an agent that cannot run
+should not start as somebody else. The cost of that correct behaviour is that it leaves almost
+nothing behind: no session, no event, no red tick.
 
+What it leaves in this view is the second row of the table above: **every rung stale together,
+including `last_seen_at`**. An agent refused at the token endpoint never reaches this instance at
+all, so rung 1 stops advancing along with the rest. That is a different picture from a fresh
+`last_seen_at` sitting above an old session — which means the agent *is* authenticating and is not
+doing work, a queue or reach question rather than a credential one.
+
+Two more readings that look like failures but are not:
+
+- **The rungs are not a timeline, and neither ordering is an inversion.**
+  `last_session_closed_at` later than `last_session_opened_at` is the healthy just-finished case;
+  `last_session_opened_at` later is the healthy mid-run case. "Where the signal stops" is about
+  which rungs are *stale against the agent's cadence*, never about which timestamp is larger.
 - **An idle agent and a broken one look identical at rung 2 alone.** `last_seen_at` moving with
-  `last_claim_at` far behind is the steady state of a healthy agent with nothing to do — the same
-  fact as `claimed 0 job(s)` below. Distinguish them by whether the queue actually held work, not by
-  the gap's size.
-- **`last_persona_claimed` is observed, not configured.** It reports which persona's work this
-  credential last took. A credential that has never claimed shows NULL there, which is not a
-  misconfiguration.
+  `last_session_opened_at` far behind is the steady state of a healthy agent with nothing to do — the
+  same fact as `claimed 0 job(s)` below. Distinguish them by whether the queue actually held work,
+  not by the gap's size.
 
 ### Observing an auditor tick
 
