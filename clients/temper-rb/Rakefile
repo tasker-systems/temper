@@ -11,6 +11,14 @@ REPO_ROOT = File.expand_path('../..', __dir__)
 # docker invocation here too would be a second copy of the pin, free to drift.
 GENERATE_SCRIPT = File.join(REPO_ROOT, '.github', 'scripts', 'generate-temper-rb.sh')
 
+# The same argument, applied to the ASSERTION rather than the pin — and no longer
+# hypothetical. This task used to hand-roll `git diff` over the two generated paths,
+# a second copy of what check-temper-rb-drift.sh does, and the two copies drifted:
+# the script grew a manifest diff and an orphan cross-check that catch a file the
+# generator has STOPPED writing, and this copy did not. CI runs this task, so CI was
+# the half that stayed blind, and two orphans rode a green gate. One implementation.
+DRIFT_SCRIPT = File.join(REPO_ROOT, '.github', 'scripts', 'check-temper-rb-drift.sh')
+
 RSpec::Core::RakeTask.new(:spec)
 RuboCop::RakeTask.new(:lint)
 
@@ -19,9 +27,11 @@ task :generate do
   sh 'bash', GENERATE_SCRIPT
 end
 
+# Not `task drift: :generate` — the script regenerates first, so depending on
+# :generate here would run the generator twice.
 desc 'Fail if the committed generated core drifts from the contract'
-task drift: :generate do
-  sh 'git', 'diff', '--exit-code', '--', 'lib/temper/generated', 'lib/temper/generated.rb'
+task :drift do
+  sh 'bash', DRIFT_SCRIPT
 end
 
 task default: %i[lint spec]

@@ -2,15 +2,27 @@
 #
 # Fail if the committed temper-rb generated core drifts from openapi.json.
 #
-# Regenerates the gem (via generate-temper-rb.sh) and diffs the result against
-# what is committed — the local mirror of the `test-ruby` CI job's `rake drift`.
-# This exists so a DTO change cannot pass a green local `cargo make check` and
-# then die in the Ruby CI drift gate (which is what bit issue #354).
+# Regenerates the gem (via generate-temper-rb.sh) and diffs the result against what
+# is committed. This is the ONE implementation of the gem's drift assertion: the
+# `test-ruby` CI job reaches it through the Rakefile's `rake drift`, and local dev
+# through `cargo make openapi-rb-drift`. It exists so a DTO change cannot pass a green
+# local `cargo make check` and then die in the Ruby CI drift gate (which is what bit
+# issue #354). The Rakefile used to carry its own copy of the diff; that copy drifted —
+# it never grew the manifest and orphan checks below — which is the whole argument for
+# there being one.
 #
-# Requires Docker. When Docker is unavailable this SKIPS with a loud notice
-# rather than failing: `cargo make check` must stay runnable on a machine with no
-# Docker daemon (the CI ruby job is the backstop that never skips). Mirrors the
-# reasoning that keeps the Docker-based `openapi-validate` out of the default gate.
+# WHEN THIS SKIPS. It runs whichever generator path the host HAS — Docker or a JVM —
+# and skips only when BOTH are missing, which is the weakest form that still catches
+# the artifact's failure mode. `cargo make check` must stay runnable on a machine with
+# neither, and the test-ruby CI job resolves to the Docker path (the runner has a
+# daemon, and generate-temper-rb.sh prefers it), so in CI this never skips.
+#
+# This used to skip whenever Docker was absent, which was stricter than its own
+# generator needs — generate-temper-rb.sh has had a Java + pinned-jar fallback all
+# along, emitting byte-identical output from the same pinned version. The cost of the
+# stricter rule was not theoretical: the two orphans this gate now catches sat in the
+# tree while a Docker-less `cargo make check` printed SKIP. Matches
+# check-temper-py-drift.sh, which shares this generator.
 #
 # Usage: bash .github/scripts/check-temper-rb-drift.sh
 
@@ -21,10 +33,11 @@ GENERATED="clients/temper-rb/lib/temper/generated"
 GENERATED_RB="clients/temper-rb/lib/temper/generated.rb"
 MANIFEST="clients/temper-rb/.openapi-generator"
 
-if ! docker info >/dev/null 2>&1; then
-  echo "SKIP: temper-rb drift check — Docker is not available." >&2
-  echo "      The gem is generated from openapi.json; run 'cargo make openapi-rb' with" >&2
-  echo "      Docker running to regenerate it. The test-ruby CI job is the backstop." >&2
+if ! (command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1) \
+   && ! command -v java >/dev/null 2>&1; then
+  echo "SKIP: temper-rb drift check — neither Docker nor a Java runtime is available." >&2
+  echo "      The gem is generated from openapi.json; run 'cargo make openapi-rb' on a" >&2
+  echo "      host with either one. The test-ruby CI job is the backstop." >&2
   exit 0
 fi
 
