@@ -133,24 +133,23 @@ from inside the code, and a threshold belongs here, where it changes without a d
 rule uid `dfwhxiq8y7d34c`, `for: 15m`, `severity=critical`. Its query is H1; `noDataState` and
 `execErrState` are both `OK`.
 
-### It detects; wiring it to a person is one manual step
+### Where it goes, and how to change that
 
-At creation this Grafana had **no contact points**, and the root notification policy routed to a
-receiver named `empty`. The rule therefore fires into nothing. Closing that is two actions in
-**Alerting**, and the indirection is deliberate — the address lives in exactly one place, so
-changing who is paged never touches the rule or the policy:
+**Wired 2026-08-28.** The rule carries `severity=critical`; the root notification policy has a child
+route matching `severity = critical` and pointing at the contact point `Temper Operators`
+(`bfwi2jg6r1ts0f`, email → `pete.jc.taylor@hey.com`). Verified by reading all three back, not by
+having created them.
 
-1. **Contact points → Add contact point.** Name it `Temper operators`, type Email, address
-   `pete.jc.taylor@hey.com`. A self-hosting operator substitutes their own here and changes nothing
-   else in this file.
-2. **Notification policies → New child policy.** Matcher `severity = critical`, contact point
-   `Temper operators`.
+The indirection is the configurable part, and it is why the address appears in exactly one place: to
+change who is paged, edit that contact point. The rule does not name a person, the policy does not
+name an address, and nothing in this repository does either. A self-hosting operator points the same
+child route at their own contact point and changes nothing else.
 
-> This could not be done from here: the Grafana service-account token that created the rule has no
-> alert-notification scope — `POST /api/v1/provisioning/contact-points` answers 403 asking for
-> `alert.notifications.provisioning:write`, and the Alertmanager config endpoint answers 403 asking
-> for `alert.notifications.config-history:read`. Granting the token the **Notifications Writer**
-> role would make both steps scriptable.
+> Creating these could not be done from the tooling that created the rule: the Grafana
+> service-account token has no alert-notification scope — `POST /api/v1/provisioning/contact-points`
+> answers 403 asking for `alert.notifications.provisioning:write`, and the Alertmanager config
+> endpoint answers 403 asking for `alert.notifications.config-history:read`. Granting that token the
+> **Notifications Writer** role would make both steps scriptable next time.
 
 ### `noDataState: OK` is a deliberate narrowing
 
@@ -158,6 +157,17 @@ No data means the cron is not running *or* the deployment has never logged in, a
 tell those apart — the same reason it does not alarm on `no_attempt_recorded`. **So a cron that
 stops running is not covered by this rule**, and covering it needs a heartbeat on the cron itself,
 which is a different mechanism from this one.
+
+---
+
+### What is still unobserved
+
+Every hop of the chain now exists — record → cron → span → Tempo → rule → policy → contact point —
+and each was verified by a test or by reading the live configuration back. **None of it has carried
+a real signal**, because the spans have not shipped: no `internal_call_health` span has ever reached
+Tempo, so the rule has never had data to evaluate against and no notification has ever been sent.
+That is what keeps every query above at `[shape]`. One login on the enterprise deployment after a
+deploy settles it, and re-marking them is the next honest step.
 
 ---
 
