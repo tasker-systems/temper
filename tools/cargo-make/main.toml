@@ -20,15 +20,15 @@ description = "Run all quality checks (Rust + TypeScript)"
 # a new field on a response DTO — leaves the committed artifact stale, and nothing else notices.
 # Omitting them meant a green local `check` followed by a red CI job; that is what bit PR #348.
 # `openapi-rb-drift` extends that same reasoning to the temper-rb generated gem (a product of
-# openapi.json), whose drift gate is otherwise CI-only — the exact gap that bit #354. It needs
-# Docker and skips without it (the test-ruby CI job is the never-skipping backstop).
-# `openapi-ts-drift` does the same for temper-ts's generated schema.ts, and unlike the
-# gem's gate it never skips: openapi-typescript needs only Node.
-# `openapi-py-drift` does the same for temper-py's generated package. Its skip rule is a
-# third one again — it runs on Docker OR a JVM and skips only when both are missing —
-# because it shares the gem's generator but not the gem's reason for a Docker-only gate.
-# The three gates having three different skip rules is not an inconsistency to tidy: each
-# is the weakest form that still catches its artifact's failure mode.
+# openapi.json), whose drift gate is otherwise CI-only — the exact gap that bit #354.
+# `openapi-ts-drift` does the same for temper-ts's generated schema.ts, and `openapi-py-drift`
+# for temper-py's generated package.
+# Each skip rule is the weakest form that still catches its artifact's failure mode, which
+# here means two rules, not three. openapi-ts-drift NEVER skips: openapi-typescript needs only
+# Node. The two that share the pinned openapi-generator — rb and py — run on Docker OR a JVM
+# and skip only when both are missing. The gem's gate used to skip whenever Docker was absent;
+# that was stricter than its own generator needs (it has had a pinned-jar fallback all along),
+# and it is how two retired files rode a green gate on Docker-less machines.
 dependencies = [
   "rust-fmt-check",
   "rust-clippy",
@@ -131,8 +131,8 @@ description = "Fail if any committed ts-rs generated type has drifted from the R
 # hypothetical: PR #498 merged with tsc clean and 79/79 tests passing while the mention agent
 # spoke a mint contract the server had stopped emitting.
 #
-# Like openapi-ts-drift and unlike openapi-rb-drift, this NEVER skips: it needs only cargo, which
-# is already required by every other task in this list.
+# Like openapi-ts-drift and unlike the two openapi-generator gates, this NEVER skips: it needs
+# only cargo, which is already required by every other task in this list.
 script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-ts-rs-drift.sh"]
 
 [tasks.tripwires]
@@ -557,20 +557,23 @@ script = [
   "cargo run --quiet -p temper-api --bin emit-openapi > \"$out\"",
   "if [ ! -s \"$out\" ]; then echo 'ERROR: openapi.json is missing or empty'; exit 1; fi",
   "echo \"OpenAPI spec written: $out ($(wc -c < \"$out\" | tr -d ' ') bytes)\"",
-  "if docker info >/dev/null 2>&1; then bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/generate-temper-rb.sh && echo 'temper-rb gem regenerated'; else echo 'NOTE: Docker unavailable — skipped temper-rb gem regen; run cargo make openapi-rb once Docker is up.'; fi",
+  "bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/generate-temper-rb.sh && echo 'temper-rb gem regenerated'",
   "bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/generate-temper-ts.sh && echo 'temper-ts schema regenerated'",
   "bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/generate-temper-py.sh && echo 'temper-py package regenerated'"
 ]
 
 [tasks.openapi-rb]
-description = "Regenerate the temper-rb gem from openapi.json (requires Docker)"
+description = "Regenerate the temper-rb gem from openapi.json (needs Docker or a JVM)"
 script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/generate-temper-rb.sh"]
 
 [tasks.openapi-rb-drift]
-description = "Fail if the committed temper-rb generated core drifts from openapi.json (skips without Docker)"
-# The local mirror of the test-ruby CI job's `rake drift`. In `check` so a DTO
-# change cannot pass a green local gate and then redden Ruby CI. Skips (does not
-# fail) when Docker is absent; the CI ruby job is the never-skipping backstop.
+description = "Fail if the committed temper-rb generated core drifts from openapi.json (skips only without both Docker and Java)"
+# Not a mirror of the test-ruby CI job's `rake drift` — the SAME script. That task
+# delegates here, so there is one implementation of the gem's drift assertion rather
+# than two free to disagree (they did: CI's copy never grew the manifest and orphan
+# checks). In `check` so a DTO change cannot pass a green local gate and then redden
+# Ruby CI. Runs on whichever of Docker or a JVM the host has; the CI ruby job, which
+# has both, is the backstop that never skips.
 script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-temper-rb-drift.sh"]
 
 [tasks.openapi-ts]
@@ -580,8 +583,8 @@ script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/generate-temper-
 [tasks.openapi-ts-drift]
 description = "Fail if the committed temper-ts schema drifts from openapi.json"
 # The local mirror of the temper-ts CI job's drift step, and the sibling of
-# openapi-rb-drift. Unlike that one it NEVER skips: openapi-typescript needs only
-# Node, so there is no environment in which we would rather guess than check.
+# openapi-rb-drift / openapi-py-drift. Unlike those two it NEVER skips: openapi-typescript
+# needs only Node, so there is no environment in which we would rather guess than check.
 script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-temper-ts-drift.sh"]
 
 [tasks.openapi-py]
@@ -591,10 +594,10 @@ script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/generate-temper-
 [tasks.openapi-py-drift]
 description = "Fail if the committed temper-py package drifts from openapi.json (skips only without both Docker and Java)"
 # The local mirror of the test-python CI job's drift step, and the third sibling of
-# openapi-rb-drift / openapi-ts-drift. It shares the gem's pinned generator but not the
+# openapi-rb-drift / openapi-ts-drift. It shares both the gem's pinned generator and the
 # gem's skip rule: it runs on whichever of Docker or a JVM the host has, and skips only
-# when both are absent — which on a GitHub runner resolves to the Docker path the gem's
-# gate uses, and on a Docker-less dev machine to the JVM, where the gem's gate skips.
+# when both are absent — which on a GitHub runner resolves to the Docker path, and on a
+# Docker-less dev machine to the JVM.
 script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-temper-py-drift.sh"]
 
 [tasks.openapi-check]
