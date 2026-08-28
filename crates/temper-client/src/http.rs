@@ -33,7 +33,33 @@ const RETRY_BASE_DELAY_MS: u64 = 200;
 /// Per-request timeout. Generous enough to ride out a Vercel cold-start / Neon
 /// compute-resume (which the retry logic above also guards), but bounded so a
 /// truly hung connection fails rather than blocking the CLI indefinitely.
-const HTTP_REQUEST_TIMEOUT_SECS: u64 = 30;
+///
+/// **It must sit ABOVE the server's own ceiling, not below it.** The public
+/// surface (`api/axum.rs`, `api/mcp.rs`) carries `maxDuration: 60`, so a client
+/// deadline under 60s cannot ever observe what the server did — it reports an
+/// opaque transport error at its own deadline while the request is still being
+/// served, and the caller cannot tell a slow answer from a refusal from a hang.
+///
+/// At 30s it also cut off work that was going to succeed. `[measured — prod,
+/// 2026-08-27, 25-day window]` the query door's composed read runs to a **25.1s
+/// mean and a 60.9s max** over its recorded calls, so the client was abandoning
+/// legitimate answers inside the server's budget. Reproduced 2026-08-28: a
+/// composed query returned a transport error at 30.06s while the statement it
+/// issued was still executing, and was observed still running at 53s.
+///
+/// 75s clears the 60s ceiling with margin for cold-start and transfer, so the
+/// bound that governs is the server's — which can say *what* happened — and this
+/// one only catches a genuinely dead connection.
+///
+/// **It compounds with retry, and that is the cost being accepted.** A timeout
+/// raises `ClientError::Network`, which `should_retry` treats as transient, so a
+/// retry-eligible request (GET/HEAD, or an explicitly idempotent one) can spend
+/// `MAX_ATTEMPTS` deadlines before failing — worst case moves from ~90s to ~225s.
+/// Non-idempotent POSTs are unaffected: they are not retried, so a composed
+/// `/api/query` fails once at 75s. The trade is deliberate — the old value was
+/// abandoning answers the server was in the middle of returning, which is a wrong
+/// result, whereas this is a slower failure on a connection that is already dead.
+const HTTP_REQUEST_TIMEOUT_SECS: u64 = 75;
 
 /// Backoff to wait after `after_attempt` (1-indexed) has failed, before the
 /// next attempt. Doubles each retry. Pure so the schedule is unit-testable.
