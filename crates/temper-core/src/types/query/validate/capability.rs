@@ -49,7 +49,9 @@
 use std::collections::BTreeMap;
 
 use crate::types::query::act::{ActName, BuildState};
-use crate::types::query::composition::{Composition, ReturnSpec, StageNode};
+use crate::types::query::composition::{
+    Composition, ReturnSpec, StageNode, MAX_COMPOSITION_INTENTION_BYTES,
+};
 use crate::types::query::disposition::RefusalReason;
 use crate::types::query::envelope::ActInvocation;
 use crate::types::query::filter::{FilterField, PropertyOp, PropertyPredicate};
@@ -59,6 +61,46 @@ use crate::types::query::stage::{StageInput, StageName, StageRelation};
 use crate::types::resource_view::ResourceSection;
 
 use super::{act_wire_name, emitted_fragment_for, refusal, term_wire_name, PlanRefusal};
+
+/// How much question text this composition asks the SERVER to embed, in bytes.
+///
+/// **Counts only the stages carrying no vector**, because a caller who precomputed one has already
+/// paid the cost this bounds. It over-counts against
+/// [`super::super::composition::MAX_COMPOSITION_INTENTION_BYTES`]'s true subject: `temper-services`
+/// narrows further — a question only reaches the embedder if its act searches by vector and the
+/// text is non-empty — and restating those conditions here would be a second spelling of a
+/// predicate that lives there. Over-counting is the safe direction: this can refuse a plan whose
+/// real embed cost is lower, never admit one whose cost is higher.
+fn server_embedded_bytes(c: &Composition) -> usize {
+    c.stages
+        .iter()
+        .filter_map(|node| match node {
+            StageNode::Act(inv) => inv.intention.as_ref(),
+            StageNode::Combine(_) => None,
+        })
+        .filter(|intention| intention.embedding.is_none())
+        .map(|intention| intention.query.len())
+        .sum()
+}
+
+/// The composition-level embed bound. Reads no stage graph, so [`super::validate`] runs it whatever
+/// the plan's shape — the same placement and the same reason as [`validate_returns`].
+pub(super) fn validate_intention_budget(c: &Composition, errs: &mut Vec<PlanRefusal>) {
+    let bytes = server_embedded_bytes(c);
+    if bytes > MAX_COMPOSITION_INTENTION_BYTES {
+        errs.push(refusal(
+            None,
+            RefusalReason::IntentionBudgetExceeded,
+            format!(
+                "this composition asks the server to embed {bytes} bytes of question text, and it \
+                 can embed at most {MAX_COMPOSITION_INTENTION_BYTES} inside one request's budget. \
+                 Ask fewer or shorter questions, split the plan, or send your own vectors — over \
+                 the budget NO stage receives one, so this refusal is the alternative to every \
+                 find stage failing at once"
+            ),
+        ));
+    }
+}
 
 /// The most predicates one stage may carry that are evaluated **once per candidate**.
 ///

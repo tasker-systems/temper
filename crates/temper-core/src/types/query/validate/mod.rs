@@ -322,6 +322,12 @@ pub fn validate(c: &Composition) -> Result<ValidatedComposition, Vec<PlanRefusal
     // refusal a cyclic plan used to receive. Every refusal, not the first, is this module's rule.
     capability::validate_returns(c, &mut errs);
 
+    // The embed bound, composition-level and ungated on topology for the same reason as the line
+    // above: it compares a sum against a constant and reads no stage graph. Capability rather than
+    // shape because what a deployment can embed inside one budget is a fact about the machine, not
+    // about the wire — see `RefusalReason::IntentionBudgetExceeded`.
+    capability::validate_intention_budget(c, &mut errs);
+
     // The per-stage half runs only when the DAG is acyclic, which is the incumbent behaviour and
     // exactly what the pinned rule is about — `reachable ACTS keep the cycle the sole finding`.
     // Per-stage findings over a graph that is not a graph would be findings about a plan that
@@ -366,7 +372,7 @@ mod tests {
     use crate::types::ids::CogmapId;
     use crate::types::query::composition::{
         CombineNode, CombineOp, Composition, Intention, OutcomeDeclaration,
-        MAX_INTENTION_QUERY_BYTES, MAX_STAGES,
+        MAX_COMPOSITION_INTENTION_BYTES, MAX_INTENTION_QUERY_BYTES, MAX_STAGES,
     };
     use crate::types::query::envelope::ActInvocation;
     use crate::types::query::filter::{
@@ -1366,6 +1372,121 @@ mod tests {
         assert!(
             !errs.iter().any(|e| e.reason == RefusalReason::TooManyIds),
             "two ids is nowhere near the size cap; got: {errs:?}"
+        );
+    }
+
+    /// **The aggregate embed bound, and it is NOT in the published family above.**
+    ///
+    /// `[added — 2026-08-28]` The other three ceilings are contract facts and are refused in the
+    /// shape pass because they are published on the field they bound. This one is a fact about what
+    /// a deployment can embed inside one wall-clock budget, so it is capability — a client raising
+    /// it against a server with more memory would refuse a plan that server answers, which is the
+    /// one thing the shape pass may never do. There is therefore no
+    /// `the_published_..._is_the_enforced_one` sibling for it, and its absence is the point.
+    #[test]
+    fn a_composition_above_the_embed_budget_is_refused() {
+        // Sixteen questions at the per-stage ceiling is exactly the budget; seventeen is over.
+        let per_stage = MAX_INTENTION_QUERY_BYTES;
+        let over = MAX_COMPOSITION_INTENTION_BYTES / per_stage + 1;
+        let stages: Vec<StageNode> = (0..over)
+            .map(|i| {
+                act_asking(
+                    &format!("s{i}"),
+                    ActName::FindAboutAnywhere,
+                    &"x".repeat(per_stage),
+                )
+            })
+            .collect();
+        let c = plan_with_intention(stages, vec!["s0"]);
+        let errs = validate(&c).unwrap_err();
+        assert!(
+            errs.iter().any(|e| e.reason == RefusalReason::IntentionBudgetExceeded
+                && e.stage.is_none()),
+            "composition-level, like the stage cap — the excess belongs to no one stage; got: {errs:?}"
+        );
+        // Each stage is individually legal. Without this the test would pass on the per-stage cap.
+        assert!(
+            !errs
+                .iter()
+                .any(|e| e.reason == RefusalReason::IntentionTooLong),
+            "every stage is AT the per-stage ceiling, not over it; got: {errs:?}"
+        );
+    }
+
+    /// **A caller who sent their own vectors is not charged for them.**
+    ///
+    /// The bound is on what the SERVER must embed, so the same question text with an embedding
+    /// beside it costs nothing and must not be refused. Without this, precomputing — the one thing
+    /// a caller can do to make a large plan cheap — would be the thing that made it illegal.
+    #[test]
+    fn precomputed_vectors_are_not_charged_against_the_embed_budget() {
+        let per_stage = MAX_INTENTION_QUERY_BYTES;
+        let over = MAX_COMPOSITION_INTENTION_BYTES / per_stage + 1;
+        let stages: Vec<StageNode> = (0..over)
+            .map(|i| {
+                let node = act_asking(
+                    &format!("s{i}"),
+                    ActName::FindAboutAnywhere,
+                    &"x".repeat(per_stage),
+                );
+                match node {
+                    StageNode::Act(mut inv) => {
+                        inv.intention
+                            .as_mut()
+                            .expect("act_asking sets one")
+                            .embedding = Some(vec![0.1; 4]);
+                        StageNode::Act(inv)
+                    }
+                    other => other,
+                }
+            })
+            .collect();
+        let c = plan_with_intention(stages, vec!["s0"]);
+        let charged = validate(&c)
+            .err()
+            .into_iter()
+            .flatten()
+            .filter(|e| e.reason == RefusalReason::IntentionBudgetExceeded)
+            .count();
+        assert_eq!(
+            charged, 0,
+            "a vector the caller supplied is work the server does not do"
+        );
+    }
+
+    /// **The gate and the seal answer identically across the embed**, which is what makes
+    /// `query_read::prepare` legal in running `validate` twice.
+    ///
+    /// `[added — 2026-08-28]` The gate moved from the shape half to the full pass so it could see
+    /// the capability-side embed bound. That is only sound if filling in `intention.embedding` —
+    /// the sole thing the embed writes — cannot change any refusal. Asserted rather than argued: a
+    /// reader can see that `validate` does not mention the field today, and cannot see that a
+    /// future check will not.
+    #[test]
+    fn the_gate_and_the_seal_agree_across_the_embed() {
+        let bare = act_asking("s", ActName::FindAboutAnywhere, "a question");
+        let embedded = match bare.clone() {
+            StageNode::Act(mut inv) => {
+                inv.intention.as_mut().expect("asking").embedding = Some(vec![0.1; 768]);
+                StageNode::Act(inv)
+            }
+            other => other,
+        };
+        // A plan carrying a real fault, so the comparison is over a refusal LIST and not over two
+        // empty ones — which is the case that would pass while proving nothing.
+        let faulty = |stage: StageNode| {
+            plan_with_intention(
+                vec![stage, act("s", ActName::FindExact, None)],
+                vec!["nope"],
+            )
+        };
+        let before = validate(&faulty(bare)).unwrap_err();
+        let after = validate(&faulty(embedded)).unwrap_err();
+        assert_eq!(
+            before, after,
+            "the embed writes only `intention.embedding`, which no validation reads; if that stops \
+             being true, `prepare`'s gate and seal can disagree and a plan can be admitted by one \
+             and refused by the other"
         );
     }
 

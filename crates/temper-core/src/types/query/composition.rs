@@ -391,6 +391,44 @@ pub const MAX_STAGES: usize = 64;
 /// the model's own truncation, a refusal is something the caller can see and repair.
 pub const MAX_INTENTION_QUERY_BYTES: usize = 4096;
 
+/// The most question text ONE COMPOSITION may hand the server to embed, summed across its stages.
+///
+/// # Why a per-stage cap is not enough, measured
+///
+/// `[added — 2026-08-28, found in review]` [`MAX_INTENTION_QUERY_BYTES`] and [`MAX_STAGES`] shipped
+/// together, and their product is 256 KB of text the server must embed inside **one** wall-clock
+/// budget — `DEFAULT_QUERY_EMBED_BUDGET_MS`, 8,000 ms, whose own doc says it is the budget for *"a
+/// single server-side query embed"* and which was already tight enough for one that the production
+/// fix was more memory and a keep-warm cron rather than a larger number.
+///
+/// Measured rather than argued (`threads=1`, the server default, cold load EXCLUDED, on hardware
+/// faster than the deploy):
+///
+/// | plan | wall clock |
+/// |---|---|
+/// | 64 questions × 640 B | 3,635 ms |
+/// | 16 × [`MAX_INTENTION_QUERY_BYTES`] | 5,950 ms |
+/// | 32 × [`MAX_INTENTION_QUERY_BYTES`] | 12,119 ms |
+/// | 64 × [`MAX_INTENTION_QUERY_BYTES`] | 24,089 ms — **3.0× the budget** |
+///
+/// Over budget, no stage gets a vector and every find stage refuses `embedding_unavailable`. So
+/// without this cap the contract published a plan the server cannot answer — the same incoherence
+/// [`super::super::super::types::query`]'s body limit exists to prevent, one layer in.
+///
+/// # 64 KB, and what it costs
+///
+/// Chosen against the 5,950 ms row: 64 KB is the largest total that fits the existing,
+/// production-validated budget with room for the variance a slower instance adds. It is 64
+/// thousand-byte questions, or sixteen at the per-stage ceiling — far above any question anyone
+/// asks, and it makes 64 × 4 KB refusable instead of unanswerable.
+///
+/// **Raising the embed budget instead was the alternative and was declined**
+/// `[decided — 2026-08-28, Pete]`: covering the worst legal plan needs ≥25 s measured, likely 40 s+
+/// on a ~1.7 vCPU function, against a 60 s `maxDuration` shared with compile, execute and hydrate.
+/// That number would have been invented rather than validated; this one keeps a number that has
+/// survived production.
+pub const MAX_COMPOSITION_INTENTION_BYTES: usize = 65_536;
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -25,10 +25,10 @@ use crate::backend::substrate_read::{embed_query_texts, QueryEmbedBatch};
 use crate::error::{ApiError, ApiResult};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::query::{
-    applied_terms, declaration, emitted_fragment_for, validate, validate_shape, ActName,
-    ActRefusal, CombineNode, Composition, Extent, NarrowedBy, PlanRefusal, QueryResponse,
-    RegionDisclosure, ResourceHit, ReturnSpec, Scoring, StageDisposition, StageInput, StageNode,
-    StageOutput, StageResult, StageTrace, ValidatedComposition, ViaEntry,
+    applied_terms, declaration, emitted_fragment_for, validate, ActName, ActRefusal, CombineNode,
+    Composition, Extent, NarrowedBy, PlanRefusal, QueryResponse, RegionDisclosure, ResourceHit,
+    ReturnSpec, Scoring, StageDisposition, StageInput, StageNode, StageOutput, StageResult,
+    StageTrace, ValidatedComposition, ViaEntry,
 };
 use temper_core::types::query::{BoundTerm, CompositionTrace, InputSource, StageInputTrace};
 use temper_core::types::resource_view::{ResourceSection, ResourceView};
@@ -94,28 +94,44 @@ fn opaque(e: anyhow::Error) -> ApiError {
 /// then seal it.
 ///
 /// ```text
-/// deserialize        serde — rejects a malformed body before anything here runs
-///   → validate_shape cheap, pure, no DB and no declarations (⟨3⟩'s expressibility pass)
-///   → embed          only the intentions that need a vector and did not carry one
-///   → validate       the full pass, capability included — the seal
-///   → compile        [`run_composition`]
+/// deserialize     serde — rejects a malformed body before anything here runs
+///   → validate    cheap, pure, no DB — the GATE (⟨3⟩'s expressibility pass AND capability)
+///   → embed       only the intentions that need a vector and did not carry one
+///   → validate    the same pass again — the SEAL
+///   → compile     [`run_composition`]
 /// ```
 ///
-/// **The shape gate is a COST gate and nothing else.** `[decided — 2026-08-13, Pete]` — *"if a
+/// **The gate is a COST gate and nothing else.** `[decided — 2026-08-13, Pete]` — *"if a
 /// composition is structurally invalid then we don't want to pay the onnx cost"*. It never decides
 /// what the caller is told: a plan it refuses still falls through to [`validate()`], which is the
 /// sole authority on refusals and returns **every** one of them rather than the first, so a plan
-/// with both a shape fault and a capability fault is still repaired in one round trip.
+/// with two faults is still repaired in one round trip.
 ///
-/// So shape is evaluated twice — once here, once inside [`validate()`]. A pure function over a small
-/// struct; named so it is not later "discovered" as a defect.
+/// **It was the SHAPE half until 2026-08-28, and widening it is what the embed budget forced.**
+/// `MAX_COMPOSITION_INTENTION_BYTES` bounds what this deployment can embed in one request — a fact
+/// about the machine, so it is a capability refusal — and a gate blind to capability would have
+/// refused an over-budget plan only after paying the ONNX cost the gate exists to avoid. The
+/// original decision is unchanged; the set of things that cost something grew.
+///
+/// So [`validate()`] is evaluated twice. A pure function over a small struct, and it reads none of
+/// what the embed writes, so the two runs cannot disagree — named so it is not later "discovered"
+/// as a defect, and asserted by `the_gate_and_the_seal_agree_across_the_embed`.
 ///
 /// **Parse-don't-validate is our line, not an external law, and this is where we put the seal.**
 /// `[2026-08-13]` The alternative was to leave the seal ahead of the embed and hand `compile` a
 /// side-channel `BTreeMap<StageName, Vec<f32>>`. It was declined: that is two sources for one
 /// fact — the shape spec ⟨7⟩ removed from `compile`'s signature, reintroduced one layer down.
 pub async fn prepare(mut c: Composition) -> Result<ValidatedComposition, Vec<PlanRefusal>> {
-    if validate_shape(&c).is_empty() {
+    // **The gate is the FULL pass, not the shape half** `[widened — 2026-08-28]`. It was
+    // `validate_shape`, which was right while every cost bound was a shape bound; the embed budget
+    // is not — what this deployment can embed inside one request is a fact about the machine, so
+    // `IntentionBudgetExceeded` lives in capability, and a gate that could not see capability would
+    // refuse the over-budget plan only AFTER paying the ONNX cost it exists to avoid.
+    //
+    // Safe because the two runs of `validate` answer identically: it is pure, and it never reads
+    // `intention.embedding` — the only field the embed writes. `EmbeddingUnavailable` is `compile`'s
+    // refusal, not this pass's. `the_gate_and_the_seal_agree_across_the_embed` holds that.
+    if validate(&c).is_ok() {
         let phase = embed_missing_intentions(&mut c).await;
         tracing::debug!(
             asked = phase.asked,
@@ -2400,6 +2416,61 @@ mod tests {
             "the embed phase must spend one budget window for the whole composition; \
              {} questions cost {}",
             phase.asked, phase.budget_windows
+        );
+    }
+
+    /// **An over-budget composition is refused by the GATE, so it pays no ONNX at all.**
+    ///
+    /// `[added — 2026-08-28]` This is what moving the gate from the shape half to the full pass
+    /// bought. `IntentionBudgetExceeded` is a capability refusal — what this deployment can embed
+    /// is a fact about the machine — so a gate that saw only shape would have embedded the plan
+    /// first and refused it afterwards, spending the exact budget the refusal exists to protect.
+    ///
+    /// Asserted through [`prepare`] rather than through `validate`, because `validate` would answer
+    /// the same either way; it is the ORDER that this change moved, and `prepare` is where the
+    /// order lives.
+    #[tokio::test]
+    async fn an_over_budget_composition_is_refused_before_the_embed() {
+        let per_stage = temper_core::types::query::composition::MAX_INTENTION_QUERY_BYTES;
+        let over =
+            temper_core::types::query::composition::MAX_COMPOSITION_INTENTION_BYTES / per_stage + 1;
+        let stages: Vec<StageNode> = (0..over)
+            .map(|i| {
+                StageNode::Act(ActInvocation {
+                    name: name(&format!("s{i}")),
+                    act: ActName::FindAboutAnywhere,
+                    intention: Some(Intention {
+                        // Distinct per stage so nothing dedups the cost away, and at the per-stage
+                        // ceiling so every stage is individually legal.
+                        query: format!("{i:04}{}", "x".repeat(per_stage - 4)),
+                        embedding: None,
+                    }),
+                    inputs: vec![],
+                    terms: Default::default(),
+                    resource_filter: None,
+                    edge_filter: None,
+                    properties: vec![],
+                })
+            })
+            .collect();
+        let c = Composition {
+            outcome: OutcomeDeclaration {
+                returns: vec![ReturnSpec {
+                    stage: name("s0"),
+                    with: vec![],
+                }],
+            },
+            stages,
+        };
+
+        let refusals = prepare(c)
+            .await
+            .expect_err("over budget must not be prepared");
+        assert!(
+            refusals
+                .iter()
+                .any(|r| r.reason == RefusalReason::IntentionBudgetExceeded),
+            "got: {refusals:?}"
         );
     }
 

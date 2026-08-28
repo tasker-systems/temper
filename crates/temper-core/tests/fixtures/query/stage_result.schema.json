@@ -480,6 +480,11 @@
           "type": "string"
         },
         {
+          "const": "intention_budget_exceeded",
+          "description": "The composition asks the server to embed more question text than it can inside its budget.\n\n`[added — 2026-08-28]` The one member of the declaration family that is **not** a contract\nfact, and it is raised in the CAPABILITY pass for exactly that reason: what a deployment can\nembed inside `DEFAULT_QUERY_EMBED_BUDGET_MS` is a property of the machine it runs on, not of\nthe wire. A beefier deployment could raise it, and a client refusing on this number against\na server that raised it would refuse a plan that server answers — which is what the shape\npass may never do. Its unpublished siblings `MAX_PER_CANDIDATE_PREDICATES` and\n`MAX_PER_CANDIDATE_PROBES` are the same shape: cost bounds over a SUM, unexpressible per\nfield, and capability for the same reason.\n\n**It counts only what the SERVER must embed** — stages whose `intention` carries no vector.\nA caller who precomputed has already paid that cost, and refusing them for it would bound\nwork nobody does.\n\n**The repair is fewer or shorter questions, and it is a real repair**: over the budget no\nstage gets a vector at all, so the alternative to this refusal is not a slower answer, it is\nevery find stage refusing `embedding_unavailable` at once with nothing saying why.",
+          "type": "string"
+        },
+        {
           "const": "no_returns",
           "description": "The composition returns no stages, so it answers nothing.",
           "type": "string"

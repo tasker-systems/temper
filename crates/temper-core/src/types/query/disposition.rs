@@ -270,6 +270,25 @@ pub enum RefusalReason {
     /// an `anchor_ids uuid[]` would retire, and which therefore lives in the capability pass. This
     /// one is a contract fact about every kind and cannot move without a wire change.
     TooManyIds,
+    /// The composition asks the server to embed more question text than it can inside its budget.
+    ///
+    /// `[added — 2026-08-28]` The one member of the declaration family that is **not** a contract
+    /// fact, and it is raised in the CAPABILITY pass for exactly that reason: what a deployment can
+    /// embed inside `DEFAULT_QUERY_EMBED_BUDGET_MS` is a property of the machine it runs on, not of
+    /// the wire. A beefier deployment could raise it, and a client refusing on this number against
+    /// a server that raised it would refuse a plan that server answers — which is what the shape
+    /// pass may never do. Its unpublished siblings `MAX_PER_CANDIDATE_PREDICATES` and
+    /// `MAX_PER_CANDIDATE_PROBES` are the same shape: cost bounds over a SUM, unexpressible per
+    /// field, and capability for the same reason.
+    ///
+    /// **It counts only what the SERVER must embed** — stages whose `intention` carries no vector.
+    /// A caller who precomputed has already paid that cost, and refusing them for it would bound
+    /// work nobody does.
+    ///
+    /// **The repair is fewer or shorter questions, and it is a real repair**: over the budget no
+    /// stage gets a vector at all, so the alternative to this refusal is not a slower answer, it is
+    /// every find stage refusing `embedding_unavailable` at once with nothing saying why.
+    IntentionBudgetExceeded,
     /// The composition returns no stages, so it answers nothing.
     NoReturns,
     /// Two stages share a name.
@@ -488,6 +507,7 @@ mod tests {
             RefusalReason::TooManyStages,
             RefusalReason::IntentionTooLong,
             RefusalReason::TooManyIds,
+            RefusalReason::IntentionBudgetExceeded,
             RefusalReason::NoReturns,
             RefusalReason::DuplicateStageName,
             RefusalReason::CombinatorArity,
