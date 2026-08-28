@@ -33,6 +33,11 @@ registered ahead of time.
   container-write cascade.
 - **[Contexts and refs](../concepts/contexts-and-refs.md)** — what a context is and how to
   address one. The ref grammar, the two-grammars problem, and the four traps.
+- **[Query cost and the bounds that shape it](../concepts/query-cost-and-bounds.md)** — what a
+  composed read costs, which layer bounds what, and why cost follows the acts you compose rather
+  than the stages you declare.
+- **[Compose queries that stay fast](../playbooks/compose-queries-that-stay-fast.md)** — the
+  practical half: binding producers, why every declared stage executes, and what to measure.
 
 ## Language SDKs
 
