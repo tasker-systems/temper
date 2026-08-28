@@ -33,8 +33,7 @@ auth-identity contract — whose tokens this instance trusts and which it accept
 
 - **[Offboarding a departure](../playbooks/offboard-a-departure.md)** — ending a departing
   person's admission, handing off the work they owned, and the bound to quote when nobody
-  acts. The controls existed already on three different pages; this is the order to run them
-  in, and why the revoke rather than an IdP-side group removal is the acting control.
+  acts. Includes why the revoke, and not an IdP-side group removal, is the acting control.
 
 ## Connecting the rest of your world
 

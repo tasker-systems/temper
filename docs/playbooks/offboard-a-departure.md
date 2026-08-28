@@ -6,23 +6,21 @@ person who has left.
 By the end you will have ended a departing person's admission and the credentials behind it,
 handed off the work they owned, and know the figure to quote when nobody acts at all.
 
-Every control this playbook uses already exists and is documented elsewhere, because each is a
-different kind of act: ending admission is a system-admin act, handing off ownership is a
-team-owner act, and the IdP staleness readout is a diagnostic for SAML deployments. What has
-been missing is the sentence that puts them in order. This page is that sentence.
-
 ## Prerequisites
 
 - **System-admin standing** on the deployment — `temper admin access` and `temper admin ledger`
   are admin-gated. See [The Trust Boundary](../concepts/trust-boundary.md) for what that gate
   is and where it is enforced.
-- **The departing person's profile UUID.** `temper team show <team>` lists a team's members
-  with their ids.
+- **The departing person's profile UUID.** `temper team show <team>` prints the roster — each
+  member's profile UUID, handle, role, and `source` — and is the only place to read a
+  teammate's id. If you share no team with them, a team owner who does can read it for you.
 - **The teams they belonged to.** `temper team show` on each, or ask their manager. Step 2 is
   per-team and there is no all-teams sweep.
 - **Owner or maintainer on each of those teams** — step 2 is authorized by team role, not by
   system-admin standing. If you do not manage a team, its owner or a maintainer runs that step;
   see [Run a Team](./run-a-team.md).
+- **For the staleness readout only:** `psql` and the database connection string. Steps 1 and 2
+  need neither.
 
 ## Why the revoke is the acting control
 
@@ -34,20 +32,20 @@ in** — that is the only trigger, and there is no background poll and no SCIM. 
 group removal takes effect on the departing person's *next successful login*, which is a login
 they have no reason to perform.
 
-This is why the readout in step 3 is a **diagnostic and not a control**. A fresh
+This is also why the staleness readout below is a **diagnostic and not a control**. A fresh
 `last_reconciled_at` says a user's reach agreed with what the IdP asserted at their last
 sign-in. It does not say their reach agrees with the IdP now, and it is not the thing that
 ends a departure.
 
 **`temper admin access revoke` is.** It takes effect in the transaction you run it in and
-waits for no login, which is why it is step 1 rather than a footnote to step 3.
+waits for no login, which is why it is step 1.
 
 ## The sequence
 
 ### 1. End their admission
 
 ```bash
-temper admin access revoke <profile-uuid> --reason "left the org 2026-03-14; offboarded by IT"
+temper admin access revoke <departing-uuid> --reason "left the org 2026-03-14; offboarded by IT"
 ```
 
 In one transaction this sets the principal's standing to revoked, demotes them from
@@ -57,11 +55,12 @@ carried forward and no later sign-in mints a replacement.
 `--reason` is required, and it is not bookkeeping: it is the only free-text record of why,
 and it is what a reviewer reads if the person later contests the revocation.
 
-**`revoke` is legal only from `approved` standing.** For a principal in any other live state —
-never admitted, or previously denied — use the act that is legal from all of them:
+**`revoke` is legal only from `approved` standing.** If it refuses because the principal was
+previously denied, or has a request still open, use `deactivate` instead — it is legal from
+every live state and reaches the same place:
 
 ```bash
-temper admin access deactivate <profile-uuid>
+temper admin access deactivate <departing-uuid>
 ```
 
 **This is a standing act, not the `is_active` flag.** Two different things share the word
@@ -71,24 +70,25 @@ temper admin access deactivate <profile-uuid>
 `kb_profiles.is_active` change that stops the account *authenticating* at all. Neither implies
 the other; use this one for a departure.
 
-Exactly what a revoked principal can and cannot still do is stated in the SAML playbook's
-[Limitations](./self-host-with-saml.md#limitations), and is worth reading once rather than
-inferring: they can still complete a sign-in and receive a short-lived, **non-renewable**
-access token — deliberately, because contesting a revocation requires one — and that token is
-refused on every data route. If you need the sign-in itself to stop, disable the account at
-your IdP. That is the control Temper does not own.
+A revoked principal can still complete a sign-in, by design — contesting a revocation requires
+a token. Exactly what that token can and cannot do is stated in the SAML playbook's
+[Limitations](./self-host-with-saml.md#limitations); read it there rather than inferring it. If
+you need the sign-in itself to stop, that is your IdP's control, not Temper's.
 
 > [!IMPORTANT]
-> **On a SAML deployment upgraded from before `INTERNAL_RESOLVE_URL` existed, a revoke ends no
-> refresh chains** — and it fails silently, because logins and refreshes keep returning `200`.
-> The standing change still lands; the credentials it was supposed to end do not. Read
-> [the upgrade note in the SAML playbook](./self-host-with-saml.md#limitations) and check the
-> `ownerless_live_chains` field it describes **before** you rely on step 1.
+> **`INTERNAL_RESOLVE_URL` must be set for this step to end refresh chains.**
+> `temper admin saml provision` emits it only into a freshly generated bundle, so a SAML
+> deployment upgraded from before it existed will not have it, and nothing reports its absence —
+> logins and refreshes keep returning `200`. After running the revoke, read the API's
+> `standing terminal ended no refresh chains` warning: a **non-zero** `ownerless_live_chains`
+> means the variable is missing. Point it at your API origin's `/internal/principal/resolve`
+> and run the revoke again. See
+> [the upgrade note in the SAML playbook](./self-host-with-saml.md#limitations).
 
 **Confirm it landed** — the ledger is the record, and reads back by subject:
 
 ```bash
-temper admin ledger --subject kb_profiles:<profile-uuid>
+temper admin ledger --subject kb_profiles:<departing-uuid>
 ```
 
 The revoke appears as a `principal_standing_changed` entry carrying the prior state, the
@@ -96,65 +96,71 @@ resulting state, who acted, and the reason you gave.
 
 ### 2. Hand off what they owned
 
-Ownership does not move on its own either — a revoked principal still owns every resource they
-owned a minute earlier. Run this once **per team** they belonged to:
+Ownership does not move on its own — a revoked principal still owns every resource they owned a
+minute earlier. Run this once **per team** they belonged to:
 
 ```bash
 temper team reassign acme-eng --from <departing-uuid> --to <successor-uuid>
 ```
 
-One transaction, and provenance is untouched: the original author stays recorded, only
-ownership moves. `--to` must be a current member of that team; `--from` need not be, so this
-works after step 1 and after they have been removed from the team.
+`--to` must be a current member of that team; `--from` need not be, so this works after step 1
+and after they have been removed from the team. One transaction, and provenance is untouched.
 
 **What it reaches, exactly.** Every resource the departing person owns that is homed in a
-*live* context **shared to that team**. Two things are therefore out of its scope and stay
-with them:
+*live* context **shared to that team**. Three things are therefore out of scope and stay with
+them:
 
-- resources in their own contexts that were never shared to a team, and
-- resources in a context that has since been retired.
+- resources in their own contexts that were never shared to a team,
+- resources in a context that has since been retired, and
+- resources homed in a cognitive map rather than a context — map interiors are not personally
+  owned, and both reassign paths refuse them.
 
-There is no command that sweeps the first of those — a personal context is theirs, and moving
-it is a decision rather than an offboarding step.
+There is no command that sweeps the first of those. A personal context is theirs, and moving it
+is a decision rather than an offboarding step.
 
-Finally, remove the membership:
+Finally, the membership row itself. Which command applies — or whether one does — depends on
+how the membership was created, and `temper team show` prints a `source` for each member.
+
+**`native`** — added directly, by `temper team add-member` or an invitation:
 
 ```bash
 temper team remove-member acme-eng <departing-uuid>
 ```
 
-Do this **after** the reassign, not before. `remove-member` reports what the departing member
-still owns in that team's contexts, so running it last turns it into a check: a clean removal
-with nothing reported means step 2 reached everything it could.
+Run it **after** the reassign. On success it reports what the departing member still owns in
+this team's contexts, computed by the same query the reassign moves, so the two cannot
+disagree — which turns the removal into a check: nothing reported means the reassign reached
+everything it could. If the departing member is the team's only `owner`, the removal is refused
+until another owner exists; promote a successor first.
 
-### 3. On a SAML deployment, read the staleness readout
+**`idp`** — created by SAML reconcile from a mapped group. `remove-member` refuses it, by
+design: those rows belong to reconcile. Remove the person from the mapped group at your IdP,
+which reconcile applies if they ever sign in again. The row grants nothing meanwhile — step 1
+ended their admission, and admission is read on every request regardless of what team rows
+exist. Note the consequence for the paragraph above: an IdP-mapped team yields no residual
+report, so the reassign is the last step you can run there.
 
-Not to confirm the departure — step 1 already did that, and this readout cannot confirm it.
-Read it to see how stale the login-triggered path has become for **everyone else**, which is
-the question the revoke does not answer.
+## Afterwards, on a SAML deployment: the staleness readout
+
+The staleness readout answers a question the revoke does not — how stale the login-triggered
+path has become for **everyone else**. It cannot confirm this departure, and does not need to;
+step 1 did that.
 
 The query, its NULL-versus-sentinel semantics, and what `last_signal_was_missing` means live in
 one place:
 [Seeing when each user's reach was last reconciled](./self-host-with-saml.md#seeing-when-each-users-reach-was-last-reconciled).
 
-The departing person's own row will show a `last_reconciled_at` from before they left, and
-will keep showing it. That is the expected reading and not a residue to clean up: the column
-records when a reconcile last ran, and no reconcile has run for someone who is not logging in.
+The departing person's own row will show a `last_reconciled_at` from before they left, and will
+keep showing it. That is the expected reading and not a residue to clean up: the column records
+when a reconcile last ran, and no reconcile has run for someone who is not logging in.
 
-## The bound, for when nobody acts
+## The bound when nobody acts
 
-Steps 1 and 2 are the answer for a departure someone knows about. The figure to give a review
-board for the case where an IdP-side removal happens and **no** administrator acts is the
-lifetime of a session that keeps refreshing without a fresh SAML login:
-
+Steps 1 and 2 are the answer for a departure someone knows about. If an IdP-side removal happens
+and no administrator runs them, the figure to give a review board is
 **`AS_REFRESH_CHAIN_MAX_SECONDS` + `AS_ACCESS_TTL_SECONDS`** — 90 days plus 15 minutes on the
-defaults.
-
-Not `AS_ACCESS_TTL_SECONDS` alone: an access token is reminted by refreshing, so its TTL says
-how often a credential is renewed, not how long a session lives. What bounds the session is the
-refresh **chain**, whose deadline is stamped at the last full SAML login and inherited unchanged
-by every rotation. The reasoning, and the cost of lowering it, are in the SAML playbook's
-[Limitations](./self-host-with-saml.md#limitations).
+defaults. Why it is the refresh chain and not the access TTL, and the cost of lowering it, are
+in the SAML playbook's [Limitations](./self-host-with-saml.md#limitations).
 
 ## What this does not cover
 
