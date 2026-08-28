@@ -49,9 +49,18 @@
 #
 # ## What this costs, stated so it is a choice and not a discovery
 #
-# 318 of 764 Rust files — 42% — leave analysis: 91 under `tests/e2e/`, 218 under `crates/*/tests/`,
+# 318 of 767 Rust files — 41% — leave analysis: 91 under `tests/e2e/`, 218 under `crates/*/tests/`,
 # 9 under `crates/*/examples/`. Every future CodeQL finding of EVERY rule in those trees goes unseen.
 # That is the blunt half, and it is the price of the precise instrument not existing.
+#
+# Measured on PR #805, and the arithmetic closes exactly: the analysis reported
+# `Total number of Rust files that were extracted without error: 449`, with 0 extracted with errors,
+# and 767 - 318 = 449. The globs exclude what they name and nothing else.
+#
+# Note for anyone verifying a change to this file: a CodeQL run on a PULL REQUEST ref is
+# diff-informed — alerts are restricted to lines in the diff — so a YAML-only PR reports
+# `results_count: 0` for Rust no matter what this file says. Every Rust PR analysis in this repo
+# reports 0. The alert count is only meaningful on the push analysis of `refs/heads/main`.
 #
 # ## The constraint that makes this work at all
 #
