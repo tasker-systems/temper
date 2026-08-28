@@ -1,0 +1,66 @@
+# CodeQL configuration — which trees the analysis reads.
+#
+# Consumed by `github/codeql-action/init` via `config-file:` in `.github/workflows/codeql.yml`.
+# Applies to whichever single language that job is analyzing; every glob below is Rust-only, so the
+# `actions`, `javascript-typescript`, `python` and `ruby` legs are unaffected by it.
+#
+# ## Why this file exists
+#
+# 75 alerts were open on `main` and 67 of them had their sink in a test or example tree. Reading the
+# SARIF code flows rather than the file paths, they reduce to three distinct errors *inside the
+# analyzer*, none of which is a fact about this repository's code:
+#
+#   - 36 `rust/cleartext-logging` share one source — `HttpClient::resolve_token`'s
+#     `auth.access_token.expose_secret()` — and reach an e2e assertion message through a taint step
+#     that jumps from a local inside a callee straight to that callee's RETURN value. Alert #65 is
+#     the proof on its face: it formats `page.rows.len()`, and a `String` bearer token cannot be
+#     inside a `usize`.
+#   - 26 `rust/cleartext-transmission` are sourced from `setup_slack_app_with_mint_secret(...)`,
+#     whose NAME matches CodeQL's `maybeSecret()` heuristic, so the whole returned harness struct is
+#     classified as a secret and every `format!("http://{}", app.addr)` built from it is a cleartext
+#     transmission. That address comes from `TcpListener::bind("127.0.0.1:0")`.
+#   - 5 `rust/cleartext-logging` fire on `.uuid()` / `.as_uuid()`, because CodeQL's account-info
+#     regex `([uU]|^|_|[a-z](?=U))([uU][iI][dD])` — written to catch `uid` and `userUID` — matches
+#     the word `uuid` against itself.
+#
+# ## Why the exclusion is by DIRECTORY, and why it is these directories
+#
+# Not "tests do not matter". CodeQL's default threat model is `remote` — untrusted input arriving
+# over the network — and **that premise is false by construction in a test**: every remote input is a
+# fixture the test itself wrote, every secret is a literal in the same file, and every URL is
+# loopback. Three unrelated analyzer errors all land in test trees for that one underlying reason.
+#
+# A directory rule tracks the reason. A file-by-file list would close the same 67 alerts today and
+# then drift, because the next test file added raises the same class of alert and nothing links the
+# narrow glob back to why it was written.
+#
+# ## Why this is not an inline suppression instead
+#
+# Because inline suppression DOES NOT EXIST FOR RUST. `// codeql[rule-id]` and `// lgtm[...]` have no
+# effect: the mechanism is per-language, implemented by an `AlertSuppression.ql` query that tags the
+# SARIF result's `suppressions[]`, and the Rust pack ships no such query while C++, C#, Go, Java,
+# JavaScript, Python, Ruby and Swift all do. Tracked upstream as github/codeql#21637, open since
+# 2026-04-02. If it lands, the eight remaining alerts — all with sinks in `src/` files, out of reach
+# of any path filter — become suppressible in place with the reason in the diff, which is what we
+# wanted in the first place.
+#
+# `query-filters` was the other durable option and is worse: excluding a rule by id takes it off
+# `crates/*/src` too, the only surface where these rules could ever be right.
+#
+# ## What this costs, stated so it is a choice and not a discovery
+#
+# 318 of 764 Rust files — 42% — leave analysis: 91 under `tests/e2e/`, 218 under `crates/*/tests/`,
+# 9 under `crates/*/examples/`. Every future CodeQL finding of EVERY rule in those trees goes unseen.
+# That is the blunt half, and it is the price of the precise instrument not existing.
+#
+# ## The constraint that makes this work at all
+#
+# `paths-ignore` is only honored for interpreted languages and for compiled languages analyzed
+# WITHOUT building the code — Rust among them. `.github/workflows/codeql.yml` passes
+# `build-mode: none`, for its own separate reason (a build would put a full cargo compile inside a
+# job holding `security-events: write`). **Changing that build mode silently disables this file.**
+
+paths-ignore:
+  - tests/e2e/**
+  - crates/*/tests/**
+  - crates/*/examples/**
