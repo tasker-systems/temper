@@ -184,8 +184,10 @@ export default defineSchedule({
     // The auditor is OPTIONAL; the steward is not. This file ships in the repo, and eve registers
     // one Vercel Cron Job per file here — so every fork and self-hosted deploy of this agent gets
     // this cron whether or not it runs an auditor. Without this guard each of those deployments
-    // fails hourly, forever, on a credential they never intended to set. That is not a signal, it
-    // is noise that teaches people to ignore a red cron.
+    // fails on every tick, forever, on a credential they never intended to set. That is not a
+    // signal, it is noise that teaches people to ignore a red cron. (Stated per-tick rather than
+    // per-hour deliberately: the cadence above is an operator's to move, and this argument does not
+    // depend on it.)
     //
     // **This is a skip, never a fallback.** It does not widen what may authenticate as the auditor:
     // `auditorFetch` still throws rather than borrowing the steward's credential, and

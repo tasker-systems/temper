@@ -221,8 +221,8 @@ describe("auditor credentials", () => {
   //
   // These two states must never collapse into each other. The auditor is OPTIONAL and its schedule
   // ships in the repo, so every fork that deploys this agent gets the cron; without a skip they all
-  // fail hourly on a credential they never meant to set, and a permanently-red cron trains people
-  // to ignore red crons. But a deployment that DID configure an auditor and got it wrong must fail
+  // fail on every tick on a credential they never meant to set, and a permanently-red cron trains
+  // people to ignore red crons. But a deployment that DID configure an auditor and got it wrong must fail
   // loudly — silence there means believing you are auditing when you are not.
   //
   // The predicate is the seam. It must never become an excuse to authenticate as someone else:
@@ -269,7 +269,7 @@ describe("auditor credentials", () => {
   it("treats a declared-but-empty credential var as absent", async () => {
     // Vercel surfaces a declared-with-no-value variable as "", not undefined. Reading that as
     // "configured" would send the tick into `build`, which rejects "" too — turning an empty
-    // declaration into the hourly hard failure this guard exists to prevent.
+    // declaration into the every-tick hard failure this guard exists to prevent.
     process.env.TEMPER_AUDITOR_M2M_CLIENT_ID = "";
     process.env.TEMPER_AUDITOR_TOKEN = "";
 
