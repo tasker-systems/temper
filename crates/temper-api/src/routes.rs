@@ -458,6 +458,18 @@ fn embed_internal_routes() -> Router<AppState> {
             "/api/as/reap",
             get(handlers::as_reap::reap_as_tables).post(handlers::as_reap::reap_as_tables),
         )
+        // Reconcile-channel health check (goal 01a035eb, clause
+        // a-de-provisioning-that-did-not-happen-is-visible-to-an-operator). Reads the fact
+        // temper-cloud records when a fail-open internal call does not reach us and turns it into a
+        // signal. It belongs in this group for the group's posture rather than its duration — the
+        // check is one indexed read — and specifically because `require_dispatch_secret` is already
+        // set on every deployment that runs the other crons, so this one cannot go dark for want of
+        // a variable nobody knew to set. Same GET+POST-on-one-handler shape as `dispatch`/`warm`.
+        .route(
+            "/api/internal-calls/health",
+            get(handlers::internal_call_health::check_internal_calls)
+                .post(handlers::internal_call_health::check_internal_calls),
+        )
         // Region-clock drain (goal 019fc46c): runs T6's two clocks off the request path. Same
         // self-gated posture and GET+POST-on-one-handler shape as `dispatch`/`warm`. It belongs in
         // this group specifically because a settling can run 55–94s, which exceeds the public

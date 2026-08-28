@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { importSPKI, jwtVerify } from "jose";
 import { beforeAll, describe, expect, it } from "vitest";
 import { type ReconcileRequest, signReconcile } from "../../src/oauth/reconcile.js";
+import { RECONCILE_CHANNEL } from "../../src/oauth/reconcile-health.js";
 import type { ResolvePrincipalRequest, ResolvePrincipalResponse } from "../../src/oauth/resolve.js";
 
 /**
@@ -184,5 +185,37 @@ describe("internal reconcile signature (mirrors Rust temper_core::internal_sig)"
 
   it("produces the shared known-answer signature", () => {
     expect(signReconcile(KAT_SECRET, KAT_TIMESTAMP, KAT_BODY)).toBe(KAT_SIG);
+  });
+});
+
+/**
+ * The channel name is a cross-language constant with no generated type behind it.
+ *
+ * temper-cloud WRITES rows keyed on it; temper-api only reports on the channels its
+ * `WATCHED_CHANNELS` enumerates. Rename either side and the two stop meeting: temper-cloud writes a
+ * channel nobody watches, and the watcher reports `no_attempt_recorded` for the one it does — a
+ * state that is deliberately never alertable. So the alert goes permanently silent, no test in
+ * either language fails, and the failure mode is exactly the one the span gate was written to
+ * prevent, on the one seam that gate cannot reach.
+ *
+ * Read out of the Rust source rather than duplicated here, so this cannot pass by agreeing with a
+ * stale copy of the value it is supposed to be checking.
+ */
+describe("internal call health channel name — TS/Rust wire contract", () => {
+  it("matches RECONCILE_CHANNEL in internal_call_health_service.rs", () => {
+    const rustSource = readFileSync(
+      new URL(
+        "../../../../crates/temper-services/src/services/internal_call_health_service.rs",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    const match = rustSource.match(/pub const RECONCILE_CHANNEL: &str = "([^"]+)";/);
+    expect(
+      match,
+      "`pub const RECONCILE_CHANNEL` was not found in internal_call_health_service.rs — either it " +
+        "was renamed or this pin is reading the wrong file, and both make the pin vacuous",
+    ).not.toBeNull();
+    expect(match?.[1]).toBe(RECONCILE_CHANNEL);
   });
 });

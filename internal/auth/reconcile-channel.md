@@ -123,3 +123,27 @@ networking is Enterprise-tier Vercel — not worth it versus the HMAC signing al
 
 Spec: `temper-artifacts:specs/2026-07-02-shared-auth-orchestration-seam-design.md`
 (Stage 3).
+
+## How you know the channel is still up
+
+The trust model above says what an attacker cannot do to this channel. It says nothing about the
+channel simply **not working**, which until 2026-08-28 was invisible: the ACS calls
+`reconcileMemberships` inside a fail-open catch (design spec §3.8 — authentication must not wait on
+provisioning), so a transport failure, a rejected signature or an unset `INTERNAL_RECONCILE_URL`
+produced a `logger.error` on a surface with no telemetry pipeline and nothing else anywhere. IdP
+de-provisioning could stop for every principal on the deployment with nothing saying so.
+
+temper-cloud now records the outcome of each call to `kb_internal_call_health` at grain `(channel)`
+— from inside that same catch, and from a code path that cannot throw, because a throw there would
+escape to the ACS's outer handler and turn an observability write into `400 SAML assertion
+rejected`. temper-api reads it on a cron (`/api/internal-calls/health`, every 15 minutes) and emits
+one `internal_call_health` span per channel.
+
+**The fail-open decision is unchanged, and the log line is unchanged.** Enriching that line was
+rejected twice — `idp_key` by an earlier security review as unnecessary, and per-principal detail
+because these failures are systemic: an unset variable or a disagreeing secret fails for everyone at
+once, which is also why the record is not keyed on `profile_id`.
+
+The queries, the four failure causes and what each one means an operator should do, and the two
+things this deliberately does not alert on, are in
+[reconcile-channel-health-queries.md](../development/reconcile-channel-health-queries.md).

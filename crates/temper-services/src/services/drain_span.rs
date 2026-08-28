@@ -9,7 +9,7 @@
 //! These spans are deliberately `internal` kind. Tempo's span-metrics processor derives RED only
 //! from `server`/`client` spans, so none of this appears in `traces_spanmetrics_*` — that is
 //! correct. They are not request boundaries, and the aggregation route is TraceQL metrics, which
-//! reads any span. See `docs/guides/drain-operator-queries.md`.
+//! reads any span. See `internal/development/drain-operator-queries.md`.
 
 use std::collections::HashMap;
 
@@ -55,7 +55,7 @@ pub enum JobOutcome {
 }
 
 impl JobOutcome {
-    /// The wire string. `docs/guides/drain-operator-queries.md` D1 groups by these.
+    /// The wire string. `internal/development/drain-operator-queries.md` D1 groups by these.
     pub fn as_str(&self) -> &'static str {
         match self {
             JobOutcome::Completed => "completed",
@@ -167,7 +167,7 @@ mod tests {
 
     #[test]
     fn job_outcome_strings_are_the_closed_vocabulary_the_queries_group_by() {
-        // docs/guides/drain-operator-queries.md D1 groups by these exact strings. A rename here
+        // internal/development/drain-operator-queries.md D1 groups by these exact strings. A rename here
         // silently empties an operator's panel, so the vocabulary is asserted, not just declared.
         assert_eq!(JobOutcome::Completed.as_str(), "completed");
         assert_eq!(JobOutcome::Deferred.as_str(), "deferred");

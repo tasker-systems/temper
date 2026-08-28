@@ -16,6 +16,7 @@ pub mod facets;
 pub mod graph;
 pub mod health;
 pub mod ingest;
+pub mod internal_call_health;
 pub mod internal_saml;
 pub mod invitations;
 pub mod invocations;

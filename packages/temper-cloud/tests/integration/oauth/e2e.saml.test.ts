@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { createLocalJWKSet, exportPKCS8, generateKeyPair, jwtVerify } from "jose";
 import type postgres from "postgres";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NeonClient } from "../../../src/db.js";
 import { handleAuthorize, handleSamlAcs, handleToken } from "../../../src/oauth/endpoints.js";
 import { getPublicJwks } from "../../../src/oauth/keys.js";
@@ -756,6 +756,215 @@ describe("e2e: full mock-IdP SAML login", () => {
       expect(
         new URL(acsRes.headers.get("location") as string).searchParams.get("code"),
       ).toBeTruthy();
+    } finally {
+      vi.unstubAllGlobals();
+      delete process.env.INTERNAL_RECONCILE_URL;
+      delete process.env.INTERNAL_RECONCILE_SECRET;
+    }
+  });
+  /**
+   * A login through the full ACS, so the health record is written by the code that actually runs on
+   * the login path rather than by a test calling the recorder directly.
+   *
+   * `tag` must differ per call: the assertion id is derived from it, and `guardReplay` refuses a
+   * repeat — which is the correct behaviour and would otherwise look like a reconcile failure.
+   */
+  async function loginOnce(tag: string, withGroups: boolean): Promise<Response> {
+    const verifier = `e2e-${tag}-verifier-${"a".repeat(50)}`;
+    const challenge = createHash("sha256").update(verifier).digest("base64url");
+    const authRes = await handleAuthorize(
+      new Request(
+        "https://as.example.com/oauth/authorize?response_type=code&client_id=cli&redirect_uri=" +
+          encodeURIComponent(REDIRECT_URI) +
+          "&code_challenge=" +
+          challenge +
+          `&code_challenge_method=S256&state=${tag}-state`,
+      ),
+      db,
+    );
+    const rs = new URLSearchParams(
+      new URL(authRes.headers.get("location") as string, "https://as.example.com").search,
+    ).get("rs");
+    const { samlResponseB64 } = makeSignedSamlResponse({
+      spEntityId: SP_ENTITY_ID,
+      acsUrl: ACS_URL,
+      nameId: `${tag}-user`,
+      attributes: { email: `${tag}@example.com`, uid: `${tag}-user` },
+      ...(withGroups ? { multiValuedAttributes: { groups: ["engineering"] } } : {}),
+      idpKeyPem,
+      idpCertPem,
+    });
+    return handleSamlAcs(
+      new Request("https://sp.example.com/saml/acs", {
+        method: "POST",
+        body: new URLSearchParams({ SAMLResponse: samlResponseB64, RelayState: rs as string }),
+      }),
+      db,
+    );
+  }
+
+  interface HealthRow {
+    consecutive_failures: number;
+    failures_total: string;
+    failing_since: Date | null;
+    last_success_at: Date | null;
+    last_failure_cause: string | null;
+    last_failure_detail: string | null;
+  }
+
+  async function readHealth(): Promise<HealthRow | undefined> {
+    const rows = await sql<HealthRow[]>`
+      SELECT consecutive_failures, failures_total, failing_since, last_success_at,
+             last_failure_cause, last_failure_detail
+        FROM kb_internal_call_health WHERE channel = 'saml_reconcile'`;
+    return rows[0];
+  }
+
+  /**
+   * The clause this whole change exists for:
+   * `a-de-provisioning-that-did-not-happen-is-visible-to-an-operator`.
+   *
+   * Before this, the state after this exact sequence was a `logger.error` on a surface with no
+   * telemetry pipeline and nothing else anywhere — the login succeeded, the reconcile did not
+   * happen, and no query could tell you so. The assertion is on the record, not on the log line:
+   * enriching that line was rejected twice, and it is not what an operator reads.
+   */
+  describe("a reconcile that never reached the endpoint", () => {
+    beforeEach(async () => {
+      await sql`UPDATE kb_saml_idp SET groups_attr = 'groups' WHERE idp_key = 'test'`;
+      process.env.INTERNAL_RECONCILE_URL = "https://api.internal/internal/saml/reconcile";
+      process.env.INTERNAL_RECONCILE_SECRET = "s3cr3t";
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      delete process.env.INTERNAL_RECONCILE_URL;
+      delete process.env.INTERNAL_RECONCILE_SECRET;
+    });
+
+    it("is recorded against the channel, with the cause that decides the operator's action", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response("no", { status: 401 })),
+      );
+      const acsRes = await loginOnce("chfail", true);
+
+      // Fail-open is unchanged — the record is written from inside the catch that guarantees it.
+      expect(acsRes.status).toBe(302);
+
+      const row = await readHealth();
+      expect(row).toBeDefined();
+      expect(row?.consecutive_failures).toBe(1);
+      expect(row?.failing_since).not.toBeNull();
+      // A rejected signature, not a generic endpoint error: "the secrets disagree" and "the
+      // endpoint is unwell" are different jobs, and this is the distinction the fourth acceptance
+      // criterion asks for.
+      expect(row?.last_failure_cause).toBe("unauthorized");
+      expect(row?.last_failure_detail).toBe("HTTP 401");
+    });
+
+    /**
+     * `failing_since` names when the run BEGAN, so the second failure must not move it.
+     *
+     * This is what makes "has this outlived the window" answerable at all. Assigning `now()` on
+     * every failure would make every run look one call old, and a channel down for a week would be
+     * indistinguishable from one that failed a moment ago — the reader would then never call
+     * anything sustained, and the alert would be present, wired, and permanently silent.
+     */
+    it("continues the failure run rather than restarting it", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response("boom", { status: 500 })),
+      );
+      await loginOnce("chrun1", true);
+      const first = await readHealth();
+      await loginOnce("chrun2", true);
+      const second = await readHealth();
+
+      expect(first?.consecutive_failures).toBe(1);
+      expect(second?.consecutive_failures).toBe(2);
+      expect(second?.failing_since?.getTime()).toBe(first?.failing_since?.getTime());
+    });
+
+    /**
+     * **An intermittent channel is the case the run counter cannot see.**
+     *
+     * A flaky egress losing half the logins never accumulates a run: every success it does manage
+     * resets `consecutive_failures` to 0 and clears `failing_since`, so the pair reports a healthy
+     * channel while half of all de-provisioning is not happening. `failures_total` is the only
+     * thing that keeps rising through it, which is why a success must not touch it.
+     */
+    it("keeps the running total across a success, so an intermittent channel stays visible", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response("boom", { status: 500 })),
+      );
+      await loginOnce("chint1", true);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response(null, { status: 204 })),
+      );
+      await loginOnce("chint2", true);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response("boom", { status: 500 })),
+      );
+      await loginOnce("chint3", true);
+
+      const row = await readHealth();
+      // The run says one — which on its own reads as a channel that has just had a blip.
+      expect(row?.consecutive_failures).toBe(1);
+      // The total says two, and two failures in three logins is not a blip.
+      expect(Number(row?.failures_total)).toBe(2);
+    });
+
+    /**
+     * A success ends the run and keeps the forensics.
+     *
+     * Two properties in one test because they are one decision: `failing_since` and
+     * `consecutive_failures` describe a live condition and must clear, while the cause and detail
+     * describe the last failure that happened and must not. Clearing those too would destroy the
+     * record at the exact moment an operator goes looking for what just broke.
+     */
+    it("ends the run on the next success, without erasing what it last failed with", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response("boom", { status: 500 })),
+      );
+      await loginOnce("chrec1", true);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response(null, { status: 204 })),
+      );
+      await loginOnce("chrec2", true);
+
+      const row = await readHealth();
+      expect(row?.consecutive_failures).toBe(0);
+      expect(row?.failing_since).toBeNull();
+      expect(row?.last_success_at).not.toBeNull();
+      expect(row?.last_failure_cause).toBe("endpoint_error");
+    });
+  });
+
+  /**
+   * An authentication-only IdP has no reconcile channel to be healthy or unhealthy about.
+   *
+   * `groups_attr` left NULL is the supported posture: no team membership is ever derived, the ACS
+   * makes no call, and there is no de-provisioning to suspend. A row here would make every such
+   * deployment read as a channel that has never succeeded — `20260827000030` refused exactly this
+   * shape of permanent false alarm for its own table, and the refusal has to hold twice or the
+   * second table reintroduces what the first one avoided.
+   */
+  it("records no channel health for an authentication-only IdP", async () => {
+    process.env.INTERNAL_RECONCILE_URL = "https://api.internal/internal/saml/reconcile";
+    process.env.INTERNAL_RECONCILE_SECRET = "s3cr3t";
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const acsRes = await loginOnce("chauthonly", true);
+      expect(acsRes.status).toBe(302);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(await readHealth()).toBeUndefined();
     } finally {
       vi.unstubAllGlobals();
       delete process.env.INTERNAL_RECONCILE_URL;
