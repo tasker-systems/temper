@@ -184,9 +184,16 @@ def _retry_after(exc: ApiException) -> int | None:
     if raw is None:
         return None
     try:
-        return int(raw)
+        seconds = int(raw)
     except (TypeError, ValueError):
+        # RFC 9110 also allows an HTTP-date here, and a proxy in the path may send
+        # anything at all. `None` says "no usable hint", which is honest; guessing a
+        # duration from an unparseable header is not.
         return None
+    # Clamped, because this value's whole purpose is to be passed to a sleep, and a
+    # clock-skewed intermediary answering a negative delay should not turn a 429 into
+    # a ValueError several frames away from here.
+    return max(seconds, 0)
 
 
 def map_error(exc: BaseException) -> TemperError:
