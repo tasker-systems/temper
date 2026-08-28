@@ -295,6 +295,13 @@ export default defineSchedule({
           //
           // Classified rather than pre-checked: minting a probe token to ask whether a token can be
           // minted spends the very quota being probed.
+          //
+          // **This `catch` cannot be taught to handle the AI Gateway's 402, and adding a branch for
+          // it would be dead code.** `receive()` above resolves when a session's workflow run is
+          // STARTED, not when it completes — eve's `Session` is an inert, non-thenable result value
+          // — so the 402, and every other in-session failure, is raised past this frame in a
+          // separate durable run. The same is true of the auditor subagent's own mint. Only not
+          // making the model call quiets those, which is the cadence and the toggle above.
           if (tokenIssuanceUnavailable(err)) {
             console.log(
               `[auditor-dispatch] tick ${correlationId}: the token endpoint will not mint for this ` +
