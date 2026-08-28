@@ -2655,3 +2655,136 @@ async fn the_staleness_boolean_agrees_with_the_staleness_set(pool: sqlx::PgPool)
         }
     }
 }
+
+// ── The cost witness — `20260828000020` ─────────────────────────────────────────────────────────
+//
+// Every other assertion in this file checks PRESENCE/ABSENCE of a specific `(cogmap_id, finding_id)`
+// pair, deliberately and for the reason stated at the top of the sweep section. That makes the whole
+// suite blind to the defect `20260828000020` fixes: the shipped function returned exactly the right
+// rows, and reached them by calling a scalar predicate once per candidate. Rows cannot see shape.
+//
+// So this counts CALLS, not milliseconds. A timing assertion would be flaky and would still not say
+// whether the cost is per-row; a call count says it directly. The technique is `20260727000010`'s —
+// it counted producer invocations with a `nextval`-instrumented copy to prove `scored` was being
+// re-evaluated — pointed here at the arm that turned out to dominate.
+
+/// THE SWEEP MUST ENTER THE STALENESS PREDICATE ONCE, WHATEVER THE CANDIDATE COUNT.
+///
+/// Observed failing against `20260727000010`'s definition before this was written: with the corpus
+/// below it recorded **12** entries, one per fully-covered candidate, because
+/// `resource_has_stale_citation` sat in the `ranked` WHERE and the cheap `coverage < magnitude` arm
+/// admitted nothing. Under `20260828000020` the array goes down once and the count is 1.
+///
+/// The corpus shape is load-bearing and is asserted rather than assumed: every candidate must be
+/// FULLY COVERED, because that is the state in which the old short-circuit failed to fire — and it
+/// is the steady state of any audited corpus, since `kb_citation_audits` has no supersession
+/// (`20260724000110`) and coverage therefore never falls. A corpus with an uncovered finding would
+/// take the cheap arm, skip the predicate, and let this pass against both definitions.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_sweep_evaluates_staleness_once_not_once_per_candidate(pool: sqlx::PgPool) {
+    const QUIET: usize = 11;
+
+    let f = stale_fixture(&pool, "ads-callcount").await;
+    let stale_block = first_block(&pool, f.finding).await;
+    fire_audit(&pool, f.auditor, stale_block, f.source.uuid(), 0.5)
+        .await
+        .unwrap();
+
+    // Siblings that are audited and stay quiet. They are the candidates the old shape paid for.
+    for i in 0..QUIET {
+        let quiet = make_cogmap_finding(
+            &pool,
+            f.owner,
+            f.emitter,
+            CogmapId::from(f.cogmap),
+            &format!("quiet finding {i}"),
+            &format!("temper://ads-callcount/quiet{i}"),
+            Some(f.source),
+        )
+        .await;
+        let block = first_block(&pool, quiet).await;
+        fire_audit(&pool, f.auditor, block, f.source.uuid(), 0.5)
+            .await
+            .unwrap();
+    }
+
+    // Only this one goes stale, so the sweep still has a row to return and the probe is not
+    // measuring an empty run.
+    mutate_block(&pool, stale_block, f.emitter, "revised after the audit").await;
+
+    // VACUITY GUARD. This is the array the sweep builds — `magnitude > 0 AND coverage >= magnitude`
+    // is verbatim the set `20260828000020` passes down, and verbatim the set the old definition
+    // called the scalar predicate on. If it were 1, a per-call and a per-candidate implementation
+    // would be indistinguishable and this test would assert nothing.
+    let fully_covered: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_resource_homes h \
+           JOIN kb_resources r ON r.id = h.resource_id \
+          WHERE h.anchor_table = 'kb_cogmaps' AND h.anchor_id = $1 \
+            AND r.is_active AND r.ingest_state = 'complete' \
+            AND resource_citation_magnitude(r.id) > 0 \
+            AND resource_audit_coverage(r.id) >= resource_citation_magnitude(r.id)",
+    )
+    .bind(f.cogmap)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        fully_covered,
+        (QUIET + 1) as i64,
+        "the probe needs every seeded finding fully covered; with fewer, the cheap arm short-circuits \
+         and the predicate is never reached under either definition"
+    );
+
+    // ── Instrument ──────────────────────────────────────────────────────────────────────────────
+    // Rename the shipped function aside and put a counting delegate in its place. Delegation rather
+    // than a second copy of the body is the point: the probe then measures ENTRIES and can never
+    // become a second, drifting definition of staleness.
+    // Default START 1, deliberately: a sequence started at 0 returns 0 from its FIRST `nextval` and
+    // leaves `last_value` at 0, so one real call would read as none and this probe would pass
+    // against the very shape it exists to reject.
+    sqlx::query("CREATE SEQUENCE probe_stale_calls")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "ALTER FUNCTION resource_stale_citations_multi(uuid[], uuid) RENAME TO __probe_real_stale",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // plpgsql, not sql: `PERFORM` is guaranteed to run, whereas a `nextval` cross-joined into a
+    // SELECT can be skipped by the planner when the other side returns no rows — which would make a
+    // zero count mean "never called" and "called, returned nothing" alike.
+    sqlx::query(
+        "CREATE FUNCTION resource_stale_citations_multi(p_findings uuid[], p_principal uuid) \
+         RETURNS TABLE(finding_id uuid, block_id uuid, source_id uuid) \
+         LANGUAGE plpgsql VOLATILE AS $f$ \
+         BEGIN \
+             PERFORM nextval('probe_stale_calls'); \
+             RETURN QUERY SELECT m.finding_id, m.block_id, m.source_id \
+                            FROM __probe_real_stale(p_findings, p_principal) m; \
+         END; \
+         $f$",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let rows = sweep(&pool, f.principal.uuid(), 50).await;
+
+    let calls: i64 = sqlx::query_scalar("SELECT last_value FROM probe_stale_calls")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert!(
+        rows.iter().any(|(_, fid, _)| *fid == f.finding.uuid()),
+        "precondition: the stale finding must be swept, or the run this measured did no work"
+    );
+    assert_eq!(
+        calls, 1,
+        "the sweep must enter the staleness predicate ONCE for the whole candidate set; {calls} \
+         entries against {fully_covered} fully-covered candidates is the per-row shape \
+         `20260828000020` removed"
+    );
+}
