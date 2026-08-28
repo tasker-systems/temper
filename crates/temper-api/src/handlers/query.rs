@@ -3,7 +3,7 @@ use axum::Json;
 
 use crate::middleware::auth::AuthUser;
 use temper_core::types::ids::ProfileId;
-use temper_core::types::query::composition::Composition;
+use temper_core::types::query::composition::{Composition, CompositionShape};
 use temper_core::types::query::envelope::QueryResponse;
 use temper_services::backend::query_read;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
@@ -60,6 +60,12 @@ pub async fn query(
     auth: AuthUser,
     Json(composition): Json<Composition>,
 ) -> ApiResult<Json<QueryResponse>> {
+    // **Measured before anything decides whether to answer it**, which is the entire design. A
+    // shape emitted after validation would show only the traffic that already passes — never the
+    // traffic a ceiling refuses — and the question this exists to answer is whether the ceilings
+    // sit above what callers actually send. See `CompositionShape`.
+    CompositionShape::of(&composition).record("http");
+
     let validated = query_read::prepare(composition)
         .await
         .map_err(|refusals| ApiError::PlanRefused { refusals })?;
