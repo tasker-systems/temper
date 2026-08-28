@@ -52,6 +52,11 @@ auth-identity contract — whose tokens this instance trusts and which it accept
   getting traces and metrics out.
 - **[Telemetry](../concepts/telemetry.md)** — what Temper emits, the OTLP export model, and
   what the architecture fixes vs. what the deployment configures.
+- **[Query cost and the bounds that shape it](../concepts/query-cost-and-bounds.md)** — the four
+  bound layers, why a bound on waiting is not a bound on work, and how to measure before choosing
+  an execution budget.
+- **[Compose queries that stay fast](../playbooks/compose-queries-that-stay-fast.md)** — the
+  operator knobs in order of leverage, and the four numbers worth checking.
 
 ## Verifying releases
 
