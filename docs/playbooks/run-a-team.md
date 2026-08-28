@@ -186,6 +186,14 @@ homed in a context shared to this team; `--to` must be a current member. It's a
 single transaction — good for bulk offboarding. Provenance is untouched: the
 original author stays recorded.
 
+> **Reassignment is half of a departure.** It moves the work, and
+> `temper team remove-member` ends what this team's share conferred — but neither
+> ends the person's admission to the instance, and anything they still own keeps
+> them as its owner, and its reader, until it is handed off. Ending admission is a
+> system-admin act on a different page: see
+> [Offboard a Departure](./offboard-a-departure.md) for the whole sequence, and for
+> why an IdP-side group removal is not the control it looks like.
+
 ## Retire a team
 
 ```bash
