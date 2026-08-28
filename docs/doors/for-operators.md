@@ -29,6 +29,12 @@ enforced — is described in [The Trust Boundary](../concepts/trust-boundary.md)
 auth-identity contract — whose tokens this instance trusts and which it accepts — is in
 [Auth identity](../concepts/auth-identity.md).
 
+## When someone leaves
+
+- **[Offboarding a departure](../playbooks/offboard-a-departure.md)** — ending a departing
+  person's admission, handing off the work they owned, and the bound to quote when nobody
+  acts. Includes why the revoke, and not an IdP-side group removal, is the acting control.
+
 ## Connecting the rest of your world
 
 - **[Slack mentions](../playbooks/slack-mentions.md)** — end-to-end setup.

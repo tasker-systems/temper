@@ -277,11 +277,13 @@ attribute entirely** (e.g. a transient IdP misconfiguration), reconcile is **ski
 memberships are revoked; only an assertion that carries the attribute with **no values** ("in no
 mapped groups now") revokes all of the user's `idp` memberships.
 
-**Seeing when each user's reach was last reconciled.** Because reconcile runs on login, how
-current a user's `idp` memberships are depends on when they last signed in — and, if the
-assertion omitted the groups attribute you configured, on whether there was anything to
-reconcile against. Both are recorded per user in `kb_saml_principal_reconcile`, and
-`vw_saml_reconcile_staleness` reads them together with the reach each user actually holds.
+### Seeing when each user's reach was last reconciled
+
+Because reconcile runs on login, how current a user's `idp` memberships are depends on
+when they last signed in — and, if the assertion omitted the groups attribute you
+configured, on whether there was anything to reconcile against. Both are recorded per user
+in `kb_saml_principal_reconcile`, and `vw_saml_reconcile_staleness` reads them together with
+the reach each user actually holds.
 
 This applies only once `groups_attr` is set. With it left NULL the IdP is authentication-only,
 no team membership is derived from it, and no reconcile is attempted or recorded — so these
