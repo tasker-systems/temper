@@ -3266,6 +3266,10 @@ impl Backend for DbBackend {
         //    each claimed row with this tick's correlation. That stamp is the ONLY carrier of the tick
         //    id into the data layer: `invocation_open` inherits it from the active job, so a session's
         //    invocation joins back to its tick with nothing asked of the agent.
+        //
+        //    `self.profile_id` also scopes the claim, exactly as it scopes step 2's sweep — see
+        //    `workflow_job_service::claim`'s doc comment for why passing the same principal here
+        //    cannot claim less than this tick just enqueued.
         let cap = cmd.cap.unwrap_or(DEFAULT_STEWARD_DISPATCH_CAP) as i32;
         let claimed = workflow_job_service::claim(
             &self.pool,
@@ -3274,6 +3278,7 @@ impl Backend for DbBackend {
             cap,
             DEFAULT_STEWARD_LEASE_SECONDS,
             cmd.correlation,
+            self.profile_id,
         )
         .await?;
 

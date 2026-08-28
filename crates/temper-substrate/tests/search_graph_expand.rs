@@ -1468,7 +1468,7 @@ async fn two_pages_of_one_walk_are_disjoint_and_their_union_is_the_single_pass_a
 
 /// **The walk clamps its own depth, so a caller's number is a request rather than a licence.**
 ///
-/// `[added — 2026-08-28]` with `20260828000040`, and asserted through `search_graph_expand` on
+/// `[added — 2026-08-28]` with `20260828000050`, and asserted through `search_graph_expand` on
 /// purpose: that is the one signature in the chain that passes a caller's `p_depth` straight
 /// through to the body. `/api/query` fixes depth at a compile-time constant, so a test driven from
 /// there would pass whether or not the clamp existed — it would witness the compiler's choice, not
@@ -1524,7 +1524,7 @@ async fn the_walk_clamps_its_own_depth_and_still_honours_a_smaller_request(pool:
     // ignores NULLs in `LEAST` — so the siblings' spelling would have turned this call from an
     // empty answer into a full three-hop neighbourhood. Empty to maximal, inside a change whose
     // whole purpose is to bound. The predicate is two conjuncts for exactly this reason and this
-    // is the assertion that says so; see `20260828000040`.
+    // is the assertion that says so; see `20260828000050`.
     let null_depth: Vec<(Uuid, f32)> = {
         use sqlx::Row;
         sqlx::query(

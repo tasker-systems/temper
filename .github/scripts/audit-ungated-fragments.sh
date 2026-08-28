@@ -333,7 +333,7 @@ sql_relations_current() {
 #   the emitter entirely. The duplication is what makes the audit see the thing it exists to see.
 #   A future reader tempted to DRY these three lists should read this paragraph first.
 
-# REVIEWED 2026-08-28 (`20260828000040`, the follow-from depth clamp, task
+# REVIEWED 2026-08-28 (`20260828000050`, the follow-from depth clamp, task
 # 01a035f1-0614-7483-9043-6d96aa181158) — the SQL-file set grows by one; the function-NAME set does
 # not, and neither does the Rust half.
 #
@@ -532,7 +532,7 @@ read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260817000020_follow_from_offset.sql
 20260820000010_survey_honors_funnel_width.sql
 20260825000020_staleness_member_gate.sql
-20260828000040_follow_from_depth_clamp.sql
+20260828000050_follow_from_depth_clamp.sql
 EOF
 
 # ── THE RELATION WATCH — derived from what the cores READ, not what names them ──

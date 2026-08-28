@@ -40,6 +40,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use temper_core::types::ids::ProfileId;
+use temper_core::types::query::composition::CompositionShape;
 use temper_core::types::query::Composition;
 use temper_services::backend::query_read;
 use temper_services::error::ApiError;
@@ -86,6 +87,12 @@ pub async fn run_query(
     input: QueryInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let profile = svc.require_profile().await?;
+
+    // Before validation, for the reason `CompositionShape` carries. The `mcp` door is measured
+    // separately from `http` because `embeddings_supplied` is structurally zero here — this door
+    // cannot run the model, which is why the server embeds on its behalf — so any bound on what
+    // the server must embed binds this door alone, and its distribution is the one that decides it.
+    CompositionShape::of(&input.plan).record("mcp");
 
     let validated = query_read::prepare(input.plan)
         .await

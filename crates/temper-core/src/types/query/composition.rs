@@ -5,9 +5,11 @@
 //! seeing the credential. There is no field here for it, by construction.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
 use super::envelope::ActInvocation;
-use super::stage::StageName;
+use super::stage::{StageInput, StageName};
+use crate::types::graph::EdgeKind;
 use crate::types::resource_view::ResourceSection;
 
 /// One find act's question: its text, and the caller's vector when there is one.
@@ -501,9 +503,318 @@ pub fn intention_budget_bytes() -> usize {
         .unwrap_or(MAX_COMPOSITION_INTENTION_BYTES)
 }
 
+/// What a caller actually asked for, measured before anything decides whether to answer it.
+///
+/// # Why this exists, and why every field is a COUNT rather than a verdict
+///
+/// `[added — 2026-08-28]` `/api/query` recorded nothing about the composition it received — not the
+/// stage count, not the question size, not how many ids were piped in. So the only answer available
+/// to *"is this ceiling above what callers actually send?"* was the fixtures in this repository,
+/// which contain no real callers. A bound chosen that way is a guess wearing a measurement's
+/// clothes, and the first evidence that it was set too low would be a customer.
+///
+/// **The fields are raw quantities rather than `would_refuse` booleans.** A verdict
+/// answers one question — *does today's cap fire?* — and goes stale the moment the cap moves. The
+/// distribution answers every question anyone asks later, including about ceilings nobody has
+/// proposed yet, and it can be re-read against a new number without redeploying to collect it
+/// again.
+///
+/// **Recorded BEFORE validation**, which is the whole design: a shape emitted only for plans that
+/// pass would show exactly the traffic no ceiling ever refuses, and none of the traffic a ceiling
+/// would have. That inverts the question this is here to answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CompositionShape {
+    /// Stages declared. Bounded on the wire since 2026-08-26.
+    pub stages: usize,
+    /// Entries in `outcome.returns`.
+    pub returns: usize,
+    /// Every stage's question, summed — whether or not the server would embed it.
+    pub intention_bytes: usize,
+    /// The subset the SERVER would embed: distinct text on stages carrying no vector. Separate from
+    /// the total because a caller who precomputes pays nothing, and a question asked by ten stages
+    /// is embedded once — so the two numbers can differ by any factor, and it is this one that a
+    /// wall-clock embed budget is a bound on.
+    pub embedded_bytes: usize,
+    /// The longest single question.
+    pub longest_question: usize,
+    /// The largest caller-supplied id set on any one stage.
+    pub largest_id_set: usize,
+    /// Every caller-supplied id across the plan.
+    pub caller_ids: usize,
+    /// The longest narrowing list — `doc_type`, `tags` or `labels` — on any one stage.
+    pub largest_filter_list: usize,
+    /// Stages arriving with a vector already computed. Zero for every MCP caller, structurally:
+    /// that door cannot run the model, which is why the server embeds on its behalf.
+    pub embeddings_supplied: usize,
+    /// Floats in the largest supplied vector. A number other than the model's dimension is a
+    /// caller sending a vector for a different space.
+    pub largest_embedding: usize,
+    /// Stages whose combinator, `with` list or `edge_kinds` names the same member twice. A repeat
+    /// changes no answer, so this is the one field that is a defect count rather than a size.
+    pub repeated_members: usize,
+}
+
+impl CompositionShape {
+    /// Measure a composition. Pure, allocation-light, and safe to run on every request.
+    pub fn of(c: &Composition) -> Self {
+        let mut s = Self {
+            stages: c.stages.len(),
+            returns: c.outcome.returns.len(),
+            ..Self::default()
+        };
+
+        for ret in &c.outcome.returns {
+            let mut seen: BTreeSet<&ResourceSection> = BTreeSet::new();
+            if ret.with.iter().any(|sec| !seen.insert(sec)) {
+                s.repeated_members += 1;
+            }
+        }
+
+        let mut distinct_to_embed: BTreeSet<&str> = BTreeSet::new();
+        for node in &c.stages {
+            let inv = match node {
+                StageNode::Act(inv) => inv,
+                StageNode::Combine(cn) => {
+                    let mut seen: BTreeSet<&str> = BTreeSet::new();
+                    if cn.inputs.iter().any(|i| !seen.insert(i.as_str())) {
+                        s.repeated_members += 1;
+                    }
+                    continue;
+                }
+            };
+
+            if let Some(intention) = &inv.intention {
+                s.intention_bytes += intention.query.len();
+                s.longest_question = s.longest_question.max(intention.query.len());
+                match &intention.embedding {
+                    Some(v) => {
+                        s.embeddings_supplied += 1;
+                        s.largest_embedding = s.largest_embedding.max(v.len());
+                    }
+                    // Distinct text, matching what the embedder would actually run: two stages
+                    // naming one question are one embedding. Not gated on whether the ACT searches
+                    // by vector — that reads the registry, and this is a measurement rather than a
+                    // decision, so it stays a pure function of the body.
+                    None => {
+                        distinct_to_embed.insert(intention.query.trim());
+                    }
+                }
+            }
+
+            for input in &inv.inputs {
+                if let StageInput::Caller { ids, .. } = input {
+                    s.caller_ids += ids.ids.len();
+                    s.largest_id_set = s.largest_id_set.max(ids.ids.len());
+                }
+            }
+
+            if let Some(f) = &inv.resource_filter {
+                s.largest_filter_list = s
+                    .largest_filter_list
+                    .max(f.doc_type.len())
+                    .max(f.tags.len());
+            }
+            if let Some(f) = &inv.edge_filter {
+                s.largest_filter_list = s.largest_filter_list.max(f.labels.len());
+                let mut seen: Vec<&EdgeKind> = Vec::new();
+                if f.edge_kinds.iter().any(|k| {
+                    let dup = seen.contains(&k);
+                    seen.push(k);
+                    dup
+                }) {
+                    s.repeated_members += 1;
+                }
+            }
+        }
+        s.embedded_bytes = distinct_to_embed.iter().map(|t| t.len()).sum();
+        s
+    }
+
+    /// Emit the shape at INFO, one event per request.
+    ///
+    /// An event rather than span fields: `/api/query` is a READ, so it opens no act span (span
+    /// conventions, clause 2 — *"asserting act ids on every request would encode a fiction"*), and
+    /// recording onto `Span::current()` is the trap that document names, since the ids would
+    /// silently attach to whatever span happens to be current once a nested one appears.
+    ///
+    /// `door` distinguishes the HTTP surface from MCP, which matters more than it looks:
+    /// `embeddings_supplied` is structurally zero for every MCP caller, so any bound on what the
+    /// server must embed binds that door alone and its distribution has to be read separately.
+    pub fn record(&self, door: &'static str) {
+        tracing::info!(
+            door,
+            stages = self.stages,
+            returns = self.returns,
+            intention_bytes = self.intention_bytes,
+            embedded_bytes = self.embedded_bytes,
+            longest_question = self.longest_question,
+            largest_id_set = self.largest_id_set,
+            caller_ids = self.caller_ids,
+            largest_filter_list = self.largest_filter_list,
+            embeddings_supplied = self.embeddings_supplied,
+            largest_embedding = self.largest_embedding,
+            repeated_members = self.repeated_members,
+            "composition shape"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod shape {
+        use super::*;
+        use crate::types::query::act::ActName;
+        use crate::types::query::filter::{EdgeFilter, ResourceFilter};
+        use crate::types::query::id_set::{IdKind, IdSet};
+        use crate::types::query::stage::StageRelation;
+
+        fn asking(name: &str, query: &str, embedding: Option<Vec<f32>>) -> StageNode {
+            StageNode::Act(ActInvocation {
+                name: StageName::parse(name).unwrap(),
+                act: ActName::FindAboutAnywhere,
+                intention: Some(Intention {
+                    query: query.to_string(),
+                    embedding,
+                }),
+                inputs: vec![],
+                terms: BTreeMap::new(),
+                resource_filter: None,
+                edge_filter: None,
+                properties: vec![],
+            })
+        }
+
+        fn plan(stages: Vec<StageNode>) -> Composition {
+            Composition {
+                outcome: OutcomeDeclaration { returns: vec![] },
+                stages,
+            }
+        }
+
+        /// **`embedded_bytes` is what the server would EMBED, and `intention_bytes` is what the
+        /// caller SENT.** They differ by any factor, and conflating them is how a wall-clock embed
+        /// budget gets sized against the wrong quantity — which is the whole reason both are here.
+        #[test]
+        fn the_embedded_subset_is_distinct_text_on_stages_carrying_no_vector() {
+            let c = plan(vec![
+                asking("a", "same question", None),
+                asking("b", "same question", None),
+                asking("c", "another", None),
+                asking("d", "precomputed already", Some(vec![0.1; 768])),
+            ]);
+            let s = CompositionShape::of(&c);
+
+            assert_eq!(
+                s.intention_bytes,
+                13 + 13 + 7 + 19,
+                "every question, as sent"
+            );
+            assert_eq!(
+                s.embedded_bytes,
+                13 + 7,
+                "one embedding for the repeated question, none for the precomputed stage"
+            );
+            assert_eq!(s.embeddings_supplied, 1);
+            assert_eq!(s.largest_embedding, 768);
+            assert_eq!(s.longest_question, 19);
+        }
+
+        /// The size fields take the LARGEST on any one stage, not a sum — a ceiling is per stage,
+        /// so a total would be measuring a quantity no bound is expressed in.
+        #[test]
+        fn the_size_fields_report_the_largest_single_stage_and_the_id_total_beside_it() {
+            let ids = |n: usize| StageInput::Caller {
+                relation: StageRelation::Bound,
+                ids: IdSet {
+                    kind: IdKind::Resource,
+                    provenance: None,
+                    ids: (0..n).map(|_| uuid::Uuid::now_v7()).collect(),
+                },
+            };
+            let mut wide = match asking("a", "q", None) {
+                StageNode::Act(mut inv) => {
+                    inv.inputs = vec![ids(7), ids(3)];
+                    inv.resource_filter = Some(ResourceFilter {
+                        doc_type: vec!["t".into(); 4],
+                        tags: vec!["x".into(); 9],
+                        ..Default::default()
+                    });
+                    StageNode::Act(inv)
+                }
+                other => other,
+            };
+            let narrow = match asking("b", "q", None) {
+                StageNode::Act(mut inv) => {
+                    inv.inputs = vec![ids(2)];
+                    StageNode::Act(inv)
+                }
+                other => other,
+            };
+            if let StageNode::Act(inv) = &mut wide {
+                inv.edge_filter = Some(EdgeFilter {
+                    labels: vec!["l".into(); 5],
+                    ..Default::default()
+                });
+            }
+            let s = CompositionShape::of(&plan(vec![wide, narrow]));
+            assert_eq!(s.largest_id_set, 7, "the biggest single set, not 7+3+2");
+            assert_eq!(s.caller_ids, 12, "and the total beside it");
+            assert_eq!(
+                s.largest_filter_list, 9,
+                "tags, across both filter containers"
+            );
+        }
+
+        /// Repeats are counted from all three places one can occur, because each is a caller
+        /// turning a bounded vocabulary into an unbounded field and the distribution has to say
+        /// whether anyone actually does it.
+        #[test]
+        fn repeated_members_counts_returns_combinators_and_edge_kinds() {
+            use crate::types::graph::EdgeKind;
+            let combine = StageNode::Combine(CombineNode {
+                name: StageName::parse("both").unwrap(),
+                op: CombineOp::Union,
+                inputs: vec![
+                    StageName::parse("a").unwrap(),
+                    StageName::parse("a").unwrap(),
+                ],
+            });
+            let walk = match asking("w", "q", None) {
+                StageNode::Act(mut inv) => {
+                    inv.edge_filter = Some(EdgeFilter {
+                        edge_kinds: vec![EdgeKind::LeadsTo, EdgeKind::LeadsTo],
+                        ..Default::default()
+                    });
+                    StageNode::Act(inv)
+                }
+                other => other,
+            };
+            let c = Composition {
+                outcome: OutcomeDeclaration {
+                    returns: vec![ReturnSpec {
+                        stage: StageName::parse("w").unwrap(),
+                        with: vec![ResourceSection::OpenMeta, ResourceSection::OpenMeta],
+                    }],
+                },
+                stages: vec![asking("a", "q", None), combine, walk],
+            };
+            assert_eq!(CompositionShape::of(&c).repeated_members, 3);
+        }
+
+        /// An empty plan measures zero rather than panicking — it is refused a layer later, and a
+        /// measurement that cannot survive the inputs validation exists to reject is a measurement
+        /// that stops being taken exactly when something odd arrives.
+        #[test]
+        fn a_plan_with_nothing_in_it_measures_zero() {
+            assert_eq!(
+                CompositionShape::of(&plan(vec![])),
+                CompositionShape::default()
+            );
+        }
+    }
+
     use crate::types::query::act::ActName;
     use crate::types::query::envelope::ActInvocation;
     use crate::types::query::stage::{StageInput, StageRelation};

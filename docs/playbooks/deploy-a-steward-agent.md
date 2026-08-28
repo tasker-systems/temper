@@ -256,6 +256,7 @@ Set these on the Vercel project (dashboard, or `vercel env add <NAME>`) **before
 | `TEMPER_AUDITOR_M2M_TOKEN_URL` | auditor, prod | Same issuer as the steward's — one instance, one issuer. Only the credential differs. |
 | `TEMPER_AUDITOR_M2M_AUDIENCE` | **external IdP only** | Same rule as `TEMPER_M2M_AUDIENCE`: required for Auth0, **omitted** for a `tmpr_` credential. |
 | `TEMPER_AUDITOR_TOKEN` | dev only | Static auditor bearer for `eve dev`. The unset-with-no-`CLIENT_ID` case **throws** rather than silently falling back to the steward's identity. |
+| `TEMPER_AUDITOR_ENABLED` | optional | **Opt-OUT.** Turns agent maintenance off on a deployment that holds auditor credentials and still wants the cron idle. **Absence means ENABLED**, as does a declared-but-empty value. Only `0`/`false`/`off`/`no` turn it off; `1`/`true`/`on`/`yes` turn it on explicitly and say nothing. Any OTHER value runs the auditor and logs a warning naming the variable — a typo must not be read as an instruction to stop. Deliberately the inverse polarity of every other variable here: a merge may not turn a production cron off any more than on. |
 | `AUDITOR_MODEL` | optional | The auditor's primary model. Defaults to `anthropic/claude-haiku-4.5` — deliberately **not** the steward's default. Same build-time freeze and redeploy-to-change semantics. |
 | `AUDITOR_MODEL_FALLBACKS` | optional | Defaults to `minimax/minimax-m3` (the steward's primary — a documented availability trade). Set to `""` to make the tick fail rather than collapse the two personas onto one model. |
 
@@ -332,12 +333,24 @@ vercel connect create https://<instance>/mcp --name steward
 
 Vercel → *Settings → Cron Jobs*: every `defineSchedule` becomes a Vercel Cron Job,
 evaluated in **UTC**. Expect **three**: the steward dispatch tick and the region-materialize
-tick, both hourly at `0 * * * *`, and the auditor dispatch tick at `30 * * * *` — half an
-hour behind, so citations a steward tick authors are auditable within the same hour without
-the two writing concurrently over one map. **The auditor's cron exists whether or not you run
-an auditor**; with no auditor credential it logs `no auditor credential on this deployment —
-skipping tick` and returns green. That is the intended resting state for a deployment that
-does not use one.
+tick, both hourly at `0 * * * *`, and the auditor dispatch tick **daily at `30 3 * * *`** — on
+the half hour, so citations a steward tick authors are auditable without the two writing
+concurrently over one map. The auditor's *hour* is a budget decision rather than a protocol one:
+each dispatched job spends an AI Gateway model session, and a deployment with a larger allowance
+may raise it.
+
+**The auditor's cron exists whether or not you run an auditor**, and there are three separate
+reasons it may do nothing on a given tick. All three log and return **green** — none is a
+failure, and none makes the auditor authenticate as anything else:
+
+| log line says | what it means |
+|---|---|
+| `no auditor credential on this deployment` | You do not run an auditor. The intended resting state for most deployments. |
+| `TEMPER_AUDITOR_ENABLED turns agent maintenance off` | You do run one, and have deliberately paused it. Unset the variable to resume. |
+| `the token endpoint will not mint … right now (issuance quota)` | Your credentials are correct and your IdP is refusing to issue more M2M tokens this period. No work was claimed. It resumes on its own when the quota does. |
+
+A **wrong** credential is none of these: it stays a loud failing tick, because a deployment that
+believes it is auditing and is not is the worse failure.
 
 ### Logs
 
@@ -391,6 +404,64 @@ Three things that read as bugs but aren't:
   back and check the `--team` / `--cogmap` reach you registered it with. A genuine auth
   failure (unregistered or revoked client id) is a `401` with an explicit message naming the
   client id.
+
+### Has this agent actually run?
+
+`vw_agent_exercise` answers it in one query, **one row per registered machine principal** — not per
+credential. A principal can hold several `kb_machine_clients` rows (reactivation is a new
+registration, never an update), so the view aggregates them into a count and reports one ladder:
+
+```sql
+SELECT label, credentials, credentials_live, last_seen_at,
+       last_session_opened_at, last_session_closed_at, last_session_status,
+       last_emitted_at
+  FROM vw_agent_exercise
+ ORDER BY last_seen_at DESC NULLS FIRST;
+```
+
+There is deliberately no `WHERE` clause on revocation. A principal whose credentials have all been
+revoked is exactly the one you are looking for when an agent goes quiet, and `credentials_live = 0`
+names that state without hiding the row.
+
+Read it as a ladder and find **which rungs are stale** — each gap means something the rungs either
+side of it cannot tell you:
+
+| What is stale | Reading |
+|---|---|
+| `last_seen_at` was never set at all | the credential has never authenticated — check registration and admission |
+| **every rung together, `last_seen_at` included** | the credential is not reaching this instance. Either it has been revoked (`credentials_live = 0`) or its issuer is refusing to mint for it, and the agent skipped quietly — see below |
+| `last_session_opened_at`, while `last_seen_at` is fresh | authenticating and not running. Benign if the queue was empty; a fault if it was not |
+| `last_session_closed_at`, with `last_session_status = open` | a session started and never finished — a function timeout, or a tick that died mid-loop |
+| `last_emitted_at`, while the session rungs are fresh | ran clean and changed nothing in the corpus |
+
+The view deliberately states **no** threshold: what counts as "recently" depends on the agent's
+cadence — the steward ticks hourly, the auditor daily at 03:30 UTC — so compare against the cron
+you configured rather than against a number baked into a column.
+
+**Why a quiet agent is hard to see, and what it actually looks like.** The two ways a token request
+fails are treated as two different facts, on purpose. A **401** means the credential is wrong: the
+agent believes it is working and is not, so it fails loudly. A **429** means the issuer will not mint
+right now for a credential it otherwise accepts — a capacity answer, not a misconfiguration — and an
+*optional* agent turns that into a logged skip and a green cron, because an agent that cannot run
+should not start as somebody else. The cost of that correct behaviour is that it leaves almost
+nothing behind: no session, no event, no red tick.
+
+What it leaves in this view is the second row of the table above: **every rung stale together,
+including `last_seen_at`**. An agent refused at the token endpoint never reaches this instance at
+all, so rung 1 stops advancing along with the rest. That is a different picture from a fresh
+`last_seen_at` sitting above an old session — which means the agent *is* authenticating and is not
+doing work, a queue or reach question rather than a credential one.
+
+Two more readings that look like failures but are not:
+
+- **The rungs are not a timeline, and neither ordering is an inversion.**
+  `last_session_closed_at` later than `last_session_opened_at` is the healthy just-finished case;
+  `last_session_opened_at` later is the healthy mid-run case. "Where the signal stops" is about
+  which rungs are *stale against the agent's cadence*, never about which timestamp is larger.
+- **An idle agent and a broken one look identical at rung 2 alone.** `last_seen_at` moving with
+  `last_session_opened_at` far behind is the steady state of a healthy agent with nothing to do — the
+  same fact as `claimed 0 job(s)` below. Distinguish them by whether the queue actually held work,
+  not by the gap's size.
 
 ### Observing an auditor tick
 
