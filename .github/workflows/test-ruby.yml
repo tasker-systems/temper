@@ -53,6 +53,14 @@ jobs:
       # JVM to build or test the gem. CI is where we prove it still matches the
       # contract: `rake drift` regenerates and fails on any diff.
       #
+      # `rake drift` is a thin delegate to .github/scripts/check-temper-rb-drift.sh --
+      # the same script `cargo make openapi-rb-drift` runs -- so this job and local dev
+      # assert the identical thing. It used to hand-roll its own `git diff` here, and
+      # that copy drifted: it never grew the manifest diff and orphan cross-check that
+      # catch a file the generator has STOPPED writing, so two retired files rode this
+      # step green. The script skips only on a host with neither Docker nor a JVM; this
+      # runner has both, so it never skips here.
+      #
       # This step is why the job is path-scoped -- it pulls a ~1GB image.
       - name: Codegen drift gate
         run: bundle exec rake drift
