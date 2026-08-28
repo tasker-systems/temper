@@ -405,6 +405,42 @@ Three things that read as bugs but aren't:
   failure (unregistered or revoked client id) is a `401` with an explicit message naming the
   client id.
 
+### Has this agent actually run?
+
+`vw_agent_exercise` answers it in one query, one row per registered machine credential:
+
+```sql
+SELECT label, last_seen_at, last_claim_at, last_persona_claimed,
+       last_completion_at, last_death_at, last_emitted_at
+  FROM vw_agent_exercise
+ WHERE revoked_at IS NULL
+ ORDER BY last_seen_at DESC NULLS FIRST;
+```
+
+Read it as a ladder and find **where the signal stops** — each gap means something the rungs
+either side of it cannot tell you:
+
+| Stops after | Reading |
+|---|---|
+| nothing (`last_seen_at` NULL) | the credential has never authenticated — check registration and admission |
+| `last_seen_at` | authenticated, took no work. Benign if the queue was empty; **this is also what a quota-exhausted agent looks like**, because it is refused at the IdP's token endpoint and never arrives |
+| `last_claim_at` | claimed and did not finish — reaped on lease expiry and now backing off |
+| `last_completion_at` | ran clean and changed nothing in the corpus |
+
+The view deliberately states **no** threshold: what counts as "recently" depends on the agent's
+cadence — the steward ticks hourly, the auditor daily at 03:30 UTC — so compare against the cron
+you configured rather than against a number baked into a column.
+
+Two readings that look like failures but are not:
+
+- **An idle agent and a broken one look identical at rung 2 alone.** `last_seen_at` moving with
+  `last_claim_at` far behind is the steady state of a healthy agent with nothing to do — the same
+  fact as `claimed 0 job(s)` below. Distinguish them by whether the queue actually held work, not by
+  the gap's size.
+- **`last_persona_claimed` is observed, not configured.** It reports which persona's work this
+  credential last took. A credential that has never claimed shows NULL there, which is not a
+  misconfiguration.
+
 ### Observing an auditor tick
 
 The verdicts land in **`kb_citation_audits`**, one row per `(block, source)` weighed, each
