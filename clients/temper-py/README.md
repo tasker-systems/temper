@@ -50,6 +50,7 @@ Everything outside `temper/generated/` is hand-written, and
 | `temper.client` | `Client.call()` — the one seam carrying retry policy and 401 repair |
 | `temper.act` | `ActInput`'s seven wire keys, with the confidence invariant enforced at construction |
 | `temper.refs` | `parse_ref` — a port of `temper_workflow::operations::parse_ref` |
+| `temper._validate` | The admission checks the seams share: endpoints, and values that become headers |
 
 ### There are no per-endpoint wrapper methods, deliberately
 
@@ -71,6 +72,53 @@ client.call(fn)  # a write: NEVER auto-retried
 A 401 is repaired once either way — re-authenticating is not re-submitting. A
 `BearerToken` cannot mint, so its 401 comes back untouched rather than being replaced
 by a message about the client's own plumbing.
+
+
+### What `configure()` will pass through
+
+Keyword arguments beyond `base_url` and `device_id` reach the generated
+`Configuration`, and only the ones on an **allowlist** do:
+
+```python
+temper.configure(
+    base_url="https://temper.internal",
+    ssl_ca_cert="/etc/ssl/private-ca.pem",  # trust a private CA
+    tls_server_name="temper.internal",  # the SNI name the cert carries
+    connection_pool_maxsize=32,
+    proxy="http://proxy.internal:3128",
+)
+```
+
+`ssl_ca_cert`, `ca_cert_data`, `cert_file`, `key_file`, `tls_server_name`,
+`connection_pool_maxsize`, `proxy`, `proxy_headers`, `socket_options`,
+`datetime_format`, `date_format` — that is the whole list, and an unrecognised name
+is a `TypeError` rather than a silent passthrough. Three of the arguments it refuses
+are why the list is an allowlist:
+
+| Refused | What it would have done |
+|---|---|
+| `debug=True` | Sets `httplib.HTTPConnection.debuglevel = 1`, a **class** attribute — every HTTP request in the process starts printing its request headers to stdout, `Authorization: Bearer …` included. Raise the level on the `temper.generated` or `urllib3` logger instead; neither touches httplib. |
+| `verify_ssl=False` | `ssl.CERT_NONE` on the pool: any certificate from anything that answers, and the bearer token goes to whoever intercepted the connection. Use `ssl_ca_cert` / `ca_cert_data`. |
+| `assert_hostname=False` | Keeps verification on but stops checking the certificate is for the host you dialled. Use `tls_server_name`. |
+
+The rest are refused because this module owns them (`host`, `retries`, the
+`server_*` family) or because credentials are call-scoped, not connection-scoped
+(`access_token`, `api_key`, `username`/`password`). Every refusal names its reason,
+and all of them fire at `configure()` — not at the first API call, which is when a
+lazily-built `Configuration` would have raised.
+
+### Endpoints, and plaintext http
+
+`base_url` and `ClientCredentials(token_url=...)` must be absolute `https` URLs, with
+no userinfo (`https://id:secret@host` puts the secret in every error message that
+names the URL) and no query or fragment. Plaintext `http` is accepted for the
+loopback interface — a test server, a `temper serve` on your laptop — and refused
+anywhere else, because a bearer token and a `client_secret` both travel in the clear
+over it. Where TLS genuinely terminates elsewhere, say so:
+
+```python
+temper.configure(base_url="http://temper.internal", allow_insecure_http=True)
+```
 
 ## Connections and forking
 
@@ -107,6 +155,27 @@ discriminator when this build predates the kind the server named.
 > The gem calls the transport failure `Temper::ConnectionError`. Here it is
 > `TransportError`, because `ConnectionError` is a Python builtin and shadowing it
 > would make `except ConnectionError` silently catch the wrong thing.
+
+## Credentials
+
+`BearerToken(token)` and `ClientCredentials(...)` check their inputs at construction,
+because the two ways a credential arrives wrong both surface as an unexplained
+`invalid_client` or 401 hours later:
+
+- **Whitespace.** `TEMPER_M2M_CLIENT_SECRET=$(cat secret.txt)` keeps the trailing
+  newline. Rejected rather than stripped — a stripped value is a guess, and the same
+  guess is wrong for a space in the middle of a secret.
+- **Swapped fields.** A `client_secret` beginning `tmpr_` is a temper *client id* in
+  the secret's slot; temper mints secrets as bare base64url.
+
+The mint itself is deliberately unadventurous. It does not follow redirects (that
+would re-POST the `client_secret` to whatever origin the `Location` names), it reads
+at most 64 KiB of response, it applies a connect/read timeout — the mint runs under a
+lock, so an issuer that accepts the connection and never answers would otherwise
+block every thread in the process, not one — and it treats a 200 that carries no
+usable `access_token`, `token_type` or `expires_in` as a credential failure rather
+than letting a `KeyError` out of `token()`. A mint that fails drops the cached token
+first, so a caller never goes on presenting one the server has already rejected.
 
 ## Development
 
