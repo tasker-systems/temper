@@ -937,10 +937,21 @@ pub(crate) async fn embed_query_text(query: &str) -> QueryEmbed {
 
 /// What a server-side embed of SEVERAL questions came to. All or nothing, and deliberately.
 ///
-/// The alternative — a per-text outcome — would be an outcome per budget, which is the shape this
-/// type exists to replace. Every way the attempt can fail is a property of the process rather than
-/// of one string (the model will not load, the ORT session errors, the budget expires), so a
-/// partial result would describe a case that does not arise while re-opening the unbounded one.
+/// **The justification is MECHANICAL, and the first version of this doc gave a different one that
+/// was false** `[corrected — 2026-08-28, found in review]`. It read: *"every way the attempt can
+/// fail is a property of the process rather than of one string (the model will not load, the ORT
+/// session errors, the budget expires)"*. The first two are process properties. **The budget
+/// expiring is not** — it is a property of the aggregate INPUT, measured: the same process, model
+/// and session take 3,635 ms for 64 questions of 640 bytes and 24,145 ms for 64 of 4,096. Filing a
+/// budget expiry as process-level is precisely how the sizing question below got talked past.
+///
+/// What actually makes a partial result unproducible is that **every fallible operation inside
+/// `embed_batch` is batch-scoped**: `tokenize`, `TensorRef::from_array_view`, `session.lock`,
+/// `session.run`, `try_extract_array`, `into_dimensionality`. There is no per-text `Result`.
+/// `load_tokenizer` sets `with_truncation`, so `encode_batch` bounds its own work rather than
+/// erroring; WordPiece carries `[UNK]`; and `TemplateProcessing` guarantees `[CLS]`/`[SEP]`, so
+/// every encoding is at least two tokens and `mean_pool`'s `mask_sum > 0` guard cannot fall
+/// through `[verified against the shipped tokenizer — 2026-08-28]`.
 ///
 /// Rendering is unchanged by this: a composition's stages each keep their own `None` and each
 /// refuse `EmbeddingUnavailable` on their own line, exactly as they did when the outcomes were

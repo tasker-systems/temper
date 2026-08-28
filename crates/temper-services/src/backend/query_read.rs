@@ -2356,10 +2356,13 @@ mod tests {
     /// what lets the bound be witnessed on every machine rather than in one job.
     #[tokio::test]
     async fn the_embed_phase_costs_one_budget_window_whatever_the_plan_asks() {
-        // The budget is squeezed so the awaited attempt returns promptly on a machine that CAN load
-        // the model; it has no bearing on the assertion, which counts windows rather than time.
-        std::env::set_var("TEMPER_QUERY_EMBED_BUDGET_MS", "1");
-
+        // No env is set here, and that is deliberate `[2026-08-28, found in review]`. An earlier
+        // version squeezed `TEMPER_QUERY_EMBED_BUDGET_MS` to 1 ms to keep the test quick — which is
+        // process-global, never restored, read by sibling tests running on other threads in this
+        // same binary, and unsound besides (`set_var` is `unsafe` from edition 2024). Its own
+        // comment admitted the value had no bearing on the assertion, which is the tell that it
+        // should not have been there: this counts budget WINDOWS, and that number is the same
+        // whether the embed succeeds, fails, or times out.
         const MANY_QUESTIONS: usize = 64;
         let stages: Vec<StageNode> = (0..MANY_QUESTIONS)
             .map(|i| {

@@ -1,7 +1,12 @@
 -- The follow-from walk gains the internal depth clamp every sibling walk already carries.
 --
 -- WHAT CHANGES. One predicate inside the recursive `walk` CTE: `w.hop < p_depth` becomes
--- `w.hop < LEAST(p_depth, 3)`. Nothing else in the body moves, and the signature is unchanged.
+-- `w.hop < p_depth AND w.hop < 3`. Nothing else in the body moves, and the signature is unchanged.
+--
+-- WHY THE PREDICATE IS TWO CONJUNCTS AND NOT THE SIBLINGS' `LEAST`. `LEAST` ignores NULL, so
+-- `LEAST(p_depth, 3)` reads a NULL depth as 3 and would turn "walk nothing" into "walk the full
+-- neighbourhood" -- the one direction a bounding change must never move. Found in review, after the
+-- first draft of this file shipped a comment asserting the opposite. See the predicate itself.
 --
 -- WHY 3, AND WHY IT CHANGES NO ANSWER TODAY. Every walk in this schema clamps p_depth internally
 -- rather than trusting its caller: the resource- and context-grain walks at 3
@@ -92,10 +97,25 @@ LANGUAGE sql STABLE AS $$
            w.seed_id, u.edge_id
       FROM walk w
       JOIN undirected u ON u.from_node = w.node
-     -- The clamp. `LEAST` and not `GREATEST`: a caller may ask for less than 3 and get it, and a
-     -- NULL p_depth still admits nothing beyond hop 0, which is the incumbent behaviour of the
-     -- comparison and is left alone.
-     WHERE w.hop < LEAST(p_depth, 3)
+     -- The clamp, written as TWO CONJUNCTS rather than as the siblings' `LEAST(p_depth, 3)`, and
+     -- the divergence is the whole reason this comment is long.
+     --
+     -- **`LEAST` IGNORES NULL.** `LEAST(NULL::int, 3)` is `3`, not NULL — so `w.hop < LEAST(p_depth,
+     -- 3)` turns a NULL depth from "no recursion at all" (`w.hop < NULL` is NULL, hence false) into
+     -- "walk the full three hops". Measured on the live container: a 6-node chain seeded at n0
+     -- answers 0 rows at NULL depth through the incumbent and 3 rows through `LEAST`. Empty to
+     -- maximal, in a change whose entire purpose is to bound.
+     --
+     -- Written this way the NULL propagates out of the first conjunct exactly as it did before, so
+     -- the only answers that move are the ones above 3 — which is what "defence in depth" has to
+     -- mean if it is to be worth applying to a walk nobody can currently reach.
+     --
+     -- The ceiling is still 3 and still the siblings'; it is the SPELLING that differs, and it
+     -- differs because every sibling was BORN with `LEAST` and so never flipped a NULL from 0 to N.
+     -- Adopting their spelling here would have imported a widening they do not have. (Their own
+     -- NULL behaviour is a separate question about their own callers, and is not touched here.)
+     WHERE w.hop < p_depth
+       AND w.hop < 3
        AND NOT u.to_node = ANY(w.path)
   ),
   -- The ORDER BY is the total order the OFFSET needs; it predates paging and is untouched. Pages
@@ -130,5 +150,5 @@ $$;
 SELECT declare_migration(
     20260828000040,
     'additive',
-    'Clamps the follow-from walk''s recursion depth inside the walk: `w.hop < p_depth` becomes `w.hop < LEAST(p_depth, 3)` in the 10-arity __temper_ungated_follow_from, which since 20260817000020 holds the only copy of the body (8 and 9 delegate to it and are untouched). 3 matches every resource- and context-grain sibling — 20260709000010:56, 20260708000002:36, 20260821000010:134 — against 10 for the cogmap/atlas traversals. NO ANSWER CHANGES TODAY: the only live depth is the compiler''s fixed WALK_DEPTH = 2 (query_plan.rs:140), which is under the clamp, and search_graph_expand''s only Rust callers are temper-substrate''s own tests. This is DEFENCE IN DEPTH rather than the closing of a reachable hole, and is stated that way so a later reader does not infer an exposure that was never measured: what it buys is that the bound belongs to the walk instead of to one caller''s constant, in the one walk in this schema where it did not — search_graph_expand passes a caller''s depth straight through and there is no SECURITY DEFINER anywhere to make a wrapper the only reachable entry. Additive: one CREATE OR REPLACE at the unchanged signature, no DROP. Draft: triage-inbound/upstream-issues/30-query-engine-resource-bounds.md item 8; task 01a035f1-0614-7483-9043-6d96aa181158.'
+    'Clamps the follow-from walk''s recursion depth inside the walk: `w.hop < p_depth` becomes `w.hop < p_depth AND w.hop < 3` in the 10-arity __temper_ungated_follow_from, which since 20260817000020 holds the only copy of the body (8 and 9 delegate to it and are untouched). TWO CONJUNCTS AND NOT THE SIBLINGS'' `LEAST(p_depth, 3)`, because LEAST IGNORES NULL: LEAST(NULL::int, 3) is 3, so that spelling would read a NULL depth as 3 and turn "walk nothing" into "walk the full three-hop neighbourhood" -- measured at 0 rows vs 3 rows on a 6-node chain, and witnessed by the_walk_clamps_its_own_depth_and_still_honours_a_smaller_request. The ceiling is the siblings''; only the spelling differs, and it differs because each sibling was born with LEAST and so never flipped a NULL, where this one would have. 3 matches every resource- and context-grain sibling — 20260709000010:56, 20260708000002:36, 20260821000010:134 — against 10 for the cogmap/atlas traversals. NO ANSWER CHANGES TODAY: the only live depth is the compiler''s fixed WALK_DEPTH = 2 (query_plan.rs:140), which is under the clamp, and search_graph_expand''s only Rust callers are temper-substrate''s own tests. This is DEFENCE IN DEPTH rather than the closing of a reachable hole, and is stated that way so a later reader does not infer an exposure that was never measured: what it buys is that the bound belongs to the walk instead of to one caller''s constant, in the one walk in this schema where it did not — search_graph_expand passes a caller''s depth straight through and there is no SECURITY DEFINER anywhere to make a wrapper the only reachable entry. Additive: one CREATE OR REPLACE at the unchanged signature, no DROP. Draft: triage-inbound/upstream-issues/30-query-engine-resource-bounds.md item 8; task 01a035f1-0614-7483-9043-6d96aa181158.'
 );

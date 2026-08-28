@@ -1519,6 +1519,33 @@ async fn the_walk_clamps_its_own_depth_and_still_honours_a_smaller_request(pool:
         "and the nodes past the ceiling are the ones missing, rather than three arbitrary rows"
     );
 
+    // **A NULL depth still walks nothing, which is what `LEAST` would have broken.**
+    // `[added — 2026-08-28, found in review]` `LEAST(NULL::int, 3)` is `3`, not NULL — Postgres
+    // ignores NULLs in `LEAST` — so the siblings' spelling would have turned this call from an
+    // empty answer into a full three-hop neighbourhood. Empty to maximal, inside a change whose
+    // whole purpose is to bound. The predicate is two conjuncts for exactly this reason and this
+    // is the assertion that says so; see `20260828000040`.
+    let null_depth: Vec<(Uuid, f32)> = {
+        use sqlx::Row;
+        sqlx::query(
+            "SELECT resource_id, graph_score FROM search_graph_expand($1, $2::uuid[], NULL, NULL::text[], $3)",
+        )
+        .bind(owner.uuid())
+        .bind(vec![chain[0].uuid()])
+        .bind(0.5f64)
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| (r.get::<Uuid, _>("resource_id"), r.get::<f32, _>("graph_score")))
+        .collect()
+    };
+    assert!(
+        null_depth.is_empty(),
+        "a NULL depth asks for no recursion and must still get none — `LEAST` would answer with \
+         the full clamped walk. got: {null_depth:?}"
+    );
+
     let shallow = graph_expand(&pool, owner.uuid(), &[chain[0].uuid()], 2, &[], 0.5).await;
     assert_eq!(
         shallow.len(),

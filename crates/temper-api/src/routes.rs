@@ -496,8 +496,8 @@ fn embed_internal_routes() -> Router<AppState> {
 /// to give Vercel crons a longer `maxDuration` and serves no third-party surface. Same reasoning
 /// as [`slack_link_public_routes`].
 ///
-/// The body limit is set HERE and nowhere else. Nothing in temper-api sets `DefaultBodyLimit`, so
-/// axum's 2 MB default applied — under GitHub's 25 MB ceiling, above which GitHub *silently drops*
+/// The body limit is set here and — until `query_routes` `[2026-08-28]` — nowhere else. Nothing in
+/// temper-api set `DefaultBodyLimit` at the time, so axum's 2 MB default applied — under GitHub's 25 MB ceiling, above which GitHub *silently drops*
 /// the delivery. A payload between the two was refused by temper while GitHub believed it had
 /// delivered. Scoped to this route rather than raised globally: no other endpoint has a reason to
 /// accept a 25 MB body, and a global raise would hand every one of them the same exposure. Note it
@@ -561,13 +561,27 @@ fn query_routes() -> OpenApiRouter<AppState> {
 ///
 /// # Why 4 MB and not the sum
 ///
-/// It is a backstop, deliberately, and cannot be a computed maximum: a property predicate's VALUES
-/// are counted (`MAX_PER_CANDIDATE_PROBES`) and never length-bounded, so the largest legal body has
-/// no finite expression. 4 MB is comfortably above the part that CAN be computed — 1.9x the
-/// measured 2,194,320 — and the margin is what absorbs the fields that carry no length bound at
-/// all. That leaves this the ONLY bound on a request's total declared bytes, which
-/// is the job it is here to do; every bound a caller is likely to meet is published on the field it
-/// bounds and refused in the shape pass, with a reason.
+/// It is a backstop and cannot be a computed maximum, for two reasons rather than the one first
+/// given here `[corrected — 2026-08-28, found in review]`:
+///
+/// - **unbounded lengths** — a property predicate's VALUES are counted
+///   (`MAX_PER_CANDIDATE_PROBES`) and never length-bounded;
+/// - **unbounded COUNTS** — and this half was missing, in the direction that understates why the
+///   backstop is needed. `ReturnSpec::with`, `EdgeFilter::labels`, `ResourceFilter::doc_type` and
+///   `ResourceFilter::tags` are `Vec`s no pass caps, and `validate_returns` checks section
+///   MEMBERSHIP only, so duplicates are legal. A composition repeating one admitted section ten
+///   thousand times per return validates `Ok` and serializes to **9.6 MB**
+///   `[measured — 2026-08-28]`.
+///
+/// **So this limit does not make the coherence property unconditional, and saying otherwise would
+/// be the overclaim.** It holds for every field whose count IS capped — a composition maximal over
+/// all of them at once measures **2,389,092 bytes**, giving 1.76x headroom. For the four fields
+/// above, a legal plan can still exceed 4 MB and meet a 413. Closing that means capping those
+/// counts too, which is a contract change nobody has taken; it is named here rather than left for
+/// a future reader to discover from a support ticket.
+///
+/// Every bound a caller is LIKELY to meet is published on the field it bounds and refused in the
+/// shape pass, with a reason. This is what stands behind the ones that are not.
 pub const QUERY_MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
 
 pub fn create_app(state: AppState) -> Router {
@@ -739,6 +753,7 @@ mod tests {
     use temper_core::types::query::envelope::ActInvocation;
     use temper_core::types::query::id_set::{IdKind, IdSet, MAX_ID_SET_IDS};
     use temper_core::types::query::stage::{StageInput, StageName, StageRelation};
+    use temper_core::types::query::validate::validate;
 
     /// **The coherence condition that makes the caps one decision rather than several ifs.**
     ///
@@ -750,23 +765,46 @@ mod tests {
     /// answers with a bare 413: no refusal list, no vocabulary, in the door whose whole promise is
     /// that a plan is repaired in one round trip.
     ///
-    /// The fixture is built at the caps rather than asserted against an arithmetic estimate,
-    /// because the estimate is the thing most likely to be wrong. It is dominated by a term that is
-    /// easy to forget: a caller may send a precomputed 768-float embedding beside each question,
-    /// which the CLI always does, and 64 of those are the largest single contribution to the body.
+    /// **The plan is VALIDATED before it is measured, and that assertion is not ceremony**
+    /// `[added — 2026-08-28, found in review]`. The first version of this fixture used
+    /// `find-about-anywhere` and carried a seed and a bound — an act that declares
+    /// `accepts_bounds: vec![]` and `accepts_seeds: vec![]` (`registry.rs:202-203`, *"a bound would
+    /// make this find-about-within"*). So it measured a plan carrying **128 refusals** while its
+    /// own doc called it *"a plan the contract calls legal"*, and nothing asked. The size claim
+    /// happened to survive — `follow-from` is the one act declaring both, and swapping it moved the
+    /// total by 512 bytes — but a size measured over an illegal plan proves nothing about what the
+    /// door must accept, and the next edit to this fixture would have had no guard at all.
     ///
-    /// **What it does NOT prove**, stated because a green here reads like completeness: a property
-    /// predicate's values are counted and never length-bounded, so the true largest legal body has
-    /// no finite expression and this fixture is a floor on it, not the maximum. That gap is exactly
-    /// what `QUERY_MAX_BODY_BYTES`' margin is for, and it is why the limit is a backstop rather
-    /// than a sum.
+    /// The dominant term is the **caller id sets**, at roughly twice the embeddings
+    /// `[measured — 2026-08-28]`: 1,286,912 bytes against 639,872, with the questions third at
+    /// 262,144. Named because both were misattributed here first — strip the id sets and the
+    /// fixture is 907,408 bytes, comfortably inside the inherited limit, so they are what carries
+    /// it past.
+    ///
+    /// **What it does NOT prove**, stated because a green here reads like completeness. This is a
+    /// floor on the largest legal body, not the maximum, and for two reasons rather than one:
+    ///
+    /// - **lengths** — a property predicate's values are counted (`MAX_PER_CANDIDATE_PROBES`) and
+    ///   never length-bounded;
+    /// - **counts** — `ReturnSpec::with`, `EdgeFilter::labels`, `ResourceFilter::doc_type` and
+    ///   `ResourceFilter::tags` are `Vec`s with no cap in either validation pass, and duplicates in
+    ///   `with` are legal (`capability.rs`'s `validate_returns` checks membership only). A
+    ///   composition repeating one admitted section ten thousand times per return validates `Ok`
+    ///   and serializes to 9.6 MB `[measured — 2026-08-28]`.
+    ///
+    /// The second is why `QUERY_MAX_BODY_BYTES` is a backstop rather than a sum — and it means the
+    /// coherence property this test states holds over the fields whose counts ARE capped, and is
+    /// backstopped rather than proved for the ones that are not. See that const's doc.
     #[test]
     fn the_largest_legal_composition_fits_inside_the_declared_body_limit() {
         let stages: Vec<StageNode> = (0..MAX_STAGES)
             .map(|i| {
                 StageNode::Act(ActInvocation {
                     name: StageName::parse(&format!("s{i}")).expect("legal stage name"),
-                    act: ActName::FindAboutAnywhere,
+                    // The one act declaring BOTH `accepts_seeds` and `accepts_bounds` for
+                    // `IdKind::Resource` (`registry.rs:359-360`), which is what lets a stage carry
+                    // the two id sets this fixture needs and still validate.
+                    act: ActName::FollowFrom,
                     intention: Some(Intention {
                         query: "x".repeat(MAX_INTENTION_QUERY_BYTES),
                         // A real normalized BGE component, so the serialized width is the one a
@@ -804,6 +842,14 @@ mod tests {
             },
             stages,
         };
+
+        // Legal FIRST. A byte count over a plan the validator refuses is a measurement of nothing.
+        assert!(
+            validate(&c).is_ok(),
+            "the fixture must be a composition this server would RUN, or its size says nothing \
+             about what the door has to accept: {:?}",
+            validate(&c).err()
+        );
 
         let bytes = serde_json::to_vec(&c)
             .expect("a composition serializes")
