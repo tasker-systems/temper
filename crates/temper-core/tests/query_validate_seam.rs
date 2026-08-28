@@ -120,6 +120,20 @@ fn the_shape_pass_emits_exactly_these_reasons() {
         ("DuplicateStageName", 1),
         ("EmptyContains", 1),
         ("EmptyPropertyKey", 1),
+        // `IntentionTooLong` and `TooManyIds` `[added — 2026-08-28]`. Two more entries clearing the
+        // same bar `TooManyStages` cleared, and clearing it the same way: each ceiling is published
+        // on the field it bounds — `max_length` on `Intention::query`, `max_items` on `IdSet::ids`
+        // — so raising either is an `openapi.json` change the drift gates see, never a
+        // per-deployment choice a stale `temper query --check` could contradict.
+        //
+        // **`TooManyIds` is not `AnchorTakesOneId`'s many arm arriving here**, which is what a
+        // reader checking this table against the seam would want to know. That arm stays in
+        // capability: it refuses a cogmap or context bound above one id because today's fragments
+        // take an `(anchor_table, anchor_id)` pair, and an `anchor_ids uuid[]` retires it. This one
+        // is a contract fact about every kind. `AnchorTakesOneId`'s count below is therefore still
+        // 1 — its zero arm — and a migration of the many arm into this module would still show up
+        // as that count going to 2.
+        ("IntentionTooLong", 1),
         ("MissingIntention", 1),
         ("MissingProvenance", 1),
         ("NoReturns", 1),
@@ -129,6 +143,7 @@ fn the_shape_pass_emits_exactly_these_reasons() {
         // It clears it — the ceiling is `max_items` on `Composition::stages`, so raising the cap
         // is an `openapi.json` change the drift gates see, not a per-deployment choice a stale
         // `temper query --check` could contradict.
+        ("TooManyIds", 1),
         ("TooManyStages", 1),
         ("UnknownAct", 1),
         ("UnknownReturnStage", 1),

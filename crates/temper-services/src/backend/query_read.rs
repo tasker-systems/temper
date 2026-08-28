@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::backend::substrate_read::{embed_query_text, QueryEmbed};
+use crate::backend::substrate_read::{embed_query_texts, QueryEmbedBatch};
 use crate::error::{ApiError, ApiResult};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::query::{
@@ -33,7 +33,7 @@ use temper_core::types::query::{
 use temper_core::types::query::{BoundTerm, CompositionTrace, InputSource, StageInputTrace};
 use temper_core::types::resource_view::{ResourceSection, ResourceView};
 use temper_substrate::readback;
-use temper_substrate::readback::query_exec::{execute, QueryRows};
+use temper_substrate::readback::query_exec::{execute, QueryRows, StageIndex};
 use temper_substrate::readback::query_plan::{compile, EMIT_FIND_WIDE, EMIT_SURVEY};
 
 /// Run a validated composition and answer in the shape `POST /api/query` publishes.
@@ -116,7 +116,13 @@ fn opaque(e: anyhow::Error) -> ApiError {
 /// fact — the shape spec ⟨7⟩ removed from `compile`'s signature, reintroduced one layer down.
 pub async fn prepare(mut c: Composition) -> Result<ValidatedComposition, Vec<PlanRefusal>> {
     if validate_shape(&c).is_empty() {
-        embed_missing_intentions(&mut c).await;
+        let phase = embed_missing_intentions(&mut c).await;
+        tracing::debug!(
+            asked = phase.asked,
+            budget_windows = phase.budget_windows,
+            embedded = phase.embedded,
+            "query embed phase"
+        );
     }
     validate(&c)
 }
@@ -182,30 +188,51 @@ fn texts_to_embed(c: &Composition) -> BTreeSet<String> {
 /// handed it to `compile` as a parameter. Neither end of that survives, so this writes INTO the
 /// plan rather than beside it.
 ///
-/// **The attempt is [`embed_query_text`], not a second one.** Its doc says why it was extracted:
-/// the query has to be embedded by the same plain `embed_text` path the corpus was ingested with,
+/// **The attempt is [`embed_query_texts`], not a second one.** `[was the singular — 2026-08-28]`
+/// The query has to be embedded by the same plain `embed_text` path the corpus was ingested with,
 /// so it lands in the stored chunks' vector space. A second implementation here would be a second
 /// answer to *"which space is this vector in"*, and `/api/query` scores would quietly stop being
-/// comparable with `/api/search`'s.
+/// comparable with `/api/search`'s — so the plural is what `/api/search`'s singular now delegates
+/// TO, rather than a sibling beside it.
+///
+/// **One attempt for the whole distinct set, under one budget.** A per-question budget is a bound
+/// that grows with the plan, which is not a bound on the request; see [`EmbedPhase`] for the
+/// observable that says so and [`embed_query_texts`] for why batching is the free half rather than
+/// the property.
 ///
 /// **A failed attempt writes nothing and refuses nothing here.** The stage keeps its `None`, and
 /// `compile` renders it as [`temper_core::types::query::RefusalReason::EmbeddingUnavailable`]
 /// against that stage — the
 /// contract's one runtime refusal, reported where a reader is already looking. That is the split
-/// [`QueryEmbed`]'s own doc names: `/api/search` collapses the outcome into a `degraded` boolean
+/// [`QueryEmbedBatch`]'s own doc names: `/api/search` collapses the outcome into a `degraded` boolean
 /// because its arms are fixed, and this surface cannot.
 ///
 /// One question that no stage can use is therefore **not** a failed composition: its siblings run,
 /// and the refusal is per stage.
-async fn embed_missing_intentions(c: &mut Composition) {
-    let mut vectors: HashMap<String, Vec<f32>> = HashMap::new();
-    for query in texts_to_embed(c) {
-        if let QueryEmbed::Embedded(vector) = embed_query_text(&query).await {
-            vectors.insert(query, vector);
-        }
+async fn embed_missing_intentions(c: &mut Composition) -> EmbedPhase {
+    let queries: Vec<String> = texts_to_embed(c).into_iter().collect();
+    let asked = queries.len();
+    if asked == 0 {
+        return EmbedPhase {
+            asked,
+            budget_windows: 0,
+            embedded: 0,
+        };
     }
+
+    // ONE attempt for the whole distinct set, so the phase costs one budget however many questions
+    // the plan asks. `embed_query_texts` carries why that is the property and batching is not.
+    let vectors: HashMap<String, Vec<f32>> = match embed_query_texts(queries.clone()).await {
+        QueryEmbedBatch::Embedded(embeddings) => queries.into_iter().zip(embeddings).collect(),
+        QueryEmbedBatch::Unavailable => HashMap::new(),
+    };
+    let phase = EmbedPhase {
+        asked,
+        budget_windows: 1,
+        embedded: vectors.len(),
+    };
     if vectors.is_empty() {
-        return;
+        return phase;
     }
 
     for node in &mut c.stages {
@@ -221,6 +248,29 @@ async fn embed_missing_intentions(c: &mut Composition) {
             }
         }
     }
+    phase
+}
+
+/// What the embed phase of one composition cost, and what it produced.
+///
+/// **`budget_windows` is the observable the bound is stated in, and it is why this is a return
+/// value rather than three tracing fields.** *"The phase is bounded once"* means exactly *"however
+/// many questions the plan asks, the phase spends one `query_embed_budget()`"* — a property with no
+/// other visible consequence, since a plan that embeds fine and a plan that embeds fine in a tenth
+/// of the time are indistinguishable from their answers. A timing assertion would witness speed,
+/// and `ceil(N/32)` ORT runs would witness throughput; neither is the bound. This is.
+///
+/// [`prepare`] records it, so the number is an operational signal as well as a testable one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EmbedPhase {
+    /// Distinct questions the composition needed the server to embed.
+    asked: usize,
+    /// Budget windows the phase spent. **One, whatever `asked` is** — or zero when there was
+    /// nothing to embed, which is not an attempt and must not be counted as one.
+    budget_windows: usize,
+    /// How many vectors landed. Zero with `budget_windows: 1` is the attempt failing, which every
+    /// stage renders as its own `EmbeddingUnavailable`.
+    embedded: usize,
 }
 
 /// Whether this node's act searches by vector. Read off the declared mechanic rather than a
@@ -331,6 +381,11 @@ struct Hydrated {
 fn assemble(v: &ValidatedComposition, rows: &QueryRows, hydrated: &Hydrated) -> QueryResponse {
     let by_name: HashMap<&str, &StageNode> =
         v.ordered().iter().map(|n| (n.name().as_str(), n)).collect();
+    // **Built once, here, for the whole response.** Everything below asks for a stage's tally by
+    // name — once per stage for the trace, again per input for the input counts, and again for the
+    // returned stages — and each of those was a scan over a list as long as the stage count. See
+    // [`StageIndex`]: the assembler is linear in stage count because this exists.
+    let rows = &rows.index();
 
     let returned = v
         .returns()
@@ -404,7 +459,7 @@ struct StageNumbers {
     extent: Extent,
 }
 
-fn stage_numbers(node: &StageNode, rows: &QueryRows) -> StageNumbers {
+fn stage_numbers(node: &StageNode, rows: &StageIndex<'_>) -> StageNumbers {
     let name = node.name().as_str();
     let tally = rows.tally(name);
     let produced = tally.map(|t| t.produced).unwrap_or(0);
@@ -509,7 +564,7 @@ fn stage_numbers(node: &StageNode, rows: &QueryRows) -> StageNumbers {
 fn stage_result(
     node: &StageNode,
     spec: &ReturnSpec,
-    rows: &QueryRows,
+    rows: &StageIndex<'_>,
     hydrated: &Hydrated,
 ) -> StageResult {
     let name = spec.stage.as_str();
@@ -631,9 +686,12 @@ fn produced_for(act: &ActName, hits: Vec<ResourceHit>) -> StageOutput {
 /// Ordered by score descending, matching the act's `orders_by`; `region_id` breaks ties so two
 /// identical runs cannot disagree about order. A trace that reorders between runs is not something
 /// a reader can diff.
-fn disclosed_regions_for(stage: &str, rows: &QueryRows) -> Vec<RegionDisclosure> {
+fn disclosed_regions_for(stage: &str, rows: &StageIndex<'_>) -> Vec<RegionDisclosure> {
     let mut seen: BTreeMap<Uuid, f64> = BTreeMap::new();
-    for h in rows.hits.iter().filter(|h| h.stage == stage) {
+    // The RAW hit order, not the ranked one: `or_insert` keeps the first score seen for a region,
+    // so reading through `hits_for` would silently change which of a region's hits supplies its
+    // score. A different answer, and not one this change was asked to make.
+    for h in rows.hits().iter().filter(|h| h.stage == stage) {
         if let (Some(region_id), Some(score)) = (h.region, h.quantity) {
             seen.entry(region_id).or_insert(score);
         }
@@ -654,7 +712,7 @@ fn disclosed_regions_for(stage: &str, rows: &QueryRows) -> Vec<RegionDisclosure>
     out
 }
 
-fn stage_trace(node: &StageNode, rows: &QueryRows) -> Option<StageTrace> {
+fn stage_trace(node: &StageNode, rows: &StageIndex<'_>) -> Option<StageTrace> {
     let n = stage_numbers(node, rows);
     Some(StageTrace {
         stage: node.name().clone(),
@@ -700,7 +758,7 @@ fn stage_trace(node: &StageNode, rows: &QueryRows) -> Option<StageTrace> {
 /// see that an `intersect` was computed against a truncated walk.
 fn extent_of(
     node: &StageNode,
-    rows: &QueryRows,
+    rows: &StageIndex<'_>,
     terms: &std::collections::BTreeMap<BoundTerm, i64>,
 ) -> Extent {
     // **A refused stage never consulted the corpus, so it cannot report completeness over it.**
@@ -797,7 +855,7 @@ fn extent_of(
 /// Returns nothing for a stage that refused: its tally is a `WHERE false` zero, byte-identical to
 /// an honest empty, so `excluded` would read as *"it removed all of them"* for a subtraction that
 /// never ran. The refusal is the disclosure in that case.
-fn subtraction_disclosure(cn: &CombineNode, rows: &QueryRows) -> Vec<NarrowedBy> {
+fn subtraction_disclosure(cn: &CombineNode, rows: &StageIndex<'_>) -> Vec<NarrowedBy> {
     if !cn.op.is_ordered() || rows.refusal(cn.name.as_str()).is_some() {
         return vec![];
     }
@@ -814,7 +872,7 @@ fn subtraction_disclosure(cn: &CombineNode, rows: &QueryRows) -> Vec<NarrowedBy>
     }]
 }
 
-fn narrowed_by(node: &StageNode, rows: &QueryRows) -> Vec<NarrowedBy> {
+fn narrowed_by(node: &StageNode, rows: &StageIndex<'_>) -> Vec<NarrowedBy> {
     let inv = match node {
         StageNode::Act(inv) => inv,
         // **A combinator discloses a narrowing only when it NARROWS, and only one of them does.**
@@ -1002,7 +1060,7 @@ mod tests {
             });
         }
 
-        let disclosed = narrowed_by(&node, &no_rows());
+        let disclosed = narrowed_by(&node, &no_rows().index());
         let pairs: Vec<(&str, &str)> = disclosed
             .iter()
             .map(|n| (n.key.as_str(), n.value.as_str()))
@@ -1039,7 +1097,7 @@ mod tests {
     #[test]
     fn a_stage_that_narrowed_by_nothing_discloses_an_empty_list() {
         let node = act_node("hits", ActName::FindExact, None);
-        assert!(narrowed_by(&node, &no_rows()).is_empty());
+        assert!(narrowed_by(&node, &no_rows().index()).is_empty());
     }
 
     fn act_node(n: &str, act: ActName, input: Option<StageInput>) -> StageNode {
@@ -2183,7 +2241,7 @@ mod tests {
             tallies: vec![tally("s1", 3, 0)],
             refusals: vec![],
         };
-        let d = disclosed_regions_for("s1", &rows);
+        let d = disclosed_regions_for("s1", &rows.index());
         assert_eq!(d.len(), 2, "one entry per region, not per resource");
         assert_eq!(d[0].region_id, best, "ordered by score, best first");
         assert_eq!(d[0].region_score, 0.91);
@@ -2208,7 +2266,7 @@ mod tests {
             tallies: vec![tally("s1", 2, 0)],
             refusals: vec![],
         };
-        let d = disclosed_regions_for("s1", &rows);
+        let d = disclosed_regions_for("s1", &rows.index());
         assert_eq!(
             d.iter().map(|r| r.region_id).collect::<Vec<_>>(),
             vec![lo, hi]
@@ -2223,7 +2281,7 @@ mod tests {
             tallies: vec![tally("w", 1, 0)],
             refusals: vec![],
         };
-        assert!(disclosed_regions_for("w", &rows).is_empty());
+        assert!(disclosed_regions_for("w", &rows.index()).is_empty());
     }
 
     /// **A negative score must survive the carrier.**
@@ -2243,7 +2301,10 @@ mod tests {
             tallies: vec![tally("s1", 1, 0)],
             refusals: vec![],
         };
-        assert_eq!(disclosed_regions_for("s1", &rows)[0].region_score, -0.57);
+        assert_eq!(
+            disclosed_regions_for("s1", &rows.index())[0].region_score,
+            -0.57
+        );
     }
 
     /// **The pair rule, asserted rather than assumed.**
@@ -2274,5 +2335,89 @@ mod tests {
         let result = &r.returned[&name("s1")];
         assert_eq!(result.disclosed_regions, trace.disclosed_regions);
         assert_eq!(result.disclosed_regions.len(), 1);
+    }
+
+    /// **The embed phase spends ONE budget window, whatever the plan asks.**
+    ///
+    /// This is the bound, stated in the only observable it has. *"Bounded once"* means the phase
+    /// costs one `query_embed_budget()` for a plan with sixty-four distinct questions exactly as it
+    /// does for one — and a plan that embeds within its budget answers identically either way, so
+    /// there is nothing in a response to assert on. The alternatives witness the wrong thing:
+    /// timing witnesses speed, and `ceil(N/32)` ORT runs witnesses throughput.
+    ///
+    /// **What it bites** `[probed — 2026-08-28]`: against the loop this replaced — one
+    /// `embed_query_text` per distinct question, each under its own budget — `budget_windows`
+    /// reports `MANY_QUESTIONS`, because that loop's bound grew with the plan and a bound that
+    /// grows with the request is not a bound on the request.
+    ///
+    /// **It asserts nothing about whether the embed SUCCEEDED**, and must not: the attempt needs
+    /// ONNX at runtime, which only the embed-gated CI job has. `budget_windows` is the count of
+    /// attempts, which is the same number whether the model loads or not — and that independence is
+    /// what lets the bound be witnessed on every machine rather than in one job.
+    #[tokio::test]
+    async fn the_embed_phase_costs_one_budget_window_whatever_the_plan_asks() {
+        // The budget is squeezed so the awaited attempt returns promptly on a machine that CAN load
+        // the model; it has no bearing on the assertion, which counts windows rather than time.
+        std::env::set_var("TEMPER_QUERY_EMBED_BUDGET_MS", "1");
+
+        const MANY_QUESTIONS: usize = 64;
+        let stages: Vec<StageNode> = (0..MANY_QUESTIONS)
+            .map(|i| {
+                StageNode::Act(ActInvocation {
+                    name: name(&format!("s{i}")),
+                    act: ActName::FindAboutAnywhere,
+                    // DISTINCT text per stage — the point of the count. Identical questions
+                    // deduplicate through `texts_to_embed`'s `BTreeSet`, which would make this
+                    // pass for the wrong reason.
+                    intention: Some(Intention {
+                        query: format!("question {i}"),
+                        embedding: None,
+                    }),
+                    inputs: vec![],
+                    terms: Default::default(),
+                    resource_filter: None,
+                    edge_filter: None,
+                    properties: vec![],
+                })
+            })
+            .collect();
+        let mut c = Composition {
+            outcome: OutcomeDeclaration { returns: vec![] },
+            stages,
+        };
+
+        let phase = embed_missing_intentions(&mut c).await;
+        assert_eq!(
+            phase.asked, MANY_QUESTIONS,
+            "the fixture must actually ask that many distinct questions, or the count below is \
+             bounded by something other than the phase"
+        );
+        assert_eq!(
+            phase.budget_windows, 1,
+            "the embed phase must spend one budget window for the whole composition; \
+             {} questions cost {}",
+            phase.asked, phase.budget_windows
+        );
+    }
+
+    /// A composition with nothing to embed makes no attempt at all — zero windows, not one.
+    ///
+    /// The counterpart the count above cannot make on its own: a `budget_windows` hard-coded to 1
+    /// would satisfy that assertion and be wrong here, and "the server tried and failed" is a
+    /// different thing to report than "there was nothing to try".
+    #[tokio::test]
+    async fn a_composition_with_no_questions_makes_no_embed_attempt() {
+        let mut c = Composition {
+            outcome: OutcomeDeclaration { returns: vec![] },
+            // `follow-from` walks edges rather than searching by vector, so its intention — which
+            // `act_node` supplies — is never a text this phase embeds.
+            stages: vec![act_node("s1", ActName::FollowFrom, None)],
+        };
+        let phase = embed_missing_intentions(&mut c).await;
+        assert_eq!(phase.asked, 0);
+        assert_eq!(
+            phase.budget_windows, 0,
+            "nothing to embed is not an attempt"
+        );
     }
 }

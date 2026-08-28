@@ -11614,7 +11614,9 @@
             "items": {
               "type": "string",
               "format": "uuid"
-            }
+            },
+            "description": "The ids themselves — at most [`MAX_ID_SET_IDS`] of them, refused as\n[`crate::types::query::disposition::RefusalReason::TooManyIds`].",
+            "maxItems": 256
           },
           "kind": {
             "$ref": "#/components/schemas/IdKind"
@@ -11940,7 +11942,9 @@
             "description": "The query vector, when the caller computed one. Mirrors `SearchParams.embedding`: the CLI\nlinks temper-ingest and embeds locally, which is faster than making the server do it; the\nruby gem, the TypeScript package and MCP structurally cannot, so the server embeds on their\nbehalf and its absence is not a refusal.\n\n**It rides beside the text it was computed FROM, and that pairing is the point.** At\ncomposition level a vector and its query could drift apart; here they cannot.\n\nThis never reaches a response: [`super::trace::CompositionTrace`] carries only `stages` and\nechoes no intention. Should a trace ever carry one, that stops being incidental and becomes\na constraint — a 768-float array must not serialize back to the caller."
           },
           "query": {
-            "type": "string"
+            "type": "string",
+            "description": "The question, in the caller's own words.\n\nAt most [`MAX_INTENTION_QUERY_BYTES`] bytes of it, refused as\n[`super::disposition::RefusalReason::IntentionTooLong`].",
+            "maxLength": 4096
           }
         }
       },
@@ -13876,6 +13880,20 @@
             "description": "The composition declares more stages than the contract admits.\n\n`[added — 2026-08-26]` The counterpart to [`RefusalReason::NoStages`]: a plan has a floor\nand now a ceiling, and the ceiling is\n[`Composition::stages`](super::composition::Composition::stages)' published `max_items`.\nEvery declared stage is executed whether or not `returns` names it, so the stage count is\nwhat a composition costs — the bound makes that cost legible up front instead of a caller\ndiscovering it in a latency number.\n\n**The repair is decomposition, not persuasion.** A question needing more stages than this\nis more than one question: ask them as separate compositions and combine the answers, which\nis also what makes each one's trace readable. The ceiling is far above anything a\nhand-authored plan reaches; a plan meeting it is usually generated in a loop.\n\nRaised in the SHAPE pass, so it costs nothing to receive — refused before any embedding or\ndatabase contact, on every door. That placement is only legal because the number is\npublished: a client refuses what the CONTRACT forbids, never what one deployment chose, and\nwidening it is a wire-contract change visible in `openapi.json`.",
             "enum": [
               "too_many_stages"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "A stage's `intention.query` is longer than the contract admits.\n\n`[added — 2026-08-28]` The second member of the declaration family\n[`RefusalReason::TooManyStages`] opened, and it is raised for the same reason in the same\nplace: the ceiling is\n[`Intention::query`](super::composition::Intention::query)' published `max_length`, so a\nclient refuses what the CONTRACT forbids rather than what one deployment chose.\n\n**What it closes is work paid for and then discarded.** The embedder tokenizes the whole\nstring and truncates the ENCODING to 512 tokens (`temper-ingest`'s `embed_batch` →\n`truncate_encoding`), so every byte past the model's window is tokenized, paid for, and\nthrown away. The cap sits far above 512 tokens of English, so no question anyone asks meets\nit.\n\n**Refused rather than truncated**, which is this contract's standing choice: a silently\nshortened question is a different question answered confidently, the substitution\n[`RefusalReason::FilterNotApplicable`]'s sites exist to prevent one field over.\n\nCounted in **bytes**, not characters. The bound exists to bound work and transfer, both of\nwhich are byte-shaped, and a char count would admit four times the bytes for a plan written\nin a non-Latin script.",
+            "enum": [
+              "intention_too_long"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "An [`IdSet`](super::id_set::IdSet) carries more ids than the contract admits.\n\n`[added — 2026-08-28]` Third member of the same family, published as `max_items` on\n[`IdSet::ids`](super::id_set::IdSet::ids) and raised in the shape pass for the same reason.\n\n**What it bounds is a product, not a list.** A caller's id set is compared against the\nvisible corpus to produce the `unusable` tally every stage discloses, so its cost is\n`|caller ids| × |visible ids|` — the same `|candidates| × |second factor|` shape\n`MAX_PER_CANDIDATE_PROBES` was measured against, with the caller choosing the second factor\nagain.\n\n**Distinct from [`RefusalReason::AnchorTakesOneId`], which is not retired by it.** That one\nrefuses a *cogmap or context* bound carrying more than one id, because today's fragments\ntake an `(anchor_table, anchor_id)` pair — a limitation of what this server has built, which\nan `anchor_ids uuid[]` would retire, and which therefore lives in the capability pass. This\none is a contract fact about every kind and cannot move without a wire change.",
+            "enum": [
+              "too_many_ids"
             ]
           },
           {

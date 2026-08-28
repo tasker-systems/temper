@@ -275,6 +275,7 @@
       "description": "The one value that crosses a stage boundary. Membership, never rank.",
       "properties": {
         "ids": {
+          "description": "The ids themselves — at most [`MAX_ID_SET_IDS`] of them, refused as\n[`crate::types::query::disposition::RefusalReason::TooManyIds`].",
           "items": {
             "format": "uuid",
             "type": "string"
@@ -317,6 +318,7 @@
           ]
         },
         "query": {
+          "description": "The question, in the caller's own words.\n\nAt most [`MAX_INTENTION_QUERY_BYTES`] bytes of it, refused as\n[`super::disposition::RefusalReason::IntentionTooLong`].",
           "type": "string"
         }
       },

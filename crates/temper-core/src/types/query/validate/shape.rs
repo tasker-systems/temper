@@ -38,11 +38,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::types::query::act::ActName;
-use crate::types::query::composition::{Composition, StageNode, MAX_STAGES};
+use crate::types::query::composition::{
+    Composition, StageNode, MAX_INTENTION_QUERY_BYTES, MAX_STAGES,
+};
 use crate::types::query::disposition::RefusalReason;
 use crate::types::query::envelope::ActInvocation;
 use crate::types::query::filter::PropertyOp;
-use crate::types::query::id_set::IdKind;
+use crate::types::query::id_set::{IdKind, MAX_ID_SET_IDS};
 use crate::types::query::stage::{StageInput, StageName, StageRelation};
 
 use super::{index_by_name, refusal, term_wire_name, PlanRefusal};
@@ -409,6 +411,28 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
         StageInput::Caller { ids, .. } => Some(ids),
         StageInput::Upstream { .. } => None,
     }) {
+        // **The set's SIZE, before anything about its kind.** `[added — 2026-08-28]` A caller's
+        // ids are compared against what this principal can see in order to produce the `unusable`
+        // number every stage discloses, so the work is `|caller ids| × |visible ids|` and the
+        // caller chooses the first factor. [`MAX_ID_SET_IDS`] carries the arithmetic.
+        //
+        // Shape, and legal there for the same reason the stage cap is: the ceiling is `max_items`
+        // on `IdSet::ids`, so it is a fact about the CONTRACT and a client may raise it against a
+        // server it does not share a binary with. It does not retire the anchor-cardinality arm
+        // below, nor its capability sibling — those are about what today's fragments can take.
+        if ids.ids.len() > MAX_ID_SET_IDS {
+            errs.push(refusal(
+                Some(name),
+                RefusalReason::TooManyIds,
+                format!(
+                    "an id set may carry at most {MAX_ID_SET_IDS} ids; this stage supplied {}. \
+                     Every id is checked against what you can see, so the set's size is the \
+                     stage's cost — narrow it, or ask in more than one composition",
+                    ids.ids.len()
+                ),
+            ));
+        }
+
         let kind = &ids.kind;
         if *kind == IdKind::Region && ids.provenance.is_none() {
             errs.push(refusal(
@@ -517,6 +541,37 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
     // the contract, not something this server has yet to build. `find-exact`'s query text becomes
     // `p_query` and has no other source, and the `find-about-*` acts refuse rather than let the
     // server invent the question. No server builds its way out of either.
+    // **The question's LENGTH, checked wherever the field appears.** `[added — 2026-08-28]` It is
+    // not gated on the act, and that follows from where the ceiling is published rather than being
+    // a separate choice: `max_length` sits on `Intention::query`, so it is a property of the FIELD
+    // on the published contract, not of what any act does with the field. Gating it on the find
+    // acts would leave the contract saying one thing and the door doing another.
+    //
+    // What it closes is work paid for and thrown away — the embedder tokenizes the whole string
+    // and truncates the ENCODING to 512 tokens, so every byte past the model's window is
+    // tokenized at the caller's request and discarded. [`MAX_INTENTION_QUERY_BYTES`] carries the
+    // choice of number, and why the answer is a refusal rather than a truncation.
+    //
+    // **Bytes, not characters, and the published bound is a character count.** The divergence is
+    // in the safe direction — a UTF-8 string is never fewer bytes than characters, so the contract
+    // promises less than this admits and a stale client cannot refuse a plan a server would run.
+    // Recorded on the field itself.
+    if let Some(intention) = inv.intention.as_ref() {
+        let bytes = intention.query.len();
+        if bytes > MAX_INTENTION_QUERY_BYTES {
+            errs.push(refusal(
+                Some(name),
+                RefusalReason::IntentionTooLong,
+                format!(
+                    "a question may carry at most {MAX_INTENTION_QUERY_BYTES} bytes; this stage \
+                     supplied {bytes}. The embedder reads the first 512 tokens and discards the \
+                     rest, so the excess is paid for and never used — shorten the question, or \
+                     ask the parts as separate stages"
+                ),
+            ));
+        }
+    }
+
     if matches!(
         inv.act,
         ActName::FindExact

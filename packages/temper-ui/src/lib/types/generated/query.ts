@@ -502,7 +502,12 @@ export type IdSet = { kind: IdKind,
 /**
  * Required for `region`; absent for every other kind today.
  */
-provenance: IdProvenance | null, ids: Array<string>, };
+provenance: IdProvenance | null, 
+/**
+ * The ids themselves — at most [`MAX_ID_SET_IDS`] of them, refused as
+ * [`crate::types::query::disposition::RefusalReason::TooManyIds`].
+ */
+ids: Array<string>, };
 
 /**
  * Where a stage's input set came from: an earlier stage, or the caller.
@@ -543,7 +548,14 @@ export type InputSource = { "source": "upstream", stage: StageName, } | { "sourc
  * [`super::envelope::StageResult`] derives neither, one derive milder: equality on a vector of
  * floats is well-defined enough for a test, total equality is not.
  */
-export type Intention = { query: string, 
+export type Intention = { 
+/**
+ * The question, in the caller's own words.
+ *
+ * At most [`MAX_INTENTION_QUERY_BYTES`] bytes of it, refused as
+ * [`super::disposition::RefusalReason::IntentionTooLong`].
+ */
+query: string, 
 /**
  * The query vector, when the caller computed one. Mirrors `SearchParams.embedding`: the CLI
  * links temper-ingest and embeds locally, which is faster than making the server do it; the
@@ -730,7 +742,7 @@ trace: CompositionTrace, };
  * change. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,
  * matched exhaustively.
  */
-export type RefusalReason = "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | string;
+export type RefusalReason = "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "intention_too_long" | "too_many_ids" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | string;
 
 /**
  * One region a `survey` stage matched, and the score it matched at.

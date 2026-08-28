@@ -470,6 +470,16 @@
           "type": "string"
         },
         {
+          "const": "intention_too_long",
+          "description": "A stage's `intention.query` is longer than the contract admits.\n\n`[added — 2026-08-28]` The second member of the declaration family\n[`RefusalReason::TooManyStages`] opened, and it is raised for the same reason in the same\nplace: the ceiling is\n[`Intention::query`](super::composition::Intention::query)' published `max_length`, so a\nclient refuses what the CONTRACT forbids rather than what one deployment chose.\n\n**What it closes is work paid for and then discarded.** The embedder tokenizes the whole\nstring and truncates the ENCODING to 512 tokens (`temper-ingest`'s `embed_batch` →\n`truncate_encoding`), so every byte past the model's window is tokenized, paid for, and\nthrown away. The cap sits far above 512 tokens of English, so no question anyone asks meets\nit.\n\n**Refused rather than truncated**, which is this contract's standing choice: a silently\nshortened question is a different question answered confidently, the substitution\n[`RefusalReason::FilterNotApplicable`]'s sites exist to prevent one field over.\n\nCounted in **bytes**, not characters. The bound exists to bound work and transfer, both of\nwhich are byte-shaped, and a char count would admit four times the bytes for a plan written\nin a non-Latin script.",
+          "type": "string"
+        },
+        {
+          "const": "too_many_ids",
+          "description": "An [`IdSet`](super::id_set::IdSet) carries more ids than the contract admits.\n\n`[added — 2026-08-28]` Third member of the same family, published as `max_items` on\n[`IdSet::ids`](super::id_set::IdSet::ids) and raised in the shape pass for the same reason.\n\n**What it bounds is a product, not a list.** A caller's id set is compared against the\nvisible corpus to produce the `unusable` tally every stage discloses, so its cost is\n`|caller ids| × |visible ids|` — the same `|candidates| × |second factor|` shape\n`MAX_PER_CANDIDATE_PROBES` was measured against, with the caller choosing the second factor\nagain.\n\n**Distinct from [`RefusalReason::AnchorTakesOneId`], which is not retired by it.** That one\nrefuses a *cogmap or context* bound carrying more than one id, because today's fragments\ntake an `(anchor_table, anchor_id)` pair — a limitation of what this server has built, which\nan `anchor_ids uuid[]` would retire, and which therefore lives in the capability pass. This\none is a contract fact about every kind and cannot move without a wire change.",
+          "type": "string"
+        },
+        {
           "const": "no_returns",
           "description": "The composition returns no stages, so it answers nothing.",
           "type": "string"

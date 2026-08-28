@@ -314,6 +314,28 @@ sql_relations_current() {
 # act framing is that a narrowing expressed as a SET needs a new function rather than new parameters
 # on the shipped find fragments, which would have been shape-breaking and halted the deploy.
 #
+# REVIEWED 2026-08-28 (`20260828000040`, the follow-from depth clamp, task
+# 01a035f1-0614-7483-9043-6d96aa181158) — the SQL-file set grows by one; the function-NAME set does
+# not, and neither does the Rust half.
+#
+#   VERDICT: unchanged. `query_follow_from` still computes `resources_visible_to(p_principal)` once
+#     and hands the array down; this migration does not touch the wrapper, `p_visible_ids`, or the
+#     `admitted` CTE that consumes it.
+#   EMITTER: unchanged. `emit_ungated_core_call`'s `CoreCall::Walk` arm still writes `VISIBLE_IDS`
+#     itself rather than taking it as a field.
+#   RESIDUE: unchanged and accepted.
+#
+#   BODY-ONLY, and the diff against `20260817000020`'s body is **one predicate**: the recursive
+#   arm's `WHERE w.hop < p_depth` becomes `WHERE w.hop < LEAST(p_depth, 3)`. Nothing else in the
+#   84-line body moves, which is what makes the three answers above carryable rather than re-derived.
+#
+#   IT TIGHTENS A RECURSION BOUND AND TOUCHES NO CANDIDATE SET, which is the direction that cannot
+#   widen: `admitted` is upstream of `adj`, `adj` is upstream of `undirected`, and the clamp sits on
+#   the join predicate below all three. There is no reading of it under which a node outside
+#   `p_visible_ids` becomes reachable — the clamp can only stop the walk sooner. The shape a reviewer
+#   should look for in a future edit is the opposite one: a change that moved the depth predicate
+#   ABOVE `admitted`, or replaced `LEAST` with `GREATEST`, which would widen rather than clamp.
+
 # REVIEWED 2026-08-15 (`20260815000030`, the element relation and the §7 tags ruling, task
 # 01a00502) — the SQL-file set grows by one; the function-NAME set does not, and neither does the
 # Rust half.
@@ -484,6 +506,7 @@ read -r -d '' SQL_FILES_BASELINE <<'EOF' || true
 20260817000020_follow_from_offset.sql
 20260820000010_survey_honors_funnel_width.sql
 20260825000020_staleness_member_gate.sql
+20260828000040_follow_from_depth_clamp.sql
 EOF
 
 # ── THE RELATION WATCH — derived from what the cores READ, not what names them ──

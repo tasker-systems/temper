@@ -44,6 +44,21 @@ use crate::types::resource_view::ResourceSection;
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct Intention {
+    /// The question, in the caller's own words.
+    ///
+    /// At most [`MAX_INTENTION_QUERY_BYTES`] bytes of it, refused as
+    /// [`super::disposition::RefusalReason::IntentionTooLong`].
+    // `max_length` is load-bearing for the same reason `max_items` is on `stages` below: it is
+    // what makes the refusal legal in the SHAPE pass, where a client may raise it against a
+    // server it does not share a binary with. See the comment on that field.
+    //
+    // **`max_length` counts CHARACTERS in JSON Schema and this cap counts BYTES**, and the two
+    // agree only on ASCII. The divergence is in the safe direction and is stated rather than
+    // papered over: a plan the contract admits on its character count can still be refused on its
+    // byte count, never the reverse, because a UTF-8 string is at least as many bytes as
+    // characters. Publishing the byte bound as a character bound therefore promises LESS than the
+    // server admits, which is the direction a stale client may be wrong in.
+    #[cfg_attr(feature = "web-api", schema(max_length = 4096))]
     pub query: String,
     /// The query vector, when the caller computed one. Mirrors `SearchParams.embedding`: the CLI
     /// links temper-ingest and embeds locally, which is faster than making the server do it; the
@@ -354,6 +369,27 @@ pub struct Composition {
 /// measurement behind it — widening it is a contract change, which is where the argument for a
 /// different number should be made.
 pub const MAX_STAGES: usize = 64;
+
+/// The most bytes one stage's question may carry.
+///
+/// # What it bounds is work paid for and then discarded
+///
+/// The embedder tokenizes the WHOLE string and truncates the resulting encoding to the model's
+/// 512-token window (`temper-ingest::embed`'s `embed_batch` → `truncate_encoding`). So every byte
+/// past that window is tokenized at the caller's request and thrown away — the caller chooses the
+/// cost and receives none of it.
+///
+/// # Chosen against the window it feeds, in both directions
+///
+/// 512 tokens of English is roughly 2 KB. 4 KB is comfortably above that — a question long enough
+/// to be fully consumed by the model, with room for a script that tokenizes less efficiently — and
+/// far below the point where tokenizing the excess is interesting. Same method as [`MAX_STAGES`]
+/// and `MAX_PER_CANDIDATE_PREDICATES`: far above the question, far below the harm.
+///
+/// **Refused rather than truncated.** Shortening a question silently would answer a different
+/// question than the one asked, which is the substitution this contract keeps closing — and unlike
+/// the model's own truncation, a refusal is something the caller can see and repair.
+pub const MAX_INTENTION_QUERY_BYTES: usize = 4096;
 
 #[cfg(test)]
 mod tests {

@@ -56,31 +56,35 @@ class RefusalReason(BaseModel):
     # data type: str
     oneof_schema_14_validator: Optional[StrictStr] = Field(default=None, description="The composition declares more stages than the contract admits.  `[added — 2026-08-26]` The counterpart to [`RefusalReason::NoStages`]: a plan has a floor and now a ceiling, and the ceiling is [`Composition::stages`](super::composition::Composition::stages)' published `max_items`. Every declared stage is executed whether or not `returns` names it, so the stage count is what a composition costs — the bound makes that cost legible up front instead of a caller discovering it in a latency number.  **The repair is decomposition, not persuasion.** A question needing more stages than this is more than one question: ask them as separate compositions and combine the answers, which is also what makes each one's trace readable. The ceiling is far above anything a hand-authored plan reaches; a plan meeting it is usually generated in a loop.  Raised in the SHAPE pass, so it costs nothing to receive — refused before any embedding or database contact, on every door. That placement is only legal because the number is published: a client refuses what the CONTRACT forbids, never what one deployment chose, and widening it is a wire-contract change visible in `openapi.json`.")
     # data type: str
-    oneof_schema_15_validator: Optional[StrictStr] = Field(default=None, description="The composition returns no stages, so it answers nothing.")
+    oneof_schema_15_validator: Optional[StrictStr] = Field(default=None, description="A stage's `intention.query` is longer than the contract admits.  `[added — 2026-08-28]` The second member of the declaration family [`RefusalReason::TooManyStages`] opened, and it is raised for the same reason in the same place: the ceiling is [`Intention::query`](super::composition::Intention::query)' published `max_length`, so a client refuses what the CONTRACT forbids rather than what one deployment chose.  **What it closes is work paid for and then discarded.** The embedder tokenizes the whole string and truncates the ENCODING to 512 tokens (`temper-ingest`'s `embed_batch` → `truncate_encoding`), so every byte past the model's window is tokenized, paid for, and thrown away. The cap sits far above 512 tokens of English, so no question anyone asks meets it.  **Refused rather than truncated**, which is this contract's standing choice: a silently shortened question is a different question answered confidently, the substitution [`RefusalReason::FilterNotApplicable`]'s sites exist to prevent one field over.  Counted in **bytes**, not characters. The bound exists to bound work and transfer, both of which are byte-shaped, and a char count would admit four times the bytes for a plan written in a non-Latin script.")
     # data type: str
-    oneof_schema_16_validator: Optional[StrictStr] = Field(default=None, description="Two stages share a name.")
+    oneof_schema_16_validator: Optional[StrictStr] = Field(default=None, description="An [`IdSet`](super::id_set::IdSet) carries more ids than the contract admits.  `[added — 2026-08-28]` Third member of the same family, published as `max_items` on [`IdSet::ids`](super::id_set::IdSet::ids) and raised in the shape pass for the same reason.  **What it bounds is a product, not a list.** A caller's id set is compared against the visible corpus to produce the `unusable` tally every stage discloses, so its cost is `|caller ids| × |visible ids|` — the same `|candidates| × |second factor|` shape `MAX_PER_CANDIDATE_PROBES` was measured against, with the caller choosing the second factor again.  **Distinct from [`RefusalReason::AnchorTakesOneId`], which is not retired by it.** That one refuses a *cogmap or context* bound carrying more than one id, because today's fragments take an `(anchor_table, anchor_id)` pair — a limitation of what this server has built, which an `anchor_ids uuid[]` would retire, and which therefore lives in the capability pass. This one is a contract fact about every kind and cannot move without a wire change.")
     # data type: str
-    oneof_schema_17_validator: Optional[StrictStr] = Field(default=None, description="A set combination needs two or more inputs.")
+    oneof_schema_17_validator: Optional[StrictStr] = Field(default=None, description="The composition returns no stages, so it answers nothing.")
     # data type: str
-    oneof_schema_18_validator: Optional[StrictStr] = Field(default=None, description="A stage references a stage that was never declared.")
+    oneof_schema_18_validator: Optional[StrictStr] = Field(default=None, description="Two stages share a name.")
     # data type: str
-    oneof_schema_19_validator: Optional[StrictStr] = Field(default=None, description="A stage is named more than once in `returns`.")
+    oneof_schema_19_validator: Optional[StrictStr] = Field(default=None, description="A set combination needs two or more inputs.")
     # data type: str
-    oneof_schema_20_validator: Optional[StrictStr] = Field(default=None, description="A stage carries two inputs in the same relation — two seeds, or two bounds.  `[added — 2026-08-14]` with the widening of `ActInvocation::inputs` from one slot to a list. The list exists so a stage can hold a seed **and** a bound at once; it is deliberately not a general fan-in `[decided — 2026-08-14, Pete]`.  **Refused rather than unioned, and that is the whole point of the variant.** Merging two seed sets is `CombineOp::Union` — an existing stage the caller declares, that appears in the trace, and whose `produced` count a reader can see. Doing it implicitly inside one act's input list would be the same merge with no stage, no tally and no disclosure, which is the silent-substitution class this contract keeps closing.  It lives in the SHAPE pass: a duplicate relation is malformed whatever the act, so no declaration is consulted to decide it.")
+    oneof_schema_20_validator: Optional[StrictStr] = Field(default=None, description="A stage references a stage that was never declared.")
     # data type: str
-    oneof_schema_21_validator: Optional[StrictStr] = Field(default=None, description="A returned stage's rows have no single ordering quantity to score them.  `[renamed from CombinatorNotReturnable — 2026-08-14]` The old name pinned one CAUSE — a combinator, whose rows come from two or more acts — when the rule is about the consequence, and a second cause arrived: `find-resources-with` selects a set and orders nothing, so a stage running it has no quantity either. Two reasons for one consequence would make a client's handling depend on which route produced it, when the repair is the same: return something that ranks, and use this stage as its input.")
+    oneof_schema_21_validator: Optional[StrictStr] = Field(default=None, description="A stage is named more than once in `returns`.")
     # data type: str
-    oneof_schema_22_validator: Optional[StrictStr] = Field(default=None, description="`returns` names a stage that was never declared.")
+    oneof_schema_22_validator: Optional[StrictStr] = Field(default=None, description="A stage carries two inputs in the same relation — two seeds, or two bounds.  `[added — 2026-08-14]` with the widening of `ActInvocation::inputs` from one slot to a list. The list exists so a stage can hold a seed **and** a bound at once; it is deliberately not a general fan-in `[decided — 2026-08-14, Pete]`.  **Refused rather than unioned, and that is the whole point of the variant.** Merging two seed sets is `CombineOp::Union` — an existing stage the caller declares, that appears in the trace, and whose `produced` count a reader can see. Doing it implicitly inside one act's input list would be the same merge with no stage, no tally and no disclosure, which is the silent-substitution class this contract keeps closing.  It lives in the SHAPE pass: a duplicate relation is malformed whatever the act, so no declaration is consulted to decide it.")
     # data type: str
-    oneof_schema_23_validator: Optional[StrictStr] = Field(default=None, description="The composition contains a cycle; a query DAG must be acyclic.")
+    oneof_schema_23_validator: Optional[StrictStr] = Field(default=None, description="A returned stage's rows have no single ordering quantity to score them.  `[renamed from CombinatorNotReturnable — 2026-08-14]` The old name pinned one CAUSE — a combinator, whose rows come from two or more acts — when the rule is about the consequence, and a second cause arrived: `find-resources-with` selects a set and orders nothing, so a stage running it has no quantity either. Two reasons for one consequence would make a client's handling depend on which route produced it, when the repair is the same: return something that ranks, and use this stage as its input.")
     # data type: str
-    oneof_schema_24_validator: Optional[StrictStr] = Field(default=None, description="The `act` name is not one this server declares. `ActName` is open, so this is reachable.")
+    oneof_schema_24_validator: Optional[StrictStr] = Field(default=None, description="`returns` names a stage that was never declared.")
     # data type: str
-    oneof_schema_25_validator: Optional[StrictStr] = Field(default=None, description="A property predicate was supplied with no key.")
+    oneof_schema_25_validator: Optional[StrictStr] = Field(default=None, description="The composition contains a cycle; a query DAG must be acyclic.")
     # data type: str
-    oneof_schema_26_validator: Optional[StrictStr] = Field(default=None, description="A `contains` predicate was supplied with no values, so it narrows nothing.")
+    oneof_schema_26_validator: Optional[StrictStr] = Field(default=None, description="The `act` name is not one this server declares. `ActName` is open, so this is reachable.")
     # data type: str
-    oneof_schema_27_validator: Optional[StrictStr] = Field(default=None, description="A reason outside the declared vocabulary.  `[corrected — 2026-08-09]` This said \"Never constructed by this crate — only by deserializing a producer newer than this consumer.\" **That was false at the time**: `validate` constructed it for twelve topology and vocabulary refusals, kebab-case, while every declared variant was snake_case — a client's vocabulary was two conventions at once. Found in review; recorded rather than repaired then, because promoting twelve strings to variants is a wire change and nothing consumed them yet — `/api/query` did not exist, so the change was free and the door was the moment it would stop being free.  `[promoted — 2026-08-12]` That moment arrived first: the twelve are now the variants above, and this crate no longer constructs `Other` for anything. What `Other` is FOR now is exactly what its original doc said — a reason from a producer newer than this consumer, one this binary has never been taught to name. Deserializing it never fails; `is_known` answers `false`; a caller degrades gracefully instead of losing the whole response to a parse error.")
+    oneof_schema_27_validator: Optional[StrictStr] = Field(default=None, description="A property predicate was supplied with no key.")
+    # data type: str
+    oneof_schema_28_validator: Optional[StrictStr] = Field(default=None, description="A `contains` predicate was supplied with no values, so it narrows nothing.")
+    # data type: str
+    oneof_schema_29_validator: Optional[StrictStr] = Field(default=None, description="A reason outside the declared vocabulary.  `[corrected — 2026-08-09]` This said \"Never constructed by this crate — only by deserializing a producer newer than this consumer.\" **That was false at the time**: `validate` constructed it for twelve topology and vocabulary refusals, kebab-case, while every declared variant was snake_case — a client's vocabulary was two conventions at once. Found in review; recorded rather than repaired then, because promoting twelve strings to variants is a wire change and nothing consumed them yet — `/api/query` did not exist, so the change was free and the door was the moment it would stop being free.  `[promoted — 2026-08-12]` That moment arrived first: the twelve are now the variants above, and this crate no longer constructs `Other` for anything. What `Other` is FOR now is exactly what its original doc said — a reason from a producer newer than this consumer, one this binary has never been taught to name. Deserializing it never fails; `is_known` answers `false`; a caller degrades gracefully instead of losing the whole response to a parse error.")
     actual_instance: Optional[Union[str]] = None
     one_of_schemas: Set[str] = { "str" }
 
@@ -264,6 +268,18 @@ class RefusalReason(BaseModel):
         # validate data type: str
         try:
             instance.oneof_schema_27_validator = v
+            match += 1
+        except (ValidationError, ValueError) as e:
+            error_messages.append(str(e))
+        # validate data type: str
+        try:
+            instance.oneof_schema_28_validator = v
+            match += 1
+        except (ValidationError, ValueError) as e:
+            error_messages.append(str(e))
+        # validate data type: str
+        try:
+            instance.oneof_schema_29_validator = v
             match += 1
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))
@@ -527,6 +543,24 @@ class RefusalReason(BaseModel):
             instance.oneof_schema_27_validator = json.loads(json_str)
             # assign value to actual_instance
             instance.actual_instance = instance.oneof_schema_27_validator
+            match += 1
+        except (ValidationError, ValueError) as e:
+            error_messages.append(str(e))
+        # deserialize data into str
+        try:
+            # validation
+            instance.oneof_schema_28_validator = json.loads(json_str)
+            # assign value to actual_instance
+            instance.actual_instance = instance.oneof_schema_28_validator
+            match += 1
+        except (ValidationError, ValueError) as e:
+            error_messages.append(str(e))
+        # deserialize data into str
+        try:
+            # validation
+            instance.oneof_schema_29_validator = json.loads(json_str)
+            # assign value to actual_instance
+            instance.actual_instance = instance.oneof_schema_29_validator
             match += 1
         except (ValidationError, ValueError) as e:
             error_messages.append(str(e))

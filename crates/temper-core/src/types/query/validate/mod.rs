@@ -365,13 +365,14 @@ mod tests {
     use crate::types::graph::EdgeKind;
     use crate::types::ids::CogmapId;
     use crate::types::query::composition::{
-        CombineNode, CombineOp, Composition, Intention, OutcomeDeclaration, MAX_STAGES,
+        CombineNode, CombineOp, Composition, Intention, OutcomeDeclaration,
+        MAX_INTENTION_QUERY_BYTES, MAX_STAGES,
     };
     use crate::types::query::envelope::ActInvocation;
     use crate::types::query::filter::{
         EdgeFilter, FacetPredicate, PropertyOp, PropertyPredicate, ResourceFilter,
     };
-    use crate::types::query::id_set::{IdKind, IdProvenance, IdSet};
+    use crate::types::query::id_set::{IdKind, IdProvenance, IdSet, MAX_ID_SET_IDS};
     use crate::types::query::scalars::BoundTerm;
     use uuid::Uuid;
     // Named here rather than reached through `super::*`: the checks that read them moved into
@@ -657,6 +658,38 @@ mod tests {
                 ids: (0..n).map(|_| uuid::Uuid::now_v7()).collect(),
             },
         }
+    }
+
+    /// A caller-supplied RESOURCE bound of a chosen size — the size is the subject, so it is a
+    /// parameter. Distinct from [`anchor_ids`], which exists for the anchor kinds whose
+    /// CARDINALITY is refused for an unrelated reason; using that one here would confound the two.
+    fn sized_resource_ids(n: usize) -> StageInput {
+        StageInput::Caller {
+            relation: StageRelation::Bound,
+            ids: IdSet {
+                kind: IdKind::Resource,
+                provenance: None,
+                ids: (0..n).map(|_| uuid::Uuid::now_v7()).collect(),
+            },
+        }
+    }
+
+    /// A find act carrying a question of the caller's choosing — for the tests whose subject is the
+    /// question's LENGTH. [`act`] supplies a one-character question, which cannot express these.
+    fn act_asking(name: &str, a: ActName, query: &str) -> StageNode {
+        StageNode::Act(ActInvocation {
+            name: StageName::parse(name).unwrap(),
+            act: a,
+            intention: Some(Intention {
+                query: query.to_string(),
+                embedding: None,
+            }),
+            inputs: vec![],
+            terms: BTreeMap::new(),
+            resource_filter: None,
+            edge_filter: None,
+            properties: vec![],
+        })
     }
 
     fn caller_ids_no_provenance(kind: IdKind) -> StageInput {
@@ -1180,6 +1213,173 @@ mod tests {
             .and_then(serde_json::Value::as_u64)
             .expect("`Composition::stages` publishes a `maxItems`");
         assert_eq!(published as usize, MAX_STAGES);
+    }
+
+    // ── The other two declaration bounds — same family, same three assertions each ──────────────
+    //
+    // `[added — 2026-08-28]` `TooManyStages` opened a family, and these two join it: a bound on
+    // what a request may DECLARE is published on the contract and refused in the shape pass, so a
+    // caller learns it costs nothing and learns it offline. Each gets the same trio the stage cap
+    // has — over, exactly at, and published-equals-enforced — because the middle one is what
+    // catches an off-by-one in the direction that refuses work the contract calls legal.
+
+    /// A question longer than the contract admits is refused, and the refusal names the stage.
+    ///
+    /// Per-stage rather than composition-level, unlike the stage cap: the excess belongs to the
+    /// stage that declared it, and a plan with two long questions should be repairable in one pass.
+    #[test]
+    fn a_question_above_the_byte_cap_is_refused() {
+        let long = "x".repeat(MAX_INTENTION_QUERY_BYTES + 1);
+        let c = plan_with_intention(
+            vec![act_asking("s", ActName::FindAboutAnywhere, &long)],
+            vec!["s"],
+        );
+        let errs = validate(&c).unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| e.reason == RefusalReason::IntentionTooLong
+                    && e.stage.as_ref().is_some_and(|n| n.as_str() == "s")),
+            "got: {errs:?}"
+        );
+    }
+
+    /// Exactly at the cap is admitted. The bound is `>`, not `>=`.
+    #[test]
+    fn a_question_exactly_at_the_byte_cap_is_not_refused_for_its_length() {
+        let at = "x".repeat(MAX_INTENTION_QUERY_BYTES);
+        let c = plan_with_intention(
+            vec![act_asking("s", ActName::FindAboutAnywhere, &at)],
+            vec!["s"],
+        );
+        let refused = validate(&c)
+            .err()
+            .into_iter()
+            .flatten()
+            .filter(|e| e.reason == RefusalReason::IntentionTooLong)
+            .count();
+        assert_eq!(refused, 0, "MAX_INTENTION_QUERY_BYTES bytes is at the cap");
+    }
+
+    /// **The cap counts bytes; the contract publishes a character count.** Held explicitly rather
+    /// than left as a comment, because the two agree only on ASCII and a reader who assumes they
+    /// are the same number would be wrong in a way nothing else here would catch.
+    ///
+    /// The direction is what makes the divergence safe: a multi-byte question can be refused while
+    /// still inside the published `maxLength`, never the reverse — so a stale client that trusts
+    /// the contract under-refuses, which is the only direction the shape pass tolerates.
+    #[test]
+    fn the_byte_cap_binds_before_the_published_character_count_on_multibyte_text() {
+        // Three bytes each, so `MAX_INTENTION_QUERY_BYTES / 3 + 1` characters is over the byte cap
+        // while being far under the same number of characters.
+        let multibyte = "\u{4f60}".repeat(MAX_INTENTION_QUERY_BYTES / 3 + 1);
+        assert!(
+            multibyte.chars().count() <= MAX_INTENTION_QUERY_BYTES,
+            "the fixture must be legal by the PUBLISHED character count, or it proves nothing"
+        );
+        assert!(multibyte.len() > MAX_INTENTION_QUERY_BYTES);
+        let c = plan_with_intention(
+            vec![act_asking("s", ActName::FindAboutAnywhere, &multibyte)],
+            vec!["s"],
+        );
+        let errs = validate(&c).unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| e.reason == RefusalReason::IntentionTooLong),
+            "got: {errs:?}"
+        );
+    }
+
+    /// The cap the shape pass enforces and the length the contract publishes are one number.
+    #[cfg(feature = "web-api")]
+    #[test]
+    fn the_published_question_length_is_the_enforced_one() {
+        use utoipa::PartialSchema;
+        let schema = serde_json::to_value(Intention::schema()).expect("Intention has a schema");
+        let published = schema
+            .pointer("/properties/query/maxLength")
+            .and_then(serde_json::Value::as_u64)
+            .expect("`Intention::query` publishes a `maxLength`");
+        assert_eq!(published as usize, MAX_INTENTION_QUERY_BYTES);
+    }
+
+    /// An id set larger than the contract admits is refused, and the refusal names the stage.
+    #[test]
+    fn an_id_set_above_the_cap_is_refused() {
+        let c = plan_with_intention(
+            vec![act(
+                "s",
+                ActName::FindExact,
+                Some(sized_resource_ids(MAX_ID_SET_IDS + 1)),
+            )],
+            vec!["s"],
+        );
+        let errs = validate(&c).unwrap_err();
+        assert!(
+            errs.iter().any(|e| e.reason == RefusalReason::TooManyIds
+                && e.stage.as_ref().is_some_and(|n| n.as_str() == "s")),
+            "got: {errs:?}"
+        );
+    }
+
+    /// Exactly at the cap is admitted. The bound is `>`, not `>=`.
+    #[test]
+    fn an_id_set_exactly_at_the_cap_is_not_refused_for_its_size() {
+        let c = plan_with_intention(
+            vec![act(
+                "s",
+                ActName::FindExact,
+                Some(sized_resource_ids(MAX_ID_SET_IDS)),
+            )],
+            vec!["s"],
+        );
+        let refused = validate(&c)
+            .err()
+            .into_iter()
+            .flatten()
+            .filter(|e| e.reason == RefusalReason::TooManyIds)
+            .count();
+        assert_eq!(refused, 0, "MAX_ID_SET_IDS ids is at the cap, not over");
+    }
+
+    /// **The id cap does not retire the anchor's cardinality arm, and does not swallow it.**
+    ///
+    /// The two answer different questions and a caller must be told the right one: a two-id cogmap
+    /// bound is *inside* the id cap and still refused, because today's fragments take an
+    /// `(anchor_table, anchor_id)` pair. Were the anchor arm ever folded into this cap, that plan
+    /// would validate and then fail somewhere with no vocabulary for why.
+    #[test]
+    fn a_small_anchor_set_still_meets_the_cardinality_arm_and_not_the_size_cap() {
+        let c = plan_with_intention(
+            vec![act(
+                "s",
+                ActName::FindAboutWithin,
+                Some(anchor_ids(IdKind::Cogmap, 2)),
+            )],
+            vec!["s"],
+        );
+        let errs = validate(&c).unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| e.reason == RefusalReason::AnchorTakesOneId),
+            "got: {errs:?}"
+        );
+        assert!(
+            !errs.iter().any(|e| e.reason == RefusalReason::TooManyIds),
+            "two ids is nowhere near the size cap; got: {errs:?}"
+        );
+    }
+
+    /// The cap the shape pass enforces and the count the contract publishes are one number.
+    #[cfg(feature = "web-api")]
+    #[test]
+    fn the_published_id_set_ceiling_is_the_enforced_one() {
+        use utoipa::PartialSchema;
+        let schema = serde_json::to_value(IdSet::schema()).expect("IdSet has a schema");
+        let published = schema
+            .pointer("/properties/ids/maxItems")
+            .and_then(serde_json::Value::as_u64)
+            .expect("`IdSet::ids` publishes a `maxItems`");
+        assert_eq!(published as usize, MAX_ID_SET_IDS);
     }
 
     /// A composition with no returns answers nothing — the contract's `returns: minItems 1`,

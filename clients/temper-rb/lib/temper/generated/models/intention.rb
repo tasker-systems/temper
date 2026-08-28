@@ -19,6 +19,7 @@ module Temper::Generated
     # The query vector, when the caller computed one. Mirrors `SearchParams.embedding`: the CLI links temper-ingest and embeds locally, which is faster than making the server do it; the ruby gem, the TypeScript package and MCP structurally cannot, so the server embeds on their behalf and its absence is not a refusal.  **It rides beside the text it was computed FROM, and that pairing is the point.** At composition level a vector and its query could drift apart; here they cannot.  This never reaches a response: [`super::trace::CompositionTrace`] carries only `stages` and echoes no intention. Should a trace ever carry one, that stops being incidental and becomes a constraint — a 768-float array must not serialize back to the caller.
     attr_accessor :embedding
 
+    # The question, in the caller's own words.  At most [`MAX_INTENTION_QUERY_BYTES`] bytes of it, refused as [`super::disposition::RefusalReason::IntentionTooLong`].
     attr_accessor :query
 
     # Attribute mapping from ruby-style variable name to JSON key.
@@ -92,6 +93,10 @@ module Temper::Generated
         invalid_properties.push('invalid value for "query", query cannot be nil.')
       end
 
+      if @query.to_s.length > 4096
+        invalid_properties.push('invalid value for "query", the character length must be smaller than or equal to 4096.')
+      end
+
       invalid_properties
     end
 
@@ -100,6 +105,7 @@ module Temper::Generated
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
       return false if @query.nil?
+      return false if @query.to_s.length > 4096
       true
     end
 
@@ -108,6 +114,10 @@ module Temper::Generated
     def query=(query)
       if query.nil?
         fail ArgumentError, 'query cannot be nil'
+      end
+
+      if query.to_s.length > 4096
+        fail ArgumentError, 'invalid value for "query", the character length must be smaller than or equal to 4096.'
       end
 
       @query = query

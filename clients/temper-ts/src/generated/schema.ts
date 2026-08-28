@@ -4119,6 +4119,10 @@ export interface components {
         };
         /** @description The one value that crosses a stage boundary. Membership, never rank. */
         IdSet: {
+            /**
+             * @description The ids themselves — at most [`MAX_ID_SET_IDS`] of them, refused as
+             *     [`crate::types::query::disposition::RefusalReason::TooManyIds`].
+             */
             ids: string[];
             kind: components["schemas"]["IdKind"];
             provenance?: null | components["schemas"]["IdProvenance"];
@@ -4363,6 +4367,12 @@ export interface components {
              *     a constraint — a 768-float array must not serialize back to the caller.
              */
             embedding?: number[] | null;
+            /**
+             * @description The question, in the caller's own words.
+             *
+             *     At most [`MAX_INTENTION_QUERY_BYTES`] bytes of it, refused as
+             *     [`super::disposition::RefusalReason::IntentionTooLong`].
+             */
             query: string;
         };
         /**
@@ -5413,7 +5423,7 @@ export interface components {
          *     change. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,
          *     matched exhaustively.
          */
-        RefusalReason: "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | string;
+        RefusalReason: "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "intention_too_long" | "too_many_ids" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | string;
         /**
          * @description One region a `survey` stage matched, and the score it matched at.
          *

@@ -17,8 +17,9 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt
 from typing import Any, ClassVar, Dict, List, Optional, Union
+from typing_extensions import Annotated
 from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
@@ -28,7 +29,7 @@ class Intention(BaseModel):
     One find act's question: its text, and the caller's vector when there is one.  `[2026-08-12]` This line read *\"computed once at composition start and threaded to every stage\"* — the envelope-placement claim spec ⟨7⟩ retired. It is corrected rather than left standing because **this doc comment IS a published schema description** (`tests/fixtures/query/intention.schema.json`), so a stale sentence here is a lie shipped to every client that reads the contract.  **Its absence refuses, and that is about the QUESTION, not the vector.** A find stage with no intention has no words to search for, so it comes back `MissingIntention`. That refusal is forced rather than chosen: `find-exact` sources its query *text* from here — it becomes `p_query` — and there is nowhere else to get it.  An absent EMBEDDING is a different absence and does **not** refuse. The CLI can embed; the ruby gem, the TypeScript package and MCP structurally cannot, so refusing a vector search for want of a precomputed vector would deny this surface to every non-CLI client. The server embeds when none arrives, exactly as `/api/search` already does, and only a FAILED embed refuses — as [`super::disposition::RefusalReason::EmbeddingUnavailable`], the one runtime refusal in the contract. `[decided — 2026-08-08, Pete]` **This is a per-STAGE field, carried by [`super::envelope::ActInvocation`].** `[decided — 2026-08-12, Pete]`, spec ⟨7⟩. It sat on the composition envelope until then, which meant a composition could ask exactly ONE question: every find stage in a DAG interrogated the same string, and *\"find A, find B, intersect them\"* was inexpressible. That placement was never ruled — it entered as a first-person commit paragraph and hardened into a test name.  **No `Eq`, only `PartialEq`** — [`Self::embedding`] holds `f32`. Same reason [`super::envelope::StageResult`] derives neither, one derive milder: equality on a vector of floats is well-defined enough for a test, total equality is not.
     """ # noqa: E501
     embedding: Optional[List[Union[StrictFloat, StrictInt]]] = Field(default=None, description="The query vector, when the caller computed one. Mirrors `SearchParams.embedding`: the CLI links temper-ingest and embeds locally, which is faster than making the server do it; the ruby gem, the TypeScript package and MCP structurally cannot, so the server embeds on their behalf and its absence is not a refusal.  **It rides beside the text it was computed FROM, and that pairing is the point.** At composition level a vector and its query could drift apart; here they cannot.  This never reaches a response: [`super::trace::CompositionTrace`] carries only `stages` and echoes no intention. Should a trace ever carry one, that stops being incidental and becomes a constraint — a 768-float array must not serialize back to the caller.")
-    query: StrictStr
+    query: Annotated[str, Field(strict=True, max_length=4096)] = Field(description="The question, in the caller's own words.  At most [`MAX_INTENTION_QUERY_BYTES`] bytes of it, refused as [`super::disposition::RefusalReason::IntentionTooLong`].")
     __properties: ClassVar[List[str]] = ["embedding", "query"]
 
     model_config = ConfigDict(

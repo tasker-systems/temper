@@ -180,7 +180,7 @@ fn gated_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::schema::describe_doc_type))
         .routes(routes!(handlers::schema::describe_open_meta))
         .routes(routes!(handlers::search::search))
-        .routes(routes!(handlers::query::query))
+        .merge(query_routes())
         .routes(routes!(handlers::slack_disconnect::admin_disconnect))
         // Operator-only re-embed trigger: enqueue embed jobs for chunks whose vector was produced by
         // a model that is no longer the one we embed with. The per-minute drain does the work; this is
@@ -523,6 +523,53 @@ fn webhook_intake_routes() -> Router<AppState> {
 /// memory.
 const GITHUB_MAX_WEBHOOK_BYTES: usize = 25 * 1024 * 1024;
 
+/// `/api/query` alone, carrying the one bound on a composition that the schema cannot express.
+///
+/// **Merged into [`gated_routes`] rather than mounted there, purely so the layer is scoped.** A
+/// `DefaultBodyLimit` applies to every route in the router it is attached to, and no other gated
+/// route has any reason to accept a body this size — the same argument that keeps
+/// [`webhook_intake_routes`] separate, and the reason this is a merge rather than one more
+/// `.routes(...)` line. It stays inside `gated_routes`' auth and system-access layers, which are
+/// applied to the merged whole in [`create_app`]; nothing about the mounting changes who may knock.
+fn query_routes() -> OpenApiRouter<AppState> {
+    use axum::extract::DefaultBodyLimit;
+
+    OpenApiRouter::new()
+        .routes(routes!(handlers::query::query))
+        .layer(DefaultBodyLimit::max(QUERY_MAX_BODY_BYTES))
+}
+
+/// The largest composition `/api/query` will read.
+///
+/// # Declared because the inherited number is wrong, not merely because inheriting is untidy
+///
+/// Nothing in temper-api set `DefaultBodyLimit`, so axum's 2 MB default was this door's operative
+/// bound by accident. `MAX_PER_CANDIDATE_PROBES`' own doc already reasons *against* that number as
+/// a bound — *"the list fits in a fraction of axum's default 2 MB body limit"* — which is the tell
+/// that it was doing work nobody had chosen.
+///
+/// **And it is wrong in the direction that refuses legal plans.** A caller may send a precomputed
+/// 768-float embedding beside each question (`Intention::embedding`, which the CLI always does),
+/// and that is ~10 KB per stage on the wire. At `MAX_STAGES` stages, with a question at
+/// `MAX_INTENTION_QUERY_BYTES` and bounds at `MAX_ID_SET_IDS`, a composition the contract calls
+/// legal serializes to **2,194,320 bytes** `[measured — 2026-08-28, by the test named below]` —
+/// 97 KB past the inherited 2,097,152. So the door would have answered a plan its own contract
+/// admits with a bare 413: no refusal list, no vocabulary, in the door whose whole promise is that
+/// every refusal arrives at once and in the caller's own terms.
+/// `the_largest_legal_composition_fits_inside_the_declared_body_limit` holds that, and fails
+/// against the inherited number rather than merely describing it.
+///
+/// # Why 4 MB and not the sum
+///
+/// It is a backstop, deliberately, and cannot be a computed maximum: a property predicate's VALUES
+/// are counted (`MAX_PER_CANDIDATE_PROBES`) and never length-bounded, so the largest legal body has
+/// no finite expression. 4 MB is comfortably above the part that CAN be computed — 1.9x the
+/// measured 2,194,320 — and the margin is what absorbs the fields that carry no length bound at
+/// all. That leaves this the ONLY bound on a request's total declared bytes, which
+/// is the job it is here to do; every bound a caller is likely to meet is published on the field it
+/// bounds and refused in the shape pass, with a reason.
+pub const QUERY_MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
+
 pub fn create_app(state: AppState) -> Router {
     // Register documented sub-routers, then apply the same middleware layers as
     // before. `require_auth` is added last on the gated router so it is the
@@ -678,4 +725,102 @@ pub fn openapi_spec() -> utoipa::openapi::OpenApi {
     crate::openapi::OpenStringEnumAddon.modify(&mut spec);
     crate::openapi::ApidogFolderAddon.modify(&mut spec);
     spec
+}
+
+#[cfg(test)]
+mod tests {
+    use super::QUERY_MAX_BODY_BYTES;
+    use std::collections::BTreeMap;
+    use temper_core::types::query::act::ActName;
+    use temper_core::types::query::composition::{
+        Composition, Intention, OutcomeDeclaration, ReturnSpec, StageNode,
+        MAX_INTENTION_QUERY_BYTES, MAX_STAGES,
+    };
+    use temper_core::types::query::envelope::ActInvocation;
+    use temper_core::types::query::id_set::{IdKind, IdSet, MAX_ID_SET_IDS};
+    use temper_core::types::query::stage::{StageInput, StageName, StageRelation};
+
+    /// **The coherence condition that makes the caps one decision rather than several ifs.**
+    ///
+    /// Every bound on what a request may declare is published on the field it bounds and refused in
+    /// the shape pass, with a typed reason and every sibling refusal beside it. The body limit is
+    /// the one such bound the schema cannot carry, so it is declared here — and it is only
+    /// coherent with the others if a caller never meets it while inside them. A composition at
+    /// every published cap that does not FIT is a plan the contract calls legal and the transport
+    /// answers with a bare 413: no refusal list, no vocabulary, in the door whose whole promise is
+    /// that a plan is repaired in one round trip.
+    ///
+    /// The fixture is built at the caps rather than asserted against an arithmetic estimate,
+    /// because the estimate is the thing most likely to be wrong. It is dominated by a term that is
+    /// easy to forget: a caller may send a precomputed 768-float embedding beside each question,
+    /// which the CLI always does, and 64 of those are the largest single contribution to the body.
+    ///
+    /// **What it does NOT prove**, stated because a green here reads like completeness: a property
+    /// predicate's values are counted and never length-bounded, so the true largest legal body has
+    /// no finite expression and this fixture is a floor on it, not the maximum. That gap is exactly
+    /// what `QUERY_MAX_BODY_BYTES`' margin is for, and it is why the limit is a backstop rather
+    /// than a sum.
+    #[test]
+    fn the_largest_legal_composition_fits_inside_the_declared_body_limit() {
+        let stages: Vec<StageNode> = (0..MAX_STAGES)
+            .map(|i| {
+                StageNode::Act(ActInvocation {
+                    name: StageName::parse(&format!("s{i}")).expect("legal stage name"),
+                    act: ActName::FindAboutAnywhere,
+                    intention: Some(Intention {
+                        query: "x".repeat(MAX_INTENTION_QUERY_BYTES),
+                        // A real normalized BGE component, so the serialized width is the one a
+                        // caller actually sends rather than the two bytes `0.0` would cost.
+                        embedding: Some(vec![-0.041_899_003; 768]),
+                    }),
+                    // A seed and a bound — the shape `inputs: Vec<StageInput>` exists for, and the
+                    // most id sets one stage may carry.
+                    inputs: vec![
+                        StageInput::Caller {
+                            relation: StageRelation::Seed,
+                            ids: full_id_set(),
+                        },
+                        StageInput::Caller {
+                            relation: StageRelation::Bound,
+                            ids: full_id_set(),
+                        },
+                    ],
+                    terms: BTreeMap::new(),
+                    resource_filter: None,
+                    edge_filter: None,
+                    properties: vec![],
+                })
+            })
+            .collect();
+
+        let c = Composition {
+            outcome: OutcomeDeclaration {
+                returns: (0..MAX_STAGES)
+                    .map(|i| ReturnSpec {
+                        stage: StageName::parse(&format!("s{i}")).expect("legal stage name"),
+                        with: vec![],
+                    })
+                    .collect(),
+            },
+            stages,
+        };
+
+        let bytes = serde_json::to_vec(&c)
+            .expect("a composition serializes")
+            .len();
+        assert!(
+            bytes < QUERY_MAX_BODY_BYTES,
+            "a composition at every published cap serializes to {bytes} bytes, which the declared \
+             body limit of {QUERY_MAX_BODY_BYTES} would refuse with a bare 413 — raise the limit, \
+             or lower the field caps, but do not let the contract admit a plan the door cannot read"
+        );
+    }
+
+    fn full_id_set() -> IdSet {
+        IdSet {
+            kind: IdKind::Resource,
+            provenance: None,
+            ids: (0..MAX_ID_SET_IDS).map(|_| uuid::Uuid::now_v7()).collect(),
+        }
+    }
 }

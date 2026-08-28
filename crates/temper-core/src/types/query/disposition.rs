@@ -231,6 +231,45 @@ pub enum RefusalReason {
     /// published: a client refuses what the CONTRACT forbids, never what one deployment chose, and
     /// widening it is a wire-contract change visible in `openapi.json`.
     TooManyStages,
+    /// A stage's `intention.query` is longer than the contract admits.
+    ///
+    /// `[added — 2026-08-28]` The second member of the declaration family
+    /// [`RefusalReason::TooManyStages`] opened, and it is raised for the same reason in the same
+    /// place: the ceiling is
+    /// [`Intention::query`](super::composition::Intention::query)' published `max_length`, so a
+    /// client refuses what the CONTRACT forbids rather than what one deployment chose.
+    ///
+    /// **What it closes is work paid for and then discarded.** The embedder tokenizes the whole
+    /// string and truncates the ENCODING to 512 tokens (`temper-ingest`'s `embed_batch` →
+    /// `truncate_encoding`), so every byte past the model's window is tokenized, paid for, and
+    /// thrown away. The cap sits far above 512 tokens of English, so no question anyone asks meets
+    /// it.
+    ///
+    /// **Refused rather than truncated**, which is this contract's standing choice: a silently
+    /// shortened question is a different question answered confidently, the substitution
+    /// [`RefusalReason::FilterNotApplicable`]'s sites exist to prevent one field over.
+    ///
+    /// Counted in **bytes**, not characters. The bound exists to bound work and transfer, both of
+    /// which are byte-shaped, and a char count would admit four times the bytes for a plan written
+    /// in a non-Latin script.
+    IntentionTooLong,
+    /// An [`IdSet`](super::id_set::IdSet) carries more ids than the contract admits.
+    ///
+    /// `[added — 2026-08-28]` Third member of the same family, published as `max_items` on
+    /// [`IdSet::ids`](super::id_set::IdSet::ids) and raised in the shape pass for the same reason.
+    ///
+    /// **What it bounds is a product, not a list.** A caller's id set is compared against the
+    /// visible corpus to produce the `unusable` tally every stage discloses, so its cost is
+    /// `|caller ids| × |visible ids|` — the same `|candidates| × |second factor|` shape
+    /// `MAX_PER_CANDIDATE_PROBES` was measured against, with the caller choosing the second factor
+    /// again.
+    ///
+    /// **Distinct from [`RefusalReason::AnchorTakesOneId`], which is not retired by it.** That one
+    /// refuses a *cogmap or context* bound carrying more than one id, because today's fragments
+    /// take an `(anchor_table, anchor_id)` pair — a limitation of what this server has built, which
+    /// an `anchor_ids uuid[]` would retire, and which therefore lives in the capability pass. This
+    /// one is a contract fact about every kind and cannot move without a wire change.
+    TooManyIds,
     /// The composition returns no stages, so it answers nothing.
     NoReturns,
     /// Two stages share a name.
@@ -447,6 +486,8 @@ mod tests {
         for reason in [
             RefusalReason::NoStages,
             RefusalReason::TooManyStages,
+            RefusalReason::IntentionTooLong,
+            RefusalReason::TooManyIds,
             RefusalReason::NoReturns,
             RefusalReason::DuplicateStageName,
             RefusalReason::CombinatorArity,
