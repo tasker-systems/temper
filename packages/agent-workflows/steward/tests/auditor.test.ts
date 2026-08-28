@@ -20,6 +20,7 @@ const AUDITOR_ENV_NAMES = [
   "TEMPER_AUDITOR_M2M_AUDIENCE",
   "TEMPER_AUDITOR_TOKEN",
 ];
+const OPTIONAL_AGENT_ENV_NAMES = ["TEMPER_AUDITOR_ENABLED"];
 const STEWARD_ENV_NAMES = [
   "TEMPER_M2M_CLIENT_ID",
   "TEMPER_M2M_CLIENT_SECRET",
@@ -31,7 +32,7 @@ const STEWARD_ENV_NAMES = [
 
 beforeEach(() => {
   vi.resetModules();
-  for (const name of [...AUDITOR_ENV_NAMES, ...STEWARD_ENV_NAMES]) {
+  for (const name of [...AUDITOR_ENV_NAMES, ...STEWARD_ENV_NAMES, ...OPTIONAL_AGENT_ENV_NAMES]) {
     delete process.env[name];
   }
 });
@@ -346,5 +347,75 @@ describe("cadence — the auditor's budget mechanism", () => {
     const steward = (await import("../agent/schedules/steward.js")).default;
 
     expect((auditor.cron ?? "").split(" ")[0]).not.toBe((steward.cron ?? "").split(" ")[0]);
+  });
+});
+
+describe("the enable toggle — absence means ENABLED", () => {
+  const mod = "../agent/lib/optional-agent.js";
+
+  it("is enabled when the variable is not set at all", async () => {
+    // THE polarity assertion, and the inverse of every other env predicate in this package.
+    // `credentialConfigured` and `otlpExportConfigured` are both presence checks — absent means off.
+    // Writing this one by copying either would turn off every auditor already running in production
+    // the moment this merges, and a merge may not turn a production cron off any more than on.
+    const { agentEnabled, AUDITOR_ENABLED } = await import(mod);
+    expect(agentEnabled(AUDITOR_ENABLED)).toBe(true);
+  });
+
+  it("is enabled when the variable is declared but empty", async () => {
+    // Vercel surfaces a declared-with-no-value variable as "", not undefined. `credentialConfigured`
+    // reads that as ABSENT, and absent means enabled here — so an empty declaration must not be the
+    // one keystroke that silently stops a deployment auditing.
+    process.env.TEMPER_AUDITOR_ENABLED = "   ";
+    const { agentEnabled, AUDITOR_ENABLED } = await import(mod);
+    expect(agentEnabled(AUDITOR_ENABLED)).toBe(true);
+  });
+
+  it("disables only on an explicit recognized value, whatever its case or padding", async () => {
+    const { agentEnabled, AUDITOR_ENABLED } = await import(mod);
+    for (const value of ["0", "false", "FALSE", " off ", "no", "No"]) {
+      process.env.TEMPER_AUDITOR_ENABLED = value;
+      expect(agentEnabled(AUDITOR_ENABLED), `${JSON.stringify(value)} should disable`).toBe(false);
+    }
+  });
+
+  it("still runs on an explicit affirmative", async () => {
+    const { agentEnabled, AUDITOR_ENABLED } = await import(mod);
+    for (const value of ["1", "true", "yes", "on"]) {
+      process.env.TEMPER_AUDITOR_ENABLED = value;
+      expect(agentEnabled(AUDITOR_ENABLED), `${JSON.stringify(value)} should enable`).toBe(true);
+    }
+  });
+
+  it("fails toward ENABLED on a value it does not recognize, and says so", async () => {
+    // A typo is not an operator decision. `TEMPER_AUDITOR_ENABLED=fasle` must keep auditing and
+    // complain, because the alternative is a deployment that silently stopped for a reason nobody
+    // can see — the same failure the credential guard's loud-on-partial rule exists to prevent.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    process.env.TEMPER_AUDITOR_ENABLED = "fasle";
+
+    const { agentEnabled, AUDITOR_ENABLED } = await import(mod);
+    expect(agentEnabled(AUDITOR_ENABLED)).toBe(true);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toMatch(/TEMPER_AUDITOR_ENABLED/);
+    warn.mockRestore();
+  });
+
+  // THE WIRING, for the same reason the credential axis pins it separately: every predicate test
+  // above stays green if the schedule never consults the predicate.
+  it("the tick SKIPS when disabled, even with a credential configured", async () => {
+    process.env.TEMPER_API_URL = "http://127.0.0.1:1";
+    process.env.TEMPER_AUDITOR_TOKEN = "auditor-dev-token";
+    process.env.TEMPER_AUDITOR_ENABLED = "false";
+
+    const schedule = (await import("../agent/schedules/auditor.js")).default;
+    const receive = vi.fn();
+    const waitUntil = vi.fn();
+
+    await schedule.run?.({ receive, waitUntil, appAuth: {} as never });
+
+    // A skip, never a fallback: nothing parked, nothing dispatched, and not a thrown error.
+    expect(waitUntil).not.toHaveBeenCalled();
+    expect(receive).not.toHaveBeenCalled();
   });
 });

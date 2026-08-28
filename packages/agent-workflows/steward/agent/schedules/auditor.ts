@@ -2,6 +2,7 @@ import { defineSchedule } from "eve/schedules";
 import { TEMPER_TS_VERSION, type components } from "temper-ts";
 
 import auditorWorker from "../channels/auditor-worker.js";
+import { AUDITOR_ENABLED, agentEnabled } from "../lib/optional-agent.js";
 import {
   AUDITOR_CREDENTIALS,
   auditorFetch,
@@ -163,6 +164,21 @@ type ClaimedAuditJob = components["schemas"]["ClaimedAuditJob"];
 export default defineSchedule({
   cron: "30 3 * * *", // daily at 03:30 UTC — trailing a steward tick; see "Cadence" above
   async run({ receive, waitUntil, appAuth }) {
+    // An operator may hold auditor credentials and still want agent maintenance off — the credential
+    // axis cannot express that, because unsetting the credential also removes the ability to run the
+    // auditor on demand. This is checked FIRST because it is the only axis that carries an EXPLICIT
+    // decision: an operator who wrote the variable outranks anything inferred from absence, and the
+    // credential guard's log line below would otherwise tell them to set a credential they already
+    // have. **Absence means ENABLED** — see `optional-agent.ts` for why that polarity is deliberate.
+    if (!agentEnabled(AUDITOR_ENABLED)) {
+      console.log(
+        `[auditor-dispatch] ${AUDITOR_ENABLED} turns agent maintenance off on this deployment — ` +
+          "skipping tick. Unset it, or set it to 1/true/on, to resume. This is a deliberate no-op, " +
+          "not a failure.",
+      );
+      return;
+    }
+
     // The auditor is OPTIONAL; the steward is not. This file ships in the repo, and eve registers
     // one Vercel Cron Job per file here — so every fork and self-hosted deploy of this agent gets
     // this cron whether or not it runs an auditor. Without this guard each of those deployments
