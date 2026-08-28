@@ -561,27 +561,24 @@ fn query_routes() -> OpenApiRouter<AppState> {
 ///
 /// # Why 4 MB and not the sum
 ///
-/// It is a backstop and cannot be a computed maximum, for two reasons rather than the one first
-/// given here `[corrected — 2026-08-28, found in review]`:
+/// **Every COUNT the contract admits is now bounded, and what remains unbounded is LENGTH.**
+/// `[narrowed — 2026-08-28, after review]` This paragraph first named only the length half, which
+/// understated why the backstop was needed: `ReturnSpec::with`, `EdgeFilter::edge_kinds`,
+/// `EdgeFilter::labels`, `ResourceFilter::doc_type` and `ResourceFilter::tags` were `Vec`s no pass
+/// capped, and `validate_returns` checked section MEMBERSHIP only — so `with: [open_meta; 10_000]`
+/// per return validated `Ok` and serialized to **9.6 MB**, and ten thousand one-character labels
+/// per stage to **4.7 MB**. Both are refused now: `MAX_FILTER_VALUES` bounds the three open lists,
+/// and `DuplicateSetMember` bounds the two closed vocabularies at their own size.
 ///
-/// - **unbounded lengths** — a property predicate's VALUES are counted
-///   (`MAX_PER_CANDIDATE_PROBES`) and never length-bounded;
-/// - **unbounded COUNTS** — and this half was missing, in the direction that understates why the
-///   backstop is needed. `ReturnSpec::with`, `EdgeFilter::labels`, `ResourceFilter::doc_type` and
-///   `ResourceFilter::tags` are `Vec`s no pass caps, and `validate_returns` checks section
-///   MEMBERSHIP only, so duplicates are legal. A composition repeating one admitted section ten
-///   thousand times per return validates `Ok` and serializes to **9.6 MB**
-///   `[measured — 2026-08-28]`.
+/// So the coherence property below holds over every field whose COUNT the contract fixes, and
+/// `the_largest_legal_composition_fits_inside_the_declared_body_limit` measures that maximum at
+/// **2,405,028 bytes** — 1.74x under this number.
 ///
-/// **So this limit does not make the coherence property unconditional, and saying otherwise would
-/// be the overclaim.** It holds for every field whose count IS capped — a composition maximal over
-/// all of them at once measures **2,389,092 bytes**, giving 1.76x headroom. For the four fields
-/// above, a legal plan can still exceed 4 MB and meet a 413. Closing that means capping those
-/// counts too, which is a contract change nobody has taken; it is named here rather than left for
-/// a future reader to discover from a support ticket.
-///
-/// Every bound a caller is LIKELY to meet is published on the field it bounds and refused in the
-/// shape pass, with a reason. This is what stands behind the ones that are not.
+/// What it does not bound is the LENGTH of the strings inside those counted lists: a facet key, a
+/// property value, a label, a `title_contains`. Reaching 4 MB now takes ~400 bytes per label across
+/// every stage rather than one byte, which is the difference between a caller and an adversary —
+/// but it is still reachable, and this is what stands behind it. That residue is why the limit is a
+/// backstop and not a sum, and it is the thing to bound next if a 413 is ever actually observed.
 pub const QUERY_MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
 
 pub fn create_app(state: AppState) -> Router {
@@ -745,15 +742,22 @@ pub fn openapi_spec() -> utoipa::openapi::OpenApi {
 mod tests {
     use super::QUERY_MAX_BODY_BYTES;
     use std::collections::BTreeMap;
+    use temper_core::types::graph::EdgeKind;
     use temper_core::types::query::act::ActName;
     use temper_core::types::query::composition::{
         Composition, Intention, OutcomeDeclaration, ReturnSpec, StageNode,
         MAX_INTENTION_QUERY_BYTES, MAX_STAGES,
     };
     use temper_core::types::query::envelope::ActInvocation;
+    use temper_core::types::query::filter::{
+        EdgeFilter, FacetPredicate, PropertyOp, PropertyPredicate, ResourceFilter,
+        MAX_FILTER_VALUES,
+    };
     use temper_core::types::query::id_set::{IdKind, IdSet, MAX_ID_SET_IDS};
+    use temper_core::types::query::scalars::BoundTerm;
     use temper_core::types::query::stage::{StageInput, StageName, StageRelation};
     use temper_core::types::query::validate::validate;
+    use temper_core::types::resource_view::ResourceSection;
 
     /// **The coherence condition that makes the caps one decision rather than several ifs.**
     ///
@@ -781,85 +785,192 @@ mod tests {
     /// fixture is 907,408 bytes, comfortably inside the inherited limit, so they are what carries
     /// it past.
     ///
-    /// **What it does NOT prove**, stated because a green here reads like completeness. This is a
-    /// floor on the largest legal body, not the maximum, and for two reasons rather than one:
+    /// **What it does NOT prove**, stated because a green here reads like completeness: it is a
+    /// floor on the largest legal body, not the maximum. Every COUNT the contract admits is bounded
+    /// as of 2026-08-28, so what escapes it is string LENGTH — a facet key, a property value, a
+    /// label, a `title_contains`. Reaching the limit now takes ~400 bytes per label across every
+    /// stage instead of one, which is the difference between a caller and an adversary, and
+    /// `QUERY_MAX_BODY_BYTES` is what stands behind the difference.
     ///
-    /// - **lengths** — a property predicate's values are counted (`MAX_PER_CANDIDATE_PROBES`) and
-    ///   never length-bounded;
-    /// - **counts** — `ReturnSpec::with`, `EdgeFilter::labels`, `ResourceFilter::doc_type` and
-    ///   `ResourceFilter::tags` are `Vec`s with no cap in either validation pass, and duplicates in
-    ///   `with` are legal (`capability.rs`'s `validate_returns` checks membership only). A
-    ///   composition repeating one admitted section ten thousand times per return validates `Ok`
-    ///   and serializes to 9.6 MB `[measured — 2026-08-28]`.
-    ///
-    /// The second is why `QUERY_MAX_BODY_BYTES` is a backstop rather than a sum — and it means the
-    /// coherence property this test states holds over the fields whose counts ARE capped, and is
-    /// backstopped rather than proved for the ones that are not. See that const's doc.
     #[test]
     fn the_largest_legal_composition_fits_inside_the_declared_body_limit() {
-        let stages: Vec<StageNode> = (0..MAX_STAGES)
+        // **Two shapes, both measured, because no single act admits every bounded field and the
+        // larger one is not obvious.** `follow-from` takes a seed, a bound and an `EdgeFilter`;
+        // `find-resources-with` is the only act whose `ResourceFilter` is not refused
+        // (`capability.rs`'s narrowings block), and it accepts no bounds and no page terms at all.
+        // A first version mixed them and measured 1,756,196 — LESS than either pure shape, because
+        // half its stages carried no id sets. Measuring both and taking the larger is what stops
+        // this test from quietly reporting a maximum that is not one.
+        let walk = plan_of(MAX_STAGES, ActName::FollowFrom);
+        let select = plan_of(MAX_STAGES, ActName::FindResourcesWith);
+
+        for (what, c) in [("walk", &walk), ("selection", &select)] {
+            // Legal FIRST. A byte count over a plan the validator refuses is a measurement of
+            // nothing — and the first version of this test measured one carrying 128 refusals
+            // while its own doc called it legal `[found in review — 2026-08-28]`.
+            assert!(
+                validate(c).is_ok(),
+                "the {what} fixture must be a composition this server would RUN, or its size says \
+                 nothing about what the door has to accept: {:?}",
+                validate(c).err()
+            );
+        }
+
+        let sizes: Vec<usize> = [&walk, &select]
+            .iter()
+            .map(|c| {
+                serde_json::to_vec(c)
+                    .expect("a composition serializes")
+                    .len()
+            })
+            .collect();
+        let bytes = *sizes.iter().max().expect("two shapes");
+        assert!(
+            bytes < QUERY_MAX_BODY_BYTES,
+            "the largest composition at every published cap serializes to {bytes} bytes (walk \
+             {}, selection {}), which the declared body limit of {QUERY_MAX_BODY_BYTES} would \
+             refuse with a bare 413 — raise the limit, or lower the field caps, but do not let the \
+             contract admit a plan the door cannot read",
+            sizes[0],
+            sizes[1]
+        );
+    }
+
+    /// `n` stages of one act, each maximal over every field that act admits and every cap the
+    /// contract publishes.
+    ///
+    /// **A selection-shaped plan still ends in one walk stage**, because a selection orders nothing
+    /// and is refused in `returns` (`StageNotReturnable`) while a composition that returns nothing
+    /// is refused outright (`NoReturns`). So the pure shape is not legal at any size, and the
+    /// largest selection-shaped plan is `n - 1` selections plus the walk that answers.
+    fn plan_of(n: usize, act: ActName) -> Composition {
+        let all_walk = act == ActName::FollowFrom;
+        let stages: Vec<StageNode> = (0..n)
             .map(|i| {
+                let walk = all_walk || i == n - 1;
                 StageNode::Act(ActInvocation {
-                    name: StageName::parse(&format!("s{i}")).expect("legal stage name"),
-                    // The one act declaring BOTH `accepts_seeds` and `accepts_bounds` for
-                    // `IdKind::Resource` (`registry.rs:359-360`), which is what lets a stage carry
-                    // the two id sets this fixture needs and still validate.
-                    act: ActName::FollowFrom,
+                    // Stage names at their own ceiling — 63 (`stage.rs:43`).
+                    name: StageName::parse(&format!(
+                        "s{i}{}",
+                        "n".repeat(60 - i.to_string().len())
+                    ))
+                    .expect("legal stage name"),
+                    act: if walk {
+                        ActName::FollowFrom
+                    } else {
+                        act.clone()
+                    },
                     intention: Some(Intention {
                         query: "x".repeat(MAX_INTENTION_QUERY_BYTES),
                         // A real normalized BGE component, so the serialized width is the one a
                         // caller actually sends rather than the two bytes `0.0` would cost.
+                        //
+                        // Every stage carries one, which is also what keeps this inside
+                        // `MAX_COMPOSITION_INTENTION_BYTES`: that bound counts only what the SERVER
+                        // must embed, and a caller who precomputed has already paid it. A fixture
+                        // without embeddings is a DIFFERENT and SMALLER maximum, because the
+                        // aggregate budget then caps its question text at 64 KB.
                         embedding: Some(vec![-0.041_899_003; 768]),
                     }),
-                    // A seed and a bound — the shape `inputs: Vec<StageInput>` exists for, and the
-                    // most id sets one stage may carry.
-                    inputs: vec![
-                        StageInput::Caller {
-                            relation: StageRelation::Seed,
-                            ids: full_id_set(),
-                        },
-                        StageInput::Caller {
-                            relation: StageRelation::Bound,
-                            ids: full_id_set(),
-                        },
-                    ],
-                    terms: BTreeMap::new(),
-                    resource_filter: None,
-                    edge_filter: None,
+                    inputs: if walk {
+                        vec![
+                            StageInput::Caller {
+                                relation: StageRelation::Seed,
+                                ids: full_id_set(),
+                            },
+                            StageInput::Caller {
+                                relation: StageRelation::Bound,
+                                ids: full_id_set(),
+                            },
+                        ]
+                    } else {
+                        // A selection accepts no bounds of any kind and no page terms — it declares
+                        // a set. Both are `capability`'s refusals, and hitting them is how this
+                        // fixture learned the shape rather than assuming it.
+                        vec![]
+                    },
+                    terms: if walk {
+                        BTreeMap::from([(BoundTerm::Limit, 50), (BoundTerm::Offset, 50)])
+                    } else {
+                        BTreeMap::new()
+                    },
+                    resource_filter: (!walk).then(full_resource_filter),
+                    edge_filter: walk.then(full_edge_filter),
                     properties: vec![],
                 })
             })
             .collect();
 
-        let c = Composition {
+        Composition {
             outcome: OutcomeDeclaration {
-                returns: (0..MAX_STAGES)
-                    .map(|i| ReturnSpec {
-                        stage: StageName::parse(&format!("s{i}")).expect("legal stage name"),
-                        with: vec![],
+                // A selection orders nothing and is refused in `returns` (`StageNotReturnable`), so
+                // that shape returns its first stage only — which is what a caller would do.
+                // Every walk stage, which for the walk shape is all of them and for the selection
+                // shape is the one that answers.
+                returns: stages
+                    .iter()
+                    .filter(|n| matches!(n, StageNode::Act(i) if i.act == ActName::FollowFrom))
+                    .map(|node| ReturnSpec {
+                        stage: node.name().clone(),
+                        with: vec![ResourceSection::OpenMeta],
                     })
                     .collect(),
             },
             stages,
-        };
+        }
+    }
 
-        // Legal FIRST. A byte count over a plan the validator refuses is a measurement of nothing.
-        assert!(
-            validate(&c).is_ok(),
-            "the fixture must be a composition this server would RUN, or its size says nothing \
-             about what the door has to accept: {:?}",
-            validate(&c).err()
-        );
+    /// Every narrowing list at [`MAX_FILTER_VALUES`], and both per-candidate containers at the caps
+    /// `capability.rs` enforces — 32 predicates summing to 256 probes.
+    fn full_resource_filter() -> ResourceFilter {
+        ResourceFilter {
+            doc_type: vec!["d".to_string(); MAX_FILTER_VALUES],
+            tags: vec!["t".to_string(); MAX_FILTER_VALUES],
+            facets: (0..16)
+                .map(|i| FacetPredicate {
+                    key: format!("k{i}"),
+                    value: "v".to_string(),
+                })
+                .collect(),
+            // 16 facets + 16 predicates = 32, the predicate cap; 16 facets + 240 probes = 256,
+            // the probe cap. Facets count against BOTH, which is what the container's own doc
+            // means by summing what walks the same candidate set.
+            properties: capped_properties(16, 15),
+            stage: Some("s".to_string()),
+            status: Some("a".to_string()),
+            owner: Some("o".to_string()),
+            title_contains: Some("t".to_string()),
+        }
+    }
 
-        let bytes = serde_json::to_vec(&c)
-            .expect("a composition serializes")
-            .len();
-        assert!(
-            bytes < QUERY_MAX_BODY_BYTES,
-            "a composition at every published cap serializes to {bytes} bytes, which the declared \
-             body limit of {QUERY_MAX_BODY_BYTES} would refuse with a bare 413 — raise the limit, \
-             or lower the field caps, but do not let the contract admit a plan the door cannot read"
-        );
+    fn full_edge_filter() -> EdgeFilter {
+        EdgeFilter {
+            // A closed vocabulary carried as a list, and repeats are refused — so its ceiling is
+            // the vocabulary, and one member is as many as this fixture may name distinctly
+            // without asserting which kinds exist.
+            edge_kinds: vec![EdgeKind::LeadsTo],
+            labels: vec!["l".to_string(); MAX_FILTER_VALUES],
+            // No facets on an edge container, so all 32 predicates and all 256 probes are the
+            // property list's.
+            properties: capped_properties(32, 8),
+        }
+    }
+
+    /// `preds` predicates each carrying `vals` values. The two caps a container must satisfy are
+    /// `MAX_PER_CANDIDATE_PREDICATES` (32, summed with `facets` where the container has them) and
+    /// `MAX_PER_CANDIDATE_PROBES` (256, likewise) — so the split differs between the two containers
+    /// and is passed rather than assumed.
+    fn capped_properties(preds: usize, vals: usize) -> Vec<PropertyPredicate> {
+        (0..preds)
+            .map(|i| PropertyPredicate {
+                key: format!("p{i}"),
+                op: PropertyOp::Contains {
+                    values: (0..vals)
+                        .map(|v| serde_json::json!(format!("v{v}")))
+                        .collect(),
+                },
+            })
+            .collect()
     }
 
     fn full_id_set() -> IdSet {

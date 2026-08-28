@@ -15,6 +15,7 @@
     },
     "query": {
       "description": "The question, in the caller's own words.\n\nAt most [`MAX_INTENTION_QUERY_BYTES`] bytes of it, refused as\n[`super::disposition::RefusalReason::IntentionTooLong`].",
+      "maxLength": 4096,
       "type": "string"
     }
   },

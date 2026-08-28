@@ -117,6 +117,18 @@ fn the_shape_pass_emits_exactly_these_reasons() {
         ("DanglingReference", 1),
         ("DuplicateInputRelation", 1),
         ("DuplicateReturnStage", 1),
+        // `DuplicateSetMember` is **2** `[added — 2026-08-28]`, and the count is the point: the two
+        // sites are `ReturnSpec::with` and `EdgeFilter::edge_kinds`, both closed vocabularies
+        // carried as lists where a repeat changes no answer. One reason for both because the
+        // caller's repair is the same shape of thing — the second-site precedent is
+        // `CombinatorArity` above, and the rule it set is that a shared reason bumps the count here
+        // rather than earning a variant.
+        //
+        // Both clear the shape bar without needing anything published, and that is worth stating
+        // because the neighbouring caps DID need it: this refuses a list that is malformed against
+        // ANY vocabulary, so no server can widen its way out of it. A server that admitted a new
+        // section would still not admit that section twice.
+        ("DuplicateSetMember", 2),
         ("DuplicateStageName", 1),
         ("EmptyContains", 1),
         ("EmptyPropertyKey", 1),
@@ -143,6 +155,11 @@ fn the_shape_pass_emits_exactly_these_reasons() {
         // It clears it — the ceiling is `max_items` on `Composition::stages`, so raising the cap
         // is an `openapi.json` change the drift gates see, not a per-deployment choice a stale
         // `temper query --check` could contradict.
+        // `TooManyFilterValues` `[added — 2026-08-28]`, one site over three fields on purpose —
+        // three sites would be three numbers waiting to drift, and would say three judgments were
+        // made where there was one. Clears the bar the same way `TooManyIds` does: `max_items` on
+        // each of `doc_type`, `tags` and `labels`, published on both doors.
+        ("TooManyFilterValues", 1),
         ("TooManyIds", 1),
         ("TooManyStages", 1),
         ("UnknownAct", 1),

@@ -10841,7 +10841,8 @@
             "type": "array",
             "items": {
               "type": "string"
-            }
+            },
+            "maxItems": 64
           },
           "properties": {
             "type": "array",
@@ -13905,6 +13906,20 @@
           },
           {
             "type": "string",
+            "description": "A narrowing list carries more values than the contract admits.\n\n`[added — 2026-08-28, found in review]` `ResourceFilter::doc_type`, `ResourceFilter::tags`\nand `EdgeFilter::labels` are the three narrowings that cost nothing per candidate — array\ncontainment and `= ANY` are single operations whatever their length — which is precisely why\nnothing had capped them. What they cost is BODY: ten thousand one-character labels per stage\nserialized to 4.7 MB and validated `Ok`, so the door answered a plan its own contract admits\nwith a bare 413. See `MAX_FILTER_VALUES`.",
+            "enum": [
+              "too_many_filter_values"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "A list that means a SET names the same member twice.\n\n`[added — 2026-08-28, found in review]` `ReturnSpec::with` and `EdgeFilter::edge_kinds` are\nboth closed vocabularies carried as lists, and a repeat in either changes nothing about the\nanswer — hydrating a section twice hydrates it once, and walking `leads_to` twice walks it\nonce. Left admitted, the repeat is a caller's only way to make an unbounded body out of a\nbounded vocabulary: `with: [open_meta; 10_000]` per return validated `Ok` at **9.6 MB**\n`[measured — 2026-08-28]`.\n\n**Refusing rather than deduplicating**, which is this contract's standing choice and the\nsame one [`RefusalReason::DuplicateReturnStage`] made one field over: silently collapsing a\ncaller's list answers a question they did not quite ask, and says nothing about it.\nDe-duplicating is also what makes the bound disappear — the count would be silently\nclamped to the vocabulary size, which is a cost decision taken by omission.",
+            "enum": [
+              "duplicate_set_member"
+            ]
+          },
+          {
+            "type": "string",
             "description": "The composition returns no stages, so it answers nothing.",
             "enum": [
               "no_returns"
@@ -14394,7 +14409,8 @@
             "items": {
               "type": "string"
             },
-            "description": "`kb_properties` where `property_key = 'doc_type'`."
+            "description": "`kb_properties` where `property_key = 'doc_type'`.",
+            "maxItems": 64
           },
           "facets": {
             "type": "array",
@@ -14433,7 +14449,8 @@
             "items": {
               "type": "string"
             },
-            "description": "`kb_properties` where `property_key = 'tags'`. AND-containment."
+            "description": "`kb_properties` where `property_key = 'tags'`. AND-containment.",
+            "maxItems": 64
           },
           "title_contains": {
             "type": [

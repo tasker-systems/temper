@@ -289,6 +289,30 @@ pub enum RefusalReason {
     /// stage gets a vector at all, so the alternative to this refusal is not a slower answer, it is
     /// every find stage refusing `embedding_unavailable` at once with nothing saying why.
     IntentionBudgetExceeded,
+    /// A narrowing list carries more values than the contract admits.
+    ///
+    /// `[added — 2026-08-28, found in review]` `ResourceFilter::doc_type`, `ResourceFilter::tags`
+    /// and `EdgeFilter::labels` are the three narrowings that cost nothing per candidate — array
+    /// containment and `= ANY` are single operations whatever their length — which is precisely why
+    /// nothing had capped them. What they cost is BODY: ten thousand one-character labels per stage
+    /// serialized to 4.7 MB and validated `Ok`, so the door answered a plan its own contract admits
+    /// with a bare 413. See `MAX_FILTER_VALUES`.
+    TooManyFilterValues,
+    /// A list that means a SET names the same member twice.
+    ///
+    /// `[added — 2026-08-28, found in review]` `ReturnSpec::with` and `EdgeFilter::edge_kinds` are
+    /// both closed vocabularies carried as lists, and a repeat in either changes nothing about the
+    /// answer — hydrating a section twice hydrates it once, and walking `leads_to` twice walks it
+    /// once. Left admitted, the repeat is a caller's only way to make an unbounded body out of a
+    /// bounded vocabulary: `with: [open_meta; 10_000]` per return validated `Ok` at **9.6 MB**
+    /// `[measured — 2026-08-28]`.
+    ///
+    /// **Refusing rather than deduplicating**, which is this contract's standing choice and the
+    /// same one [`RefusalReason::DuplicateReturnStage`] made one field over: silently collapsing a
+    /// caller's list answers a question they did not quite ask, and says nothing about it.
+    /// De-duplicating is also what makes the bound disappear — the count would be silently
+    /// clamped to the vocabulary size, which is a cost decision taken by omission.
+    DuplicateSetMember,
     /// The composition returns no stages, so it answers nothing.
     NoReturns,
     /// Two stages share a name.
@@ -508,6 +532,8 @@ mod tests {
             RefusalReason::IntentionTooLong,
             RefusalReason::TooManyIds,
             RefusalReason::IntentionBudgetExceeded,
+            RefusalReason::TooManyFilterValues,
+            RefusalReason::DuplicateSetMember,
             RefusalReason::NoReturns,
             RefusalReason::DuplicateStageName,
             RefusalReason::CombinatorArity,

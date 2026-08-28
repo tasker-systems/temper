@@ -184,6 +184,7 @@
           "items": {
             "type": "string"
           },
+          "maxItems": 64,
           "type": "array"
         },
         "properties": {
@@ -280,6 +281,7 @@
             "format": "uuid",
             "type": "string"
           },
+          "maxItems": 256,
           "type": "array"
         },
         "kind": {
@@ -319,6 +321,7 @@
         },
         "query": {
           "description": "The question, in the caller's own words.\n\nAt most [`MAX_INTENTION_QUERY_BYTES`] bytes of it, refused as\n[`super::disposition::RefusalReason::IntentionTooLong`].",
+          "maxLength": 4096,
           "type": "string"
         }
       },
@@ -432,6 +435,7 @@
           "items": {
             "type": "string"
           },
+          "maxItems": 64,
           "type": "array"
         },
         "facets": {
@@ -471,6 +475,7 @@
           "items": {
             "type": "string"
           },
+          "maxItems": 64,
           "type": "array"
         },
         "title_contains": {
@@ -608,6 +613,7 @@
       "items": {
         "$ref": "#/$defs/StageNode"
       },
+      "maxItems": 64,
       "type": "array"
     }
   },

@@ -37,6 +37,8 @@ pub struct EdgeFilter {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub edge_kinds: Vec<EdgeKind>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "web-api", schema(max_items = 64))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 64)))]
     pub labels: Vec<String>,
     /// `kb_properties` rows owned by the edge itself: open key space, closed operator set.
     /// AND across the list, OR within a [`PropertyOp::Contains`].
@@ -88,9 +90,13 @@ pub struct FacetPredicate {
 pub struct ResourceFilter {
     /// `kb_properties` where `property_key = 'doc_type'`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "web-api", schema(max_items = 64))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 64)))]
     pub doc_type: Vec<String>,
     /// `kb_properties` where `property_key = 'tags'`. AND-containment.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "web-api", schema(max_items = 64))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 64)))]
     pub tags: Vec<String>,
     /// `kb_properties` where `property_key = 'facet'`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -242,6 +248,28 @@ pub struct PropertyPredicate {
     pub key: String,
     pub op: PropertyOp,
 }
+
+/// The most values one narrowing LIST may carry — `doc_type`, `tags`, `labels`.
+///
+/// # It bounds BYTES, not work, and that is why it is tighter than its neighbours
+///
+/// `[added — 2026-08-28, found in review]` `MAX_PER_CANDIDATE_PREDICATES` and
+/// `MAX_PER_CANDIDATE_PROBES` bound a per-candidate multiplier, and `ResourceFilter::facets`'
+/// own doc records why these three fields are not in that family: *"`tags` and `doc_type` do NOT
+/// have this shape — array containment and `= ANY` are single operations whatever their length."*
+/// That is still true, and it is exactly what left them unbounded: costing nothing per candidate,
+/// they had no reason to be capped, and so a caller could declare as many as they liked.
+///
+/// What they do cost is BODY. Ten thousand one-character labels on each of `MAX_STAGES` stages is
+/// a composition `validate` accepted and which serialized to **4.7 MB**
+/// `[measured — 2026-08-28]` — past the door's declared body limit, so a plan the contract called
+/// legal met a bare 413 with no refusal list. This is the cap that makes that a typed refusal.
+///
+/// 64 is far above the question and far below the harm, by the same method as its siblings, and it
+/// can be far tighter than `MAX_PER_CANDIDATE_PROBES`' 256 precisely because it is bounding a
+/// declaration rather than a measured cost cliff: a narrowing that names sixty-four doc types is
+/// not narrowing, and the live corpus does not carry that many.
+pub const MAX_FILTER_VALUES: usize = 64;
 
 #[cfg(test)]
 mod tests {

@@ -375,6 +375,7 @@ mod tests {
         MAX_COMPOSITION_INTENTION_BYTES, MAX_INTENTION_QUERY_BYTES, MAX_STAGES,
     };
     use crate::types::query::envelope::ActInvocation;
+    use crate::types::query::filter::MAX_FILTER_VALUES;
     use crate::types::query::filter::{
         EdgeFilter, FacetPredicate, PropertyOp, PropertyPredicate, ResourceFilter,
     };
@@ -1373,6 +1374,122 @@ mod tests {
             !errs.iter().any(|e| e.reason == RefusalReason::TooManyIds),
             "two ids is nowhere near the size cap; got: {errs:?}"
         );
+    }
+
+    /// A narrowing list above the cap is refused, and the refusal names WHICH list.
+    ///
+    /// `[added — 2026-08-28]` Three fields share one reason and one site, so the detail is the only
+    /// thing telling a caller which of them to shorten — a caller who over-filled two would
+    /// otherwise get two identical refusals. Same rule the property-predicate sources apply one
+    /// container over.
+    #[test]
+    fn a_narrowing_list_above_the_cap_is_refused_and_says_which() {
+        let over = vec!["x".to_string(); MAX_FILTER_VALUES + 1];
+        let mut inv = match act("s", ActName::FindResourcesWith, None) {
+            StageNode::Act(inv) => inv,
+            other => panic!("expected an act node, got {other:?}"),
+        };
+        inv.resource_filter = Some(ResourceFilter {
+            doc_type: over.clone(),
+            tags: over,
+            ..Default::default()
+        });
+        let c = plan_with_intention(vec![StageNode::Act(inv)], vec!["s"]);
+        let errs = validate(&c).unwrap_err();
+        let named: Vec<&String> = errs
+            .iter()
+            .filter(|e| e.reason == RefusalReason::TooManyFilterValues)
+            .map(|e| &e.detail)
+            .collect();
+        assert_eq!(named.len(), 2, "one per over-filled list; got: {errs:?}");
+        assert!(named.iter().any(|d| d.contains("resource_filter.doc_type")));
+        assert!(named.iter().any(|d| d.contains("resource_filter.tags")));
+    }
+
+    /// Exactly at the cap is admitted. The bound is `>`, not `>=`.
+    #[test]
+    fn a_narrowing_list_exactly_at_the_cap_is_not_refused_for_its_size() {
+        let mut inv = match act("s", ActName::FindResourcesWith, None) {
+            StageNode::Act(inv) => inv,
+            other => panic!("expected an act node, got {other:?}"),
+        };
+        inv.resource_filter = Some(ResourceFilter {
+            doc_type: vec!["x".to_string(); MAX_FILTER_VALUES],
+            ..Default::default()
+        });
+        let c = plan_with_intention(vec![StageNode::Act(inv)], vec!["s"]);
+        let refused = validate(&c)
+            .err()
+            .into_iter()
+            .flatten()
+            .filter(|e| e.reason == RefusalReason::TooManyFilterValues)
+            .count();
+        assert_eq!(refused, 0, "MAX_FILTER_VALUES is at the cap, not over");
+    }
+
+    /// **A section named twice is refused, which is what bounds a closed vocabulary's list.**
+    ///
+    /// `[added — 2026-08-28]` Without it `with: [open_meta; 10_000]` per return validated cleanly
+    /// and serialized to 9.6 MB — a plan the contract called legal that the door answers with a
+    /// bare 413. Refused rather than deduplicated: a silent collapse answers a question the caller
+    /// did not quite ask and says nothing about it.
+    #[test]
+    fn a_section_named_twice_is_refused_rather_than_collapsed() {
+        let c = plan_returning(
+            vec![act(
+                "hits",
+                ActName::FindExact,
+                Some(caller_ids(IdKind::Resource)),
+            )],
+            vec![ReturnSpec {
+                stage: StageName::parse("hits").unwrap(),
+                with: vec![ResourceSection::OpenMeta, ResourceSection::OpenMeta],
+            }],
+        );
+        let errs = validate(&c).unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| e.reason == RefusalReason::DuplicateSetMember),
+            "got: {errs:?}"
+        );
+    }
+
+    /// The same rule on the other closed vocabulary carried as a list.
+    #[test]
+    fn an_edge_kind_named_twice_is_refused() {
+        let mut inv = match act("s", ActName::FollowFrom, Some(caller_ids(IdKind::Resource))) {
+            StageNode::Act(inv) => inv,
+            other => panic!("expected an act node, got {other:?}"),
+        };
+        inv.edge_filter = Some(EdgeFilter {
+            edge_kinds: vec![EdgeKind::LeadsTo, EdgeKind::LeadsTo],
+            ..Default::default()
+        });
+        let c = plan_with_intention(vec![StageNode::Act(inv)], vec!["s"]);
+        let errs = validate(&c).unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| e.reason == RefusalReason::DuplicateSetMember),
+            "got: {errs:?}"
+        );
+    }
+
+    /// One section, once, is legal — the arm that stops the two tests above passing against a check
+    /// that refuses `with` outright.
+    #[test]
+    fn a_section_named_once_is_admitted() {
+        let c = plan_returning(
+            vec![act(
+                "hits",
+                ActName::FindExact,
+                Some(caller_ids(IdKind::Resource)),
+            )],
+            vec![ReturnSpec {
+                stage: StageName::parse("hits").unwrap(),
+                with: vec![ResourceSection::OpenMeta],
+            }],
+        );
+        assert!(validate(&c).is_ok(), "got: {:?}", validate(&c).err());
     }
 
     /// **The aggregate embed bound, and it is NOT in the published family above.**

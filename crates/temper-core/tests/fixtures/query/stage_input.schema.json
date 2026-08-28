@@ -68,6 +68,7 @@
             "format": "uuid",
             "type": "string"
           },
+          "maxItems": 256,
           "type": "array"
         },
         "kind": {

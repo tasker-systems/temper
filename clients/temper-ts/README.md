@@ -137,3 +137,14 @@ npm run build      # tsc, emits dist/ (including dist/generated/schema.js + .d.t
 in-process HTTP mock API and a mock OAuth issuer (both a `temper-as`-flavored and an
 Auth0-flavored mint), used by this package's own tests and importable by consumers (the steward
 uses them for its own auth tests).
+
+## Composition bounds are NOT enforced here `[2026-08-28]`
+
+`/api/query`'s contract publishes ceilings on what one composition may declare — 64 stages,
+4096 bytes per question, 256 ids per set, 64 values per narrowing list. `schema.ts` carries
+them as types only; there is no runtime validator in this package, so an over-cap plan is
+sent and the server answers `400 PLAN_REFUSED` with the typed reason
+(`too_many_stages`, `intention_too_long`, `too_many_ids`, `too_many_filter_values`).
+
+That is a deliberate difference from the Ruby gem and the Python package, whose generated
+models raise locally. Handle the refusal; do not assume a client-side guard.

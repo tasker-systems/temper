@@ -97,6 +97,10 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
+      if !@labels.nil? && @labels.length > 64
+        invalid_properties.push('invalid value for "labels", number of items must be less than or equal to 64.')
+      end
+
       invalid_properties
     end
 
@@ -104,7 +108,22 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
+      return false if !@labels.nil? && @labels.length > 64
       true
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] labels Value to be assigned
+    def labels=(labels)
+      if labels.nil?
+        fail ArgumentError, 'labels cannot be nil'
+      end
+
+      if labels.length > 64
+        fail ArgumentError, 'invalid value for "labels", number of items must be less than or equal to 64.'
+      end
+
+      @labels = labels
     end
 
     # Checks equality by comparing each attribute.

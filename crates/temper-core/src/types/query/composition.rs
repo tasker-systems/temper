@@ -59,6 +59,7 @@ pub struct Intention {
     // characters. Publishing the byte bound as a character bound therefore promises LESS than the
     // server admits, which is the direction a stale client may be wrong in.
     #[cfg_attr(feature = "web-api", schema(max_length = 4096))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 4096)))]
     pub query: String,
     /// The query vector, when the caller computed one. Mirrors `SearchParams.embedding`: the CLI
     /// links temper-ingest and embeds locally, which is faster than making the server do it; the
@@ -335,6 +336,14 @@ pub struct Composition {
     ///
     /// At most [`MAX_STAGES`] of them, refused as
     /// [`super::disposition::RefusalReason::TooManyStages`].
+    // **Published on BOTH doors** `[schemars added — 2026-08-28, found in review]`. The `utoipa`
+    // attribute reaches `openapi.json` and the three SDKs; the `schemars` one reaches the MCP tool's
+    // input schema, which IS this type (`temper-mcp`'s `run_query`). Until the second was added, an
+    // MCP client read the doc line *"at most [`MAX_STAGES`] of them"* — a Rust symbol with no
+    // resolvable value — and had no number to hold the server to. Two attributes for one fact is
+    // not duplication to remove: they are two published contracts, and
+    // `the_mcp_door_publishes_the_ceilings_it_enforces` pins both against the constant.
+    //
     // `max_items` is not decoration here — it is what makes the refusal legal where it is raised.
     // The seam guard (`tests/query_validate_seam.rs`) admits a reason into the SHAPE pass only if
     // "asserting it cannot change without a wire-contract change", and the shape module's own rule
@@ -348,6 +357,7 @@ pub struct Composition {
     // rejects, which is the exact argument the `returns` field's own `min_items` comment makes one
     // struct up. It is untouched here only so this change carries one bound rather than two.
     #[cfg_attr(feature = "web-api", schema(max_items = 64))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 64)))]
     pub stages: Vec<StageNode>,
 }
 

@@ -43,9 +43,10 @@ use crate::types::query::composition::{
 };
 use crate::types::query::disposition::RefusalReason;
 use crate::types::query::envelope::ActInvocation;
-use crate::types::query::filter::PropertyOp;
+use crate::types::query::filter::{PropertyOp, MAX_FILTER_VALUES};
 use crate::types::query::id_set::{IdKind, MAX_ID_SET_IDS};
 use crate::types::query::stage::{StageInput, StageName, StageRelation};
+use crate::types::resource_view::ResourceSection;
 
 use super::{index_by_name, refusal, term_wire_name, PlanRefusal};
 
@@ -235,6 +236,31 @@ pub(super) fn validate_shape_indexed(
     // one question, one of them thrown away without a word. Found in review.
     let mut returned_once: BTreeSet<&str> = BTreeSet::new();
     for ret in &c.outcome.returns {
+        // **A section named twice hydrates it once.** `[added — 2026-08-28, found in review]` The
+        // vocabulary is closed (`ReturnSpec::ADMITTED_SECTIONS`), so without this the list is the
+        // one way a caller turns a bounded vocabulary into an unbounded body — `[open_meta; 10_000]`
+        // per return validated cleanly at 9.6 MB. Refused rather than deduplicated, for the reason
+        // on the variant: a silent collapse answers a question nobody quite asked.
+        //
+        // Shape, and by the same test the duplicate-stage check below passes: a repeat is malformed
+        // whatever this door hydrates. WHICH sections it offers is capability's question
+        // (`SectionNotAvailable`), and the two compose — a caller repeating an unoffered section is
+        // told both things at once, which is this contract's rule.
+        let mut sections_once: BTreeSet<&ResourceSection> = BTreeSet::new();
+        for section in &ret.with {
+            if !sections_once.insert(section) {
+                errs.push(refusal(
+                    Some(&ret.stage),
+                    RefusalReason::DuplicateSetMember,
+                    format!(
+                        "stage `{}` names the `{section:?}` section more than once in `with`; \
+                         hydrating a section twice hydrates it once",
+                        ret.stage.as_str()
+                    ),
+                ));
+            }
+        }
+
         if !returned_once.insert(ret.stage.as_str()) {
             errs.push(refusal(
                 Some(&ret.stage),
@@ -619,6 +645,76 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
         };
         if let Some(detail) = missing {
             errs.push(refusal(Some(name), RefusalReason::MissingIntention, detail));
+        }
+    }
+
+    // **The narrowing LISTS: a cap on how many values, and no repeats where the vocabulary is
+    // closed.** `[added — 2026-08-28, found in review]`
+    //
+    // These are the fields that cost nothing per candidate — `ResourceFilter::facets`' own doc says
+    // so: *"`tags` and `doc_type` do NOT have this shape — array containment and `= ANY` are single
+    // operations whatever their length"* — and costing nothing is exactly why nothing capped them.
+    // What they cost is BODY, which is a bound this door owes just the same. `MAX_FILTER_VALUES`
+    // carries the number and why it is tighter than the per-candidate caps.
+    //
+    // Shape rather than capability, on the same test as the id-set cap: each ceiling is `max_items`
+    // on the field it bounds, published on both doors, so it is a contract fact a client may raise
+    // against a server it does not share a binary with.
+    //
+    // ONE site for the reason rather than three, so the three fields cannot drift into three
+    // different numbers, and so the seam guard's count stays honest about how many judgments were
+    // made here — one.
+    {
+        let lists: [(&str, usize); 3] = [
+            (
+                "resource_filter.doc_type",
+                inv.resource_filter.as_ref().map_or(0, |f| f.doc_type.len()),
+            ),
+            (
+                "resource_filter.tags",
+                inv.resource_filter.as_ref().map_or(0, |f| f.tags.len()),
+            ),
+            (
+                "edge_filter.labels",
+                inv.edge_filter.as_ref().map_or(0, |f| f.labels.len()),
+            ),
+        ];
+        for (field, len) in lists {
+            if len > MAX_FILTER_VALUES {
+                errs.push(refusal(
+                    Some(name),
+                    RefusalReason::TooManyFilterValues,
+                    format!(
+                        "`{field}` may carry at most {MAX_FILTER_VALUES} values; this stage \
+                         supplied {len}. A narrowing that names that many is not narrowing"
+                    ),
+                ));
+            }
+        }
+    }
+
+    // **`edge_kinds` is a closed enum carried as a list**, so a repeat walks the same edge kind
+    // twice and changes nothing — the same defect as a repeated section in `with`, and refused for
+    // the same reason. Without it the one bounded vocabulary on `EdgeFilter` is still an unbounded
+    // field. WHICH kinds an act admits stays capability's question; this is only about repeats.
+    if let Some(f) = &inv.edge_filter {
+        // `Vec` rather than a set: `EdgeKind` is not `Ord`, and the list is capped by its own
+        // vocabulary the moment repeats are refused — so the quadratic scan is over at most
+        // `|EdgeKind|` entries before the first refusal fires.
+        let mut kinds_once: Vec<&crate::types::graph::EdgeKind> = Vec::new();
+        for kind in &f.edge_kinds {
+            if kinds_once.contains(&kind) {
+                errs.push(refusal(
+                    Some(name),
+                    RefusalReason::DuplicateSetMember,
+                    format!(
+                        "`edge_filter.edge_kinds` names `{kind:?}` more than once; walking an edge \
+                         kind twice walks it once"
+                    ),
+                ));
+                break;
+            }
+            kinds_once.push(kind);
         }
     }
 

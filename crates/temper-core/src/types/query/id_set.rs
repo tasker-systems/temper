@@ -74,10 +74,13 @@ pub struct IdSet {
     pub provenance: Option<IdProvenance>,
     /// The ids themselves — at most [`MAX_ID_SET_IDS`] of them, refused as
     /// [`crate::types::query::disposition::RefusalReason::TooManyIds`].
+    // Published on BOTH doors — `utoipa` for `openapi.json` and the SDKs, `schemars` for the MCP
+    // tool's input schema. See `Composition::stages` for why the pair is not duplication.
     // `max_items` is what makes that refusal legal in the SHAPE pass, exactly as it is for
     // `Composition::stages` — a client refuses what the contract forbids, never what one
     // deployment chose. See the comment on that field for the full argument.
     #[cfg_attr(feature = "web-api", schema(max_items = 256))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 256)))]
     pub ids: Vec<Uuid>,
 }
 
