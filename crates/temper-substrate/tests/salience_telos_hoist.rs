@@ -228,6 +228,28 @@ async fn the_cogmap_branch_is_hoisted_and_agrees_with_its_own_incumbent(pool: Pg
         "the cogmap fixture must carry more than one live region; got {regions}"
     );
 
+    // The READOUT hoist's cogmap branch, checked before `refresh_salience` runs and overwrites the
+    // column. These values were written by `populate_readouts` during the materialize above, so this
+    // is the only place in the suite that holds the readout path's cogmap branch to the oracle —
+    // `context_with_regions` builds a context, and this is the one cogmap anchor the suite forms.
+    let readout_disagreements: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_cogmap_regions r \
+          WHERE r.home_anchor_table='kb_cogmaps' AND r.home_anchor_id=$1 AND NOT r.is_folded \
+            AND r.telos_alignment IS DISTINCT FROM \
+                nullif(anchor_region_telos_alignment(r.id, r.home_anchor_table, r.home_anchor_id, \
+                                                     r.lens_id), 'NaN'::double precision)",
+    )
+    .bind(loaded.cogmap)
+    .fetch_one(&pool)
+    .await
+    .expect("compare readouts");
+    assert_eq!(
+        readout_disagreements, 0,
+        "every telos_alignment materialize wrote on a COGMAP anchor must equal the per-region \
+         oracle; the hoisted value routes through anchor_telos_embedding's kb_cogmaps branch while \
+         the oracle routes through cogmap_region_telos_alignment"
+    );
+
     install_telos_counter(&pool).await;
     reset_telos_counter(&pool).await;
 
@@ -308,5 +330,82 @@ async fn a_region_with_a_zero_centroid_stores_null_alignment_not_nan(pool: PgPoo
     assert!(
         salience.is_finite(),
         "a NaN alignment would propagate into salience through the blend; got {salience}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The SAME N+1, one layer down: `populate_readouts`.
+//
+// `refresh_salience` was hoisted on 2026-08-03 and the function it stopped calling was left in
+// place partly because `populate_readouts` still called it. That caller is the larger one. Over a
+// 25-day production window its statement ran **121,289 times at a 56ms mean — 6,752s of database
+// time, the single largest line in the deployment** — because it is invoked once per region of
+// every materialize, and each invocation recomputed the same anchor-level goal census.
+//
+// The hoist needed no new query: both `materialize` and `incremental_materialize` ALREADY evaluate
+// the telos once inside their transaction, for the ledger payload. Threading that value down makes
+// the readout and the recorded snapshot the identical evaluation rather than two reads that ought
+// to agree.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **The bite, for the readout path.** A full `materialize` re-asserts every region and calls
+/// `populate_readouts` once per region. The anchor's telos must still be evaluated exactly once.
+///
+/// Against the per-region shape this fails with `left: 1 + <region count>, right: 1` — one
+/// evaluation for the ledger payload plus one per region, which is the defect stated as a number.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn materialize_evaluates_the_anchor_telos_exactly_once(pool: PgPool) {
+    let (ctx, anchor, emitter) = context_with_regions(&pool).await;
+
+    let regions = live_region_count(&pool, ctx).await;
+    assert!(
+        regions > 1,
+        "the fixture must carry more than one live region or the N+1 cannot be distinguished from \
+         a single correct evaluation; got {regions}"
+    );
+
+    install_telos_counter(&pool).await;
+    reset_telos_counter(&pool).await;
+
+    // A second full pass: folds and re-asserts the same partition, so `populate_readouts` runs once
+    // per region. Nothing about the corpus changed, which is what makes the count purely structural.
+    write::materialize(&pool, anchor, "workflow-default", emitter)
+        .await
+        .expect("materialize");
+
+    assert_eq!(
+        telos_eval_count(&pool).await,
+        1,
+        "the anchor telos is one value for the whole anchor and must be evaluated once per \
+         materialize, not once per region ({regions} live regions in this fixture)"
+    );
+}
+
+/// The safety argument for the readout hoist, mirroring
+/// `the_hoisted_alignment_equals_the_incumbent_per_region_function`: what `populate_readouts`
+/// stores must equal what the untouched per-region function computes.
+///
+/// This reads the values `materialize` itself wrote — not a later `refresh_salience` pass — so it
+/// is the readout statement under test, not the clock's.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_hoisted_readout_equals_the_incumbent_per_region_function(pool: PgPool) {
+    let (ctx, _anchor, _emitter) = context_with_regions(&pool).await;
+
+    let disagreements: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_cogmap_regions r \
+          WHERE r.home_anchor_table='kb_contexts' AND r.home_anchor_id=$1 AND NOT r.is_folded \
+            AND r.telos_alignment IS DISTINCT FROM \
+                nullif(anchor_region_telos_alignment(r.id, r.home_anchor_table, r.home_anchor_id, \
+                                                     r.lens_id), 'NaN'::double precision)",
+    )
+    .bind(ctx)
+    .fetch_one(&pool)
+    .await
+    .expect("compare");
+
+    assert_eq!(
+        disagreements, 0,
+        "every telos_alignment written by materialize must equal what the unchanged per-region \
+         function computes; a performance change that moves a value is not a performance change"
     );
 }
