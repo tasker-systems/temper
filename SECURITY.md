@@ -126,8 +126,12 @@ a convention documented as though it were enforced is worse than one documented 
   with sha256-pinned native dependencies. `temper attest` verifies an installed binary.
 - **Dependency and secret scanning.** `cargo audit` blocking in CI, Dependabot, GitHub secret
   scanning with push protection.
-- **CodeQL** static analysis, **blocking**. It gates merges through the same single required
-  check every other CI job reports to, and analyzes only the languages a change can reach.
+- **CodeQL** static analysis, scoped to the languages a change can reach, reporting into the same
+  single required check every other CI job does. **What that gates is that the analysis RAN** — a
+  crashed, stalled or timed-out analysis blocks a merge. It does **not** yet gate on what the
+  analysis *found*: the CodeQL action uploads results rather than failing on them, so blocking a
+  merge on a finding needs code scanning merge protection on the branch ruleset, which is not
+  enabled here. Findings alert; they do not block.
 
 None of these is a guarantee, and several of them say so in their own documentation. They are what
 makes a regression loud rather than silent.
