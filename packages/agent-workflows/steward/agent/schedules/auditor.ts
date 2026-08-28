@@ -137,9 +137,19 @@ import {
  *   (`lib/tool-allowlists.ts`). That held by accident of two separately-authored lists until
  *   `tests/auditor.test.ts` started asserting it; treat the assertion as load-bearing, not tidiness.
  *
- * Cadence: hourly at :30, half an hour behind the steward's `0 * * * *`. Citations authored by a
- * steward tick are then auditable within the same hour without the two ticks writing concurrently
- * over one map. Single-flight and lease-reaping live in the server, so a fixed cadence is safe.
+ * **Cadence is the budget mechanism, not a tuning preference.** The AI Gateway gets a fixed monthly
+ * allowance and that allowance IS the ceiling — topping it up is not the plan. Cadence is how the
+ * auditor is made to fit inside it: hourly spends the month in a few days of real work, daily makes
+ * the same allowance last it. Hourly was also ~24x this corpus's own rate of change, so the extra 23
+ * ticks bought re-derivation rather than coverage.
+ *
+ * **The committed value is every fork's default, so moving it is an operator decision.** It was
+ * hourly at :30 from 2026-07-29 until 2026-08-28. The MINUTE is load-bearing and unchanged: :30
+ * trails the steward's `0 * * * *` so citations authored by a steward tick stay auditable without
+ * the two ticks writing concurrently over one map. The HOUR is not load-bearing — an operator with a
+ * larger allowance may raise the frequency, and one with none should reach for the enable toggle
+ * below rather than a cron nobody can read as deliberate. Single-flight and lease-reaping live in
+ * the server, so any fixed cadence is safe.
  */
 /**
  * The claimed-job wire shape, taken from the generated OpenAPI client rather than hand-mirrored.
@@ -151,7 +161,7 @@ import {
 type ClaimedAuditJob = components["schemas"]["ClaimedAuditJob"];
 
 export default defineSchedule({
-  cron: "30 * * * *", // hourly at :30, UTC — trailing the steward's tick; the server gates the rest
+  cron: "30 3 * * *", // daily at 03:30 UTC — trailing a steward tick; see "Cadence" above
   async run({ receive, waitUntil, appAuth }) {
     // The auditor is OPTIONAL; the steward is not. This file ships in the repo, and eve registers
     // one Vercel Cron Job per file here — so every fork and self-hosted deploy of this agent gets

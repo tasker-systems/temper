@@ -313,3 +313,38 @@ describe("auditor credentials", () => {
     expect(api.bearers).toEqual(["temper-as-token-1", "temper-as-token-2"]);
   });
 });
+
+// ── Fitting the auditor inside its allowance ──────────────────────────────────────────────────
+//
+// Three axes decide whether an optional agent runs on a given tick. They are deliberately
+// different questions with deliberately different defaults:
+//
+//   credential   — absent means SKIP.    Nobody configured an auditor on this deployment.
+//   enablement   — absent means RUN.     A merge may not turn a production cron off.
+//   capacity     — refused means SKIP.   The issuer will not mint for this credential right now.
+//
+// The suite above pins the first. These pin the second and third, plus the cadence that is the
+// mechanism by which the auditor is made to fit a fixed monthly allowance — not a tuning nicety.
+describe("cadence — the auditor's budget mechanism", () => {
+  it("runs once a day, not hourly", async () => {
+    // Hourly on this corpus is ~24x its own rate of change, and the AI Gateway's allowance is a
+    // fixed ceiling rather than something to top up — so cadence is how the auditor is made to fit
+    // inside it. The assertion is the SHAPE (a fixed hour), not which hour: the hour is an
+    // operator's to move, but a wildcard hour field would restore the spend this exists to bound.
+    const schedule = (await import("../agent/schedules/auditor.js")).default;
+    const hour = (schedule.cron ?? "").split(" ")[1];
+
+    expect(schedule.cron).toBeDefined();
+    expect(hour).not.toBe("*");
+    expect(hour).toMatch(/^\d{1,2}$/);
+  });
+
+  it("still trails a steward tick rather than colliding with one", async () => {
+    // The incumbent's reason for :30 outlives the cadence change: citations authored by a steward
+    // tick stay auditable without the two ticks writing concurrently over one map.
+    const auditor = (await import("../agent/schedules/auditor.js")).default;
+    const steward = (await import("../agent/schedules/steward.js")).default;
+
+    expect((auditor.cron ?? "").split(" ")[0]).not.toBe((steward.cron ?? "").split(" ")[0]);
+  });
+});
