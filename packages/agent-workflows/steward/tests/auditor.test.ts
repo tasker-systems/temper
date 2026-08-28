@@ -1,3 +1,6 @@
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type MockApi, type MockIssuer, startMockApi, startMockIssuer } from "temper-ts/testing";
 
@@ -12,6 +15,33 @@ import { AUDITOR_TOOLS, STEWARD_TOOLS } from "../agent/lib/tool-allowlists.js";
 
 let issuer: MockIssuer | undefined;
 let api: MockApi | undefined;
+let refusing: { url: string; close(): Promise<void> } | undefined;
+
+/**
+ * A token endpoint that refuses every mint with one status.
+ *
+ * Deliberately NOT an option on `startMockIssuer`. That mock's own header says the auth0 flavor "is
+ * asserted against NOTHING real" and must not be trusted "for the exact status or error code it says
+ * so with" — so teaching it a quota response would dress a local guess as a pinned contract. This
+ * server claims nothing about Auth0; it exists to put one status on the wire so the classifier can
+ * be witnessed against it.
+ */
+async function startRefusingIssuer(
+  status: number,
+  body: unknown,
+): Promise<{ url: string; close(): Promise<void> }> {
+  const server: Server = createServer((_req, res) => {
+    res.writeHead(status, { "content-type": "application/json" });
+    res.end(JSON.stringify(body));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `http://127.0.0.1:${port}/oauth/token`,
+    close: () =>
+      new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve()))),
+  };
+}
 
 const AUDITOR_ENV_NAMES = [
   "TEMPER_AUDITOR_M2M_CLIENT_ID",
@@ -40,8 +70,10 @@ beforeEach(() => {
 afterEach(async () => {
   await issuer?.close();
   await api?.close();
+  await refusing?.close();
   issuer = undefined;
   api = undefined;
+  refusing = undefined;
 });
 
 describe("resolveAuditorModelConfig", () => {
@@ -417,5 +449,108 @@ describe("the enable toggle — absence means ENABLED", () => {
     // A skip, never a fallback: nothing parked, nothing dispatched, and not a thrown error.
     expect(waitUntil).not.toHaveBeenCalled();
     expect(receive).not.toHaveBeenCalled();
+  });
+});
+
+describe("capacity — correct credentials are not sufficient credentials", () => {
+  const mod = "../agent/lib/optional-agent.js";
+
+  // Auth0 enforces its own monthly quota on M2M token issuance, so the auditor's credentials can be
+  // entirely correct and still be rejected. That is a funding ceiling, not a misconfiguration, and
+  // it belongs in the same quiet skip as an absent credential.
+  //
+  // It answers **429**, NOT the AI Gateway's 402. Different vendor, different failure, different
+  // status — and matching the gateway's code by analogy would match one Auth0 never sends.
+  it("classifies a 429 from the token endpoint as cannot-run-right-now", async () => {
+    const { tokenIssuanceUnavailable } = await import(mod);
+    const err = Object.assign(new Error("token mint failed (429): quota"), {
+      name: "TokenMintError",
+      status: 429,
+    });
+    expect(tokenIssuanceUnavailable(err)).toBe(true);
+  });
+
+  it("does NOT classify a 401 that way — a wrong credential must stay loud", async () => {
+    // The distinction the whole guard exists to draw. "Cannot afford to run" is quiet; "believes it
+    // is auditing and is not" is the far worse failure and must never be silenced.
+    const { tokenIssuanceUnavailable } = await import(mod);
+    const err = Object.assign(new Error("token mint failed (401): invalid_client"), {
+      name: "TokenMintError",
+      status: 401,
+    });
+    expect(tokenIssuanceUnavailable(err)).toBe(false);
+  });
+
+  it("does NOT classify a 429 that did not come from the token endpoint", async () => {
+    // A 429 from temper's own API is rate limiting, not a funding ceiling, and arrives as a plain
+    // Error from the schedule's own `res.ok` check. The structural name check is what separates
+    // them; without it this would quietly swallow an unrelated class of failure.
+    const { tokenIssuanceUnavailable } = await import(mod);
+    expect(tokenIssuanceUnavailable(new Error("auditor dispatch failed: 429 slow down"))).toBe(false);
+    expect(tokenIssuanceUnavailable({ status: 429 })).toBe(false);
+  });
+
+  it("does NOT classify a missing-env failure — that is a misconfiguration", async () => {
+    // A partially-configured auditor throws a plain Error out of `requireEnv`, and the incumbent is
+    // explicit that this must be loud: it is a misconfiguration by someone who MEANT to run one.
+    const { tokenIssuanceUnavailable } = await import(mod);
+    expect(
+      tokenIssuanceUnavailable(new Error("TEMPER_AUDITOR_M2M_CLIENT_SECRET is required")),
+    ).toBe(false);
+  });
+
+  // THE WIRING. As with the other two axes, the predicate tests above all stay green if the
+  // schedule never consults it.
+  it("the tick ends QUIETLY when the token endpoint answers 429", async () => {
+    refusing = await startRefusingIssuer(429, {
+      error: "too_many_requests",
+      error_description: "Client quota exceeded",
+    });
+    process.env.TEMPER_API_URL = "https://example.invalid";
+    process.env.TEMPER_AUDITOR_M2M_CLIENT_ID = "auditor-client";
+    process.env.TEMPER_AUDITOR_M2M_CLIENT_SECRET = "s3cr3t";
+    process.env.TEMPER_AUDITOR_M2M_TOKEN_URL = refusing.url;
+
+    const schedule = (await import("../agent/schedules/auditor.js")).default;
+    const receive = vi.fn();
+    const waitUntil = vi.fn();
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await schedule.run?.({ receive, waitUntil, appAuth: {} as never });
+
+    // The tick still PARKS — the credential is configured, so the guard above must not stop it — and
+    // the parked promise must then SETTLE rather than reject. Resolving is the whole assertion: it
+    // is what "degrade quietly" means at this seam.
+    expect(waitUntil).toHaveBeenCalledTimes(1);
+    await expect(waitUntil.mock.calls[0]?.[0]).resolves.toBeUndefined();
+    expect(receive).not.toHaveBeenCalled();
+    expect(error).not.toHaveBeenCalled();
+    error.mockRestore();
+  });
+
+  it("the tick still FAILS LOUDLY when the token endpoint rejects the credential", async () => {
+    // Same code path, one status apart. The mock issuer is used here for the one thing it is pinned
+    // on — the AS's own 401 for a secret that does not verify.
+    issuer = await startMockIssuer({
+      flavor: "temper-as",
+      clientId: "tmpr_auditor",
+      clientSecret: "the-real-secret",
+    });
+    process.env.TEMPER_API_URL = "https://example.invalid";
+    process.env.TEMPER_AUDITOR_M2M_CLIENT_ID = "tmpr_auditor";
+    process.env.TEMPER_AUDITOR_M2M_CLIENT_SECRET = "the-wrong-secret";
+    process.env.TEMPER_AUDITOR_M2M_TOKEN_URL = issuer.url;
+
+    const schedule = (await import("../agent/schedules/auditor.js")).default;
+    const receive = vi.fn();
+    const waitUntil = vi.fn();
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await schedule.run?.({ receive, waitUntil, appAuth: {} as never });
+
+    expect(waitUntil).toHaveBeenCalledTimes(1);
+    await expect(waitUntil.mock.calls[0]?.[0]).rejects.toThrow(/401/);
+    expect(error).toHaveBeenCalled();
+    error.mockRestore();
   });
 });

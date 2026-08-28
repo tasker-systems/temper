@@ -9,14 +9,15 @@
  *
  *   credential   — absent means SKIP.    `credentialConfigured` in `temper-auth.ts`.
  *   enablement   — absent means RUN.     [`agentEnabled`] below.
+ *   capacity     — refused means SKIP.   [`tokenIssuanceUnavailable`] below.
  *
  * The credential axis stays in `temper-auth.ts` because it is genuinely auth: it is derived from the
  * same `CredentialEnv` shape `build` reads, in the same order, so the two cannot drift on what
- * "configured" means. Enablement is not auth — it is the guard — so it lives here.
+ * "configured" means. The other two are not auth — they are the guard — so they live here.
  *
- * They share one contract, and it is the incumbent's: **a skip, never a fallback.** Neither widens
- * what may authenticate as the auditor, and neither starts the tick as somebody else. The fix for
- * "cannot run" is to not start.
+ * All three share one contract, and it is the incumbent's: **a skip, never a fallback.** None of
+ * them widens what may authenticate as the auditor, and none of them starts the tick as somebody
+ * else. The fix for "cannot run" is to not start.
  */
 
 /** The auditor's enable toggle. Named beside `AUDITOR_CREDENTIALS`, and read the same way: by name. */
@@ -80,4 +81,55 @@ export function agentEnabled(name: string): boolean {
       "turn it off — an unreadable value is not taken as an instruction to stop.",
   );
   return true;
+}
+
+/**
+ * The status an issuer answers with when it will not mint for a credential it otherwise accepts.
+ *
+ * **429, and deliberately not the AI Gateway's 402.** These are two different vendors failing two
+ * different ways: the gateway's 402 is a credit balance and is raised at the model call; this is
+ * Auth0's monthly quota on machine-to-machine token issuance and is raised at the token endpoint.
+ * Matching 402 here — the obvious guess, since both are "out of money" — would match a status Auth0
+ * never sends.
+ */
+const ISSUANCE_REFUSED_STATUS = 429;
+
+/**
+ * Did a token mint fail because the issuer would not mint RIGHT NOW, rather than because the
+ * credential is wrong?
+ *
+ * **Correct credentials are not sufficient credentials.** Auth0 enforces its own monthly quota on
+ * M2M token issuance, so the auditor's credentials can be entirely correct and still be rejected.
+ * That is a funding ceiling, not a misconfiguration, and it belongs in the same quiet skip as an
+ * absent credential: an optional agent that cannot run right now.
+ *
+ * **The status line is the whole predicate, and that is a decision rather than a shortcut.**
+ *
+ * - **It is enough.** A wrong credential is `401 invalid_client`, from Auth0 and from temper's own
+ *   AS alike. So the distinction the guard exists to draw — "cannot afford to run" quiet, "believes
+ *   it is auditing and is not" loud — falls out of the status without reading a body at all.
+ * - **Quota and throttling are not separated, and need not be.** Both are 429 and both mean the same
+ *   thing to this caller. Auth0 documents quota headers as the discriminator, but they are
+ *   unreachable twice over: `TokenMintError` carries only a status, and an instance's own
+ *   `/oauth/token` proxy rebuilds the response keeping content-type and cache-control alone.
+ * - **The body is log detail, never a predicate.** Matching `error_description` would couple this to
+ *   vendor prose, and confirming that prose against the live issuer would cost a token from the very
+ *   quota being probed. Do not pre-check by minting one.
+ *
+ * **This needs no deployment-profile branch, and that is not an oversight.** A temper-issued `tmpr_`
+ * credential never transits Auth0, and temper's own AS has no 429 in its vocabulary — it answers 400,
+ * 401 and 503. So on a self-hosted instance this predicate is simply never true, and the behaviour
+ * degrades to what it was before rather than assuming an Auth0 error vocabulary everywhere.
+ *
+ * Checked STRUCTURALLY rather than with `instanceof`: the error is raised by `temper-ts` and crosses
+ * a package boundary, where a duplicated module identity would make `instanceof` quietly false. The
+ * name check is also what keeps this narrow — a 429 from temper's own API is rate limiting rather
+ * than a funding ceiling, and arrives as a plain `Error` that must stay loud.
+ */
+export function tokenIssuanceUnavailable(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) {
+    return false;
+  }
+  const { name, status } = err as { name?: unknown; status?: unknown };
+  return name === "TokenMintError" && status === ISSUANCE_REFUSED_STATUS;
 }

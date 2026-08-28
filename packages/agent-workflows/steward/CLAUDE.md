@@ -16,20 +16,45 @@ quality.
 **Two agents live here, and their separation is the product.** Besides the root steward, this
 project ships the **citation auditor** (Set 5) as a declared subagent at `agent/subagents/auditor/`.
 
-> **The auditor's cron is LIVE as of 2026-07-29** — `agent/schedules/auditor.ts`, hourly at `:30`,
-> trailing the steward's `0 * * * *`. eve creates one Vercel Cron Job per file in `agent/schedules/`,
-> so **this file's location is the on/off switch**: withdrawing the capability again means moving it
-> back out, not guarding `run`.
+> **The auditor's cron is LIVE as of 2026-07-29** — `agent/schedules/auditor.ts`, **daily at 03:30
+> UTC**, trailing a steward tick. eve creates one Vercel Cron Job per file in `agent/schedules/`, so
+> **this file's location is the repo-wide on/off switch**: withdrawing the *capability* means moving
+> it back out. The guards in `run` are a different thing — they decide whether a given *deployment's*
+> tick does work, and they never remove the ability to run the auditor on demand.
 >
-> **A deployment with no auditor credential no-ops rather than failing.** `run` checks
-> `credentialConfigured(AUDITOR_CREDENTIALS)` and returns early with a log line. This is a **skip,
-> never a fallback** — `auditorFetch` still throws rather than borrowing the steward's credential,
-> and that is pinned by test. It exists because this schedule ships in the repo, so every fork and
-> self-hosted deploy gets the cron whether or not it runs an auditor; without the skip they all fail
-> hourly on a credential they never meant to set. Only **total** absence skips: a partially
+> **Cadence is a budget mechanism, not a preference.** The AI Gateway's monthly allowance is a fixed
+> ceiling rather than something to top up, so cadence is how the auditor is made to fit inside it.
+> The `:30` minute is load-bearing (it trails the steward's `0 * * * *` so the two never write
+> concurrently over one map); the hour is an operator's to move. The committed value is every fork's
+> default.
+>
+> **Three axes decide whether a tick does any work, with three different defaults.** Two live in
+> `agent/lib/optional-agent.ts`; the credential one stays in `temper-auth.ts` because it is genuinely
+> auth. All three are a **skip, never a fallback** — `auditorFetch` still throws rather than
+> borrowing the steward's credential, and that is pinned by test.
+>
+> | axis | predicate | absent means |
+> |---|---|---|
+> | credential | `credentialConfigured(AUDITOR_CREDENTIALS)` | **skip** — nobody configured an auditor here |
+> | enablement | `agentEnabled(AUDITOR_ENABLED)` | **run** — a merge may not turn a production cron off |
+> | capacity | `tokenIssuanceUnavailable(err)` | n/a — classified from the failure, never pre-checked |
+>
+> The credential guard exists because this schedule ships in the repo, so every fork and self-hosted
+> deploy gets the cron whether or not it runs an auditor. Only **total** absence skips: a partially
 > configured auditor (client id set, secret missing) still fails loudly, because that is a
 > misconfiguration by someone who meant to run one, and silence there means believing you are
 > auditing when you are not.
+>
+> **`TEMPER_AUDITOR_ENABLED` is an opt-OUT** — the inverse polarity of everything else here, so that
+> every deployment auditing today keeps auditing across the change that added it. Unset,
+> declared-but-empty, and unrecognized values all mean **enabled**; the last one warns.
+>
+> **Correct credentials are not sufficient credentials.** Auth0 enforces a monthly quota on M2M token
+> issuance, so a credential can be entirely correct and still refused — `429`, and deliberately not
+> the AI Gateway's `402`. That is a funding ceiling, not a misconfiguration, and it takes the same
+> quiet skip. A wrong credential is `401` and stays loud. The status line is the whole predicate;
+> the body is never matched, and no probe token is minted, because minting one spends the quota being
+> probed.
 >
 > It shipped enabled once before, in PR #531, fired hourly from 2026-07-24T23:16Z, and failed every
 > tick on an unprovisioned `TEMPER_AUDITOR_TOKEN` until it was withdrawn on 2026-07-25. Both lessons

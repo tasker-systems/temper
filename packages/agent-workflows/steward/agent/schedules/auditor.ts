@@ -2,7 +2,7 @@ import { defineSchedule } from "eve/schedules";
 import { TEMPER_TS_VERSION, type components } from "temper-ts";
 
 import auditorWorker from "../channels/auditor-worker.js";
-import { AUDITOR_ENABLED, agentEnabled } from "../lib/optional-agent.js";
+import { AUDITOR_ENABLED, agentEnabled, tokenIssuanceUnavailable } from "../lib/optional-agent.js";
 import {
   AUDITOR_CREDENTIALS,
   auditorFetch,
@@ -18,10 +18,12 @@ import {
  * carrying a cron expression"*), so this file's LOCATION is the on/off switch. It lived outside
  * the agent root from 2026-07-25 until now for exactly that reason.
  *
- * **Turning this off again means moving the file back out, not guarding `run`.** The
- * unconfigured-skip below is not an off switch: on a deployment that HAS an auditor credential the
- * cron fires and works. Withdrawing the capability is a `git mv` plus an operator decision, the
- * same way restoring it was.
+ * **Withdrawing the CAPABILITY still means moving the file back out.** That is a repo-wide decision
+ * — it unregisters the cron for every deployment — and it stays a `git mv` plus an operator
+ * decision, the same way restoring it was. The guards in `run` answer a narrower question: whether
+ * THIS deployment's tick does work. `TEMPER_AUDITOR_ENABLED` is the per-deployment off switch, and
+ * it deliberately leaves the auditor runnable on demand, which is exactly what unsetting a
+ * credential cannot do. Neither guard is a substitute for the other.
  *
  * **The history this file exists to not repeat.** It shipped enabled in PR #531 and began firing in
  * production on 2026-07-24T23:16Z. Every tick died at `requireEnv("TEMPER_AUDITOR_TOKEN")` before
@@ -283,6 +285,22 @@ export default defineSchedule({
             ),
           );
         } catch (err) {
+          // The THIRD axis of the optional-agent guard, and the one the credential check above
+          // cannot see. `credentialConfigured` reads environment variables: it establishes that
+          // somebody INTENDED to run an auditor, never that the auditor CAN run. A deployment whose
+          // issuance quota is spent holds credentials that are entirely correct and still gets them
+          // refused — configured-and-cannot-mint passes the guard and then fails here.
+          //
+          // Classified rather than pre-checked: minting a probe token to ask whether a token can be
+          // minted spends the very quota being probed.
+          if (tokenIssuanceUnavailable(err)) {
+            console.log(
+              `[auditor-dispatch] tick ${correlationId}: the token endpoint will not mint for this ` +
+                "credential right now (issuance quota). Agent maintenance is optional; skipping " +
+                "this tick. This is a deliberate no-op, not a failure — no work was claimed.",
+            );
+            return;
+          }
           console.error(`[auditor-dispatch] tick ${correlationId} failed:`, err);
           throw err;
         }

@@ -256,6 +256,7 @@ Set these on the Vercel project (dashboard, or `vercel env add <NAME>`) **before
 | `TEMPER_AUDITOR_M2M_TOKEN_URL` | auditor, prod | Same issuer as the steward's — one instance, one issuer. Only the credential differs. |
 | `TEMPER_AUDITOR_M2M_AUDIENCE` | **external IdP only** | Same rule as `TEMPER_M2M_AUDIENCE`: required for Auth0, **omitted** for a `tmpr_` credential. |
 | `TEMPER_AUDITOR_TOKEN` | dev only | Static auditor bearer for `eve dev`. The unset-with-no-`CLIENT_ID` case **throws** rather than silently falling back to the steward's identity. |
+| `TEMPER_AUDITOR_ENABLED` | optional | **Opt-OUT.** Turns agent maintenance off on a deployment that holds auditor credentials and still wants the cron idle. **Absence means ENABLED** — as do a declared-but-empty value and any value not in `0`/`false`/`off`/`no` (that last case warns). Deliberately the inverse polarity of every other variable here: a merge may not turn a production cron off any more than on. |
 | `AUDITOR_MODEL` | optional | The auditor's primary model. Defaults to `anthropic/claude-haiku-4.5` — deliberately **not** the steward's default. Same build-time freeze and redeploy-to-change semantics. |
 | `AUDITOR_MODEL_FALLBACKS` | optional | Defaults to `minimax/minimax-m3` (the steward's primary — a documented availability trade). Set to `""` to make the tick fail rather than collapse the two personas onto one model. |
 
