@@ -166,7 +166,14 @@ jobs:
           # No compilation for any language here. Rust supports it, and requiring a build would put
           # a full cargo compile — plus whatever a build.rs wants — inside a job holding
           # `security-events: write`, on every PR that touches Rust.
+          #
+          # It is now load-bearing for a SECOND reason: `paths-ignore` in the config file below is
+          # only honored for interpreted languages and for compiled languages analyzed WITHOUT
+          # building. Restoring a build mode here silently disables that file.
           build-mode: none
+          # Excludes the test and example trees, where CodeQL's `remote` threat model is false by
+          # construction. The file carries the alert-by-alert reasoning and the cost.
+          config-file: .github/codeql/codeql-config.yml
 
       - name: Analyze
         uses: github/codeql-action/analyze@v3
