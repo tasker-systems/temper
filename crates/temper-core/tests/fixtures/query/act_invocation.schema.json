@@ -68,7 +68,7 @@
           "items": {
             "type": "string"
           },
-          "maxItems": 64,
+          "maxItems": 256,
           "type": "array"
         },
         "properties": {
@@ -304,7 +304,7 @@
           "items": {
             "type": "string"
           },
-          "maxItems": 64,
+          "maxItems": 256,
           "type": "array"
         },
         "facets": {
@@ -344,7 +344,7 @@
           "items": {
             "type": "string"
           },
-          "maxItems": 64,
+          "maxItems": 256,
           "type": "array"
         },
         "title_contains": {

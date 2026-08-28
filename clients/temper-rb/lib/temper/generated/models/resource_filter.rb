@@ -146,12 +146,12 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
-      if !@doc_type.nil? && @doc_type.length > 64
-        invalid_properties.push('invalid value for "doc_type", number of items must be less than or equal to 64.')
+      if !@doc_type.nil? && @doc_type.length > 256
+        invalid_properties.push('invalid value for "doc_type", number of items must be less than or equal to 256.')
       end
 
-      if !@tags.nil? && @tags.length > 64
-        invalid_properties.push('invalid value for "tags", number of items must be less than or equal to 64.')
+      if !@tags.nil? && @tags.length > 256
+        invalid_properties.push('invalid value for "tags", number of items must be less than or equal to 256.')
       end
 
       invalid_properties
@@ -161,8 +161,8 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
-      return false if !@doc_type.nil? && @doc_type.length > 64
-      return false if !@tags.nil? && @tags.length > 64
+      return false if !@doc_type.nil? && @doc_type.length > 256
+      return false if !@tags.nil? && @tags.length > 256
       true
     end
 
@@ -173,8 +173,8 @@ module Temper::Generated
         fail ArgumentError, 'doc_type cannot be nil'
       end
 
-      if doc_type.length > 64
-        fail ArgumentError, 'invalid value for "doc_type", number of items must be less than or equal to 64.'
+      if doc_type.length > 256
+        fail ArgumentError, 'invalid value for "doc_type", number of items must be less than or equal to 256.'
       end
 
       @doc_type = doc_type
@@ -187,8 +187,8 @@ module Temper::Generated
         fail ArgumentError, 'tags cannot be nil'
       end
 
-      if tags.length > 64
-        fail ArgumentError, 'invalid value for "tags", number of items must be less than or equal to 64.'
+      if tags.length > 256
+        fail ArgumentError, 'invalid value for "tags", number of items must be less than or equal to 256.'
       end
 
       @tags = tags

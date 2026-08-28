@@ -572,7 +572,7 @@ fn query_routes() -> OpenApiRouter<AppState> {
 ///
 /// So the coherence property below holds over every field whose COUNT the contract fixes, and
 /// `the_largest_legal_composition_fits_inside_the_declared_body_limit` measures that maximum at
-/// **2,406,820 bytes** — 1.74x under this number.
+/// **2,455,972 bytes** — 1.71x under this number.
 ///
 /// What it does not bound is SIZE, and there are two kinds `[both named — 2026-08-28, after review]`:
 /// the LENGTH of a string inside a counted list (a facet key, a label, a `title_contains`), and the

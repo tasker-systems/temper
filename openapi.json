@@ -10842,7 +10842,7 @@
             "items": {
               "type": "string"
             },
-            "maxItems": 64
+            "maxItems": 256
           },
           "properties": {
             "type": "array",
@@ -14418,7 +14418,7 @@
               "type": "string"
             },
             "description": "`kb_properties` where `property_key = 'doc_type'`.",
-            "maxItems": 64
+            "maxItems": 256
           },
           "facets": {
             "type": "array",
@@ -14458,7 +14458,7 @@
               "type": "string"
             },
             "description": "`kb_properties` where `property_key = 'tags'`. AND-containment.",
-            "maxItems": 64
+            "maxItems": 256
           },
           "title_contains": {
             "type": [

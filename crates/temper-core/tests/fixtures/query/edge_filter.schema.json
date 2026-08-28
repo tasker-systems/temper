@@ -102,7 +102,7 @@
       "items": {
         "type": "string"
       },
-      "maxItems": 64,
+      "maxItems": 256,
       "type": "array"
     },
     "properties": {
