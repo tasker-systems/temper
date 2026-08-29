@@ -26,6 +26,7 @@ fn test_client(base_url: &str) -> TemperClient {
         "test-token".to_string(),
         Arc::new(MemoryTokenStore::empty()),
     )
+    .expect("test server URL (loopback) validates")
 }
 
 fn segmented_payload() -> IngestPayload {

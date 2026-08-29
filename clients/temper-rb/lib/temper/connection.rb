@@ -68,7 +68,11 @@ module Temper
     def base_uri
       raise ArgumentError, 'Temper.config.base_url is not set' if config.base_url.nil?
 
-      URI.parse(config.base_url)
+      # Every request puts the bearer token on this URL, so the scheme is
+      # checked where the client is built, not per request. The opt-in is
+      # configuration here (not a kwarg) because the gem's URL is process-wide.
+      Validate.require_endpoint(config.base_url, name: 'base_url',
+                                                 allow_insecure_http: config.allow_insecure_http)
     end
 
     def apply_endpoint(generated_config, base)

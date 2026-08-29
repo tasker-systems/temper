@@ -713,6 +713,15 @@ pub async fn refresh_token(
 ) -> Result<StoredAuth> {
     use secrecy::ExposeSecret;
 
+    // The refresh token goes on the wire to this URL, so the scheme is checked
+    // before any network attempt — the same rule `HttpClient::new` applies to
+    // the base URL, at the one place a secret meets this endpoint.
+    crate::endpoint::validate_endpoint(
+        token_url,
+        "token_url",
+        crate::endpoint::allow_insecure_http_from_env(),
+    )?;
+
     let refresh = auth
         .refresh_token
         .as_ref()
@@ -807,6 +816,37 @@ mod tests {
     fn needs_refresh_false_when_expires_in_10_minutes() {
         let auth = make_auth(Utc::now() + Duration::minutes(10));
         assert!(!needs_refresh(&auth));
+    }
+
+    // --- refresh_token: the scheme refusal fires before any network attempt ---
+
+    #[test]
+    fn refresh_token_refuses_a_plaintext_non_loopback_token_url() {
+        temp_env::with_var("TEMPER_ALLOW_INSECURE_HTTP", None::<&str>, || {
+            let auth = make_auth(Utc::now() - Duration::minutes(1));
+            let store = crate::auth::MemoryTokenStore::empty();
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .expect("test runtime");
+            // No server is started: the refusal must happen before any network
+            // attempt, so a would-be listener port is never reached.
+            let err = rt
+                .block_on(refresh_token(
+                    &store,
+                    &auth,
+                    "http://idp.example.com/oauth/token",
+                    "test-client",
+                ))
+                .expect_err("plaintext non-loopback token_url must be refused");
+            assert!(
+                matches!(err, ClientError::NotConfigured(_)),
+                "expected NotConfigured, got {err:?}"
+            );
+            assert!(
+                err.to_string().contains("token_url"),
+                "names the variable: {err}"
+            );
+        });
     }
 
     #[test]

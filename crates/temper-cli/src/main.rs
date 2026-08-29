@@ -1415,29 +1415,21 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     target.default_skill_dir(&home)
                 };
                 let report = temper_cli::commands::skill::install(&config, &skill_dir, target)?;
-                if report.is_no_op() {
+                if report.is_no_op() || report.changed.is_empty() {
                     temper_cli::output::success(format!(
                         "Skill already up to date ({} files): {}",
                         report.total,
                         skill_dir.display()
                     ));
                 } else {
-                    if report.changed.is_empty() {
-                        temper_cli::output::success(format!(
-                            "Skill already up to date ({} files): {}",
-                            report.total,
-                            skill_dir.display()
-                        ));
-                    } else {
-                        temper_cli::output::success(format!(
-                            "Skill installed: {} ({} of {} files updated)",
-                            skill_dir.display(),
-                            report.changed.len(),
-                            report.total
-                        ));
-                        for path in &report.changed {
-                            temper_cli::output::item(path);
-                        }
+                    temper_cli::output::success(format!(
+                        "Skill installed: {} ({} of {} files updated)",
+                        skill_dir.display(),
+                        report.changed.len(),
+                        report.total
+                    ));
+                    for path in &report.changed {
+                        temper_cli::output::item(path);
                     }
                 }
                 for path in &report.removed_legacy {

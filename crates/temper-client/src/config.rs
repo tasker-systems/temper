@@ -94,6 +94,19 @@ pub fn build_client_from(
     surface: temper_workflow::operations::Surface,
 ) -> crate::error::Result<crate::TemperClient> {
     let url = api_url(config);
+    // Validated here under the operator-facing name — `TEMPER_API_URL` /
+    // `cloud.api_url` — so a refusal names the variable the caller can fix.
+    // The empty case is deliberately left to `HttpClient::new`, whose message
+    // names the fix ("run `temper init`") rather than the parse failure.
+    // `TemperClient::new` re-validates as `base_url` for direct constructors;
+    // a URL that passes here passes there.
+    if !url.is_empty() {
+        crate::endpoint::validate_endpoint(
+            &url,
+            "api_url",
+            crate::endpoint::allow_insecure_http_from_env(),
+        )?;
+    }
     let auth = store.load()?;
     let device_id = auth.as_ref().and_then(|a| a.device_id.clone());
 
@@ -104,9 +117,9 @@ pub fn build_client_from(
             surface,
             secrecy::ExposeSecret::expose_secret(&auth.access_token).to_string(),
             store,
-        )
+        )?
     } else {
-        crate::TemperClient::new(&url, device_id, surface, store)
+        crate::TemperClient::new(&url, device_id, surface, store)?
     };
 
     let client = match oauth_config(config) {
@@ -394,11 +407,17 @@ scopes        = ["openid", "profile"]
     // --- build_client smoke test ---
 
     #[test]
-    fn build_client_succeeds_with_defaults() {
+    fn build_client_without_configuration_names_the_fix() {
         // Point TEMPER_GLOBAL_CONFIG at a non-existent path inside a temp dir
         // so load_config() falls back to TemperConfig::default() instead of
         // reading the developer's real ~/.config/temper/config.toml (which
         // might be in any format at any time).
+        //
+        // `[amended]` The old contract — construction succeeds with an empty
+        // api_url and the refusal fires at first request — moved to
+        // construction when endpoint validation landed: every request puts
+        // the bearer token on that URL, so the scheme and the emptiness are
+        // checked at the same seam. Same error, same message, earlier.
         let dir = TempDir::new().unwrap();
         let nonexistent = dir.path().join("no-such-config.toml");
         let store: std::sync::Arc<dyn crate::auth::TokenStore> =
@@ -410,10 +429,88 @@ scopes        = ["openid", "profile"]
             ],
             || build_client(store, temper_workflow::operations::Surface::CliCloud),
         );
-        assert!(result.is_ok(), "build_client failed: {:?}", result.err());
+        let err = result.expect_err("empty api_url must be refused at construction");
+        assert!(
+            matches!(err, crate::error::ClientError::NotConfigured(ref msg)
+                if msg.contains("temper init")),
+            "expected an actionable NotConfigured, got {err:?}"
+        );
     }
 
     // --- build_client_from ---
+
+    #[test]
+    fn build_client_from_refuses_a_plaintext_non_loopback_api_url() {
+        // The refusal must surface here — at the builder, before any network
+        // attempt — naming the variable and both outs (https, or the env
+        // opt-in). `api_url()` reads the environment, so pin it unset.
+        temp_env::with_var("TEMPER_API_URL", None::<&str>, || {
+            temp_env::with_var("TEMPER_ALLOW_INSECURE_HTTP", None::<&str>, || {
+                let config = TemperConfig {
+                    cloud: CloudSection {
+                        api_url: "http://temper.example.com".to_string(),
+                    },
+                    ..TemperConfig::default()
+                };
+                let store: std::sync::Arc<dyn crate::auth::TokenStore> =
+                    std::sync::Arc::new(crate::auth::MemoryTokenStore::empty());
+                let err = build_client_from(
+                    &config,
+                    store,
+                    temper_workflow::operations::Surface::CliCloud,
+                )
+                .expect_err("plaintext non-loopback must be refused");
+                assert!(
+                    matches!(err, crate::error::ClientError::NotConfigured(_)),
+                    "expected NotConfigured, got {err:?}"
+                );
+                let msg = err.to_string();
+                assert!(msg.contains("api_url"), "names the variable: {msg}");
+                assert!(
+                    msg.contains("TEMPER_ALLOW_INSECURE_HTTP"),
+                    "names the opt-in: {msg}"
+                );
+            })
+        });
+    }
+
+    #[test]
+    fn build_client_from_allows_loopback_plaintext_and_the_env_opt_out() {
+        temp_env::with_var("TEMPER_API_URL", None::<&str>, || {
+            let store: std::sync::Arc<dyn crate::auth::TokenStore> =
+                std::sync::Arc::new(crate::auth::MemoryTokenStore::empty());
+
+            // Loopback plaintext is the dev workflow, not a refusal.
+            let loopback = TemperConfig {
+                cloud: CloudSection {
+                    api_url: "http://127.0.0.1:9966".to_string(),
+                },
+                ..TemperConfig::default()
+            };
+            build_client_from(
+                &loopback,
+                store.clone(),
+                temper_workflow::operations::Surface::CliCloud,
+            )
+            .expect("loopback plaintext is allowed by default");
+
+            // The opt-in is a variable the operator has to set.
+            temp_env::with_var("TEMPER_ALLOW_INSECURE_HTTP", Some("1"), || {
+                let insecure = TemperConfig {
+                    cloud: CloudSection {
+                        api_url: "http://temper.example.com".to_string(),
+                    },
+                    ..TemperConfig::default()
+                };
+                build_client_from(
+                    &insecure,
+                    store.clone(),
+                    temper_workflow::operations::Surface::CliCloud,
+                )
+                .expect("the explicit opt-in accepts plaintext");
+            });
+        });
+    }
 
     #[test]
     fn build_client_from_uses_config_api_url() {

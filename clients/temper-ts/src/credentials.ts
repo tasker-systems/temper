@@ -22,6 +22,8 @@
  *     poisons the next attempt.
  */
 
+import { requireEndpoint } from "./validate.js";
+
 /** `expiresAt` is ABSOLUTE (ms since epoch). A duration cannot survive being cached — and eve's connection auth wants exactly this shape. */
 export interface TokenResult {
   token: string;
@@ -91,6 +93,12 @@ export interface ClientCredentialsOptions {
   audience?: string;
   /** Injectable clock (ms since epoch) — tests drive expiry without sleeping. */
   now?: () => number;
+  /**
+   * Accept a plaintext `http` token URL off the loopback interface, deliberately — for a private
+   * network where TLS terminates elsewhere. Every mint puts the clientSecret on this URL; see
+   * `requireEndpoint`.
+   */
+  allowInsecureHttp?: boolean;
 }
 
 /** The `/oauth/token` success body both issuers promise (tests/contracts/m2m-token-request.json). */
@@ -135,6 +143,9 @@ export class ClientCredentials implements Credentials {
   #inFlight: Promise<TokenResult> | undefined;
 
   constructor(opts: ClientCredentialsOptions) {
+    // The clientSecret goes on the wire to this URL on every mint, so the
+    // scheme is checked at construction — refused here, not flagged per mint.
+    requireEndpoint(opts.tokenUrl, "tokenUrl", { allowInsecureHttp: opts.allowInsecureHttp });
     this.#tokenUrl = requireNonEmpty(opts.tokenUrl, "tokenUrl");
     this.#clientId = requireNonEmpty(opts.clientId, "clientId");
     this.#clientSecret = requireNonEmpty(opts.clientSecret, "clientSecret");

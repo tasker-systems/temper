@@ -167,6 +167,21 @@ fn prompt_err(e: dialoguer::Error) -> TemperError {
 
 /// Assemble a `SelfHostConfig` from `--no-interactive` flags. Returns
 /// `Ok(None)` when the instance quad is absent (local-only init). Errors when
+/// Refuse an instance URL the client would refuse at every later command.
+///
+/// `temper init` is where the value is chosen; without this check, init happily
+/// writes a config that `build_client_from` then rejects on every cloud
+/// command. The same rule and the same opt-in the client applies, so the
+/// choice and its consequence meet at the seam where both are visible.
+fn validate_instance_url(url: &str) -> std::result::Result<(), TemperError> {
+    temper_client::endpoint::validate_endpoint(
+        url,
+        "instance_url",
+        temper_client::endpoint::allow_insecure_http_from_env(),
+    )
+    .map_err(|e| TemperError::Config(e.to_string()))
+}
+
 /// `--idp okta` is missing `--auth-server-id`, or `--idp` is unrecognized.
 pub fn self_host_from_flags(
     instance_url: Option<String>,
@@ -181,6 +196,7 @@ pub fn self_host_from_flags(
         return Ok(None);
     };
     let instance_url = instance_url.trim_end_matches('/').to_string();
+    validate_instance_url(&instance_url)?;
 
     // Temper AS preset: only the instance URL is needed — client_id/audience default and there is
     // no separate auth domain.
@@ -356,6 +372,8 @@ fn gather_self_host_config(theme: &ColorfulTheme) -> Result<SelfHostConfig> {
         .with_prompt("Instance base URL (e.g. https://temper.acme.com)")
         .interact_text()
         .map_err(prompt_err)?;
+    let instance_url = instance_url.trim().trim_end_matches('/').to_string();
+    validate_instance_url(&instance_url)?;
     let idp_idx = Select::with_theme(theme)
         .with_prompt("Identity provider")
         .default(0)

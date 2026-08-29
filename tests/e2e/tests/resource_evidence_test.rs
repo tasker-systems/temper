@@ -353,7 +353,8 @@ async fn citation_audit_moves_audit_coverage_and_citation_quality(pool: sqlx::Pg
         temper_workflow::operations::Surface::CliCloud,
         auditor_token,
         Arc::new(temper_client::auth::MemoryTokenStore::empty()),
-    );
+    )
+    .expect("e2e app base URL (loopback listener) validates");
 
     let audit_request = CitationAuditRequest {
         block_id,

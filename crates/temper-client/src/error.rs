@@ -91,8 +91,11 @@ pub enum ClientError {
     Server { status: u16, message: String },
 
     /// A required cloud-configuration field (API URL, OAuth callback URL) is
-    /// empty. Surfaced before any network attempt so the user gets an
-    /// actionable "run `temper init`" message instead of a cryptic reqwest
+    /// empty, or an endpoint is configured with a scheme this client refuses —
+    /// plaintext `http` off the loopback interface, which would put a
+    /// credential on the wire in the clear (see [`crate::endpoint`]). Surfaced
+    /// before any network attempt so the user gets an actionable "run
+    /// `temper init`" or "use https" message instead of a cryptic reqwest
     /// "builder error" (empty base URL) or an Auth0 "Oops" page (empty
     /// `redirect_uri`). See the regression from baked-in defaults being
     /// removed in favor of per-instance config.

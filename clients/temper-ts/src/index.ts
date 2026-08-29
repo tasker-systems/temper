@@ -26,6 +26,7 @@ export type { components, operations, paths } from "./generated/schema.js";
 
 export { createAuthedFetch, type AuthedFetchOptions, type FetchLike } from "./auth-fetch.js";
 export { createTemperClient, type TemperClientOptions } from "./client.js";
+export { isLoopback, requireEndpoint } from "./validate.js";
 
 /**
  * The deploy gate's evidence. The steward logs this on every dispatch tick

@@ -46,6 +46,15 @@ async fn exchange_code(
     code_verifier: &str,
     redirect_uri: &str,
 ) -> Result<TokenResponse> {
+    // The authorization code and verifier go on the wire to this URL, so the
+    // scheme is checked before any network attempt — the same rule
+    // `HttpClient::new` applies to the base URL.
+    crate::endpoint::validate_endpoint(
+        &config.token_url,
+        "token_url",
+        crate::endpoint::allow_insecure_http_from_env(),
+    )?;
+
     let client = reqwest::Client::new();
     let resp = client
         .post(&config.token_url)
@@ -94,6 +103,14 @@ pub async fn login(config: &OAuthConfig, store: &dyn auth::TokenStore) -> Result
 
     // Build authorization URL and open browser.
     // The redirect_uri points to temperkb.io which relays the code to localhost.
+    //
+    // The authorize leg is deliberately NOT scheme-checked, unlike the token
+    // leg below: no secret travels on it. It carries the client id, the
+    // audience, the state and the PKCE *challenge* — never the verifier — so
+    // even a plaintext authorize endpoint cannot yield a token; the code it
+    // returns is bound to this client's verifier and only becomes a credential
+    // at the (validated) token endpoint. A tampered authorize leg costs the
+    // login attempt, not the credential.
     let auth_url = build_authorize_url(&AuthorizeParams {
         authorize_url: config.authorize_url.clone(),
         client_id: config.client_id.clone(),

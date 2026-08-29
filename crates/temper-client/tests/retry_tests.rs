@@ -32,7 +32,8 @@ async fn get_retries_on_5xx_then_succeeds() {
         .mount(&server)
         .await;
 
-    let client = HttpClient::new(&server.uri(), None, Surface::CliCloud, None);
+    let client = HttpClient::new(&server.uri(), None, Surface::CliCloud, None)
+        .expect("test server URL (loopback) validates");
     let req = client.get("/api/resources");
     let resp = client
         .send(&Method::GET, "/api/resources", req, None)
@@ -55,7 +56,8 @@ async fn get_exhausts_retries_and_returns_server_error() {
         .mount(&server)
         .await;
 
-    let client = HttpClient::new(&server.uri(), None, Surface::CliCloud, None);
+    let client = HttpClient::new(&server.uri(), None, Surface::CliCloud, None)
+        .expect("test server URL (loopback) validates");
     let req = client.get("/api/resources");
     let err = client
         .send(&Method::GET, "/api/resources", req, None)
@@ -77,7 +79,8 @@ async fn post_does_not_retry_on_5xx() {
         .mount(&server)
         .await;
 
-    let client = HttpClient::new(&server.uri(), None, Surface::CliCloud, None);
+    let client = HttpClient::new(&server.uri(), None, Surface::CliCloud, None)
+        .expect("test server URL (loopback) validates");
     let req = client.post("/api/ingest");
     let err = client
         .send(&Method::POST, "/api/ingest", req, None)
@@ -97,7 +100,8 @@ async fn sends_surface_header_on_every_request() {
         .mount(&server)
         .await;
 
-    let client = HttpClient::new(&server.uri(), None, Surface::CliCloud, None);
+    let client = HttpClient::new(&server.uri(), None, Surface::CliCloud, None)
+        .expect("test server URL (loopback) validates");
     let req = client.get("/api/health");
     // The `header` matcher plus `.expect(1)` asserts `X-Temper-Surface: cli` was sent;
     // the mock verifies on drop.
@@ -115,7 +119,8 @@ async fn sdk_client_sends_sdk_marker() {
         .mount(&server)
         .await;
 
-    let client = HttpClient::new(&server.uri(), None, Surface::Sdk, None);
+    let client = HttpClient::new(&server.uri(), None, Surface::Sdk, None)
+        .expect("test server URL (loopback) validates");
     let req = client.get("/api/health");
     let _ = client.send(&Method::GET, "/api/health", req, None).await;
 }

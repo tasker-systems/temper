@@ -16,6 +16,7 @@ use tracing::Instrument;
 use temper_workflow::operations::{Surface, SURFACE_HEADER};
 
 use crate::auth::TokenStore;
+use crate::endpoint;
 use crate::error::{ClientError, Result};
 
 /// Total attempts (initial request + retries) for safe, idempotent requests
@@ -159,25 +160,47 @@ impl HttpClient {
     /// `surface` is construction state, not a per-call argument — a client *is* a
     /// surface for its whole life. There is deliberately no default: a defaulted
     /// surface would silently attribute every write to `@web`.
+    ///
+    /// Returns [`ClientError::NotConfigured`] when `base_url` is an endpoint
+    /// [`endpoint::validate_endpoint`] refuses — plaintext `http` off the
+    /// loopback interface, unless `TEMPER_ALLOW_INSECURE_HTTP` says otherwise.
+    /// Every request this client sends puts the bearer token on that URL, so
+    /// the scheme is checked here, once, rather than per request.
     pub fn new(
         base_url: &str,
         device_id: Option<String>,
         surface: Surface,
         token_store: Option<Arc<dyn TokenStore>>,
-    ) -> Self {
+    ) -> Result<Self> {
+        // An empty base URL would join to a relative path (`/api/...`), which
+        // reqwest rejects at send time with an opaque "builder error". Refused
+        // here, at construction, with the fix named. This is the
+        // unconfigured-cloud regression: the API URL default is empty until
+        // `temper init` writes one.
+        if base_url.is_empty() {
+            return Err(ClientError::NotConfigured(
+                "cloud API URL is not configured — run `temper init` (or set TEMPER_API_URL)"
+                    .to_string(),
+            ));
+        }
+        endpoint::validate_endpoint(
+            base_url,
+            "base_url",
+            endpoint::allow_insecure_http_from_env(),
+        )?;
         let inner = Client::builder()
             .timeout(Duration::from_secs(HTTP_REQUEST_TIMEOUT_SECS))
             .build()
             .expect("failed to build reqwest client");
 
-        Self {
+        Ok(Self {
             inner,
             base_url: base_url.trim_end_matches('/').to_owned(),
             device_id,
             surface,
             token_override: None,
             token_store,
-        }
+        })
     }
 
     /// Construct an `HttpClient` with a fixed token that bypasses the store.
@@ -194,11 +217,11 @@ impl HttpClient {
         device_id: Option<String>,
         surface: Surface,
         token: String,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        Ok(Self {
             token_override: Some(token),
-            ..Self::new(base_url, device_id, surface, None)
-        }
+            ..Self::new(base_url, device_id, surface, None)?
+        })
     }
 
     /// Return the token to use for authenticated requests.
@@ -309,17 +332,8 @@ impl HttpClient {
         token: Option<&str>,
         idempotent: bool,
     ) -> Result<Response> {
-        // An empty base URL would join to a relative path (`/api/...`), which
-        // reqwest rejects at send time with an opaque "builder error". Catch it
-        // here and tell the user how to fix it. This is the unconfigured-cloud
-        // regression: the API URL default is empty until `temper init` writes one.
-        if self.base_url.is_empty() {
-            return Err(ClientError::NotConfigured(
-                "cloud API URL is not configured — run `temper init` (or set TEMPER_API_URL)"
-                    .to_string(),
-            ));
-        }
-
+        // `base_url` emptiness and scheme are refused at construction — see
+        // `HttpClient::new`. Nothing about the URL is re-checked per request.
         let api_req = ApiRequest {
             method,
             path,
@@ -781,7 +795,8 @@ mod tests {
 
     #[test]
     fn url_building_strips_trailing_and_leading_slashes() {
-        let client = HttpClient::new("https://api.example.com/", None, TEST_SURFACE, None);
+        let client = HttpClient::new("https://api.example.com/", None, TEST_SURFACE, None)
+            .expect("https validates");
         let url = client.url("/v1/tasks");
         assert_eq!(url, "https://api.example.com/v1/tasks");
     }
@@ -794,7 +809,8 @@ mod tests {
             None,
             TEST_SURFACE,
             token.clone(),
-        );
+        )
+        .expect("https validates");
         let result = client.resolve_token();
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), token);
@@ -942,16 +958,13 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn empty_base_url_returns_not_configured() {
+    #[test]
+    fn empty_base_url_returns_not_configured() {
         // Regression: an unconfigured cloud (empty api_url) must surface an
-        // actionable "run `temper init`" error, not reqwest's opaque builder error.
-        let client = HttpClient::new("", None, TEST_SURFACE, None);
-        let req = client.get("/api/resources");
-        let err = client
-            .send(&reqwest::Method::GET, "/api/resources", req, None)
-            .await
-            .expect_err("empty base URL must error before sending");
+        // actionable "run `temper init`" error, not reqwest's opaque builder
+        // error — refused at construction, before any request is built.
+        let err = HttpClient::new("", None, TEST_SURFACE, None)
+            .expect_err("empty base URL must be refused at construction");
         match err {
             ClientError::NotConfigured(msg) => {
                 assert!(msg.contains("temper init"), "got: {msg}");
@@ -962,7 +975,8 @@ mod tests {
 
     #[test]
     fn resolve_token_errors_when_no_override_and_no_store() {
-        let client = HttpClient::new("https://api.example.com", None, TEST_SURFACE, None);
+        let client = HttpClient::new("https://api.example.com", None, TEST_SURFACE, None)
+            .expect("https validates");
         let err = client
             .resolve_token()
             .expect_err("no override, no store → NotAuthenticated");
@@ -1107,7 +1121,8 @@ mod tests {
             None,
             TEST_SURFACE,
             Some(Arc::new(store)),
-        );
+        )
+        .expect("https validates");
         assert_eq!(client.resolve_token().unwrap(), "at_from_store");
     }
 }

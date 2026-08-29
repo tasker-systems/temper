@@ -463,12 +463,10 @@ mod embed_impl {
 
         fn make_test_client() -> Arc<TemperClient> {
             let store = Arc::new(MemoryTokenStore::empty());
-            Arc::new(TemperClient::new(
-                "http://localhost:0",
-                None,
-                Surface::CliCloud,
-                store,
-            ))
+            Arc::new(
+                TemperClient::new("http://localhost:0", None, Surface::CliCloud, store)
+                    .expect("loopback test URL validates"),
+            )
         }
 
         fn make_test_backend() -> CloudBackend {
@@ -796,12 +794,10 @@ mod non_embed_impl {
         async fn cloud_backend_create_errors_with_embed_message_in_no_embed_build() {
             let temp = tempfile::tempdir().unwrap();
             let store = Arc::new(MemoryTokenStore::empty());
-            let client = Arc::new(TemperClient::new(
-                "http://localhost:0",
-                None,
-                Surface::CliCloud,
-                store,
-            ));
+            let client = Arc::new(
+                TemperClient::new("http://localhost:0", None, Surface::CliCloud, store)
+                    .expect("loopback test URL validates"),
+            );
             let ctx = CloudBackendCtx {
                 client,
                 context_ref: "@me/temper".to_string(),

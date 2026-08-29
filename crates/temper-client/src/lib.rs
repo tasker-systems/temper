@@ -12,6 +12,7 @@ pub mod config;
 pub mod connection;
 pub mod contexts;
 pub mod data_artifacts;
+pub mod endpoint;
 pub mod error;
 pub mod events;
 pub mod facets;
@@ -69,17 +70,22 @@ impl TemperClient {
     /// per-device manifest tracking. `surface` is sent as `X-Temper-Surface`
     /// and determines which `<handle>@<marker>` emitter the server attributes
     /// this client's writes to. `store` is the source of truth for token resolution.
+    ///
+    /// Returns [`crate::error::ClientError::NotConfigured`] when `base_url` is
+    /// an endpoint [`crate::endpoint::validate_endpoint`] refuses — every
+    /// request puts the bearer token on it, so the scheme is checked at
+    /// construction, not per request.
     pub fn new(
         base_url: &str,
         device_id: Option<String>,
         surface: temper_workflow::operations::Surface,
         store: Arc<dyn auth::TokenStore>,
-    ) -> Self {
-        Self {
-            http: http::HttpClient::new(base_url, device_id, surface, Some(store.clone())),
+    ) -> crate::error::Result<Self> {
+        Ok(Self {
+            http: http::HttpClient::new(base_url, device_id, surface, Some(store.clone()))?,
             oauth_config: None,
             store,
-        }
+        })
     }
 
     /// Create a new client with a pre-resolved token override.
@@ -98,12 +104,12 @@ impl TemperClient {
         surface: temper_workflow::operations::Surface,
         token: String,
         store: Arc<dyn auth::TokenStore>,
-    ) -> Self {
-        Self {
-            http: http::HttpClient::with_token_override(base_url, device_id, surface, token),
+    ) -> crate::error::Result<Self> {
+        Ok(Self {
+            http: http::HttpClient::with_token_override(base_url, device_id, surface, token)?,
             oauth_config: None,
             store,
-        }
+        })
     }
 
     /// Attach OAuth configuration for login and token refresh.
