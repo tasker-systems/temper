@@ -190,6 +190,50 @@ describe("handleAuthorizationServer (RFC 8414 §3.1 path-suffixed form)", () => 
     expect(res.status).toBe(404);
   });
 
+  // The security-relevant invariant, locked as a table: suffix matching is pure string
+  // equality after one searchParams decode and a slash-trim — no path normalization, no
+  // case folding, no encoding games. A traversal-shaped or encoded suffix selects nothing
+  // but its own equality, so none of these may serve the document.
+  it("404s adversarial suffixes — no normalization but the slash-trim (security pass, 2026-08-29)", async () => {
+    process.env.AS_ISSUER = "https://host.example.com/tenants/acme";
+    const { handleAuthorizationServer } = await import("../../src/oauth/metadata.js");
+    for (const suffix of [
+      "tenants/Acme", // case
+      "tenants/acme/..", // traversal suffix — inert: nothing is resolved
+      "%252Ftenants%252Facme", // double-encoded slash decodes once, stays literal %2F
+      "tenants//acme", // inner double slash
+      "tenants%5Cacme", // backslash is not a separator here
+      "tenants%20acme", // percent-encoded space
+      "+", // form-encoded space
+      "tenants/acme%00", // trailing null byte
+      "％2F", // fullwidth slash
+    ]) {
+      const res = await handleAuthorizationServer(requestFor(suffix));
+      expect(res.status, `suffix ${suffix}`).toBe(404);
+    }
+  });
+
+  it("serves slash-padded aliases of the claimed path (same path, semantically)", async () => {
+    process.env.AS_ISSUER = "https://host.example.com/tenants/acme";
+    const { handleAuthorizationServer } = await import("../../src/oauth/metadata.js");
+    for (const suffix of ["/tenants/acme/", "/tenants/acme", "tenants/acme/"]) {
+      const res = await handleAuthorizationServer(requestFor(suffix));
+      expect(res.status, `suffix ${suffix}`).toBe(200);
+    }
+  });
+
+  it("serves the bare well-known in AS mode without any AUTH_* env (?? short-circuits)", async () => {
+    delete process.env.AUTH_ISSUER;
+    delete process.env.MCP_BASE_URL;
+    delete process.env.AUTH_AUDIENCE;
+    const { handleAuthorizationServer } = await import("../../src/oauth/metadata.js");
+    const res = await handleAuthorizationServer(requestFor(""));
+    const body = (await res.json()) as { issuer: string };
+
+    expect(res.status).toBe(200);
+    expect(body.issuer).toBe("https://temper.example.com");
+  });
+
   it("404s suffixed requests on the Auth0 arm (the Auth0 domain is pathless)", async () => {
     delete process.env.AS_ISSUER;
     const { handleAuthorizationServer } = await import("../../src/oauth/metadata.js");
