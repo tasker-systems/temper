@@ -35,6 +35,7 @@ import { describeFailure } from '$lib/server/bounded';
 import { CSRF_FORBIDDEN_MESSAGE, isForbiddenCrossOriginFormPost } from '$lib/server/csrf';
 import { REFRESH_THRESHOLD_SECONDS, refreshAccessToken } from '$lib/server/oidc';
 import { isProxiedPath, proxyRequest } from '$lib/server/proxy';
+import { applySecurityHeaders } from '$lib/server/security-headers';
 import { clearSession, readSession, writeSession } from '$lib/server/session';
 import { traceRequest } from '$lib/server/telemetry/request-span';
 import type { ProfileWithEntitlements } from '$lib/types';
@@ -77,16 +78,25 @@ export const handleError: HandleServerError = ({ error, message, status, event }
 // browser→ui→api acceptance hop returns early from the proxy and never reaches `resolve`.
 export const handle: Handle = (input) => traceRequest(input.event, () => handleRequest(input));
 
-const handleRequest = async ({ event, resolve }: Parameters<Handle>[0]): Promise<Response> => {
+const handleRequest = async (input: Parameters<Handle>[0]): Promise<Response> => {
 	// Reverse-proxy the API/MCP/OAuth/discovery surface to the upstream host
 	// before any SvelteKit handling. These paths are not UI routes. This
 	// includes the SAML ACS (`/oauth/saml/acs`), which by design takes a
 	// cross-origin form POST from the IdP — authenticated by the SAML layer,
 	// not by origin — so it must forward upstream before the CSRF guard below.
-	if (isProxiedPath(event.url.pathname)) {
-		return proxyRequest(event);
+	if (isProxiedPath(input.event.url.pathname)) {
+		return proxyRequest(input.event);
 	}
 
+	// Everything below is a response this app renders, so this app sets its baseline headers on it.
+	// A proxied response is not one of them: it carries the upstream's own, which the upstream sets
+	// for itself. One owner per response.
+	const response = await renderRequest(input);
+	applySecurityHeaders(response.headers);
+	return response;
+};
+
+const renderRequest = async ({ event, resolve }: Parameters<Handle>[0]): Promise<Response> => {
 	// SvelteKit's built-in `checkOrigin` is disabled (svelte.config.js) so the
 	// proxied ACS POST above isn't blocked pre-hook. Re-apply the equivalent
 	// origin guard here, scoped to the UI's own routes.
