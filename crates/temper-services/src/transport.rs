@@ -13,8 +13,84 @@
 //! are exported together.
 
 use axum::extract::DefaultBodyLimit;
+use axum::http::header::{self, HeaderValue};
 use axum::Router;
 use tower_http::decompression::RequestDecompressionLayer;
+use tower_http::set_header::SetResponseHeaderLayer;
+
+/// The response headers both public HTTP surfaces set on every response.
+///
+/// **These are set in-app, not verified at the edge, and that is the whole point.** The hosting
+/// platform may well send some of them; it can also be reconfigured, or replaced, without any
+/// change to this repository. A control that only holds while something in front of the instance
+/// keeps behaving is not a control this codebase can claim.
+///
+/// Each is applied `if_not_present`, so the baseline is a **floor a handler can deliberately
+/// raise or relax for its own content**, and every relaxation is visible next to the response it
+/// belongs to rather than hidden in a wider policy here. One route needs that today: temper-api's
+/// Slack callback renders HTML with an inline `<style>`, which the policy below forbids.
+///
+/// | Header | Value | Why this value |
+/// |---|---|---|
+/// | `x-content-type-options` | `nosniff` | Both surfaces answer `application/json` almost everywhere. Content sniffing can only ever disagree with a `Content-Type` these surfaces set deliberately |
+/// | `x-frame-options` | `DENY` | Neither surface has a page meant to be framed. The Slack callback is a terminal page, not an embed |
+/// | `referrer-policy` | `no-referrer` | The Slack callback carries state in its URL. A referrer leak from it is the one path either surface has to leaking a URL to a third party |
+/// | `strict-transport-security` | `max-age=63072000; includeSubDomains` | Two years, the usual floor for preload eligibility. `preload` itself is **not** sent — it is a submission to a browser-vendor list that is painful to reverse, and that is an operator's decision, not a default |
+/// | `content-security-policy` | `default-src 'none'; frame-ancestors 'none'; base-uri 'none'` | A JSON API loads nothing, so the correct policy is *nothing*. `frame-ancestors` is what actually enforces the framing rule in modern browsers; `x-frame-options` is above it for the ones that never learned |
+fn security_header_layers<S>(app: Router<S>) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    const NOSNIFF: HeaderValue = HeaderValue::from_static("nosniff");
+    const DENY: HeaderValue = HeaderValue::from_static("DENY");
+    const NO_REFERRER: HeaderValue = HeaderValue::from_static("no-referrer");
+    const HSTS: HeaderValue = HeaderValue::from_static("max-age=63072000; includeSubDomains");
+
+    app.layer(SetResponseHeaderLayer::if_not_present(
+        header::X_CONTENT_TYPE_OPTIONS,
+        NOSNIFF,
+    ))
+    .layer(SetResponseHeaderLayer::if_not_present(
+        header::X_FRAME_OPTIONS,
+        DENY,
+    ))
+    .layer(SetResponseHeaderLayer::if_not_present(
+        header::REFERRER_POLICY,
+        NO_REFERRER,
+    ))
+    .layer(SetResponseHeaderLayer::if_not_present(
+        header::STRICT_TRANSPORT_SECURITY,
+        HSTS,
+    ))
+    .layer(SetResponseHeaderLayer::if_not_present(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(JSON_CONTENT_SECURITY_POLICY),
+    ))
+}
+
+/// The policy for a surface that renders nothing — which is every route on both surfaces except
+/// the two that answer with HTML.
+pub const JSON_CONTENT_SECURITY_POLICY: &str =
+    "default-src 'none'; frame-ancestors 'none'; base-uri 'none'";
+
+/// Replace the baseline content-security policy on one sub-router.
+///
+/// The baseline is applied `if_not_present`, so a route that answers with HTML can set its own and
+/// keep it. A handler assembling a single response does that on the response itself; this is for
+/// the case where the exception covers a whole sub-router nobody hand-writes — Swagger's bundle,
+/// which serves its own scripts, styles and images.
+///
+/// Kept here rather than layered at the call site so the surfaces do not each grow a `tower-http`
+/// dependency to relax a policy this module set.
+pub fn override_content_security_policy<S>(app: Router<S>, policy: &'static str) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    app.layer(SetResponseHeaderLayer::overriding(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(policy),
+    ))
+}
 
 /// The largest request body either public HTTP surface will read, in **decompressed** bytes.
 ///
@@ -41,7 +117,7 @@ use tower_http::decompression::RequestDecompressionLayer;
 pub const MAX_REQUEST_BODY_BYTES: usize = 2 * 1024 * 1024;
 
 /// Apply the layers that sit **below** a surface's root span: the fallback handler, request
-/// decompression, and the request-body ceiling.
+/// decompression, the request-body ceiling, and the baseline response headers.
 ///
 /// Call this first, then add the surface's own root span and its CORS layer:
 ///
@@ -58,9 +134,12 @@ pub fn apply_base_layers<S>(app: Router<S>) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
-    app.fallback(fallback_handler)
+    let app = app
+        .fallback(fallback_handler)
         .layer(RequestDecompressionLayer::new())
-        .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES));
+
+    security_header_layers(app)
 }
 
 /// Answer an unmatched route with temper's structured error body.

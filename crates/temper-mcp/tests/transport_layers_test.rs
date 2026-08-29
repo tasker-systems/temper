@@ -283,3 +283,109 @@ async fn the_request_ceiling_is_measured_after_decompression() {
          was applied to the size on the wire, and a small request can still expand past it"
     );
 }
+
+// ── The baseline response headers ───────────────────────────────────────────────────────────────
+//
+// Set in `apply_base_layers`, so both public surfaces carry them and neither can be assembled
+// without them. Witnessed here for the same reason the layers above are: the MCP surface is the one
+// that was previously built without the shared stack, so it is the surface where an omission
+// actually happened once.
+//
+// These bite cleanly, unlike the request-ceiling witnesses: nothing supplied these headers before,
+// so removing the layer removes the header and every assertion below fails.
+
+/// Every response carries the baseline, and the policy is the one for a surface that renders
+/// nothing.
+///
+/// Asserted on the 404 path deliberately. A header set on handler responses but not on the
+/// fallback would pass a test that probed a real route, and the unmatched-path response is exactly
+/// the one a scanner reaches first.
+#[tokio::test]
+async fn every_response_carries_the_baseline_security_headers() {
+    let response = router()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/no-such-route-on-the-mcp-surface")
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("router answers");
+
+    let headers = response.headers();
+    for (name, expected) in [
+        ("x-content-type-options", "nosniff"),
+        ("x-frame-options", "DENY"),
+        ("referrer-policy", "no-referrer"),
+        (
+            "strict-transport-security",
+            "max-age=63072000; includeSubDomains",
+        ),
+        (
+            "content-security-policy",
+            "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        ),
+    ] {
+        assert_eq!(
+            headers.get(name).map(|v| v.to_str().expect("header is ascii")),
+            Some(expected),
+            "{name} must be set in-app; the posture cannot depend on what the hosting edge \
+             happens to send, because the edge can be reconfigured without touching this repository"
+        );
+    }
+}
+
+/// The baseline is a floor a response can raise or relax, not a value layered over one.
+///
+/// `apply_base_layers` sets each header `if_not_present`, which is what lets temper-api's HTML
+/// routes carry their own content-security policy. Probed here on the shared layer rather than on
+/// those routes: if this ever became `overriding`, the exception on the Slack callback page would
+/// stop working and that page would render unstyled — a failure nobody would see in a test that
+/// only checked the headers were present.
+#[tokio::test]
+async fn a_response_that_sets_its_own_policy_keeps_it() {
+    use axum::routing::get;
+
+    let app = temper_services::transport::apply_base_layers(axum::Router::new().route(
+        "/probe",
+        get(|| async {
+            (
+                [(
+                    axum::http::header::CONTENT_SECURITY_POLICY,
+                    "default-src 'none'; style-src 'unsafe-inline'",
+                )],
+                "probe",
+            )
+        }),
+    ));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/probe")
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("router answers");
+
+    assert_eq!(
+        response
+            .headers()
+            .get("content-security-policy")
+            .map(|v| v.to_str().expect("header is ascii")),
+        Some("default-src 'none'; style-src 'unsafe-inline'"),
+        "a response that set its own policy must keep it; the shared baseline is applied \
+         if_not_present precisely so an HTML route can state its own exception next to the markup"
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-content-type-options")
+            .map(|v| v.to_str().expect("header is ascii")),
+        Some("nosniff"),
+        "relaxing one header must not drop the rest of the baseline"
+    );
+}
