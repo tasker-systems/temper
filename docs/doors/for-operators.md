@@ -40,8 +40,9 @@ auth-identity contract — whose tokens this instance trusts and which it accept
 - **[Slack mentions](../playbooks/slack-mentions.md)** — end-to-end setup.
 - **[Slack identity and revocation](../concepts/slack-identity-and-revocation.md)** — what the
   integration actually does: identity, credentials, and what is retained.
-- **[GitHub connection](../playbooks/github-connection.md)** — provisioning a GitHub App and
-  wiring it to Temper.
+- **[GitHub connection](../playbooks/github-connection.md)** — provisioning a read-only GitHub
+  App and wiring it to Temper in both directions: the brokered token agents read GitHub with,
+  and the webhook path GitHub's events arrive on.
 
 ## Agents that run on your deployment
 

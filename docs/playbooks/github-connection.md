@@ -1,17 +1,18 @@
 # Provision a Read-Only GitHub Connection
 
 **For operators.** This playbook provisions a verified read-only GitHub
-connection against a temper deployment, end-toend in one sequence: a GitHub App
+connection against a temper deployment, end to end in one sequence: a GitHub App
 with read-only installation permissions, a non-managed Vercel Connect connector
-backed by that App, the broker env vars that let temper mint, and the temper
-connection row with an attached credential, registered webhook events, and a
-declared read-only tool manifest.
+backed by that App, the broker env vars that let temper mint and verify, the
+temper connection row with an attached credential, the webhook wiring that makes
+GitHub's events actually arrive, and a declared read-only tool manifest.
 
-By the end you will have a connection whose drift check passed — the mint that
-reads the provider's `metadata.permissions` and confirms the App's read-only
-ceiling is reflected in the actual token. After that, webhook events can land
-and agents can read the remote back through the brokered token. Follow the
-steps in order; every step has a verification — do not skip them.
+By the end you will have two things working in opposite directions, each with
+its own witness: a drift check that passed — the mint that reads the provider's
+`metadata.permissions` and confirms the App's read-only ceiling is reflected in
+the actual token — and a real GitHub event landing on temper's intake path with
+a `202`. Follow the steps in order; every step has a verification — do not skip
+them.
 
 ## Prerequisites
 
@@ -42,6 +43,27 @@ They are tied together by the **connector uid** (e.g. `github/<app-slug>`) and
 the **installation ID** GitHub assigns when you install the App. A mismatch in
 either is a `401` at mint time, not a warning.
 
+## Two directions, wired separately
+
+The four pieces above serve **two independent data paths**, and the most common
+way this setup fails is finishing one and assuming the other came with it:
+
+| Direction | What it means | Configured by | Witnessed by |
+|---|---|---|---|
+| **egress** — temper reads GitHub | An agent calls a read-only tool through a brokered installation token | Steps 1–6, 9 | the drift check (`verified: true`) in Step 6 |
+| **ingest** — GitHub notifies temper | A `pull_request` event lands in `kb_events` and steers a coarse radius | Steps 1–2, 7–8 | a `202` on `/api/intake/webhook` in Step 7 |
+
+They share the App and the connector, and they fail **independently**. A green
+drift check says nothing about whether a single webhook has ever arrived, and a
+`202` on intake says nothing about whether a token can be minted. Verify both.
+
+> **Ingest depends on egress having got as far as Step 6.** temper resolves an
+> inbound forward by looking for exactly one live connection whose stored
+> credential names the connector uid, so a forward that arrives before
+> `attach-credential` is refused — with the same opaque `401` as a forged one.
+> That is deliberate (a prober learns nothing from the difference), which is
+> also why the order below matters.
+
 ---
 
 ## Step 1 — create the GitHub App
@@ -58,7 +80,13 @@ it.
 |---|---|
 | GitHub App name | `<org>-temper-readonly` (or similar — the slug is derived from this) |
 | Homepage URL | `https://vercel.com` (placeholder) |
-| Webhook | **Unchecked** — "I don't want to set up webhooks for now" (Connect handles trigger forwarding) |
+| Webhook | **Leave unconfigured for now** — the URL you need contains the connector id, which does not exist yet. Step 7 comes back and sets it, together with a secret. |
+
+> **Do not read "leave it for now" as "Connect handles it."** Vercel Connect
+> forwards webhooks it *receives*; nothing in Connect configures GitHub to
+> *send* any. The App's webhook URL and its secret are operator-set, in Step 7.
+> Skip that step and every egress verification in this playbook still passes
+> green while no event ever reaches temper.
 
 **Repository permissions — the enforcement point:**
 
@@ -339,7 +367,7 @@ The trailing line names any gap between declared and observed reach:
 > acknowledged before granting a team.*
 
 That gap is the excess-reach affirmation — it's working as designed. When you
-grant a team reach on this connection, the `grant-reach` command (Step 9) will
+grant a team reach on this connection, the `grant-reach` command (Step 10) will
 require an `--affirm-reach` rationale if the declared reach is broad.
 
 > **The drift check is the end-to-end witness.** `verified: true` with only read
@@ -350,7 +378,141 @@ require an `--affirm-reach` rationale if the declared reach is broad.
 
 ---
 
-## Step 7 — register webhook events (ledger-capable)
+## Step 7 — wire the webhook (the ingest half)
+
+Everything so far configured temper's ability to *read* GitHub. This step
+configures GitHub's ability to *reach* temper. Three parts have to agree, and a
+fourth reads both sides of the result.
+
+### 7a — register the trigger destination
+
+Tell the connector which project and path a verified webhook is forwarded to.
+
+```bash
+vercel connect attach github/<app-slug> \
+  --project <temper-api-project> \
+  --triggers \
+  --trigger-path /api/intake/webhook
+```
+
+`--trigger-path` **requires** `--triggers`; without the flag you attach the
+project for token minting only and no forwarding is configured. The default path
+is `/<service>`, which is not temper's intake route — pass it explicitly.
+
+**Verify** on the connector's Overview page: a **Triggers** row naming your
+project, `Default (production)`, and `/api/intake/webhook`.
+
+### 7b — point the App's webhook at the connector
+
+**Location:** the connector's **Settings** page in Vercel Connect. Under
+**Triggers** it shows the URL to use:
+
+```
+https://connect.vercel.com/trigger/<connector-id>
+```
+
+Copy it into the GitHub App's webhook settings at
+`https://github.com/organizations/<org>/settings/apps/<app-slug>`:
+
+| Field | Value |
+|---|---|
+| Active | **checked** |
+| Webhook URL | `https://connect.vercel.com/trigger/<connector-id>` |
+| Secret | a value you generate — see 7c |
+| SSL verification | **Enable** |
+
+Then subscribe the App to the events you want under **Permissions & events →
+Subscribe to events** (e.g. `pull_request`). An event the App is not subscribed
+to is never sent, and nothing downstream can tell you that.
+
+> **The App and its installation are different objects, and only the
+> installation delivers.** `GET /apps/<slug>` reports the App's *definition*;
+> `GET /orgs/<org>/installations` reports the *grant*. They can disagree —
+> notably, a pending **permission** change freezes an installation's whole
+> config until an owner approves it, and that freeze pins the event
+> subscription riding along with it. Read the installation:
+>
+> ```bash
+> gh api /orgs/<org>/installations \
+>   --jq '.installations[] | select(.app_slug=="<app-slug>") | .events'
+> ```
+
+### 7c — set the same secret on both sides
+
+Connect verifies the signature on every inbound webhook and refuses anything it
+cannot verify. GitHub signs only when the App has a secret. **An empty secret on
+the App is not "unsigned and allowed" — it is a `401` on every delivery.**
+
+1. Generate one: `openssl rand -hex 32`
+2. Paste it into the GitHub App's **Secret** field and save
+3. Paste the *same* value into the connector's **Settings → GitHub App
+   Credentials → Webhook Secret** and save
+
+Connect does not display the secret again after saving it, so if the two ever
+disagree the fix is a fresh value on both sides rather than a recovery of the
+stored one.
+
+### 7d — verify the ingest path, on both sides
+
+Fire one event. A label add/remove on any pull request — open or closed — emits
+`pull_request` and triggers no CI:
+
+```bash
+gh pr edit <n> --add-label enhancement && gh pr edit <n> --remove-label enhancement
+```
+
+Then read **two** observables, one per hop. They answer different questions and
+neither substitutes for the other.
+
+**Hop 1 — GitHub → Connect.** The App's **Advanced → Recent Deliveries** page.
+
+> **Read the response code, not the presence of a row.** A delivery is recorded
+> whether it succeeded or failed; a red ⚠ against every row still looks like
+> "GitHub is delivering" at a glance. Open a delivery and check its **Response**
+> tab.
+
+| Response | Meaning |
+|---|---|
+| `2xx` | Connect accepted it. Go to hop 2. |
+| `401` `{"error":{"code":"unauthorized","message":"Invalid signature"}}` | The secrets in 7c disagree, or the App's is empty. |
+| any other `4xx`/`5xx` with `Server: Vercel` in the response headers | The URL reached Vercel but not a usable connector — re-check the id in 7b. |
+| no delivery at all | The App is not subscribed to that event, or the webhook is not `Active`. See 7b. |
+
+**Hop 2 — Connect → temper.** Your temper-api deployment's runtime logs,
+production:
+
+```bash
+vercel logs <your-temper-api-production-url>
+```
+
+| Log line | Meaning |
+|---|---|
+| `POST /api/intake/webhook 202` | **Working.** The event is in `kb_events`. |
+| `POST /api/intake/webhook 500` naming a header | Connect forwarded, but stripped the provider's event-name header. |
+| `POST /api/intake/webhook 401` | The attestation verified but named no live credentialed connection — Step 6 is incomplete, or `VERCEL_CONNECT_TEAM_SLUG` does not match the team that owns the connector. |
+| no request at all | Connect accepted but did not forward — check the trigger destination in 7a. |
+
+A `202` is the witness this step exists to produce, and it is a strong one:
+temper refuses to guess an event name it cannot read, so the `202` is only
+reachable when the provider's event-name header actually arrived. The event's
+`metadata` records both the name and where it came from
+(`provider_event_type_source: "header"`), so a later rule that reads the name
+from somewhere else cannot be confused with this one.
+
+**Re-testing is free.** Each delivery has a **Redeliver** button that replays
+the identical payload under the *current* configuration — so after changing a
+secret or a path, redeliver rather than manufacturing another event.
+
+> **Two Connect fields look like blockers here and are not.** `Trigger Events:
+> Disabled` on the connector does not gate ingest — the events are chosen on the
+> App (7b), and forwarding works with this field untouched. `No installations
+> yet` under **Installations** concerns Connect's authority to call GitHub's API
+> *on your behalf*, which is the egress half; it does not stop a webhook from
+> being forwarded.
+
+---
+
+## Step 8 — register webhook events (ledger-capable)
 
 ```bash
 temper admin connection set-webhooks \
@@ -378,7 +540,7 @@ accepts events.
 
 ---
 
-## Step 8 — declare the tool manifest (reach-capable)
+## Step 9 — declare the tool manifest (reach-capable)
 
 ```bash
 temper admin connection set-tools \
@@ -416,13 +578,15 @@ can call via the brokered token.
 The trailing line no longer says "Not reach-capable" — agents can now read the
 remote back.
 
-After Step 6 the connection is verified. After Step 7 events can land. After
-Step 8 agents can reach the remote. Steps 7 and 8 can be done in either order,
-but both must be done for the connection to be useful.
+After Step 6 the connection is verified. After Step 7 a real event reaches
+temper. After Step 8 that event is matched against the events this connection
+claims to receive. After Step 9 agents can reach the remote. Steps 8 and 9 can
+be done in either order, but both must be done for the connection to be
+useful.
 
 ---
 
-## Step 9 — grant a team reach (optional, separate from ownership)
+## Step 10 — grant a team reach (optional, separate from ownership)
 
 Owning a connection is NOT reaching it. A team must be granted read-reach for
 its members to inherit read on what the connection receives.
@@ -478,6 +642,7 @@ CONNECTOR_NAME="<your-org>-temper-readonly"
 VERCEL_TEAM_ID="<team_...>"
 VERCEL_TEAM_SLUG="<your-vercel-team-slug>"
 TEMPER_PROJECT_ID="<prj_...>"
+TEMPER_PROJECT_NAME="<temper-api-project-name>"
 VERCEL_TOKEN="<a-vercel-access-token>"
 TEAM_SLUG="temper-system"
 REACH="org"
@@ -551,12 +716,26 @@ temper admin connection attach-credential \
   --installation "$INSTALLATION_ID" \
   "$CONNECTION_ID"
 
-# --- Step 7: set webhooks (ledger-capable) ---
+# --- Step 7a: register the trigger destination ---
+vercel connect attach "github/$APP_SLUG" \
+  --project "$TEMPER_PROJECT_NAME" \
+  --triggers \
+  --trigger-path /api/intake/webhook
+
+# --- Steps 7b/7c are browser-side and cannot be scripted ---
+# Point the App's webhook at https://connect.vercel.com/trigger/<connector-id>,
+# subscribe it to the events you want, and set the SAME `openssl rand -hex 32`
+# secret on the GitHub App and on the connector's Settings page. Then fire one
+# event and confirm a 202 on /api/intake/webhook before continuing.
+echo "=== Wire the App webhook + shared secret (Step 7b/7c), then press Enter ==="
+read
+
+# --- Step 8: set webhooks (ledger-capable) ---
 temper admin connection set-webhooks \
   --event pull_request \
   "$CONNECTION_ID"
 
-# --- Step 8: set tools (reach-capable) ---
+# --- Step 9: set tools (reach-capable) ---
 temper admin connection set-tools \
   --tool github_get_file_contents \
   --tool github_get_pull_request_files \
@@ -568,7 +747,7 @@ temper admin connection set-tools \
   --tool github_get_codeowners \
   "$CONNECTION_ID"
 
-# --- Step 9 (optional): grant team reach ---
+# --- Step 10 (optional): grant team reach ---
 # temper admin connection grant-reach \
 #   --team "$TEAM_SLUG" \
 #   --affirm-reach "team scope is comparably broad (same org)" \
@@ -626,4 +805,32 @@ Re-attach the credential after fixing; the drift check will re-run.
 
 **`409 Conflict` on `grant-reach`** — the connection declares reach and you
 didn't provide `--affirm-reach`. Add it with a rationale naming why the team's
-scope is comparably broad (Step 9).
+scope is comparably broad (Step 10).
+
+**Every webhook delivery is red, `401 Invalid signature`** — the GitHub App's
+webhook secret and the connector's stored webhook secret disagree, or the App's
+is empty. An empty secret means GitHub signs nothing and Connect refuses
+everything. Set the same value on both sides (Step 7c) and **Redeliver**.
+
+**Deliveries look fine but no event reached temper** — "fine" is usually
+unchecked. Open a delivery and read its **Response** tab; a page of red ⚠ rows
+still reads as "GitHub is delivering" until you do. If the response really is
+`2xx`, the drop is Connect → temper: check the trigger destination (Step 7a).
+
+**`500` on `/api/intake/webhook` naming a header** — the forward arrived without
+the provider's event-name header. temper refuses to compute a coarse radius from
+an input it does not have, so this is a loud failure by design rather than an
+event landing with an empty radius. It means the forwarding path stopped
+carrying a header it previously did; it is not something to work around by
+guessing the event name from the payload.
+
+**`401` on `/api/intake/webhook`** — the attestation verified but resolved to no
+live credentialed connection. Either Step 6 has not been completed for this
+connector uid, or `VERCEL_CONNECT_TEAM_SLUG` names a different team than the one
+that owns the connector: inbound attestations are checked against
+`https://oidc.vercel.com/<team-slug>`. The same opaque refusal covers a forged
+attestation, so the log line — not the response body — is where the reason is.
+
+**More than one connection carries the same connector** — intake fails closed
+with a `500` saying so. Exactly one live, credentialed connection may name a
+given connector uid; revoke the duplicate rather than picking a winner.
