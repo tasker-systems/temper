@@ -185,6 +185,12 @@ async fn a_gzip_encoded_body_is_decompressed_before_the_json_extractor() {
 // `/oauth/register` is the probe for the same reason the decompression witness above uses it: it is
 // public, it reads `Json<_>`, and with no `mcp_client_id` configured the handler answers `503`. So
 // `503` means the extractor read the whole body, and `413` means it refused to.
+//
+// **These cover a different door from `MCP_MAX_BODY_BYTES`' witness above, and the split is not
+// cosmetic.** `/mcp` is a raw tower service where `DefaultBodyLimit` is inapplicable, so it carries
+// `RequestBodyLimitLayer` and its own 25 MB. The routes below — discovery, registration, health —
+// are ordinary axum routes, so `MAX_REQUEST_BODY_BYTES` is what bounds them. One surface, two
+// mechanisms, because one of them cannot reach half of it.
 
 /// A JSON body of exactly `n` decompressed bytes, valid enough for the extractor to parse.
 fn registration_body_of(n: usize) -> Vec<u8> {

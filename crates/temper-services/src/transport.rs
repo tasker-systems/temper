@@ -92,7 +92,7 @@ where
     ))
 }
 
-/// The largest request body either public HTTP surface will read, in **decompressed** bytes.
+/// The default request-body ceiling, in **decompressed** bytes, for a door that declares none.
 ///
 /// **This number is ratified, not derived, and that is the point of it being here.** Before this
 /// constant existed the ceiling was axum's `DefaultBodyLimit` default — the same 2 MiB, but owned
@@ -100,20 +100,41 @@ where
 /// in this repository failing. Setting it explicitly changes no behaviour and moves the decision
 /// here, where a change to it is a change someone made on purpose.
 ///
-/// **Why 2 MiB is enough headroom, measured rather than assumed.** The largest first-party document
-/// in this repository is ~70 KB; the largest resource body observed in the vault is ~34 KB. 2 MiB
-/// is roughly thirty times the former.
+/// # Read the per-door limits before reasoning about this one
 ///
-/// **What that measurement does not cover, stated so a later decision to lower this has the
-/// evidence it needs:** data artifacts and segmented ingest carry structured payloads and per-block
-/// provenance, and neither was measured. A lower ceiling is defensible on document sizes alone and
-/// is *not* defensible on these, which is why this ratifies the value in force instead of reducing
-/// it.
+/// This is the floor for ordinary requests, not a ceiling over the whole instance. Four doors
+/// declare their own, each for a reason recorded next to it, and a limit applied to a single route
+/// runs *inside* this one and therefore wins there:
 ///
-/// Two limits deliberately sit outside this one, and both are narrower or wider on purpose:
-/// temper-api's signed internal routes cap at 64 KiB, and its GitHub webhook route carries an
-/// explicit 25 MiB ceiling because GitHub delivers up to that. A limit applied to a single route
-/// runs inside this one and therefore wins for that route — which is what lets both coexist.
+/// | Door | Limit | Where |
+/// |---|---|---|
+/// | signed internal routes | 64 KiB | `temper-api/src/middleware/internal_auth.rs` |
+/// | `/api/query` | 4 MB | `QUERY_MAX_BODY_BYTES`, `temper-api/src/routes.rs` |
+/// | GitHub webhook intake | 25 MiB | `GITHUB_MAX_WEBHOOK_BYTES`, `temper-api/src/routes.rs` |
+/// | `/mcp` | 25 MB | `MCP_MAX_BODY_BYTES`, `temper-mcp/src/router.rs` |
+///
+/// **`/mcp` is not merely an exception — this constant cannot reach it.** That door is mounted with
+/// `nest_service` over a raw tower service, so no axum extractor runs and `DefaultBodyLimit` is
+/// inapplicable rather than overridden; it uses `RequestBodyLimitLayer` instead. So this constant
+/// governs temper-api's undeclared routes and temper-mcp's *axum* routes (discovery, registration,
+/// health) — not the MCP tool surface.
+///
+/// # Why 2 MiB, and the measurement that bounds the claim
+///
+/// Ordinary request bodies here are small: the largest first-party document in this repository is
+/// ~70 KB and the largest resource body observed in the vault is ~34 KB. 2 MiB is roughly thirty
+/// times the former, which is ample for a door carrying one of them.
+///
+/// **It is emphatically not ample for every payload the contract admits, and that is the reason the
+/// table above exists rather than a reason to raise this.** A composition `/api/query` calls legal
+/// serializes to **2,194,320 bytes** `[measured — 2026-08-28]` — 97 KB *past* this number. Had that
+/// door inherited this ceiling it would have answered a legal plan with a bare 413. The doors
+/// carrying large payloads by design — a composition, and the MCP tool surface with `ingest`'s
+/// inline content and `data_artifacts`' JSON — each declare their own, which is the shape this
+/// constant is the default half of.
+///
+/// So: **do not raise this to accommodate a door that needs more.** Give that door its own limit and
+/// state why, as all four above do.
 pub const MAX_REQUEST_BODY_BYTES: usize = 2 * 1024 * 1024;
 
 /// Apply the layers that sit **below** a surface's root span: the fallback handler, request
