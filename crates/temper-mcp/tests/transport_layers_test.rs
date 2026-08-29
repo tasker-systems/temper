@@ -24,6 +24,71 @@ use tower::ServiceExt;
 
 mod common;
 
+/// A body past the door's ceiling is refused, and a body under it is not refused FOR ITS SIZE.
+///
+/// `[added — 2026-08-28, found in review]` `/mcp` is mounted with `nest_service`, whose target is a
+/// raw tower service — no axum extractor runs, so `DefaultBodyLimit` is not merely unset here, it is
+/// inapplicable. rmcp's `expect_json` reads with a bare `.collect()`, so this door buffered an
+/// arbitrarily large body while the sibling reasoning in `temper-api/src/routes.rs` read as though
+/// every surface were bounded.
+///
+/// **The under-limit half is what makes this a witness rather than a tautology.** A test that only
+/// sent an oversized body would stay green if the limit were set absurdly low, which is the failure
+/// that breaks legitimate ingest — this door carries `ingest`'s inline content and
+/// `data_artifacts`' JSON, so refusing too early is the more likely mistake. The small body must
+/// therefore get past the limit and fail somewhere else (401 — it is unauthenticated), never 413.
+///
+/// **`Content-Length` is load-bearing and the reason is worth keeping.** `RequestBodyLimitLayer`
+/// refuses eagerly on that header and otherwise only when the body is READ — and `require_mcp_auth`
+/// answers 401 without reading it. So a declared oversized body is refused before authentication,
+/// while an undeclared (chunked) one is refused when rmcp reads it, after. Both are bounded; only
+/// the first is observable without a token, which is why this probe sends the header a real client
+/// sends.
+#[tokio::test]
+async fn a_body_past_the_ceiling_is_refused_and_a_small_one_is_not() {
+    // One byte over 25 MB. Built here rather than named from the constant, which is private: a test
+    // that imported the number could not disagree with it.
+    let over = vec![b'x'; 25 * 1024 * 1024 + 1];
+    let over_len = over.len();
+    let response = router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::CONTENT_LENGTH, over_len)
+                .body(Body::from(over))
+                .expect("request builds"),
+        )
+        .await
+        .expect("router answers");
+    assert_eq!(
+        response.status(),
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "a body past the ceiling must be refused by the transport, not buffered"
+    );
+
+    let under = vec![b'x'; 1024];
+    let under_len = under.len();
+    let response = router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::CONTENT_LENGTH, under_len)
+                .body(Body::from(under))
+                .expect("request builds"),
+        )
+        .await
+        .expect("router answers");
+    assert_ne!(
+        response.status(),
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "a 1 KB body is nowhere near the ceiling; a 413 here means the limit is mis-set"
+    );
+}
+
 /// Assemble the real router over a never-queried pool.
 fn router() -> axum::Router {
     temper_mcp::build_router(

@@ -19,6 +19,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict, Field
 from typing import Any, ClassVar, Dict, List, Optional
+from typing_extensions import Annotated
 from uuid import UUID
 from temper.generated.models.id_kind import IdKind
 from temper.generated.models.id_provenance import IdProvenance
@@ -30,7 +31,7 @@ class IdSet(BaseModel):
     """
     The one value that crosses a stage boundary. Membership, never rank.
     """ # noqa: E501
-    ids: List[UUID]
+    ids: Annotated[List[UUID], Field(max_length=256)] = Field(description="The ids themselves — at most [`MAX_ID_SET_IDS`] of them, refused as [`crate::types::query::disposition::RefusalReason::TooManyIds`].")
     kind: IdKind
     provenance: Optional[IdProvenance] = Field(default=None, description="Required for `region`; absent for every other kind today.")
     __properties: ClassVar[List[str]] = ["ids", "kind", "provenance"]

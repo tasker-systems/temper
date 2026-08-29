@@ -924,31 +924,99 @@ pub(crate) enum QueryEmbed {
 /// keeps it in the stored chunks' vector space so scores stay comparable. A second implementation
 /// here would be a second answer to "which space is this vector in".
 pub(crate) async fn embed_query_text(query: &str) -> QueryEmbed {
+    match embed_query_texts(vec![query.to_string()]).await {
+        QueryEmbedBatch::Embedded(mut vectors) if !vectors.is_empty() => {
+            QueryEmbed::Embedded(vectors.remove(0))
+        }
+        // An `Embedded` carrying nothing is the embedder returning fewer vectors than texts, which
+        // it does not do — but reading it as a successful embed would hand the caller someone
+        // else's vector, so it degrades like every other way the attempt can fail to produce one.
+        _ => QueryEmbed::Unavailable,
+    }
+}
+
+/// What a server-side embed of SEVERAL questions came to. All or nothing, and deliberately.
+///
+/// **The justification is MECHANICAL, and the first version of this doc gave a different one that
+/// was false** `[corrected — 2026-08-28, found in review]`. It read: *"every way the attempt can
+/// fail is a property of the process rather than of one string (the model will not load, the ORT
+/// session errors, the budget expires)"*. The first two are process properties. **The budget
+/// expiring is not** — it is a property of the aggregate INPUT, measured: the same process, model
+/// and session take 3,635 ms for 64 questions of 640 bytes and 24,145 ms for 64 of 4,096. Filing a
+/// budget expiry as process-level is precisely how the sizing question below got talked past.
+///
+/// What actually makes a partial result unproducible is that **every fallible operation inside
+/// `embed_batch` is batch-scoped**: `tokenize`, `TensorRef::from_array_view`, `session.lock`,
+/// `session.run`, `try_extract_array`, `into_dimensionality`. There is no per-text `Result`.
+/// `load_tokenizer` sets `with_truncation`, so `encode_batch` bounds its own work rather than
+/// erroring; WordPiece carries `[UNK]`; and `TemplateProcessing` guarantees `[CLS]`/`[SEP]`, so
+/// every encoding is at least two tokens and `mean_pool`'s `mask_sum > 0` guard cannot fall
+/// through `[verified against the shipped tokenizer — 2026-08-28]`.
+///
+/// Rendering is unchanged by this: a composition's stages each keep their own `None` and each
+/// refuse `EmbeddingUnavailable` on their own line, exactly as they did when the outcomes were
+/// separate. What is now shared is the ATTEMPT, not the report.
+pub(crate) enum QueryEmbedBatch {
+    Embedded(Vec<Vec<f32>>),
+    /// The server tried and could not — an embed error, a task panic, or the budget expiring.
+    Unavailable,
+}
+
+/// Embed every distinct question in one attempt, off the async executor and under **one**
+/// wall-clock budget.
+///
+/// # The budget is per REQUEST, and that is the point rather than a side effect
+///
+/// `[widened from the singular — 2026-08-28]` `/api/query` embedded one question at a time, so a
+/// composition asking N distinct questions could spend `N × query_embed_budget()` — a bound that
+/// grows with the plan is not a bound on the request. One `timeout` around one `spawn_blocking` is
+/// what makes the phase cost the same whatever N is, and
+/// `the_embed_phase_costs_one_budget_window_whatever_the_plan_asks` is what holds it.
+///
+/// **Batching is the free half and is not the property.** `embed_texts` windows internally at 32
+/// (`temper-ingest::embed`, tuned against a measured peak-memory table), so handing it the whole
+/// distinct set turns N ORT runs into `ceil(N/32)` and takes the `Mutex<Session>` that many times
+/// instead of N. Worth having; it witnesses throughput, not the bound.
+///
+/// **Still the SAME attempt `embed_text` was.** That function is `embed_texts(&[text])`, so the
+/// query is embedded by the plain path the corpus was ingested with (no BGE query prefix) and lands
+/// in the stored chunks' vector space. There is one answer to *"which space is this vector in"*,
+/// and it did not move.
+pub(crate) async fn embed_query_texts(queries: Vec<String>) -> QueryEmbedBatch {
+    if queries.is_empty() {
+        return QueryEmbedBatch::Embedded(Vec::new());
+    }
     let budget = query_embed_budget();
-    let owned = query.to_string();
-    let embed = tokio::task::spawn_blocking(move || temper_ingest::embed::embed_text(&owned));
+    let count = queries.len();
+    let embed = tokio::task::spawn_blocking(move || {
+        let refs: Vec<&str> = queries.iter().map(String::as_str).collect();
+        temper_ingest::embed::embed_texts(&refs)
+    });
     match tokio::time::timeout(budget, embed).await {
-        Ok(Ok(Ok(embedding))) => QueryEmbed::Embedded(embedding),
+        Ok(Ok(Ok(embeddings))) => QueryEmbedBatch::Embedded(embeddings),
         Ok(Ok(Err(e))) => {
             tracing::warn!(
                 error = %e,
+                texts = count,
                 "server-side query embedding failed; falling back to FTS + graph only"
             );
-            QueryEmbed::Unavailable
+            QueryEmbedBatch::Unavailable
         }
         Ok(Err(join_err)) => {
             tracing::warn!(
                 error = %join_err,
+                texts = count,
                 "server-side query embedding task panicked; falling back to FTS + graph only"
             );
-            QueryEmbed::Unavailable
+            QueryEmbedBatch::Unavailable
         }
         Err(_elapsed) => {
             tracing::warn!(
                 budget_ms = budget.as_millis(),
+                texts = count,
                 "server-side query embedding exceeded its budget; falling back to FTS + graph only"
             );
-            QueryEmbed::Unavailable
+            QueryEmbedBatch::Unavailable
         }
     }
 }

@@ -10841,7 +10841,8 @@
             "type": "array",
             "items": {
               "type": "string"
-            }
+            },
+            "maxItems": 256
           },
           "properties": {
             "type": "array",
@@ -11614,7 +11615,9 @@
             "items": {
               "type": "string",
               "format": "uuid"
-            }
+            },
+            "description": "The ids themselves — at most [`MAX_ID_SET_IDS`] of them, refused as\n[`crate::types::query::disposition::RefusalReason::TooManyIds`].",
+            "maxItems": 256
           },
           "kind": {
             "$ref": "#/components/schemas/IdKind"
@@ -11937,10 +11940,14 @@
               "type": "number",
               "format": "float"
             },
-            "description": "The query vector, when the caller computed one. Mirrors `SearchParams.embedding`: the CLI\nlinks temper-ingest and embeds locally, which is faster than making the server do it; the\nruby gem, the TypeScript package and MCP structurally cannot, so the server embeds on their\nbehalf and its absence is not a refusal.\n\n**It rides beside the text it was computed FROM, and that pairing is the point.** At\ncomposition level a vector and its query could drift apart; here they cannot.\n\nThis never reaches a response: [`super::trace::CompositionTrace`] carries only `stages` and\nechoes no intention. Should a trace ever carry one, that stops being incidental and becomes\na constraint — a 768-float array must not serialize back to the caller."
+            "description": "The query vector, when the caller computed one. Mirrors `SearchParams.embedding`: the CLI\nlinks temper-ingest and embeds locally, which is faster than making the server do it; the\nruby gem, the TypeScript package and MCP structurally cannot, so the server embeds on their\nbehalf and its absence is not a refusal.\n\n**It rides beside the text it was computed FROM, and that pairing is the point.** At\ncomposition level a vector and its query could drift apart; here they cannot.\n\nThis never reaches a response: [`super::trace::CompositionTrace`] carries only `stages` and\nechoes no intention. Should a trace ever carry one, that stops being incidental and becomes\na constraint — a 768-float array must not serialize back to the caller.\n\n**Exactly [`MAX_EMBEDDING_DIM`] floats**, refused as\n[`super::disposition::RefusalReason::MalformedEmbedding`]. `[added — 2026-08-28, found in\nreview]` This carried no bound of any kind, which made it the largest unbounded field on the\ncontract: a million floats on one stage is 4 MB that validates cleanly, and there are\n[`MAX_STAGES`] stages. A wrong-sized vector also reached pgvector and came back as an\n**opaque 500** — the caller told nothing, in the door whose promise is a typed refusal.\n\n**Published as a min AND a max, because the check is an equality.** `[corrected —\n2026-08-28, found in review]` Publishing only the maximum stated half the rule: a 384-float\nvector cleared every generated client and was then refused by the server, which is exactly\nthe gap the shape pass exists to close — a client must be able to refuse what the server\nwould refuse. The two bounds are the same number because a vector of any other length is\nnot a large question, it is a vector for a different space.",
+            "maxItems": 768,
+            "minItems": 768
           },
           "query": {
-            "type": "string"
+            "type": "string",
+            "description": "The question, in the caller's own words.\n\nAt most [`MAX_INTENTION_QUERY_BYTES`] bytes of it, refused as\n[`super::disposition::RefusalReason::IntentionTooLong`].",
+            "maxLength": 4096
           }
         }
       },
@@ -13880,6 +13887,48 @@
           },
           {
             "type": "string",
+            "description": "A stage's `intention.query` is longer than the contract admits.\n\n`[added — 2026-08-28]` The second member of the declaration family\n[`RefusalReason::TooManyStages`] opened, and it is raised for the same reason in the same\nplace: the ceiling is\n[`Intention::query`](super::composition::Intention::query)' published `max_length`, so a\nclient refuses what the CONTRACT forbids rather than what one deployment chose.\n\n**What it closes is work paid for and then discarded.** The embedder tokenizes the whole\nstring and truncates the ENCODING to 512 tokens (`temper-ingest`'s `embed_batch` →\n`truncate_encoding`), so every byte past the model's window is tokenized, paid for, and\nthrown away. The cap sits far above 512 tokens of English, so no question anyone asks meets\nit.\n\n**Refused rather than truncated**, which is this contract's standing choice: a silently\nshortened question is a different question answered confidently, the substitution\n[`RefusalReason::FilterNotApplicable`]'s sites exist to prevent one field over.\n\nCounted in **bytes**, not characters. The bound exists to bound work and transfer, both of\nwhich are byte-shaped, and a char count would admit four times the bytes for a plan written\nin a non-Latin script.",
+            "enum": [
+              "intention_too_long"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "An [`IdSet`](super::id_set::IdSet) carries more ids than the contract admits.\n\n`[added — 2026-08-28]` Third member of the same family, published as `max_items` on\n[`IdSet::ids`](super::id_set::IdSet::ids) and raised in the shape pass for the same reason.\n\n**What it bounds is a product, not a list.** A caller's id set is compared against the\nvisible corpus to produce the `unusable` tally every stage discloses, so its cost is\n`|caller ids| × |visible ids|` — the same `|candidates| × |second factor|` shape\n`MAX_PER_CANDIDATE_PROBES` was measured against, with the caller choosing the second factor\nagain.\n\n**Distinct from [`RefusalReason::AnchorTakesOneId`], which is not retired by it.** That one\nrefuses a *cogmap or context* bound carrying more than one id, because today's fragments\ntake an `(anchor_table, anchor_id)` pair — a limitation of what this server has built, which\nan `anchor_ids uuid[]` would retire, and which therefore lives in the capability pass. This\none is a contract fact about every kind and cannot move without a wire change.",
+            "enum": [
+              "too_many_ids"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "The composition asks the server to embed more question text than it can inside its budget.\n\n`[added — 2026-08-28]` The one member of the declaration family that is **not** a contract\nfact, and it is raised in the CAPABILITY pass for exactly that reason: what a deployment can\nembed inside `DEFAULT_QUERY_EMBED_BUDGET_MS` is a property of the machine it runs on, not of\nthe wire. A beefier deployment could raise it, and a client refusing on this number against\na server that raised it would refuse a plan that server answers — which is what the shape\npass may never do. Its unpublished siblings `MAX_PER_CANDIDATE_PREDICATES` and\n`MAX_PER_CANDIDATE_PROBES` are the same shape: cost bounds over a SUM, unexpressible per\nfield, and capability for the same reason.\n\n**It counts only what the SERVER must embed** — stages whose `intention` carries no vector.\nA caller who precomputed has already paid that cost, and refusing them for it would bound\nwork nobody does.\n\n**The repair is fewer or shorter questions, and it is a real repair**: over the budget no\nstage gets a vector at all, so the alternative to this refusal is not a slower answer, it is\nevery find stage refusing `embedding_unavailable` at once with nothing saying why.",
+            "enum": [
+              "intention_budget_exceeded"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "A narrowing list carries more values than the contract admits.\n\n`[added — 2026-08-28, found in review]` `ResourceFilter::doc_type`, `ResourceFilter::tags`\nand `EdgeFilter::labels` are the three narrowings that cost nothing per candidate — array\ncontainment and `= ANY` are single operations whatever their length — which is precisely why\nnothing had capped them. What they cost is BODY: ten thousand one-character labels per stage\nserialized to 4.7 MB and validated `Ok`, so the door answered a plan its own contract admits\nwith a bare 413. See `MAX_FILTER_VALUES`.",
+            "enum": [
+              "too_many_filter_values"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "A list that means a SET names the same member twice.\n\n`[added — 2026-08-28, found in review]` `ReturnSpec::with` and `EdgeFilter::edge_kinds` are\nboth closed vocabularies carried as lists, and a repeat in either changes nothing about the\nanswer — hydrating a section twice hydrates it once, and walking `leads_to` twice walks it\nonce. Left admitted, the repeat is a caller's only way to make an unbounded body out of a\nbounded vocabulary: `with: [open_meta; 10_000]` per return validated `Ok` at **9.6 MB**\n`[measured — 2026-08-28]`.\n\n**Refusing rather than deduplicating**, which is this contract's standing choice and the\nsame one [`RefusalReason::DuplicateReturnStage`] made one field over: silently collapsing a\ncaller's list answers a question they did not quite ask, and says nothing about it.\nDe-duplicating is also what makes the bound disappear — the count would be silently\nclamped to the vocabulary size, which is a cost decision taken by omission.",
+            "enum": [
+              "duplicate_set_member"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "A caller-supplied query vector is not the shape this server's vector space has.\n\n`[added — 2026-08-28, found in review]` `Intention::embedding` carried no bound at all,\nwhich made it the largest unbounded field on the contract — a million floats on one stage is\n4 MB that validates cleanly, times [`super::composition::MAX_STAGES`] stages.\n\n**Not a `TooMany…`**, and the difference is what a caller can act on. A wrong-length vector\nis not a large question; it is a vector for a different space, and 767 floats is exactly as\nwrong as 769. Before this it reached pgvector, whose dimension complaint the door redacts to\nan opaque 500 — a caller told nothing at all, by the surface whose contract is that every\nrefusal arrives at once and in their own vocabulary.",
+            "enum": [
+              "malformed_embedding"
+            ]
+          },
+          {
+            "type": "string",
             "description": "The composition returns no stages, so it answers nothing.",
             "enum": [
               "no_returns"
@@ -14369,7 +14418,8 @@
             "items": {
               "type": "string"
             },
-            "description": "`kb_properties` where `property_key = 'doc_type'`."
+            "description": "`kb_properties` where `property_key = 'doc_type'`.",
+            "maxItems": 256
           },
           "facets": {
             "type": "array",
@@ -14408,7 +14458,8 @@
             "items": {
               "type": "string"
             },
-            "description": "`kb_properties` where `property_key = 'tags'`. AND-containment."
+            "description": "`kb_properties` where `property_key = 'tags'`. AND-containment.",
+            "maxItems": 256
           },
           "title_contains": {
             "type": [

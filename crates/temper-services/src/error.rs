@@ -158,12 +158,25 @@ impl IntoResponse for ApiError {
                 tracing::warn!(status_code, error_code = code, %message, "bad request");
             }
             ApiError::PlanRefused { refusals } => {
-                // The count, not the refusals themselves — a composition is caller-authored content
-                // and its refusal details quote it back.
+                // The count and the REASONS, never the refusals themselves — a composition is
+                // caller-authored content and `PlanRefusal::detail` quotes it back. `reason` is a
+                // closed vocabulary this crate raises, so it carries no caller bytes.
+                //
+                // `[added — 2026-08-28, found in review]` The count alone made every refusal look
+                // alike: a caller repeatedly tripping `TooManyIds` on a published ceiling was
+                // indistinguishable from one sending a cyclic plan, so the operator could not tell
+                // a mis-sized cap from a malformed request. Declared holes this does NOT close:
+                // a client that enforces the published ceiling locally never reaches this door at
+                // all, and a refusal is a 400 — `otel.status_code` is set to ERROR only for 5xx, so
+                // this is greppable and not alertable.
+                //
+                // Debug, not the serde name: the wire spelling lives in one `rename_all` and
+                // re-deriving it here would be a second copy free to drift from it.
                 tracing::warn!(
                     status_code,
                     error_code = code,
                     refusal_count = refusals.len(),
+                    reasons = ?refusals.iter().map(|r| &r.reason).collect::<Vec<_>>(),
                     "plan refused"
                 );
             }

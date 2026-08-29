@@ -37,6 +37,8 @@ pub struct EdgeFilter {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub edge_kinds: Vec<EdgeKind>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "web-api", schema(max_items = 256))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 256)))]
     pub labels: Vec<String>,
     /// `kb_properties` rows owned by the edge itself: open key space, closed operator set.
     /// AND across the list, OR within a [`PropertyOp::Contains`].
@@ -88,9 +90,13 @@ pub struct FacetPredicate {
 pub struct ResourceFilter {
     /// `kb_properties` where `property_key = 'doc_type'`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "web-api", schema(max_items = 256))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 256)))]
     pub doc_type: Vec<String>,
     /// `kb_properties` where `property_key = 'tags'`. AND-containment.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "web-api", schema(max_items = 256))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 256)))]
     pub tags: Vec<String>,
     /// `kb_properties` where `property_key = 'facet'`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -242,6 +248,45 @@ pub struct PropertyPredicate {
     pub key: String,
     pub op: PropertyOp,
 }
+
+/// The most values one narrowing LIST may carry — `doc_type`, `tags`, `labels`.
+///
+/// # It bounds BYTES, not work, and that is why it is tighter than its neighbours
+///
+/// `[added — 2026-08-28, found in review]` `MAX_PER_CANDIDATE_PREDICATES` and
+/// `MAX_PER_CANDIDATE_PROBES` bound a per-candidate multiplier, and `ResourceFilter::facets`'
+/// own doc records why these three fields are not in that family: *"`tags` and `doc_type` do NOT
+/// have this shape — array containment and `= ANY` are single operations whatever their length."*
+/// That is still true, and it is exactly what left them unbounded: costing nothing per candidate,
+/// they had no reason to be capped, and so a caller could declare as many as they liked.
+///
+/// What they do cost is BODY. Ten thousand one-character labels on each of `MAX_STAGES` stages is
+/// a composition `validate` accepted and which serialized to **4.7 MB**
+/// `[measured — 2026-08-28]` — past the door's declared body limit, so a plan the contract called
+/// legal met a bare 413 with no refusal list. This is the cap that makes that a typed refusal.
+///
+/// # 256, measured against the live vocabularies rather than guessed
+///
+/// `[raised from 64 — 2026-08-28, measured on prod `crimson-fog-23541670`]` 64 was chosen by the
+/// "far above the question" method its siblings use, and for one of these three fields that was
+/// simply **false**:
+///
+/// | field | live vocabulary | semantics | is 64 above it? |
+/// |---|---|---|---|
+/// | `doc_type` | 19 distinct values | `= ANY`, an OR | yes, 3.4x |
+/// | `tags` | 997 distinct elements | AND-containment | yes — a long list narrows to nothing |
+/// | `labels` | **124 distinct** | `= ANY`, an OR | **no — 64 is half the vocabulary** |
+///
+/// A caller naming more than half the label vocabulary is doing something ordinary, and 4,362
+/// resources is a small corpus: these vocabularies GROW with the material, so the field where the
+/// cap was already too tight is the one where the margin erodes fastest.
+///
+/// 256 is chosen against what this actually bounds — **body bytes, not work**. At `MAX_STAGES`
+/// stages of 256 twenty-byte labels that is ~330 KB, comfortably inside the door's declared limit,
+/// and it is twice today's label vocabulary with room for a corpus an order of magnitude larger.
+/// It matches `MAX_PER_CANDIDATE_PROBES`' number by arithmetic coincidence rather than by
+/// analogy — that one bounds a per-candidate multiplier and this one bounds a serialization.
+pub const MAX_FILTER_VALUES: usize = 256;
 
 #[cfg(test)]
 mod tests {

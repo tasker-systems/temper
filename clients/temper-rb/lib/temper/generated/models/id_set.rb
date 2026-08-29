@@ -16,6 +16,7 @@ require 'time'
 module Temper::Generated
   # The one value that crosses a stage boundary. Membership, never rank.
   class IdSet < ApiModelBase
+    # The ids themselves — at most [`MAX_ID_SET_IDS`] of them, refused as [`crate::types::query::disposition::RefusalReason::TooManyIds`].
     attr_accessor :ids
 
     attr_accessor :kind
@@ -102,6 +103,10 @@ module Temper::Generated
         invalid_properties.push('invalid value for "ids", ids cannot be nil.')
       end
 
+      if @ids.length > 256
+        invalid_properties.push('invalid value for "ids", number of items must be less than or equal to 256.')
+      end
+
       if @kind.nil?
         invalid_properties.push('invalid value for "kind", kind cannot be nil.')
       end
@@ -114,6 +119,7 @@ module Temper::Generated
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
       return false if @ids.nil?
+      return false if @ids.length > 256
       return false if @kind.nil?
       true
     end
@@ -123,6 +129,10 @@ module Temper::Generated
     def ids=(ids)
       if ids.nil?
         fail ArgumentError, 'ids cannot be nil'
+      end
+
+      if ids.length > 256
+        fail ArgumentError, 'invalid value for "ids", number of items must be less than or equal to 256.'
       end
 
       @ids = ids

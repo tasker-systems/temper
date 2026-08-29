@@ -156,6 +156,35 @@ discriminator when this build predates the kind the server named.
 > `TransportError`, because `ConnectionError` is a Python builtin and shadowing it
 > would make `except ConnectionError` silently catch the wrong thing.
 
+### Composition bounds raise BEFORE the request `[2026-08-28]`
+
+`/api/query`'s contract publishes ceilings on what one composition may declare, and the
+generated pydantic models enforce them locally — so these surface as a `ValidationError`
+at construction (and, since `validate_assignment` is on, at mutation) rather than as a
+`BadRequest` carrying a typed refusal:
+
+| field | ceiling |
+|---|---|
+| `Composition.stages` | 64 |
+| `Intention.query` | 4096 |
+| `IdSet.ids` | 256 |
+| `ResourceFilter.doc_type` / `.tags`, `EdgeFilter.labels` | 256 |
+
+**This is a behaviour change for code that already builds large plans**: a 300-id `IdSet`
+used to construct fine and reach the server. It now raises before any HTTP call.
+
+**The client counts characters; the server counts bytes.** A 4096-character CJK question is
+8192 bytes — it constructs cleanly here and is refused server-side as `intention_too_long`.
+The skew is one-directional by construction (a UTF-8 string is never fewer bytes than
+characters), so the client can only ever under-enforce, never refuse something the server
+would have run.
+
+Two ceilings are deliberately NOT enforced here, because neither is a contract fact: the
+per-stage predicate and probe caps, and the aggregate embed budget
+(`intention_budget_exceeded`) — what a deployment can embed in one request is a property of
+that deployment. Those arrive as refusals.
+
+
 ## Credentials
 
 `BearerToken(token)` and `ClientCredentials(...)` check their inputs at construction,

@@ -38,14 +38,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::types::query::act::ActName;
-use crate::types::query::composition::{Composition, StageNode, MAX_STAGES};
+use crate::types::query::composition::{
+    Composition, StageNode, MAX_EMBEDDING_DIM, MAX_INTENTION_QUERY_BYTES, MAX_STAGES,
+};
 use crate::types::query::disposition::RefusalReason;
 use crate::types::query::envelope::ActInvocation;
-use crate::types::query::filter::PropertyOp;
-use crate::types::query::id_set::IdKind;
+use crate::types::query::filter::{PropertyOp, MAX_FILTER_VALUES};
+use crate::types::query::id_set::{IdKind, MAX_ID_SET_IDS};
 use crate::types::query::stage::{StageInput, StageName, StageRelation};
+use crate::types::resource_view::ResourceSection;
 
-use super::{index_by_name, refusal, term_wire_name, PlanRefusal};
+use super::{index_by_name, refusal, term_wire_name, wire_name, PlanRefusal};
 
 /// Kahn's topological sort over the resolvable edges. `None` iff a cycle prevents a total order.
 fn topo_order(by_name: &BTreeMap<&str, &StageNode>) -> Option<Vec<StageNode>> {
@@ -209,6 +212,48 @@ pub(super) fn validate_shape_indexed(
                 ));
             }
         }
+        // **A combinator naming one stage twice combines it once.** `[added — 2026-08-28, found in
+        // review]` `CombineNode::inputs` carries no `max_items`, and cannot: the ceiling is
+        // per-op and only the ordered ops have one — so for `union` and `intersect` a repeat was
+        // the one way to make an unbounded list out of a bounded vocabulary: inputs must name
+        // DECLARED stages, of which there are at most `MAX_STAGES`, so refusing repeats is what
+        // bounds the field. A million repeated inputs validated cleanly at 4 MB.
+        //
+        // Exactly the argument `DuplicateSetMember` was invented for one field over, and missed
+        // here because this list holds names rather than a closed enum. `break` for the same reason
+        // the sibling checks do: an over-long list must not answer with an over-long refusal list.
+        if let StageNode::Combine(cn) = node {
+            let mut inputs_once: BTreeSet<&str> = BTreeSet::new();
+            for input in &cn.inputs {
+                if !inputs_once.insert(input.as_str()) {
+                    errs.push(refusal(
+                        Some(node.name()),
+                        RefusalReason::DuplicateSetMember,
+                        format!(
+                            "stage `{}` names `{}` more than once among its inputs; combining a \
+                             set with itself yields the set",
+                            node.name().as_str(),
+                            input.as_str()
+                        ),
+                    ));
+                    break;
+                }
+            }
+        }
+
+        // `break` for the same reason the two checks above it do. `[added — 2026-08-28, found in
+        // review]` This loop walks the SAME unbounded `CombineNode::inputs`, and the
+        // `DuplicateSetMember` guard's `break` does not protect it: a repeat of an UNDECLARED name
+        // trips that guard once and then falls through to here, which had no ceiling of its own. A
+        // million repeats of one undeclared name is 4 MB of request and was a million refusals —
+        // each carrying a `StageName` and a ~40-byte detail — built in memory and serialized whole
+        // as a 400, on a function with ~1.7 vCPU. `prepare` runs `validate` twice, so the list was
+        // built, dropped and built again.
+        //
+        // With the `break` the whole pass emits at most one dangling-reference refusal per node,
+        // and nodes are bounded by `MAX_STAGES`. The cost is that a node naming two different
+        // undeclared stages reports only the first — the same trade the sibling guards make, and
+        // the right one: an over-long list must not be answered with an over-long refusal list.
         for up in node.upstream_names() {
             if !declared.contains(up.as_str()) {
                 errs.push(refusal(
@@ -220,6 +265,7 @@ pub(super) fn validate_shape_indexed(
                         up.as_str()
                     ),
                 ));
+                break;
             }
         }
     }
@@ -233,6 +279,43 @@ pub(super) fn validate_shape_indexed(
     // one question, one of them thrown away without a word. Found in review.
     let mut returned_once: BTreeSet<&str> = BTreeSet::new();
     for ret in &c.outcome.returns {
+        // **A section named twice hydrates it once.** `[added — 2026-08-28, found in review]` The
+        // vocabulary is closed (`ReturnSpec::ADMITTED_SECTIONS`), so without this the list is the
+        // one way a caller turns a bounded vocabulary into an unbounded body — `[open_meta; 10_000]`
+        // per return validated cleanly at 9.6 MB. Refused rather than deduplicated, for the reason
+        // on the variant: a silent collapse answers a question nobody quite asked.
+        //
+        // Shape, and by the same test the duplicate-stage check below passes: a repeat is malformed
+        // whatever this door hydrates. WHICH sections it offers is capability's question
+        // (`SectionNotAvailable`), and the two compose — a caller repeating an unoffered section is
+        // told both things at once, which is this contract's rule.
+        //
+        // **ONE refusal per `returns` entry, and the `break` is the whole reason this is not a
+        // regression** `[added — 2026-08-28, found in review]`. Without it a repeated section
+        // produces a refusal PER ELEMENT: `[open-meta; 350_000]` fits inside the declared body
+        // limit and would answer with 350,000 refusals carrying a 110-character detail each — tens
+        // of megabytes of 400, built in memory and serialized whole. That is the stage cap's own
+        // argument turned against the caller (*"an over-cap plan produces an over-cap REFUSAL LIST,
+        // and a 400 body grows without limit in exactly the direction being closed"*), and the
+        // first draft of this check made exactly that mistake while the `edge_kinds` sibling
+        // twenty lines down broke correctly.
+        let mut sections_once: BTreeSet<&ResourceSection> = BTreeSet::new();
+        for section in &ret.with {
+            if !sections_once.insert(section) {
+                errs.push(refusal(
+                    Some(&ret.stage),
+                    RefusalReason::DuplicateSetMember,
+                    format!(
+                        "stage `{}` names the `{}` section more than once in `with`; hydrating a \
+                         section twice hydrates it once",
+                        ret.stage.as_str(),
+                        wire_name(section)
+                    ),
+                ));
+                break;
+            }
+        }
+
         if !returned_once.insert(ret.stage.as_str()) {
             errs.push(refusal(
                 Some(&ret.stage),
@@ -409,6 +492,28 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
         StageInput::Caller { ids, .. } => Some(ids),
         StageInput::Upstream { .. } => None,
     }) {
+        // **The set's SIZE, before anything about its kind.** `[added — 2026-08-28]` A caller's
+        // ids are compared against what this principal can see in order to produce the `unusable`
+        // number every stage discloses, so the work is `|caller ids| × |visible ids|` and the
+        // caller chooses the first factor. [`MAX_ID_SET_IDS`] carries the arithmetic.
+        //
+        // Shape, and legal there for the same reason the stage cap is: the ceiling is `max_items`
+        // on `IdSet::ids`, so it is a fact about the CONTRACT and a client may raise it against a
+        // server it does not share a binary with. It does not retire the anchor-cardinality arm
+        // below, nor its capability sibling — those are about what today's fragments can take.
+        if ids.ids.len() > MAX_ID_SET_IDS {
+            errs.push(refusal(
+                Some(name),
+                RefusalReason::TooManyIds,
+                format!(
+                    "an id set may carry at most {MAX_ID_SET_IDS} ids; this stage supplied {}. \
+                     Every id is checked against what you can see, so the set's size is the \
+                     stage's cost — narrow it, or ask in more than one composition",
+                    ids.ids.len()
+                ),
+            ));
+        }
+
         let kind = &ids.kind;
         if *kind == IdKind::Region && ids.provenance.is_none() {
             errs.push(refusal(
@@ -489,6 +594,63 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
         }
     }
 
+    // **The question's LENGTH, checked wherever the field appears.** `[added — 2026-08-28]` It is
+    // not gated on the act, and that follows from where the ceiling is published rather than being
+    // a separate choice: `max_length` sits on `Intention::query`, so it is a property of the FIELD
+    // on the published contract, not of what any act does with the field. Gating it on the find
+    // acts would leave the contract saying one thing and the door doing another.
+    //
+    // What it closes is work paid for and thrown away — the embedder tokenizes the whole string
+    // and truncates the ENCODING to 512 tokens, so every byte past the model's window is
+    // tokenized at the caller's request and discarded. [`MAX_INTENTION_QUERY_BYTES`] carries the
+    // choice of number, and why the answer is a refusal rather than a truncation.
+    //
+    // **Bytes, not characters, and the published bound is a character count.** The divergence is
+    // in the safe direction — a UTF-8 string is never fewer bytes than characters, so the contract
+    // promises less than this admits and a stale client cannot refuse a plan a server would run.
+    // Recorded on the field itself.
+    if let Some(intention) = inv.intention.as_ref() {
+        let bytes = intention.query.len();
+        if bytes > MAX_INTENTION_QUERY_BYTES {
+            errs.push(refusal(
+                Some(name),
+                RefusalReason::IntentionTooLong,
+                format!(
+                    "a question may carry at most {MAX_INTENTION_QUERY_BYTES} bytes; this stage \
+                     supplied {bytes}. The embedder reads the first 512 tokens and discards the \
+                     rest, so the excess is paid for and never used — shorten the question, or \
+                     ask the parts as separate stages"
+                ),
+            ));
+        }
+    }
+
+    // **A caller-supplied vector must be this space's shape.** `[added — 2026-08-28, found in
+    // review]` It was the one field on the contract with no bound of any kind, and the largest:
+    // a million floats on one stage is 4 MB that validated cleanly, times `MAX_STAGES`.
+    //
+    // Shape, and published as `max_items` on the field like its neighbours — but the refusal names
+    // the SHAPE rather than a maximum, because 767 floats is exactly as wrong as 769 and a caller
+    // told about a ceiling would fix the wrong end. What it replaces is worse than a bad message:
+    // the vector reached pgvector, and this door redacts that dimension complaint to an opaque 500.
+    if let Some(intention) = inv.intention.as_ref() {
+        if let Some(embedding) = intention.embedding.as_ref() {
+            if embedding.len() != MAX_EMBEDDING_DIM {
+                errs.push(refusal(
+                    Some(name),
+                    RefusalReason::MalformedEmbedding,
+                    format!(
+                        "a query vector must carry exactly {MAX_EMBEDDING_DIM} floats, the \
+                         dimension of the space this corpus is embedded in; this stage supplied \
+                         {}. A vector of another length is not a longer question, it is a vector \
+                         for a different model — omit it and the server will embed on your behalf",
+                        embedding.len()
+                    ),
+                ));
+            }
+        }
+    }
+
     // Every find act refuses without a threaded intention. For `find-about-*` the reason is that
     // the server does not supply the QUESTION on the caller's behalf — "no question was asked" and
     // "the question could not be embedded" stay distinct. `find-exact` needs the intention for a
@@ -564,6 +726,77 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
         };
         if let Some(detail) = missing {
             errs.push(refusal(Some(name), RefusalReason::MissingIntention, detail));
+        }
+    }
+
+    // **The narrowing LISTS: a cap on how many values, and no repeats where the vocabulary is
+    // closed.** `[added — 2026-08-28, found in review]`
+    //
+    // These are the fields that cost nothing per candidate — `ResourceFilter::facets`' own doc says
+    // so: *"`tags` and `doc_type` do NOT have this shape — array containment and `= ANY` are single
+    // operations whatever their length"* — and costing nothing is exactly why nothing capped them.
+    // What they cost is BODY, which is a bound this door owes just the same. `MAX_FILTER_VALUES`
+    // carries the number and why it is tighter than the per-candidate caps.
+    //
+    // Shape rather than capability, on the same test as the id-set cap: each ceiling is `max_items`
+    // on the field it bounds, published on both doors, so it is a contract fact a client may raise
+    // against a server it does not share a binary with.
+    //
+    // ONE site for the reason rather than three, so the three fields cannot drift into three
+    // different numbers, and so the seam guard's count stays honest about how many judgments were
+    // made here — one.
+    {
+        let lists: [(&str, usize); 3] = [
+            (
+                "resource_filter.doc_type",
+                inv.resource_filter.as_ref().map_or(0, |f| f.doc_type.len()),
+            ),
+            (
+                "resource_filter.tags",
+                inv.resource_filter.as_ref().map_or(0, |f| f.tags.len()),
+            ),
+            (
+                "edge_filter.labels",
+                inv.edge_filter.as_ref().map_or(0, |f| f.labels.len()),
+            ),
+        ];
+        for (field, len) in lists {
+            if len > MAX_FILTER_VALUES {
+                errs.push(refusal(
+                    Some(name),
+                    RefusalReason::TooManyFilterValues,
+                    format!(
+                        "`{field}` may carry at most {MAX_FILTER_VALUES} values; this stage \
+                         supplied {len}. A narrowing that names that many is not narrowing"
+                    ),
+                ));
+            }
+        }
+    }
+
+    // **`edge_kinds` is a closed enum carried as a list**, so a repeat walks the same edge kind
+    // twice and changes nothing — the same defect as a repeated section in `with`, and refused for
+    // the same reason. Without it the one bounded vocabulary on `EdgeFilter` is still an unbounded
+    // field. WHICH kinds an act admits stays capability's question; this is only about repeats.
+    if let Some(f) = &inv.edge_filter {
+        // `Vec` rather than a set: `EdgeKind` is not `Ord`, and the list is capped by its own
+        // vocabulary the moment repeats are refused — so the quadratic scan is over at most
+        // `|EdgeKind|` entries before the first refusal fires.
+        let mut kinds_once: Vec<&crate::types::graph::EdgeKind> = Vec::new();
+        for kind in &f.edge_kinds {
+            if kinds_once.contains(&kind) {
+                errs.push(refusal(
+                    Some(name),
+                    RefusalReason::DuplicateSetMember,
+                    format!(
+                        "`edge_filter.edge_kinds` names `{}` more than once; walking an edge kind \
+                         twice walks it once",
+                        wire_name(kind)
+                    ),
+                ));
+                break;
+            }
+            kinds_once.push(kind);
         }
     }
 

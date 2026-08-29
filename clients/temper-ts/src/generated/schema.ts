@@ -4119,6 +4119,10 @@ export interface components {
         };
         /** @description The one value that crosses a stage boundary. Membership, never rank. */
         IdSet: {
+            /**
+             * @description The ids themselves — at most [`MAX_ID_SET_IDS`] of them, refused as
+             *     [`crate::types::query::disposition::RefusalReason::TooManyIds`].
+             */
             ids: string[];
             kind: components["schemas"]["IdKind"];
             provenance?: null | components["schemas"]["IdProvenance"];
@@ -4361,8 +4365,28 @@ export interface components {
              *     This never reaches a response: [`super::trace::CompositionTrace`] carries only `stages` and
              *     echoes no intention. Should a trace ever carry one, that stops being incidental and becomes
              *     a constraint — a 768-float array must not serialize back to the caller.
+             *
+             *     **Exactly [`MAX_EMBEDDING_DIM`] floats**, refused as
+             *     [`super::disposition::RefusalReason::MalformedEmbedding`]. `[added — 2026-08-28, found in
+             *     review]` This carried no bound of any kind, which made it the largest unbounded field on the
+             *     contract: a million floats on one stage is 4 MB that validates cleanly, and there are
+             *     [`MAX_STAGES`] stages. A wrong-sized vector also reached pgvector and came back as an
+             *     **opaque 500** — the caller told nothing, in the door whose promise is a typed refusal.
+             *
+             *     **Published as a min AND a max, because the check is an equality.** `[corrected —
+             *     2026-08-28, found in review]` Publishing only the maximum stated half the rule: a 384-float
+             *     vector cleared every generated client and was then refused by the server, which is exactly
+             *     the gap the shape pass exists to close — a client must be able to refuse what the server
+             *     would refuse. The two bounds are the same number because a vector of any other length is
+             *     not a large question, it is a vector for a different space.
              */
             embedding?: number[] | null;
+            /**
+             * @description The question, in the caller's own words.
+             *
+             *     At most [`MAX_INTENTION_QUERY_BYTES`] bytes of it, refused as
+             *     [`super::disposition::RefusalReason::IntentionTooLong`].
+             */
             query: string;
         };
         /**
@@ -5413,7 +5437,7 @@ export interface components {
          *     change. Contrast [`StageDisposition`], which stays closed on purpose — four dispositions,
          *     matched exhaustively.
          */
-        RefusalReason: "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | string;
+        RefusalReason: "unsupported_bound_kind" | "anchor_takes_one_id" | "unsupported_seed_kind" | "missing_provenance" | "not_implemented" | "missing_intention" | "section_not_available" | "filter_not_applicable" | "bound_term_not_applicable" | "not_separably_reachable" | "embedding_unavailable" | "subtrahend_refused" | "no_stages" | "too_many_stages" | "intention_too_long" | "too_many_ids" | "intention_budget_exceeded" | "too_many_filter_values" | "duplicate_set_member" | "malformed_embedding" | "no_returns" | "duplicate_stage_name" | "combinator_arity" | "dangling_reference" | "duplicate_return_stage" | "duplicate_input_relation" | "stage_not_returnable" | "unknown_return_stage" | "cycle" | "unknown_act" | "empty_property_key" | "empty_contains" | string;
         /**
          * @description One region a `survey` stage matched, and the score it matched at.
          *

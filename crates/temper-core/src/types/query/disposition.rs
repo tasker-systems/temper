@@ -231,6 +231,100 @@ pub enum RefusalReason {
     /// published: a client refuses what the CONTRACT forbids, never what one deployment chose, and
     /// widening it is a wire-contract change visible in `openapi.json`.
     TooManyStages,
+    /// A stage's `intention.query` is longer than the contract admits.
+    ///
+    /// `[added — 2026-08-28]` The second member of the declaration family
+    /// [`RefusalReason::TooManyStages`] opened, and it is raised for the same reason in the same
+    /// place: the ceiling is
+    /// [`Intention::query`](super::composition::Intention::query)' published `max_length`, so a
+    /// client refuses what the CONTRACT forbids rather than what one deployment chose.
+    ///
+    /// **What it closes is work paid for and then discarded.** The embedder tokenizes the whole
+    /// string and truncates the ENCODING to 512 tokens (`temper-ingest`'s `embed_batch` →
+    /// `truncate_encoding`), so every byte past the model's window is tokenized, paid for, and
+    /// thrown away. The cap sits far above 512 tokens of English, so no question anyone asks meets
+    /// it.
+    ///
+    /// **Refused rather than truncated**, which is this contract's standing choice: a silently
+    /// shortened question is a different question answered confidently, the substitution
+    /// [`RefusalReason::FilterNotApplicable`]'s sites exist to prevent one field over.
+    ///
+    /// Counted in **bytes**, not characters. The bound exists to bound work and transfer, both of
+    /// which are byte-shaped, and a char count would admit four times the bytes for a plan written
+    /// in a non-Latin script.
+    IntentionTooLong,
+    /// An [`IdSet`](super::id_set::IdSet) carries more ids than the contract admits.
+    ///
+    /// `[added — 2026-08-28]` Third member of the same family, published as `max_items` on
+    /// [`IdSet::ids`](super::id_set::IdSet::ids) and raised in the shape pass for the same reason.
+    ///
+    /// **What it bounds is a product, not a list.** A caller's id set is compared against the
+    /// visible corpus to produce the `unusable` tally every stage discloses, so its cost is
+    /// `|caller ids| × |visible ids|` — the same `|candidates| × |second factor|` shape
+    /// `MAX_PER_CANDIDATE_PROBES` was measured against, with the caller choosing the second factor
+    /// again.
+    ///
+    /// **Distinct from [`RefusalReason::AnchorTakesOneId`], which is not retired by it.** That one
+    /// refuses a *cogmap or context* bound carrying more than one id, because today's fragments
+    /// take an `(anchor_table, anchor_id)` pair — a limitation of what this server has built, which
+    /// an `anchor_ids uuid[]` would retire, and which therefore lives in the capability pass. This
+    /// one is a contract fact about every kind and cannot move without a wire change.
+    TooManyIds,
+    /// The composition asks the server to embed more question text than it can inside its budget.
+    ///
+    /// `[added — 2026-08-28]` The one member of the declaration family that is **not** a contract
+    /// fact, and it is raised in the CAPABILITY pass for exactly that reason: what a deployment can
+    /// embed inside `DEFAULT_QUERY_EMBED_BUDGET_MS` is a property of the machine it runs on, not of
+    /// the wire. A beefier deployment could raise it, and a client refusing on this number against
+    /// a server that raised it would refuse a plan that server answers — which is what the shape
+    /// pass may never do. Its unpublished siblings `MAX_PER_CANDIDATE_PREDICATES` and
+    /// `MAX_PER_CANDIDATE_PROBES` are the same shape: cost bounds over a SUM, unexpressible per
+    /// field, and capability for the same reason.
+    ///
+    /// **It counts only what the SERVER must embed** — stages whose `intention` carries no vector.
+    /// A caller who precomputed has already paid that cost, and refusing them for it would bound
+    /// work nobody does.
+    ///
+    /// **The repair is fewer or shorter questions, and it is a real repair**: over the budget no
+    /// stage gets a vector at all, so the alternative to this refusal is not a slower answer, it is
+    /// every find stage refusing `embedding_unavailable` at once with nothing saying why.
+    IntentionBudgetExceeded,
+    /// A narrowing list carries more values than the contract admits.
+    ///
+    /// `[added — 2026-08-28, found in review]` `ResourceFilter::doc_type`, `ResourceFilter::tags`
+    /// and `EdgeFilter::labels` are the three narrowings that cost nothing per candidate — array
+    /// containment and `= ANY` are single operations whatever their length — which is precisely why
+    /// nothing had capped them. What they cost is BODY: ten thousand one-character labels per stage
+    /// serialized to 4.7 MB and validated `Ok`, so the door answered a plan its own contract admits
+    /// with a bare 413. See `MAX_FILTER_VALUES`.
+    TooManyFilterValues,
+    /// A list that means a SET names the same member twice.
+    ///
+    /// `[added — 2026-08-28, found in review]` `ReturnSpec::with` and `EdgeFilter::edge_kinds` are
+    /// both closed vocabularies carried as lists, and a repeat in either changes nothing about the
+    /// answer — hydrating a section twice hydrates it once, and walking `leads_to` twice walks it
+    /// once. Left admitted, the repeat is a caller's only way to make an unbounded body out of a
+    /// bounded vocabulary: `with: [open_meta; 10_000]` per return validated `Ok` at **9.6 MB**
+    /// `[measured — 2026-08-28]`.
+    ///
+    /// **Refusing rather than deduplicating**, which is this contract's standing choice and the
+    /// same one [`RefusalReason::DuplicateReturnStage`] made one field over: silently collapsing a
+    /// caller's list answers a question they did not quite ask, and says nothing about it.
+    /// De-duplicating is also what makes the bound disappear — the count would be silently
+    /// clamped to the vocabulary size, which is a cost decision taken by omission.
+    DuplicateSetMember,
+    /// A caller-supplied query vector is not the shape this server's vector space has.
+    ///
+    /// `[added — 2026-08-28, found in review]` `Intention::embedding` carried no bound at all,
+    /// which made it the largest unbounded field on the contract — a million floats on one stage is
+    /// 4 MB that validates cleanly, times [`super::composition::MAX_STAGES`] stages.
+    ///
+    /// **Not a `TooMany…`**, and the difference is what a caller can act on. A wrong-length vector
+    /// is not a large question; it is a vector for a different space, and 767 floats is exactly as
+    /// wrong as 769. Before this it reached pgvector, whose dimension complaint the door redacts to
+    /// an opaque 500 — a caller told nothing at all, by the surface whose contract is that every
+    /// refusal arrives at once and in their own vocabulary.
+    MalformedEmbedding,
     /// The composition returns no stages, so it answers nothing.
     NoReturns,
     /// Two stages share a name.
@@ -447,6 +541,12 @@ mod tests {
         for reason in [
             RefusalReason::NoStages,
             RefusalReason::TooManyStages,
+            RefusalReason::IntentionTooLong,
+            RefusalReason::TooManyIds,
+            RefusalReason::IntentionBudgetExceeded,
+            RefusalReason::TooManyFilterValues,
+            RefusalReason::DuplicateSetMember,
+            RefusalReason::MalformedEmbedding,
             RefusalReason::NoReturns,
             RefusalReason::DuplicateStageName,
             RefusalReason::CombinatorArity,

@@ -63,10 +63,12 @@
       "description": "The one value that crosses a stage boundary. Membership, never rank.",
       "properties": {
         "ids": {
+          "description": "The ids themselves — at most [`MAX_ID_SET_IDS`] of them, refused as\n[`crate::types::query::disposition::RefusalReason::TooManyIds`].",
           "items": {
             "format": "uuid",
             "type": "string"
           },
+          "maxItems": 256,
           "type": "array"
         },
         "kind": {

@@ -22,7 +22,7 @@ mod capability;
 mod shape;
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::act::{ActName, ActQuantity, Disclosure};
 use super::composition::{Composition, ReturnSpec, StageNode};
@@ -193,6 +193,85 @@ fn term_wire_name(term: &BoundTerm) -> String {
         .unwrap_or_else(|_| format!("{term:?}"))
 }
 
+/// The fragments that answer by VECTOR, and therefore the acts whose question the server embeds.
+///
+/// `[moved here from temper-services — 2026-08-28]` The names are `CALLABLE_FRAGMENTS`' own, which
+/// is what makes this reachable from this crate at all; `temper-substrate` carries `EMIT_FIND_WIDE`
+/// and `EMIT_SURVEY` as the same two strings for the compiler's use.
+const VECTOR_FRAGMENTS: [&str; 2] = ["__temper_ungated_find_wide", "__temper_ungated_survey"];
+
+/// Whether this node's act searches by vector, read off the declared mechanic rather than a
+/// hardcoded act list — so an act served by the wide arm is covered without an edit here.
+///
+/// **Two hops, and the second is why this is not a string comparison against `served_by`.**
+/// `served_by` names what the deployed `/api/search` door calls and is ALLOWED to move; it moved to
+/// `query_find_wide` once, and the comparison that had been written against the old spelling
+/// returned `false` for both wide acts, so every find-about stage refused `EmbeddingUnavailable`
+/// for exactly the callers the server embeds on behalf of. Going through [`emitted_fragment_for`]
+/// asks the question the answer depends on.
+pub fn wants_a_vector(node: &StageNode) -> bool {
+    match node {
+        StageNode::Act(inv) => declaration(&inv.act)
+            .and_then(|d| d.served_by)
+            .and_then(|mechanic| emitted_fragment_for(&mechanic))
+            .is_some_and(|fragment| VECTOR_FRAGMENTS.contains(&fragment)),
+        StageNode::Combine(_) => false,
+    }
+}
+
+/// The query text this node needs the SERVER to embed, trimmed — or `None`, for four different
+/// reasons that must not be collapsed: this act does not search by vector; it carries no question;
+/// the caller already sent a vector; or the question is empty.
+///
+/// **The text is TRIMMED**, matching `substrate_read::embed_query_if_missing`. Two questions
+/// differing only in surrounding whitespace are one question.
+pub fn text_to_embed(node: &StageNode) -> Option<&str> {
+    if !wants_a_vector(node) {
+        return None;
+    }
+    let StageNode::Act(inv) = node else {
+        return None;
+    };
+    let intention = inv.intention.as_ref()?;
+    if intention.embedding.is_some() {
+        return None;
+    }
+    let query = intention.query.trim();
+    (!query.is_empty()).then_some(query)
+}
+
+/// Every DISTINCT question this composition needs embedded, in a stable order.
+///
+/// **Distinct query TEXT, not per stage** — two properties rather than one. Two stages naming the
+/// same string must not pay ONNX twice; and they must not be able to receive two *different*
+/// vectors for one question. A `BTreeSet` gives both, and gives a deterministic embed order free.
+///
+/// `[moved here from temper-services — 2026-08-28, found in review]` It lived beside the embedder,
+/// and `capability::validate_intention_budget` — which must bound exactly this set — approximated
+/// it instead: it summed every un-embedded intention, counting a question asked by seventeen stages
+/// seventeen times and counting `follow-from`'s intention, which is never embedded at all. So the
+/// budget refused plans whose real cost was a fraction of the counted one. One definition, two
+/// callers, and the bound is now over the same set the embedder builds.
+pub fn texts_to_embed(c: &Composition) -> BTreeSet<String> {
+    c.stages
+        .iter()
+        .filter_map(text_to_embed)
+        .map(str::to_string)
+        .collect()
+}
+
+/// The wire spelling of any serializable value a refusal names, for the same reason
+/// [`term_wire_name`] exists: a caller greps their own request for the token they sent, and a Rust
+/// variant name is not in it. `EdgeKind::LeadsTo` is `leads_to` on the wire, and
+/// `ResourceSection::OpenMeta` is `open-meta`.
+///
+/// `[added — 2026-08-28, found in review]` Two new refusals rendered `{:?}` and named neither.
+pub(super) fn wire_name<T: serde::Serialize + std::fmt::Debug>(value: &T) -> String {
+    serde_json::to_string(value)
+        .map(|s| s.trim_matches('"').to_string())
+        .unwrap_or_else(|_| format!("{value:?}"))
+}
+
 /// The declared stages indexed by name, **first wins**.
 ///
 /// One definition, called by both passes. A duplicate name is refused by [`shape`], but the two
@@ -322,6 +401,12 @@ pub fn validate(c: &Composition) -> Result<ValidatedComposition, Vec<PlanRefusal
     // refusal a cyclic plan used to receive. Every refusal, not the first, is this module's rule.
     capability::validate_returns(c, &mut errs);
 
+    // The embed bound, composition-level and ungated on topology for the same reason as the line
+    // above: it compares a sum against a constant and reads no stage graph. Capability rather than
+    // shape because what a deployment can embed inside one budget is a fact about the machine, not
+    // about the wire — see `RefusalReason::IntentionBudgetExceeded`.
+    capability::validate_intention_budget(c, &mut errs);
+
     // The per-stage half runs only when the DAG is acyclic, which is the incumbent behaviour and
     // exactly what the pinned rule is about — `reachable ACTS keep the cycle the sole finding`.
     // Per-stage findings over a graph that is not a graph would be findings about a plan that
@@ -345,11 +430,16 @@ pub fn validate(c: &Composition) -> Result<ValidatedComposition, Vec<PlanRefusal
 /// run this against a plan it will send to a server whose binary it does not share.
 ///
 /// `[shipped — 2026-08-13]` This said *"No such command ships yet; PR C adds `temper query --check`
-/// as its first caller."* It has two callers now, and the pair is the point: `temper query --check`
-/// runs it **alone**, and `temper_services::backend::query_read::prepare` runs it as the gate
-/// before embedding. (Named, not linked — that crate depends on this one, so a link would point up
-/// the dependency graph.) One function, so a plan checked locally and a plan checked by the server
-/// cannot disagree about what "well-formed" means.
+/// as its first caller."*
+///
+/// **It has ONE caller** `[was two — 2026-08-28]`: `temper query --check`.
+/// `temper_services::backend::query_read::prepare` ran it as the gate before embedding and now runs
+/// the full [`validate`], because the embed budget the gate must see is a CAPABILITY refusal. (Named,
+/// not linked — that crate depends on this one, so a link would point up the dependency graph.)
+///
+/// One function still, so a plan checked locally and a plan checked by the server cannot disagree
+/// about what "well-formed" means — but **this is now strictly weaker than the server's first
+/// check**, and describing it as the same pass is the drift that sentence was written to forbid.
 ///
 /// **What it still cannot see is capability** — spec §C: *"it reports expressibility and says so —
 /// it cannot speak to what the server has implemented and does not try."* That is why `--check`
@@ -365,13 +455,15 @@ mod tests {
     use crate::types::graph::EdgeKind;
     use crate::types::ids::CogmapId;
     use crate::types::query::composition::{
-        CombineNode, CombineOp, Composition, Intention, OutcomeDeclaration, MAX_STAGES,
+        intention_budget_bytes, CombineNode, CombineOp, Composition, Intention, OutcomeDeclaration,
+        MAX_EMBEDDING_DIM, MAX_INTENTION_QUERY_BYTES, MAX_STAGES,
     };
     use crate::types::query::envelope::ActInvocation;
+    use crate::types::query::filter::MAX_FILTER_VALUES;
     use crate::types::query::filter::{
         EdgeFilter, FacetPredicate, PropertyOp, PropertyPredicate, ResourceFilter,
     };
-    use crate::types::query::id_set::{IdKind, IdProvenance, IdSet};
+    use crate::types::query::id_set::{IdKind, IdProvenance, IdSet, MAX_ID_SET_IDS};
     use crate::types::query::scalars::BoundTerm;
     use uuid::Uuid;
     // Named here rather than reached through `super::*`: the checks that read them moved into
@@ -657,6 +749,38 @@ mod tests {
                 ids: (0..n).map(|_| uuid::Uuid::now_v7()).collect(),
             },
         }
+    }
+
+    /// A caller-supplied RESOURCE bound of a chosen size — the size is the subject, so it is a
+    /// parameter. Distinct from [`anchor_ids`], which exists for the anchor kinds whose
+    /// CARDINALITY is refused for an unrelated reason; using that one here would confound the two.
+    fn sized_resource_ids(n: usize) -> StageInput {
+        StageInput::Caller {
+            relation: StageRelation::Bound,
+            ids: IdSet {
+                kind: IdKind::Resource,
+                provenance: None,
+                ids: (0..n).map(|_| uuid::Uuid::now_v7()).collect(),
+            },
+        }
+    }
+
+    /// A find act carrying a question of the caller's choosing — for the tests whose subject is the
+    /// question's LENGTH. [`act`] supplies a one-character question, which cannot express these.
+    fn act_asking(name: &str, a: ActName, query: &str) -> StageNode {
+        StageNode::Act(ActInvocation {
+            name: StageName::parse(name).unwrap(),
+            act: a,
+            intention: Some(Intention {
+                query: query.to_string(),
+                embedding: None,
+            }),
+            inputs: vec![],
+            terms: BTreeMap::new(),
+            resource_filter: None,
+            edge_filter: None,
+            properties: vec![],
+        })
     }
 
     fn caller_ids_no_provenance(kind: IdKind) -> StageInput {
@@ -1180,6 +1304,648 @@ mod tests {
             .and_then(serde_json::Value::as_u64)
             .expect("`Composition::stages` publishes a `maxItems`");
         assert_eq!(published as usize, MAX_STAGES);
+    }
+
+    // ── The other two declaration bounds — same family, same three assertions each ──────────────
+    //
+    // `[added — 2026-08-28]` `TooManyStages` opened a family, and these two join it: a bound on
+    // what a request may DECLARE is published on the contract and refused in the shape pass, so a
+    // caller learns it costs nothing and learns it offline. Each gets the same trio the stage cap
+    // has — over, exactly at, and published-equals-enforced — because the middle one is what
+    // catches an off-by-one in the direction that refuses work the contract calls legal.
+
+    /// A question longer than the contract admits is refused, and the refusal names the stage.
+    ///
+    /// Per-stage rather than composition-level, unlike the stage cap: the excess belongs to the
+    /// stage that declared it, and a plan with two long questions should be repairable in one pass.
+    #[test]
+    fn a_question_above_the_byte_cap_is_refused() {
+        let long = "x".repeat(MAX_INTENTION_QUERY_BYTES + 1);
+        let c = plan_with_intention(
+            vec![act_asking("s", ActName::FindAboutAnywhere, &long)],
+            vec!["s"],
+        );
+        let errs = validate(&c).unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| e.reason == RefusalReason::IntentionTooLong
+                    && e.stage.as_ref().is_some_and(|n| n.as_str() == "s")),
+            "got: {errs:?}"
+        );
+    }
+
+    /// Exactly at the cap is admitted. The bound is `>`, not `>=`.
+    #[test]
+    fn a_question_exactly_at_the_byte_cap_is_not_refused_for_its_length() {
+        let at = "x".repeat(MAX_INTENTION_QUERY_BYTES);
+        let c = plan_with_intention(
+            vec![act_asking("s", ActName::FindAboutAnywhere, &at)],
+            vec!["s"],
+        );
+        let refused = validate(&c)
+            .err()
+            .into_iter()
+            .flatten()
+            .filter(|e| e.reason == RefusalReason::IntentionTooLong)
+            .count();
+        assert_eq!(refused, 0, "MAX_INTENTION_QUERY_BYTES bytes is at the cap");
+    }
+
+    /// **The cap counts bytes; the contract publishes a character count.** Held explicitly rather
+    /// than left as a comment, because the two agree only on ASCII and a reader who assumes they
+    /// are the same number would be wrong in a way nothing else here would catch.
+    ///
+    /// The direction is what makes the divergence safe: a multi-byte question can be refused while
+    /// still inside the published `maxLength`, never the reverse — so a stale client that trusts
+    /// the contract under-refuses, which is the only direction the shape pass tolerates.
+    #[test]
+    fn the_byte_cap_binds_before_the_published_character_count_on_multibyte_text() {
+        // Three bytes each, so `MAX_INTENTION_QUERY_BYTES / 3 + 1` characters is over the byte cap
+        // while being far under the same number of characters.
+        let multibyte = "\u{4f60}".repeat(MAX_INTENTION_QUERY_BYTES / 3 + 1);
+        assert!(
+            multibyte.chars().count() <= MAX_INTENTION_QUERY_BYTES,
+            "the fixture must be legal by the PUBLISHED character count, or it proves nothing"
+        );
+        assert!(multibyte.len() > MAX_INTENTION_QUERY_BYTES);
+        let c = plan_with_intention(
+            vec![act_asking("s", ActName::FindAboutAnywhere, &multibyte)],
+            vec!["s"],
+        );
+        let errs = validate(&c).unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| e.reason == RefusalReason::IntentionTooLong),
+            "got: {errs:?}"
+        );
+    }
+
+    /// The cap the shape pass enforces and the length the contract publishes are one number.
+    #[cfg(feature = "web-api")]
+    #[test]
+    fn the_published_question_length_is_the_enforced_one() {
+        use utoipa::PartialSchema;
+        let schema = serde_json::to_value(Intention::schema()).expect("Intention has a schema");
+        let published = schema
+            .pointer("/properties/query/maxLength")
+            .and_then(serde_json::Value::as_u64)
+            .expect("`Intention::query` publishes a `maxLength`");
+        assert_eq!(published as usize, MAX_INTENTION_QUERY_BYTES);
+    }
+
+    /// The vector dimension is published as BOTH bounds, because the check is an equality.
+    ///
+    /// `[added — 2026-08-28, found in review]` The other members of this family publish a maximum
+    /// because they enforce a maximum. This one enforced `!=` while publishing only `max_items`, so
+    /// a 384-float vector cleared every generated client and was refused by the server — the exact
+    /// asymmetry the shape pass exists to remove. Asserting only the max would have stayed green
+    /// through that bug, so both halves are asserted here.
+    #[cfg(feature = "web-api")]
+    #[test]
+    fn the_published_vector_dimension_is_published_as_an_equality() {
+        use utoipa::PartialSchema;
+        let schema = serde_json::to_value(Intention::schema()).expect("Intention has a schema");
+        let max = schema
+            .pointer("/properties/embedding/maxItems")
+            .and_then(serde_json::Value::as_u64)
+            .expect("`Intention::embedding` publishes a `maxItems`");
+        let min = schema
+            .pointer("/properties/embedding/minItems")
+            .and_then(serde_json::Value::as_u64)
+            .expect("`Intention::embedding` publishes a `minItems`");
+        assert_eq!(max as usize, MAX_EMBEDDING_DIM);
+        assert_eq!(min as usize, MAX_EMBEDDING_DIM);
+    }
+
+    /// Every narrowing list publishes the one cap the shape pass enforces on all three.
+    ///
+    /// `[added — 2026-08-28, found in review]` The MCP door already pinned these three; the
+    /// `web-api` door pinned none, so a utoipa-side divergence was caught only by `openapi-check` —
+    /// which compares the file to a regeneration of itself, never the published number to the
+    /// constant. A cap raised in `filter.rs` and not in the attribute would have stayed green.
+    #[cfg(feature = "web-api")]
+    #[test]
+    fn the_published_filter_value_ceilings_are_the_enforced_one() {
+        use utoipa::PartialSchema;
+        let resource =
+            serde_json::to_value(ResourceFilter::schema()).expect("ResourceFilter has a schema");
+        let edge = serde_json::to_value(EdgeFilter::schema()).expect("EdgeFilter has a schema");
+        for (schema, ptr, what) in [
+            (&resource, "/properties/doc_type/maxItems", "doc_type"),
+            (&resource, "/properties/tags/maxItems", "tags"),
+            (&edge, "/properties/labels/maxItems", "labels"),
+        ] {
+            let published = schema
+                .pointer(ptr)
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or_else(|| panic!("`{what}` publishes a `maxItems`"));
+            assert_eq!(published as usize, MAX_FILTER_VALUES, "{what}");
+        }
+    }
+
+    /// An id set larger than the contract admits is refused, and the refusal names the stage.
+    #[test]
+    fn an_id_set_above_the_cap_is_refused() {
+        let c = plan_with_intention(
+            vec![act(
+                "s",
+                ActName::FindExact,
+                Some(sized_resource_ids(MAX_ID_SET_IDS + 1)),
+            )],
+            vec!["s"],
+        );
+        let errs = validate(&c).unwrap_err();
+        assert!(
+            errs.iter().any(|e| e.reason == RefusalReason::TooManyIds
+                && e.stage.as_ref().is_some_and(|n| n.as_str() == "s")),
+            "got: {errs:?}"
+        );
+    }
+
+    /// Exactly at the cap is admitted. The bound is `>`, not `>=`.
+    #[test]
+    fn an_id_set_exactly_at_the_cap_is_not_refused_for_its_size() {
+        let c = plan_with_intention(
+            vec![act(
+                "s",
+                ActName::FindExact,
+                Some(sized_resource_ids(MAX_ID_SET_IDS)),
+            )],
+            vec!["s"],
+        );
+        let refused = validate(&c)
+            .err()
+            .into_iter()
+            .flatten()
+            .filter(|e| e.reason == RefusalReason::TooManyIds)
+            .count();
+        assert_eq!(refused, 0, "MAX_ID_SET_IDS ids is at the cap, not over");
+    }
+
+    /// **The id cap does not retire the anchor's cardinality arm, and does not swallow it.**
+    ///
+    /// The two answer different questions and a caller must be told the right one: a two-id cogmap
+    /// bound is *inside* the id cap and still refused, because today's fragments take an
+    /// `(anchor_table, anchor_id)` pair. Were the anchor arm ever folded into this cap, that plan
+    /// would validate and then fail somewhere with no vocabulary for why.
+    #[test]
+    fn a_small_anchor_set_still_meets_the_cardinality_arm_and_not_the_size_cap() {
+        let c = plan_with_intention(
+            vec![act(
+                "s",
+                ActName::FindAboutWithin,
+                Some(anchor_ids(IdKind::Cogmap, 2)),
+            )],
+            vec!["s"],
+        );
+        let errs = validate(&c).unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| e.reason == RefusalReason::AnchorTakesOneId),
+            "got: {errs:?}"
+        );
+        assert!(
+            !errs.iter().any(|e| e.reason == RefusalReason::TooManyIds),
+            "two ids is nowhere near the size cap; got: {errs:?}"
+        );
+    }
+
+    /// A narrowing list above the cap is refused, and the refusal names WHICH list.
+    ///
+    /// `[added — 2026-08-28]` Three fields share one reason and one site, so the detail is the only
+    /// thing telling a caller which of them to shorten — a caller who over-filled two would
+    /// otherwise get two identical refusals. Same rule the property-predicate sources apply one
+    /// container over.
+    #[test]
+    fn a_narrowing_list_above_the_cap_is_refused_and_says_which() {
+        let over = vec!["x".to_string(); MAX_FILTER_VALUES + 1];
+        let mut inv = match act("s", ActName::FindResourcesWith, None) {
+            StageNode::Act(inv) => inv,
+            other => panic!("expected an act node, got {other:?}"),
+        };
+        inv.resource_filter = Some(ResourceFilter {
+            doc_type: over.clone(),
+            tags: over,
+            ..Default::default()
+        });
+        let c = plan_with_intention(vec![StageNode::Act(inv)], vec!["s"]);
+        let errs = validate(&c).unwrap_err();
+        let named: Vec<&String> = errs
+            .iter()
+            .filter(|e| e.reason == RefusalReason::TooManyFilterValues)
+            .map(|e| &e.detail)
+            .collect();
+        assert_eq!(named.len(), 2, "one per over-filled list; got: {errs:?}");
+        assert!(named.iter().any(|d| d.contains("resource_filter.doc_type")));
+        assert!(named.iter().any(|d| d.contains("resource_filter.tags")));
+    }
+
+    /// Exactly at the cap is admitted. The bound is `>`, not `>=`.
+    #[test]
+    fn a_narrowing_list_exactly_at_the_cap_is_not_refused_for_its_size() {
+        let mut inv = match act("s", ActName::FindResourcesWith, None) {
+            StageNode::Act(inv) => inv,
+            other => panic!("expected an act node, got {other:?}"),
+        };
+        inv.resource_filter = Some(ResourceFilter {
+            doc_type: vec!["x".to_string(); MAX_FILTER_VALUES],
+            ..Default::default()
+        });
+        let c = plan_with_intention(vec![StageNode::Act(inv)], vec!["s"]);
+        let refused = validate(&c)
+            .err()
+            .into_iter()
+            .flatten()
+            .filter(|e| e.reason == RefusalReason::TooManyFilterValues)
+            .count();
+        assert_eq!(refused, 0, "MAX_FILTER_VALUES is at the cap, not over");
+    }
+
+    /// **A section named twice is refused, which is what bounds a closed vocabulary's list.**
+    ///
+    /// `[added — 2026-08-28]` Without it `with: [open_meta; 10_000]` per return validated cleanly
+    /// and serialized to 9.6 MB — a plan the contract called legal that the door answers with a
+    /// bare 413. Refused rather than deduplicated: a silent collapse answers a question the caller
+    /// did not quite ask and says nothing about it.
+    #[test]
+    fn a_section_named_twice_is_refused_rather_than_collapsed() {
+        let c = plan_returning(
+            vec![act(
+                "hits",
+                ActName::FindExact,
+                Some(caller_ids(IdKind::Resource)),
+            )],
+            vec![ReturnSpec {
+                stage: StageName::parse("hits").unwrap(),
+                with: vec![ResourceSection::OpenMeta, ResourceSection::OpenMeta],
+            }],
+        );
+        let errs = validate(&c).unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| e.reason == RefusalReason::DuplicateSetMember),
+            "got: {errs:?}"
+        );
+    }
+
+    /// The same rule on the other closed vocabulary carried as a list.
+    #[test]
+    fn an_edge_kind_named_twice_is_refused() {
+        let mut inv = match act("s", ActName::FollowFrom, Some(caller_ids(IdKind::Resource))) {
+            StageNode::Act(inv) => inv,
+            other => panic!("expected an act node, got {other:?}"),
+        };
+        inv.edge_filter = Some(EdgeFilter {
+            edge_kinds: vec![EdgeKind::LeadsTo, EdgeKind::LeadsTo],
+            ..Default::default()
+        });
+        let c = plan_with_intention(vec![StageNode::Act(inv)], vec!["s"]);
+        let errs = validate(&c).unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| e.reason == RefusalReason::DuplicateSetMember),
+            "got: {errs:?}"
+        );
+    }
+
+    /// One section, once, is legal — the arm that stops the two tests above passing against a check
+    /// that refuses `with` outright.
+    #[test]
+    fn a_section_named_once_is_admitted() {
+        let c = plan_returning(
+            vec![act(
+                "hits",
+                ActName::FindExact,
+                Some(caller_ids(IdKind::Resource)),
+            )],
+            vec![ReturnSpec {
+                stage: StageName::parse("hits").unwrap(),
+                with: vec![ResourceSection::OpenMeta],
+            }],
+        );
+        assert!(validate(&c).is_ok(), "got: {:?}", validate(&c).err());
+    }
+
+    /// **The aggregate embed bound, and it is NOT in the published family above.**
+    ///
+    /// `[added — 2026-08-28]` The other three ceilings are contract facts and are refused in the
+    /// shape pass because they are published on the field they bound. This one is a fact about what
+    /// a deployment can embed inside one wall-clock budget, so it is capability — a client raising
+    /// it against a server with more memory would refuse a plan that server answers, which is the
+    /// one thing the shape pass may never do. There is therefore no
+    /// `the_published_..._is_the_enforced_one` sibling for it, and its absence is the point.
+    #[test]
+    fn a_composition_above_the_embed_budget_is_refused() {
+        // Sixteen questions at the per-stage ceiling is exactly the budget; seventeen is over.
+        let per_stage = MAX_INTENTION_QUERY_BYTES;
+        let over = intention_budget_bytes() / per_stage + 1;
+        let stages: Vec<StageNode> = (0..over)
+            .map(|i| {
+                act_asking(
+                    &format!("s{i}"),
+                    ActName::FindAboutAnywhere,
+                    // DISTINCT per stage. `[fixed — 2026-08-28]` These were identical, and the
+                    // fixture stopped being over the budget the moment the count started
+                    // deduplicating by text — which is the correct bound and was the whole point
+                    // of that change. The test had been passing for a reason that was itself the
+                    // defect.
+                    &format!("{i:04}{}", "x".repeat(per_stage - 4)),
+                )
+            })
+            .collect();
+        let c = plan_with_intention(stages, vec!["s0"]);
+        let errs = validate(&c).unwrap_err();
+        assert!(
+            errs.iter().any(|e| e.reason == RefusalReason::IntentionBudgetExceeded
+                && e.stage.is_none()),
+            "composition-level, like the stage cap — the excess belongs to no one stage; got: {errs:?}"
+        );
+        // Each stage is individually legal. Without this the test would pass on the per-stage cap.
+        assert!(
+            !errs
+                .iter()
+                .any(|e| e.reason == RefusalReason::IntentionTooLong),
+            "every stage is AT the per-stage ceiling, not over it; got: {errs:?}"
+        );
+    }
+
+    /// **The budget counts what the SERVER EMBEDS, which is neither "every intention" nor "every
+    /// stage".** Two shapes that cost nothing and were refused before this was single-sourced.
+    ///
+    /// `[added — 2026-08-28, found in review]` The count summed every un-embedded intention. But
+    /// `texts_to_embed` keys on DISTINCT text — the shipped graph surface emits one survey stage
+    /// per anchor, up to 24, all sharing one question, and its own comment says so — and it drops
+    /// acts that do not search by vector, of which `find-exact` is one that shape REQUIRES to carry
+    /// a question. So a plan asking the server to embed one question, or none at all, could be
+    /// refused for asking too much.
+    #[test]
+    fn the_budget_charges_for_the_embed_set_and_not_for_every_intention() {
+        let per_stage = MAX_INTENTION_QUERY_BYTES;
+        let over = intention_budget_bytes() / per_stage + 1;
+
+        // One question, many stages — the fan-out shape. Costs ONE embedding.
+        let shared: Vec<StageNode> = (0..over)
+            .map(|i| {
+                act_asking(
+                    &format!("s{i}"),
+                    ActName::FindAboutAnywhere,
+                    &"x".repeat(per_stage),
+                )
+            })
+            .collect();
+        assert!(
+            validate(&plan_with_intention(shared, vec!["s0"])).is_ok(),
+            "one question asked by many stages is one embedding, not many"
+        );
+
+        // `find-exact` carries a question because shape requires it, and that text becomes the
+        // fragment's `p_query` — it is never embedded at all.
+        let exact: Vec<StageNode> = (0..over)
+            .map(|i| {
+                act_asking(
+                    &format!("s{i}"),
+                    ActName::FindExact,
+                    &format!("{i:04}{}", "x".repeat(per_stage - 4)),
+                )
+            })
+            .collect();
+        let charged = validate(&plan_with_intention(exact, vec!["s0"]))
+            .err()
+            .into_iter()
+            .flatten()
+            .filter(|e| e.reason == RefusalReason::IntentionBudgetExceeded)
+            .count();
+        assert_eq!(
+            charged, 0,
+            "find-exact does not search by vector, so its question reaches no embedder"
+        );
+    }
+
+    /// **A caller who sent their own vectors is not charged for them.**
+    ///
+    /// The bound is on what the SERVER must embed, so the same question text with an embedding
+    /// beside it costs nothing and must not be refused. Without this, precomputing — the one thing
+    /// a caller can do to make a large plan cheap — would be the thing that made it illegal.
+    #[test]
+    fn precomputed_vectors_are_not_charged_against_the_embed_budget() {
+        let per_stage = MAX_INTENTION_QUERY_BYTES;
+        let over = intention_budget_bytes() / per_stage + 1;
+        let stages: Vec<StageNode> = (0..over)
+            .map(|i| {
+                let node = act_asking(
+                    &format!("s{i}"),
+                    ActName::FindAboutAnywhere,
+                    &format!("{i:04}{}", "x".repeat(per_stage - 4)),
+                );
+                match node {
+                    StageNode::Act(mut inv) => {
+                        inv.intention
+                            .as_mut()
+                            .expect("act_asking sets one")
+                            .embedding = Some(vec![0.1; MAX_EMBEDDING_DIM]);
+                        StageNode::Act(inv)
+                    }
+                    other => other,
+                }
+            })
+            .collect();
+        let c = plan_with_intention(stages, vec!["s0"]);
+        let charged = validate(&c)
+            .err()
+            .into_iter()
+            .flatten()
+            .filter(|e| e.reason == RefusalReason::IntentionBudgetExceeded)
+            .count();
+        assert_eq!(
+            charged, 0,
+            "a vector the caller supplied is work the server does not do"
+        );
+    }
+
+    /// **The seal never refuses what the gate admitted**, which is what makes `query_read::prepare`
+    /// legal in running `validate` twice.
+    ///
+    /// `[rewritten — 2026-08-28, found in review]` The first version asserted the stronger and
+    /// FALSE property that filling in `intention.embedding` cannot change any refusal, over a
+    /// fixture asking one ten-byte question — so the budget check could not fire, and the test
+    /// certified an invariant the same commit had broken by adding
+    /// [`super::capability::validate_intention_budget`], the only read of that field in this crate.
+    ///
+    /// The true property is MONOTONE, not invariant: the embed only sets `embedding` to `Some`, so
+    /// the counted set can only shrink. This asserts it where it bites — a composition **over** the
+    /// budget without vectors and under it with them, which is exactly the divergence, plus the
+    /// unchanged-refusal case beside it so the test still covers the ordinary path.
+    #[test]
+    fn the_gate_and_the_seal_agree_across_the_embed() {
+        // The case that made the old fixture vacuous: over the budget bare, under it embedded.
+        let over = intention_budget_bytes() / MAX_INTENTION_QUERY_BYTES + 1;
+        let big = |embedded: bool| {
+            let stages: Vec<StageNode> = (0..over)
+                .map(|i| {
+                    let node = act_asking(
+                        &format!("s{i}"),
+                        ActName::FindAboutAnywhere,
+                        &format!("{i:04}{}", "x".repeat(MAX_INTENTION_QUERY_BYTES - 4)),
+                    );
+                    match node {
+                        StageNode::Act(mut inv) if embedded => {
+                            inv.intention.as_mut().expect("asking").embedding =
+                                Some(vec![0.1; MAX_EMBEDDING_DIM]);
+                            StageNode::Act(inv)
+                        }
+                        other => other,
+                    }
+                })
+                .collect();
+            plan_with_intention(stages, vec!["s0"])
+        };
+        assert!(
+            validate(&big(false))
+                .unwrap_err()
+                .iter()
+                .any(|e| e.reason == RefusalReason::IntentionBudgetExceeded),
+            "the fixture must be over the budget BARE, or this test cannot see the field the \
+             embed writes"
+        );
+        assert!(
+            validate(&big(true)).is_ok(),
+            "and under it once embedded — so the direction is gate-refuses/seal-would-pass, never \
+             the reverse: {:?}",
+            validate(&big(true)).err()
+        );
+
+        let bare = act_asking("s", ActName::FindAboutAnywhere, "a question");
+        let embedded = match bare.clone() {
+            StageNode::Act(mut inv) => {
+                inv.intention.as_mut().expect("asking").embedding = Some(vec![0.1; 768]);
+                StageNode::Act(inv)
+            }
+            other => other,
+        };
+        // A plan carrying a real fault, so the comparison is over a refusal LIST and not over two
+        // empty ones — which is the case that would pass while proving nothing.
+        let faulty = |stage: StageNode| {
+            plan_with_intention(
+                vec![stage, act("s", ActName::FindExact, None)],
+                vec!["nope"],
+            )
+        };
+        let before = validate(&faulty(bare)).unwrap_err();
+        let after = validate(&faulty(embedded)).unwrap_err();
+        assert_eq!(
+            before, after,
+            "the embed writes only `intention.embedding`, which no validation reads; if that stops \
+             being true, `prepare`'s gate and seal can disagree and a plan can be admitted by one \
+             and refused by the other"
+        );
+    }
+
+    /// **A vector of the wrong shape is refused, not passed to pgvector.**
+    ///
+    /// `[added — 2026-08-28, found in review]` Both directions, because a cap alone would only
+    /// catch one: too many floats was 4 MB of body that validated cleanly, too few reached pgvector
+    /// and came back as an opaque 500. Neither told the caller anything.
+    #[test]
+    fn a_query_vector_of_the_wrong_dimension_is_refused_in_both_directions() {
+        for len in [MAX_EMBEDDING_DIM - 1, MAX_EMBEDDING_DIM + 1] {
+            let node = match act_asking("s", ActName::FindAboutAnywhere, "q") {
+                StageNode::Act(mut inv) => {
+                    inv.intention.as_mut().expect("asking").embedding = Some(vec![0.1; len]);
+                    StageNode::Act(inv)
+                }
+                other => other,
+            };
+            let errs = validate(&plan_with_intention(vec![node], vec!["s"])).unwrap_err();
+            assert!(
+                errs.iter()
+                    .any(|e| e.reason == RefusalReason::MalformedEmbedding),
+                "{len} floats must be refused; got: {errs:?}"
+            );
+        }
+    }
+
+    /// **A combinator naming one stage twice is refused**, which is what bounds a list that has no
+    /// `max_items` and cannot have one — the ceiling is per-op, and only the ordered ops have one.
+    ///
+    /// `[added — 2026-08-28, found in review]` A million repeated inputs validated cleanly at 4 MB.
+    /// Inputs must name DECLARED stages, so refusing repeats bounds the field at `MAX_STAGES`.
+    #[test]
+    fn a_combinator_naming_one_input_twice_is_refused() {
+        let c = plan_with_intention(
+            vec![
+                act("a", ActName::FindExact, Some(caller_ids(IdKind::Resource))),
+                StageNode::Combine(CombineNode {
+                    name: StageName::parse("both").unwrap(),
+                    op: CombineOp::Union,
+                    inputs: vec![
+                        StageName::parse("a").unwrap(),
+                        StageName::parse("a").unwrap(),
+                    ],
+                }),
+            ],
+            vec!["a"],
+        );
+        let errs = validate(&c).unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| e.reason == RefusalReason::DuplicateSetMember),
+            "combining a set with itself yields the set; got: {errs:?}"
+        );
+    }
+
+    /// **A long list of undeclared names is answered with a SHORT refusal list.**
+    ///
+    /// `[added — 2026-08-28, found in review]` The duplicate guard above `break`s on the first
+    /// repeat, and that does not protect the dangling-reference walk below it: a repeat of an
+    /// *undeclared* name trips the duplicate guard once and then falls through. So the refusal list
+    /// grew with the input — 4 MB of repeated names became roughly a million refusals, built in
+    /// memory, serialized whole as a 400, and built twice because `prepare` validates either side
+    /// of the embed.
+    ///
+    /// This is the bite: against the unbroken loop the assertion below sees 20,000 refusals, not a
+    /// number bounded by the plan's node count.
+    #[test]
+    fn a_long_list_of_undeclared_names_yields_a_bounded_refusal_list() {
+        let repeats = 20_000;
+        let c = plan_with_intention(
+            vec![
+                act("a", ActName::FindExact, Some(caller_ids(IdKind::Resource))),
+                StageNode::Combine(CombineNode {
+                    name: StageName::parse("both").unwrap(),
+                    op: CombineOp::Union,
+                    inputs: (0..repeats)
+                        .map(|_| StageName::parse("nowhere").unwrap())
+                        .collect(),
+                }),
+            ],
+            vec!["a"],
+        );
+        let errs = validate(&c).unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| e.reason == RefusalReason::DanglingReference),
+            "an undeclared name must still be refused; got {} refusals",
+            errs.len()
+        );
+        assert!(
+            errs.len() <= MAX_STAGES,
+            "the refusal list must be bounded by the plan's size, not by the length of one \
+             unbounded field: {repeats} repeats produced {} refusals",
+            errs.len()
+        );
+    }
+
+    /// The cap the shape pass enforces and the count the contract publishes are one number.
+    #[cfg(feature = "web-api")]
+    #[test]
+    fn the_published_id_set_ceiling_is_the_enforced_one() {
+        use utoipa::PartialSchema;
+        let schema = serde_json::to_value(IdSet::schema()).expect("IdSet has a schema");
+        let published = schema
+            .pointer("/properties/ids/maxItems")
+            .and_then(serde_json::Value::as_u64)
+            .expect("`IdSet::ids` publishes a `maxItems`");
+        assert_eq!(published as usize, MAX_ID_SET_IDS);
     }
 
     /// A composition with no returns answers nothing — the contract's `returns: minItems 1`,
@@ -1993,7 +2759,7 @@ mod tests {
         if let StageNode::Act(a) = &mut node {
             a.intention = Some(Intention {
                 query: "salience".to_string(),
-                embedding: Some(vec![0.1; 4]),
+                embedding: Some(vec![0.1; MAX_EMBEDDING_DIM]),
             });
         }
         let c = plan(vec![node], vec!["hits"]);

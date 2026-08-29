@@ -46,6 +46,22 @@ use crate::types::resource_view::ResourceSection;
 #[cfg_attr(feature = "typescript", ts(export, export_to = "query.ts"))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct Intention {
+    /// The question, in the caller's own words.
+    ///
+    /// At most [`MAX_INTENTION_QUERY_BYTES`] bytes of it, refused as
+    /// [`super::disposition::RefusalReason::IntentionTooLong`].
+    // `max_length` is load-bearing for the same reason `max_items` is on `stages` below: it is
+    // what makes the refusal legal in the SHAPE pass, where a client may raise it against a
+    // server it does not share a binary with. See the comment on that field.
+    //
+    // **`max_length` counts CHARACTERS in JSON Schema and this cap counts BYTES**, and the two
+    // agree only on ASCII. The divergence is in the safe direction and is stated rather than
+    // papered over: a plan the contract admits on its character count can still be refused on its
+    // byte count, never the reverse, because a UTF-8 string is at least as many bytes as
+    // characters. Publishing the byte bound as a character bound therefore promises LESS than the
+    // server admits, which is the direction a stale client may be wrong in.
+    #[cfg_attr(feature = "web-api", schema(max_length = 4096))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 4096)))]
     pub query: String,
     /// The query vector, when the caller computed one. Mirrors `SearchParams.embedding`: the CLI
     /// links temper-ingest and embeds locally, which is faster than making the server do it; the
@@ -58,7 +74,23 @@ pub struct Intention {
     /// This never reaches a response: [`super::trace::CompositionTrace`] carries only `stages` and
     /// echoes no intention. Should a trace ever carry one, that stops being incidental and becomes
     /// a constraint — a 768-float array must not serialize back to the caller.
+    ///
+    /// **Exactly [`MAX_EMBEDDING_DIM`] floats**, refused as
+    /// [`super::disposition::RefusalReason::MalformedEmbedding`]. `[added — 2026-08-28, found in
+    /// review]` This carried no bound of any kind, which made it the largest unbounded field on the
+    /// contract: a million floats on one stage is 4 MB that validates cleanly, and there are
+    /// [`MAX_STAGES`] stages. A wrong-sized vector also reached pgvector and came back as an
+    /// **opaque 500** — the caller told nothing, in the door whose promise is a typed refusal.
+    ///
+    /// **Published as a min AND a max, because the check is an equality.** `[corrected —
+    /// 2026-08-28, found in review]` Publishing only the maximum stated half the rule: a 384-float
+    /// vector cleared every generated client and was then refused by the server, which is exactly
+    /// the gap the shape pass exists to close — a client must be able to refuse what the server
+    /// would refuse. The two bounds are the same number because a vector of any other length is
+    /// not a large question, it is a vector for a different space.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "web-api", schema(min_items = 768, max_items = 768))]
+    #[cfg_attr(feature = "mcp", schemars(length(min = 768, max = 768)))]
     pub embedding: Option<Vec<f32>>,
 }
 
@@ -322,6 +354,14 @@ pub struct Composition {
     ///
     /// At most [`MAX_STAGES`] of them, refused as
     /// [`super::disposition::RefusalReason::TooManyStages`].
+    // **Published on BOTH doors** `[schemars added — 2026-08-28, found in review]`. The `utoipa`
+    // attribute reaches `openapi.json` and the three SDKs; the `schemars` one reaches the MCP tool's
+    // input schema, which IS this type (`temper-mcp`'s `run_query`). Until the second was added, an
+    // MCP client read the doc line *"at most [`MAX_STAGES`] of them"* — a Rust symbol with no
+    // resolvable value — and had no number to hold the server to. Two attributes for one fact is
+    // not duplication to remove: they are two published contracts, and
+    // `the_mcp_door_publishes_the_ceilings_it_enforces` pins both against the constant.
+    //
     // `max_items` is not decoration here — it is what makes the refusal legal where it is raised.
     // The seam guard (`tests/query_validate_seam.rs`) admits a reason into the SHAPE pass only if
     // "asserting it cannot change without a wire-contract change", and the shape module's own rule
@@ -335,6 +375,7 @@ pub struct Composition {
     // rejects, which is the exact argument the `returns` field's own `min_items` comment makes one
     // struct up. It is untouched here only so this change carries one bound rather than two.
     #[cfg_attr(feature = "web-api", schema(max_items = 64))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 64)))]
     pub stages: Vec<StageNode>,
 }
 
@@ -356,6 +397,123 @@ pub struct Composition {
 /// measurement behind it — widening it is a contract change, which is where the argument for a
 /// different number should be made.
 pub const MAX_STAGES: usize = 64;
+
+/// The most bytes one stage's question may carry.
+///
+/// # What it bounds is work paid for and then discarded
+///
+/// The embedder tokenizes the WHOLE string and truncates the resulting encoding to the model's
+/// 512-token window (`temper-ingest::embed`'s `embed_batch` → `truncate_encoding`). So every byte
+/// past that window is tokenized at the caller's request and thrown away — the caller chooses the
+/// cost and receives none of it.
+///
+/// # Chosen against the window it feeds, in both directions
+///
+/// 512 tokens of English is roughly 2 KB. 4 KB is comfortably above that — a question long enough
+/// to be fully consumed by the model, with room for a script that tokenizes less efficiently — and
+/// far below the point where tokenizing the excess is interesting. Same method as [`MAX_STAGES`]
+/// and `MAX_PER_CANDIDATE_PREDICATES`: far above the question, far below the harm.
+///
+/// **Refused rather than truncated.** Shortening a question silently would answer a different
+/// question than the one asked, which is the substitution this contract keeps closing — and unlike
+/// the model's own truncation, a refusal is something the caller can see and repair.
+pub const MAX_INTENTION_QUERY_BYTES: usize = 4096;
+
+/// The most floats a caller-supplied query vector may carry.
+///
+/// `[added — 2026-08-28, found in review]` It is the model's dimension — bge-base-en-v1.5 emits
+/// 768, which `temper-ingest`'s `EMBEDDING_DIM` names on the other side of a dependency this crate
+/// does not have — and the number is repeated here rather than shared for that reason, with a test
+/// pinning the two together where both are reachable.
+///
+/// **The bound is on the COUNT and the refusal is about the SHAPE**, which is why it is not one of
+/// the `TooMany…` family. A vector of any other length is not a large question, it is a vector for
+/// a different space: `pgvector` rejects it, and this door redacts that to an opaque 500. So the
+/// check is `!= MAX_EMBEDDING_DIM` and the refusal says *wrong shape*, since a caller who sends 767
+/// floats has the same problem as one who sends 769 and neither is helped by being told about a
+/// maximum.
+///
+/// `[corrected — 2026-08-28, found in review]` The field publishes this as **both** `min_items` and
+/// `max_items`. An earlier revision published only the maximum, which let a short vector clear every
+/// generated client and be refused by the server — the enforced rule was an equality and the
+/// published one was an inequality, so a client could not refuse what the server would.
+pub const MAX_EMBEDDING_DIM: usize = 768;
+
+/// The most question text ONE COMPOSITION may hand the server to embed, summed across its stages.
+///
+/// # Why a per-stage cap is not enough, measured
+///
+/// [`MAX_INTENTION_QUERY_BYTES`] and [`MAX_STAGES`] shipped together, and their product is 256 KB
+/// of text the server must embed inside **one** wall-clock budget — `DEFAULT_QUERY_EMBED_BUDGET_MS`,
+/// 8,000 ms, whose own doc calls it the budget for *"a single server-side query embed"* and which
+/// was already tight enough for one that the production fix was more memory and a keep-warm cron
+/// rather than a larger number. Over budget, no stage gets a vector and every find stage refuses
+/// `embedding_unavailable`.
+///
+/// # 40 KB, and why the first number was wrong
+///
+/// `[recalibrated — 2026-08-28, found in review]` This was 64 KB, chosen against a measurement of
+/// **16 × 4,096 bytes = 6,309 ms**. That is one of TWO shapes that sit at 64 KB, and it is the
+/// cheaper one. The other was not measured:
+///
+/// | shape | total bytes | wall clock |
+/// |---|---|---|
+/// | 64 × 640 B | 40,960 | 4,284 ms |
+/// | 16 × 4,096 B | 65,536 | 6,309 ms |
+/// | **64 × 1,024 B** | **65,536** | **7,384 ms — 92% of the budget** |
+/// | 64 × 4,096 B | 262,144 | 25,603 ms |
+///
+/// `[measured — 2026-08-28, ORT loaded, threads=1, realistic English, cold load EXCLUDED]`
+///
+/// **The mechanism is token saturation.** `MAX_MODEL_TOKENS` is 512 and the encoder truncates each
+/// question to it, so per-question cost stops growing at roughly 2 KB of English — 640 B is 113
+/// tokens, 1,024 B is 180, and 4,096 B is 512 and saturated. Bytes therefore *overstate* the cost
+/// of long questions and *understate* many short ones, and the worst case at any byte total is
+/// [`MAX_STAGES`] questions, not the fewest that fit. A tokenized bound would be the honest
+/// denominator and is not available here: counting tokens needs the model, and this pass runs
+/// without one.
+///
+/// So the number is re-derived against the 64-stage row and scaled to leave the budget's remaining
+/// 40% for what the measurement excluded — the cold model load, which `embed_service`'s own doc
+/// calls a *"best-effort"* warmth because Vercel does not promise the keep-warm cron and a user
+/// request land on the same instance. 40 KB predicts ~4,600 ms at that shape.
+///
+/// It costs nothing real: the largest composition anywhere in this repository totals **702 bytes**
+/// of question text `[surveyed — 2026-08-28]`, 1.7% of this cap.
+///
+/// **Raising the embed budget instead was the alternative and was declined**
+/// `[decided — 2026-08-28, Pete]`: covering the worst legal plan needs ≥25 s measured, likely 40 s+
+/// on a ~1.7 vCPU function, against a 60 s `maxDuration` shared with compile, execute and hydrate.
+/// That number would have been invented rather than validated; this one keeps a number that has
+/// survived production.
+///
+/// # It is a floor, not a fixed ceiling — see [`intention_budget_bytes`]
+///
+/// The refusal is capability's precisely because this is a property of the machine, and
+/// `TEMPER_QUERY_EMBED_BUDGET_MS` — the budget it is derived from — is already an env override. A
+/// deployment that raises one and not the other buys nothing, so this moves the same way.
+pub const MAX_COMPOSITION_INTENTION_BYTES: usize = 40_960;
+
+/// [`MAX_COMPOSITION_INTENTION_BYTES`], or the deployment's own number.
+///
+/// `[added — 2026-08-28, found in review]` The capability placement of
+/// `RefusalReason::IntentionBudgetExceeded` rests on the claim that *"a beefier deployment could
+/// raise it"* — which the code did not honour: the budget it derives from is
+/// `TEMPER_QUERY_EMBED_BUDGET_MS`, an env var, while this was a hard `const` nobody could move. A
+/// justification the code contradicts is worse than no justification, because it is the sentence a
+/// later reader cites when deciding the refusal could live in the shape pass after all. It cannot:
+/// two deployments may now legitimately disagree about this number, which is exactly why a client
+/// must never raise it.
+///
+/// Zero and unparseable values fall back rather than disabling the bound, matching
+/// `query_embed_budget`'s own `filter(|&ms| ms > 0)`.
+pub fn intention_budget_bytes() -> usize {
+    std::env::var("TEMPER_QUERY_INTENTION_BUDGET_BYTES")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(MAX_COMPOSITION_INTENTION_BYTES)
+}
 
 /// What a caller actually asked for, measured before anything decides whether to answer it.
 ///

@@ -117,9 +117,45 @@ fn the_shape_pass_emits_exactly_these_reasons() {
         ("DanglingReference", 1),
         ("DuplicateInputRelation", 1),
         ("DuplicateReturnStage", 1),
+        // `DuplicateSetMember` is **2** `[added — 2026-08-28]`, and the count is the point: the two
+        // sites are `ReturnSpec::with` and `EdgeFilter::edge_kinds`, both closed vocabularies
+        // carried as lists where a repeat changes no answer. One reason for both because the
+        // caller's repair is the same shape of thing — the second-site precedent is
+        // `CombinatorArity` above, and the rule it set is that a shared reason bumps the count here
+        // rather than earning a variant.
+        //
+        // **3 as of 2026-08-28**, the third being `CombineNode::inputs` — found in review, and
+        // missed first time because this list holds stage NAMES rather than a closed enum while
+        // the argument is identical: inputs must name declared stages, so a repeat is the one way
+        // to make an unbounded list out of a bounded vocabulary.
+        //
+        // Both clear the shape bar without needing anything published, and that is worth stating
+        // because the neighbouring caps DID need it: this refuses a list that is malformed against
+        // ANY vocabulary, so no server can widen its way out of it. A server that admitted a new
+        // section would still not admit that section twice.
+        ("DuplicateSetMember", 3),
         ("DuplicateStageName", 1),
         ("EmptyContains", 1),
         ("EmptyPropertyKey", 1),
+        // `IntentionTooLong` and `TooManyIds` `[added — 2026-08-28]`. Two more entries clearing the
+        // same bar `TooManyStages` cleared, and clearing it the same way: each ceiling is published
+        // on the field it bounds — `max_length` on `Intention::query`, `max_items` on `IdSet::ids`
+        // — so raising either is an `openapi.json` change the drift gates see, never a
+        // per-deployment choice a stale `temper query --check` could contradict.
+        //
+        // **`TooManyIds` is not `AnchorTakesOneId`'s many arm arriving here**, which is what a
+        // reader checking this table against the seam would want to know. That arm stays in
+        // capability: it refuses a cogmap or context bound above one id because today's fragments
+        // take an `(anchor_table, anchor_id)` pair, and an `anchor_ids uuid[]` retires it. This one
+        // is a contract fact about every kind. `AnchorTakesOneId`'s count below is therefore still
+        // 1 — its zero arm — and a migration of the many arm into this module would still show up
+        // as that count going to 2.
+        ("IntentionTooLong", 1),
+        // `MalformedEmbedding` `[added — 2026-08-28]`. Published as `max_items` on
+        // `Intention::embedding`, so it clears the bar the same way — but the refusal names the
+        // SHAPE rather than the ceiling, because a vector of any other length belongs to a
+        // different space and a caller told about a maximum would fix the wrong end.
+        ("MalformedEmbedding", 1),
         ("MissingIntention", 1),
         ("MissingProvenance", 1),
         ("NoReturns", 1),
@@ -129,6 +165,12 @@ fn the_shape_pass_emits_exactly_these_reasons() {
         // It clears it — the ceiling is `max_items` on `Composition::stages`, so raising the cap
         // is an `openapi.json` change the drift gates see, not a per-deployment choice a stale
         // `temper query --check` could contradict.
+        // `TooManyFilterValues` `[added — 2026-08-28]`, one site over three fields on purpose —
+        // three sites would be three numbers waiting to drift, and would say three judgments were
+        // made where there was one. Clears the bar the same way `TooManyIds` does: `max_items` on
+        // each of `doc_type`, `tags` and `labels`, published on both doors.
+        ("TooManyFilterValues", 1),
+        ("TooManyIds", 1),
         ("TooManyStages", 1),
         ("UnknownAct", 1),
         ("UnknownReturnStage", 1),

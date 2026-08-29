@@ -49,7 +49,9 @@
 use std::collections::BTreeMap;
 
 use crate::types::query::act::{ActName, BuildState};
-use crate::types::query::composition::{Composition, ReturnSpec, StageNode};
+use crate::types::query::composition::{
+    intention_budget_bytes, Composition, ReturnSpec, StageNode,
+};
 use crate::types::query::disposition::RefusalReason;
 use crate::types::query::envelope::ActInvocation;
 use crate::types::query::filter::{FilterField, PropertyOp, PropertyPredicate};
@@ -59,6 +61,46 @@ use crate::types::query::stage::{StageInput, StageName, StageRelation};
 use crate::types::resource_view::ResourceSection;
 
 use super::{act_wire_name, emitted_fragment_for, refusal, term_wire_name, PlanRefusal};
+
+/// How much question text this composition asks the SERVER to embed, in bytes.
+///
+/// **The same set the embedder builds, not an approximation of it** `[corrected — 2026-08-28,
+/// found in review]`. This summed `intention.query.len()` over every stage carrying no vector,
+/// which over-counted in two ways that both refuse legal plans the server would answer cheaply:
+///
+/// - **Duplicates.** [`super::texts_to_embed`] collects into a `BTreeSet` precisely so two stages
+///   naming the same string pay ONNX once. Seventeen stages asking one 4,096-byte question cost
+///   4,096 bytes and were counted as 69,632 — over the budget, refused.
+/// - **Acts that never embed.** `follow-from` may carry an intention and is served by a walk, so
+///   its question reaches no embedder. `find-exact` carries one too, and its text becomes the
+///   fragment's `p_query` rather than a vector. Both were counted.
+///
+/// Fan-out — one question, many narrowings — is an ordinary composition shape, so this was
+/// reachable by callers rather than adversaries. Over-counting is not "the safe direction" when
+/// what it costs is a refusal for work nobody does.
+fn server_embedded_bytes(c: &Composition) -> usize {
+    super::texts_to_embed(c).iter().map(String::len).sum()
+}
+
+/// The composition-level embed bound. Reads no stage graph, so [`super::validate`] runs it whatever
+/// the plan's shape — the same placement and the same reason as [`validate_returns`].
+pub(super) fn validate_intention_budget(c: &Composition, errs: &mut Vec<PlanRefusal>) {
+    let budget = intention_budget_bytes();
+    let bytes = server_embedded_bytes(c);
+    if bytes > budget {
+        errs.push(refusal(
+            None,
+            RefusalReason::IntentionBudgetExceeded,
+            format!(
+                "this composition asks the server to embed {bytes} bytes of question text, and \
+                 this deployment can embed at most {budget} inside one request's budget. \
+                 Ask fewer or shorter questions, split the plan, or send your own vectors — over \
+                 the budget NO stage receives one, so this refusal is the alternative to every \
+                 find stage failing at once"
+            ),
+        ));
+    }
+}
 
 /// The most predicates one stage may carry that are evaluated **once per candidate**.
 ///
@@ -508,11 +550,21 @@ fn check_act(
             // question — the same reason a multi-value `doc_type` was refused rather than truncated
             // to its first element while that slot held one value.
             //
-            // **This closes the instance and not the class.** Nothing bounds a composition's stage
-            // count, no `statement_timeout` exists anywhere in the repo, and `acquire_timeout`
-            // bounds waiting for a connection rather than execution — so a caller can still spend
-            // arbitrary time by other means. That is task
-            // `01a000ee-9fec-7283-baa5-75cd1580f023`, which is not fixed here
+            // **This closes the instance and not the class.** `[amended — 2026-08-28]` The stage
+            // count IS now bounded — `MAX_STAGES`, refused in the shape pass — so the original
+            // wording here is no longer true and must not be cited as if it were. What remains open
+            // is the execution bound: no `statement_timeout` exists anywhere in the repo, and
+            // `acquire_timeout` bounds waiting for a connection rather than execution, so a caller
+            // can still spend arbitrary time by other means.
+            //
+            // Note the residual this cap leaves even with the stage cap in place: these are
+            // PER-STAGE ceilings, and `MAX_STAGES` of them multiply. There is no composition-level
+            // analogue of `MAX_COMPOSITION_INTENTION_BYTES` for the axes that reach Postgres, which
+            // is a known hole and not an oversight — it is the same question as the execution
+            // bound, and it is sized by measurement rather than by argument.
+            //
+            // That is task `01a000ee-9fec-7283-baa5-75cd1580f023`, whose successor
+            // `01a0013c-06d2-7f22-bafc-409154f72af3` holds the number. Not fixed here
             // `[decided — 2026-08-14, Pete]`: a global execution bound is a decision about every
             // query on the surface rather than about this act, and it may want a read/write path
             // split rather than a single setting — so it gets a focused session, not a corner of
@@ -661,9 +713,11 @@ fn check_act(
             // Refused rather than clamped, for `facets`' reason: clamping answers a different
             // question silently.
             //
-            // **It closes the instance, not the class.** Nothing bounds a composition's stage
-            // count and no `statement_timeout` exists anywhere in the repo — task
-            // `01a000ee-9fec-7283-baa5-75cd1580f023`, unchanged by this.
+            // **It closes the instance, not the class.** `[amended — 2026-08-28]` The stage count
+            // IS now bounded by `MAX_STAGES`; what is still absent is a `statement_timeout`, and
+            // these per-stage ceilings still multiply by the stage cap — task
+            // `01a000ee-9fec-7283-baa5-75cd1580f023` and its successor
+            // `01a0013c-06d2-7f22-bafc-409154f72af3`, unchanged by this.
             // The same value-list hazard, over candidate EDGES rather than rows. It shipped with
             // the edge half on 2026-08-15 and is closed here in the same change that closes the
             // resource one, because the two predicates compile to the same shape and a bound

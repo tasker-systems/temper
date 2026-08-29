@@ -19,6 +19,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 from typing import Any, ClassVar, Dict, List, Optional
+from typing_extensions import Annotated
 from temper.generated.models.edge_kind import EdgeKind
 from temper.generated.models.property_predicate import PropertyPredicate
 from typing import Optional, Set
@@ -30,7 +31,7 @@ class EdgeFilter(BaseModel):
     Narrowing over edges. `edge_kinds` and `labels` are DIFFERENT AXES and are never merged: the kind is a closed DDL enum, the label is free text the caller actually sees on every edge.  # Every field here constrains a HOP, and that is why they live in a container  `[decided — 2026-08-14, Pete]` *A narrowing that can be expressed as a set must be an act. A narrowing that cannot be a set belongs to the act whose semantics it constrains.* An edge predicate has no set-shaped substitute: binding a walk by *\"nodes that participate in an edge matching P\"* admits a node because it has a matching edge **somewhere** and then walks it through a different, non-matching one — a different question, returning plausible rows and looking like it narrowed. So these constrain the traversal from inside it, and the only act that traverses an edge is `follow-from`.
     """ # noqa: E501
     edge_kinds: Optional[List[EdgeKind]] = None
-    labels: Optional[List[StrictStr]] = None
+    labels: Optional[Annotated[List[StrictStr], Field(max_length=256)]] = None
     properties: Optional[List[PropertyPredicate]] = Field(default=None, description="`kb_properties` rows owned by the edge itself: open key space, closed operator set. AND across the list, OR within a [`PropertyOp::Contains`].  **This is where an edge property predicate lives, and the container is the point.** It moved off [`super::ActInvocation::properties`], where the same field meant different things depending on which act carried it — which is what a `PropertySubject` tag existed to disambiguate. Given a container the tag has no job; the subject is the container.  **Zero edge-owned properties exist in this deployment** `[measured on prod — 2026-08-14]`, and the storage has admitted them since the schema's first migration (`kb_properties. owner_table` includes `'kb_edges'`, whose DDL comment has said *\"§4a edges carry facets\"* throughout) with a shipped write path `[verified — 20260727000030]`. So this slot narrows nothing today by data rather than by design.")
     __properties: ClassVar[List[str]] = ["edge_kinds", "labels", "properties"]
 
