@@ -12,11 +12,36 @@
 //! names it `mcp_request`, because three different things under one name is unreadable once they
 //! are exported together.
 
+use axum::extract::DefaultBodyLimit;
 use axum::Router;
 use tower_http::decompression::RequestDecompressionLayer;
 
-/// Apply the layers that sit **below** a surface's root span: the fallback handler and request
-/// decompression.
+/// The largest request body either public HTTP surface will read, in **decompressed** bytes.
+///
+/// **This number is ratified, not derived, and that is the point of it being here.** Before this
+/// constant existed the ceiling was axum's `DefaultBodyLimit` default — the same 2 MiB, but owned
+/// by a dependency, so a framework upgrade could have moved temper's request ceiling with nothing
+/// in this repository failing. Setting it explicitly changes no behaviour and moves the decision
+/// here, where a change to it is a change someone made on purpose.
+///
+/// **Why 2 MiB is enough headroom, measured rather than assumed.** The largest first-party document
+/// in this repository is ~70 KB; the largest resource body observed in the vault is ~34 KB. 2 MiB
+/// is roughly thirty times the former.
+///
+/// **What that measurement does not cover, stated so a later decision to lower this has the
+/// evidence it needs:** data artifacts and segmented ingest carry structured payloads and per-block
+/// provenance, and neither was measured. A lower ceiling is defensible on document sizes alone and
+/// is *not* defensible on these, which is why this ratifies the value in force instead of reducing
+/// it.
+///
+/// Two limits deliberately sit outside this one, and both are narrower or wider on purpose:
+/// temper-api's signed internal routes cap at 64 KiB, and its GitHub webhook route carries an
+/// explicit 25 MiB ceiling because GitHub delivers up to that. A limit applied to a single route
+/// runs inside this one and therefore wins for that route — which is what lets both coexist.
+pub const MAX_REQUEST_BODY_BYTES: usize = 2 * 1024 * 1024;
+
+/// Apply the layers that sit **below** a surface's root span: the fallback handler, request
+/// decompression, and the request-body ceiling.
 ///
 /// Call this first, then add the surface's own root span and its CORS layer:
 ///
@@ -35,6 +60,7 @@ where
 {
     app.fallback(fallback_handler)
         .layer(RequestDecompressionLayer::new())
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
 }
 
 /// Answer an unmatched route with temper's structured error body.
