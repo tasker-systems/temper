@@ -45,6 +45,21 @@ source edits, no fork.
   (`/.well-known/openid-configuration`), so any OIDC provider works. Logout
   uses the standard RP-initiated `end_session_endpoint`.
 
+## Content-Security-Policy — nothing to configure, one thing to know
+
+The UI ships a restrictive content-security policy (set in `svelte.config.js`,
+`kit.csp`), on every page it renders. Operators do not need to configure
+anything: because the reverse proxy above keeps all browser API/MCP/OAuth
+traffic same-origin, `connect-src 'self'` is correct for every deployment
+shape — including one whose API lives on a different host. The only external
+origins admitted are Google Fonts (`fonts.googleapis.com` for the stylesheet,
+`fonts.gstatic.com` for the font files).
+
+The one thing to know: **if you ever modify the UI so the browser talks
+directly to another origin** — bypassing the reverse proxy, e.g. client-side
+fetches to a public API host — you must widen `connect-src` in `svelte.config.js`
+to match. The same goes for adding any other external asset origin.
+
 ## Register a confidential OIDC client
 
 In your identity provider, register a **Regular Web Application** (confidential

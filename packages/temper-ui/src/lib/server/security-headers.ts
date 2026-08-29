@@ -7,10 +7,12 @@
  * surfaces set the same baseline in `temper_services::transport::apply_base_layers`, for the same
  * reason and with the same values.
  *
- * **Content-Security-Policy is deliberately absent from this set.** It is the header that matters
- * most on a browser-facing surface and the one that cannot be added by copying a list: SvelteKit
- * emits inline scripts and styles, and the graph views set inline styles from d3 at runtime. Adding
- * it is its own piece of work, tracked separately — see the note in `svelte.config.js`.
+ * **Content-Security-Policy is set by `kit.csp` in `svelte.config.js`, not here.** SvelteKit emits
+ * it inside `resolve` — with the per-request nonce its inline hydration script needs — so it lands
+ * on exactly the responses this app renders and never on proxied ones. This hook runs after
+ * `resolve` and cannot know that nonce; a second writer here would either clobber Kit's policy or
+ * ship one that voids its own `'unsafe-inline'` tokens. The resolution of the
+ * nonce-vs-`'unsafe-inline'` question is recorded beside the config in `svelte.config.js`.
  *
  * Applied only to responses this app renders. Proxied API/MCP/OAuth paths short-circuit before this
  * runs and carry the upstream's own headers, which the upstream sets for itself — one owner per
