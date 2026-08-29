@@ -15,7 +15,7 @@ changes.
    directory, read it for project-specific conventions, test commands, and lint rules.
 3. **Discovery** — search for related work and context:
    - `temper search "<relevant terms>"` to find related documents
-   - `temper context` to review the current context landscape
+   - `temper context list` to review the current context landscape
    - Check recent sessions for prior work in this area
 4. **Read subagent guidance** — read `subagent-guidance.md` and apply all principles
    throughout the session.

@@ -274,15 +274,15 @@ fn test_skill_generate_documents_block_grain_ingest() {
             content.contains("## Block-Grain Ingest & Attribution"),
             "reference.md should document the block-grain ingest/attribution surface"
         );
-        for tool in [
-            "ingest_begin",
-            "ingest_append",
-            "ingest_blocks",
-            "ingest_finalize",
-        ] {
+        // The MCP surface exposes the lifecycle as ONE tool with an `action` discriminator.
+        assert!(
+            content.contains("segmented_ingest"),
+            "reference should name the consolidated segmented_ingest tool"
+        );
+        for action in ["`begin`", "`append`", "`blocks`", "`finalize`"] {
             assert!(
-                content.contains(tool),
-                "reference should name the {tool} lifecycle tool"
+                content.contains(action),
+                "reference should mention the segmented_ingest `{action}` action"
             );
         }
         assert!(
@@ -439,7 +439,7 @@ fn unknown_hash_arm_reports_on_stdout_like_its_siblings() {
     let dir = TempDir::new().unwrap();
 
     // A minimal global config the spawned CLI's `load_global_config` can parse:
-    // only `[vault]` is required; `skill.output` defaults to `~/.claude/skills/temper`,
+    // only `[vault]` is required; `skill.output` defaults to `~/.agents/skills/temper`,
     // and `~` resolves under the tempdir via `HOME` below, so the whole check runs
     // inside the test's isolated space.
     let config_path = dir.path().join("global-config.toml");
@@ -456,7 +456,7 @@ path = "{vault_path}"
 
     // Materialize a SKILL.md with NO `<!-- config-hash: ... -->` comment so the
     // staleness check takes the UNKNOWN (None) arm. `~` expands via `HOME`.
-    let skill_dir = dir.path().join(".claude/skills/temper");
+    let skill_dir = dir.path().join(".agents/skills/temper");
     std::fs::create_dir_all(&skill_dir).unwrap();
     std::fs::write(
         skill_dir.join("SKILL.md"),

@@ -64,9 +64,8 @@ one profile. An email spread across multiple profiles (possible only via unverif
 sign-ins) is discounted — not shown, never mis-delivered; the fallback there is the
 inviter sharing the printed token directly.
 
-**Invitations are a CLI capability, not an MCP one.** The tool consolidation removed
-`list_my_invitations` / `accept_invitation` / `decline_invitation` from the MCP surface
-deliberately — each of these stays at the CLI, and the absence is a declaration. An agent
+**Invitations are a CLI capability, not an MCP one.** The MCP surface deliberately carries
+no invitation tools — the absence is a declaration. An agent
 working purely over MCP has no invitation surface; reach for the CLI.
 
 `temper warmup` counts what is waiting on you, so an invitation surfaces at session start

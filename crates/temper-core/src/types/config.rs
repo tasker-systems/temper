@@ -101,7 +101,10 @@ pub struct SkillConfig {
 }
 
 fn default_skill_output() -> String {
-    "~/.claude/skills/temper".to_string()
+    // The vendor-neutral `~/.agents` location — the same default `skill install --target agents`
+    // resolves to. An existing config that still names `~/.claude/skills/temper` keeps working;
+    // this default only governs machines that never wrote a `[skill]` section.
+    "~/.agents/skills/temper".to_string()
 }
 
 impl Default for SkillConfig {

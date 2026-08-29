@@ -10,7 +10,7 @@ tools for writes and search.
 Trigger when: the user mentions their knowledge base, vault, notes, contexts,
 sessions, research, or wants to look up / store information across conversations.
 
-## The Tool Surface (28 tools, read/write separable)
+## The Tool Surface (35 tools, read/write separable)
 
 The MCP surface is consolidated: each tool serves an agent use case, not an
 administrative one. Tools that shared a lifecycle are collapsed into one tool
@@ -18,23 +18,24 @@ with a discriminator (`action`, `view`, or `target`). Read and write are
 separable — a consumer gating on "read-only" can grant the read tools without
 drilling into action parameters.
 
-**Reads (14):** `search`, `run_query`, `get_resource`, `list_resources`,
+**Reads (18):** `search`, `run_query`, `get_resource`, `list_resources`,
 `resource_lineage`, `element_trail`, `get_block_provenance`, `cogmap_read`,
 `cogmap_list`, `context_read`, `describe_schema`, `invocation_read`,
-`facets_read`, `steward_ingest_delta`
+`facets_read`, `steward_ingest_delta`, `list_data_artifacts`,
+`get_data_artifact`, `list_data_artifact_shapes`, `get_data_artifact_shape`
 
-**Writes (15 listed; the list is known to be incomplete — see the note):** `create_resource`,
-`update_resource`, `update_resource_meta`, `delete_resource`, `annotate_resource`,
-`relationship`, `facet_set`, `record_citation_audit`, `invocation_manage`,
-`segmented_ingest`, `cogmap_create`, `cogmap_materialize`, `context_materialize`,
-`context_manage`, `steward_advance_watermark`
+**Writes (17):** `create_resource`, `update_resource`, `update_resource_meta`,
+`delete_resource`, `annotate_resource`, `relationship`, `facet_set`,
+`record_citation_audit`, `invocation_manage`, `segmented_ingest`,
+`cogmap_create`, `cogmap_materialize`, `context_materialize`, `context_manage`,
+`steward_advance_watermark`, `commit_data_artifact`,
+`declare_data_artifact_shape`
 
-> `[2026-08-24]` The count read **12** beside a list of **14**, and the list omits at least
-> `commit_data_artifact` and `declare_data_artifact_shape`, both advertised by the router and both
-> writes. The number now describes the list; the list still does not describe the router. This file
-> is hand-written — `generate_agent_skill_files()` deliberately does not emit it — so no gate
-> re-derives its contents, and the tool-NAME half of that gap is covered only by tests in
-> temper-mcp. A full reconciliation against `tool_router()` is worth doing and has not been done.
+> `[2026-08-29]` Reconciled against `tool_router()`: 35 tools, 18 reads / 17 writes. The
+> previous census read **28** beside a list that omitted the four data-artifact read tools
+> and the two data-artifact writes. This file is hand-written — `generate_agent_skill_files()`
+> deliberately does not emit it — so no gate re-derives its contents, and the tool-NAME half of
+> that gap is covered only by tests in temper-mcp.
 
 **Declared off-MCP (CLI door):** grants (`resource_grant`/`revoke`,
 `cogmap_grant`/`revoke`), `admin_ledger`, cogmap bind/unbind, team invitations,

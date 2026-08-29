@@ -50,13 +50,13 @@ reader who expects a bulk import will trip over:
 
 ### Before migrating, read for near-duplicates yourself
 
-A pre-write full-text search used to do this, and it was deleted because it did not work: against a
-real 184-memory store on 2026-08-02 it surfaced **54 collisions, 3 of them genuinely overlapping**
-— 51 false positives, ~94% noise. The false positives matched on *shared project vocabulary*, not
-on claim: `temper invocation` was surfaced against `NEVER abbreviate a UUIDv7 to its prefix`,
-`cargo make cannot` against `the ts-rs drift gate`. Both mention temper, or cargo, or a CI job.
-Full-text search cannot see that they make unrelated claims, and this gets **worse in a shared
-context, not better** — shared vocabulary is exactly what a team's context accumulates.
+A pre-write full-text search used to do this, and it was deleted because it did not work: on a
+real store it surfaced dozens of **collisions of which only a few were genuinely overlapping**
+— most matched on *shared project vocabulary*, not on claim ("run invocations this way"
+surfaced against "never abbreviate a UUID"; "the build tool cannot X" against "the CI gate
+does Y"). Both mention the same tools, or the same project. Full-text search cannot see that
+they make unrelated claims, and this gets **worse in a shared context, not better** — shared
+vocabulary is exactly what a team's context accumulates.
 
 **The rule did not go with the mechanism.** Two accounts of nearly the same thing are surfaced for
 judgment, never merged automatically. What changed is who forms the candidate set and on what
@@ -65,15 +65,14 @@ basis: read the local memories against what the store already holds, and
 memories asserting the same thing are, however differently they are phrased. Bring a short list a
 human can actually adjudicate.
 
-**Three outcome kinds, each observed on 2026-08-02.** A reader who expects only the first will
+**Three outcome kinds.** A reader who expects only the first will
 mis-handle the other two:
 
-- **Duplicate** — the same incident documented twice, in that case on two different machines.
+- **Duplicate** — the same incident documented twice, say on two different machines.
   Resolved by keeping the **older, richer** account: a judgement no confidence score encodes.
-- **Supersession** — a three-weeks-newer account, strictly richer than the one it covers.
-- **Both stale** — both accounts out of date, and the newer one still wrong. The real instance was
-  two memories about what triggers an `sqlx::migrate!` rebuild; the more recent one was the more
-  wrong. **Recency arbitrated nothing.**
+- **Supersession** — a newer account, strictly richer than the one it covers.
+- **Both stale** — both accounts out of date, and the newer one still wrong. **Recency
+  arbitrated nothing** in the observed cases.
 
 **Say what this costs: a compiled-in gate is unskippable, and this is guidance, which is skippable
 by construction.** An agent can simply not do it. The trade is an *enforcement* mechanism for a

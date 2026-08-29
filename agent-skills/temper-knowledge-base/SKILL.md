@@ -47,11 +47,9 @@ This file is the router. Read a supporting file when the work calls for it, not 
 | `outcome-registers.md` | **Authoring or amending a goal**, or deciding whether a criterion belongs on one |
 
 > **Read these as principles, not checklists.** Each carries a worked example from the incident that
-> produced it. The example is **evidence for** the principle, never the **scope of** it. So the
-> thought *"this guidance doesn't cover my case"* is the failure mode itself, not a finding — and
-> *"ritual A misses this, ritual B misses this, so I'll add ritual C"* is that failure mode
-> mid-sentence, growing an unbounded catalogue of edge cases instead of reasoning from the theme.
-> When you get there, stop and ask what the principle is **for**.
+> produced it — evidence **for** the principle, never the **scope of** it. *"This guidance doesn't
+> cover my case"* is the failure mode itself, not a finding; when you reach it, ask what the
+> principle is **for**.
 
 ## Outcome Discipline — applies to every task, whether or not you author a goal
 
@@ -73,6 +71,14 @@ authoring or amending a goal or sub-goal.
   criterion is uncovered, never concludes that the work should be dropped. Cost, churn and whether a
   goal is worth pursuing belong to the user, not to a criterion inside it.
 
+## Starting a session
+
+**The purpose comes first.** Before running `session-lifecycle.md`'s standing-state checklist —
+or any listing — know what the session is for. If the user's ask is ambiguous, **ask before
+doing anything else**; a ritual performed before the purpose is known is effort spent on the
+wrong question. Then load the heavy context lazily: the checklist's reads are warranted when
+the session will touch goals or tasks, not as an opening flourish.
+
 ## Starting work on a task
 
 There is no `task start` tool. A task is a resource, and starting one is three calls:
@@ -89,10 +95,8 @@ Input: { "id": "<task uuid>",
 
 Stages are `backlog`, `in-progress`, `done`, `cancelled` — there is no "active".
 
-**`update_resource_meta` takes both tiers.** `managed_meta` and `open_meta` are required fields on
-that call, and each is a **per-key patch**: a key you omit is untouched, a key you send is replaced
-whole. Sending `"open_meta": {}` therefore changes nothing — it is how you say "I am only touching
-the managed tier".
+**`update_resource_meta` takes both tiers, each a per-key patch** — a key you omit is untouched, a
+key you send is replaced whole; `"open_meta": {}` touches nothing.
 
 A task's `temper-mode` (`plan` / `build`) and `temper-effort` (`small` / `medium` / `large`) say how
 much process the work deserves. If either is missing, ask. If the work drifts away from what they
@@ -132,16 +136,9 @@ nothing.
 
 **A UUID is not a SHA. Never abbreviate one.** A UUIDv7's leading bits are a **timestamp**, so
 resources created near each other share a prefix *by construction* — a goal and the task written a
-minute later routinely agree on their first seven characters:
-
-```
-019fbb77-72a3-72e1-bbbd-13eb6aa64982   <- a goal
-019fbb78-657b-7380-9063-212727cfe390   <- its task, 62 seconds later
-```
-
-A prefix is therefore *systematically* ambiguous between exactly the resources most likely to be
-cited together, and resolves to nothing a reader can follow. Write the full 36 characters
-everywhere — prose, tables, `open_meta`, commit messages.
+minute later routinely agree on their first seven characters, and the prefix resolves to nothing a
+reader can follow. Write the full 36 characters everywhere — prose, tables, `open_meta`, commit
+messages.
 
 **When a document refers to another resource, write it as a markdown link:**
 
@@ -149,13 +146,10 @@ everywhere — prose, tables, `open_meta`, commit messages.
 [<the resource's exact title>](./<full-uuidv7>)
 ```
 
-Resources are addressed **flatly**; there is no directory tree to be relative to, so `./<uuid>` is
-the entire path and it resolves wherever the body renders. The reader then sees *what* is cited
-without a round-trip, and can navigate to it instead of copying an id into a tool call.
-
-Take the title from `list_resources` / `get_resource`, not from memory — an approximate title inside
-a link is a citation that looks precise and is not. Escape any `[`, `]`, `(` or `)` the title
-contains, or the link will not render.
+Resources are addressed **flatly** — there is no directory tree to be relative to, so `./<uuid>` is
+the entire path and resolves wherever the body renders. Take the title from `list_resources` /
+`get_resource`, not from memory (an approximate title is a citation that looks precise and is
+not), and escape any `[`, `]`, `(` or `)` it contains, or the link will not render.
 
 ## Writing bodies
 
@@ -167,24 +161,18 @@ fragment: a partial body is a silent truncation, not an append. To change only f
 `update_resource_meta` and send no body at all.
 
 **Because it replaces, verify what you are about to send.** `get_resource` hands you a *snapshot*,
-and the gap between reading it and writing it back is where content disappears — to another session,
-another machine, or your own splice. Both happened in one session: a concurrent edit from a second
-machine was nearly overwritten, and then a single-section edit that spliced on a heading silently
-truncated everything after it. The second had no concurrency at all.
+and the gap between reading it and writing it back is where content disappears.
 
-- **Re-read immediately before writing**, not once at the start of the work. Assemble the amended
-  document, then `get_resource` again and re-apply to what is actually stored now.
-- **Assert at BOTH ends of a splice.** Confirming your new text landed says nothing about what it
-  displaced. Check that the content you did *not* intend to touch survived, and prefer counting
-  sections or naming markers over trusting a length.
-- **Prefer the narrowest write** — `update_resource_meta` when only frontmatter changes, and one
-  spliced section over regenerating a document you did not author.
+- **Re-read immediately before writing**, not once at the start of the work — `get_resource` again
+  and re-apply to what is actually stored now
+- **Assert at BOTH ends of a splice** — confirming your new text landed says nothing about what it
+  displaced; prefer counting sections or naming markers over trusting a length
+- **Prefer the narrowest write** — `update_resource_meta` when only frontmatter changes
 
-This is operating discipline, not a lock. Writes are **not** mutexed, and deliberately so — locking
-them would be overkill for essentially every workflow here.
+This is operating discipline, not a lock. Writes are **not** mutexed, and deliberately so.
 
 For a body too large for one call, for a resumable build, or for citation-grade per-block
-attribution, use the segmented `ingest_*` lifecycle and `annotate_resource` — `knowledge-base.md`
+attribution, use the `segmented_ingest` lifecycle and `annotate_resource` — `knowledge-base.md`
 has both.
 
 ## Subagent dispatch
@@ -200,6 +188,10 @@ Before dispatching any subagent:
 > **This applies to you, too.** When *you* write a plan, nobody dispatches you, so nothing injects
 > anything — and that is exactly how an ungrounded plan gets authored and then stamped "verified" by
 > its own author.
+
+**Skills and plugins are looked up on request, not on arrival.** If the client exposes skills or
+plugins, discover what exists when a dispatch is imminent — or when the user asks about quality
+gates — then present the list and ask what subagents should use. Do not scan as an opening flourish.
 
 ## Declared gaps — what this packaging does not carry
 

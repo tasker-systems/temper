@@ -321,8 +321,8 @@ mechanize it (enclosure of responsibility again).
 ## Doing it with the tools you have
 
 The register itself is **the goal's body** — write it as markdown sections. There is no
-section-skeleton tool on this surface: `describe_doc_type` returns the frontmatter JSON Schema and
-an `example_managed_meta`, which is metadata, not an outline. Take the headings from *The eight
+section-skeleton tool on this surface: `describe_schema` (view: `doc_type`) returns the frontmatter
+JSON Schema and an example, which is metadata, not an outline. Take the headings from *The eight
 elements* above.
 
 ```

@@ -18,130 +18,108 @@ This is a modular skill. SKILL.md (this file) is the router — it tells you wha
 read and when. Behavioral content lives in supporting files. Do NOT read all files
 upfront; read only what the current task requires.
 
+**Read everything as principles, not checklists.** Each file carries a worked example from the
+incident that produced it. The example is **evidence for** the principle, never the **scope of**
+it — so *"this guidance doesn't cover my case"* is the failure mode itself, not a finding, and
+*"ritual A misses this, ritual B misses this, so I'll add ritual C"* is that failure mode
+mid-sentence. When you get there, stop and ask what the principle is **for**. It almost always
+already covers you.
+
 ### Supporting Files
-- `reference.md` — CLI commands, stages, mode/effort definitions
+- `reference.md` — CLI commands, stages, mode/effort, listing flags, body-source precedence
 - `subagent-guidance.md` — 10 universal principles for dispatched subagents
 - `plan-verification.md` — Verify a plan's claims against the code **before** dispatching from it
-- `implementation-grounding.md` — For anyone **writing a plan, or writing code from one** —
-  including you, in the main loop. Inject verbatim into plan-writing/implementing subagents.
-- `outcome-registers.md` — Stating an outcome so its rigor survives decomposition. Read when
-  **authoring or amending a goal or sub-goal**, not to start a task
-- `data-artifacts.md` — **Before storing structured data**: when to commit a data artifact vs.
-  writing into a resource body, the selection vocabulary, and shape state
+- `implementation-grounding.md` — Writing a plan, or code from one — including you in the main
+  loop. Inject verbatim into plan-writing/implementing subagents
+- `outcome-registers.md` — Stating an outcome so its rigor survives decomposition. For
+  **authoring or amending a goal**, not to start a task
+- `data-artifacts.md` — **Before storing structured data**: data artifact vs. resource body,
+  the selection vocabulary, shape state
 - `session-lifecycle.md` — Session start/end patterns, drift detection, checkpoints
-- `session-wrap.md` — **Ending a session**: what the note must hold, and how to write the
-  handoff preamble the next session starts from. The mechanics stay in `session-lifecycle.md`
-- `memories.md` — Durable memories: what a `memory` resource is, how to **populate** the store from
-  a machine's local files, and what generates and gates this machine's `MEMORY.md`
+- `session-wrap.md` — **Ending a session**: what the note must hold, and the handoff preamble
+- `memories.md` — Durable memories: the `memory` type, populating the store, this machine's `MEMORY.md`
 - `knowledge-base.md` — MCP resources and tools for cloud knowledge base access
 - `cognitive-maps.md` — Reading from and authoring into cognitive maps (telos-governed graphs)
-- `teams.md` — Working with teams: create, invite (email as correlator), list your invitations, join, roles, offboarding
-- `querying.md` — **Which door to ask through** (`search` vs `query`), writing a composition, reading its trace
+- `teams.md` — Teams: create, invite (email as correlator), join, roles, offboarding
+- `querying.md` — **Which door to ask through** (`search` vs `query`), compositions, reading a trace
 
 ### Workflow Files (`workflows/`)
 One file per mode/effort combination. Read only the one that matches the current task.
 
 ### Extension Files (`guidance/`)
-**Read every file in `guidance/` — all of them.** These are user-created; each one exists because
-something went wrong once. `guidance/fundamentals.md` contains project-specific principles if it
-exists.
-
-> **Read all guidance — here and in the Supporting Files above — as principles, not checklists.**
-> Each carries a worked example from the incident that produced it. The example is **evidence for**
-> the principle, never the **scope of** it. So the thought *"this guidance doesn't cover my case"*
-> is the failure mode itself, not a finding — and *"ritual A misses this, ritual B misses this, so
-> I'll add ritual C"* is that failure mode mid-sentence, growing an unbounded catalogue of edge
-> cases instead of reasoning from the theme. When you get there, stop and ask what the principle is
-> **for**. It almost always already covers you; what it will not do is match your case by shape.
+**Read every file in `guidance/` — all of them** (when an entry point below says to). These are
+user-created; each one exists because something went wrong once. `guidance/fundamentals.md`
+contains project-specific principles if it exists.
 
 ## Outcome Discipline — applies to every task, whether or not you author a goal
 
-Four rules. They are short because they are always in force; the reasoning, the eight register
-elements, and the worked failures are in `outcome-registers.md`, which you read **only** when
-authoring or amending a goal or sub-goal.
+Four rules, always in force; the reasoning and worked failures are in `outcome-registers.md`
+(read **only** when authoring or amending a goal or sub-goal).
 
-- **A clause states what must be true, or must never be true, and names no mechanism.** The *how* is
-  the part that mutates, and a clause naming one propagates that commitment to every reader — most
-  damagingly to an implementing agent, which builds the mechanism the clause named rather than the
-  outcome it meant.
+- **A clause states what must be true, or must never be true, and names no mechanism.** A clause
+  naming a mechanism commits every reader to it — most damagingly the implementing agent, which
+  builds the mechanism a clause named rather than the outcome it meant.
 - **A witness is authored during the build, never in a preamble.** A witness must fail against the
-  state its clause claims to change. When the mechanism does not exist yet, "fails against current
-  state" is satisfied by the *absence of the feature* — vacuously, by anything. A clause whose
-  mechanism is unbuilt carries a **declared hole, not a filed task**.
-- **Coverage is never inferred from absence.** A criterion with no evidence says so explicitly. A
+  state its clause claims to change; against an unbuilt mechanism anything passes vacuously. A
+  clause whose mechanism is unbuilt carries a **declared hole, not a filed task**.
+- **Coverage is never inferred from absence.** A criterion with no evidence says so explicitly; a
   retired check leaves a named remainder, not a gap that reads as clean.
-- **The discipline detects; it does not decide.** Reporting that something never ran, or that a
-  criterion is uncovered, never concludes that the work should be dropped. Cost, churn and whether a
-  goal is worth pursuing belong to the user, not to a criterion inside it.
+- **The discipline detects; it does not decide.** Reporting that something never ran never
+  concludes the work should be dropped — cost and whether to pursue belong to the user.
 
 ## On Task Start
 
-> **Addressing**: resources are addressed by **ref** — a UUID or the decorated
-> `sluggify(title)-<uuid>` form (resolution is trailing-UUID-only; the slug half is
-> presentation, a stale slug half is harmless). Every `resource list`/`search`/`show`
-> row carries a `ref` field — copy it. `resource show`/`update`/`delete` take a single
-> `<ref>` (no `--type`/`--context`). `resource create` and `resource list` still take
-> `--type`/`--context` (create writes *into* a context; list filters by them).
->
-> **CLI sequence**: There is no `task start` command. To start a task:
-> 1. `temper resource list --type task --context @me/<ctx>` — find the task, copy its `ref`
-> 2. `temper resource show <ref>` — read the task content
-> 3. `temper resource update <ref> --stage in-progress` — mark it active
->
-> Stages are: `backlog`, `in-progress`, `done`, `cancelled` (not "active").
+> **Addressing**: every `resource list`/`search`/`show` row carries a `ref` — copy it.
+> `resource show`/`update`/`delete` take a single `<ref>` (no `--type`/`--context`);
+> `resource create`/`list` still take `--type`/`--context`. Stages: `backlog`,
+> `in-progress`, `done`, `cancelled` (not "active"). Full details: `reference.md`.
+
+There is no `task start` CLI command; the sequence is:
 
 1. Resolve the task's ref: `temper resource list --type task --context @me/<ctx>`, find the row matching `<slug>`, copy its `ref`. Read it via `temper resource show <ref>` — extract mode and effort
 2. Move the task to in-progress: `temper resource update <ref> --stage in-progress`
 3. If mode or effort is missing, ask: "What mode (plan/build) and effort (small/medium/large)?"
-4. Infer or ask the domain: "What kind of work is this? (a) Software development, (b) Writing/documentation, (c) Research/analysis, (d) Design/architecture, (e) Something else"
-5. Read `plan-verification.md`, `implementation-grounding.md`, and **every** file in `guidance/` —
-   as principles, not checklists (see *Extension Files*). Apply *Outcome Discipline* above: clauses
-   name no mechanism, witnesses are authored during the build. If this task authors or amends a
-   goal, read `outcome-registers.md` first. Then check `guidance/fundamentals.md`:
-   - If it exists, read it and apply its principles
-   - If it doesn't, offer: "This context has no project fundamentals. Want to set them up? (`/temper init`)"
-6. Check auto-memory for user plugin preferences (skills they've said they rely on)
-7. Scan for installed skills and plugins: check `~/.claude/skills/` for skills and `~/.claude/plugins/installed_plugins.json` for plugins (e.g. superpowers, LSP plugins, vercel-plugin)
-8. Ask: "I found [list]. Want subagents to use any of these? Any other quality gates?"
-9. Read `workflows/{mode}-{effort}.md` and follow it
+4. Read `plan-verification.md`, `implementation-grounding.md`, and **every** file in `guidance/` —
+   as principles, not checklists. Apply *Outcome Discipline* above: clauses name no mechanism,
+   witnesses are authored during the build. If this task authors or amends a goal, read
+   `outcome-registers.md` first. Then check `guidance/fundamentals.md`: if it exists, apply its
+   principles; if it doesn't, offer "This context has no project fundamentals. Want to set them
+   up? (`/temper init`)"
+5. Read `workflows/{mode}-{effort}.md` and follow it
 
 ## On Task Resume
 
-> **CLI sequence**: To resume a task from a previous session:
-> 1. `temper resource list --type task --context @me/<ctx>` — find the task, copy its `ref`; `temper resource show <ref>` — reload the task content
-> 2. `temper resource list --type session --context @me/<ctx>` — find the most recent session, copy its `ref`
-> 3. `temper resource show <ref>` — read the session's "Next Steps"
-> 4. Continue from the workflow file for this task's mode/effort
-
 1. Resolve the task's ref via `temper resource list --type task --context @me/<ctx>`, then `temper resource show <ref>` — extract mode, effort, and context
 2. List recent sessions: `temper resource list --type session --context @me/<ctx>`
-3. Read the most recent session note: copy the `ref` of the most recent session row, then `temper resource show <ref>`
-   - Match the session by its `slug`/`title` column in the `resource list` output (a unique substring is enough), then copy that row's `ref`
+3. Read the most recent session note: match a row by its `slug`/`title` (a unique substring is
+   enough), copy that row's `ref`, then `temper resource show <ref>` — its "Next Steps" is where
+   you resume
 4. If the task is not already in-progress, move it: `temper resource update <ref> --stage in-progress`
-5. Read `plan-verification.md`, `implementation-grounding.md`, and **every** file in `guidance/`
-   — as principles, not checklists (see *Extension Files*). Apply *Outcome Discipline* above; if
-   this task authors or amends a goal, read `outcome-registers.md` first
-6. Check auto-memory for user plugin preferences
-7. Scan for installed skills and plugins: check `~/.claude/skills/` for skills and `~/.claude/plugins/installed_plugins.json` for plugins (e.g. superpowers, LSP plugins, vercel-plugin)
-8. Ask: "Resuming from last session. Found these skills: [list]. Want subagents to use any? Any other quality gates?"
-9. Read `workflows/{mode}-{effort}.md` and continue from where the last session left off
+5. Read `plan-verification.md`, `implementation-grounding.md`, and **every** file in `guidance/` —
+   as principles, not checklists. Apply *Outcome Discipline*; if this task authors or amends a
+   goal, read `outcome-registers.md` first
+6. Read `workflows/{mode}-{effort}.md` and continue from where the last session left off
 
 ## On Session Start
 
 > Start a working session without a predefined task. Useful for exploration,
 > ad-hoc work, or when a task hasn't been created yet.
 
-1. If `--context @me/<ctx>` provided, use it. Otherwise ask which context to work in.
-2. List in-progress tasks: `temper resource list --type task --context @me/<ctx>`
-3. If tasks exist, ask: "Working on one of these, or something new?"
-   - If existing task: pivot to **On Task Resume** with that slug
-   - If new: continue as open session
-4. Read `plan-verification.md`, `implementation-grounding.md`, and **every** file in `guidance/`
-   — as principles, not checklists (see *Extension Files*). Apply *Outcome Discipline* above; if
-   this session authors or amends a goal, read `outcome-registers.md` first
-5. Check auto-memory for user plugin preferences
-6. Scan for installed skills and plugins: check `~/.claude/skills/` for skills and `~/.claude/plugins/installed_plugins.json` for plugins (e.g. superpowers, LSP plugins, vercel-plugin)
-7. Proceed with the user's request. At session end, save via:
+**The purpose comes first.** Every step below runs only once the purpose is known — a
+session ritual performed before the purpose is known is effort spent on the wrong question.
+
+1. Get the purpose: use `--purpose <text>` when provided; otherwise **ask before doing
+   anything else** — no task listing, no guidance reads, no scans until it is answered.
+2. If `--context @me/<ctx>` provided, use it. Otherwise ask which context to work in.
+3. List in-progress tasks: `temper resource list --type task --context @me/<ctx>`. If one
+   matches the purpose, ask "Working on this?" — if yes, pivot to **On Task Resume** with that
+   slug; otherwise continue as an open session.
+4. Proceed with the purpose. Load the heavy context **lazily**, when the work reaches it:
+   - `workflows/{mode}-{effort}.md` — when the session's mode/effort is known
+   - `plan-verification.md`, `implementation-grounding.md`, and every file in `guidance/` —
+     when the work will write a plan, dispatch a subagent, or author a goal
+   - `outcome-registers.md` — before authoring or amending a goal
+5. At session end, save via:
    ```bash
    cat <<'EOF' | temper resource create --type session --title "<title>" --context @me/<ctx>
    ## Goal
@@ -165,18 +143,8 @@ authoring or amending a goal or sub-goal.
    `slug-<uuid>` ref, from `temper resource list --type goal`). This projects a live
    `advances`→goal edge; later, `temper resource list --type task --goal <ref>` filters
    tasks by it, and `temper resource update <ref> --clear-goal` retracts the link.
-7. Create the task (pipe the problem statement and acceptance criteria via stdin):
-   ```bash
-   cat <<'EOF' | temper resource create --type task --title "<title>" --context @me/<ctx> --mode <mode> --effort <effort> [--goal <ref>]
-   # <title>
-
-   <problem statement from step 2>
-
-   ## Acceptance Criteria
-
-   <criteria from step 6, or omit section if skipped>
-   EOF
-   ```
+7. Create the task (pipe the problem statement and acceptance criteria via stdin — the pattern is
+   `cat <<'EOF' | temper resource create --type task --title "<title>" --context @me/<ctx> --mode <mode> --effort <effort> [--goal <ref>]`, body `# <title>`, problem statement, `## Acceptance Criteria`)
 8. Ask: "Task created. Want to start working on it now?"
    - If yes: pivot to **On Task Start** with the new slug
 
@@ -187,84 +155,50 @@ authoring or amending a goal or sub-goal.
 | `task start <slug>` | On Task Start |
 | `task resume <slug>` | On Task Resume |
 | `task create [--context @me/<ctx>]` | On Task Create |
-| `session start [--context @me/<ctx>]` | On Session Start |
+| `session start [--context @me/<ctx>] [--purpose <text>]` | On Session Start |
 | `session wrap` | Read `session-wrap.md`, then follow *Session End* in `session-lifecycle.md` |
 | Authoring or amending a goal or sub-goal, or deciding whether a criterion belongs on one | Read `outcome-registers.md` |
 | Storing structured data (JSON, YAML, measurements, query plans) a later session must retrieve whole | Read `data-artifacts.md` |
 | Anything touching a cognitive map (read/author a map, telos, nodes/edges, regions) | Read `cognitive-maps.md` |
-| Block-level / segmented / attributable writes (per-block provenance/sources, citation-grade docs, `annotate`, `ingest_*` lifecycle) | Read `reference.md` → *Block-Grain Ingest & Attribution* |
+| Block-level / segmented / attributable writes (per-block provenance/sources, citation-grade docs, `annotate`, `segmented_ingest` lifecycle) | Read `reference.md` → *Block-Grain Ingest & Attribution* |
 | Asking a question of the knowledge base — deciding between `temper search` and `temper query`, writing or debugging a composition | Read `querying.md` |
 | Other commands (search, session save, etc.) | Read `reference.md` for syntax |
 
 ## Listing Is Truncated — Enumerate Before Asserting
 
 > **Never claim a goal/task/session is absent, or that a set is complete, from a
-> default `temper resource list`.** The list returns a capped page (20 rows,
-> whatever sections you ask for), so a resource you "don't see" may just be past
-> the cap —
-> this has repeatedly led agents to assert wrong backlog/status.
+> default `temper resource list`.** The list returns a capped page (20 rows),
+> so a resource you "don't see" may just be past the cap — this has repeatedly
+> led agents to assert wrong backlog/status.
 
 Every list response carries `total` (all matching rows), `returned` (this page),
-and `truncated`. When `truncated` is `true`, there is more than you can see.
-Before asserting absence or completeness:
-
-- **Narrow**: `--title-contains <substr>`, `--stage <s>`, `--status <s>`, or `--sort <field>[:asc|desc]`.
-- **Enumerate fully**: `--all`, a larger `--limit`, or walk with `--page <n>`.
-
-See `reference.md` → *Listing: truncation, sort, and filters* for the full flag set.
+and `truncated`. When `truncated` is `true`, there is more than you can see:
+**narrow** (`--title-contains`, `--stage`, `--status`, `--sort`) or **enumerate
+fully** (`--all`, a larger `--limit`, `--page`). Full flag set: `reference.md` →
+*Listing: truncation, sort, and filters*.
 
 ## Cheap Orientation (read-side projection)
 
-When you need to peek at a resource or scan a list without paying for the full
-body, use the projection flags. They make orientation reads dramatically
-cheaper, both in tokens and in API work:
+`show` and `list` answer in the same shape; `--with <section>` / `--without <section>`
+say which parts you want — `body`, `open-meta`, `edges` (the managed tier is always
+there, so it is not a section).
 
-`show` and `list` answer in the same shape, and `--with <section>` / `--without
-<section>` say which **parts** of it you want. The sections are `body`,
-`open-meta` and `edges`; the managed tier is not one, because it is always there.
+- `temper resource show <ref> --without body` — full view minus the body; skips the round-trip
+- `temper resource list … --with open-meta` — rows plus the open tier, no bodies: triages a whole
+  context in one call (`list` offers no `--with body`: use `show` per row)
+- `--fields <a,b,c>` — subselect top-level response keys; pipe through `jq` for nested
+- `--edges` (long form `--with edges`) — adds graph edges; **composes** with `--without body`
 
-- `temper resource show <ref> --without body` — the full resource view
-  (title, type, context, owner, and both the managed and open meta tiers)
-  minus the reconstructed body. Everything `show` gives you except the body,
-  and it skips the body round-trip rather than fetching and discarding it.
-- `temper resource list --type <t> --context @me/<ctx> --with open-meta` — each
-  matching resource as a full row **plus** the open tier (still no bodies). The
-  default `list` carries only the managed tier, so this is how you triage a whole
-  context on your own `open_meta` keys in one call instead of one `show` per
-  resource. `list` does not offer `--with body`: use `show` per row.
-- `--fields <a,b,c>` on either of the above — subselect top-level response
-  keys (the anchor key `id` is always preserved). For nested projection, pipe
-  through `jq`.
-- `temper resource show <ref> --with edges` (or the short `--edges`) — adds the
-  graph edges connected to this resource. It **composes** with `--without body`:
-  "everything but the body, plus the edges" is one call.
-
-Reach for `--without body` whenever you need a resource's metadata but not its
-prose — triaging a context, comparing a few resources, or deciding whether to
-read the body. It is strictly cheaper than a full `show` (no body
-reconstruction) and strictly richer than the default `list` (which omits the
-open tier). Fall back to the full `show` only when you actually need the body.
-
-Naming one section in both `--with` and `--without` is an error, not a
-precedence rule — the two say incompatible things about one part, so neither
-answer would be right.
+Reach for these whenever you need metadata but not prose. Naming one section in both
+`--with` and `--without` is an error, not a precedence rule. Full table: `reference.md` →
+*Orientation Projection*.
 
 ## Referencing Other Resources — full UUIDv7, and link it
 
-**A UUID is not a SHA. Never abbreviate one.** Git teaches everyone that a
-seven-character prefix identifies a commit. That intuition is wrong here and
-actively harmful: a UUIDv7's leading bits are a **timestamp**, so resources
-created near each other share a prefix *by construction*. A goal and the task
-written a minute later routinely agree on their first seven characters:
-
-```
-019fbb77-72a3-72e1-bbbd-13eb6aa64982   ← a goal
-019fbb78-657b-7380-9063-212727cfe390   ← its task, 62 seconds later
-```
-
-So a prefix is not merely ambiguous, it is *systematically* ambiguous between
-exactly the resources most likely to be discussed together — and it points at
-nothing a reader can resolve. Write the full 36 characters everywhere: prose,
+**A UUID is not a SHA. Never abbreviate one.** A UUIDv7's leading bits are a **timestamp**,
+so resources created near each other share a prefix *by construction* — a goal and the task
+written a minute later routinely agree on their first seven characters, and the prefix
+resolves to nothing a reader can follow. Write the full 36 characters everywhere: prose,
 tables, `open_meta`, commit messages.
 
 **When a document refers to another resource, write it as a markdown link:**
@@ -273,19 +207,11 @@ tables, `open_meta`, commit messages.
 [<the resource's exact title>](./<full-uuidv7>)
 ```
 
-Resources are addressed **flatly** — there is no directory tree to be relative
-to — so `./<uuid>` is the entire path, and it resolves wherever the body is
-rendered. This buys two things a bare id cannot: the reader sees *what* is being
-cited without a round-trip, and the reference is navigable instead of something
-to copy into `resource show`.
-
-Take the title from `resource list`/`show` rather than from memory. Titles carry
-em-dashes and trailing clauses that are easy to approximate, and an approximate
-title inside a link is a citation that looks precise and is not. If a title
-contains `[`, `]`, `(` or `)`, escape them or the link will not render.
-
-To delete a resource, use `temper resource delete <ref> [--force]` — the `<ref>`
-is the `ref` field from `list`/`show`.
+Resources are addressed **flatly** — there is no directory tree to be relative to — so
+`./<uuid>` is the entire path and resolves wherever the body renders. Take the title from
+`resource list`/`show`, not from memory (an approximate title is a citation that looks
+precise and is not), and escape any `[`, `]`, `(` or `)` it contains, or the link will not
+render. To delete a resource: `temper resource delete <ref> [--force]`.
 
 ## Editing Frontmatter vs Body — Avoid the stdin Footgun
 
@@ -299,45 +225,31 @@ inside a redirected loop:
 # body with the leftover lines; one resource clobbered, the rest skipped, no error.
 while read n ref; do temper resource update "$ref" --title "…"; done < refs.txt
 ```
-
 Rewrite a body only with an explicit, intended `cat file.md | temper resource
-update <ref>` (or `--body @file.md`, which always wins over stdin). For per-block
-provenance/attribution and the segmented `ingest_*` lifecycle, read `reference.md`
-→ *Block-Grain Ingest & Attribution*. Full body-source precedence is in
-`reference.md` → *Body Source*.
+update <ref>` (or `--body @file.md`, which always wins over stdin). Full
+precedence table: `reference.md` → *Body Source*.
 
 **A body write replaces the WHOLE body, so verify what you are about to send.**
-`show` hands you a *snapshot*, and the gap between reading it and writing it back
-is where content disappears — to another session, another machine, or your own
-splice. Both happened in one session: a concurrent edit from a second machine was
-nearly overwritten, and then a single-section edit that spliced on a heading
-silently truncated everything after it. The second had no concurrency at all.
+`show` hands you a *snapshot*; the gap between reading it and writing it back is
+where content disappears — to another session, another machine, or your own splice.
 
-- **Re-read immediately before writing**, not once at the start of the work. Edit
-  a scratch copy, then re-`show` and re-apply to what is actually stored now.
-- **Assert at BOTH ends of a splice.** Confirming your new text landed says
-  nothing about what it displaced. Check that the content you did *not* intend to
-  touch survived, and prefer counting sections or naming markers over trusting a
-  byte count.
-- **Prefer the narrowest write.** One line spliced into a freshly-read body beats
-  regenerating a document you did not author.
+- **Re-read immediately before writing**, not once at the start of the work
+- **Assert at BOTH ends of a splice** — confirming your new text landed says nothing
+  about what it displaced; prefer counting sections or naming markers over trusting a
+  byte count
+- **Prefer the narrowest write** — one spliced line beats regenerating a document you
+  did not author
 
-This is operating discipline, not a lock. Cloud writes are **not** mutexed, and
-deliberately so — locking them would be overkill for essentially every workflow
-here, and the same care is what a stale local edit needs anyway.
+This is operating discipline, **not a lock** — cloud writes are deliberately not mutexed,
+and the same care is what a stale local edit needs anyway.
 
 ## Cognitive Maps
 
 A **context** homes resources as they are; a **cognitive map** homes *distilled nodes* in a
-telos-governed graph (nodes · edges · facets · regions). They share storage but mean
-different things — a map node is a **new** resource that distills from its source(s), never
-the same row. Authoring into a map (the authored-4 under an invocation envelope,
-provenance, fold-then-recreate supersession, the access model, and cross-map linking) is
-its own discipline.
-
-When a task involves reading from or authoring into a map, **read `cognitive-maps.md`** —
-don't reconstruct the model from scratch. It cross-links the steward's `map-stewardship`
-skill for the exhaustive per-call mechanics.
+telos-governed graph — a map node is a **new** resource that distills from its source(s), never
+the same row. Anything touching a map — reading, and especially **authoring** into one (the
+authored-4 under an invocation envelope, provenance, fold-then-recreate supersession) — is its
+own discipline: **read `cognitive-maps.md`**, don't reconstruct the model from scratch.
 
 ## Subagent Dispatch
 
@@ -345,33 +257,29 @@ Before dispatching any subagent:
 1. Read `subagent-guidance.md`
 2. Include all applicable principles in the subagent prompt (verbatim, not summarized)
 3. Include project fundamentals from `guidance/fundamentals.md` if available
-3b. **If the subagent will write a plan, or write code from one, inject
-   `implementation-grounding.md` verbatim.** That is what it exists for, and it is the guidance
-   most often skipped.
+4. **If the subagent will write a plan, or write code from one, inject
+   `implementation-grounding.md` verbatim.** That is what it exists for, and it is the
+   guidance most often skipped.
+5. Include any user-selected plugin skills
 
-> **This applies to you, too.** When *you* write a plan in the main loop, nobody dispatches you, so
-> nothing injects anything — and that is exactly how an ungrounded plan gets authored and then
-> stamped "verified" by its own author. Load `implementation-grounding.md` and apply it to your own
-> drafting before you ask anyone else to follow it.
-4. Include any user-selected plugin skills
+> **This applies to you, too.** When *you* write a plan in the main loop, nobody dispatches
+> you, so nothing injects anything — and that is exactly how an ungrounded plan gets
+> authored and then stamped "verified" by its own author. Load `implementation-grounding.md`
+> and apply it to your own drafting before you ask anyone else to follow it.
 
-## Session Lifecycle
+**Skills and plugins are looked up on request, not on arrival.** The first time a session
+is about to dispatch a subagent — or the user asks about quality gates or available skills
+— scan `~/.claude/skills/` and `~/.claude/plugins/installed_plugins.json` (e.g.
+superpowers, LSP plugins, vercel), check auto-memory for skills the user said they rely
+on, present the list, and ask what subagents should use. Do not run this scan during
+session or task start.
 
-**Ending a session? Read `session-wrap.md` first** — it governs what the note must hold and how
-to write the handoff preamble; the calls themselves are below.
+## Session Lifecycle & Memories
 
-Read `session-lifecycle.md` for:
-- Session start checklist
-- Session end save pattern
-- Mid-session drift detection
-- Checkpoint prompts
+**Ending a session? Read `session-wrap.md` first** — it governs what the note must hold and how to
+write the handoff preamble; the save pattern lives in `session-lifecycle.md`, which also carries
+the session-start checklist, mid-session drift detection, and checkpoints.
 
-## Memories
-
-Read `memories.md` — this machine's `MEMORY.md` is a generated projection, not a hand-edited file.
-
-**Read it before assuming this machine's memories are in Temper.** `temper memory status` reports
-what is still local-only, and populating the store is `temper memory harvest` **then**
-`temper memory migrate` — in that order, because the takeover destroys the only copy of every
-curated title. `migrate` reconciles rather than bulk-imports: it is interactive by default and
-refuses to write with no terminal attached.
+**Read `memories.md` before assuming this machine's memories are in Temper** — `MEMORY.md` is a
+generated projection, not a hand-edited file, and `temper memory status` reports what is still
+local-only.

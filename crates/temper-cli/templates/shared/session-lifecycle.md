@@ -2,6 +2,9 @@
 
 ## Session Start
 
+**Runs only once the session's purpose is known** (see *Starting a session* / *On Session Start*
+in `SKILL.md`). If it is not known, ask before any of the reads below.
+
 **Open on standing state, not on narrative.** What is in force — active goals and their criteria —
 is the thing a new session needs. The previous session note is a *pointer* to an arc, not a
 description of where the work stands, and on a machine other than the one that wrote it, it can be

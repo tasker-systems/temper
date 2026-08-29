@@ -15,7 +15,7 @@ learn, evolve the roadmap, create the next task.
 1. **Read the task** — find it via `temper resource list --type task` (copy its `ref`), then run `temper resource show <ref>` to load the full task content.
 2. **Deep discovery** — cast a wide net:
    - `temper search "<relevant terms>"` across multiple angles
-   - `temper context` to review the current context landscape
+   - `temper context list` to review the current context landscape
    - Codebase exploration: read key files, trace data flows, map dependencies
    - Check recent sessions: `temper resource list --type session --context @me/<ctx>`
 3. **Map the problem space** — if the user has opted into a brainstorming skill, invoke
