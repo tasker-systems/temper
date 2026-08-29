@@ -8,7 +8,8 @@ RSpec.describe Temper::Validate do
     end
 
     it 'rejects anything that is not an absolute http(s) URL' do
-      ['', 'temperkb.io', '/api/relative', 'ftp://temperkb.io', 'http://'].each do |bad|
+      ['', 'temperkb.io', '/api/relative', 'ftp://temperkb.io',
+       'http://'].each do |bad|
         expect { described_class.require_endpoint(bad, name: 'base_url') }
           .to raise_error(ArgumentError), bad
       end
@@ -48,7 +49,8 @@ RSpec.describe Temper::Validate do
     end
 
     it 'refuses plaintext to anything else' do
-      ['http://temperkb.io', 'http://10.0.0.5:8080', 'http://192.168.1.10'].each do |url|
+      ['http://temperkb.io', 'http://10.0.0.5:8080',
+       'http://192.168.1.10'].each do |url|
         expect { described_class.require_endpoint(url, name: 'base_url') }
           .to raise_error(ArgumentError, /non-loopback/), url
       end
@@ -57,7 +59,7 @@ RSpec.describe Temper::Validate do
     it 'the opt-out is a keyword the caller has to write' do
       expect do
         described_class.require_endpoint('http://temperkb.io', name: 'base_url',
-                                                          allow_insecure_http: true)
+                                                               allow_insecure_http: true)
       end.not_to raise_error
     end
   end
@@ -78,41 +80,50 @@ RSpec.describe Temper::Validate do
       expect(described_class.loopback?('127.0.0.2.example.com')).to be(false)
     end
   end
-end
 
-RSpec.describe 'the seams' do
-  describe 'Temper.api_client' do
-    after { Temper.reset_connection! }
-
-    it 'refuses a plaintext non-loopback base_url where the client is built' do
-      Temper.reset_connection!
-      Temper.configure { |c| c.base_url = 'http://api.test' }
-      expect { Temper.api_client }.to raise_error(ArgumentError, /base_url is plaintext http/)
-    end
-
-    it 'allows it when configuration opts in deliberately' do
-      Temper.reset_connection!
-      Temper.configure do |c|
-        c.base_url = 'http://api.test'
-        c.allow_insecure_http = true
+  describe 'the seams' do
+    describe 'Temper.api_client' do
+      # `Temper.config` is a process-global memo and `allow_insecure_http`
+      # outlives each example — reset it both sides so random ordering cannot
+      # leak the opt-in from one test into its neighbour.
+      before do
+        Temper.reset_connection!
+        Temper.configure { |c| c.allow_insecure_http = nil }
       end
-      expect { Temper.api_client }.not_to raise_error
-    end
-  end
 
-  describe Temper::Credentials::ClientCredentials do
-    it 'refuses a plaintext non-loopback token URL at construction' do
-      expect do
-        described_class.new(token_url: 'http://idp.example.com/oauth/token',
-                            client_id: 'cid', client_secret: 'sec')
-      end.to raise_error(ArgumentError, /token_url is plaintext http/)
+      after do
+        Temper.reset_connection!
+        Temper.configure { |c| c.allow_insecure_http = nil }
+      end
+
+      it 'refuses a plaintext non-loopback base_url where the client is built' do
+        Temper.configure { |c| c.base_url = 'http://api.test' }
+        expect { Temper.api_client }.to raise_error(ArgumentError, /base_url is plaintext http/)
+      end
+
+      it 'allows it when configuration opts in deliberately' do
+        Temper.configure do |c|
+          c.base_url = 'http://api.test'
+          c.allow_insecure_http = true
+        end
+        expect { Temper.api_client }.not_to raise_error
+      end
     end
 
-    it 'accepts a loopback token URL without the opt-in' do
-      expect do
-        described_class.new(token_url: 'http://127.0.0.1:9999/oauth/token',
-                            client_id: 'cid', client_secret: 'sec')
-      end.not_to raise_error
+    describe Temper::Credentials::ClientCredentials do
+      it 'refuses a plaintext non-loopback token URL at construction' do
+        expect do
+          described_class.new(token_url: 'http://idp.example.com/oauth/token',
+                              client_id: 'cid', client_secret: 'sec')
+        end.to raise_error(ArgumentError, /token_url is plaintext http/)
+      end
+
+      it 'accepts a loopback token URL without the opt-in' do
+        expect do
+          described_class.new(token_url: 'http://127.0.0.1:9999/oauth/token',
+                              client_id: 'cid', client_secret: 'sec')
+        end.not_to raise_error
+      end
     end
   end
 end

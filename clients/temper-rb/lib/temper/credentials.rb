@@ -63,7 +63,7 @@ module Temper
         # The client_secret goes on the wire to this URL on every mint, so the
         # scheme is checked at construction -- refused here, not flagged per mint.
         Validate.require_endpoint(token_url, name: 'token_url',
-                                                 allow_insecure_http: allow_insecure_http)
+                                             allow_insecure_http: allow_insecure_http)
         @token_url = require_value(token_url, 'token_url')
         @client_id = require_value(client_id, 'client_id')
         @client_secret = require_value(client_secret, 'client_secret')

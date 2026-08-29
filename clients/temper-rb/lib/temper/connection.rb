@@ -72,7 +72,7 @@ module Temper
       # checked where the client is built, not per request. The opt-in is
       # configuration here (not a kwarg) because the gem's URL is process-wide.
       Validate.require_endpoint(config.base_url, name: 'base_url',
-                                               allow_insecure_http: config.allow_insecure_http)
+                                                 allow_insecure_http: config.allow_insecure_http)
     end
 
     def apply_endpoint(generated_config, base)

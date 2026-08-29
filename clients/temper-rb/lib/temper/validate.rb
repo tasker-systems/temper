@@ -33,45 +33,13 @@ module Temper
     # keyword a caller has to write, which is the whole point: it must not be a
     # typo away.
     def require_endpoint(value, name:, allow_insecure_http: false)
-      raise ArgumentError, "#{name} must be a non-empty String" unless value.is_a?(String) && !value.empty?
-
-      # URI.parse refuses most malformed input; ASCII whitespace and control
-      # characters are refused up front (with the parser catching anything
-      # non-ASCII) rather than normalized: a URL with an embedded tab or
-      # newline is not a URL the caller wrote, and silently cleaning it hides
-      # the mistake.
-      return bad_chars(value, name) if value.match?(/[\s[:cntrl:]]/)
-
+      ensure_non_empty_string(value, name)
+      refuse_control_characters(value, name)
       uri = parse(value, name)
-
-      # URI.parse hands back URI::FTP, URI::MailTo and friends just as happily;
-      # only the two schemes that can protect a credential are accepted, and
-      # only with a host.
-      unless (uri.is_a?(URI::HTTP) || uri.is_a?(URI::HTTPS)) && !uri.host.to_s.empty?
-        raise ArgumentError, "#{name} must be an absolute http(s) URL, got #{value.inspect}"
-      end
-
-      # `uri.user` is nil for `host:port`, so this catches only a real userinfo
-      # section. Refused rather than dropped: a caller who wrote credentials
-      # into the URL meant them to authenticate something, and quietly
-      # discarding them would produce a 401 whose cause is invisible.
-      if uri.user || uri.password
-        raise ArgumentError,
-              "#{name} must not carry userinfo (user:password@); pass credentials to ClientCredentials instead"
-      end
-
-      if uri.query || uri.fragment
-        raise ArgumentError,
-              "#{name} must be an origin (optionally with a path prefix), not a URL with a query or fragment"
-      end
-
-      if uri.scheme == 'http' && !(allow_insecure_http || loopback?(uri.host))
-        raise ArgumentError,
-              "#{name} is plaintext http to a non-loopback host, which would put the bearer token " \
-              'and client_secret on the wire in the clear; use https, or pass ' \
-              'allow_insecure_http: true to accept that deliberately'
-      end
-
+      ensure_http_scheme(uri, value, name)
+      refuse_userinfo(uri, name)
+      refuse_query_or_fragment(uri, name)
+      refuse_plaintext(uri, name, allow_insecure_http)
       uri
     end
 
@@ -89,20 +57,71 @@ module Temper
       LOOPBACK_NAMES.include?(host) || host.end_with?('.localhost')
     end
 
+    def ensure_non_empty_string(value, name)
+      return if value.is_a?(String) && !value.empty?
+
+      raise ArgumentError, "#{name} must be a non-empty String"
+    end
+
+    # URI.parse refuses most malformed input; ASCII whitespace and control
+    # characters are refused up front (with the parser catching anything
+    # non-ASCII) rather than normalized -- silently cleaning a URL hides the
+    # mistake its author needs to see.
+    def refuse_control_characters(value, name)
+      return unless value.match?(/[\s[:cntrl:]]/)
+
+      raise ArgumentError, "#{name} must not contain whitespace or control characters"
+    end
+
     def parse(value, name)
       uri = URI.parse(value)
-      # Ruby's URI accepts a port outside 0..65535 without complaint; the
+      # Ruby's URI accepts a port outside 0..65535 without complaint; such an
       # address is not usable, so it meets the same message as a parse failure.
-      unless uri.port.to_i.between?(0, 65_535)
-        raise ArgumentError, "#{name} is not a parseable URL: #{value.inspect}"
-      end
+      port_usable = uri.port.to_i.between?(0, 65_535)
+      raise ArgumentError, "#{name} is not a parseable URL: #{value.inspect}" unless port_usable
+
       uri
     rescue URI::InvalidURIError, URI::InvalidComponentError, URI::BadURIError
       raise ArgumentError, "#{name} is not a parseable URL: #{value.inspect}"
     end
 
-    def bad_chars(value, name)
-      raise ArgumentError, "#{name} must not contain whitespace or control characters"
+    # URI.parse hands back URI::FTP, URI::MailTo and friends just as happily;
+    # only the two schemes that can protect a credential are accepted, and
+    # only with a host.
+    def ensure_http_scheme(uri, value, name)
+      return if (uri.is_a?(URI::HTTP) || uri.is_a?(URI::HTTPS)) && !uri.host.to_s.empty?
+
+      raise ArgumentError, "#{name} must be an absolute http(s) URL, got #{value.inspect}"
+    end
+
+    # `uri.user` is nil for `host:port`, so this catches only a real userinfo
+    # section. Refused rather than dropped: a caller who wrote credentials
+    # into the URL meant them to authenticate something, and quietly
+    # discarding them would produce a 401 whose cause is invisible.
+    def refuse_userinfo(uri, name)
+      return unless uri.user || uri.password
+
+      raise ArgumentError,
+            "#{name} must not carry userinfo (user:password@); pass credentials to ClientCredentials instead"
+    end
+
+    def refuse_query_or_fragment(uri, name)
+      return unless uri.query || uri.fragment
+
+      raise ArgumentError,
+            "#{name} must be an origin (optionally with a path prefix), not a URL with a query or fragment"
+    end
+
+    # The rule and its opt-out, named in the message so the refusal teaches
+    # both ways out.
+    def refuse_plaintext(uri, name, allow_insecure_http)
+      return unless uri.scheme == 'http'
+      return if allow_insecure_http || loopback?(uri.host)
+
+      raise ArgumentError,
+            "#{name} is plaintext http to a non-loopback host, which would put the bearer token " \
+            'and client_secret on the wire in the clear; use https, or pass ' \
+            'allow_insecure_http: true to accept that deliberately'
     end
   end
 end
