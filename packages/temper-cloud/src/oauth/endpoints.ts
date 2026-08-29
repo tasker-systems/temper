@@ -525,22 +525,32 @@ async function issueTokenPair(
   };
 }
 
-/** Reads client credentials from HTTP Basic (preferred, RFC 6749 §2.3.1) or the form body. */
+/**
+ * Reads client credentials from HTTP Basic (preferred, RFC 6749 §2.3.1) or the form body.
+ *
+ * `via` records which presentation form the caller used — the round-2 through-path datum
+ * ("which client-auth method Connect actually presents at /oauth/token") is read off this,
+ * because the verification itself is deliberately form-agnostic.
+ */
 function readClientCredentials(
   req: Request,
   form: FormData,
-): { clientId: string; clientSecret: string } | null {
+): { clientId: string; clientSecret: string; via: "basic" | "post" } | null {
   const auth = req.headers.get("authorization");
   if (auth?.startsWith("Basic ")) {
     const decoded = Buffer.from(auth.slice("Basic ".length), "base64").toString("utf8");
     const sep = decoded.indexOf(":");
     if (sep > 0) {
-      return { clientId: decoded.slice(0, sep), clientSecret: decoded.slice(sep + 1) };
+      return {
+        clientId: decoded.slice(0, sep),
+        clientSecret: decoded.slice(sep + 1),
+        via: "basic",
+      };
     }
   }
   const clientId = String(form.get("client_id") ?? "");
   const clientSecret = String(form.get("client_secret") ?? "");
-  return clientId && clientSecret ? { clientId, clientSecret } : null;
+  return clientId && clientSecret ? { clientId, clientSecret, via: "post" } : null;
 }
 
 /**
@@ -708,6 +718,20 @@ export async function handleToken(req: Request, db: NeonClient): Promise<Respons
     if (!creds) {
       return oauthError("invalid_request");
     }
+    // Recorded BEFORE verification, so a refused exchange leaves the same datum as a
+    // successful one: what was presented, not just what was accepted. The secret itself is
+    // never logged — `via`, the client id, and any scope/resource parameters are the
+    // measurement, not the credential.
+    logger.info(
+      {
+        client_id: creds.clientId,
+        client_auth: creds.via,
+        ...(form.get("scope") ? { scope: String(form.get("scope")) } : {}),
+        ...(form.get("resource") ? { resource: String(form.get("resource")) } : {}),
+        ...(form.get("authorization_details") ? { authorization_details_present: true } : {}),
+      },
+      "token: client_credentials exchange presented",
+    );
     if (!(await verifyMachineSecret(db, creds.clientId, creds.clientSecret))) {
       return oauthError("invalid_client", 401);
     }
