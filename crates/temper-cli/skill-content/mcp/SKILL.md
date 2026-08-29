@@ -46,10 +46,8 @@ This file is the router. Read a supporting file when the work calls for it, not 
 | `data-artifacts.md` | **Before storing structured data** — when to commit a data artifact vs. writing into a resource body, and the selection vocabulary |
 | `outcome-registers.md` | **Authoring or amending a goal**, or deciding whether a criterion belongs on one |
 
-> **Read these as principles, not checklists.** Each carries a worked example from the incident that
-> produced it — evidence **for** the principle, never the **scope of** it. *"This guidance doesn't
-> cover my case"* is the failure mode itself, not a finding; when you reach it, ask what the
-> principle is **for**.
+> **Read these as principles, not checklists**: a worked example is evidence *for* its principle,
+> never the scope of it.
 
 ## Outcome Discipline — applies to every task, whether or not you author a goal
 
@@ -185,9 +183,8 @@ Before dispatching any subagent:
 3. If the subagent will write a plan, or write code from one, inject `implementation-grounding.md`
    verbatim. That is what it is for, and it is the one most often skipped.
 
-> **This applies to you, too.** When *you* write a plan, nobody dispatches you, so nothing injects
-> anything — and that is exactly how an ungrounded plan gets authored and then stamped "verified" by
-> its own author.
+> **This applies to you, too.** Nobody dispatches you in the main loop — load
+> `implementation-grounding.md` yourself before writing a plan.
 
 **Skills and plugins are looked up on request, not on arrival.** If the client exposes skills or
 plugins, discover what exists when a dispatch is imminent — or when the user asks about quality

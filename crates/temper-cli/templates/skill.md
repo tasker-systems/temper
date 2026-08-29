@@ -18,12 +18,8 @@ This is a modular skill. SKILL.md (this file) is the router — it tells you wha
 read and when. Behavioral content lives in supporting files. Do NOT read all files
 upfront; read only what the current task requires.
 
-**Read everything as principles, not checklists.** Each file carries a worked example from the
-incident that produced it. The example is **evidence for** the principle, never the **scope of**
-it — so *"this guidance doesn't cover my case"* is the failure mode itself, not a finding, and
-*"ritual A misses this, ritual B misses this, so I'll add ritual C"* is that failure mode
-mid-sentence. When you get there, stop and ask what the principle is **for**. It almost always
-already covers you.
+**Read everything as principles, not checklists**: a worked example is evidence *for* its
+principle, never the scope of it.
 
 ### Supporting Files
 - `reference.md` — CLI commands, stages, mode/effort, listing flags, body-source precedence
@@ -47,9 +43,8 @@ already covers you.
 One file per mode/effort combination. Read only the one that matches the current task.
 
 ### Extension Files (`guidance/`)
-**Read every file in `guidance/` — all of them** (when an entry point below says to). These are
-user-created; each one exists because something went wrong once. `guidance/fundamentals.md`
-contains project-specific principles if it exists.
+The project's own rules — `guidance/fundamentals.md` holds its conventions if it exists. Read
+them before substantive work in a project; `/temper init` offers to create them where missing.
 
 ## Outcome Discipline — applies to every task, whether or not you author a goal
 
@@ -79,12 +74,9 @@ There is no `task start` CLI command; the sequence is:
 1. Resolve the task's ref: `temper resource list --type task --context @me/<ctx>`, find the row matching `<slug>`, copy its `ref`. Read it via `temper resource show <ref>` — extract mode and effort
 2. Move the task to in-progress: `temper resource update <ref> --stage in-progress`
 3. If mode or effort is missing, ask: "What mode (plan/build) and effort (small/medium/large)?"
-4. Read `plan-verification.md`, `implementation-grounding.md`, and **every** file in `guidance/` —
-   as principles, not checklists. Apply *Outcome Discipline* above: clauses name no mechanism,
-   witnesses are authored during the build. If this task authors or amends a goal, read
-   `outcome-registers.md` first. Then check `guidance/fundamentals.md`: if it exists, apply its
-   principles; if it doesn't, offer "This context has no project fundamentals. Want to set them
-   up? (`/temper init`)"
+4. Apply *Outcome Discipline* above. Check `guidance/fundamentals.md`: apply it if present; if
+   not, offer "This context has no project fundamentals. Want to set them up? (`/temper init`)".
+   If this task authors or amends a goal, read `outcome-registers.md` first
 5. Read `workflows/{mode}-{effort}.md` and follow it
 
 ## On Task Resume
@@ -95,9 +87,7 @@ There is no `task start` CLI command; the sequence is:
    enough), copy that row's `ref`, then `temper resource show <ref>` — its "Next Steps" is where
    you resume
 4. If the task is not already in-progress, move it: `temper resource update <ref> --stage in-progress`
-5. Read `plan-verification.md`, `implementation-grounding.md`, and **every** file in `guidance/` —
-   as principles, not checklists. Apply *Outcome Discipline*; if this task authors or amends a
-   goal, read `outcome-registers.md` first
+5. Apply *Outcome Discipline*; if this task authors or amends a goal, read `outcome-registers.md` first
 6. Read `workflows/{mode}-{effort}.md` and continue from where the last session left off
 
 ## On Session Start
@@ -116,8 +106,8 @@ session ritual performed before the purpose is known is effort spent on the wron
    slug; otherwise continue as an open session.
 4. Proceed with the purpose. Load the heavy context **lazily**, when the work reaches it:
    - `workflows/{mode}-{effort}.md` — when the session's mode/effort is known
-   - `plan-verification.md`, `implementation-grounding.md`, and every file in `guidance/` —
-     when the work will write a plan, dispatch a subagent, or author a goal
+   - `plan-verification.md` / `implementation-grounding.md` — when writing or executing a plan,
+     or dispatching subagents
    - `outcome-registers.md` — before authoring or amending a goal
 5. At session end, save via:
    ```bash
@@ -262,10 +252,9 @@ Before dispatching any subagent:
    guidance most often skipped.
 5. Include any user-selected plugin skills
 
-> **This applies to you, too.** When *you* write a plan in the main loop, nobody dispatches
-> you, so nothing injects anything — and that is exactly how an ungrounded plan gets
-> authored and then stamped "verified" by its own author. Load `implementation-grounding.md`
-> and apply it to your own drafting before you ask anyone else to follow it.
+> **This applies to you, too.** In the main loop nobody injects anything into you — load
+> `implementation-grounding.md` yourself, and apply it to your own drafting, before you write a
+> plan or ask anyone else to follow one.
 
 **Skills and plugins are looked up on request, not on arrival.** The first time a session
 is about to dispatch a subagent — or the user asks about quality gates or available skills
