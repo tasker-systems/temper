@@ -2217,6 +2217,23 @@ mod tests {
         let config = test_config();
         let skill_dir = dir.path().join("skill-output");
 
+        // install() hashes the global config (it bakes the hash into SKILL.md), so point
+        // TEMPER_GLOBAL_CONFIG at a minimal file and HOME at the tempdir. Without these the
+        // test passes only on machines that happen to have a global config — which is exactly
+        // how it reached CI green-local/red-remote.
+        let global_config = dir.path().join("global-config.toml");
+        std::fs::write(&global_config, "[vault]\npath = \"/tmp/test-vault\"\n").unwrap();
+        let env = vec![
+            (
+                "TEMPER_GLOBAL_CONFIG".to_string(),
+                Some(global_config.to_string_lossy().into_owned()),
+            ),
+            (
+                "HOME".to_string(),
+                Some(dir.path().to_string_lossy().into_owned()),
+            ),
+        ];
+
         let guidance = skill_dir.join("guidance");
         std::fs::create_dir_all(&guidance).unwrap();
 
@@ -2230,21 +2247,23 @@ mod tests {
         )
         .unwrap();
 
-        install(&config, &skill_dir, SkillTarget::Agents).unwrap();
+        temp_env::with_vars(env, || {
+            install(&config, &skill_dir, SkillTarget::Agents).unwrap();
 
-        assert!(
-            !stale.exists(),
-            "the byte-identical installer-era duplicate must be removed"
-        );
-        assert!(
-            edited.exists(),
-            "a guidance file the user has modified is theirs — install must not touch it"
-        );
+            assert!(
+                !stale.exists(),
+                "the byte-identical installer-era duplicate must be removed"
+            );
+            assert!(
+                edited.exists(),
+                "a guidance file the user has modified is theirs — install must not touch it"
+            );
 
-        // Idempotent: a second install neither re-creates nor re-reports the removal.
-        let second = install(&config, &skill_dir, SkillTarget::Agents).unwrap();
-        assert!(second.removed_legacy.is_empty());
-        assert!(!stale.exists());
+            // Idempotent: a second install neither re-creates nor re-reports the removal.
+            let second = install(&config, &skill_dir, SkillTarget::Agents).unwrap();
+            assert!(second.removed_legacy.is_empty());
+            assert!(!stale.exists());
+        });
     }
 
     /// The exact bytes the old installer wrote into `guidance/` for `plan-verification.md` —
