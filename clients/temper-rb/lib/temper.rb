@@ -7,6 +7,10 @@ module Temper
   # Process-wide settings. Credentials are NOT here -- they are per-call (D12).
   class Configuration
     attr_accessor :base_url, :device_id
+    # Whether to accept a plaintext http base URL off the loopback interface,
+    # deliberately -- for a private network where TLS terminates elsewhere.
+    # Default nil (falsy); see Temper::Validate.require_endpoint.
+    attr_accessor :allow_insecure_http
   end
 
   class << self
@@ -26,6 +30,7 @@ end
 require 'temper/generated'
 require 'temper/version'
 require 'temper/errors'
+require 'temper/validate'
 require 'temper/credentials'
 require 'temper/connection'
 require 'temper/act'

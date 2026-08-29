@@ -2,6 +2,7 @@ import createClient, { type Client } from "openapi-fetch";
 
 import { createAuthedFetch, type FetchLike } from "./auth-fetch.js";
 import type { Credentials } from "./credentials.js";
+import { requireEndpoint } from "./validate.js";
 import type { paths } from "./generated/schema.js";
 
 export interface TemperClientOptions {
@@ -10,6 +11,12 @@ export interface TemperClientOptions {
   credentials: Credentials;
   /** The fetch to wrap — compose here to keep a caller-specific retry. Default: global `fetch`. */
   fetch?: FetchLike;
+  /**
+   * Accept a plaintext `http` origin off the loopback interface, deliberately —
+   * for a private network where TLS terminates elsewhere. Every request puts
+   * the bearer token on this URL; see `requireEndpoint`.
+   */
+  allowInsecureHttp?: boolean;
 }
 
 /**
@@ -35,6 +42,9 @@ export interface TemperClientOptions {
  * `if (error)` alone will not see them.
  */
 export function createTemperClient(opts: TemperClientOptions): Client<paths> {
+  // Checked here, once, before any request exists to carry the token — a
+  // plaintext origin refused at creation rather than flagged per request.
+  requireEndpoint(opts.baseUrl, "baseUrl", { allowInsecureHttp: opts.allowInsecureHttp });
   return createClient<paths>({
     baseUrl: opts.baseUrl,
     fetch: createAuthedFetch({

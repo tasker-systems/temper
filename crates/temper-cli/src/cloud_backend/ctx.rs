@@ -97,6 +97,10 @@ mod tests {
                     "TEMPER_GLOBAL_CONFIG",
                     Some(nonexistent_config.to_str().unwrap()),
                 ),
+                // A valid URL, so the unconfigured-cloud refusal does not
+                // shadow the token check this test exists for — both now
+                // fire at client construction, URL first.
+                ("TEMPER_API_URL", Some("https://temper.test")),
             ],
             || match assemble_cloud_backend(&config, "temper") {
                 Ok(_) => panic!("expected Err when no token, got Ok"),
