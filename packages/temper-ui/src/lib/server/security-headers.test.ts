@@ -42,4 +42,16 @@ describe('applySecurityHeaders', () => {
 
 		expect(headers.get('strict-transport-security')).not.toContain('preload');
 	});
+
+	/**
+	 * The content-security policy belongs to SvelteKit (`kit.csp` in svelte.config.js), which emits
+	 * it inside `resolve` with the per-request nonce its inline hydration script needs. Were it also
+	 * in this array, the hook would write a nonce-less policy over Kit's nonce-bearing one — and
+	 * every "is the header set" assertion would still pass while the page broke.
+	 */
+	it('does not carry the content-security policy — that is SvelteKit\u2019s to emit', () => {
+		const names = SECURITY_HEADERS.map(([name]) => name);
+
+		expect(names).not.toContain('content-security-policy');
+	});
 });
