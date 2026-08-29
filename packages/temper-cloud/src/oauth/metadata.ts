@@ -95,15 +95,49 @@ export function buildAuth0AsMetadata(cfg: {
 }
 
 /**
+ * The well-known path suffix RFC 8414 §3.1 has this instance's own issuer answer on.
+ *
+ * A pathless issuer (`https://temper.example.com`) answers at the bare well-known (suffix "");
+ * a path-bearing issuer (`https://host/tenants/acme`) answers at
+ * `/.well-known/oauth-authorization-server/tenants/acme` — the well-known inserted between
+ * host and path. Derived from the issuer the served document itself advertises, so the doc
+ * and the path it answers on cannot disagree.
+ */
+function issuerWellKnownSuffix(issuer: string): string {
+  try {
+    return new URL(issuer).pathname.replace(/^\/+|\/+$/g, "");
+  } catch {
+    // An unparsable issuer has bigger problems than its well-known path; treat it as
+    // pathless so the bare route still serves rather than 500ing the document away.
+    return "";
+  }
+}
+
+/**
  * `GET /.well-known/oauth-authorization-server` — the single RFC 8414 handler for BOTH
  * instance types (SAML/AS instances that set `AS_ISSUER`, and the legacy Auth0-fronted
  * instance that doesn't). This migrated the doc off the Rust MCP function
  * (`crates/temper-mcp/src/discovery.rs`) so a single shared `vercel.json` can serve the right
  * AS metadata per instance without env-conditional routing, which Vercel's static route table
  * can't express. The Auth0 branch below is byte-identical to the former Rust handler.
+ *
+ * The route also answers the RFC 8414 §3.1 path-suffixed form a conformant client computes
+ * for a path-bearing issuer. Only the suffix the advertised issuer actually implies is
+ * served; any other path 404s rather than serving a copy of this instance's document under
+ * a path it never claimed. The suffix arrives as the `issuer_path` query param because a
+ * `vercel.json` routes rewrite need not preserve the original path in `req.url`.
  */
-export async function handleAuthorizationServer(_req: Request): Promise<Response> {
+export async function handleAuthorizationServer(req: Request): Promise<Response> {
   const asIssuer = process.env.AS_ISSUER;
+  const requested = (new URL(req.url).searchParams.get("issuer_path") ?? "").replace(
+    /^\/+|\/+$/g,
+    "",
+  );
+  const expected = issuerWellKnownSuffix(asIssuer ?? requireEnv("AUTH_ISSUER"));
+  if (requested !== expected) {
+    return new Response("Not Found", { status: 404 });
+  }
+
   const body: AsMetadata | Auth0AsMetadata = asIssuer
     ? buildAsMetadata(asIssuer)
     : buildAuth0AsMetadata({

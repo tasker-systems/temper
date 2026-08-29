@@ -37,6 +37,7 @@
     { "src": "/api/internal-calls/health", "dest": "/api/internal" },
     { "src": "/internal/(.*)", "dest": "/api/internal" },
     { "src": "/.well-known/oauth-authorization-server", "dest": "/api/oauth/authorization-server" },
+    { "src": "/.well-known/oauth-authorization-server/(?<issuer_path>.*)", "dest": "/api/oauth/authorization-server?issuer_path=$issuer_path" },
     { "src": "/oauth/jwks", "dest": "/api/oauth/jwks" },
     { "src": "/oauth/authorize", "dest": "/api/oauth/authorize" },
     { "src": "/oauth/saml/login", "dest": "/api/oauth/saml/login" },

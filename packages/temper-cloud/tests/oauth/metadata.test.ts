@@ -118,3 +118,83 @@ describe("handleJwks", () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe("handleAuthorizationServer (RFC 8414 §3.1 path-suffixed form)", () => {
+  const originalAsIssuer = process.env.AS_ISSUER;
+  const originalAuthIssuer = process.env.AUTH_ISSUER;
+  const originalMcpBaseUrl = process.env.MCP_BASE_URL;
+  const originalAuthAudience = process.env.AUTH_AUDIENCE;
+
+  function requestFor(suffix: string): Request {
+    // The route hands the suffix over as a query param because a routes rewrite need not
+    // preserve the original path in req.url — the handler must read it there.
+    return new Request(
+      `https://temper.example.com/api/oauth/authorization-server?issuer_path=${suffix}`,
+    );
+  }
+
+  beforeEach(() => {
+    process.env.AS_ISSUER = "https://temper.example.com";
+    process.env.AUTH_ISSUER = "https://tenant.auth0.com";
+    process.env.MCP_BASE_URL = "https://temper.example.com";
+    process.env.AUTH_AUDIENCE = "https://api.temper.example.com";
+  });
+
+  afterEach(() => {
+    for (const [name, value] of [
+      ["AS_ISSUER", originalAsIssuer],
+      ["AUTH_ISSUER", originalAuthIssuer],
+      ["MCP_BASE_URL", originalMcpBaseUrl],
+      ["AUTH_AUDIENCE", originalAuthAudience],
+    ] as const) {
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    }
+  });
+
+  it("serves the bare well-known for a pathless issuer (unchanged behavior)", async () => {
+    const { handleAuthorizationServer } = await import("../../src/oauth/metadata.js");
+    const res = await handleAuthorizationServer(requestFor(""));
+    const body = (await res.json()) as { issuer: string };
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("application/json");
+    expect(body.issuer).toBe("https://temper.example.com");
+  });
+
+  it("serves the matching suffix when the issuer bears a path", async () => {
+    process.env.AS_ISSUER = "https://host.example.com/tenants/acme";
+    const { handleAuthorizationServer } = await import("../../src/oauth/metadata.js");
+    const res = await handleAuthorizationServer(requestFor("tenants/acme"));
+    const body = (await res.json()) as { issuer: string };
+
+    expect(res.status).toBe(200);
+    expect(body.issuer).toBe("https://host.example.com/tenants/acme");
+  });
+
+  it("404s a suffix the pathless issuer never claimed", async () => {
+    const { handleAuthorizationServer } = await import("../../src/oauth/metadata.js");
+    const res = await handleAuthorizationServer(requestFor("tenants/acme"));
+
+    expect(res.status).toBe(404);
+  });
+
+  it("404s every suffix but the issuer's own when the issuer bears a path", async () => {
+    process.env.AS_ISSUER = "https://host.example.com/tenants/acme";
+    const { handleAuthorizationServer } = await import("../../src/oauth/metadata.js");
+    const res = await handleAuthorizationServer(requestFor("tenants/other"));
+
+    expect(res.status).toBe(404);
+  });
+
+  it("404s suffixed requests on the Auth0 arm (the Auth0 domain is pathless)", async () => {
+    delete process.env.AS_ISSUER;
+    const { handleAuthorizationServer } = await import("../../src/oauth/metadata.js");
+    const res = await handleAuthorizationServer(requestFor("tenants/acme"));
+
+    expect(res.status).toBe(404);
+  });
+});
