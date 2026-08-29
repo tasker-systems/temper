@@ -66,6 +66,8 @@ async fn mcp_links_an_authenticated_callers_trace_and_no_one_elses(pool: sqlx::P
             redirect_uris: vec![],
             allow_localhost: true,
         },
+        as_mode: false,
+        connect_dcr_enabled: false,
     };
     let app = temper_mcp::build_router(state, mcp_config);
 

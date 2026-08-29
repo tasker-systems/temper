@@ -381,6 +381,130 @@ pub async fn issue(
     })
 }
 
+/// The registrar of record for unattended mints: the Connect DCR endpoint itself, standing in
+/// where no authenticated human caller exists. A fixed-handle agent profile, lazy-ensured on
+/// first use — same shape as the canonical `system` actor the boot-seed creates
+/// (`20260624000003_canonical_seed.sql`), born in the service rather than a migration so the
+/// row appears exactly when the surface that needs it does.
+const CONNECT_REGISTRAR_HANDLE: &str = "connect-dcr";
+
+/// Ensure the sentinel registrar profile exists and has its emitter entities, returning its id.
+///
+/// Idempotent under concurrency the same way [`profile_service::provision_profile_entities`]
+/// is: the handle is UNIQUE (`kb_profiles.handle`, canonical schema), the INSERT conflicts to
+/// a no-op, and the loser re-reads. Entities are `ON CONFLICT DO NOTHING`, so re-provisioning
+/// an existing sentinel is a no-op too.
+async fn ensure_connect_registrar(conn: &mut sqlx::PgConnection) -> ApiResult<ProfileId> {
+    let inserted = sqlx::query_scalar!(
+        r#"INSERT INTO kb_profiles (id, handle, display_name, email, preferences)
+           VALUES ($1, $2, 'Connect DCR endpoint', NULL, '{}')
+           ON CONFLICT (handle) DO NOTHING
+           RETURNING id"#,
+        Uuid::now_v7(),
+        CONNECT_REGISTRAR_HANDLE,
+    )
+    .fetch_optional(&mut *conn)
+    .await?;
+
+    let id = match inserted {
+        Some(id) => {
+            profile_service::provision_profile_entities(&mut *conn, id, CONNECT_REGISTRAR_HANDLE)
+                .await?;
+            id
+        }
+        None => {
+            sqlx::query_scalar!(
+                r#"SELECT id FROM kb_profiles WHERE handle = $1"#,
+                CONNECT_REGISTRAR_HANDLE,
+            )
+            .fetch_one(&mut *conn)
+            .await?
+        }
+    };
+
+    Ok(ProfileId::from(id))
+}
+
+/// Mint a machine credential for a Vercel Connect connector via RFC 7591 dynamic client
+/// registration (the AS-mode arm of the Connect provider surface, task 01a04f94).
+///
+/// [`issue`]'s structural twin with the one difference that defines it: **there is no human
+/// caller**. A DCR request arrives from Connect with no authenticated temper principal, so
+/// there is no authority to resolve reach against — and none is conferred:
+///
+/// - **Empty reach by construction.** No owner team, no team enrollments, no grants. Whatever
+///   `trg_sync_system_membership` auto-joins under the instance's access mode applies, exactly
+///   as it does to every new profile — and post-D11 that enrollment confers no access at all.
+/// - **Born Denied** (D11), with the sentinel registrar as the ledger's actor. The containment
+///   invariant holds trivially and provably: a Connect-minted credential's reach is a subset of
+///   every tenant owner's authority because it is empty, and stays empty until a tenant admin
+///   grants standing through the ordinary machinery. Growth-without-provisioning and
+///   no-cross-context-reuse are enforced at that grant, not at this mint.
+/// - **`registered_by_profile_id` is the sentinel** — `kb_machine_clients` requires a registrar
+///   (NOT NULL, `20260711000010`), and "the Connect DCR endpoint" is the honest attribution of
+///   an unattended mint. The machine's own profile must NOT stand in here: a self-registered
+///   row is the attribution hole `provision`'s actor note describes.
+///
+/// The secret's SHA-256 hex is byte-identical to the TS AS's `hashToken`, so the plaintext
+/// returned once here verifies at `/oauth/token` (`endpoints.ts` client_credentials arm).
+pub async fn issue_connect(
+    pool: &PgPool,
+    label: &str,
+) -> ApiResult<temper_core::types::machine::IssuedMachineCredential> {
+    let client_id = crate::auth::secret::mint_client_id();
+    let secret = crate::auth::secret::mint_secret();
+
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to begin transaction: {e}")))?;
+
+    let registrar = ensure_connect_registrar(&mut tx).await?;
+
+    let (profile_id, handle) = profile_service::create_agent_profile_and_link(&mut tx, &client_id)
+        .await
+        .map_err(|e| map_duplicate_from_conflict(e, &client_id))?;
+
+    profile_service::provision_profile_entities(&mut tx, profile_id, &handle).await?;
+
+    let id = sqlx::query_scalar!(
+        r#"INSERT INTO kb_machine_clients
+               (client_id, issuer, label, profile_id, team_id, registered_by_profile_id, secret_hash)
+           VALUES ($1, 'temper', $2, $3, NULL, $4, $5)
+           RETURNING id"#,
+        client_id,
+        label,
+        profile_id,
+        *registrar,
+        secret.hash,
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|e| map_duplicate(e, &client_id))?;
+
+    // D11 — the unattended door births Denied too. It is exactly the "carelessly-added door"
+    // the whole-surface property guards against: three mint doors (provision, issue, DCR),
+    // one born-Denied rule. The actor is the sentinel registrar, so the ledger says who — or
+    // rather what — registered this machine.
+    sqlx::query_scalar!(
+        "SELECT principal_standing_apply($1,'provision','denied',$2,'connect dcr')",
+        profile_id,
+        *registrar,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+
+    tx.commit()
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to commit transaction: {e}")))?;
+
+    let client = machine_client_service::get(pool, id).await?;
+    Ok(temper_core::types::machine::IssuedMachineCredential {
+        client,
+        client_secret: secret.plaintext,
+    })
+}
+
 /// Point a fresh `client_id` at an EXISTING agent profile, revoking the old row in the
 /// same transaction unless an overlap window was requested (D8).
 ///
@@ -1221,5 +1345,97 @@ mod tests {
             provisions, 2,
             "both mint doors must land on the registrar's own actor axis, not the machine's",
         );
+    }
+
+    /// The unattended door mints a credential that is INERT at birth — the containment
+    /// invariant (spec Component 3) holding by construction rather than by inspection.
+    ///
+    /// Every assertion here is one half of "reach ⊆ every tenant owner's authority": no owning
+    /// team, no grants, and a standing row that says `denied`. What is deliberately NOT
+    /// asserted is team membership: under `open` access mode `trg_sync_system_membership`
+    /// auto-joins every new profile to the gating team, exactly as it does for `issue`, and
+    /// post-D11 that enrollment confers no access — the standing row is the authority.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn connect_dcr_mints_an_inert_temper_credential(pool: PgPool) {
+        let cred = svc::issue_connect(&pool, "vercel-connect: acme prod")
+            .await
+            .expect("connect dcr mint");
+
+        assert!(
+            cred.client.client_id.starts_with("tmpr_"),
+            "temper mints the id"
+        );
+        assert_eq!(cred.client.issuer, "temper");
+        assert_eq!(cred.client.label, "vercel-connect: acme prod");
+        assert_eq!(cred.client.team_id, None, "an unattended mint owns no team");
+        assert!(!cred.client_secret.is_empty(), "plaintext returned once");
+
+        // The registrar is the sentinel, not the machine itself — a self-registered row is
+        // the attribution hole `provision`'s actor note describes.
+        let registrar_handle = sqlx::query_scalar!(
+            "SELECT handle FROM kb_profiles WHERE id = $1",
+            cred.client.registered_by_profile_id,
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("registrar profile");
+        assert_eq!(registrar_handle, "connect-dcr");
+
+        // The stored hash is the SHA-256 of the returned plaintext — the exact shape the TS
+        // AS's `verifyMachineSecret` compares against at /oauth/token.
+        let stored: Option<String> = sqlx::query_scalar!(
+            "SELECT secret_hash FROM kb_machine_clients WHERE id = $1",
+            cred.client.id,
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("row");
+        assert_eq!(
+            stored.as_deref(),
+            Some(crate::auth::secret::sha256_hex(&cred.client_secret).as_str()),
+        );
+
+        // Born Denied (D11): the standing row exists and refuses.
+        let standing = sqlx::query_scalar!(
+            "SELECT state FROM kb_principal_standing WHERE profile_id = $1",
+            cred.client.profile_id,
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("a mint must write a standing row, not rely on absence-denies");
+        assert_eq!(standing, "denied");
+
+        // No reach: zero grants name this profile as principal.
+        let grants = sqlx::query_scalar!(
+            "SELECT count(*) FROM kb_access_grants \
+              WHERE principal_table = 'kb_profiles' AND principal_id = $1",
+            cred.client.profile_id,
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("count grants");
+        assert_eq!(grants, Some(0), "an unattended mint confers no grants");
+    }
+
+    /// The sentinel is ensured once and reused — two mints attribute to one registrar row.
+    ///
+    /// Bitten by an ensure that INSERTs unconditionally: the second mint would 500 on the
+    /// UNIQUE(handle) constraint instead of minting.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn connect_dcr_reuses_one_sentinel_registrar(pool: PgPool) {
+        let first = svc::issue_connect(&pool, "one").await.expect("first mint");
+        let second = svc::issue_connect(&pool, "two").await.expect("second mint");
+
+        assert_eq!(
+            first.client.registered_by_profile_id, second.client.registered_by_profile_id,
+            "every unattended mint attributes to the same sentinel"
+        );
+
+        let sentinels =
+            sqlx::query_scalar!("SELECT count(*) FROM kb_profiles WHERE handle = 'connect-dcr'",)
+                .fetch_one(&pool)
+                .await
+                .expect("count sentinels");
+        assert_eq!(sentinels, Some(1));
     }
 }

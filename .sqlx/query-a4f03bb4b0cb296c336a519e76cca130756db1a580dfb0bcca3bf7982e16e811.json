@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_machine_clients\n               (client_id, issuer, label, profile_id, team_id, registered_by_profile_id, secret_hash)\n           VALUES ($1, 'temper', $2, $3, NULL, $4, $5)\n           RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a4f03bb4b0cb296c336a519e76cca130756db1a580dfb0bcca3bf7982e16e811"
+}

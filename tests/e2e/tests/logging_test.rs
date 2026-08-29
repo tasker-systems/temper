@@ -314,6 +314,8 @@ async fn mcp_requests_produce_a_root_span(pool: sqlx::PgPool) {
             redirect_uris: vec![],
             allow_localhost: true,
         },
+        as_mode: false,
+        connect_dcr_enabled: false,
     };
     let app = temper_mcp::build_router(state, mcp_config);
 

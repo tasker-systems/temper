@@ -73,5 +73,7 @@ pub fn mcp_config() -> McpConfig {
             redirect_uris: vec![],
             allow_localhost: false,
         },
+        as_mode: false,
+        connect_dcr_enabled: false,
     }
 }

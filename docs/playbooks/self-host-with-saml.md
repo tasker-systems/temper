@@ -321,6 +321,7 @@ openssl genpkey -algorithm ed25519 -out as_signing_key.pem
 | `AS_SIGNING_KEY_PKCS8` | *(PEM contents)* | Ed25519 private signing key (PKCS#8 PEM). Keep secret. |
 | `AS_SIGNING_KID` | e.g. `as-2026-07` | Key id published in the JWKS. |
 | `AS_CLIENTS` | *(JSON, see below)* | **Required** allowlist of `client_id → [redirect_uris]`. Without it every `/oauth/authorize` is rejected (fail-closed). |
+| `AS_CONNECT_DCR` | unset (default) | **Opt-in**: enables real RFC 7591 dynamic client registration for Vercel Connect. `1`/`true` = on. When enabled, a registration proposing `https://connect.vercel.com/callback` mints a machine client (with a secret that verifies at `/oauth/token`'s `client_credentials` grant) instead of the static-client echo MCP clients get. Minted credentials are born with **no reach and denied standing** — a tenant admin confers authority later through the ordinary machinery. Refuses with 503 when a Connect-shaped registration arrives and this is unset. |
 | `AS_ACCESS_TTL_SECONDS` | `900` (default) | Access-token lifetime. |
 | `AS_REFRESH_TTL_SECONDS` | `2592000` (default, 30d) | Refresh-token lifetime. Slides on every rotation. |
 | `AS_REFRESH_CHAIN_MAX_SECONDS` | `7776000` (default, 90d) | **Absolute** lifetime of a refresh chain, from the last full SAML login. Rotation never moves it, so this — not the two TTLs above — is the bound on how long IdP-removed reach can persist. See [Limitations](#limitations). |

@@ -48,6 +48,36 @@ pub struct McpConfig {
     /// OAuth config: compiled in from `mcp-server.toml`, with the redirect-URI list replaced by
     /// the authoritative one on AS-mode instances.
     pub oauth: OAuthStaticConfig,
+
+    /// `AS_ISSUER` is set: this instance mints its own tokens (AS mode).
+    ///
+    /// Carried because the registration handler branches on it — the real DCR mint is an
+    /// AS-mode-only surface — and because `parse_mcp_config` already derives it to source the
+    /// redirect-URI allowlist. Reading `env::var` ad hoc in the handler would be a second,
+    /// drift-prone statement of the same signal `parse_auth_config` derives `AuthMode` from.
+    pub as_mode: bool,
+
+    /// `AS_CONNECT_DCR` is `1`/`true`: this instance accepts unattended DCR mints for
+    /// Connect-shaped registrations (the exact `https://connect.vercel.com/callback` redirect).
+    ///
+    /// Default **OFF**, deliberately. An unattended mint creates rows (a profile, an auth link,
+    /// a machine client) with no authenticated registrar, so it is an opt-in surface an operator
+    /// enables when they intend to connect a tenant to Vercel Connect — not a posture every
+    /// AS-mode instance silently acquires. With the gate off, a Connect-shaped registration is
+    /// refused (503) rather than falling through to the thin proxy, whose static-client echo is
+    /// the wrong answer for a client that will never authenticate as it.
+    pub connect_dcr_enabled: bool,
+}
+
+impl McpConfig {
+    /// True iff the real Connect DCR mint may serve on this deployment.
+    ///
+    /// The gate is meaningful only in AS mode: on an external-IdP instance a set `AS_CONNECT_DCR`
+    /// is inert (the mint writes `issuer='temper'` rows whose secrets only the temper AS's
+    /// `/oauth/token` verifies — an Auth0-fronted instance has no such endpoint).
+    pub fn connect_dcr_ready(&self) -> bool {
+        self.as_mode && self.connect_dcr_enabled
+    }
 }
 
 impl McpConfig {
@@ -115,10 +145,17 @@ pub fn parse_mcp_config(
         oauth.redirect_uris = authoritative.clone();
     }
 
+    // The TEMPER_ASYNC_EMBED idiom: `1`/`true` ⇒ on, anything else (including unset) ⇒ off.
+    let connect_dcr_enabled = lookup("AS_CONNECT_DCR")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
     Ok(McpConfig {
         mcp_base_url,
         mcp_client_id,
         oauth,
+        as_mode,
+        connect_dcr_enabled,
     })
 }
 
@@ -329,5 +366,49 @@ mod tests {
         .expect_err("a malformed registry must not boot");
 
         assert!(matches!(err, McpConfigError::AsClientsMalformed));
+    }
+
+    /// The Connect DCR gate defaults OFF, including on an AS-mode instance.
+    ///
+    /// An unattended mint creates rows with no authenticated registrar; acquiring that surface by
+    /// merely setting AS_ISSUER would make every AS-mode deployment opt-out of a door it never
+    /// opened. `connect_dcr_ready` composes both halves, so this also bites a deletion of the
+    /// `as_mode &&` conjunct — which would arm the mint on external-IdP instances.
+    #[test]
+    fn the_connect_dcr_gate_is_off_by_default_even_in_as_mode() {
+        let cfg = parse(as_mode(&[("AS_CLIENTS", AUTHORITATIVE)]))
+            .expect("an AS-mode instance boots without the gate");
+
+        assert!(cfg.as_mode);
+        assert!(!cfg.connect_dcr_enabled);
+        assert!(!cfg.connect_dcr_ready());
+    }
+
+    /// The gate follows the TEMPER_ASYNC_EMBED idiom: `1`/`true` ⇒ on, anything else ⇒ off.
+    #[test]
+    fn the_connect_dcr_gate_parses_the_async_embed_idiom() {
+        for (value, expected) in [("1", true), ("true", true), ("TRUE", true), ("yes", false)] {
+            let cfg = parse(as_mode(&[("AS_CONNECT_DCR", value)]))
+                .unwrap_or_else(|_| panic!("gate value {value} must not refuse the boot"));
+            assert_eq!(cfg.connect_dcr_enabled, expected, "gate value {value}");
+        }
+    }
+
+    /// A set gate is inert on an external-IdP instance.
+    ///
+    /// The mint writes `issuer='temper'` rows whose secrets verify only at the temper AS's
+    /// `/oauth/token`; an Auth0-fronted instance has no such endpoint, so the gate there arms
+    /// nothing. `connect_dcr_ready` must say so.
+    #[test]
+    fn a_set_gate_is_inert_on_an_external_idp_instance() {
+        let cfg = parse(vec![
+            ("MCP_BASE_URL", "https://temperkb.io".to_string()),
+            ("AS_CONNECT_DCR", "1".to_string()),
+        ])
+        .expect("an external-IdP instance boots with the gate set");
+
+        assert!(!cfg.as_mode);
+        assert!(cfg.connect_dcr_enabled);
+        assert!(!cfg.connect_dcr_ready());
     }
 }

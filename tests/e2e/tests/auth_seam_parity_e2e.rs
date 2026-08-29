@@ -70,6 +70,8 @@ async fn spawn_mcp_server(pool: &sqlx::PgPool) -> String {
             redirect_uris: vec![],
             allow_localhost: true,
         },
+        as_mode: false,
+        connect_dcr_enabled: false,
     };
     let router = temper_mcp::router::build_router(mcp_app_state(pool), mcp_config);
 

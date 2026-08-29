@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT principal_standing_apply($1,'provision','denied',$2,'connect dcr')",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "principal_standing_apply",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "4cbb48b2c2467129949e577121f414ddb3c0d599f9b40f03bd77f56349cb3f6b"
+}
