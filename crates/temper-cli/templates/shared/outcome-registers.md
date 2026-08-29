@@ -352,8 +352,8 @@ temper resource create --type task --title "…" --context @me/<ctx> \
 ## Doing it with the tools you have
 
 The register itself is **the goal's body** — write it as markdown sections. There is no
-section-skeleton tool on this surface: `describe_doc_type` returns the frontmatter JSON Schema and
-an `example_managed_meta`, which is metadata, not an outline. Take the headings from *The eight
+section-skeleton tool on this surface: `describe_schema` (view: `doc_type`) returns the frontmatter
+JSON Schema and an example, which is metadata, not an outline. Take the headings from *The eight
 elements* above.
 
 ```
@@ -407,12 +407,12 @@ downstream reader is that reader.
   **edge**, which is the only thing `resource list --type task --goal <ref>` filters on.
   `open_meta.witnesses.goal` is a **citation**. A task can carry one without the other — one does, and
   a clause migration built from `list --goal` silently missed it. **Pass `--goal` *and* write the
-  citation**, and when you enumerate a goal's tasks, do not trust either spelling alone.
-
-  `scripts/register-coverage.py <goal-ref>` reads the citation and compares the two, so you no longer
-  have to eyeball it. Note what the divergence usually *is*: not a missing edge, but an edge pointing
-  at a **different** goal, because a task may advance one goal while evidencing a clause of another —
-  and a resource gets only one `advances`→goal edge.
+  citation**, and when you enumerate a goal's tasks, do not trust either spelling alone. There is no
+  command that reconciles them, so the comparison is yours to make: list by `--goal`, then read
+  `open_meta.witnesses.goal` off the same set and diff the two by hand. Note what the divergence
+  usually *is*: not a missing edge, but an edge pointing at a **different** goal, because a task may
+  advance one goal while evidencing a clause of another — and a resource gets only one
+  `advances`→goal edge.
 - **`--open-meta` on `update` is a per-key PATCH, and the key is the unit.** Keys you do not supply
   are untouched, but a key you do supply is **replaced whole** — sending `{"witness":{"mode":"judged"}}`
   drops every other field of `witness`. Send the complete key value.

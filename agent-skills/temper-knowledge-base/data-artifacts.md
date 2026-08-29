@@ -126,7 +126,7 @@ data they retrieved conforms to anything the writer declared.
 ```
 Tool: commit_data_artifact
 Input: {
-  "resource": "<resource UUID>",
+  "resource_id": "<resource UUID>",
   "kind": "measurement",
   "intent": "current",
   "content": { ... },                 // a JSON value, not a string
@@ -135,11 +135,11 @@ Input: {
 }
 
 Tool: get_data_artifact
-Input: { "resource": "<resource UUID>", "artifact_id": "<artifact UUID>" }
+Input: { "artifact_id": "<artifact UUID>" }
 
 Tool: list_data_artifacts
 Input: {
-  "resource": "<resource UUID>",
+  "resource_id": "<resource UUID>",
   "kind": "measurement",              // optional filter
   "intent": "current",                // optional filter
   "include_folded": false             // optional, default false
@@ -152,14 +152,15 @@ string. The commit returns the artifact with its server-assigned ID, content has
 ```
 Tool: declare_data_artifact_shape
 Input: {
-  "context": "<context UUID>",
+  "home_type": "context",             // or "cogmap" — shapes are keyed per home
+  "home_id": "<home UUID>",
   "kind": "measurement",
-  "schema": { ... },                // a JSON Schema draft 2020-12 document
-  "enforcement": "advisory"         // "advisory" (default) or "enforcing"
+  "schema": { ... },                  // a JSON Schema draft 2020-12 document
+  "enforcement": "advisory"           // "advisory" (default) or "enforcing"
 }
 
 Tool: list_data_artifact_shapes
-Input: { "context": "<context UUID>" }
+Input: { "home_type": "context", "home_id": "<home UUID>" }
 
 Tool: get_data_artifact_shape
 Input: { "shape_id": "<shape UUID>" }

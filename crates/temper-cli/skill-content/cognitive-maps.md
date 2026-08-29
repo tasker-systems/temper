@@ -7,9 +7,10 @@ model from scratch.
 
 The exhaustive authoring mechanics (label vocabulary, edge kind/polarity/weight
 conventions, the "materially changed" judgment, the steward loop) live in the steward's
-**`map-stewardship`** skill — `packages/agent-workflows/steward/agent/skills/map-stewardship.md`
-in the temper repo. This file teaches the *model* and the human+agent flow; reach for
-`map-stewardship` for the per-call detail.
+**`map-stewardship`** skill where that skill exists. This file teaches the *model* and the
+human+agent flow; where you need per-call authoring detail and no steward skill is
+installed, derive the vocabulary from the map's own charter and existing nodes rather than
+inventing one.
 
 ## Map vs context — the duality (the crux)
 
@@ -46,9 +47,7 @@ resource, created into the map, that **distills** from one or more sources and c
 - **Context** — you are *doing* work: producing and tracking tasks, sessions, research.
 - **Cognitive map** — you want a *purpose-shaped distillation* of material: an understanding
   a telos decides the shape of. The same sources under a *different* telos yield a
-  *different* map — this is demonstrated, not asserted (two teloi over the same 8 docs
-  produced two distinct, each-telos-coherent node sets; see the telos-differentiation
-  findings). Reach for a map to **orient across a distilled understanding**, not to store
+  *different* map. Reach for a map to **orient across a distilled understanding**, not to store
   working artifacts.
 
 ## The telos-charter — read it first
@@ -115,10 +114,9 @@ from — rides on `--sources` (and, with `--sources-as-edges`, `derived_from` ed
 `managed_meta`. Neither belongs in a facet.
 
 **Materialize** (recompute regions) is `temper cogmap materialize <MAP> [--threshold N]`
-on the CLI, or `cogmap_materialize` / `cogmap_materialize_delta` on the agent surface. A
+on the CLI, or `cogmap_materialize` on the agent surface. A
 CONTEXT materializes the same way: `temper context materialize`, or `context_materialize` on the
-agent surface — the peer tool, registered 2026-08-24 after sitting implemented-but-unregistered.
-Regions only exist *after* a materialize.
+agent surface. Regions only exist *after* a materialize.
 
 **Whether a shape is still current** is `temper cogmap analytics <MAP>`, and a CONTEXT has the
 peer read: `temper context analytics <CONTEXT_REF>`, or `context_read` (view: analytics) on the
@@ -176,8 +174,9 @@ as labeled `edge assert`s:
 - a status node `settles →` or `concerns →` the concept it reports on, and `classifies →`
   the patterns a methodology sorts.
 
-(Those arrows are edge **labels** — pick the label vocabulary your map's `map-stewardship`
-conventions define.) The payoff shows at **materialize**: a status node about a topic joins
+(Those arrows are edge **labels** — pick the label vocabulary your map's charter and existing
+edges already use, and stay consistent with them.) The payoff shows at **materialize**: a
+status node about a topic joins
 the region of the concept it concerns.
 
 ### The act envelope — a hard invariant
@@ -193,9 +192,6 @@ An act missing them is real but **orphaned** — it will not appear under
 - **`confident`** — an explicit, dated decision or a direct claim the source states outright.
 - **`probable`** — a synthesis you drew across sources that they don't state verbatim.
 - **`tentative`** — thin or uncertain evidence; noted, not leaned on.
-
-(The same three bands appear in `map-stewardship`; this rubric is the missing "which band
-when" a charter-only author otherwise has to invent.)
 
 ### Breadth-with-confidence before depth
 
@@ -276,11 +272,11 @@ the node body (a plain `temper resource show <ref>` carries the tiers too, plus 
 
 ### Two authoring gotchas
 
-- **Use ASCII characters in node titles.** A non-ASCII title char once broke slug
-  generation and failed the create (bug B2, fixed in PR #287). The ASCII habit costs
-  nothing and stays safe regardless of which build a given map's server is running.
-- **Provenance belongs in `managed_meta`, never `open_meta`.** `temper-llm-model` once
-  landed in `open_meta` (bug B1, fixed in #287). You no longer stamp it by hand — but if
+- **Use ASCII characters in node titles.** Slug generation has broken on non-ASCII titles
+  before, failing the create. The ASCII habit costs nothing and stays safe regardless of
+  which build a given map's server is running.
+- **Provenance belongs in `managed_meta`, never `open_meta`.** A provenance key (`temper-llm-model`)
+  once landed in `open_meta` by mistake. You no longer stamp it by hand — but if
   you do pass it, pass it in `managed_meta`.
 
 ## Who may author — the access reality
@@ -292,9 +288,9 @@ Reading a map is **not** authoring it.
   **not** mere team membership.
 - **Modify an existing node** — needs modify-access **to that node**. Whether a
   container-level (map) write grant should *confer* node-level write is an **open
-  precedence decision** — task `019f3739` ("should container `can_write` confer node-level
-  `can_write`?"). The full human+agent re-distill flow's viability tracks that decision, so
-  don't assume a map-write grant lets you fold/supersede a node you don't own until it lands.
+  precedence decision**. The full human+agent re-distill flow's viability tracks that
+  decision, so don't assume a map-write grant lets you fold/supersede a node you don't
+  own until it lands.
 
 ## Cross-map — one map at a time, and a composition you run yourself
 
@@ -308,14 +304,12 @@ You have several visible maps. To draw on more than one:
   single anchor; pass at most one `--cogmap`."* Asking several maps at once is a
   composition, and you run it — one search per map, and you compare the results yourself.
 - **Cross-map pooling is not currently offered.** There is no flag that ranks regions from
-  several maps against one query. An earlier `--wayfind` / `--regions` pair did that and was
-  removed when the read path became two arms; nothing replaced it, and this page will not
-  pretend otherwise. If you need the pooled view, run the per-map searches and pool by hand.
+  several maps against one query. If you need the pooled view, run the per-map searches and
+  pool by hand.
 - **Cross-map linking is a capability, not an instinct.** An agent won't search neighboring
   maps unprompted. If you *want* a node to reference a concept already present in a visible
   neighbor rather than re-distilling it, **say so explicitly** — and name the maps, since
-  nothing will sweep them for you. When directed, it's high value (one pass asserted 16
-  quality cross-links and rejected 5 loose ones).
+  nothing will sweep them for you.
 
 ## Worked example — a human+agent re-distill
 

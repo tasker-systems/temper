@@ -97,6 +97,23 @@ fn binary_adjacent_candidates(exe_path: &std::path::Path) -> Vec<std::path::Path
     ]
 }
 
+/// The running exe with symlinks resolved, falling back to the unresolved path if the link
+/// cannot be canonicalized. See [`canonicalized_exe`] — the resolution is what the
+/// "next to the binary" searches hang off.
+#[allow(dead_code)]
+fn resolved_exe_path() -> Option<std::path::PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .map(|exe| canonicalized_exe(&exe))
+}
+
+/// `exe` with symlinks resolved, falling back to the raw path when canonicalization fails
+/// (exotic mounts, deleted components mid-run).
+#[allow(dead_code)]
+fn canonicalized_exe(exe: &std::path::Path) -> std::path::PathBuf {
+    std::fs::canonicalize(exe).unwrap_or_else(|_| exe.to_path_buf())
+}
+
 /// Linux fallback for when `temper` is symlinked onto PATH while the actual
 /// install lives at `~/.local/share/temper/`. On macOS, `dirs::data_local_dir()`
 /// resolves to `~/Library/Application Support/` (platform-idiomatic) — but the
@@ -163,8 +180,8 @@ fn init_ort_runtime() -> std::result::Result<(), String> {
                 .ok()
                 .map(std::path::PathBuf::from)
                 .or_else(|| {
-                    std::env::current_exe().ok().and_then(|exe| {
-                        resolve_dylib_from_candidates(&binary_adjacent_candidates(&exe))
+                    resolved_exe_path().as_deref().and_then(|exe| {
+                        resolve_dylib_from_candidates(&binary_adjacent_candidates(exe))
                     })
                 })
                 .or_else(|| resolve_dylib_from_candidates(&xdg_data_candidates()))
@@ -574,12 +591,36 @@ fn model_path_override() -> std::result::Result<Option<std::path::PathBuf>, Stri
 const MODEL_BASENAME: &str = "model_quantized.onnx";
 
 /// Candidate on-disk locations for the model, mirroring [`binary_adjacent_candidates`] for the ORT
-/// dylib: next to the binary, then the XDG install location a symlinked `temper` resolves back to.
+/// dylib: next to the binary (symlinks resolved — the PATH `temper` is a symlink into the install
+/// dir), then the XDG install location.
 #[cfg(feature = "embed-download")]
 fn model_candidates() -> Vec<std::path::PathBuf> {
+    let data_dir = dirs::data_local_dir();
+    model_candidates_for(
+        std::env::current_exe().ok().as_deref(),
+        data_dir.as_deref(),
+        std::path::PathBuf::from(env!("TEMPER_CHECKOUT_MODEL_PATH")),
+    )
+}
+
+/// [`model_candidates`] with the environment sources injected — the pure half, so the
+/// PATH-symlink layout is testable without being the running binary. The exe is canonicalized
+/// here (see [`canonicalized_exe`]): built raw, every candidate for a symlinked `temper` was
+/// wrong by exactly the install dir, and on macOS nothing else caught the model — the XDG
+/// candidate uses `dirs::data_local_dir()`, which is `~/Library/Application Support`, not the
+/// `~/.local/share` install.sh writes to. Embedding writes therefore failed with "model not
+/// found" on any macOS release install, from any shell, and reads never embed, so it stayed
+/// invisible. Resolving the symlink is the fix; the install layout is correct as shipped.
+#[cfg(feature = "embed-download")]
+fn model_candidates_for(
+    exe: Option<&std::path::Path>,
+    data_dir: Option<&std::path::Path>,
+    checkout_model: std::path::PathBuf,
+) -> Vec<std::path::PathBuf> {
     let mut out = Vec::new();
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
+    if let Some(exe) = exe {
+        let exe_dir = canonicalized_exe(exe);
+        if let Some(dir) = exe_dir.parent() {
             out.push(dir.join("models").join(MODEL_BASENAME));
             // `temper` symlinked onto PATH from an install dir one level up.
             if let Some(up) = dir.parent() {
@@ -587,7 +628,7 @@ fn model_candidates() -> Vec<std::path::PathBuf> {
             }
         }
     }
-    if let Some(data_dir) = dirs::data_local_dir() {
+    if let Some(data_dir) = data_dir {
         out.push(data_dir.join("temper").join("models").join(MODEL_BASENAME));
     }
     // Last resort: the model in the checkout this binary was BUILT from (baked by build.rs). This is
@@ -595,7 +636,7 @@ fn model_candidates() -> Vec<std::path::PathBuf> {
     // with no adjacent `models/`, and it is the only supported install on the platforms where
     // `install.sh` refuses to run. Guarded by `is_file()` and sha256-verified like any other
     // candidate, so on a machine that is not the build machine it simply misses.
-    out.push(std::path::PathBuf::from(env!("TEMPER_CHECKOUT_MODEL_PATH")));
+    out.push(checkout_model);
     out
 }
 
@@ -1493,6 +1534,56 @@ mod tests {
         assert!(
             err.contains("wrong model"),
             "the error must say which way it failed, so the fix is obvious: {err}"
+        );
+    }
+
+    /// **The PATH `temper` is a symlink into the install dir, and the model search must follow
+    /// it.** `current_exe()` returns the path as invoked — `~/.local/bin/temper`, not the
+    /// `~/.local/share/temper/temper` it points at — so candidates built from it raw missed
+    /// the install dir by exactly one level. On macOS the XDG fallback misses too
+    /// (`data_local_dir` is `~/Library/Application Support`, not `~/.local/share`), which is
+    /// how embedding writes failed with "model not found" on a fully correct release install.
+    /// This reproduces the layout and witnesses the candidates hitting it through the link.
+    #[test]
+    #[cfg(feature = "embed-download")]
+    fn model_candidates_follow_a_path_symlink_into_the_install_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let install = tmp.path().join("local/share/temper");
+        let bin = tmp.path().join("local/bin");
+        fs::create_dir_all(install.join("models")).unwrap();
+        fs::create_dir_all(&bin).unwrap();
+        let model = install.join("models").join(super::MODEL_BASENAME);
+        fs::write(&model, b"stub").unwrap();
+
+        // The PATH symlink: <tmp>/local/bin/temper -> <tmp>/local/share/temper/temper
+        let real_exe = install.join("temper");
+        fs::write(&real_exe, b"stub").unwrap();
+        let link = bin.join("temper");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real_exe, &link).unwrap();
+        #[cfg(not(unix))]
+        fs::copy(&real_exe, &link).unwrap();
+
+        let candidates = super::model_candidates_for(
+            Some(&link),
+            Some(&tmp.path().join("Library/Application Support")),
+            tmp.path().join("nowhere/on purpose"),
+        );
+
+        // Candidates are built from the CANONICALIZED exe, so expectations are canonicalized
+        // too (on macOS /tmp resolves to /private/tmp).
+        let expected_model = super::canonicalized_exe(&model);
+
+        // The model the install actually ships must be among the candidates...
+        assert!(
+            candidates.contains(&expected_model),
+            "candidates for a PATH-symlinked temper must reach the install dir's model; got {candidates:?}"
+        );
+        // ...and `find` (what build_session runs) must pick it without touching the fallback.
+        assert_eq!(
+            candidates.into_iter().find(|p| p.is_file()),
+            Some(expected_model),
+            "the installed model must be found before the checkout fallback"
         );
     }
 }

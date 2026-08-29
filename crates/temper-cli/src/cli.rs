@@ -2081,11 +2081,12 @@ pub enum SkillAction {
     /// Install skill directory and command wrapper
     Install {
         /// Which agent to install for. Determines the default skill directory and command
-        /// wrapper location: `claude` writes to `~/.claude/skills/temper/` +
+        /// wrapper location: `agents` writes the vendor-neutral `~/.agents/skills/temper/`
+        /// (no command wrapper); `claude` writes to `~/.claude/skills/temper/` +
         /// `~/.claude/commands/temper.md`; `opencode` writes to
         /// `~/.config/opencode/skills/temper/` + `~/.config/opencode/command/temper.md`.
-        /// Defaults to `claude` for back-compat.
-        #[arg(long, default_value = "claude")]
+        /// Defaults to `agents`.
+        #[arg(long, default_value = "agents")]
         target: SkillTarget,
 
         /// Override the skill install directory (overrides the target's default)
@@ -2095,8 +2096,8 @@ pub enum SkillAction {
     /// Check skill status
     Check {
         /// Which agent to check for. Determines the expected command-wrapper location.
-        /// Defaults to `claude`.
-        #[arg(long, default_value = "claude")]
+        /// Defaults to `agents`.
+        #[arg(long, default_value = "agents")]
         target: SkillTarget,
     },
     /// Emit the MCP (`agent-skills/`) projection into a directory.
@@ -2117,6 +2118,8 @@ pub enum SkillAction {
 /// format Claude Code does, via its Claude-Code-compat skill discovery).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum SkillTarget {
+    /// Vendor-neutral `~/.agents` — skill to `~/.agents/skills/temper/`, no command wrapper
+    Agents,
     /// Claude Code — skill to `~/.claude/skills/temper/`, wrapper to `~/.claude/commands/temper.md`
     Claude,
     /// opencode — skill to `~/.config/opencode/skills/temper/`, wrapper to `~/.config/opencode/command/temper.md`

@@ -14,7 +14,7 @@ trade-offs between approaches, creating a technical design for a subsystem chang
    directory, read it for project-specific conventions and architectural context.
 3. **Discovery** — search for related work and context:
    - `temper search "<relevant terms>"` to find related documents
-   - `temper context` to review the current context landscape
+   - `temper context list` to review the current context landscape
    - Check recent sessions for prior work in this area
 4. **Brainstorm** — if the user has opted into a brainstorming skill, invoke it to
    explore the problem space. Otherwise, work through these questions inline:

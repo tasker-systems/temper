@@ -48,13 +48,14 @@ Usage: temper skill install [OPTIONS]
 
 Options:
       --target <TARGET>
-          Which agent to install for. Determines the default skill directory and command wrapper location: `claude` writes to `~/.claude/skills/temper/` + `~/.claude/commands/temper.md`; `opencode` writes to `~/.config/opencode/skills/temper/` + `~/.config/opencode/command/temper.md`. Defaults to `claude` for back-compat
+          Which agent to install for. Determines the default skill directory and command wrapper location: `agents` writes the vendor-neutral `~/.agents/skills/temper/` (no command wrapper); `claude` writes to `~/.claude/skills/temper/` + `~/.claude/commands/temper.md`; `opencode` writes to `~/.config/opencode/skills/temper/` + `~/.config/opencode/command/temper.md`. Defaults to `agents`
 
           Possible values:
+          - agents:   Vendor-neutral `~/.agents` — skill to `~/.agents/skills/temper/`, no command wrapper
           - claude:   Claude Code — skill to `~/.claude/skills/temper/`, wrapper to `~/.claude/commands/temper.md`
           - opencode: opencode — skill to `~/.config/opencode/skills/temper/`, wrapper to `~/.config/opencode/command/temper.md`
           
-          [default: claude]
+          [default: agents]
 
       --vault <VAULT>
           Path to vault (overrides TEMPER_VAULT and auto-detection)
@@ -84,13 +85,14 @@ Usage: temper skill check [OPTIONS]
 
 Options:
       --target <TARGET>
-          Which agent to check for. Determines the expected command-wrapper location. Defaults to `claude`
+          Which agent to check for. Determines the expected command-wrapper location. Defaults to `agents`
 
           Possible values:
+          - agents:   Vendor-neutral `~/.agents` — skill to `~/.agents/skills/temper/`, no command wrapper
           - claude:   Claude Code — skill to `~/.claude/skills/temper/`, wrapper to `~/.claude/commands/temper.md`
           - opencode: opencode — skill to `~/.config/opencode/skills/temper/`, wrapper to `~/.config/opencode/command/temper.md`
           
-          [default: claude]
+          [default: agents]
 
       --vault <VAULT>
           Path to vault (overrides TEMPER_VAULT and auto-detection)

@@ -94,14 +94,9 @@ static WF_PLAN_LARGE: &str = include_str!("../../skill-content/workflows/plan-la
 static REFERENCE_FOOTER: &str = r#"
 ## Resource Types
 
-| Type | Description |
-|------|-------------|
-| task | Work items with stage, mode, effort tracking |
-| goal | High-level objectives that group tasks |
-| session | Timestamped work session notes |
-| research | Research notes and findings |
-| concept | Named ideas, patterns, or domain terms |
-| decision | Point-in-time choices with rationale (ADR-like) |
+These are the complete set (see *Template Access* for per-type schema):
+
+{{ doc_type_table }}
 
 ## Task Stages
 
@@ -144,7 +139,8 @@ carry a `slug` field. A slug placed in managed frontmatter is likewise inert.
 ## Discovery Workflow
 
 1. `temper search "<topic>"` -- find relevant documents and notes
-2. `temper context [<name>]` -- understand current context and recent activity
+2. `temper warmup --context @me/<ctx>` -- a context primer: active goals, in-progress tasks,
+   recent session pointers, and what is pending for you
 3. Use search results to guide targeted file reads
 4. Reach for `--without body` / `--fields` on `resource show`, or `--with
    open-meta` on `resource list`, when you need cheap orientation rather than
@@ -243,19 +239,15 @@ To delete a resource server-side, run `temper resource delete <ref> [--force]`
 
 ## Context Requirement
 
-| Verb | `--context` required? |
+| Verb | `--context` takes... |
 |------|----------------------|
-| `resource list` | optional (omitting lists across all contexts) |
-| `resource show` | **required** |
-| `resource create` | **required** |
-| `resource update` | **required** |
-| `resource delete` | **required** |
+| `resource list` | optional — omitting it lists across all contexts |
+| `resource create` | **required** — the context the resource is created into |
 
-Omitting `--context` where it is required surfaces the error
-`Project error: no context specified — use --context <ref> (e.g. @me/temper, +team/general, or a UUID)`.
-
-A context is addressed by **ref**: `@me/<slug>` for your own contexts, `+team-slug/<slug>` for
-team contexts, or a bare UUID. Bare context names are **not accepted**.
+`resource show`/`update`/`delete` address a single resource by `<ref>` and take no
+`--context`. A context is addressed by **ref**: `@me/<slug>` for your own contexts,
+`+team-slug/<slug>` for team contexts, or a bare UUID. Bare context names are **not
+accepted**.
 
 ## Template Access
 
@@ -357,15 +349,15 @@ Verify with `resource show --provenance`.
 
 For a body too large for one call, the CLI streams it automatically (the
 `resource create` path segments internally past ~256 KB and resumes an
-interrupted upload). The **MCP** surface exposes the lifecycle explicitly for
-programmatic callers:
+interrupted upload). The **MCP** surface exposes the lifecycle explicitly as
+one tool, `segmented_ingest`, whose `action` field selects the step:
 
-| Tool | Role |
+| `action` | Role |
 |------|------|
-| `ingest_begin` | Lands segment 0, creates the resource, returns `resource_id` + landed block set + an opaque `body_hash`. Takes every `create_resource` field plus `content_hash`. |
-| `ingest_append` | Lands segment N (`seq` starts at **1**, in order). **Idempotent** — a re-append of an already-landed seq is a safe no-op, so retry/resume is safe. Optional per-segment `sources`. |
-| `ingest_blocks` | Reads the landed segment set back — how a stateless caller resumes after an interruption. |
-| `ingest_finalize` | Declares the session complete: pass `expected_blocks` and **echo the `body_hash` verbatim** (opaque — never parse or recompute it). Fails loudly on a gap. |
+| `begin` | Lands segment 0, creates the resource, returns `resource_id` + landed block set + an opaque `body_hash`. Takes every `create_resource` field plus `content_hash`. |
+| `append` | Lands segment N (`seq` starts at **1**, in order). **Idempotent** — a re-append of an already-landed seq is a safe no-op, so retry/resume is safe. Optional per-segment `sources`. |
+| `blocks` | Reads the landed segment set back — how a stateless caller resumes after an interruption. |
+| `finalize` | Declares the session complete: pass `expected_blocks` and **echo the `body_hash` verbatim** (opaque — never parse or recompute it). Fails loudly on a gap. |
 
 See `knowledge-base.md` for the MCP tool details.
 
@@ -693,16 +685,19 @@ pub fn generate_reference() -> String {
     out.push_str("# CLI Reference\n\n");
     out.push_str("## Invocation\n\n");
     out.push_str("**Always run `temper` directly from PATH.** Never use `cargo run -p temper-cli`, `python`,\n");
-    out.push_str("full paths, or any indirect invocation method — even when working inside the temper source\n");
+    out.push_str("full paths, or any indirect invocation method — an on-PATH install is what this skill assumes,\n");
     out.push_str(
-        "repository. The installed binary may differ from the in-development code, and that is\n",
+        "and indirect invocations reach a different binary than the one the user installed.\n\n",
     );
-    out.push_str("intentional: we use the installed CLI to manage our own workflow while evolving the crate.\n\n");
     out.push_str("**Before running any temper command**, verify the binary exists:\n");
     out.push_str("```bash\nwhich temper\n```\n");
     out.push_str("If `temper` is not on PATH, **stop and warn the user**:\n");
-    out.push_str("> \"The `temper` binary is not installed or not on PATH. Install it with\n");
-    out.push_str("> `cargo install --path crates/temper-cli` or ensure `~/.cargo/bin` is in your PATH.\"\n\n");
+    out.push_str(
+        "> \"The `temper` binary is not installed or not on PATH. Install it from the temper\n",
+    );
+    out.push_str(
+        "> releases (see the project README), or ensure `~/.cargo/bin` is in your PATH.\"\n\n",
+    );
     out.push_str("Do not fall back to `cargo run` as a workaround.\n\n");
     out.push_str("## Commands\n\n");
     out.push_str("| Command | Syntax |\n");
@@ -711,7 +706,28 @@ pub fn generate_reference() -> String {
         out.push_str(&format!("| {} | `{}` |\n", name, syntax));
     }
     out.push_str("\nPipe content via stdin for `resource create` (all types accept stdin body).\n");
-    out.push_str(REFERENCE_FOOTER);
+    // The doc-type set is derived from the validator's own enumeration rather than restated,
+    // so a type added or retired in temper-workflow cannot leave this table contradicting the
+    // same skill's `memories.md` (which teaches creating `memory`-typed resources).
+    let doc_type_table = {
+        use temper_workflow::schema;
+        let mut table = String::from("| Type | Notes |\n|------|-------|\n");
+        for name in schema::DOC_TYPE_NAMES {
+            let notes = match *name {
+                "task" => "Work items with stage, mode, effort tracking",
+                "goal" => "High-level objectives that group tasks",
+                "session" => "Timestamped work session notes",
+                "research" => "Research notes and findings",
+                "concept" => "Named ideas, patterns, or domain terms",
+                "decision" => "Point-in-time choices with rationale (ADR-like)",
+                "memory" => "Durable statements carried across sessions (see `memories.md`)",
+                _ => "Per-type schema via `--show-template`",
+            };
+            table.push_str(&format!("| {name} | {notes} |\n"));
+        }
+        table
+    };
+    out.push_str(&REFERENCE_FOOTER.replace("{{ doc_type_table }}", &doc_type_table));
     out
 }
 
@@ -900,11 +916,14 @@ pub fn emit_agent_skills(dir: &Path) -> Result<Vec<String>> {
 pub struct InstallReport {
     pub total: usize,
     pub changed: Vec<String>,
+    /// Installer-era duplicate files removed from `guidance/` (byte-matched against the exact
+    /// revisions the old installer shipped — user-modified files are never touched).
+    pub removed_legacy: Vec<String>,
 }
 
 impl InstallReport {
     pub fn is_no_op(&self) -> bool {
-        self.changed.is_empty()
+        self.changed.is_empty() && self.removed_legacy.is_empty()
     }
 }
 
@@ -919,16 +938,22 @@ impl SkillTarget {
     /// The default skill directory under the target's config home.
     pub fn default_skill_dir(&self, home: &Path) -> PathBuf {
         match self {
+            // The vendor-neutral location: not any one agent's config home, but the
+            // `~/.agents` convention several clients converge on for shared skill content.
+            SkillTarget::Agents => home.join(".agents/skills/temper"),
             SkillTarget::Claude => home.join(".claude/skills/temper"),
             SkillTarget::Opencode => home.join(".config/opencode/skills/temper"),
         }
     }
 
-    /// The command-wrapper directory under the target's config home.
-    fn command_dir(&self, home: &Path) -> PathBuf {
+    /// The command-wrapper directory under the target's config home, when the target has one.
+    /// `Agents` has none — `~/.agents` is a skill-content location, and `/temper` command
+    /// routing stays an individual agent's concern.
+    fn command_dir(&self, home: &Path) -> Option<PathBuf> {
         match self {
-            SkillTarget::Claude => home.join(".claude/commands"),
-            SkillTarget::Opencode => home.join(".config/opencode/command"),
+            SkillTarget::Agents => None,
+            SkillTarget::Claude => Some(home.join(".claude/commands")),
+            SkillTarget::Opencode => Some(home.join(".config/opencode/command")),
         }
     }
 }
@@ -950,6 +975,7 @@ pub fn install(config: &Config, skill_dir: &Path, target: SkillTarget) -> Result
     let mut report = InstallReport {
         total: files.len(),
         changed: Vec::new(),
+        removed_legacy: Vec::new(),
     };
 
     // Ensure skill_dir and subdirectories exist
@@ -980,21 +1006,67 @@ pub fn install(config: &Config, skill_dir: &Path, target: SkillTarget) -> Result
         }
     }
 
-    // Write command-wrapper.md to the target's command directory
+    // Write command-wrapper.md to the target's command directory, when the target has one.
     if let Some(wrapper_content) = files.get("command-wrapper.md") {
-        let home = dirs::home_dir()
-            .ok_or_else(|| TemperError::Config("cannot determine home directory".to_string()))?;
-        let commands_dir = target.command_dir(&home);
-        std::fs::create_dir_all(&commands_dir).map_err(|e| {
-            TemperError::Config(format!("cannot create {}: {}", commands_dir.display(), e))
-        })?;
-        let wrapper_path = commands_dir.join("temper.md");
-        if write_if_changed(&wrapper_path, wrapper_content)? {
-            report.changed.push("command-wrapper.md".to_string());
+        if let Some(commands_dir) =
+            target.command_dir(&dirs::home_dir().ok_or_else(|| {
+                TemperError::Config("cannot determine home directory".to_string())
+            })?)
+        {
+            std::fs::create_dir_all(&commands_dir).map_err(|e| {
+                TemperError::Config(format!("cannot create {}: {}", commands_dir.display(), e))
+            })?;
+            let wrapper_path = commands_dir.join("temper.md");
+            if write_if_changed(&wrapper_path, wrapper_content)? {
+                report.changed.push("command-wrapper.md".to_string());
+            }
         }
     }
 
+    report.removed_legacy = remove_legacy_guidance_duplicates(skill_dir)?;
+
     Ok(report)
+}
+
+/// The pre-root-shipping installer wrote the grounding pair into `guidance/`. It now ships at the
+/// skill root and writes nothing into `guidance/` (the user's namespace), so those copies survive
+/// as stale revisions — and the router's "read every file in `guidance/`" step makes an agent read
+/// them as current. Remove a legacy copy **only** when its bytes match the exact revision the old
+/// installer shipped: a file a user has since edited is theirs, not ours to delete. Keyed by hash
+/// rather than by "not present at root", so the check survives even if the root copy is later
+/// renamed or the guidance file is regenerated.
+const LEGACY_GUIDANCE_DUPLICATES: [(&str, &str); 2] = [
+    (
+        "guidance/implementation-grounding.md",
+        "29ae9493f2e774820ce18d7a6d49c257fcf7999fa5b5ef8c2ef8f75a4705a023",
+    ),
+    (
+        "guidance/plan-verification.md",
+        "1d7e2545159019ea56b79159f91f04faa8ea7e3091c481e1270c5bb8167d4790",
+    ),
+];
+
+/// Remove stale installer-era duplicates from `guidance/`, byte-matched against
+/// [`LEGACY_GUIDANCE_DUPLICATES`]. Returns the paths removed.
+fn remove_legacy_guidance_duplicates(skill_dir: &Path) -> Result<Vec<String>> {
+    let mut removed = Vec::new();
+    for (rel_path, legacy_hash) in LEGACY_GUIDANCE_DUPLICATES {
+        let path = skill_dir.join(rel_path);
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            // Absent, or unreadable — nothing to clean up, and an unreadable file is not
+            // ours to judge by hash anyway.
+            Err(_) => continue,
+        };
+        let hash = format!("{:x}", Sha256::digest(&bytes));
+        if hash == legacy_hash {
+            std::fs::remove_file(&path).map_err(|e| {
+                TemperError::Config(format!("cannot remove {}: {}", path.display(), e))
+            })?;
+            removed.push(rel_path.to_string());
+        }
+    }
+    Ok(removed)
 }
 
 /// Write `content` to `dest` only if the on-disk bytes differ. Returns
@@ -1106,11 +1178,17 @@ fn check_config_hash_staleness(skill_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Check the command wrapper at the target's command path.
+/// Check the command wrapper at the target's command path. `Agents` has no wrapper by design;
+/// that is stated rather than left to be inferred from a missing line.
 fn check_command_wrapper(target: SkillTarget) {
-    let wrapper_path = target
-        .command_dir(&dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("~")))
-        .join("temper.md");
+    let Some(commands_dir) =
+        target.command_dir(&dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("~")))
+    else {
+        output::plain("Command wrapper: none (this target installs skill content only)");
+        return;
+    };
+
+    let wrapper_path = commands_dir.join("temper.md");
 
     if wrapper_path.exists() {
         output::status_icon(true, format!("Command wrapper: {}", wrapper_path.display()));
@@ -1986,6 +2064,32 @@ mod tests {
         );
     }
 
+    /// The Resource Types table is DERIVED from `DOC_TYPE_NAMES`, not restated — the hand list
+    /// once named 6 of 14 types while the same skill's `memories.md` taught creating a
+    /// `memory`-typed resource. This pins the wiring: every real type appears, the
+    /// placeholder is actually substituted (an unsubstituted `{{ doc_type_table }}` would
+    /// ship as literal text), and no retired type is named.
+    #[test]
+    fn reference_doc_type_table_is_derived_from_the_validator() {
+        let reference = generate_reference();
+        assert!(
+            !reference.contains("{{ doc_type_table }}"),
+            "the doc-type placeholder leaked into the rendered reference"
+        );
+        for doc_type in temper_workflow::schema::DOC_TYPE_NAMES {
+            assert!(
+                reference.contains(&format!("| {doc_type} |")),
+                "the reference's Resource Types table never names `{doc_type}`"
+            );
+        }
+        for retired in ["ticket", "milestone", "epic"] {
+            assert!(
+                !reference.contains(&format!("| {retired} |")),
+                "the reference's Resource Types table names `{retired}`, which is not a temper type"
+            );
+        }
+    }
+
     #[test]
     fn test_generate_skill_files_uses_generated_reference() {
         let config = test_config();
@@ -1997,4 +2101,177 @@ mod tests {
             "installed reference.md should have --stage"
         );
     }
+
+    // ── Install targets ─────────────────────────────────────────────────────
+
+    /// `agents` is the default `--target`, and its default directory is the vendor-neutral
+    /// `~/.agents/skills/temper` — a default is only a default if the flag's absence resolves
+    /// to it, so the parse path is exercised rather than assumed.
+    #[test]
+    fn skill_target_agents_is_the_parsed_default_and_resolves_to_the_neutral_home() {
+        use crate::cli::{Cli, Commands, SkillAction};
+        use clap::Parser as _;
+
+        let cli = Cli::try_parse_from(["temper", "skill", "install"]).unwrap();
+        let Commands::Skill {
+            action: SkillAction::Install { target, .. },
+        } = cli.command
+        else {
+            panic!("expected `temper skill install`");
+        };
+        assert_eq!(target, SkillTarget::Agents);
+
+        let home = Path::new("/home/test");
+        assert_eq!(
+            target.default_skill_dir(home),
+            PathBuf::from("/home/test/.agents/skills/temper"),
+            "the agents target must resolve to the vendor-neutral ~/.agents location"
+        );
+    }
+
+    /// The agents target installs skill content and nothing else — no command wrapper, because
+    /// `~/.agents` is a content location and `/temper` routing is an individual agent's concern.
+    /// Witnessed through a real install with `HOME` pointed at the tempdir (the wrapper path is
+    /// resolved from the process home, like the integration tests do): the claude target writes
+    /// the wrapper beside its config home; the agents target writes none.
+    #[test]
+    fn agents_target_installs_content_and_no_command_wrapper() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let config = test_config();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+
+        // install() hashes the global config (it bakes the hash into SKILL.md), so point
+        // TEMPER_GLOBAL_CONFIG at a minimal file, and HOME at the tempdir so the wrapper
+        // path resolves inside the test's isolated space.
+        let global_config = dir.path().join("global-config.toml");
+        std::fs::write(&global_config, "[vault]\npath = \"/tmp/test-vault\"\n").unwrap();
+        let env = vec![
+            (
+                "TEMPER_GLOBAL_CONFIG".to_string(),
+                Some(global_config.to_string_lossy().into_owned()),
+            ),
+            (
+                "HOME".to_string(),
+                Some(home.to_string_lossy().into_owned()),
+            ),
+        ];
+
+        temp_env::with_vars(env, || {
+            let skill_dir = SkillTarget::Agents.default_skill_dir(&home);
+            install(&config, &skill_dir, SkillTarget::Agents).unwrap();
+
+            assert!(
+                skill_dir.join("SKILL.md").exists(),
+                "skill content installed"
+            );
+            assert!(
+                !home.join(".claude/commands/temper.md").exists()
+                    && !home.join(".config/opencode/command/temper.md").exists(),
+                "the agents target must not write a command wrapper to any agent's config home"
+            );
+
+            // The comparison arm: the claude target does write its wrapper.
+            let claude_dir = SkillTarget::Claude.default_skill_dir(&home);
+            install(&config, &claude_dir, SkillTarget::Claude).unwrap();
+            assert!(home.join(".claude/commands/temper.md").exists());
+        });
+    }
+
+    /// **The router is the only file every session loads, so its size is a budget, not a
+    /// property.** SKILL.md once carried full sections duplicating `reference.md` and grew to
+    /// 22.4KB rendered; the rework moved the detail behind pointers and shipped ~17KB. These
+    /// gates sit just above what the rework ships (well below the old size) so the duplication
+    /// cannot quietly grow back — a regression here costs every session on every machine.
+    #[test]
+    fn skill_md_files_stay_under_their_size_budgets() {
+        let cli = generate_skill_files_with_hash(&test_config(), "testhash").unwrap();
+        let cli_skill_md = cli.get("SKILL.md").expect("SKILL.md").len();
+        assert!(
+            cli_skill_md <= 18_432,
+            "the CLI SKILL.md render is {cli_skill_md} bytes; the budget is 18,432 (the rework \
+             shipped ~17.1KB). Grow the budget deliberately, with a reason, never by accretion."
+        );
+
+        let mcp = generate_agent_skill_files().unwrap();
+        let mcp_skill_md = mcp.get("SKILL.md").expect("SKILL.md").len();
+        assert!(
+            mcp_skill_md <= 11_955,
+            "the MCP SKILL.md is {mcp_skill_md} bytes; the budget is 11,955 — the pre-rework \
+             size. It gained the purpose-first and on-request-discovery sections and still had \
+             to fit, so any further growth needs a deliberate budget edit."
+        );
+    }
+
+    /// **Legacy `guidance/` duplicates are removed only when their bytes match the exact
+    /// revisions the old installer shipped.** A file the user has since edited is theirs; a
+    /// file the old installer left behind is a stale duplicate that the router's "read every
+    /// file in `guidance/`" step feeds to agents as current. Both arms are witnessed here.
+    #[test]
+    fn install_removes_legacy_guidance_duplicates_only_when_unmodified() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let config = test_config();
+        let skill_dir = dir.path().join("skill-output");
+
+        // install() hashes the global config (it bakes the hash into SKILL.md), so point
+        // TEMPER_GLOBAL_CONFIG at a minimal file and HOME at the tempdir. Without these the
+        // test passes only on machines that happen to have a global config — which is exactly
+        // how it reached CI green-local/red-remote.
+        let global_config = dir.path().join("global-config.toml");
+        std::fs::write(&global_config, "[vault]\npath = \"/tmp/test-vault\"\n").unwrap();
+        let env = vec![
+            (
+                "TEMPER_GLOBAL_CONFIG".to_string(),
+                Some(global_config.to_string_lossy().into_owned()),
+            ),
+            (
+                "HOME".to_string(),
+                Some(dir.path().to_string_lossy().into_owned()),
+            ),
+        ];
+
+        let guidance = skill_dir.join("guidance");
+        std::fs::create_dir_all(&guidance).unwrap();
+
+        // One file exactly as the old installer shipped it; one user-edited sibling.
+        let stale = guidance.join("plan-verification.md");
+        std::fs::write(&stale, LEGACY_STALE_BYTES).unwrap();
+        let edited = guidance.join("implementation-grounding.md");
+        std::fs::write(
+            &edited,
+            format!("{}\n\nmy local edits\n", LEGACY_STALE_BYTES),
+        )
+        .unwrap();
+
+        temp_env::with_vars(env, || {
+            install(&config, &skill_dir, SkillTarget::Agents).unwrap();
+
+            assert!(
+                !stale.exists(),
+                "the byte-identical installer-era duplicate must be removed"
+            );
+            assert!(
+                edited.exists(),
+                "a guidance file the user has modified is theirs — install must not touch it"
+            );
+
+            // Idempotent: a second install neither re-creates nor re-reports the removal.
+            let second = install(&config, &skill_dir, SkillTarget::Agents).unwrap();
+            assert!(second.removed_legacy.is_empty());
+            assert!(!stale.exists());
+        });
+    }
+
+    /// The exact bytes the old installer wrote into `guidance/` for `plan-verification.md` —
+    /// the revision this machine carried, hashed in `LEGACY_GUIDANCE_DUPLICATES`. Embedded so
+    /// the test witnesses the removal against the same bytes the cleanup matches, with no
+    /// round-trip through the user's home directory.
+    const LEGACY_STALE_BYTES: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/skill-content/legacy-guidance/plan-verification.md"
+    ));
 }

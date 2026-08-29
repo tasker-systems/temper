@@ -22,7 +22,7 @@ path = "~/Documents/temper-vault"
 contexts = []
 
 [skill]
-output = "~/.claude/skills/temper"
+output = "~/.agents/skills/temper"
 
 [auth]
 provider = "none"
@@ -116,7 +116,7 @@ Skill generation config.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `output` | string | `~/.claude/skills/temper` | _(undocumented — this field has no doc comment in `TemperConfig`)_ |
+| `output` | string | `~/.agents/skills/temper` | _(undocumented — this field has no doc comment in `TemperConfig`)_ |
 
 ### `[sync]`
 

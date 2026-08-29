@@ -76,8 +76,8 @@ carry a `file:line` citation (GD-1) or an EXTEND/AMEND tag (GD-3).
 ### GD-5: Escalate, don't fabricate-to-complete
 The corollary of GD-1: when a step **cannot** be grounded and is **not** a sanctioned invention (no
 spec authorization to EXTEND/AMEND), STOP and report **BLOCKED** with what's missing. Never fill the
-gap with confident prose to make the deliverable look complete. (This is `subagent-guidance`'s
-escalate-not-soften, pointed at grounding specifically.)
+gap with confident prose to make the deliverable look complete. A report the controller can act on
+beats a deliverable that only looks done.
 
 ## Division of labor
 
