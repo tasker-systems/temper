@@ -304,6 +304,14 @@ RUST_INERT_ROOTS='^packages/temper-cloud/|^packages/temper-ui/|^packages/agent-w
 #     path-traversal security rule; editing it alone skipped the entire pipeline.
 #   scripts/migration-declaration-corpus.txt — `include_str!`d by temper-migrate
 #     and read by code-quality's awk-side parity check.
+#   scripts/personal-data-surface.txt — `include_str!`d by
+#     personal_data_surface_test.rs, which joins it against the personal-data
+#     candidate set DERIVED from the live catalog. The file is half a gate: the
+#     test supplies the columns, this file supplies the classification, and a
+#     lone edit skipping the pipeline would mean reclassifying personal data —
+#     or deleting a declaration outright — with the test that checks it never
+#     running. Verified before the entry was added: DOCS_ONLY=true,
+#     SKIP_ALL=true.
 #   docs/reference/** — the committed projection of the BUILT CLI's `--help` tree
 #     (and, next to it, of TemperConfig). All `.md` under `docs/`, so it scoped as
 #     docs-only and turned rust-quality OFF — leaving a hand-edit to a GENERATED
@@ -331,7 +339,7 @@ RUST_INERT_ROOTS='^packages/temper-cloud/|^packages/temper-ui/|^packages/agent-w
 # `assert_every_compiled_in_doc_is_vetoed` in test-detect-ci-scope.sh guards —
 # it derives the set from the source rather than trusting this list to stay
 # complete.
-RUST_COUPLED='^packages/temper-ui/src/lib/types/generated/|^packages/agent-workflows/mention/agent/generated/|^agent-skills/|^openapi\.json$|^tests/contracts/|^crates/temper-cli/skill-content/|^scripts/install/containment-corpus\.txt$|^scripts/migration-declaration-corpus\.txt$|^docs/reference/'
+RUST_COUPLED='^packages/temper-ui/src/lib/types/generated/|^packages/agent-workflows/mention/agent/generated/|^agent-skills/|^openapi\.json$|^tests/contracts/|^crates/temper-cli/skill-content/|^scripts/install/containment-corpus\.txt$|^scripts/migration-declaration-corpus\.txt$|^scripts/personal-data-surface\.txt$|^docs/reference/'
 
 HAS_RUST_COUPLED=false
 if changes_match "$RUST_COUPLED"; then

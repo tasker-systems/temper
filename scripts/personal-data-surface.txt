@@ -1,0 +1,168 @@
+# The personal-data surface — DERIVED candidates, DECLARED classifications.
+#
+# Under goal "A person can be erased without the ledger losing what happened".
+#
+# WHY THIS FILE EXISTS, AND WHY IT IS HALF A FILE.
+#
+# A fully-derived inventory of personal data is impossible: no query can tell you whether a `text`
+# column holds a person's name. A fully-declared one rots — the way it rots is that someone adds a
+# column and nobody remembers this file. So the work is split, and the split is the point:
+#
+#   * `personal_data_surface_test.rs` DERIVES the candidate set from the live catalog. It cannot
+#     miss a column, because it asks Postgres rather than a person.
+#   * This file DECLARES the judgement for each candidate: what class of personal data it holds and
+#     how far erasure can reach it.
+#   * The test fails on any derived candidate with no line here, and on any line here naming a
+#     column that no longer exists. Neither half can drift silently.
+#
+# The derivations are six, and each exists because the one before it is blind to something:
+#
+#   fk       foreign keys into kb_profiles / kb_entities.
+#   poly     polymorphic (`*_table` + `*_id`) references, which carry NO foreign key at all —
+#            Postgres will neither cascade them nor complain about them.
+#   prin     every column of the principal tables themselves, where identity actually lives.
+#   vec      vector / tsvector columns: representations derived from content.
+#   json     every jsonb column, because that is where unbounded free-form data lives.
+#   named    a NAME-PATTERN heuristic over text columns. It is the only derivation that is not
+#            structural, and it exists because four identifier columns have no structure to find
+#            them by: kb_team_invitations.invited_email, kb_slack_link_intents.slack_principal_id,
+#            kb_slack_grant_vault.slack_principal_id, kb_saml_idp.email_attr. A heuristic produces
+#            CANDIDATES, never verdicts — which is exactly what this file is for.
+#
+# WHAT IS NOT COVERED, STATED SO NOBODY INFERS COVERAGE FROM SILENCE.
+# 150 `text`/`varchar` columns exist that no derivation above nominates. Free-text classification is
+# an open remainder, not a clean sheet. `named` skims the ones whose NAME betrays them; a column
+# called `note` that happens to hold a person's name is not found by anything here, and cannot be.
+#
+# FORMAT (line-oriented; `#` comments and blank lines ignored)
+#   <table>.<column> | <class> | <ceiling> | <note>
+#
+# class
+#   identifier     a direct identifier of a natural person
+#   reference      a pseudonymous UUID pointing at a principal
+#   content        authored content
+#   derived        a representation computed FROM content (vector, search index)
+#   incidental     free-form that MAY carry personal data depending on what was written
+#   discriminator  the table-name half of a polymorphic pair; no personal data, but it is what
+#                  makes its `_id` sibling resolvable, so it is declared rather than skipped
+#   none           carries no personal data
+#
+# ceiling — how far erasure reaches
+#   full        erasable outright
+#   recompute   must be RECOMPUTED after an erasure, not deleted; a cascade will not reach it
+#   pseudonym   a UUID that stops identifying anyone once kb_profiles is tombstoned
+#   none        on the append-only ledger; cannot be erased at all
+#   n-a         nothing to erase
+
+# ── the pseudonym, and the identifiers that give it meaning ──────────────────────────────────
+kb_profiles.id                            | reference     | pseudonym | THE pseudonym; breaking its mapping is what erasure does
+kb_profiles.email                         | identifier    | full      |
+kb_profiles.handle                        | identifier    | full      | also denormalized into kb_teams.slug — see below
+kb_profiles.display_name                  | identifier    | full      | also denormalized into kb_teams.name — see below
+kb_profiles.preferences                   | incidental    | full      | open jsonb, user-controlled
+kb_profiles.created                       | none          | n-a       |
+kb_profile_auth_links.id                  | none          | n-a       | surrogate
+kb_profile_auth_links.profile_id          | reference     | pseudonym |
+kb_profile_auth_links.email               | identifier    | full      |
+kb_profile_auth_links.auth_provider_user_id | identifier  | full      | the IdP's subject identifier for this person
+kb_profile_auth_links.auth_provider       | none          | n-a       |
+kb_profile_auth_links.email_verified      | none          | n-a       |
+kb_profile_auth_links.is_default          | none          | n-a       |
+kb_profile_auth_links.linked_at           | none          | n-a       |
+
+# ── the actor layer: one indirection between the ledger and a person ─────────────────────────
+kb_entities.id                            | reference     | pseudonym | what kb_events points at; undeletable once any event exists
+kb_entities.profile_id                    | reference     | pseudonym | the link erasure breaks
+kb_entities.name                          | identifier    | full      | agent-instance name; may embed a person's name
+kb_entities.metadata                      | incidental    | full      | launch metadata (model, platform, persona)
+kb_entities.created                       | none          | n-a       |
+
+# ── the ledger: immutable by trigger, so every ceiling here is `none` ────────────────────────
+kb_events.emitter_entity_id               | reference     | pseudonym | the ONLY ledger link to a person, and it is one indirection
+kb_events.payload                         | incidental    | none      | titles, origin_uri, edge labels, property values, telos_centroid
+kb_events.metadata                        | incidental    | none      |
+kb_events.references                      | none          | none      | typed provenance pointers
+kb_event_types.payload_schema             | none          | n-a       |
+
+# ── denormalized by trigger, reachable by NO foreign key ─────────────────────────────────────
+# `sync_personal_team` copies handle and display_name into kb_teams on every profile insert.
+# Found by derivation `denorm`, not by memory. Scrubbing kb_profiles alone leaves these behind.
+kb_teams.slug                             | identifier    | full      | 'personal-' || kb_profiles.handle
+kb_teams.name                             | identifier    | full      | kb_profiles.display_name || ' (personal)'
+
+# ── polymorphic references: a CHECK, not a foreign key ───────────────────────────────────────
+kb_access_grants.principal_table          | discriminator | n-a       |
+kb_access_grants.principal_id             | reference     | pseudonym | may be a team; only kb_profiles rows are in scope
+kb_access_grants.subject_table            | discriminator | n-a       | nominated by `named`; the subject is a resource, not a person
+kb_contexts.owner_table                   | discriminator | n-a       |
+kb_contexts.owner_id                      | reference     | pseudonym |
+kb_data_artifacts.kind_owner_table        | discriminator | n-a       |
+kb_data_artifacts.kind_owner_id           | reference     | pseudonym |
+kb_data_artifact_shapes.kind_owner_table  | discriminator | n-a       |
+kb_data_artifact_shapes.kind_owner_id     | reference     | pseudonym |
+
+# ── content-derived representations ──────────────────────────────────────────────────────────
+# A centroid is an AGGREGATE over member embeddings. No cascade reaches it: erasing a member does
+# not change it, so it must be recomputed or it keeps residue of erased content.
+kb_chunks.embedding                       | derived       | full      | nulled with its chunk
+kb_resource_search_index.search_vector    | derived       | full      | cascades from kb_resources
+kb_cogmap_regions.centroid                | derived       | recompute |
+kb_cogmaps.telos_centroid                 | derived       | recompute | an immutable copy also rides kb_events.payload
+kb_contexts.telos_centroid                | derived       | recompute | an immutable copy also rides kb_events.payload
+
+# ── external identifiers ─────────────────────────────────────────────────────────────────────
+kb_team_invitations.invited_email         | identifier    | full      | an email for someone who may have NO profile at all
+kb_slack_link_intents.slack_principal_id  | identifier    | full      | no profile FK; an unconsumed intent is reachable only by this value
+kb_slack_grant_vault.slack_principal_id   | identifier    | full      |
+kb_saml_idp.email_attr                    | none          | n-a       | an attribute NAME, not a value
+
+# ── free-form columns that may carry personal data ───────────────────────────────────────────
+kb_properties.property_value              | incidental    | full      | the projection is erasable; its copy in kb_events.payload is not
+kb_workflow_jobs.payload                  | incidental    | full      |
+kb_invocations.outcome                    | incidental    | full      |
+kb_connections.credential                 | incidental    | full      | an external account binding
+kb_connections.observed_reach             | incidental    | full      |
+kb_connections.tool_manifest              | none          | n-a       | the provider's tool schema
+kb_data_artifact_content.content          | content       | full      |
+kb_data_artifact_shapes.schema            | none          | n-a       | a JSON schema
+kb_data_artifact_verdicts.detail          | incidental    | full      |
+kb_subscriptions.selector                 | none          | n-a       |
+kb_oauth_flow.claims                      | identifier    | full      | IdP claims carry email and name
+kb_oauth_refresh_tokens.claims            | identifier    | full      | IdP claims carry email and name
+
+# ── pseudonymous references; each ceases to identify when the profile is tombstoned ──────────
+kb_access_grants.granted_by_profile_id    | reference     | pseudonym |
+kb_blob_files.profile_id                  | reference     | pseudonym | the BLOB it points at lives outside Postgres and no delete here reaches it
+kb_citation_audits.audited_by_profile_id  | reference     | pseudonym |
+kb_connections.profile_id                 | reference     | pseudonym |
+kb_connections.emitter_entity_id          | reference     | pseudonym |
+kb_connections.reach_affirmed_by          | reference     | pseudonym |
+kb_connections.registered_by_profile_id   | reference     | pseudonym |
+kb_connections.revoked_by_profile_id      | reference     | pseudonym |
+kb_idempotency_keys.owner_profile_id      | reference     | pseudonym |
+kb_invocations.scoped_entity_id           | reference     | pseudonym |
+kb_join_requests.requesting_profile_id    | reference     | pseudonym |
+kb_join_requests.reviewed_by_profile_id   | reference     | pseudonym |
+kb_machine_clients.profile_id             | reference     | pseudonym |
+kb_machine_clients.registered_by_profile_id | reference   | pseudonym |
+kb_machine_clients.revoked_by_profile_id  | reference     | pseudonym |
+kb_oauth_flow.profile_id                  | reference     | pseudonym |
+kb_oauth_refresh_replays.profile_id       | reference     | pseudonym | evidence a credential was copied; RESTRICTed against retention sweeps
+kb_oauth_refresh_tokens.profile_id        | reference     | pseudonym |
+kb_principal_governance.profile_id        | reference     | pseudonym |
+kb_principal_governance.granted_by        | reference     | pseudonym |
+kb_principal_review_requests.profile_id   | reference     | pseudonym |
+kb_principal_review_requests.decided_by   | reference     | pseudonym |
+kb_principal_standing.profile_id          | reference     | pseudonym |
+kb_principal_standing_events.profile_id   | reference     | pseudonym |
+kb_principal_standing_events.actor_profile_id | reference | pseudonym |
+kb_resource_homes.owner_profile_id        | reference     | pseudonym |
+kb_resource_homes.originator_profile_id   | reference     | pseudonym |
+kb_saml_principal_reconcile.profile_id    | reference     | pseudonym |
+kb_slack_grant_vault.profile_id           | reference     | pseudonym |
+kb_subscription_deliveries.decided_by_profile_id | reference | pseudonym |
+kb_subscriptions.created_by_profile_id    | reference     | pseudonym |
+kb_subscriptions.revoked_by_profile_id    | reference     | pseudonym |
+kb_team_invitations.invited_by_profile_id | reference     | pseudonym |
+kb_team_members.profile_id                | reference     | pseudonym |
+kb_workflow_jobs.claimed_by_profile_id    | reference     | pseudonym |
