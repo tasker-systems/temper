@@ -386,9 +386,15 @@ async fn a_missing_event_name_fails_rather_than_routing_on_a_guess(pool: PgPool)
     );
 }
 
-/// A body between axum's 2 MB default and GitHub's 25 MB ceiling is accepted. That window was the
-/// gap: GitHub believed it had delivered while temper refused, and nothing in temper-api set
+/// A body between the shared 2 MiB ceiling and GitHub's 25 MB ceiling is accepted. That window was
+/// the gap: GitHub believed it had delivered while temper refused, and nothing in temper-api set
 /// `DefaultBodyLimit` at all.
+///
+/// **It now witnesses a second thing.** `apply_base_layers` sets an explicit
+/// `MAX_REQUEST_BODY_BYTES` of 2 MiB across both public surfaces, so this route's own limit is no
+/// longer merely larger than a framework default — it has to *win* against a limit temper applies
+/// deliberately. It does because a limit layered onto a single route runs inside the router-wide
+/// one. If that ever stopped holding, this is the test that says so.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_payload_above_axums_default_limit_is_accepted(pool: PgPool) {
     let (_team, conn) = seed_world(&pool, Some(pr_selector())).await;

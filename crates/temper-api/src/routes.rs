@@ -641,8 +641,25 @@ pub fn create_app(state: AppState) -> Router {
         .merge(webhook_intake_routes());
 
     if state.config.enable_swagger {
-        app =
-            app.merge(SwaggerUi::new("/api-docs/ui").url("/api-docs/openapi.json", openapi_spec()));
+        // Swagger's own bundle is scripts, styles and images from this origin, all of which the
+        // app-wide `default-src 'none'` forbids — so the explorer would load as a blank page under
+        // the baseline. Its policy is set here, on the only routes it covers, and is still
+        // origin-locked: nothing third-party, no framing, no `<base>` rewrite. The `if_not_present`
+        // baseline then leaves it alone.
+        //
+        // This is the *developer* explorer, reached only when `ENABLE_SWAGGER` is set. That is why
+        // a looser policy is acceptable here and would not be as a shared default.
+        const SWAGGER_CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self'              'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;              frame-ancestors 'none'; base-uri 'none'";
+
+        let swagger: Router<AppState> = SwaggerUi::new("/api-docs/ui")
+            .url("/api-docs/openapi.json", openapi_spec())
+            .into();
+        app = app.merge(
+            temper_services::transport::override_content_security_policy(
+                swagger,
+                SWAGGER_CONTENT_SECURITY_POLICY,
+            ),
+        );
     }
 
     apply_transport_layers(app, state)

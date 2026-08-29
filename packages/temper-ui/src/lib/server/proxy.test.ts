@@ -262,7 +262,9 @@ describe('forwardRequest (upstream failure handling)', () => {
 
 	it('does NOT retry a non-idempotent POST — a dropped write surfaces as 502', async () => {
 		let hits = 0;
-		const flaky = createServer((req: IncomingMessage, res: ServerResponse) => {
+		// No `res` parameter: this handler answers nothing, it destroys the socket. Naming a
+		// response it never writes to would suggest it might.
+		const flaky = createServer((req: IncomingMessage) => {
 			hits += 1;
 			req.socket.destroy();
 		});

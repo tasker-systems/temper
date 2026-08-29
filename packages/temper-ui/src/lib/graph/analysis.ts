@@ -486,15 +486,18 @@ const describeEmptyShape = (emptiness: ShapeEmptiness | null, place: PlaceRef): 
 			return 'This place has groupings, and the view you have selected excludes every one of them. Widening the view — or clearing it altogether — will bring them back.';
 		case 'unreadable_or_absent':
 			return 'The measurements for this place could not be read. Either they are not readable by you or it is not there any more — this page deliberately cannot tell you which, because saying which would answer the other. If you followed a link here, check it with whoever sent it.';
-		case null:
-		// The read said the set was non-empty while handing back no rows. The server does not
-		// produce this — `emptiness` is non-NULL exactly when the row set is empty — so rather
-		// than invent a cause for a state that should not exist, say only what is known.
+		// Two inputs land here, one answer, and this arm is NOT dead code however exhaustive the
+		// union looks above it.
 		//
-		// `default` shares this arm and is NOT dead code, however exhaustive the union looks.
+		// `null` means the read said the set was non-empty while handing back no rows. The server
+		// does not produce that — `emptiness` is non-NULL exactly when the row set is empty — so
+		// rather than invent a cause for a state that should not exist, say only what is known. It
+		// carries no `case` label of its own because the label would change no behaviour: `default`
+		// already answers it, and a label that decides nothing is a comment wearing syntax.
+		//
 		// `undefined` reaches here from an API build predating `20260823000010`, which sends no
 		// `emptiness` key at all (the field carries no `skip_serializing_if`, so this needs version
-		// skew rather than an ordinary response). Without it the switch falls off the end, the
+		// skew rather than an ordinary response). Without this arm the switch falls off the end, the
 		// function returns `undefined` from a `: string` signature, and the page renders the literal
 		// word "undefined" under "How its work has been grouped" — failing ugly on precisely the
 		// door this work exists to make honest.

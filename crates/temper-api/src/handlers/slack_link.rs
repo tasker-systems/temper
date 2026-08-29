@@ -503,6 +503,20 @@ const TEMPLATE: &str = r##"<!DOCTYPE html>
 </body>
 </html>"##;
 
+/// The one relaxation of the app-wide content-security policy, and it is one directive wide.
+///
+/// `apply_base_layers` sets `default-src \'none\'` for both surfaces, which is right for the JSON
+/// they answer with and wrong for this page: the template carries an inline `<style>` block, and
+/// under the baseline the page renders unstyled. Everything else the baseline forbids stays
+/// forbidden — there is no script, no external font, no image fetch (the mark is inline SVG, which
+/// is markup rather than a load), and nothing here relaxes those.
+///
+/// It lives beside the markup it is about rather than in the shared policy so that widening it
+/// requires touching this page, and so that the shared policy stays the strict one it should be for
+/// every other route on either surface.
+const CALLBACK_CONTENT_SECURITY_POLICY: &str =
+    "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'";
+
 /// Assemble a callback page. `heading_html` carries its own static `<em>` accent and is trusted
 /// markup; `body_html` is assembled by the callers below, which escape any dynamic text first.
 fn render(eyebrow: &str, heading_html: &str, body_html: &str) -> Response {
@@ -511,7 +525,15 @@ fn render(eyebrow: &str, heading_html: &str, body_html: &str) -> Response {
         .replace("{{EYEBROW}}", eyebrow)
         .replace("{{HEADING}}", heading_html)
         .replace("{{BODY}}", body_html);
-    Html(html).into_response()
+
+    let mut response = Html(html).into_response();
+    // Set here rather than layered: the baseline is applied `if_not_present`, so a header already
+    // on the response wins, and this is the response that needs the exception.
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_SECURITY_POLICY,
+        axum::http::HeaderValue::from_static(CALLBACK_CONTENT_SECURITY_POLICY),
+    );
+    response
 }
 
 /// Shown when the account is now linked. `slug` is the resolved profile handle, escaped.

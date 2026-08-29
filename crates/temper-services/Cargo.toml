@@ -30,7 +30,7 @@ tokio = { version = "1", features = ["sync", "rt", "time"] }
 # This crate owns the transport concerns both surfaces share — the cross-origin policy
 # (`cors::cors_layer`) and the base layers below each surface's root span
 # (`transport::apply_base_layers`) — so neither surface can be assembled without them.
-tower-http = { version = "0.6", features = ["cors", "decompression-gzip"] }
+tower-http = { version = "0.6", features = ["cors", "decompression-gzip", "set-header"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 jsonwebtoken = "9"
