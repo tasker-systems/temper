@@ -11,6 +11,8 @@
 //! which has the composition and the declarations; keeping them out of here is what stops the
 //! substrate from forming an opinion about what a stage MEANT.
 
+use std::collections::HashMap;
+
 use anyhow::Result;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
@@ -90,7 +92,78 @@ pub struct QueryRows {
     pub refusals: Vec<PlanRefusal>,
 }
 
+/// Every stage's tally and refusal, keyed by name — **built once for a whole response.**
+///
+/// `[added — 2026-08-28]` [`QueryRows::tally`] and [`QueryRows::refusal`] each scan a list whose
+/// length is the stage count, and the assembler asks both for every stage and again for every one
+/// of its inputs. That is quadratic in stage count, and while the stage cap now bounds it at a
+/// number nobody will notice, an assembler whose cost is quadratic in the plan is a shape that gets
+/// reused rather than a size that stays small.
+///
+/// **`hits_for` DELEGATES rather than indexing**, and the asymmetry is deliberate. Its cost is
+/// `|returned stages| × |hits|`, which is bounded by the per-stage row ceiling rather than by the
+/// stage count — a different quantity, and not the one the assembler is being made linear in.
+/// Copying its body here to index it would be a second definition of the descending sort whose own
+/// doc explains why the order is restored at all, and two of those would eventually disagree about
+/// where an unscored row sorts.
+pub struct StageIndex<'a> {
+    rows: &'a QueryRows,
+    tallies: HashMap<&'a str, &'a TallyRow>,
+    refusals: HashMap<&'a str, &'a PlanRefusal>,
+}
+
+impl<'a> StageIndex<'a> {
+    /// One stage's disclosure numbers. `None` means the stage produced no tally row at all, which
+    /// is how a stage that never ran is told apart from one that ran and matched nothing.
+    pub fn tally(&self, stage: &str) -> Option<&'a TallyRow> {
+        self.tallies.get(stage).copied()
+    }
+
+    /// Why this stage refused, if it did. `None` means it ran — an empty result from here is an
+    /// honest empty, and the two must never be collapsed.
+    pub fn refusal(&self, stage: &str) -> Option<&'a PlanRefusal> {
+        self.refusals.get(stage).copied()
+    }
+
+    /// Every hit in the response, in the order the statement returned them — the raw list, for the
+    /// one consumer whose answer depends on that order rather than on the ranked one.
+    pub fn hits(&self) -> &'a [HitRow] {
+        &self.rows.hits
+    }
+
+    /// One stage's hits, ordered by its own quantity, best first — [`QueryRows::hits_for`], which
+    /// owns the ordering rule and the reason there is no accessor producing one list two acts share.
+    pub fn hits_for(&self, stage: &str) -> Vec<&'a HitRow> {
+        self.rows.hits_for(stage)
+    }
+}
+
 impl QueryRows {
+    /// Index this response's tallies and refusals by stage. See [`StageIndex`].
+    ///
+    /// **First occurrence wins, matching the scans it replaces.** Stage names are unique — the
+    /// validator refuses a duplicate and the statement emits one tally arm per stage — so the two
+    /// can only differ on input that cannot arrive. `or_insert` rather than `insert` anyway,
+    /// because an index that silently disagreed with the accessor beside it would be the kind of
+    /// difference nothing goes red over.
+    pub fn index(&self) -> StageIndex<'_> {
+        let mut tallies: HashMap<&str, &TallyRow> = HashMap::with_capacity(self.tallies.len());
+        for t in &self.tallies {
+            tallies.entry(t.stage.as_str()).or_insert(t);
+        }
+        let mut refusals: HashMap<&str, &PlanRefusal> = HashMap::with_capacity(self.refusals.len());
+        for r in &self.refusals {
+            if let Some(stage) = r.stage.as_ref() {
+                refusals.entry(stage.as_str()).or_insert(r);
+            }
+        }
+        StageIndex {
+            rows: self,
+            tallies,
+            refusals,
+        }
+    }
+
     pub fn tally(&self, stage: &str) -> Option<&TallyRow> {
         self.tallies.iter().find(|t| t.stage == stage)
     }
@@ -188,6 +261,54 @@ pub async fn execute(pool: &PgPool, compiled: &CompiledQuery) -> Result<QueryRow
 #[cfg(test)]
 mod tests {
     use super::*;
+    use temper_core::types::query::{RefusalReason, StageName};
+
+    /// **The index and the scans it replaces answer identically, for every stage and for a name
+    /// that is not one.**
+    ///
+    /// This is the drift guard, and it is what [`StageIndex`] can actually be held to. That the
+    /// assembler is now LINEAR in stage count is structural — a `HashMap::get` where a `Vec::find`
+    /// used to be — and carries no executable witness here; nothing below measures a complexity,
+    /// and a timing assertion would witness the machine rather than the shape. What CAN go wrong
+    /// and go unnoticed is the two disagreeing, so that is what is pinned: a stage present in one
+    /// and absent from the other, or a different row for the same name.
+    #[test]
+    fn the_index_answers_exactly_as_the_scans_it_replaces() {
+        let stages = ["a", "b", "c", "d"];
+        let rows = QueryRows {
+            hits: vec![],
+            tallies: stages
+                .iter()
+                .enumerate()
+                .map(|(i, s)| TallyRow {
+                    stage: (*s).to_string(),
+                    produced: i as i64,
+                    unusable: 0,
+                })
+                .collect(),
+            refusals: vec![PlanRefusal {
+                stage: Some(StageName::parse("c").expect("legal stage name")),
+                reason: RefusalReason::EmbeddingUnavailable,
+                detail: "the server tried and could not".to_string(),
+            }],
+        };
+        let index = rows.index();
+
+        // A name that names no stage answers `None` through both, which is the arm that
+        // distinguishes a stage that never ran from one that ran and matched nothing.
+        for stage in stages.iter().copied().chain(["absent"]) {
+            assert_eq!(
+                index.tally(stage).map(|t| t.produced),
+                rows.tally(stage).map(|t| t.produced),
+                "tally disagreed for `{stage}`"
+            );
+            assert_eq!(
+                index.refusal(stage).map(|r| &r.detail),
+                rows.refusal(stage).map(|r| &r.detail),
+                "refusal disagreed for `{stage}`"
+            );
+        }
+    }
 
     /// Ids are literal rather than generated: this crate mints UUIDv7 only, and nothing here turns
     /// on the id's shape — only on which rows come back and in what order.

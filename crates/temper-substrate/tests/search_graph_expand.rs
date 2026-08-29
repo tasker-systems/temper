@@ -1465,3 +1465,92 @@ async fn two_pages_of_one_walk_are_disjoint_and_their_union_is_the_single_pass_a
          lost, repeated or reordered at a boundary"
     );
 }
+
+/// **The walk clamps its own depth, so a caller's number is a request rather than a licence.**
+///
+/// `[added — 2026-08-28]` with `20260828000050`, and asserted through `search_graph_expand` on
+/// purpose: that is the one signature in the chain that passes a caller's `p_depth` straight
+/// through to the body. `/api/query` fixes depth at a compile-time constant, so a test driven from
+/// there would pass whether or not the clamp existed — it would witness the compiler's choice, not
+/// the walk's.
+///
+/// The chain is deliberately LONGER than the ceiling: five hops asked at ten. Against the
+/// pre-clamp body this returns all five `[probed against 20260817000020's body — 2026-08-28]`.
+///
+/// The second half is what stops the clamp from being read as a floor. `LEAST`, not `GREATEST`: a
+/// caller asking for less than the ceiling gets less, which is also the only reason `/api/query`'s
+/// fixed depth of 2 still means 2.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_walk_clamps_its_own_depth_and_still_honours_a_smaller_request(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "gc").await;
+
+    // n0 — n1 — n2 — n3 — n4 — n5: five hops from the seed, all weight 1.0.
+    let mut chain = Vec::new();
+    for i in 0..6 {
+        chain.push(
+            mk_embedded(
+                &pool,
+                home,
+                owner,
+                emitter,
+                &format!("n{i}"),
+                &format!("temper://gc/n{i}"),
+                unit(i),
+            )
+            .await,
+        );
+    }
+    for w in chain.windows(2) {
+        edge(&pool, w[0], w[1], home, emitter, EdgeKind::LeadsTo, 1.0).await;
+    }
+
+    let deep = graph_expand(&pool, owner.uuid(), &[chain[0].uuid()], 10, &[], 0.5).await;
+    assert_eq!(
+        deep.len(),
+        3,
+        "a five-hop chain asked at depth 10 answers with three hops; the walk clamps at 3 \
+         whatever the caller names. got: {deep:?}"
+    );
+    let reached: std::collections::BTreeSet<Uuid> = deep.iter().map(|(id, _)| *id).collect();
+    assert!(
+        !reached.contains(&chain[4].uuid()) && !reached.contains(&chain[5].uuid()),
+        "and the nodes past the ceiling are the ones missing, rather than three arbitrary rows"
+    );
+
+    // **A NULL depth still walks nothing, which is what `LEAST` would have broken.**
+    // `[added — 2026-08-28, found in review]` `LEAST(NULL::int, 3)` is `3`, not NULL — Postgres
+    // ignores NULLs in `LEAST` — so the siblings' spelling would have turned this call from an
+    // empty answer into a full three-hop neighbourhood. Empty to maximal, inside a change whose
+    // whole purpose is to bound. The predicate is two conjuncts for exactly this reason and this
+    // is the assertion that says so; see `20260828000050`.
+    let null_depth: Vec<(Uuid, f32)> = {
+        use sqlx::Row;
+        sqlx::query(
+            "SELECT resource_id, graph_score FROM search_graph_expand($1, $2::uuid[], NULL, NULL::text[], $3)",
+        )
+        .bind(owner.uuid())
+        .bind(vec![chain[0].uuid()])
+        .bind(0.5f64)
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| (r.get::<Uuid, _>("resource_id"), r.get::<f32, _>("graph_score")))
+        .collect()
+    };
+    assert!(
+        null_depth.is_empty(),
+        "a NULL depth asks for no recursion and must still get none — `LEAST` would answer with \
+         the full clamped walk. got: {null_depth:?}"
+    );
+
+    let shallow = graph_expand(&pool, owner.uuid(), &[chain[0].uuid()], 2, &[], 0.5).await;
+    assert_eq!(
+        shallow.len(),
+        2,
+        "asking for less than the ceiling still gets less — the clamp is a ceiling, not a floor. \
+         got: {shallow:?}"
+    );
+}

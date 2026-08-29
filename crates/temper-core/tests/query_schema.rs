@@ -168,3 +168,66 @@ fn no_orphaned_fixtures(checked: &Checked) {
         "committed fixtures nothing checks — delete them: {orphaned:?}"
     );
 }
+
+/// **The ceilings the MCP door publishes are the ones the validator enforces.**
+///
+/// `[added — 2026-08-28, found in review]` The three declaration bounds are refused in the SHAPE
+/// pass, and that placement is legal only because the number is a published contract fact rather
+/// than one deployment's choice. `openapi.json` carried them from the start; **this door did not**.
+/// `max_items`/`max_length` are `utoipa` attributes gated on `web-api`, schemars reads
+/// `#[schemars(...)]`, and nothing bridged the two — so an MCP client, whose tool input schema IS
+/// `Composition` (`temper-mcp`'s `run_query`), read the doc line *"at most [`MAX_STAGES`] of
+/// them"*: a Rust symbol with no resolvable value anywhere in the schema it was handed.
+///
+/// It was a pre-existing hole — the stage cap shipped with it — that this branch would have widened
+/// from one ceiling to five. The snapshots above would not have caught it either: they pin whatever
+/// schemars emits, so an absent constraint is simply a snapshot with no constraint in it. This
+/// compares against the CONSTANT.
+#[test]
+fn the_mcp_door_publishes_the_ceilings_it_enforces() {
+    use temper_core::types::query::composition::{MAX_INTENTION_QUERY_BYTES, MAX_STAGES};
+    use temper_core::types::query::filter::MAX_FILTER_VALUES;
+    use temper_core::types::query::id_set::MAX_ID_SET_IDS;
+
+    fn published(schema: serde_json::Value, pointer: &str) -> u64 {
+        schema
+            .pointer(pointer)
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or_else(|| {
+                panic!("the MCP schema publishes nothing at `{pointer}`: {schema:#}")
+            })
+    }
+
+    let composition = serde_json::to_value(schemars::schema_for!(q::Composition)).unwrap();
+    assert_eq!(
+        published(composition, "/properties/stages/maxItems") as usize,
+        MAX_STAGES
+    );
+
+    let intention = serde_json::to_value(schemars::schema_for!(q::Intention)).unwrap();
+    assert_eq!(
+        published(intention, "/properties/query/maxLength") as usize,
+        MAX_INTENTION_QUERY_BYTES
+    );
+
+    let id_set = serde_json::to_value(schemars::schema_for!(q::IdSet)).unwrap();
+    assert_eq!(
+        published(id_set, "/properties/ids/maxItems") as usize,
+        MAX_ID_SET_IDS
+    );
+
+    let resource = serde_json::to_value(schemars::schema_for!(q::ResourceFilter)).unwrap();
+    for field in ["doc_type", "tags"] {
+        assert_eq!(
+            published(resource.clone(), &format!("/properties/{field}/maxItems")) as usize,
+            MAX_FILTER_VALUES,
+            "`ResourceFilter::{field}`"
+        );
+    }
+
+    let edge = serde_json::to_value(schemars::schema_for!(q::EdgeFilter)).unwrap();
+    assert_eq!(
+        published(edge, "/properties/labels/maxItems") as usize,
+        MAX_FILTER_VALUES
+    );
+}

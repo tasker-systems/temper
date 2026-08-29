@@ -72,8 +72,39 @@ pub struct IdSet {
     /// Required for `region`; absent for every other kind today.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provenance: Option<IdProvenance>,
+    /// The ids themselves — at most [`MAX_ID_SET_IDS`] of them, refused as
+    /// [`crate::types::query::disposition::RefusalReason::TooManyIds`].
+    // Published on BOTH doors — `utoipa` for `openapi.json` and the SDKs, `schemars` for the MCP
+    // tool's input schema. See `Composition::stages` for why the pair is not duplication.
+    // `max_items` is what makes that refusal legal in the SHAPE pass, exactly as it is for
+    // `Composition::stages` — a client refuses what the contract forbids, never what one
+    // deployment chose. See the comment on that field for the full argument.
+    #[cfg_attr(feature = "web-api", schema(max_items = 256))]
+    #[cfg_attr(feature = "mcp", schemars(length(max = 256)))]
     pub ids: Vec<Uuid>,
 }
+
+/// The most ids one [`IdSet`] may carry.
+///
+/// # It bounds a PRODUCT, not a list
+///
+/// Every stage discloses how many of the ids it was handed it could not use, and that number is
+/// computed by comparing the caller's set against the set this principal can see — so the work is
+/// `|caller ids| × |visible ids|`, with the caller choosing the second factor. Same shape as
+/// `MAX_PER_CANDIDATE_PROBES`, which was measured rather than argued: one predicate carrying 2,000
+/// values against 3,761 live rows discarded 2.5 million join-filter rows in 1,628 ms. 256 against a
+/// corpus of that order is roughly a million comparisons per stage — an order below the measured
+/// cliff, and orders above any question anyone asks, since a caller pipes ids they received from a
+/// prior read and a page is 50.
+///
+/// # Distinct from the anchor's cardinality, which this does not retire
+///
+/// `AnchorTakesOneId` refuses a cogmap or context bound carrying more than one id, because today's
+/// fragments take an `(anchor_table, anchor_id)` pair. That is a limitation of what this server has
+/// BUILT — an `anchor_ids uuid[]` retires it — so it lives in the capability pass and may move.
+/// This cap is a fact about the contract and cannot move without a wire change. The two coexist:
+/// a two-id cogmap bound meets the first, a 300-id resource bound meets the second.
+pub const MAX_ID_SET_IDS: usize = 256;
 
 #[cfg(test)]
 mod tests {

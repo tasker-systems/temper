@@ -20,7 +20,8 @@
 //!    `query_check` are round trips — the CLI's `--check` is free because it touches no network,
 //!    and that advantage does not transfer. Worse, `query_check` runs `validate_shape` only, so a
 //!    cautious agent that checks first gets a false "clean" and then discovers capability refusals
-//!    on the real call. `query`'s `prepare` already gates shape before embed, so a shape-invalid
+//!    on the real call. `query`'s `prepare` already gates on the full `validate` before embed
+//!    `[was shape alone — 2026-08-28]`, so an invalid
 //!    plan refuses at the shape gate and returns every fault (shape + capability) in one response.
 //!    The refusal path IS the check.
 //!
@@ -132,6 +133,17 @@ pub async fn run_query(
 fn map_query_error(context: &str, err: ApiError) -> rmcp::ErrorData {
     match err {
         ApiError::PlanRefused { refusals } => {
+            // `[added — 2026-08-28, found in review]` The HTTP door logs every refusal's reason in
+            // `ApiError`'s `IntoResponse`; this door never reaches that impl, so an MCP refusal
+            // emitted NOTHING and the agent-facing surface — the one carrying the most automated
+            // traffic — was the one with no operator signal. Reasons only, never `detail`, which
+            // quotes the caller's own composition back.
+            tracing::warn!(
+                context,
+                refusal_count = refusals.len(),
+                reasons = ?refusals.iter().map(|r| &r.reason).collect::<Vec<_>>(),
+                "plan refused"
+            );
             let details = refusals
                 .iter()
                 .map(|r| {

@@ -76,10 +76,15 @@ pub struct ShapeReport {
 
 /// Check a plan's shape locally: no network, no declarations, every refusal at once.
 ///
-/// Calls [`temper_core::types::query::validate::validate_shape`], which is the **same** pass the
-/// server runs before it embeds — so this cannot drift into a second, kinder validator. What it
-/// deliberately does not run is the capability pass, which is why a clean result is a statement
-/// about expressibility and not about this deployment.
+/// Calls [`temper_core::types::query::validate::validate_shape`] — the **same function** the server
+/// links, so this cannot drift into a second, kinder spelling of expressibility.
+///
+/// **It is no longer the same pass the server runs before it embeds** `[corrected — 2026-08-28,
+/// found in review]`, and the sentence that said so had become exactly backwards. `query_read::
+/// prepare` gates on the FULL `validate`, because the composition-level embed budget it must see is
+/// a capability refusal — what this deployment can embed is a property of the machine. So a clean
+/// result here is a statement about expressibility and not about this deployment, which is what
+/// `SHAPE_DISCLOSURE` says on every report; the set of things it cannot speak to simply grew.
 pub fn check_plan(composition: &Composition) -> ShapeReport {
     let refusals = temper_core::types::query::validate::validate_shape(composition);
     ShapeReport {

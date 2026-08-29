@@ -142,6 +142,34 @@ permanent would be silently dropped.
 Idempotent reads retry three times on 5xx and transport failures. **Writes are
 never auto-retried.** The SDK classifies; it does not decide to re-submit.
 
+## Composition bounds raise before the request `[2026-08-28]`
+
+`/api/query`'s contract publishes ceilings on what one composition may declare, and the
+generated models enforce them in their attribute writers — which `initialize` calls — so
+these raise `ArgumentError` locally rather than returning a `BadRequest` with a typed
+refusal. The writers are **not** gated on `client_side_validation`, so this cannot be
+switched off.
+
+| field | ceiling |
+|---|---|
+| `Composition#stages` | 64 |
+| `Intention#query` | 4096 |
+| `IdSet#ids` | 256 |
+| `ResourceFilter#doc_type` / `#tags`, `EdgeFilter#labels` | 256 |
+
+**This is a behaviour change for code that already builds large plans**: a 300-id `IdSet`
+used to construct fine and reach the server. It now raises before any HTTP call.
+
+**The gem counts characters; the server counts bytes.** A 4096-character CJK question is
+8192 bytes — it constructs cleanly here and is refused server-side as `intention_too_long`.
+The skew is one-directional (a UTF-8 string is never fewer bytes than characters), so the
+gem can only under-enforce, never refuse something the server would have run.
+
+The per-stage predicate and probe caps and the aggregate embed budget
+(`intention_budget_exceeded`) are deliberately not enforced here — neither is a contract
+fact — and arrive as refusals.
+
+
 ## Going live
 
 Authentication is not authorization. A valid M2M token does **not** get you in on

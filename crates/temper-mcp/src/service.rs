@@ -858,6 +858,70 @@ mod tests {
     /// door declares — so the expected schema is stripped the same way before comparing. A real
     /// drift (a wrapper, a subset, a hand-rolled twin) still fails this test: the `properties` map
     /// and `type` are unaffected by the strip.
+    /// **The ceilings `/api/query` refuses on are in the schema this door hands a client.**
+    ///
+    /// `[added — 2026-08-28, found in review]` The shape pass may raise a bound only if the number
+    /// is published, because a client must never refuse a plan a newer server would run. Until
+    /// 2026-08-28 the MCP door published none of them — `max_items`/`max_length` are `utoipa`
+    /// attributes gated on `web-api`, schemars reads its own namespace, and nothing bridged the
+    /// two — so an agent read *"at most [`MAX_ID_SET_IDS`] of them"*, a Rust symbol with no
+    /// resolvable value.
+    ///
+    /// **temper-core has a test for that, and it is one door short.** It asserts against
+    /// `schemars::schema_for!`, which proves the DERIVE emits the constraint, not that rmcp hands
+    /// it over — it would stay green if the SDK changed how it builds input schemas from a
+    /// `Parameters<_>` wrapper. This asserts against `tool_router().list_all()`, the object a
+    /// connected client actually receives, which is the pattern the search test beside it already
+    /// uses.
+    #[test]
+    fn the_query_tool_advertises_the_ceilings_the_server_enforces() {
+        use temper_core::types::query::composition::{MAX_INTENTION_QUERY_BYTES, MAX_STAGES};
+        use temper_core::types::query::filter::MAX_FILTER_VALUES;
+        use temper_core::types::query::id_set::MAX_ID_SET_IDS;
+
+        let advertised = TemperMcpService::tool_router()
+            .list_all()
+            .into_iter()
+            .find(|t| t.name == "run_query")
+            .expect("the router advertises a `run_query` tool")
+            .input_schema;
+        let schema = serde_json::to_value(&*advertised).expect("input schema serializes");
+
+        // The wrapper `$ref`s `Composition` into `$defs`, so the ceilings live under the DEFS —
+        // reaching them through the advertised object is the whole point of this test.
+        for (pointer, expected) in [
+            ("/$defs/Composition/properties/stages/maxItems", MAX_STAGES),
+            (
+                "/$defs/Intention/properties/query/maxLength",
+                MAX_INTENTION_QUERY_BYTES,
+            ),
+            ("/$defs/IdSet/properties/ids/maxItems", MAX_ID_SET_IDS),
+            (
+                "/$defs/ResourceFilter/properties/doc_type/maxItems",
+                MAX_FILTER_VALUES,
+            ),
+            (
+                "/$defs/ResourceFilter/properties/tags/maxItems",
+                MAX_FILTER_VALUES,
+            ),
+            (
+                "/$defs/EdgeFilter/properties/labels/maxItems",
+                MAX_FILTER_VALUES,
+            ),
+        ] {
+            let published = schema
+                .pointer(pointer)
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or_else(|| {
+                    panic!("the advertised run_query schema publishes nothing at `{pointer}`")
+                });
+            assert_eq!(
+                published as usize, expected,
+                "`{pointer}` in the schema this door hands a client"
+            );
+        }
+    }
+
     #[test]
     fn the_search_tool_advertises_exactly_the_shared_search_params_schema() {
         let advertised = TemperMcpService::tool_router()
