@@ -9,6 +9,7 @@ use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
 };
 use std::sync::Arc;
+use tower_http::limit::RequestBodyLimitLayer;
 
 use temper_services::state::AppState;
 
@@ -16,6 +17,31 @@ use crate::config::McpConfig;
 use crate::discovery;
 use crate::middleware::require_mcp_auth;
 use crate::service::TemperMcpService;
+
+/// The largest request body this door will read.
+///
+/// `[added — 2026-08-28, found in review]` **This door had no body limit of any kind**, and not by
+/// omission: `/mcp` is mounted with `nest_service`, whose target is a raw tower service, so no axum
+/// extractor runs and `DefaultBodyLimit` is not merely unset but *inapplicable*. rmcp's `expect_json`
+/// reads the body with a bare `.collect()`, and `apply_base_layers` puts request decompression
+/// ABOVE this router — so a compressed POST expanded into an unbounded buffer on a ~1.7 vCPU
+/// function. `RequestBodyLimitLayer` is the instrument that works on a raw service, and sitting
+/// inside decompression it measures decompressed bytes, the same property `/api/query`'s limit has.
+///
+/// **Why this is not `QUERY_MAX_BODY_BYTES`.** `/api/query` reads one composition and 4 MB is
+/// generous for it. This door carries the whole tool surface, including `ingest`'s inline
+/// `content: String` and `data_artifacts`' `content: serde_json::Value`, so a 4 MB ceiling could
+/// refuse legitimate work — and lowering a limit later is the breaking direction. 25 MB matches
+/// `GITHUB_MAX_WEBHOOK_BYTES`, this repo's existing generous transport bound, which puts the number
+/// on an in-repo precedent rather than on a guess.
+///
+/// **What it does NOT bound**, stated so it is not mistaken for more than it is: every declaration
+/// cap on a composition is enforced identically on this door, because `run_query` calls the same
+/// `query_read::prepare`. What a transport limit adds is the backstop for the cost the declaration
+/// caps cannot see — `QUERY_MAX_BODY_BYTES`' own doc names it, a single `Contains` value counting
+/// as one probe however large. At 25 MB that shape is bounded far more loosely here than at 4 MB on
+/// the HTTP door. Closing it properly is a declaration-cap question, not a transport one.
+const MCP_MAX_BODY_BYTES: usize = 25 * 1024 * 1024;
 
 /// Shared state for discovery handlers and the MCP middleware.
 #[derive(Clone, Debug)]
@@ -72,13 +98,17 @@ pub fn build_router(api_state: AppState, mcp_config: McpConfig) -> Router {
         config,
     );
 
-    let mcp_routes =
-        Router::new()
-            .nest_service("/mcp", mcp_service)
-            .layer(middleware::from_fn_with_state(
-                shared.clone(),
-                require_mcp_auth,
-            ));
+    // The limit is the OUTERMOST layer here, above `require_mcp_auth`, so an oversized body is
+    // refused without the database round trip that authentication performs. It is still INSIDE
+    // `apply_base_layers`' decompression, which is applied to the merged router below — so it
+    // measures decompressed bytes, the property `/api/query`'s limit has and the one that matters.
+    let mcp_routes = Router::new()
+        .nest_service("/mcp", mcp_service)
+        .layer(middleware::from_fn_with_state(
+            shared.clone(),
+            require_mcp_auth,
+        ))
+        .layer(RequestBodyLimitLayer::new(MCP_MAX_BODY_BYTES));
 
     // ── Health (public) ────────────────────────────────────────────────
     let health = Router::new().route("/mcp/health", get(|| async { "ok" }));

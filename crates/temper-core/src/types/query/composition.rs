@@ -75,15 +75,22 @@ pub struct Intention {
     /// echoes no intention. Should a trace ever carry one, that stops being incidental and becomes
     /// a constraint — a 768-float array must not serialize back to the caller.
     ///
-    /// **At most [`MAX_EMBEDDING_DIM`] floats**, refused as
+    /// **Exactly [`MAX_EMBEDDING_DIM`] floats**, refused as
     /// [`super::disposition::RefusalReason::MalformedEmbedding`]. `[added — 2026-08-28, found in
     /// review]` This carried no bound of any kind, which made it the largest unbounded field on the
     /// contract: a million floats on one stage is 4 MB that validates cleanly, and there are
     /// [`MAX_STAGES`] stages. A wrong-sized vector also reached pgvector and came back as an
     /// **opaque 500** — the caller told nothing, in the door whose promise is a typed refusal.
+    ///
+    /// **Published as a min AND a max, because the check is an equality.** `[corrected —
+    /// 2026-08-28, found in review]` Publishing only the maximum stated half the rule: a 384-float
+    /// vector cleared every generated client and was then refused by the server, which is exactly
+    /// the gap the shape pass exists to close — a client must be able to refuse what the server
+    /// would refuse. The two bounds are the same number because a vector of any other length is
+    /// not a large question, it is a vector for a different space.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "web-api", schema(max_items = 768))]
-    #[cfg_attr(feature = "mcp", schemars(length(max = 768)))]
+    #[cfg_attr(feature = "web-api", schema(min_items = 768, max_items = 768))]
+    #[cfg_attr(feature = "mcp", schemars(length(min = 768, max = 768)))]
     pub embedding: Option<Vec<f32>>,
 }
 
@@ -422,9 +429,14 @@ pub const MAX_INTENTION_QUERY_BYTES: usize = 4096;
 /// **The bound is on the COUNT and the refusal is about the SHAPE**, which is why it is not one of
 /// the `TooMany…` family. A vector of any other length is not a large question, it is a vector for
 /// a different space: `pgvector` rejects it, and this door redacts that to an opaque 500. So the
-/// cap is `> MAX_EMBEDDING_DIM` for the body's sake and the refusal says *wrong shape*, since a
-/// caller who sends 767 floats has the same problem as one who sends 769 and neither is helped by
-/// being told about a maximum.
+/// check is `!= MAX_EMBEDDING_DIM` and the refusal says *wrong shape*, since a caller who sends 767
+/// floats has the same problem as one who sends 769 and neither is helped by being told about a
+/// maximum.
+///
+/// `[corrected — 2026-08-28, found in review]` The field publishes this as **both** `min_items` and
+/// `max_items`. An earlier revision published only the maximum, which let a short vector clear every
+/// generated client and be refused by the server — the enforced rule was an equality and the
+/// published one was an inequality, so a client could not refuse what the server would.
 pub const MAX_EMBEDDING_DIM: usize = 768;
 
 /// The most question text ONE COMPOSITION may hand the server to embed, summed across its stages.

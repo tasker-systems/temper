@@ -420,6 +420,17 @@ Two committed, target-agnostic mitigations in `vercel.json`, so every target inh
   graceful FTS degrade, and live traffic. Tune the cadence, or the budget via
   `TEMPER_QUERY_EMBED_BUDGET_MS`, per target.
 
+> **Raising `TEMPER_QUERY_EMBED_BUDGET_MS` alone buys nothing on `/api/query`.**
+> `[added — 2026-08-28]` A composition's embed phase is bounded twice: by that time budget, and by
+> `TEMPER_QUERY_INTENTION_BUDGET_BYTES` (default 40,960) — the total bytes of intention text one
+> composition may ask the server to embed, refused in the capability pass as
+> `intention_budget_exceeded`. The byte ceiling is what keeps the published per-field caps
+> answerable: `MAX_STAGES × MAX_INTENTION_QUERY_BYTES` is 64 × 4,096, and a composition of that
+> shape measures ~24s of embedding — far outside the time budget. **The two move together.** A
+> target that raises the time budget without raising the byte budget still refuses the same
+> compositions, and one that raises the byte budget without the time budget turns a fast refusal
+> into a slow timeout.
+
 ### Embed-drain throughput knobs (per deploy)
 
 The async-embed drain scales by three env/cron knobs, tuned per deploy — none need a rebuild:

@@ -22,6 +22,7 @@ http = "1"
 jsonwebtoken = "9"
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls"] }
 tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["limit"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"

@@ -133,6 +133,17 @@ pub async fn run_query(
 fn map_query_error(context: &str, err: ApiError) -> rmcp::ErrorData {
     match err {
         ApiError::PlanRefused { refusals } => {
+            // `[added — 2026-08-28, found in review]` The HTTP door logs every refusal's reason in
+            // `ApiError`'s `IntoResponse`; this door never reaches that impl, so an MCP refusal
+            // emitted NOTHING and the agent-facing surface — the one carrying the most automated
+            // traffic — was the one with no operator signal. Reasons only, never `detail`, which
+            // quotes the caller's own composition back.
+            tracing::warn!(
+                context,
+                refusal_count = refusals.len(),
+                reasons = ?refusals.iter().map(|r| &r.reason).collect::<Vec<_>>(),
+                "plan refused"
+            );
             let details = refusals
                 .iter()
                 .map(|r| {

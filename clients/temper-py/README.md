@@ -168,7 +168,7 @@ at construction (and, since `validate_assignment` is on, at mutation) rather tha
 | `Composition.stages` | 64 |
 | `Intention.query` | 4096 |
 | `IdSet.ids` | 256 |
-| `ResourceFilter.doc_type` / `.tags`, `EdgeFilter.labels` | 64 |
+| `ResourceFilter.doc_type` / `.tags`, `EdgeFilter.labels` | 256 |
 
 **This is a behaviour change for code that already builds large plans**: a 300-id `IdSet`
 used to construct fine and reach the server. It now raises before any HTTP call.

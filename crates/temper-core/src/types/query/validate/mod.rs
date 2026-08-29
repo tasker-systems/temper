@@ -1393,6 +1393,56 @@ mod tests {
         assert_eq!(published as usize, MAX_INTENTION_QUERY_BYTES);
     }
 
+    /// The vector dimension is published as BOTH bounds, because the check is an equality.
+    ///
+    /// `[added — 2026-08-28, found in review]` The other members of this family publish a maximum
+    /// because they enforce a maximum. This one enforced `!=` while publishing only `max_items`, so
+    /// a 384-float vector cleared every generated client and was refused by the server — the exact
+    /// asymmetry the shape pass exists to remove. Asserting only the max would have stayed green
+    /// through that bug, so both halves are asserted here.
+    #[cfg(feature = "web-api")]
+    #[test]
+    fn the_published_vector_dimension_is_published_as_an_equality() {
+        use utoipa::PartialSchema;
+        let schema = serde_json::to_value(Intention::schema()).expect("Intention has a schema");
+        let max = schema
+            .pointer("/properties/embedding/maxItems")
+            .and_then(serde_json::Value::as_u64)
+            .expect("`Intention::embedding` publishes a `maxItems`");
+        let min = schema
+            .pointer("/properties/embedding/minItems")
+            .and_then(serde_json::Value::as_u64)
+            .expect("`Intention::embedding` publishes a `minItems`");
+        assert_eq!(max as usize, MAX_EMBEDDING_DIM);
+        assert_eq!(min as usize, MAX_EMBEDDING_DIM);
+    }
+
+    /// Every narrowing list publishes the one cap the shape pass enforces on all three.
+    ///
+    /// `[added — 2026-08-28, found in review]` The MCP door already pinned these three; the
+    /// `web-api` door pinned none, so a utoipa-side divergence was caught only by `openapi-check` —
+    /// which compares the file to a regeneration of itself, never the published number to the
+    /// constant. A cap raised in `filter.rs` and not in the attribute would have stayed green.
+    #[cfg(feature = "web-api")]
+    #[test]
+    fn the_published_filter_value_ceilings_are_the_enforced_one() {
+        use utoipa::PartialSchema;
+        let resource =
+            serde_json::to_value(ResourceFilter::schema()).expect("ResourceFilter has a schema");
+        let edge = serde_json::to_value(EdgeFilter::schema()).expect("EdgeFilter has a schema");
+        for (schema, ptr, what) in [
+            (&resource, "/properties/doc_type/maxItems", "doc_type"),
+            (&resource, "/properties/tags/maxItems", "tags"),
+            (&edge, "/properties/labels/maxItems", "labels"),
+        ] {
+            let published = schema
+                .pointer(ptr)
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or_else(|| panic!("`{what}` publishes a `maxItems`"));
+            assert_eq!(published as usize, MAX_FILTER_VALUES, "{what}");
+        }
+    }
+
     /// An id set larger than the contract admits is refused, and the refusal names the stage.
     #[test]
     fn an_id_set_above_the_cap_is_refused() {
@@ -1840,6 +1890,48 @@ mod tests {
             errs.iter()
                 .any(|e| e.reason == RefusalReason::DuplicateSetMember),
             "combining a set with itself yields the set; got: {errs:?}"
+        );
+    }
+
+    /// **A long list of undeclared names is answered with a SHORT refusal list.**
+    ///
+    /// `[added — 2026-08-28, found in review]` The duplicate guard above `break`s on the first
+    /// repeat, and that does not protect the dangling-reference walk below it: a repeat of an
+    /// *undeclared* name trips the duplicate guard once and then falls through. So the refusal list
+    /// grew with the input — 4 MB of repeated names became roughly a million refusals, built in
+    /// memory, serialized whole as a 400, and built twice because `prepare` validates either side
+    /// of the embed.
+    ///
+    /// This is the bite: against the unbroken loop the assertion below sees 20,000 refusals, not a
+    /// number bounded by the plan's node count.
+    #[test]
+    fn a_long_list_of_undeclared_names_yields_a_bounded_refusal_list() {
+        let repeats = 20_000;
+        let c = plan_with_intention(
+            vec![
+                act("a", ActName::FindExact, Some(caller_ids(IdKind::Resource))),
+                StageNode::Combine(CombineNode {
+                    name: StageName::parse("both").unwrap(),
+                    op: CombineOp::Union,
+                    inputs: (0..repeats)
+                        .map(|_| StageName::parse("nowhere").unwrap())
+                        .collect(),
+                }),
+            ],
+            vec!["a"],
+        );
+        let errs = validate(&c).unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| e.reason == RefusalReason::DanglingReference),
+            "an undeclared name must still be refused; got {} refusals",
+            errs.len()
+        );
+        assert!(
+            errs.len() <= MAX_STAGES,
+            "the refusal list must be bounded by the plan's size, not by the length of one \
+             unbounded field: {repeats} repeats produced {} refusals",
+            errs.len()
         );
     }
 

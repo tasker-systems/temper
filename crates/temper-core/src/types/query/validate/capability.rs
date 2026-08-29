@@ -550,11 +550,21 @@ fn check_act(
             // question — the same reason a multi-value `doc_type` was refused rather than truncated
             // to its first element while that slot held one value.
             //
-            // **This closes the instance and not the class.** Nothing bounds a composition's stage
-            // count, no `statement_timeout` exists anywhere in the repo, and `acquire_timeout`
-            // bounds waiting for a connection rather than execution — so a caller can still spend
-            // arbitrary time by other means. That is task
-            // `01a000ee-9fec-7283-baa5-75cd1580f023`, which is not fixed here
+            // **This closes the instance and not the class.** `[amended — 2026-08-28]` The stage
+            // count IS now bounded — `MAX_STAGES`, refused in the shape pass — so the original
+            // wording here is no longer true and must not be cited as if it were. What remains open
+            // is the execution bound: no `statement_timeout` exists anywhere in the repo, and
+            // `acquire_timeout` bounds waiting for a connection rather than execution, so a caller
+            // can still spend arbitrary time by other means.
+            //
+            // Note the residual this cap leaves even with the stage cap in place: these are
+            // PER-STAGE ceilings, and `MAX_STAGES` of them multiply. There is no composition-level
+            // analogue of `MAX_COMPOSITION_INTENTION_BYTES` for the axes that reach Postgres, which
+            // is a known hole and not an oversight — it is the same question as the execution
+            // bound, and it is sized by measurement rather than by argument.
+            //
+            // That is task `01a000ee-9fec-7283-baa5-75cd1580f023`, whose successor
+            // `01a0013c-06d2-7f22-bafc-409154f72af3` holds the number. Not fixed here
             // `[decided — 2026-08-14, Pete]`: a global execution bound is a decision about every
             // query on the surface rather than about this act, and it may want a read/write path
             // split rather than a single setting — so it gets a focused session, not a corner of
@@ -703,9 +713,11 @@ fn check_act(
             // Refused rather than clamped, for `facets`' reason: clamping answers a different
             // question silently.
             //
-            // **It closes the instance, not the class.** Nothing bounds a composition's stage
-            // count and no `statement_timeout` exists anywhere in the repo — task
-            // `01a000ee-9fec-7283-baa5-75cd1580f023`, unchanged by this.
+            // **It closes the instance, not the class.** `[amended — 2026-08-28]` The stage count
+            // IS now bounded by `MAX_STAGES`; what is still absent is a `statement_timeout`, and
+            // these per-stage ceilings still multiply by the stage cap — task
+            // `01a000ee-9fec-7283-baa5-75cd1580f023` and its successor
+            // `01a0013c-06d2-7f22-bafc-409154f72af3`, unchanged by this.
             // The same value-list hazard, over candidate EDGES rather than rows. It shipped with
             // the edge half on 2026-08-15 and is closed here in the same change that closes the
             // resource one, because the two predicates compile to the same shape and a bound

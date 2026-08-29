@@ -141,7 +141,7 @@ uses them for its own auth tests).
 ## Composition bounds are NOT enforced here `[2026-08-28]`
 
 `/api/query`'s contract publishes ceilings on what one composition may declare — 64 stages,
-4096 bytes per question, 256 ids per set, 64 values per narrowing list. `schema.ts` carries
+4096 bytes per question, 256 ids per set, 256 values per narrowing list. `schema.ts` carries
 them as types only; there is no runtime validator in this package, so an over-cap plan is
 sent and the server answers `400 PLAN_REFUSED` with the typed reason
 (`too_many_stages`, `intention_too_long`, `too_many_ids`, `too_many_filter_values`,

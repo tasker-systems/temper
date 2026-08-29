@@ -241,6 +241,19 @@ pub(super) fn validate_shape_indexed(
             }
         }
 
+        // `break` for the same reason the two checks above it do. `[added — 2026-08-28, found in
+        // review]` This loop walks the SAME unbounded `CombineNode::inputs`, and the
+        // `DuplicateSetMember` guard's `break` does not protect it: a repeat of an UNDECLARED name
+        // trips that guard once and then falls through to here, which had no ceiling of its own. A
+        // million repeats of one undeclared name is 4 MB of request and was a million refusals —
+        // each carrying a `StageName` and a ~40-byte detail — built in memory and serialized whole
+        // as a 400, on a function with ~1.7 vCPU. `prepare` runs `validate` twice, so the list was
+        // built, dropped and built again.
+        //
+        // With the `break` the whole pass emits at most one dangling-reference refusal per node,
+        // and nodes are bounded by `MAX_STAGES`. The cost is that a node naming two different
+        // undeclared stages reports only the first — the same trade the sibling guards make, and
+        // the right one: an over-long list must not be answered with an over-long refusal list.
         for up in node.upstream_names() {
             if !declared.contains(up.as_str()) {
                 errs.push(refusal(
@@ -252,6 +265,7 @@ pub(super) fn validate_shape_indexed(
                         up.as_str()
                     ),
                 ));
+                break;
             }
         }
     }
