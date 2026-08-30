@@ -25,6 +25,39 @@ construct. But `authenticate`, `classify`, `Principal` and `resolve_from_claims`
 crate-private, so a hand-built `AuthClaims` has nowhere to go — there is no public function
 that takes one. The enforcement is the absence of a door, not a runtime check.
 
+## Edge-injected identity: observability only, never an answer
+
+`x-vercel-oidc-passport-token` — and any edge-injected identity header — may be read for
+**observability only**, recording who reached the edge. It is never an input to authentication
+or authorization. Identity comes from the seam; standing comes from `admit`.
+
+The header is *genuinely trustworthy as to its own claims*: Vercel Passport signs it, and the
+edge strips client-supplied values, so it authentically names the user who passed the edge
+challenge. That authenticity is what makes it hazardous. Vercel team membership is not Temper
+standing — trusting the header would admit principals `admit` never approved, bypass
+`Denied` / `Revoked` entirely, and give *who is this caller* two answers that can disagree, on
+one of two surfaces only: Passport fronts the UI origin, the API origin never sees the header.
+That asymmetry is the seam-drift shape again — the property that once let a deactivated account
+keep MCP access.
+
+The cautionary twin is already in production: `webhook_intake`'s anti-decoy `client_id`
+assertion (recorded in `audit-route-auth.sh`) exists because the broker attestation is
+claim-for-claim identical to the deployment's own ambient `x-vercel-oidc-token` — a verifier
+stopping at *"a valid Vercel OIDC token naming our project"* would accept the deployment's own
+identity as a forged webhook. Same failure mode, one header over; the lesson was paid for once.
+
+**What the sanctioned Passport shape does instead.** When Passport fronts the UI origin, the
+edge-authenticated user reaches Temper's own AS through the ordinary upstream-connector chain —
+Passport pointed at the same corporate IdP Temper's AS federates, sessions issued by Temper's
+AS, tokens verified by the seam like every other token. No surface needs the header for
+identity. A UI server that reads the header to "trust `external_sub`" directly has constructed
+a principal outside the seam — the most tempting shortcut past it, and the one this section
+exists to refuse before the shortcut is built rather than after.
+
+**Enforcement.** `audit-passport-identity-header.sh` fails CI on the header name in any
+non-markdown file outside a cited allowlist. If the header is ever logged for observability,
+the field is named in the logging contract first, and the allowlist entry cites that decision.
+
 ## Three public entry points, a typestate chain
 
 ```rust
