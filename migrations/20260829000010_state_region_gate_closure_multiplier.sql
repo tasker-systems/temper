@@ -17,7 +17,9 @@ COMMENT ON FUNCTION visible_region_anchors(uuid) IS
     'by anchor_table, and each source already de-duplicates within its own kind. COST, stated where '
     'it is paid: every call evaluates BOTH arms — a UNION ALL does not short-circuit — and each arm '
     'computes the recursive team closure (cogmap_visible_maps calls profile_reachable_teams once; '
-    'contexts_readable_by, through contexts_readable_by_teams, once), so ONE call costs TWO '
+    'contexts_readable_by calls it once itself and hands the expanded set to '
+    'contexts_readable_by_teams, which takes the closure as a parameter rather than recomputing), '
+    'so ONE call costs TWO '
     'recursive team closures. wayfind_region_scores enters this once per invocation and a composed '
     'plan invokes it once per survey stage, so an N-survey-stage statement pays 2N team closures '
     'for region visibility, beside the same statement''s single hoisted resource gate.';

@@ -3,8 +3,9 @@
 //! only across a stage boundary, dependency order) are all decidable from the emitted text alone.
 //!
 //! One property is NOT decidable from the emitted text: the survey act's region gate lives inside
-//! the SQL chain the statement calls by principal, so its per-stage closure cost is pinned from the
-//! deployed function definitions in `migrations/` (newest definition wins) — still no database.
+//! the SQL chain the statement calls by principal, so its per-stage closure cost is pinned from
+//! the deployed function definitions `MIGRATOR` embeds (newest definition wins) — still no
+//! database.
 
 use temper_core::types::ids::ProfileId;
 use temper_core::types::query::{
@@ -2025,21 +2026,11 @@ fn every_arm_of_the_union_carries_the_region_column() {
 // text — however written — cannot see this cost. The pin therefore has two halves: the EMITTED half
 // counts the statement's gate entries (one survey core call per stage, each handing the principal
 // to the region gate), and the DEPLOYED half counts the closure-bearing calls through the chain's
-// newest definitions in `migrations/`, newest definition winning — the same rule this tree uses to
-// read any function. Still no database: both halves are decided from text the repository holds.
+// newest definitions — read from `MIGRATOR`, the exact set the binary ships, so "deployed" means
+// the embedded artifact and not the directory beside it. Still no database: both halves are
+// decided from text the repository holds.
 
-use std::path::{Path, PathBuf};
-
-fn workspace_root() -> PathBuf {
-    // `crates/temper-substrate` -> the workspace root.
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("temper-substrate sits two levels below the workspace root")
-        .to_path_buf()
-}
-
-/// The deployed body of `sql_fn`, from the NEWEST definition in `migrations/`.
+/// The deployed body of `sql_fn`, from the NEWEST definition `MIGRATOR` embeds.
 ///
 /// Full-line `--` comments are stripped before scanning, because migration headers quote SQL
 /// freely (the same call the migration declaration checker makes). The needle carries `CREATE`
@@ -2047,53 +2038,50 @@ fn workspace_root() -> PathBuf {
 /// a `COMMENT ON FUNCTION <name>(` line names the function too, and matching it would hand back
 /// the NEXT function's body — the paren keeps a longer name (`contexts_readable_by_teams`) from
 /// matching its shorter sibling, and the `CREATE` prefix keeps comment targets from matching
-/// definitions. Within and across files, a later definition replaces an earlier one, so the last
-/// occurrence in the last defining file is what ships — and what this returns.
+/// definitions. Both spellings are scanned as ONE positional pass: exhausting one needle before
+/// the other would pin an earlier definition whenever a file's last definition of a name uses the
+/// other spelling.
 ///
-/// A name no migration defines panics: every name asked for here is load-bearing to the test that
-/// asks, so a rename reddens the test rather than silently skipping a hop.
+/// The margins are loud, not silent. This tree writes uppercase `CREATE` and plain `$$` bodies;
+/// a definition that broke either convention would panic here or truncate toward a count that
+/// fails the hop assertions below — never a vacuous green. And a name no migration defines
+/// panics: every name asked for here is load-bearing to the test that asks, so a rename reddens
+/// the test rather than silently skipping a hop.
 fn deployed_body(sql_fn: &str) -> String {
-    let mut files: Vec<PathBuf> = std::fs::read_dir(workspace_root().join("migrations"))
-        .expect("migrations/ is readable")
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|e| e == "sql"))
-        .collect();
-    files.sort();
-
     let needles = [
         format!("CREATE FUNCTION {sql_fn}("),
         format!("CREATE OR REPLACE FUNCTION {sql_fn}("),
     ];
 
     let mut body = None;
-    for path in &files {
-        let Ok(text) = std::fs::read_to_string(path) else {
-            continue;
-        };
+    for migration in temper_substrate::MIGRATOR.iter() {
         // Full-line comments only: `--` also appears inside string literals, and a naive strip
         // would truncate a body mid-expression.
-        let stripped: String = text
+        let stripped: String = migration
+            .sql
             .lines()
             .filter(|l| !l.trim_start().starts_with("--"))
             .collect::<Vec<_>>()
             .join("\n");
-        for needle in &needles {
-            let mut from = 0;
-            while let Some(rel) = stripped[from..].find(needle.as_str()) {
-                let site = from + rel;
-                let open = stripped[site..]
-                    .find("$$")
-                    .expect("a definition opens a dollar-quoted body")
-                    + site;
-                let close = stripped[open + 2..]
-                    .find("$$")
-                    .expect("a definition closes its dollar-quoted body")
-                    + open
-                    + 2;
-                body = Some(stripped[open + 2..close].to_string());
-                from = close + 2;
-            }
+        let mut from = 0;
+        loop {
+            // The next definition site under EITHER spelling, by position.
+            let next = needles
+                .iter()
+                .filter_map(|n| stripped[from..].find(n.as_str()).map(|rel| from + rel))
+                .min();
+            let Some(site) = next else { break };
+            let open = stripped[site..]
+                .find("$$")
+                .expect("a definition opens a dollar-quoted body")
+                + site;
+            let close = stripped[open + 2..]
+                .find("$$")
+                .expect("a definition closes its dollar-quoted body")
+                + open
+                + 2;
+            body = Some(stripped[open + 2..close].to_string());
+            from = close + 2;
         }
     }
     body.unwrap_or_else(|| panic!("no migration defines `{sql_fn}`"))
