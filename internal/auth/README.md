@@ -89,6 +89,11 @@ tool requires Level 2.) See [authorization-seam.md](./authorization-seam.md).
 - [ ] **Building an `AuthClaims`?** Don't. Only the seam constructs a principal; the
       constructor is `authenticate_token` (token path) or `resolve_federated_human`
       (federated path). If you need a third path, add it *inside* the seam.
+- [ ] **Reading an edge-injected identity header** (Passport's `x-vercel-oidc-passport-token`)?
+      Observability only — never an identity or standing input; the Passport leg reaches
+      identity through the upstream-connector chain instead. See
+      [authorization-seam.md](./authorization-seam.md); `audit-passport-identity-header.sh`
+      pins it.
 - [ ] **New `AuthzError` variant?** Map it in **both** transport mappers:
       `temper-api` `middleware/auth.rs` (Level 1) + `middleware/system_access.rs`
       (Level 2), and `temper-mcp` `service.rs::map_authz_error`. The compiler's

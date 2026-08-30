@@ -196,6 +196,15 @@ jobs:
       - name: Security tripwire — credential types deriving Debug
         run: bash .github/scripts/audit-credential-debug.sh
 
+      # Preventive, and deliberately landed before the surface exists: Vercel Passport, fronting
+      # an origin, injects a Vercel-signed identity JWT that authentically names the edge user —
+      # the most tempting possible shortcut past the auth seam, and on the UI origin only, which
+      # is the seam-drift asymmetry. The rule (observability-only, never identity or standing
+      # input) lives in internal/auth/authorization-seam.md; this is its enforcement half.
+      # Markdown is exempt by design: prose may NAME the header, code may not READ it.
+      - name: Security tripwire — edge-injected identity header
+        run: bash .github/scripts/audit-passport-identity-header.sh
+
       # The `__temper_ungated_` find cores apply NO visibility gate — they are handed the RBAC
       # verdict as `p_visible_ids uuid[]` so a composition computes it once instead of once per
       # stage. For those bodies the invariant "every mechanic acts only on resources visible to the
@@ -373,6 +382,13 @@ jobs:
 
       - name: Guard test — audit-credential-debug
         run: bash .github/scripts/test-audit-credential-debug.sh
+
+      # Five probes, two of them GREEN-direction (markdown may name the header; the ambient
+      # edge token is a different, shorter string whose readers are legitimate) — a tripwire
+      # that reds on either gets re-baselined without being read, which is the same outcome as
+      # no tripwire by a slower route. Red probes assert the output NAMES the flagged file.
+      - name: Guard test — audit-passport-identity-header
+        run: bash .github/scripts/test-audit-passport-identity-header.sh
 
       - name: Guard test — audit-grant-sinks (SQL half)
         run: bash .github/scripts/test-audit-grant-sinks.sh
