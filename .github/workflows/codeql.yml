@@ -1,22 +1,41 @@
 name: CodeQL
 
-# CodeQL, scoped to the languages a change can actually affect.
+# CodeQL, uniform across every run.
 #
 # ## Why this exists instead of default setup
 #
-# Default setup ran all seven configured languages on every push, with no path filters and no
-# per-change language selection — so a docs-only PR, and a PR touching only `clients/temper-rb`,
-# both paid for a full Rust analysis, which is by far the largest surface here. Default setup has
-# no control surface for that: scoping is only reachable from an in-repo workflow.
+# Default setup offered no control surface for any of what this workflow needs: the fan-in
+# described below; wall-clock timeouts that convert a stalled analysis into a failure the
+# `codeql-override` label can release (a stall on a required gate blocks a PR forever, because
+# pending is not failed and an override cannot act on a check that never reported); the
+# threat-model exclusions in .github/codeql/codeql-config.yml; and tag-pinned actions.
+#
+# ## Why the language set is UNIFORM — every run analyzes all five
+#
+# This workflow originally scoped languages to what a change could reach (2026-08-28: a
+# docs-only PR paid for no Rust analysis). The `code_scanning` rule on the `no-merge-main`
+# ruleset (2026-08-30) made that shape unsound: the rule determines "alerts introduced by this
+# pull request" by diffing each PR analysis configuration against the default branch's LATEST
+# analysis for that same configuration — and that set is the UNION of whatever recent merges
+# happened to analyze. Any PR narrower than the union is unmergeable, with "code scanning
+# cannot determine the alerts introduced by this pull request", because a configuration
+# present on the base is missing from the head. The first PR to hit it carried a workflows-and-
+# docs-only change against a base whose python and ruby analyses were hours old.
+#
+# Scoped analysis and findings-blocking cannot coexist; findings-blocking won. The wall-clock
+# cost is absorbed by parallelism on code PRs (the test shards run longer than any analysis),
+# so the real cost is a docs-only PR paying ~12 minutes it used to skip — priced, and paid.
+#
+# Do not reintroduce scoping as an optimization without revisiting the rule: the two designs
+# are mutually exclusive, and it was the second one landing that discovered it.
 #
 # ## Why it is NOT a required status check of its own
 #
-# It fans into `CI Success` (`ci.yml`) like every other job, and that is load-bearing rather than
-# stylistic. **A required check that does not run is pending forever, not passing** — so the moment
-# CodeQL is both scoped and separately required, the first docs-only PR becomes unmergeable. The
-# fan-in already knows how to read a correctly-skipped job as a pass, so routing through it is what
-# makes scoping and gating compatible at all. It also keeps the ruleset at exactly one required
-# context and leaves `bypass_actors: []` intact.
+# It fans into `CI Success` (`ci.yml`) like every other job, and that is load-bearing rather
+# than stylistic. **A required check that does not run is pending forever, not passing** — and
+# while uniformity has removed the skip case, routing through the fan-in also keeps the
+# ruleset at exactly one required context, leaves `bypass_actors: []` intact, and gives the
+# `codeql-override` label one place to act.
 #
 # ## Deltas from the default setup this replaces, stated so they are choices and not drift
 #
@@ -26,8 +45,10 @@ name: CodeQL
 # - **Threat model is left unset**, which is `remote` — what default setup reported.
 # - **The seven configured languages collapse to five.** `javascript`, `typescript` and
 #   `javascript-typescript` are one analysis; the first two were aliases.
-# - **The weekly scan is preserved** by the `schedule` trigger below. Default setup ran weekly and
-#   losing that silently is exactly the kind of thing a migration drops.
+# - **The weekly scan is preserved** by the `schedule` trigger below — with uniformity it is no
+#   longer the only run covering python and ruby, but it still refreshes the default branch's
+#   analyses on a week with no merges, which is exactly the week the union would otherwise go
+#   stale.
 # - **Actions are tag-pinned** (`@v3`), matching ordinary CI here. The SHA pinning elsewhere in this
 #   repo guards the release-signing path specifically; this workflow holds `security-events: write`
 #   and nothing that reaches a signing oracle.
@@ -35,31 +56,6 @@ name: CodeQL
 on:
   workflow_call:
     inputs:
-      run-actions:
-        description: Analyze GitHub Actions workflows.
-        type: string
-        required: false
-        default: "false"
-      run-javascript-typescript:
-        description: Analyze JavaScript/TypeScript. One analysis covers both.
-        type: string
-        required: false
-        default: "false"
-      run-python:
-        description: Analyze Python.
-        type: string
-        required: false
-        default: "false"
-      run-ruby:
-        description: Analyze Ruby.
-        type: string
-        required: false
-        default: "false"
-      run-rust:
-        description: Analyze Rust. The largest surface here by a wide margin.
-        type: string
-        required: false
-        default: "false"
       rust-timeout-minutes:
         description: >-
           Wall-clock ceiling for the Rust analysis. UNMEASURED first cut — set generously on purpose.
@@ -77,9 +73,8 @@ on:
         required: false
         default: 20
 
-  # Replaces default setup's weekly scan. On this trigger every input is unset, and `plan` below
-  # analyzes everything — a periodic full scan is the whole point, and scoping it to "what changed"
-  # would make it a second PR run rather than a sweep.
+  # Weekly default-branch sweep. On this trigger the inputs are unset; the `||` fallbacks in the
+  # timeout expression carry the defaults so a scheduled run is bounded exactly like a PR run.
   schedule:
     - cron: "24 5 * * 1"
 
@@ -87,74 +82,28 @@ permissions:
   contents: read
 
 jobs:
-  # ==========================================================================
-  # Which languages does this change actually reach?
-  #
-  # A separate job rather than an expression in `ci.yml`, because the mapping from scope flags to
-  # CodeQL languages is a claim worth reading in one place with its reasoning attached — and because
-  # an empty result has to be expressible. `analyze` is skipped on `[]`, and this workflow still
-  # succeeds, which is what lets a docs-only PR pass the gate without CodeQL having run.
-  # ==========================================================================
-  plan:
-    name: Plan CodeQL matrix
-    runs-on: ubuntu-latest
-    outputs:
-      languages: ${{ steps.plan.outputs.languages }}
-    steps:
-      - name: Select languages
-        id: plan
-        env:
-          RUN_ACTIONS: ${{ inputs.run-actions }}
-          RUN_JS_TS: ${{ inputs.run-javascript-typescript }}
-          RUN_PYTHON: ${{ inputs.run-python }}
-          RUN_RUBY: ${{ inputs.run-ruby }}
-          RUN_RUST: ${{ inputs.run-rust }}
-          EVENT_NAME: ${{ github.event_name }}
-        run: |
-          set -euo pipefail
-          langs=""
-          add() { langs="${langs}${langs:+,}\"$1\""; }
-
-          if [ "${EVENT_NAME}" = "schedule" ]; then
-            # The weekly sweep is unscoped by design. Inputs are unset on this trigger anyway, so
-            # falling through to the per-flag branch would analyze nothing at all — a scheduled scan
-            # that silently covers zero languages is worse than no scheduled scan, because the run
-            # is green either way.
-            add actions; add javascript-typescript; add python; add ruby; add rust
-          else
-            if [ "${RUN_ACTIONS}" = "true" ]; then add actions; fi
-            if [ "${RUN_JS_TS}"   = "true" ]; then add javascript-typescript; fi
-            if [ "${RUN_PYTHON}"  = "true" ]; then add python; fi
-            if [ "${RUN_RUBY}"    = "true" ]; then add ruby; fi
-            if [ "${RUN_RUST}"    = "true" ]; then add rust; fi
-          fi
-
-          echo "languages=[${langs}]" >> "$GITHUB_OUTPUT"
-          if [ -z "${langs}" ]; then
-            echo "::notice title=CodeQL::No analyzed language is reachable from this change — skipping."
-          else
-            echo "::notice title=CodeQL::Analyzing [${langs}]"
-          fi
-
   analyze:
     name: Analyze
-    needs: plan
-    if: needs.plan.outputs.languages != '[]'
     runs-on: ubuntu-latest
     # Granted here rather than at workflow level so only the job that writes alerts holds the scope.
-    # NOTE: a reusable workflow can never exceed the CALLER's permissions, so `ci.yml`'s `codeql`
+    # NOTE: a reusable workflow can never exceed its CALLER's permissions, so `ci.yml`'s `codeql`
     # job grants the same three; without that this is silently downgraded and the upload 403s.
     permissions:
       contents: read
       security-events: write
       actions: read
-    timeout-minutes: ${{ matrix.language == 'rust' && inputs.rust-timeout-minutes || inputs.other-timeout-minutes }}
+    # `||` fallbacks, not bare inputs: on the schedule trigger inputs are unset and a bare
+    # reference would leave the job unbounded — the timeout is the thing that turns a stall
+    # into a releasable failure, so it must exist on every trigger.
+    timeout-minutes: ${{ matrix.language == 'rust' && (inputs.rust-timeout-minutes || 45) || (inputs.other-timeout-minutes || 20) }}
     strategy:
       # One language failing must not cancel the others: a partial result still files real alerts,
       # and cancelling siblings would make one flaky analysis look like four broken ones.
       fail-fast: false
       matrix:
-        language: ${{ fromJSON(needs.plan.outputs.languages) }}
+        # The uniformity invariant, one line: every run analyzes exactly this set. The header's
+        # "Why the language set is UNIFORM" is why this must not become conditional.
+        language: [actions, javascript-typescript, python, ruby, rust]
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
