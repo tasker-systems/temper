@@ -94,6 +94,31 @@ function requireCertsFor(row: SamlIdpRow): string[] {
   return certs;
 }
 
+/**
+ * Clock-skew tolerance applied to the IdP's timestamps, in milliseconds — deliberately ZERO.
+ *
+ * **A security-relevant value is chosen rather than inherited.** node-saml's own default is also 0,
+ * and that coincidence is why the explicit pin exists: while the two agree there is nothing on this
+ * file to review, and a library release that moved its default would silently move ours with it.
+ * Zero means the IdP's `NotBefore`/`NotOnOrAfter` are taken at face value — no clock disagreement
+ * between the IdP and this host is forgiven, and no expired assertion lingers one millisecond past
+ * the window the IdP itself issued. Widening this is a posture change, not a fix: it extends how
+ * long a consumed assertion stays presentable, which the replay guard's retention must then cover
+ * (see `REPLAY_TTL_SECONDS` in `../oauth/endpoints.ts` and the coupling test that binds them).
+ */
+export const SAML_ACCEPTED_CLOCK_SKEW_MS = 0;
+
+/**
+ * Cap on an assertion's age beyond its IdP-issued window, in milliseconds — deliberately ZERO.
+ *
+ * Zero is node-saml's "no additional cap": the assertion expires exactly at its `NotOnOrAfter` and
+ * never a moment sooner, so an IdP issuing five-minute assertions gets five minutes and an operator
+ * shortening the IdP's window needs no change here. Pinning it states the choice; the alternative —
+ * an operator-set cap stricter than `NotOnOrAfter` — would refuse assertions the IdP considers
+ * valid, an availability failure that would present as "the IdP is signing wrongly".
+ */
+export const SAML_MAX_ASSERTION_AGE_MS = 0;
+
 /** Pure mapping from the persisted IdP row to the node-saml SP config. */
 export function toSamlConfig(row: SamlIdpRow): SamlConfig {
   return {
@@ -106,6 +131,11 @@ export function toSamlConfig(row: SamlIdpRow): SamlConfig {
     idpCert: requireCertsFor(row),
     audience: row.sp_entity_id,
     identifierFormat: row.nameid_format,
+    // The two assertion windows are pinned constants above, not inherited defaults — the same
+    // register as `wantAuthnResponseSigned` below: what an assertion must satisfy to be accepted
+    // is a reviewable choice on this file, never something a dependency upgrade decides.
+    acceptedClockSkewMs: SAML_ACCEPTED_CLOCK_SKEW_MS,
+    maxAssertionAgeMs: SAML_MAX_ASSERTION_AGE_MS,
     wantAssertionsSigned: true,
     // node-saml defaults this to true already, but pin it explicitly so the "both the Response and
     // the Assertion must be signed" guarantee is a local, reviewable invariant rather than an

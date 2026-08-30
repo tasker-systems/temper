@@ -35,6 +35,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 jsonwebtoken = "9"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+# AUTH_AUDIENCE must parse as an absolute URI at boot — the MCP protected-resource metadata
+# advertises it as the RFC 9728 `resource`, which requires one. Already in the graph via reqwest.
+url = "2"
 tracing = "0.1"
 thiserror = "2"
 uuid = { version = "1", features = ["v7", "serde"] }

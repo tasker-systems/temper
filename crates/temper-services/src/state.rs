@@ -413,6 +413,16 @@ impl JwksKeyStore {
         self.refresh().await
     }
 
+    /// The tolerance applied to the `exp`/`nbf` window, in seconds: a token is accepted up to
+    /// this long past `exp` (and up to this long before `nbf`).
+    ///
+    /// **A security-relevant value is stated here rather than inherited.** `jsonwebtoken`'s own
+    /// default is also 60 seconds, which is exactly why the explicit assignment matters: while the
+    /// two agree, the library default and our choice are indistinguishable, and a library release
+    /// that moved its default would silently move ours with it. The pin keeps the tolerance at the
+    /// value this codebase chose.
+    const CLOCK_SKEW_LEEWAY_SECONDS: u64 = 60;
+
     /// Build a `Validation` for the given issuer and audience, with an allow-list scoped to exactly
     /// `algorithm` (the loaded key's family).
     ///
@@ -437,6 +447,7 @@ impl JwksKeyStore {
     pub fn validation(&self, issuer: &str, audience: &str, algorithm: Algorithm) -> Validation {
         let mut v = Validation::new(algorithm);
         v.algorithms = vec![algorithm];
+        v.leeway = Self::CLOCK_SKEW_LEEWAY_SECONDS;
         v.set_required_spec_claims(&["exp", "iss", "aud"]);
         v.set_issuer(&[issuer]);
         v.set_audience(&[audience]);
@@ -1062,6 +1073,27 @@ mod tests {
                 .map(|s| s.contains("https://auth.example.com"))
                 .unwrap_or(false),
             "issuer should be set"
+        );
+    }
+
+    /// The exp/`nbf` tolerance is the stated constant, not whatever `jsonwebtoken` defaults to.
+    ///
+    /// Today the constant equals the library's default (60s), so this test cannot tell the two
+    /// apart — that indistinguishability is why the pin exists. If the library ever moves its
+    /// default, this is what keeps our tolerance at the value we chose instead of drifting with it.
+    #[test]
+    fn the_clock_skew_tolerance_is_the_stated_value_not_the_library_default() {
+        let store = JwksKeyStore::new("https://example.com/.well-known/jwks.json".to_string());
+        let v = store.validation("https://auth.example.com", "temper-api", Algorithm::RS256);
+        assert_eq!(
+            v.leeway,
+            JwksKeyStore::CLOCK_SKEW_LEEWAY_SECONDS,
+            "the leeway must be the explicit constant, never an inherited default"
+        );
+        assert_eq!(
+            v.leeway,
+            60,
+            "jsonwebtoken 9.3.1's default is also 60 — move this literal only as a deliberate posture change"
         );
     }
 

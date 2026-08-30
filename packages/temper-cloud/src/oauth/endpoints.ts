@@ -45,8 +45,22 @@ import { resolvePrincipal } from "./resolve.js";
 const PENDING_FLOW_TTL_SECONDS = 600;
 /** How long a freshly-issued authorization code stays redeemable at /oauth/token. */
 const CODE_TTL_SECONDS = 300;
-/** How long a consumed SAML assertion ID is retained in the replay guard. */
-const REPLAY_TTL_SECONDS = 600;
+/**
+ * How long a consumed SAML assertion ID is retained in the replay guard — stamped as the row's
+ * `expires_at` at the `guardReplay` call site below.
+ *
+ * **The floor this buys is only safe while it covers the assertion window above it.** An assertion
+ * stays presentable until its IdP-issued `NotOnOrAfter` widened by the pinned clock skew and capped
+ * early by `SAML_MAX_ASSERTION_AGE_MS` when non-zero (`../saml/config.ts`) — of the two pinned
+ * windows, only skew can extend presentability; maxAge can only shorten it — so retention must
+ * cover that window or a captured assertion replays after the guard has forgotten it. The
+ * coupling is asserted, not assumed — `tests/saml/config.test.ts` binds the numbers on both sides.
+ * The window half beyond this constant is the reaper's to cover: `as_reap_service` in
+ * temper-services subtracts the operator-stated `AS_SAML_ASSERTION_MAX_SECONDS` and never deletes
+ * a row before it, and this constant is the margin absorbing host/DB clock disagreement in that
+ * arithmetic — shrink it with care.
+ */
+export const REPLAY_TTL_SECONDS = 600;
 /** Default TTL for a freshly-issued refresh token, when AS_REFRESH_TTL_SECONDS is unset/invalid. */
 const DEFAULT_REFRESH_TTL_SECONDS = 2592000;
 /**
