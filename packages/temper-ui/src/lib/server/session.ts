@@ -21,6 +21,25 @@ import type { OidcIdTokenClaims } from './oidc';
 
 const COOKIE_NAME = 'temper_session';
 const PKCE_COOKIE_NAME = 'temper_pkce';
+/**
+ * Session-cookie ceiling: 30 days. A choice, and the follower rather than the leader.
+ *
+ * The authority over how long a session can live is the AS's refresh-chain bound
+ * (`AS_REFRESH_CHAIN_MAX_SECONDS`, default 90 days, temper-cloud's oauth endpoints):
+ * a cookie — stolen or otherwise — cannot outlive the refresh chain it rides, and an
+ * operator tightens session lifetime by tightening THAT, not this. Thirty days equals
+ * the default per-token refresh TTL (`AS_REFRESH_TTL_SECONDS`): the cookie only has to
+ * outlive one refresh cycle, because hooks.server.ts re-writes it on every refresh —
+ * the ceiling slides forward with activity, while inactivity still dies with the chain.
+ *
+ * Deliberately NOT separately configurable: a second knob for the same ceiling would be
+ * one security-relevant fact stated in two places, and the two would drift.
+ *
+ * What bounds the blast radius of these 30 days: the payload is JWE-sealed (header
+ * above), the cookie is httpOnly/secure/sameSite=lax, and entitlements are never read
+ * from it — the profile is re-fetched on every request, so authorization is always
+ * current even mid-cookie.
+ */
 const COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30; // 30 days
 const PKCE_COOKIE_MAX_AGE_SECONDS = 60 * 10; // 10 minutes — login flow window
 
