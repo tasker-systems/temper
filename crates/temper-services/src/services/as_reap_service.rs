@@ -145,11 +145,15 @@ pub async fn reap_expired_as_rows(pool: &PgPool) -> ApiResult<AsReapSummary> {
 /// A row here is what stops a captured assertion being presented twice, and it may only be deleted
 /// once the assertion can no longer be replayed at all. That is a property of the IdP's own
 /// `NotOnOrAfter`, and the deciding detail is that **temper does not know it**: `toSamlConfig`
-/// (`packages/temper-cloud/src/saml/config.ts`) sets no `acceptedClockSkewMs` and reads no window,
-/// and `guardReplay` is handed `now + REPLAY_TTL_SECONDS` where that constant is the literal `600`.
+/// (`packages/temper-cloud/src/saml/config.ts`) pins the window shape — `acceptedClockSkewMs` and
+/// `maxAssertionAgeMs`, both 0, so the IdP's `NotOnOrAfter` is the expiry authority — but the
+/// IDP-ISSUED WINDOW ITSELF is still not code anywhere, and `guardReplay` is handed
+/// `now + REPLAY_TTL_SECONDS` where that constant is the literal `600`.
 /// So `expires_at` on this table is a GUESS at the window, not a statement of it, and reaping on
 /// `expires_at` alone would forget a still-replayable assertion for any IdP issuing a window wider
-/// than ten minutes.
+/// than ten minutes. Widening the pinned skew widens presentability with it, and must be reflected
+/// in `AS_SAML_ASSERTION_MAX_SECONDS` — the coupling test (`tests/saml/config.test.ts`) binds the
+/// temper-cloud half of that arithmetic.
 ///
 /// **So the window is subtracted rather than trusted.** The predicate is
 /// `expires_at < now() - window`, and because `expires_at` is stamped at or after the row was

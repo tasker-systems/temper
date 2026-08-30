@@ -19,6 +19,9 @@ use crate::router::McpAppState;
 /// resource and how to present credentials.
 #[derive(Serialize)]
 struct ProtectedResourceMetadata {
+    /// The resource indicator this deployment's tokens carry as `aud`. Read from the same
+    /// `AuthConfig` the auth middleware matches `aud` against — see
+    /// [`protected_resource_metadata`].
     resource: String,
     authorization_servers: Vec<String>,
     bearer_methods_supported: Vec<&'static str>,
@@ -27,12 +30,21 @@ struct ProtectedResourceMetadata {
 
 /// Build RFC 9728 protected-resource metadata for the given server base URL.
 ///
+/// `resource` is the ONE audience both surfaces validate, passed in from the boot-gated
+/// `AuthConfig` rather than derived here. It used to be `format!("{base}/")`, which equals the
+/// audience only if the operator sets them equal — and on the documented instance shape it never
+/// is: `MCP_BASE_URL` is the apex (`https://<instance>`) while `AUTH_AUDIENCE` is conventionally
+/// `$INSTANCE/api`. The PRM is a surface that TELLS clients what to ask for, so it may not
+/// advertise a resource indicator the issued tokens do not carry — the cloud side already fixed
+/// its own copy of this fact (`metadata.ts` reads `AUTH_AUDIENCE` for the same reason), and the
+/// two doors now state one fact with one authority.
+///
 /// `offline_access` is advertised so conformant MCP clients request it
 /// during the authorization code flow, prompting Auth0 to issue a refresh
 /// token (avoids a full re-auth on every access token expiry).
-fn protected_resource_metadata(base: &str) -> ProtectedResourceMetadata {
+fn protected_resource_metadata(base: &str, resource: &str) -> ProtectedResourceMetadata {
     ProtectedResourceMetadata {
-        resource: format!("{base}/"),
+        resource: resource.to_string(),
         authorization_servers: vec![format!("{base}/")],
         bearer_methods_supported: vec!["header"],
         scopes_supported: vec!["openid", "profile", "email", "offline_access"],
@@ -41,7 +53,10 @@ fn protected_resource_metadata(base: &str) -> ProtectedResourceMetadata {
 
 /// `GET /.well-known/oauth-protected-resource`
 pub async fn oauth_protected_resource(State(state): State<Arc<McpAppState>>) -> impl IntoResponse {
-    Json(protected_resource_metadata(&state.mcp_config.mcp_base_url))
+    Json(protected_resource_metadata(
+        &state.mcp_config.mcp_base_url,
+        &state.api_state.config.auth.audience,
+    ))
 }
 
 // ── Dynamic Client Registration (thin proxy) ──────────────────────────
@@ -148,11 +163,25 @@ mod tests {
     /// access token expiry forces a full re-auth.
     #[test]
     fn protected_resource_metadata_advertises_offline_access() {
-        let meta = protected_resource_metadata("https://temperkb.io");
+        let meta = protected_resource_metadata("https://temperkb.io", "https://temperkb.io/api");
         assert!(
             meta.scopes_supported.contains(&"offline_access"),
             "offline_access must be advertised: {:?}",
             meta.scopes_supported
+        );
+    }
+
+    /// The PRM's `resource` is the audience the auth middleware validates `aud` against — the one
+    /// authority — not a value derived from `MCP_BASE_URL`. The documented instance shape is the
+    /// witness: base is the apex, the audience conventionally `$INSTANCE/api`, and the retired
+    /// derivation (`base + "/"`) advertised a resource indicator no issued token carries on it.
+    #[test]
+    fn the_prm_advertises_the_validated_audience_not_the_base_url() {
+        let meta =
+            protected_resource_metadata("https://temper.acme.com", "https://temper.acme.com/api");
+        assert_eq!(
+            meta.resource, "https://temper.acme.com/api",
+            "the PRM must advertise the validated audience, not the server base URL"
         );
     }
 

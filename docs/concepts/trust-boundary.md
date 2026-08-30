@@ -67,10 +67,10 @@ On a self-hosted SAML instance (Temper AS), the response has **no `resource` fie
 correctly, because that AS ignores a request-supplied audience. The caller omits `audience`
 and the server does too.
 
-> **The trap.** `/.well-known/oauth-**protected-resource**` (RFC 9728) returns a *different*
-> `resource` — the MCP base URL, not the audience. An integrator who reaches for the wrong
-> well-known document gets a value that silently fails audience validation. Use
-> `oauth-authorization-server` (RFC 8414), not `oauth-protected-resource`.
+> **One fact, one authority.** `/.well-known/oauth-**protected-resource**` (RFC 9728) returns the
+> same `resource` — both documents read the one boot-gated audience the server validates, so either
+> door answers "what must my token's `aud` carry". (The RFC 9728 document used to return the MCP
+> base URL instead, a value that failed audience validation on the documented deployment shape.)
 
 ## The error contract
 

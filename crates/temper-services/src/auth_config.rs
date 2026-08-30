@@ -88,6 +88,13 @@ pub enum ConfigError {
     AsJwksMismatch,
 
     #[error(
+        "AUTH_AUDIENCE must be a URI. It is matched byte-for-byte against the token's `aud` claim \
+         AND advertised as the `resource` indicator in the RFC 9728 protected-resource metadata, \
+         which requires a URI. Use an absolute URI such as https://<instance>/api."
+    )]
+    AudienceNotUri,
+
+    #[error(
         "{0} and {1} hold the SAME value. Each of this instance's shared secrets gates a different \
          internal capability, and their being different values is the whole security property: \
          SLACK_LINK_SECRET answers \"is this principal linked?\", SLACK_MINT_SECRET vends a token \
@@ -114,6 +121,17 @@ pub fn parse_auth_config(
     let issuer = get(&lookup, "AUTH_ISSUER").ok_or(ConfigError::Missing("AUTH_ISSUER"))?;
     let jwks_url = get(&lookup, "JWKS_URL").ok_or(ConfigError::Missing("JWKS_URL"))?;
     let audience = get(&lookup, "AUTH_AUDIENCE").ok_or(ConfigError::MissingAudience)?;
+
+    // The audience must be a URI, and that became LOAD-BEARING the moment the protected-resource
+    // metadata advertised it: RFC 7519 lets a JWT `aud` be a colon-free StringOrURI, so a plain
+    // string was historically a legal audience — but the RFC 9728 `resource` MUST be a URI, and
+    // every surface serves that document. There is no deployment left where a plain-string
+    // audience is correct; an opaque scheme (`api://default`, Okta's convention) parses fine.
+    // Validated, never normalized — the RAW value feeds `Validation::set_audience`, so applying
+    // the URL crate's trailing-slash repair here would silently change what every token must
+    // carry. The same value minted from AS_AUDIENCE is covered transitively by the equality
+    // checks below, which the MCP_AUDIENCE check already models.
+    url::Url::parse(&audience).map_err(|_| ConfigError::AudienceNotUri)?;
 
     // MCP_AUDIENCE is no longer a *value* — it is an agreement assertion. An instance has exactly
     // one audience; this variable may only restate it.
@@ -291,6 +309,46 @@ mod tests {
         assert_eq!(
             parse_auth_config(env(&e)),
             Err(ConfigError::MissingAudience)
+        );
+    }
+
+    // The protected-resource metadata advertises the audience as the RFC 9728 `resource`, which
+    // must be a URI — so a non-URI audience is a boot fault, not a value that "works until
+    // someone reads the metadata".
+    #[test]
+    fn an_audience_that_is_not_a_uri_is_refused() {
+        let e = with(external_idp(), "AUTH_AUDIENCE", "temper-api");
+        assert_eq!(parse_auth_config(env(&e)), Err(ConfigError::AudienceNotUri));
+        let msg = parse_auth_config(env(&e)).unwrap_err().to_string();
+        assert!(
+            msg.contains("AUTH_AUDIENCE"),
+            "must name the variable: {msg}"
+        );
+        assert!(
+            !msg.contains("temper-api"),
+            "must never print the value: {msg}"
+        );
+    }
+
+    #[test]
+    fn an_opaque_scheme_uri_audience_is_accepted() {
+        // Okta's convention (`api://default`) is a URI with a non-HTTP scheme. The check exists
+        // for RFC 9728 conformance, not to impose https.
+        let e = with(external_idp(), "AUTH_AUDIENCE", "api://default");
+        parse_auth_config(env(&e)).expect("an opaque-scheme URI is still a URI");
+    }
+
+    #[test]
+    fn the_audience_is_validated_but_never_normalized() {
+        // `Url::parse("https://temperkb.io").to_string()` repairs the empty path to a trailing
+        // slash — so if the parsed form were stored, cfg.audience would grow one and every
+        // token's byte-for-byte `aud` match would break after an upgrade. The slashless input is
+        // the discriminator: it is a valid URI (accepted) yet must survive verbatim.
+        let e = with(external_idp(), "AUTH_AUDIENCE", "https://temperkb.io");
+        let cfg = parse_auth_config(env(&e)).expect("a pathless URI audience is valid");
+        assert_eq!(
+            cfg.audience, "https://temperkb.io",
+            "the RAW configured value feeds set_audience — never the URL crate's normalized form"
         );
     }
 

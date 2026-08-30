@@ -1,6 +1,12 @@
 import { ValidateInResponseTo } from "@node-saml/node-saml";
 import { describe, expect, it } from "vitest";
-import { type SamlIdpRow, toSamlConfig } from "../../src/saml/config.js";
+import { REPLAY_TTL_SECONDS } from "../../src/oauth/endpoints.js";
+import {
+  SAML_ACCEPTED_CLOCK_SKEW_MS,
+  SAML_MAX_ASSERTION_AGE_MS,
+  type SamlIdpRow,
+  toSamlConfig,
+} from "../../src/saml/config.js";
 
 function fakeRow(overrides: Partial<SamlIdpRow> = {}): SamlIdpRow {
   return {
@@ -56,5 +62,32 @@ describe("toSamlConfig", () => {
 
     expect(config.idpCert).toEqual([fakeRow().idp_cert]);
     expect(config.idpCert).not.toContain(null);
+  });
+});
+
+describe("assertion windows vs replay retention", () => {
+  it("pins both SAML windows explicitly rather than inheriting node-saml defaults", () => {
+    const config = toSamlConfig(fakeRow());
+
+    // The windows node-saml applies are the constants on this file, not whatever its
+    // constructor defaults to — a dependency upgrade cannot silently move what an
+    // assertion must satisfy to be accepted.
+    expect(config.acceptedClockSkewMs).toBe(SAML_ACCEPTED_CLOCK_SKEW_MS);
+    expect(config.maxAssertionAgeMs).toBe(SAML_MAX_ASSERTION_AGE_MS);
+  });
+
+  // A consumed assertion is presentable until its IdP-issued NotOnOrAfter widened by the pinned
+  // clock skew — only skew can extend presentability; MAX_AGE can only cap it early — and the
+  // replay guard's retention must cover that whole presentable window or a captured assertion
+  // replays after the guard has forgotten it. The window half beyond REPLAY_TTL_SECONDS is the
+  // reaper's (AS_SAML_ASSERTION_MAX_SECONDS, in temper-services' as_reap_service); this binds the
+  // numbers both sides can see, so widening a window here without raising retention fails this
+  // test instead of re-opening replay. The sum is the conservative bound, and it is trivially
+  // satisfied at today's pins (0 + 0 <= 600) — stated rather than hidden: it bites the day a
+  // widening pushes past retention, not today.
+  it("retention covers the widest assertion window the pinned windows can add", () => {
+    const addedWindowSeconds = (SAML_ACCEPTED_CLOCK_SKEW_MS + SAML_MAX_ASSERTION_AGE_MS) / 1000;
+
+    expect(REPLAY_TTL_SECONDS).toBeGreaterThanOrEqual(addedWindowSeconds);
   });
 });
