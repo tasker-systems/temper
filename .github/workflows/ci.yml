@@ -137,15 +137,11 @@ jobs:
     if: needs.detect-scope.outputs.run-test-agents-ts == 'true'
     uses: ./.github/workflows/test-agents-ts.yml
 
-  # CodeQL, scoped to the languages this change can reach. Its own workflow carries the reasoning
-  # for why it fans in here instead of becoming a second required status check — the short version
-  # is that a required check which does not run is pending forever, so "scoped" and "separately
-  # required" cannot both be true.
-  #
-  # INVOKED unconditionally, like code-quality and for the same reason: it decides internally, and a
-  # change reaching no analyzed language still produces a green job (its matrix is empty and
-  # `analyze` skips). That keeps the decision in one place instead of splitting it between an `if:`
-  # here and a matrix there.
+  # CodeQL, uniform: every run analyzes all five languages. Its own workflow carries why
+  # uniformity is load-bearing — the short version is that the code_scanning rule diffs each
+  # analysis configuration against the default branch's per-configuration latest, which is the
+  # union of whatever recent merges analyzed, so any narrower PR is unmergeable. There is no
+  # skip case and no scoping to keep green; the invocation is unconditional by construction.
   #
   # PERMISSIONS ARE GRANTED HERE, and they must be. The workflow-level `permissions: contents: read`
   # above zeroes every unlisted scope, and a reusable workflow can never exceed its CALLER's — so
@@ -158,17 +154,6 @@ jobs:
       security-events: write
       actions: read
     uses: ./.github/workflows/codeql.yml
-    with:
-      # `actions` is the cheapest of the five and has no scope flag of its own; rather than add an
-      # output that would need its own harness cases, it rides run-code-quality, which is true for
-      # any change with something load-bearing in it — workflow edits included.
-      run-actions: ${{ needs.detect-scope.outputs.run-code-quality }}
-      # One CodeQL analysis covers both, so either project reaching it is enough.
-      run-javascript-typescript: ${{ (needs.detect-scope.outputs.run-test-typescript == 'true' || needs.detect-scope.outputs.run-test-agents-ts == 'true') && 'true' || 'false' }}
-      run-python: ${{ needs.detect-scope.outputs.run-test-python }}
-      run-ruby: ${{ needs.detect-scope.outputs.run-test-ruby }}
-      # Both flags, because a change can be rust-inert for tests and still owe rust-quality.
-      run-rust: ${{ (needs.detect-scope.outputs.run-rust-quality == 'true' || needs.detect-scope.outputs.run-test-rust == 'true') && 'true' || 'false' }}
 
   # ==========================================================================
   # Stage 2: CI Success Gate
