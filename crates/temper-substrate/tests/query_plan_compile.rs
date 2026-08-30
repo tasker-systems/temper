@@ -1,6 +1,10 @@
 //! Pure emission tests for the query compiler — NO database. The security property (every caller
 //! value is bound, never interpolated) and the structural properties (one visibility relation, ids
 //! only across a stage boundary, dependency order) are all decidable from the emitted text alone.
+//!
+//! One property is NOT decidable from the emitted text: the survey act's region gate lives inside
+//! the SQL chain the statement calls by principal, so its per-stage closure cost is pinned from the
+//! deployed function definitions in `migrations/` (newest definition wins) — still no database.
 
 use temper_core::types::ids::ProfileId;
 use temper_core::types::query::{
@@ -215,6 +219,12 @@ fn the_visibility_relation_is_computed_once_no_matter_how_many_stages() {
     // appears EXACTLY ONCE in the emitted statement, at any stage count. The ungated cores
     // (`20260808000030`) do not call it, so any second occurrence means a stage went back to gating
     // for itself.
+    //
+    // **What this count cannot see: the survey act's REGION gate.** The count is over the emitted
+    // statement, and survey's region visibility is decided inside the SQL chain its call enters by
+    // principal — `wayfind_region_scores` → `visible_region_anchors` → the two closure-bearing
+    // readers. That cost is pinned per stage by
+    // `survey_s_region_gate_pays_two_team_closures_per_stage_and_the_count_is_pinned` below.
     let one = compile(&plan_one_find(), test_profile()).expect("compiles");
     let three = compile(&plan_three_finds(), test_profile()).expect("compiles");
 
@@ -1999,4 +2009,197 @@ fn every_arm_of_the_union_carries_the_region_column() {
              which, so it nulls the column rather than omitting it: {tally}"
         );
     }
+}
+
+// ─── The survey path's region gate: the per-stage closure cost, pinned ──────────────────────────
+//
+// The compute-once test above pins the RESOURCE gate — `resources_visible_to` hoisted into
+// `__temper_vis`, one computation per statement no matter how many stages. Survey carries a SECOND
+// gate the emitted statement never names: the ungated core takes the principal beside the hoisted
+// set, and region visibility is decided inside the SQL chain
+//
+//     __temper_ungated_survey → wayfind_region_scores → visible_region_anchors
+//                             → cogmap_visible_maps | contexts_readable_by → profile_reachable_teams
+//
+// Neither closure-bearing reader is in the emitted text, which is exactly why a count over that
+// text — however written — cannot see this cost. The pin therefore has two halves: the EMITTED half
+// counts the statement's gate entries (one survey core call per stage, each handing the principal
+// to the region gate), and the DEPLOYED half counts the closure-bearing calls through the chain's
+// newest definitions in `migrations/`, newest definition winning — the same rule this tree uses to
+// read any function. Still no database: both halves are decided from text the repository holds.
+
+use std::path::{Path, PathBuf};
+
+fn workspace_root() -> PathBuf {
+    // `crates/temper-substrate` -> the workspace root.
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("temper-substrate sits two levels below the workspace root")
+        .to_path_buf()
+}
+
+/// The deployed body of `sql_fn`, from the NEWEST definition in `migrations/`.
+///
+/// Full-line `--` comments are stripped before scanning, because migration headers quote SQL
+/// freely (the same call the migration declaration checker makes). The needle carries `CREATE`
+/// AND the `(`:
+/// a `COMMENT ON FUNCTION <name>(` line names the function too, and matching it would hand back
+/// the NEXT function's body — the paren keeps a longer name (`contexts_readable_by_teams`) from
+/// matching its shorter sibling, and the `CREATE` prefix keeps comment targets from matching
+/// definitions. Within and across files, a later definition replaces an earlier one, so the last
+/// occurrence in the last defining file is what ships — and what this returns.
+///
+/// A name no migration defines panics: every name asked for here is load-bearing to the test that
+/// asks, so a rename reddens the test rather than silently skipping a hop.
+fn deployed_body(sql_fn: &str) -> String {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(workspace_root().join("migrations"))
+        .expect("migrations/ is readable")
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "sql"))
+        .collect();
+    files.sort();
+
+    let needles = [
+        format!("CREATE FUNCTION {sql_fn}("),
+        format!("CREATE OR REPLACE FUNCTION {sql_fn}("),
+    ];
+
+    let mut body = None;
+    for path in &files {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        // Full-line comments only: `--` also appears inside string literals, and a naive strip
+        // would truncate a body mid-expression.
+        let stripped: String = text
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("--"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for needle in &needles {
+            let mut from = 0;
+            while let Some(rel) = stripped[from..].find(needle.as_str()) {
+                let site = from + rel;
+                let open = stripped[site..]
+                    .find("$$")
+                    .expect("a definition opens a dollar-quoted body")
+                    + site;
+                let close = stripped[open + 2..]
+                    .find("$$")
+                    .expect("a definition closes its dollar-quoted body")
+                    + open
+                    + 2;
+                body = Some(stripped[open + 2..close].to_string());
+                from = close + 2;
+            }
+        }
+    }
+    body.unwrap_or_else(|| panic!("no migration defines `{sql_fn}`"))
+}
+
+/// How many times `body` CALLS `sql_fn`.
+///
+/// A call has its `(` adjacent to the name — the same adjacency rule [`ungated_core_calls`] uses —
+/// which keeps prose in a `--` comment out of the count (comment mentions of these functions never
+/// carry the paren). The word boundary on the left keeps a longer identifier ending in the same
+/// characters from counting. Nothing here strips comments: a comment that wrote `name(` would
+/// INFLATE the count and redden the pin, which is the safe direction for a cost assertion.
+fn calls_in(body: &str, sql_fn: &str) -> usize {
+    let needle = format!("{sql_fn}(");
+    let mut count = 0;
+    let mut from = 0;
+    while let Some(rel) = body[from..].find(&needle) {
+        let at = from + rel;
+        let bounded = body[..at]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
+        if bounded {
+            count += 1;
+        }
+        from = at + needle.len();
+    }
+    count
+}
+
+/// **The compute-once invariant's survey half — the count the emitted statement cannot show.**
+///
+/// Each survey stage enters the region gate once, and each entry pays TWO recursive team closures:
+/// `visible_region_anchors` evaluates both arms — `cogmap_visible_maps` and `contexts_readable_by`
+/// — and each computes `profile_reachable_teams` from base tables. Two closures per stage, `2N` for
+/// an N-stage plan, beside the same statement's single hoisted resource gate.
+///
+/// The pin fails in BOTH directions, on purpose: a third closure-bearing call per stage raises the
+/// product, and a hoist that computes the closure once per statement drops it to zero. Either way
+/// the number moves only deliberately — through this assertion and the cost statements the
+/// migration carries on the two functions that pay it.
+#[test]
+fn survey_s_region_gate_pays_two_team_closures_per_stage_and_the_count_is_pinned() {
+    // ── The emitted half: one region-gate entry per stage, and the hoist still covers the rest.
+    let v = build(
+        vec![
+            survey_stage("surveyed_a"),
+            survey_stage("surveyed_b"),
+            survey_stage("surveyed_c"),
+        ],
+        vec!["surveyed_a"],
+    );
+    let c = compile(&v, test_profile()).expect("compiles");
+
+    // Written out rather than imported, for the same reason the ids-from-the-hoisted-relation
+    // guard writes its literal: an assertion reading the emitter's own constants would agree with
+    // any value, including a wrong one.
+    let survey_call = "__temper_ungated_survey((SELECT ids FROM __temper_vis), $1,";
+    assert_eq!(
+        c.sql.matches(survey_call).count(),
+        3,
+        "one region-gate entry per survey stage, each carrying the principal beside the hoisted \
+         set; got:\n{}",
+        c.sql
+    );
+    assert_eq!(
+        c.sql.matches("resources_visible_to(").count(),
+        1,
+        "the survey stages must not add a second resource gate — their member gate reads the \
+         hoisted relation; got:\n{}",
+        c.sql
+    );
+
+    // ── The deployed half: the closure-bearing calls through the chain, newest definitions.
+    let survey_core = deployed_body("__temper_ungated_survey");
+    let scoring = deployed_body("wayfind_region_scores");
+    let anchors = deployed_body("visible_region_anchors");
+    let maps = deployed_body("cogmap_visible_maps");
+    let contexts = deployed_body("contexts_readable_by");
+
+    // Each hop is asserted on its own so a drift reddens at the site that moved, not only in the
+    // product below.
+    assert_eq!(
+        calls_in(&survey_core, "wayfind_region_scores"),
+        1,
+        "{survey_core}"
+    );
+    assert_eq!(calls_in(&scoring, "visible_region_anchors"), 1, "{scoring}");
+    assert_eq!(calls_in(&anchors, "cogmap_visible_maps"), 1, "{anchors}");
+    assert_eq!(calls_in(&anchors, "contexts_readable_by"), 1, "{anchors}");
+    assert_eq!(calls_in(&maps, "profile_reachable_teams"), 1, "{maps}");
+    assert_eq!(
+        calls_in(&contexts, "profile_reachable_teams"),
+        1,
+        "{contexts}"
+    );
+
+    let per_stage = calls_in(&survey_core, "wayfind_region_scores")
+        * calls_in(&scoring, "visible_region_anchors")
+        * (calls_in(&anchors, "cogmap_visible_maps") * calls_in(&maps, "profile_reachable_teams")
+            + calls_in(&anchors, "contexts_readable_by")
+                * calls_in(&contexts, "profile_reachable_teams"));
+    assert_eq!(
+        per_stage, 2,
+        "the pinned cost: TWO recursive team closures per survey stage — one per arm of \
+         visible_region_anchors — so an N-survey-stage statement pays 2N for the region gate \
+         beside its one hoisted resource gate"
+    );
 }
