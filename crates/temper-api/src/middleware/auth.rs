@@ -83,7 +83,9 @@ pub async fn require_auth(
     //    loaded key's algorithm (see `JwksKeyStore::validation`).
     let issuer = &state.config.auth.issuer;
     let audience = state.config.auth.audience.as_str();
-    let validation = state.jwks_store.validation(issuer, audience, vk.algorithm);
+    let validation = state
+        .jwks_store
+        .validation(issuer, &[audience], vk.algorithm);
 
     let token_data: TokenData<temper_services::auth::RawJwtClaims> =
         decode(&token, &vk.key, &validation).map_err(|e| {

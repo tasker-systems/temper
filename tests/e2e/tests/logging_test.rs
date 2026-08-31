@@ -294,6 +294,7 @@ async fn mcp_requests_produce_a_root_span(pool: sqlx::PgPool) {
             issuer: "test-issuer".to_string(),
             jwks_url: "unused".to_string(),
             audience: common::TEST_AUDIENCE.to_string(),
+            mcp_audience: common::TEST_AUDIENCE.to_string(),
             mode: AuthMode::ExternalIdp,
         },
         auth_provider_name: "test-provider".to_string(),

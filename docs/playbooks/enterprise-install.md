@@ -78,9 +78,9 @@ Sources: [Self-hosting Temper](./self-host-temper.md),
 | **Auth (issuer / audience / provider)** | | | | |
 | `AUTH_ISSUER` | Yes | — | — | Auth0 tenant, or `AS_ISSUER` value in the SAML path |
 | `JWKS_URL` | Yes | — | — | Auth0 JWKS, or `https://<instance>/oauth/jwks` in the SAML path |
-| `AUTH_AUDIENCE` | Yes | — | — | Must equal `AS_AUDIENCE` / `MCP_AUDIENCE` / UI `OIDC_AUDIENCE` |
+| `AUTH_AUDIENCE` | Yes | — | — | The HTTP audience; must equal `AS_AUDIENCE` / UI `OIDC_AUDIENCE` |
 | `AUTH_PROVIDER_NAME` | Yes | — | — | `auth0`, or `saml:<idp-key>` in the SAML path (max 32 chars) |
-| `MCP_AUDIENCE` | No | — | — | **Optional.** An instance has ONE audience; both surfaces read `AUTH_AUDIENCE`. If set, must **equal** it — enforced at boot, not by discipline. |
+| `MCP_AUDIENCE` | No | — | — | **Optional.** The MCP surface's own OAuth `resource` (e.g. `https://<instance>/mcp`); defaults to `AUTH_AUDIENCE`. Setting it lets MCP clients pass their resource-vs-URL/origin check while the CLI and machine clients keep the API audience |
 | `MCP_CLIENT_ID` | Yes | — | — | Auth0 MCP native app client_id; n/a in the SAML path (client allowlisting is `AS_CLIENTS` instead) |
 | `MCP_BASE_URL` | Yes | — | — | `https://<instance>` — used in OAuth discovery responses |
 | `MCP_PROXY_SECRET` | Yes (external-IdP path) | — | — | ≥ 32 chars (`openssl rand -base64 48`); encrypts the loopback redirect proxy's state token, derived from this secret alone. **New — an upgraded deployment will not have it.** Until it is set, a loopback sign-in (MCP CLI clients) answers `503` naming this variable; browser clients with an HTTPS callback are unaffected. Set it **and redeploy** — a Vercel function's environment is bound to its deployment. Rotating it fails sign-ins already in flight for up to 10 minutes; they succeed on retry. **n/a in the SAML path** — the Temper AS runs the whole flow and the relay answers `404` there |

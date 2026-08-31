@@ -87,6 +87,7 @@ mod tests {
             issuer: issuer.to_string(),
             jwks_url: "https://unused/.well-known/jwks.json".to_string(),
             audience: "https://api.temperkb.io".to_string(),
+            mcp_audience: "https://api.temperkb.io".to_string(),
             mode,
         }
     }

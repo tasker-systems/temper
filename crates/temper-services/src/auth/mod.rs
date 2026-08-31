@@ -408,6 +408,7 @@ mod tests {
                 issuer: "http://127.0.0.1:1".to_string(),
                 jwks_url: "http://127.0.0.1:1/jwks".to_string(),
                 audience: "test-audience".to_string(),
+                mcp_audience: "test-audience".to_string(),
                 mode: crate::auth_config::AuthMode::ExternalIdp,
             },
             auth_provider_name: "test-provider".to_string(),

@@ -14,6 +14,7 @@ import {
   validateAssertion,
 } from "../saml/sp.js";
 import { isRedirectUriAllowed, loadClientRegistry } from "./clients.js";
+import { requireEnv } from "./env.js";
 import {
   bindCodeToFlow,
   consumeCode,
@@ -296,6 +297,27 @@ export async function handleAuthorize(req: Request, db: NeonClient): Promise<Res
     return badRequest("unregistered client_id or redirect_uri");
   }
 
+  // RFC 8707: a caller may name the resource it wants a token FOR. MCP clients always do (they
+  // read `resource` off the protected-resource metadata); the CLI sends the same fact under
+  // Auth0's `audience` parameter name. An instance serves two audiences — the API audience and,
+  // when `MCP_AUDIENCE` is set, the MCP surface's own resource indicator — so a requested
+  // audience is validated against that set and stored on the flow, and the mint stamps the
+  // token with exactly what was requested. Before this, both parameters were dropped and every
+  // token carried AS_AUDIENCE, which is precisely the mismatch that makes a strict MCP client
+  // refuse the flow: the metadata promises one resource and the mint delivers another.
+  // Fail-closed on anything the instance does not serve, per the same discipline as the
+  // redirect-URI allowlist above.
+  const asAudience = requireEnv("AS_AUDIENCE");
+  const mcpAudience = process.env.MCP_AUDIENCE?.trim() || asAudience;
+  const requestedAudience = params.get("resource")?.trim() || params.get("audience")?.trim() || "";
+  let audience = asAudience;
+  if (requestedAudience) {
+    if (requestedAudience !== asAudience && requestedAudience !== mcpAudience) {
+      return badRequest("requested resource is not served by this authorization server");
+    }
+    audience = requestedAudience;
+  }
+
   const relayState = newOpaqueToken();
   await createPendingFlow(db, {
     relayState,
@@ -304,7 +326,7 @@ export async function handleAuthorize(req: Request, db: NeonClient): Promise<Res
     codeChallenge,
     codeChallengeMethod: "S256",
     oauthState: state,
-    audience: process.env.AS_AUDIENCE ?? "",
+    audience,
     expiresAt: new Date(Date.now() + PENDING_FLOW_TTL_SECONDS * 1000),
   });
 
@@ -507,8 +529,9 @@ async function issueTokenPair(
   claims: MintedClaims,
   clientId: string,
   chain: { id: string | null; expiresAt: string; profileId: string | null },
+  audience?: string,
 ): Promise<TokenResponse> {
-  const accessToken = await mintAccessToken(claims);
+  const accessToken = await mintAccessToken(claims, audience);
   const refreshToken = newOpaqueToken();
   const chainId = await storeRefreshToken(db, {
     token: refreshToken,
@@ -615,13 +638,23 @@ export async function handleToken(req: Request, db: NeonClient): Promise<Respons
     // an access token and no refresh token, and the revoke that ended their standing is not undone
     // by their next sign-in.
     return oauthJson(
-      await issueTokenPair(db, consumed.claims, clientId, {
-        // A fresh login starts a chain, so it has no identity to inherit — `storeRefreshToken`
-        // roots the new one at this very token.
-        id: null,
-        expiresAt: chainDeadline,
-        profileId: consumed.profileId,
-      }),
+      await issueTokenPair(
+        db,
+        consumed.claims,
+        clientId,
+        {
+          // A fresh login starts a chain, so it has no identity to inherit — `storeRefreshToken`
+          // roots the new one at this very token.
+          id: null,
+          expiresAt: chainDeadline,
+          profileId: consumed.profileId,
+        },
+        // The audience the flow was authorized for — what the PRM promised and the caller
+        // requested. The refresh grant below omits it (the chain does not carry it) and mints
+        // the instance audience; the MCP middleware accepts both, so a refreshed MCP session
+        // survives.
+        consumed.audience,
+      ),
       200,
     );
   }

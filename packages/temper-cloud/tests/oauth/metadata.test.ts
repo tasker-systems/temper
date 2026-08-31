@@ -55,7 +55,7 @@ describe("buildAuth0AsMetadata", () => {
     const meta = buildAuth0AsMetadata({
       base: "https://temperkb.io",
       auth0Domain: "https://tenant.auth0.com/",
-      mcpAudience: "https://api.temperkb.io",
+      audience: "https://api.temperkb.io",
     });
 
     expect(meta).toEqual({
@@ -75,7 +75,7 @@ describe("buildAuth0AsMetadata", () => {
     const meta = buildAuth0AsMetadata({
       base: "https://temperkb.io",
       auth0Domain: "https://tenant.auth0.com/",
-      mcpAudience: "https://api.temperkb.io",
+      audience: "https://api.temperkb.io",
     });
     expect(meta.grant_types_supported).toContain("client_credentials");
     expect(meta.grant_types_supported).toContain("authorization_code");
@@ -86,7 +86,7 @@ describe("buildAuth0AsMetadata", () => {
     const meta = buildAuth0AsMetadata({
       base: "https://temperkb.io/",
       auth0Domain: "https://tenant.auth0.com",
-      mcpAudience: "https://api.temperkb.io",
+      audience: "https://api.temperkb.io",
     });
 
     expect(meta.issuer).toBe("https://tenant.auth0.com/");

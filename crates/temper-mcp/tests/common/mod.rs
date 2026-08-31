@@ -46,6 +46,7 @@ pub fn state_with_cors_origins(cors_origins: Vec<String>) -> AppState {
             issuer: "unused".to_string(),
             jwks_url: "unused".to_string(),
             audience: "unused".to_string(),
+            mcp_audience: "unused".to_string(),
             mode: AuthMode::ExternalIdp,
         },
         auth_provider_name: "unused".to_string(),
@@ -60,6 +61,40 @@ pub fn state_with_cors_origins(cors_origins: Vec<String>) -> AppState {
     };
 
     let jwks = JwksKeyStore::new("https://example.invalid/.well-known/jwks.json".to_string());
+    AppState::new(pool, jwks, config)
+}
+
+/// An `AppState` whose auth identity names DISTINCT API and MCP audiences, with the same static
+/// HS256 key as [`state_with_static_jwt_key`] — the dedicated-MCP-resource instance shape. The
+/// audience-set tests pin the gate's contract against it: a token for either audience passes,
+/// a token for neither does not.
+pub fn state_with_distinct_audiences() -> AppState {
+    let pool = PgPoolOptions::new()
+        .connect_lazy("postgres://__router_witness_no_db__")
+        .expect("lazy pool constructs without a server");
+
+    let config = ApiConfig {
+        database_url: "unused".to_string(),
+        auth: AuthConfig {
+            issuer: "https://as.test".to_string(),
+            jwks_url: "unused".to_string(),
+            audience: "https://inst.test/api".to_string(),
+            mcp_audience: "https://inst.test/mcp".to_string(),
+            mode: AuthMode::ExternalIdp,
+        },
+        auth_provider_name: "unused".to_string(),
+        cors_origins: vec![],
+        port: 0,
+        enable_swagger: false,
+        internal_reconcile_secret: None,
+        embed_dispatch_secret: None,
+        vercel_connect: None,
+        slack_link: None,
+        slack_mint_secret: None,
+    };
+
+    let jwks =
+        JwksKeyStore::with_static_key(DecodingKey::from_secret(b"witness"), Algorithm::HS256);
     AppState::new(pool, jwks, config)
 }
 

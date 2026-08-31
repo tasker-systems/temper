@@ -317,7 +317,7 @@ openssl genpkey -algorithm ed25519 -out as_signing_key.pem
 | Variable | Value | Notes |
 | --- | --- | --- |
 | `AS_ISSUER` | `https://<instance>` | The AS issuer URL. **Setting this flips the instance into AS mode** (it serves AS metadata/JWKS instead of Auth0). |
-| `AS_AUDIENCE` | `https://<instance>/api` | Audience claim minted into tokens (must equal the `temper-api` `AUTH_AUDIENCE`). |
+| `AS_AUDIENCE` | `https://<instance>/api` | Audience claim minted into tokens for API flows (must equal the `temper-api` `AUTH_AUDIENCE`). |
 | `AS_SIGNING_KEY_PKCS8` | *(PEM contents)* | Ed25519 private signing key (PKCS#8 PEM). Keep secret. |
 | `AS_SIGNING_KID` | e.g. `as-2026-07` | Key id published in the JWKS. |
 | `AS_CLIENTS` | *(JSON, see below)* | **Required** allowlist of `client_id → [redirect_uris]`. Without it every `/oauth/authorize` is rejected (fail-closed). |
@@ -481,9 +481,10 @@ open-redirect protection is unweakened. To enable it on a SAML instance:
    | `AS_AUDIENCE` | `AUTH_AUDIENCE` | `AS_AUDIENCE == AUTH_AUDIENCE` |
    | (its JWKS) | `JWKS_URL` | `JWKS_URL == $AS_ISSUER/oauth/jwks` |
 
-   `MCP_AUDIENCE` is **optional**. temper-mcp reads the instance's one audience, same as
-   temper-api. If you do set `MCP_AUDIENCE`, it must **equal** `AUTH_AUDIENCE`; it is an
-   assertion, not a second value.
+   `MCP_AUDIENCE` is **optional** and independent: it is the MCP surface's own OAuth `resource`
+   (conventionally `https://<instance>/mcp`), which the AS mints into tokens for MCP
+   authorization flows that request it. Unset, it defaults to `AUTH_AUDIENCE`. The MCP gate also
+   accepts `AUTH_AUDIENCE` tokens, so machine credentials keep working against MCP either way.
 
    These already hold on any correctly-configured SAML instance — a divergent audience means
    no AS-minted token ever verifies. Temper names the rule and fails fast rather than leaving

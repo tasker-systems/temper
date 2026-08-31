@@ -5,10 +5,16 @@ provider it trusts. Also relevant to **integrators**, who need to know what toke
 
 ## The contract
 
-A Temper instance validates tokens from **exactly one issuer**. It checks **one audience** on
-both surfaces (HTTP and MCP). The issuer, the audience, and the JWKS endpoint the server fetches
-keys from are six variables that carry two facts — whose tokens this instance trusts, and which
-tokens it accepts. They must agree, and the server refuses to start if they do not.
+A Temper instance validates tokens from **exactly one issuer**. It checks an **audience** on
+each surface: the HTTP surface validates `AUTH_AUDIENCE`, and the MCP surface validates
+`MCP_AUDIENCE` — which defaults to `AUTH_AUDIENCE` when unset — plus, deliberately, `AUTH_AUDIENCE`
+itself, because machine tokens and sessions minted before the split carry it. Both audiences name
+the same instance; the split exists because conformant MCP clients refuse a `resource` that is
+neither the MCP server URL nor its origin, and the only honest way to satisfy that check is for
+the MCP surface to have its own resource indicator. The issuer, the audiences, and the JWKS
+endpoint the server fetches keys from are the variables that carry whose tokens this instance
+trusts and which tokens it accepts. They must agree, and the server refuses to start if they do
+not.
 
 ## The two modes
 
@@ -25,15 +31,16 @@ The mode is decided by a single signal: whether the Temper Authorization Server 
 |---|---|---|
 | Auth issuer | The IdP's issuer URL | **Must equal** the AS issuer |
 | JWKS URL | The IdP's JWKS endpoint | **Must be** the AS issuer + `/oauth/jwks` |
-| Auth audience | The IdP's API identifier — the one audience, validated on both surfaces | **Must equal** the AS audience |
-| MCP audience | Optional; if set, must equal the auth audience | Same rule |
+| Auth audience | The IdP's API identifier — validated by the HTTP surface | **Must equal** the AS audience |
+| MCP audience | Optional; the MCP surface's own `resource`. Defaults to the auth audience; must be a URI | Same rule |
 | AS issuer | Unset — setting it flips the instance into AS mode | Required — the instance origin |
 | AS audience | Unset — never read | Required — **must equal** the auth audience |
 
-In AS mode, the three audiences are **one value spelled three ways** — the AS mints every
-token with the server-side AS audience, the auth audience is what both surfaces validate, and
-the MCP audience (if set) merely restates it. They are the same string or the instance verifies
-nothing.
+In AS mode, the AS audience and the auth audience are **one value spelled two ways** — the AS
+mints API-flow tokens with the server-side AS audience and the HTTP surface validates exactly
+that. The MCP audience is independent: when set, an MCP authorization flow asks the AS for that
+resource and the AS mints its token with it. `MCP_AUDIENCE` unset collapses everything back to a
+single audience, which is the shape instances ran before the split.
 
 Under an external IdP, there is no AS, so the AS-specific variables are unset entirely. That is
 why the agreement rules are mode-dependent: an operator should not have to hold six independent
@@ -78,10 +85,10 @@ issuer.
 ## What this means for integrators
 
 A caller does not configure any of these variables — the operator did, at deployment. What the
-caller needs is the **audience** the server validates, and the way to discover it is in
-[The Trust Boundary](./trust-boundary.md). The auth-identity contract is why the discovery
-answer is authoritative: the server validates exactly one audience, and it is the one the
-operator set.
+caller needs is the **audience** the surface it targets validates, and the way to discover it is
+in [The Trust Boundary](./trust-boundary.md): HTTP callers read the authorization-server
+metadata; MCP clients read the protected-resource metadata. Each discovery answer is
+authoritative for its surface.
 
 ## Further reading
 

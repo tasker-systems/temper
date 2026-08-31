@@ -49,14 +49,16 @@ a deep page; per-endpoint pages have import-generated ids that may not survive a
 ## How a caller obtains the audience
 
 The audience is the string the JWT must carry for the server to accept it. **Do not guess it;
-discover it.**
+discover it** — and discover it from the door that matches the surface you are calling.
+
+**HTTP callers** (CLI, machine clients, SDK users):
 
 ```
 GET <origin>/.well-known/oauth-authorization-server
 ```
 
-The response includes a `resource` field carrying exactly the audience the server validates.
-For the hosted instance:
+The response includes a `resource` field carrying exactly the audience the HTTP surface
+validates. For the hosted instance:
 
 ```json
 { "issuer": "https://temperkb.us.auth0.com/",
@@ -67,10 +69,22 @@ On a self-hosted SAML instance (Temper AS), the response has **no `resource` fie
 correctly, because that AS ignores a request-supplied audience. The caller omits `audience`
 and the server does too.
 
-> **One fact, one authority.** `/.well-known/oauth-**protected-resource**` (RFC 9728) returns the
-> same `resource` — both documents read the one boot-gated audience the server validates, so either
-> door answers "what must my token's `aud` carry". (The RFC 9728 document used to return the MCP
-> base URL instead, a value that failed audience validation on the documented deployment shape.)
+**MCP clients** read the RFC 9728 protected-resource metadata instead:
+
+```
+GET <origin>/.well-known/oauth-protected-resource
+```
+
+Its `resource` is the MCP surface's own audience — `MCP_AUDIENCE` when the operator set it
+(conventionally the MCP server URL itself, which is what lets conformant MCP clients pass their
+`resource`-matches-the-server-URL-or-origin check), `AUTH_AUDIENCE` otherwise.
+
+> **Each discovery door answers for its surface.** The authorization-server metadata and the
+> protected-resource metadata used to be required to state one identical audience; they now
+> state the audience of the surface that discovers through them. They agree whenever
+> `MCP_AUDIENCE` is unset. The MCP gate additionally accepts HTTP-audience tokens (machine
+> tokens, pre-split sessions), so an MCP client that somehow holds an API-audience token still
+> authenticates — the reverse is not true, and no client should rely on it.
 
 ## The error contract
 
@@ -132,7 +146,8 @@ CLI. There is no separate "agent identity" — the agent is the human, through t
 ## MCP is a second surface, not a second API
 
 The MCP server runs on a different base path (`/mcp`, no `/api` prefix) with a JSON-RPC
-transport, but the authentication is identical — same issuer, same single audience, same two
+transport, but the authentication is identical — same issuer, the MCP surface's own audience
+(`MCP_AUDIENCE`, plus the HTTP audience for machine and pre-split tokens), same two
 gates. The difference is transport and tool surface (~26 consolidated tools against 82 REST
 paths). An integrator writing a service targets HTTP; MCP is an agent-runtime target. The SDKs
 are generated from the OpenAPI spec, i.e. HTTP-only.

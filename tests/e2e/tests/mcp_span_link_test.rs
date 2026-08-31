@@ -46,6 +46,7 @@ async fn mcp_links_an_authenticated_callers_trace_and_no_one_elses(pool: sqlx::P
             issuer: "test-issuer".to_string(),
             jwks_url: "unused".to_string(),
             audience: common::TEST_AUDIENCE.to_string(),
+            mcp_audience: common::TEST_AUDIENCE.to_string(),
             mode: AuthMode::ExternalIdp,
         },
         auth_provider_name: "test-provider".to_string(),

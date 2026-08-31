@@ -379,7 +379,9 @@ async fn resolve_existing(
 
     let issuer = &state.config.auth.issuer;
     let audience = state.config.auth.audience.as_str();
-    let validation = state.jwks_store.validation(issuer, audience, vk.algorithm);
+    let validation = state
+        .jwks_store
+        .validation(issuer, &[audience], vk.algorithm);
 
     let token_data: TokenData<RawJwtClaims> =
         decode(access_token, &vk.key, &validation).map_err(|e| {

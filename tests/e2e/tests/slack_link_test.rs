@@ -169,6 +169,7 @@ async fn setup_slack_app_with_mint_secret(
             issuer: idp.uri(),
             jwks_url: "unused".to_string(),
             audience: common::TEST_AUDIENCE.to_string(),
+            mcp_audience: common::TEST_AUDIENCE.to_string(),
             mode: AuthMode::ExternalIdp,
         },
         auth_provider_name: PROVIDER.to_string(),

@@ -22,6 +22,7 @@ interface TokenErrorBody {
 async function seedCode(
   db: NeonClient,
   profileId: string | null = null,
+  audienceOverride?: string,
 ): Promise<{ code: string; verifier: string; relayState: string }> {
   const verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
   const challenge = createHash("sha256").update(verifier).digest("base64url");
@@ -35,7 +36,9 @@ async function seedCode(
     codeChallenge: challenge,
     codeChallengeMethod: "S256",
     oauthState: "st",
-    audience: "aud",
+    // A flow with no requested resource is stored with the instance audience — what the
+    // authorize handler defaults to — so the minted `aud` matches AS_AUDIENCE.
+    audience: audienceOverride ?? "https://audience.test",
     expiresAt: new Date(Date.now() + 600000),
   });
   await bindCodeToFlow(db, relayState, {
@@ -145,6 +148,32 @@ describe("handleToken", () => {
     );
     expect(reuseOldRefresh.status).toBe(400);
     expect((await reuseOldRefresh.json()) as TokenErrorBody).toEqual({ error: "invalid_grant" });
+  });
+
+  it("authorization_code: mints the aud the flow was authorized for (RFC 8707 resource)", async () => {
+    // An MCP client's flow: `/oauth/authorize` validated the requested `resource` and stored it
+    // on the flow; the exchange must stamp that exact value into the token's `aud` — not the
+    // instance audience — so the token is usable at the resource the PRM advertised.
+    const { code, verifier } = await seedCode(db, null, "https://inst.test/mcp");
+
+    const res = await handleToken(
+      tokenRequest({
+        grant_type: "authorization_code",
+        code,
+        code_verifier: verifier,
+        client_id: "cli",
+      }),
+      db,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as TokenSuccessBody;
+
+    const JWKS = createLocalJWKSet(await getPublicJwks());
+    const { payload } = await jwtVerify(body.access_token, JWKS, {
+      issuer: process.env.AS_ISSUER,
+      audience: "https://inst.test/mcp",
+    });
+    expect(payload.sub).toBe("u1");
   });
 
   it("rejects an unsupported grant_type", async () => {

@@ -30,11 +30,16 @@ export function accessTtlSeconds(): number {
 /**
  * Mints a signed EdDSA access token for the given claims, using the process
  * signing key and AS_ISSUER / AS_AUDIENCE / AS_ACCESS_TTL_SECONDS env config.
+ *
+ * `audience` is the RFC 8707 resource indicator the authorization flow was granted — what the
+ * caller requested and the flow validated. When omitted (the refresh grant, whose chain does not
+ * carry the original request) the token is minted with the instance audience, AS_AUDIENCE; the
+ * MCP middleware accepts both audiences, so a refreshed MCP session survives the omission.
  */
-export async function mintAccessToken(claims: MintedClaims): Promise<string> {
+export async function mintAccessToken(claims: MintedClaims, audience?: string): Promise<string> {
   const { key, kid } = await getSigningKey();
   const issuer = requireEnv("AS_ISSUER");
-  const audience = requireEnv("AS_AUDIENCE");
+  const resolvedAudience = audience?.trim() || requireEnv("AS_AUDIENCE");
   const nowSeconds = Math.floor(Date.now() / 1000);
   const expSeconds = nowSeconds + accessTtlSeconds();
 
@@ -45,7 +50,7 @@ export async function mintAccessToken(claims: MintedClaims): Promise<string> {
     .setProtectedHeader({ alg: "EdDSA", kid })
     .setSubject(claims.sub)
     .setIssuer(issuer)
-    .setAudience(audience)
+    .setAudience(resolvedAudience)
     .setIssuedAt(nowSeconds)
     .setExpirationTime(expSeconds)
     .sign(key);

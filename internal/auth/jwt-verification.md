@@ -123,12 +123,14 @@ how they came to be violated silently.
   and `JWKS_URL == $AS_ISSUER/oauth/jwks` (trailing slashes normalized before comparison).
   `temper admin saml provision` keeps them consistent by construction. Details in
   [../../docs/playbooks/self-host-with-saml.md](../../docs/playbooks/self-host-with-saml.md).
-- **An instance has exactly ONE audience.** temper-mcp no longer carries its own — the
-  `mcp_audience` field is gone, and both surfaces read `AuthConfig::audience`. `MCP_AUDIENCE`
-  survives as an env var, but purely as an assertion: if set, it **must equal** `AUTH_AUDIENCE`, or
-  the instance does not boot. There was previously an `MCP_AUDIENCE ?? AUTH_AUDIENCE` fallback, and
-  two parsers for one concept is precisely how the surfaces came to answer an empty value in
-  opposite ways — temper-api fell open, temper-mcp fell shut.
+- **The MCP surface validates an audience SET.** `MCP_AUDIENCE` is the MCP surface's own RFC 8707
+  resource indicator — the value its protected-resource metadata advertises — and defaults to
+  `AUTH_AUDIENCE` when unset. The MCP gate accepts the MCP audience *and* `AUTH_AUDIENCE`
+  (machine tokens and pre-split sessions carry the latter); the HTTP gate accepts only
+  `AUTH_AUDIENCE`. Both values must be URIs (they are served in RFC 9728 documents), and an
+  empty `MCP_AUDIENCE` counts as absent — historically, two parsers for one concept answered an
+  empty value in opposite ways (temper-api fell open, temper-mcp fell shut), which is why the
+  parse now happens once, in `auth_config`.
 
   This matters most on an AS instance: the Temper AS mints **every** token — human and machine —
   with the server-side `AS_AUDIENCE`, ignoring any request-supplied `audience` (`mint.ts`). There is

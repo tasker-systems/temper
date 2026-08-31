@@ -40,6 +40,7 @@ async fn build_mcp_service(pool: &sqlx::PgPool) -> temper_mcp::service::TemperMc
             issuer: "test-issuer".to_string(),
             jwks_url: "unused".to_string(),
             audience: common::TEST_AUDIENCE.to_string(),
+            mcp_audience: common::TEST_AUDIENCE.to_string(),
             mode: AuthMode::ExternalIdp,
         },
         auth_provider_name: "test-provider".to_string(),
