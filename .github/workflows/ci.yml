@@ -155,6 +155,15 @@ jobs:
       actions: read
     uses: ./.github/workflows/codeql.yml
 
+  # Secret scan, unconditional like CodeQL and for a starker reason: the docs-only
+  # skip that lets pure-docs changes bypass everything else must NOT apply here —
+  # a key pasted into a `.md` is exactly a leak. Its workflow header states the
+  # field of view (tracked content at the checkout, never history) and why it is
+  # blocking with no eject label.
+  secret-scan:
+    needs: detect-scope
+    uses: ./.github/workflows/secret-scan.yml
+
   # ==========================================================================
   # Stage 2: CI Success Gate
   # The single check meant for branch protection. Always runs and validates
@@ -165,7 +174,7 @@ jobs:
   # ==========================================================================
   ci-success:
     name: CI Success
-    needs: [detect-scope, code-quality, test-rust, test-typescript, test-ruby, test-python, test-agents-ts, codeql]
+    needs: [detect-scope, code-quality, test-rust, test-typescript, test-ruby, test-python, test-agents-ts, codeql, secret-scan]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -261,6 +270,13 @@ jobs:
             "true" \
             "${{ contains(github.event.pull_request.labels.*.name, 'codeql-override') }}" \
             "codeql-override"
+
+          # Always "should run": the job is invoked for every change because no scope
+          # decision may exempt it (see the job's comment above), so an out-of-scope
+          # change reaches here as a green job rather than a skipped one.
+          check_job "secret-scan" \
+            "${{ needs.secret-scan.result }}" \
+            "true"
 
           echo ""
           if [ -n "$FAILED" ]; then

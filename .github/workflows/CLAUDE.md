@@ -43,3 +43,22 @@ Unrelated to `.github/scripts/test-vercel-build.sh`, which `env -u`s the same na
 Shared CI behavior lives in composite actions (`.github/actions/install-onnx`,
 `.github/actions/setup-rust`) rather than being copy-pasted per job — the ONNX install had
 drifted into **five** near-identical copies.
+
+## Secret scan is unconditional, and the docs-only skip must never reach it
+
+`secret-scan.yml` is invoked for every change with no scope gate — like CodeQL, but with a
+starker reason: `detect-ci-scope.sh` lets pure-docs changes skip the whole pipeline, and **a
+key pasted into a `.md` is exactly a leak**. The ci-success gate therefore reports it as
+should-run `"true"` with the same "the job decides internally" reasoning CodeQL gets; adding
+a scope output for it would duplicate the "never skips" decision in a second place and the
+two copies would drift.
+
+Its field of view is stated in the workflow header and in `.gitleaks.toml`: tracked content
+at the checkout, **never history** (push protection is the history layer, and it is
+server-side settings, not this tree). The binary is pinned by version **and checksum** —
+bump `GITLEAKS_VERSION` and the checksum lookup together or the download step fails, which
+is the point. Locally, the pre-commit hook runs the same config over staged content and
+skips loudly when the binary is absent; CI is the backstop that does not depend on local
+setup. The committed test-fixture keys are allowlisted in `.gitleaks.toml` with their
+rationale beside them; inline source exceptions use `gitleaks:allow` on the same line (the
+line-above form is NOT honored by gitleaks 8.30).

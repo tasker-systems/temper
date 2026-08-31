@@ -556,9 +556,8 @@ mod tests {
 
     // Ed25519 test keypair (generated with `openssl genpkey -algorithm ed25519`).
     // These keys are safe for tests only — never use in production.
-    const TEST_PRIVATE_PEM: &str = "-----BEGIN PRIVATE KEY-----\n\
-        MC4CAQAwBQYDK2VwBCIEICZi0TADAPL1fahH9fUfCwPifwDDyvN6xFYr6TdFLTOO\n\
-        -----END PRIVATE KEY-----\n";
+    #[rustfmt::skip]
+    const TEST_PRIVATE_PEM: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEICZi0TADAPL1fahH9fUfCwPifwDDyvN6xFYr6TdFLTOO\n-----END PRIVATE KEY-----\n"; // gitleaks:allow — inline test keypair, no production trust relationship
 
     const TEST_PUBLIC_PEM: &str = "-----BEGIN PUBLIC KEY-----\n\
         MCowBQYDK2VwAyEAgtSuqEGOi6UzF0IPHxm49q8vu0Hrt+eBcaSnjk+YD+c=\n\
@@ -576,9 +575,8 @@ mod tests {
     // A SECOND Ed25519 test keypair, so a JWKS can publish two keys and a test can prove the store
     // picks the one the token names rather than the one that happens to be first.
     // Test-only, same as the pair above.
-    const TEST_PRIVATE_PEM_2: &str = "-----BEGIN PRIVATE KEY-----\n\
-        MC4CAQAwBQYDK2VwBCIEIMoN2GZ+oOtD7JwVGY6jLSqAnfaSIDSeg31tntarak9e\n\
-        -----END PRIVATE KEY-----\n";
+    #[rustfmt::skip]
+    const TEST_PRIVATE_PEM_2: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIMoN2GZ+oOtD7JwVGY6jLSqAnfaSIDSeg31tntarak9e\n-----END PRIVATE KEY-----\n"; // gitleaks:allow — inline test keypair, no production trust relationship
 
     const TEST_PUBLIC_PEM_2: &str = "-----BEGIN PUBLIC KEY-----\n\
         MCowBQYDK2VwAyEAzo3nINJTwVoMArx1c/sxgHK6s+Plqvzb0Rh6Hj65Hg4=\n\

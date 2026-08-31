@@ -336,9 +336,8 @@ mod verify_inbound_tests {
     use super::*;
     use jsonwebtoken::{encode, Algorithm, DecodingKey, EncodingKey, Header};
 
-    const ED_PRIV: &str = "-----BEGIN PRIVATE KEY-----\n\
-        MC4CAQAwBQYDK2VwBCIEIMBUy9dWl8ECx1v9KN+aoEl/fI80u7Qcv9F8OTVxWW0G\n\
-        -----END PRIVATE KEY-----\n";
+    #[rustfmt::skip]
+    const ED_PRIV: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIMBUy9dWl8ECx1v9KN+aoEl/fI80u7Qcv9F8OTVxWW0G\n-----END PRIVATE KEY-----\n"; // gitleaks:allow — inline test keypair, no production trust relationship
     const ED_PUB: &str = "-----BEGIN PUBLIC KEY-----\n\
         MCowBQYDK2VwAyEAcCE6sWGL6rcfOATmlUSiuWLQAl+hpPAPp/aTR1yxqdc=\n\
         -----END PUBLIC KEY-----\n";
@@ -405,12 +404,12 @@ mod verify_inbound_tests {
 
     #[tokio::test]
     async fn rejects_a_bad_signature() {
-        // A token signed by a DIFFERENT key must fail signature verification.
-        let other_priv = "-----BEGIN PRIVATE KEY-----\n\
-            MC4CAQAwBQYDK2VwBCIEIEGD8kZ8y1sXZ8sQpQ0oT8yJZ0k8k0k0k0k0k0k0k0k\n\
-            -----END PRIVATE KEY-----\n";
-        // If the alternate key is unusable, fall back to tampering the token.
-        let token = match EncodingKey::from_ed_pem(other_priv.as_bytes()) {
+        // A token signed by a DIFFERENT key must fail signature verification. If the
+        // alternate key is unusable (it is — the material is deliberately bogus), the
+        // match below falls back to tampering the token.
+        #[rustfmt::skip]
+        const OTHER_PRIV: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIEGD8kZ8y1sXZ8sQpQ0oT8yJZ0k8k0k0k0k0k0k0k0k\n-----END PRIVATE KEY-----\n"; // gitleaks:allow — deliberately unusable key material for the rejection path
+        let token = match EncodingKey::from_ed_pem(OTHER_PRIV.as_bytes()) {
             Ok(enc) => encode(&Header::new(Algorithm::EdDSA), &valid_attestation(), &enc)
                 .expect("sign with other key"),
             Err(_) => {
@@ -638,8 +637,8 @@ mod tests {
     /// (2026-07-14), token value replaced.
     fn live_github_mint() -> serde_json::Value {
         serde_json::json!({
-            "token": "ghs_EXAMPLETOKENVALUE",
-            "tokenId": "stk_cjrQxli7X32bhSTKe6pRKw",
+            "token": "ghs_EXAMPLETOKENVALUE", // gitleaks:allow — example token, real value replaced
+            "tokenId": "stk_cjrQxli7X32bhSTKe6pRKw", // gitleaks:allow — example id, real value replaced
             "expiresAt": 1784065923026_i64,
             "connector": { "id": "scl_Fa0hyGE6xDZHJ7DCItpggg", "uid": "github/temper-probe", "type": "github" },
             "installationId": "146616373",
