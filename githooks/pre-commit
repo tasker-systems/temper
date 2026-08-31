@@ -57,6 +57,23 @@ fi
 
 staged_match() { echo "$STAGED" | grep -qE "$1"; }
 
+# --- Secrets battery (gitleaks) — runs whenever ANYTHING is staged. ---
+# A secret can ride any file, including docs, so unlike the batteries below it
+# is not class-gated and the "docs/other only" early-exit does not reach it.
+# It watches exactly the staged content (`git --pre-commit --staged`); it does
+# not watch history (server-side push protection is that layer) — the same
+# field-of-view statement .github/workflows/secret-scan.yml carries.
+# Absent binary => skip LOUDLY, mirroring the temper-ui battery: an uninstall
+# is not a violation, and CI (secret-scan.yml) runs it regardless of local setup.
+if command -v gitleaks >/dev/null 2>&1; then
+  echo "  Secret scan (gitleaks, staged)..."
+  gitleaks git --pre-commit --staged -c "$(git rev-parse --show-toplevel)/.gitleaks.toml" --no-banner --redact
+  echo "  ✓ Secret scan OK"
+else
+  echo "  ! gitleaks not on PATH — SKIPPING the secret scan." >&2
+  echo "    Install it (brew install gitleaks) so your commits are scanned locally; CI runs it regardless." >&2
+fi
+
 # Rust-affecting: anything that can move a fmt / clippy / doc / OpenAPI result.
 # openapi.json is here because the OpenAPI gates regenerate it from the router
 # and diff — a manual edit must be caught. Cargo.* / .sqlx / migrations move the
