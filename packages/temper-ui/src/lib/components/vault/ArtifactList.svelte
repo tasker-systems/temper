@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { ArtifactView } from '$lib/types';
 	import { humanBytes } from '$lib/bytes';
+	import { highlightCode } from '$lib/highlight';
 	import { flattenPayload } from '$lib/graph/payloadRows';
 	import { relativeTime } from '$lib/graph/relativeTime';
 
@@ -42,14 +43,18 @@
 		return flattenPayload(meta);
 	};
 
-	const contentText = (content: ArtifactView['content']): string | null =>
-		content === null || content === undefined ? null : JSON.stringify(content, null, 2);
+	// hljs escapes the input and emits only its own spans, so {@html} of this is safe by
+	// construction — the same property the markdown pipeline relies on, sanitizer or not.
+	const contentHtml = (content: ArtifactView['content']): string | null =>
+		content === null || content === undefined
+			? null
+			: highlightCode(JSON.stringify(content, null, 2), 'json');
 </script>
 
 <section>
 	<div class="label">Data artifacts · {rows.length}</div>
 	{#each rows as artifact (artifact.artifact_id)}
-		{@const content = contentText(artifact.content)}
+		{@const content = contentHtml(artifact.content)}
 		<div class="artifact" class:folded={artifact.is_folded}>
 			<button
 				class="head"
@@ -74,7 +79,7 @@
 					{/each}
 				</dl>
 				{#if content}
-					<pre class="content">{content}</pre>
+					<pre class="content hljs">{@html content}</pre>
 				{:else}
 					<div class="meta">no content — committed with an empty payload</div>
 				{/if}

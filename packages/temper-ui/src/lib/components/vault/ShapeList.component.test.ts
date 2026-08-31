@@ -67,6 +67,8 @@ describe('ShapeList', () => {
 
 		const shown = JSON.parse(container.querySelector('.schema')?.textContent ?? 'null');
 		expect(shown).toEqual(schema);
+		// Highlighted, not plain: the schema is a code view, not just a string dump.
+		expect(container.querySelector('.schema .hljs-attr')).not.toBeNull();
 		expect(getHead(container).getAttribute('aria-expanded')).toBe('true');
 	});
 });

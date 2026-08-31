@@ -100,6 +100,8 @@ describe('ArtifactList', () => {
 		expect(container.querySelector('.meta-table')?.textContent).toContain('a'.repeat(64));
 		const content = container.querySelector('.content')?.textContent ?? '';
 		expect(JSON.parse(content)).toEqual({ run: 2, ms: 412 });
+		// Highlighted, not plain: the payload is a code view, not just a string dump.
+		expect(container.querySelector('.content .hljs-attr')).not.toBeNull();
 	});
 
 	it('says so when an artifact was committed with no content, rather than showing an empty box', async () => {

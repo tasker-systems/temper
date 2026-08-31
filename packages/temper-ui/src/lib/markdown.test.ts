@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { highlightCode } from './highlight';
 import { parseMarkdown } from './markdown';
 
 /**
@@ -49,5 +50,18 @@ describe('parseMarkdown', () => {
 		const html = parseMarkdown('```json\n{"a": "<script>alert(1)</script>"}\n```');
 		expect(html).not.toContain('<script>alert');
 		expect(html).toContain('&lt;script&gt;');
+	});
+});
+
+describe('highlightCode', () => {
+	it('escapes the input and emits only hljs spans — the {@html}-safety property', () => {
+		const html = highlightCode('{"a": "<b>text</b>"}', 'json');
+		expect(html).toContain('&lt;b&gt;');
+		expect(html).not.toContain('<b>');
+		expect(html.startsWith('<span class="hljs-punctuation">')).toBe(true);
+	});
+
+	it('falls back to plaintext for an unregistered language', () => {
+		expect(highlightCode('plain', 'klingon')).not.toContain('hljs-attr');
 	});
 });

@@ -176,54 +176,8 @@
 		line-height: 1.65;
 	}
 
-	/* ── Syntax highlighting (highlight.js) ────────────────────────────── */
-	/* Token colors drawn from the palette this surface already speaks: the
-	   confidence green and the decision amber, with a muted blue for numbers
-	   so keys, strings and values read as three distinct things at a glance.
-	   Comment stays dim — the least interesting thing a fence says. */
-
-	.md-body :global(.hljs-comment),
-	.md-body :global(.hljs-quote) {
-		color: var(--color-quiet-dim);
-		font-style: italic;
-	}
-	.md-body :global(.hljs-attr),
-	.md-body :global(.hljs-attribute),
-	.md-body :global(.hljs-property),
-	.md-body :global(.hljs-selector-tag),
-	.md-body :global(.hljs-name) {
-		color: #8fd8a8;
-	}
-	.md-body :global(.hljs-string),
-	.md-body :global(.hljs-regexp) {
-		color: var(--decision-amber-lt);
-	}
-	.md-body :global(.hljs-number),
-	.md-body :global(.hljs-literal),
-	.md-body :global(.hljs-keyword),
-	.md-body :global(.hljs-built_in),
-	.md-body :global(.hljs-type) {
-		color: #93c5fd;
-	}
-	.md-body :global(.hljs-title),
-	.md-body :global(.hljs-title.function_) {
-		color: rgba(255, 255, 255, 0.88);
-	}
-	.md-body :global(.hljs-meta),
-	.md-body :global(.hljs-symbol),
-	.md-body :global(.hljs-bullet),
-	.md-body :global(.hljs-addition) {
-		color: #8fd8a8;
-	}
-	.md-body :global(.hljs-deletion) {
-		color: #f0a8a8;
-	}
-	.md-body :global(.hljs-emphasis) {
-		font-style: italic;
-	}
-	.md-body :global(.hljs-strong) {
-		font-weight: 600;
-	}
+	/* hljs token colors live in app.css (`.hljs-*`), shared with the direct-code JSON
+	   viewers — one theme, or the markdown fences and the artifact/schema viewers drift. */
 
 	/* ── Blockquotes ──────────────────────────────────────────────────── */
 

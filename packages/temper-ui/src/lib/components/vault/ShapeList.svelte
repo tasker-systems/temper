@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { ShapeView } from '$lib/types/generated/data_artifact_shape';
+	import { highlightCode } from '$lib/highlight';
 
 	/**
 	 * The data-artifact families a context governs — one row per family in force: the family
@@ -16,8 +17,10 @@
 	let rows = $derived([...shapes].sort((a, b) => a.artifact_kind.localeCompare(b.artifact_kind)));
 	let openShape = $state<string | null>(null);
 
-	const schemaText = (schema: ShapeView['schema']): string =>
-		JSON.stringify(schema, null, 2);
+	// hljs escapes the input and emits only its own spans, so {@html} of this is safe by
+	// construction — the same property the markdown pipeline relies on, sanitizer or not.
+	const schemaHtml = (schema: ShapeView['schema']): string =>
+		highlightCode(JSON.stringify(schema, null, 2), 'json');
 </script>
 
 <section>
@@ -41,7 +44,7 @@
 				<span class="chev">{openShape === shape.shape_id ? '⌄' : '›'}</span>
 			</button>
 			{#if openShape === shape.shape_id}
-				<pre class="schema">{schemaText(shape.schema)}</pre>
+				<pre class="schema hljs">{@html schemaHtml(shape.schema)}</pre>
 			{/if}
 		</div>
 	{/each}
