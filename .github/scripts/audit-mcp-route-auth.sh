@@ -28,7 +28,10 @@
 # declaration is renamed or removed, this fails loudly rather than silently skipping.
 #
 # FIELD OF VIEW — stated so green is never mistaken for more than it checks:
-#   - THIS guard watches build_router's body in crates/temper-mcp/src/router.rs ONLY.
+#   - THIS guard watches build_router's body in crates/temper-mcp/src/router.rs ONLY — and it
+#     MECHANICALLY backs the "only" with check (a2): Router::new() anywhere else under
+#     crates/temper-mcp/src fails, so a second router-assembly site cannot grow silently outside
+#     the frozen one.
 #   - It does not watch temper-api's routes (audit-route-auth.sh), the AS's api/** entry points
 #     (audit-as-entry-points.sh), or service-layer predicate drift (audit-handler-authz-drift.sh).
 #   - It watches the routes and layers declared INSIDE build_router. Layers applied outside it
@@ -50,6 +53,10 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 ROUTER_FILE="${ROUTER_FILE:-crates/temper-mcp/src/router.rs}"
+MCP_SRC_DIR="${MCP_SRC_DIR:-crates/temper-mcp/src}"
+# Absolute form of ROUTER_FILE: grep -rl prints paths relative to MCP_SRC_DIR's form, so the
+# self-exclusion in (a2) must compare like with like.
+ROUTER_ABS="$(cd "$(dirname "$ROUTER_FILE")" && pwd)/$(basename "$ROUTER_FILE")"
 GUARD_NAME="audit-mcp-route-auth"
 
 # The sub-router declarations in build_router and their reviewed posture. A new `let X =
@@ -149,6 +156,22 @@ if [[ -n "$UNKNOWN_GROUPS" ]]; then
   printf '  %s\n' $UNKNOWN_GROUPS >&2
   echo "  Classify it: public-by-design (join the baseline with its reason) or gated (mount the" >&2
   echo "  auth layer in its own block and add it to KNOWN_GROUPS)." >&2
+  fail=1
+fi
+
+# (a2) Router assembly must stay inside the one file this guard freezes. A second
+# Router::new() site elsewhere under the crate would be invisible to every check above —
+# this is the mechanical form of the field-of-view statement in the header.
+OTHER_ASSEMBLY="$(grep -rl 'Router::new' "$MCP_SRC_DIR" --include='*.rs' | while IFS= read -r p; do
+  p_abs="$(cd "$(dirname "$p")" && pwd)/$(basename "$p")"
+  [[ "$p_abs" != "$ROUTER_ABS" ]] && printf '%s\n' "$p"
+done || true)"
+if [[ -n "$OTHER_ASSEMBLY" ]]; then
+  echo "$GUARD_NAME: FAIL — Router::new() outside the frozen router file:" >&2
+  printf '  %s\n' $OTHER_ASSEMBLY >&2
+  echo "  This guard can only see build_router in $ROUTER_FILE. A second assembly site" >&2
+  echo "  needs its own reviewed posture BEFORE it can go green — extend this guard or fold" >&2
+  echo "  the site into build_router." >&2
   fail=1
 fi
 

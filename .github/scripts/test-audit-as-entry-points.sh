@@ -116,6 +116,18 @@ run_test "new file wired by a new route: still fails (the file lacks a baseline 
     "$API_COPY" "$WIRED_VERCEL" 1 \
     "entry-point set changed"
 
+# --- (7) a new public path at an ALREADY-REVIEWED file: the frozen routes array is the trip ---
+NEW_SRC_VERCEL="${FIXTURE_DIR}/vercel-new-src.json"
+jq '.routes += [{"src": "/anything", "dest": "/api/oauth/token"}]' "$REAL_VERCEL" > "$NEW_SRC_VERCEL"
+run_test "new public path at reviewed file: fails frozen routes array" "api" "$NEW_SRC_VERCEL" 1 \
+    "routes array changed"
+
+# --- (8) a reorder: first-match semantics are part of the mapping, and the freeze bites ---
+REORDER_VERCEL="${FIXTURE_DIR}/vercel-reorder.json"
+jq '.routes = (.routes | reverse)' "$REAL_VERCEL" > "$REORDER_VERCEL"
+run_test "routes reordered: fails frozen routes array" "api" "$REORDER_VERCEL" 1 \
+    "routes array changed"
+
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed (total: $((PASS + FAIL)))"
 [ "$FAIL" -eq 0 ]

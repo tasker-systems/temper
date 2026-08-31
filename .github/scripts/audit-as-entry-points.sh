@@ -22,7 +22,11 @@
 #   (c) every vercel.json `routes` dest starting /api/ resolves to a file that exists — a route
 #       mapping a public path at nothing fails;
 #   (d) every vercel.json `functions` key is a file that exists — a renamed/deleted file left in
-#       the functions map fails.
+#       the functions map fails;
+#   (e) the `routes` array itself is frozen, jq-normalized, as a whole — a NEW route line mapping
+#       a public path at an ALREADY-REVIEWED file is a new public path, and freezing only the
+#       dest/file pairs would wave it through. Reordering is also a semantic change in
+#       vercel.json (first match wins) and fails with the rest.
 #
 # FIELD OF VIEW — stated so green is never mistaken for more than it checks:
 #   - THIS guard watches `find api -type f` and vercel.json's `functions` and `routes` arrays.
@@ -68,6 +72,15 @@ api/oauth/saml/metadata.ts	route /oauth/saml/metadata	SAML metadata
 api/oauth/token.ts	route /oauth/token	token endpoint
 EOF
 
+# The frozen vercel.json routes array, jq-normalized (-S sorts object keys, -c one line). This is
+# the public-path mapping itself: a NEW route line mapping a public path at an ALREADY-REVIEWED
+# file is still a new public path, and dest/file checks alone cannot see it; a reorder changes
+# first-match semantics. A change here means confirm every src is intentional, then
+# UPDATE_BASELINE=1.
+read -r -d '' ROUTES_BASELINE <<'ROUTES_EOF' || true
+[{"handle":"filesystem"},{"dest":"/api/mcp","src":"/mcp"},{"dest":"/api/mcp","src":"/mcp/(.*)"},{"dest":"/api/internal","src":"/api/embed/dispatch"},{"dest":"/api/internal","src":"/api/embed/warm"},{"dest":"/api/internal","src":"/api/slack/intents/reap"},{"dest":"/api/internal","src":"/api/region/dispatch"},{"dest":"/api/internal","src":"/api/as/reap"},{"dest":"/api/internal","src":"/api/internal-calls/health"},{"dest":"/api/internal","src":"/internal/(.*)"},{"dest":"/api/oauth/authorization-server","src":"/.well-known/oauth-authorization-server"},{"dest":"/api/oauth/authorization-server?issuer_path=$issuer_path","src":"/.well-known/oauth-authorization-server/(?<issuer_path>.*)"},{"dest":"/api/oauth/jwks","src":"/oauth/jwks"},{"dest":"/api/oauth/authorize","src":"/oauth/authorize"},{"dest":"/api/oauth/saml/login","src":"/oauth/saml/login"},{"dest":"/api/oauth/saml/acs","src":"/oauth/saml/acs"},{"dest":"/api/oauth/saml/metadata","src":"/oauth/saml/metadata"},{"dest":"/api/oauth/token","src":"/oauth/token"},{"dest":"/api/mcp","src":"/oauth/(.*)"},{"dest":"/api/mcp","src":"/.well-known/(.*)"},{"dest":"/api/axum","src":"/(.*)"}]
+ROUTES_EOF
+
 fail=0
 
 # The entry set: every file Vercel could build a function from.
@@ -106,15 +119,21 @@ if [[ "${1:-}" == "--list" ]]; then
   printf '%s\n' "$ENTRY_CURRENT"
   echo "# named by vercel.json (routes dests + functions keys):"
   printf '%s\n' "$REFERENCE_CURRENT"
+  echo "# frozen routes array:"
+  jq -S -c '.routes' "$VERCEL_JSON"
   exit 0
 fi
 
 # (a/b) The entry set must match the reviewed baseline, both directions.
+ROUTES_CURRENT="$(jq -S -c '.routes' "$VERCEL_JSON")"
 if [[ "${UPDATE_BASELINE:-}" == "1" ]]; then
   while IFS= read -r f; do
     role="$(printf '%s\n' "$BASELINE" | awk -F'\t' -v f="$f" '$1==f {print $2"\t"$3; found=1} END{if(!found) print "UNREVIEWED\tUNREVIEWED"}')"
     printf '%s\t%s\n' "$f" "$role"
   done <<< "$ENTRY_CURRENT"
+  echo "" >&2
+  echo "# frozen routes array — copy into ROUTES_BASELINE after confirming every src:" >&2
+  printf '%s\n' "$ROUTES_CURRENT" >&2
   echo "^^^ copy into BASELINE after confirming each entry is intentionally public-by-protocol" >&2
   echo "    (or a reviewed server) and the reach column says how a request reaches it." >&2
   exit 0
@@ -155,7 +174,19 @@ printf '%s\n' "$FNKEY_LIST" | while IFS= read -r k; do
   fi
 done || fail=1
 
+# (e) The routes array is frozen whole. A new src naming an already-reviewed file is still a new
+# public path; a reorder changes first-match semantics. Neither is visible to (c)/(d).
+if [[ "$ROUTES_CURRENT" != "$ROUTES_BASELINE" ]]; then
+  echo "$GUARD_NAME: FAIL — the vercel.json routes array changed." >&2
+  echo "The routes array IS the public-path mapping. A new line mapping a public path at an" >&2
+  echo "already-reviewed file is still a new public path, and reordering changes which route" >&2
+  echo "wins. diff (baseline -> current), one element per line:" >&2
+  diff <(printf '%s' "$ROUTES_BASELINE" | jq '.[]') <(printf '%s' "$ROUTES_CURRENT" | jq '.[]') >&2 || true
+  echo "If reviewed and correct: UPDATE_BASELINE=1 .github/scripts/$GUARD_NAME.sh" >&2
+  fail=1
+fi
+
 if [[ "$fail" == "0" ]]; then
-  echo "$GUARD_NAME: OK — $(printf '%s\n' "$ENTRY_CURRENT" | grep -c .) entry points, all reviewed; $(printf '%s\n' "$DEST_LIST" | grep -c . || true) /api/ dests and $(printf '%s\n' "$FNKEY_LIST" | grep -c . || true) functions keys resolve."
+  echo "$GUARD_NAME: OK — $(printf '%s\n' "$ENTRY_CURRENT" | grep -c .) entry points, all reviewed; $(printf '%s\n' "$DEST_LIST" | grep -c . || true) /api/ dests and $(printf '%s\n' "$FNKEY_LIST" | grep -c . || true) functions keys resolve; routes array frozen."
 fi
 exit "$fail"

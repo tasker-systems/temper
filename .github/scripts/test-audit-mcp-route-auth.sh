@@ -33,19 +33,23 @@ FAIL=0
 FIXTURE_DIR="$(mktemp -d)"
 trap 'rm -rf "$FIXTURE_DIR"' EXIT
 
-# run_test NAME ROUTER_FILE EXPECTED_EXIT [EXPECTED_SUBSTRING]
+# run_test NAME ROUTER_FILE EXPECTED_EXIT [EXPECTED_SUBSTRING] [EXTRA_ENV]
 #
 # A fixture never matches the reviewed route BASELINE, so exit code alone cannot distinguish "the
 # wiring assertion bit" from "the baseline diff tripped". EXPECTED_SUBSTRING pins the actual reason.
+# EXTRA_ENV is extra KEY=VALUE assignments (word-split intentionally) for probes needing more
+# overrides than ROUTER_FILE.
 run_test() {
     local test_name="$1"
     local router_file="$2"
     local expected_exit="$3"
     local expected_substr="${4:-}"
+    local extra_env="${5:-}"
 
     local output actual_exit
     set +e
-    output="$(ROUTER_FILE="$router_file" bash "$AUDIT_SCRIPT" 2>&1)"
+    # shellcheck disable=SC2086
+    output="$(env $extra_env ROUTER_FILE="$router_file" bash "$AUDIT_SCRIPT" 2>&1)"
     actual_exit=$?
     set -e
 
@@ -115,6 +119,14 @@ EMPTY_ROUTER="${FIXTURE_DIR}/empty.rs"
 : > "$EMPTY_ROUTER"
 run_test "router with no build_router: fails loudly" "$EMPTY_ROUTER" 1 \
     "no routes extracted"
+
+# --- (9) a second router-assembly site under the crate: fails even with a clean build_router ---
+MCP_SRC_FIX="${FIXTURE_DIR}/mcp_src"
+mkdir -p "$MCP_SRC_FIX"
+cp "$REAL_ROUTER" "$MCP_SRC_FIX/router.rs"
+printf 'use axum::Router;\npub fn stray() -> Router {\n    Router::new()\n}\n' > "$MCP_SRC_FIX/stray.rs"
+run_test "second assembly site: fails" "${MCP_SRC_FIX}/router.rs" 1 \
+    "outside the frozen router file" "MCP_SRC_DIR=${MCP_SRC_FIX}"
 
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed (total: $((PASS + FAIL)))"
