@@ -28,9 +28,15 @@
 //! keys differ by spec A1:
 //!
 //! | Door | Keyed on | Counted from | Mechanism |
-//! |---|---|---| [`create_request`](crate::services::access_service) guard |
+//! |---|---|---|---|
 //! | reconcile pair (`internal_routes`) | the route itself | `kb_rate_counters` (no per-call artifact exists — the handlers trace only) | [`require_route_rate_limit`] middleware |
-//! | `POST /api/access/requests` | the verified JWT principal | the `kb_join_requests` rows themselves (the audit trail) | the `create_request` guard |
+//! | `POST /api/access/requests` | the verified JWT principal | the `kb_join_requests` rows themselves (the audit trail) | the `create_join_request` guard |
+//!
+//! One note on placement: the spec's chosen approach sketched the layer "in
+//! `temper-services::transport`"; it lives in this module instead (its own home,
+//! beside the counters and the guard it shares state with). That is the latitude the
+//! spec's step-4 parenthetical grants — the load-bearing half it requires, one place
+//! where a limit's number and window are stated, is what this module is.
 //!
 //! An in-process counter is rejected as *the* control: on a horizontally-scaled
 //! serverless deployment it bounds one instance and reads as coverage it cannot have —
@@ -43,11 +49,10 @@
 //! open in spec A8 — a decision recorded, not an omission; revisit after the two opt-ins
 //! have exercised.
 
-use axum::extract::Request as AxumRequest;
+use axum::extract::Request;
 use axum::extract::State;
 use axum::middleware::Next;
 use axum::response::Response;
-use chrono::Utc;
 use sqlx::PgPool;
 
 use crate::auth_config::ConfigError;
@@ -185,7 +190,11 @@ fn parse_window(
 /// two concurrent calls can never resurrect a window that just expired.
 ///
 /// Returns `(allowed, retry_after_secs)`. `allowed` is `call_count <= max`; a window
-/// that expired rolls to `1` for the caller that tripped it.
+/// that expired rolls to `1` for the caller that tripped it. The retry value is
+/// computed **inside the statement** — `window_started_at` and `now()` are both the
+/// database's clock, so a `Retry-After: 0` cannot be manufactured by app/DB clock skew;
+/// the value is the honest number of seconds until a retry re-enters as the window's
+/// first call.
 ///
 /// The approximation to *state* in the door's reasoning, not to fix: the counter bounds
 /// pressure, it is not a ledger. The row-level atomicity makes the count exact per
@@ -208,7 +217,10 @@ pub async fn bump_route(pool: &PgPool, route: &str, limit: WindowLimit) -> ApiRe
                     THEN now()
                     ELSE c.window_started_at
             END
-        RETURNING call_count, window_started_at
+        RETURNING call_count,
+                  GREATEST(0, extract(epoch FROM
+                      (window_started_at + make_interval(secs => $2)) - now()))::bigint
+                      AS "retry_after_secs!"
         "#,
         route,
         // `make_interval`'s `secs` parameter is double precision, so the bind is an f64;
@@ -219,19 +231,7 @@ pub async fn bump_route(pool: &PgPool, route: &str, limit: WindowLimit) -> ApiRe
     .await?;
 
     let allowed = row.call_count <= limit.max;
-    let retry_after_secs = if allowed {
-        0
-    } else {
-        window_remaining(row.window_started_at, limit.window_secs)
-    };
-    Ok((allowed, retry_after_secs))
-}
-
-/// Seconds until `window_started_at + window` passes, clamped at zero — the honest
-/// `Retry-After`: the moment this window closes, a retry re-enters it as its first call.
-fn window_remaining(window_started_at: chrono::DateTime<Utc>, window_secs: i32) -> i64 {
-    let ends_at = window_started_at + chrono::Duration::seconds(i64::from(window_secs));
-    (ends_at - Utc::now()).num_seconds().max(0)
+    Ok((allowed, row.retry_after_secs))
 }
 
 /// The self-service guard: **count the canonical artifact** (spec A2). "This principal
@@ -242,9 +242,10 @@ fn window_remaining(window_started_at: chrono::DateTime<Utc>, window_secs: i32) 
 /// `None` is the default-off path and passes immediately — not "checks with an infinite
 /// limit", *passes*: an absent limit must not pay for a round trip it will never use.
 ///
-/// Refusal carries a `Retry-After` computed from the oldest in-window request, which is
-/// the moment the count next drops — the sliding-window honest answer. The COUNT is
-/// approximate under races (two concurrent callers near the edge may both pass); that is
+/// Refusal carries a `Retry-After` computed **inside the statement** from the oldest
+/// in-window request — both operands on the database's clock — which is the moment the
+/// count next drops: the sliding-window honest answer. The COUNT is approximate under
+/// races (two concurrent callers near the edge may both pass); that is
 /// accepted by spec and must stay *stated* in the operator-facing reasoning: a limit is
 /// pressure control, not a ledger.
 pub async fn guard_join_request(
@@ -259,7 +260,9 @@ pub async fn guard_join_request(
     let row = sqlx::query!(
         r#"
         SELECT count(*) AS "count!",
-               COALESCE(min(created), now()) AS "oldest!"
+               GREATEST(0, extract(epoch FROM
+                   (COALESCE(min(created), now()) + make_interval(secs => $2)) - now()))::bigint
+                   AS "retry_after_secs!"
           FROM kb_join_requests
          WHERE requesting_profile_id = $1
            AND created > now() - make_interval(secs => $2)
@@ -272,7 +275,6 @@ pub async fn guard_join_request(
     .await?;
 
     if row.count >= limit.max {
-        let retry_after_secs = window_remaining(row.oldest, limit.window_secs);
         tracing::info!(
             count = row.count,
             max = limit.max,
@@ -280,7 +282,7 @@ pub async fn guard_join_request(
         );
         return Err(ApiError::TooManyRequests {
             message: "too many access requests in the current window".to_string(),
-            retry_after_secs,
+            retry_after_secs: row.retry_after_secs,
         });
     }
 
@@ -303,7 +305,7 @@ pub async fn guard_join_request(
 /// never hears about it.
 pub async fn require_route_rate_limit(
     State(state): State<AppState>,
-    request: AxumRequest,
+    request: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
     let Some(limit) = state.config.rate_limit.and_then(|r| r.reconcile) else {

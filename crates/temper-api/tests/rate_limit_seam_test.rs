@@ -151,18 +151,21 @@ async fn withdrawal_is_never_rate_limited(pool: sqlx::PgPool) {
     ));
 
     // ...but there is nothing pending, and a withdraw from nothing must answer with the
-    // standing machine's own refusal (denied again after the second withdraw) — never a
+    // standing machine's own refusal — after two full cycles the standing is back at
+    // `denied`, so the machine's BadRequest arrives first; had anything been pending to
+    // withdraw, the uniform not-found is the other answer. Either way: never the seam's
     // 429. A caller that cannot request must still be able to find out they have nothing
-    // to withdraw; the seam's refusal is reserved for the request door alone.
+    // to withdraw.
     let err = access_service::withdraw_request(&pool, ProfileId::from(profile))
         .await
         .expect_err("nothing pending");
     assert!(
-        !matches!(
+        matches!(
             err,
-            temper_services::error::ApiError::TooManyRequests { .. }
+            temper_services::error::ApiError::BadRequest(_)
+                | temper_services::error::ApiError::NotFound(_)
         ),
-        "withdraw must never answer with the seam's refusal: got {err:?}"
+        "withdraw must answer with the standing machine's own refusal, never the seam: got {err:?}"
     );
 }
 
@@ -222,6 +225,10 @@ fn limited_reconcile_app(pool: sqlx::PgPool) -> axum::Router {
     axum::Router::new()
         .route(
             "/internal/saml/reconcile",
+            axum::routing::post(|| async { StatusCode::OK }),
+        )
+        .route(
+            "/internal/principal/resolve",
             axum::routing::post(|| async { StatusCode::OK }),
         )
         .layer(axum::middleware::from_fn_with_state(
@@ -295,7 +302,7 @@ async fn an_unconfigured_layer_neither_refuses_nor_counts(pool: sqlx::PgPool) {
     let decoding_key =
         DecodingKey::from_rsa_pem(include_bytes!("common/test_rsa.pub")).expect("test RSA key");
     let jwks = JwksKeyStore::with_static_key(decoding_key, Algorithm::RS256);
-    let mut config = ApiConfig {
+    let config = ApiConfig {
         database_url: "unused".to_string(),
         auth: AuthConfig {
             issuer: "test-issuer".to_string(),
@@ -315,13 +322,6 @@ async fn an_unconfigured_layer_neither_refuses_nor_counts(pool: sqlx::PgPool) {
         slack_mint_secret: None,
         rate_limit: None,
     };
-    // The type-level statement of the clause: there is no Some to be had here. The test
-    // below would fail if the middleware read a fallback instead of `None`.
-    assert_eq!(
-        config.rate_limit, None,
-        "default off means None, not a default limit"
-    );
-    config.auth.audience = "test-audience".to_string();
     let state = AppState::new(pool.clone(), jwks, config);
 
     let app = axum::Router::new()
@@ -356,13 +356,14 @@ async fn an_unconfigured_layer_neither_refuses_nor_counts(pool: sqlx::PgPool) {
 }
 
 /// **Keying witness (the route is the key).** Two doors with one shared budget is the
-/// conflation A1 refuses; each route's counter must be its own row.
+/// conflation A1 refuses: exhaust one route to its limit and the other must still pass,
+/// each with its own counter row. A keying regression to a shared constant key would
+/// leave this green only if both routes were not driven — so both are.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn each_route_spends_its_own_budget(pool: sqlx::PgPool) {
-    // Reuse the limited app but hit BOTH routes; the stub only declares reconcile, so
-    // the second route is asserted at the counter level through the same middleware.
     let app = limited_reconcile_app(pool.clone());
 
+    // Exhaust the reconcile route: max=2 means the third call refuses.
     for _ in 0..2 {
         let (status, _, _) = post_reconcile(app.clone()).await;
         assert_eq!(status, StatusCode::OK);
@@ -370,13 +371,120 @@ async fn each_route_spends_its_own_budget(pool: sqlx::PgPool) {
     let (status, _, _) = post_reconcile(app.clone()).await;
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
 
-    let keys: Vec<String> = sqlx::query_scalar("SELECT route FROM kb_rate_counters")
+    // The second route has its own row and its own budget: still passing, on its FIRST
+    // call — impossible under a shared key, which would already be at its limit.
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/internal/principal/resolve")
+                .body(axum::body::Body::from("{}"))
+                .expect("request builds"),
+        )
+        .await
+        .expect("infallible service");
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "the second route must not have spent the first route's budget"
+    );
+
+    let mut keys: Vec<String> = sqlx::query_scalar("SELECT route FROM kb_rate_counters")
         .fetch_all(&pool)
         .await
         .expect("counter keys");
+    keys.sort();
     assert_eq!(
         keys,
-        vec!["/internal/saml/reconcile".to_string()],
-        "one row per route — the route is the key, and only the route that was called has a row"
+        vec![
+            "/internal/principal/resolve".to_string(),
+            "/internal/saml/reconcile".to_string(),
+        ],
+        "one row per route — each route's budget lives in its own row"
+    );
+}
+
+/// **Ordering witness (the merge-site layering).** The merge sites add the rate-limit
+/// layer FIRST so the signature gate sits OUTERMOST and runs first — the claim is that
+/// an unsigned caller can never spend the signed caller's budget. This witness mounts
+/// both layers exactly as the merge sites do and checks the claim's two halves: the
+/// unsigned call gets the 401, and the counter never heard of it.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_unsigned_caller_spends_no_budget(pool: sqlx::PgPool) {
+    let decoding_key =
+        DecodingKey::from_rsa_pem(include_bytes!("common/test_rsa.pub")).expect("test RSA key");
+    let jwks = JwksKeyStore::with_static_key(decoding_key, Algorithm::RS256);
+    let config = ApiConfig {
+        database_url: "unused".to_string(),
+        auth: AuthConfig {
+            issuer: "test-issuer".to_string(),
+            jwks_url: "unused".to_string(),
+            audience: "test-audience".to_string(),
+            mcp_audience: "test-audience".to_string(),
+            mode: AuthMode::ExternalIdp,
+        },
+        auth_provider_name: "test-provider".to_string(),
+        cors_origins: vec![],
+        port: 0,
+        enable_swagger: false,
+        // The signature gate is configured, so an unsigned call is refused by IT —
+        // not by a disabled endpoint.
+        internal_reconcile_secret: Some("test-reconcile-secret".to_string()),
+        embed_dispatch_secret: None,
+        vercel_connect: None,
+        slack_link: None,
+        slack_mint_secret: None,
+        rate_limit: Some(RateLimitConfig {
+            reconcile: Some(BITES),
+            create_request: None,
+        }),
+    };
+    let state = AppState::new(pool.clone(), jwks, config);
+
+    // The merge-site order: rate limit added first (inner), signature second (outer,
+    // runs first).
+    let app = axum::Router::new()
+        .route(
+            "/internal/saml/reconcile",
+            axum::routing::post(|| async { StatusCode::OK }),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            temper_services::rate_limit::require_route_rate_limit,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            temper_api::middleware::internal_auth::require_internal_signature,
+        ))
+        .with_state(state);
+
+    for i in 0..3 {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/internal/saml/reconcile")
+                    .body(axum::body::Body::from("{}"))
+                    .expect("request builds"),
+            )
+            .await
+            .expect("infallible service");
+        assert_eq!(
+            response.status(),
+            StatusCode::UNAUTHORIZED,
+            "unsigned call {i} must be refused by the signature gate, not counted"
+        );
+    }
+
+    // Three unsigned calls, zero budget spent: a signature-gated attacker cannot soften
+    // the door for the legitimate caller.
+    let counters: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_rate_counters")
+        .fetch_one(&pool)
+        .await
+        .expect("count counter rows");
+    assert_eq!(
+        counters, 0,
+        "unsigned calls must never reach the counter — garbage gets the 401, not a bump"
     );
 }
