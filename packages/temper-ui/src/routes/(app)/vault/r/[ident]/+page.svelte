@@ -5,6 +5,7 @@
 	import PropertySet from '$lib/components/vault/PropertySet.svelte';
 	import EventHistory from '$lib/components/vault/EventHistory.svelte';
 	import EdgeList from '$lib/components/vault/EdgeList.svelte';
+	import ArtifactList from '$lib/components/vault/ArtifactList.svelte';
 	import RegionState from '$lib/components/RegionState.svelte';
 	import { mergeProperties } from '$lib/properties';
 	import { docTypeHue } from '$lib/graph/palette';
@@ -81,6 +82,33 @@
 				<RegionState state={regionStateFor(error)} label="document" />
 			{/await}
 		</div>
+
+		<!--
+			Data artifacts live in the main column, not the rail: their content payload is meant to be
+			read whole, and a 260px rail is where summaries go.
+
+			Three states, and they are deliberately NOT the rail's symmetric four:
+			- **empty renders nothing.** A resource owning no artifacts must read exactly as it did
+			  before this section existed — an "empty" placeholder here would be a changed layout for
+			  every resource that has none, which is precisely what the goal's negative face forbids.
+			  The absence of the section IS the honest answer "none".
+			- **arriving renders nothing too**, for the same reason: the overwhelming majority of
+			  resources own none, and a region that flashes in and out on every page is noise.
+			- **a FAILED read renders, and names itself.** A failed artifacts read degrading to
+			  nothing would be indistinguishable from a resource that owns none — the exact
+			  failed-vs-empty defect this page's other fills were cured of.
+		-->
+		<!-- `await … then` (no pending arm) is the arriving-renders-nothing rule, stated
+		     structurally rather than as an empty block. -->
+		{#await data.artifacts then artifacts}
+			{#if artifacts.length > 0}
+				<ArtifactList {artifacts} />
+			{/if}
+		{:catch error}
+			<div class="artifacts-failed">
+				<RegionState state={regionStateFor(error)} label="data artifacts" />
+			</div>
+		{/await}
 	</div>
 
 	<!--
@@ -165,6 +193,9 @@
 	}
 	.body {
 		padding: 18px 22px 24px;
+	}
+	.artifacts-failed {
+		padding: 0 22px 18px;
 	}
 	.rail {
 		background: var(--color-quiet-card);

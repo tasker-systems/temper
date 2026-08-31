@@ -4,6 +4,8 @@
 // summaries resolve a target
 // TITLE from the loaded subgraph nodes when present, else fall back to the label.
 // Never throws — a malformed/unknown payload yields null (row shows kind + actor only).
+import { humanBytes } from '$lib/bytes';
+
 export function summarizeEvent(
 	kind: string,
 	payload: unknown,
@@ -28,6 +30,20 @@ export function summarizeEvent(
 			if (label && title) return `${label} → ${title}`;
 			return label ?? null;
 		}
+		case 'data_artifact_committed': {
+			const family = str(p.artifact_kind);
+			if (!family) return null;
+			const parts = [
+				family,
+				str(p.intent),
+				humanBytes(p.content_bytes),
+				hashPrefix(p.content_hash),
+			];
+			if (Array.isArray(p.supersedes) && p.supersedes.length > 0) {
+				parts.push(`supersedes ${p.supersedes.length}`);
+			}
+			return parts.filter((s) => s !== null).join(' · ');
+		}
 		default:
 			return null;
 	}
@@ -40,4 +56,11 @@ function scalarish(v: unknown): string | null {
 	if (typeof v === 'string') return v;
 	if (typeof v === 'number' || typeof v === 'boolean') return String(v);
 	return null;
+}
+
+/** A short, honestly-labeled hash prefix — a pointer to the content's identity,
+ *  not the content. The ledger carries only the hash; the summary says so. */
+function hashPrefix(v: unknown): string | null {
+	if (typeof v !== 'string' || v.length < 8) return null;
+	return `sha256:${v.slice(0, 8)}…`;
 }

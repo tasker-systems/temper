@@ -480,3 +480,54 @@
 .atlas-focusable:focus-visible .focus-ring {
   opacity: 1;
 }
+
+/* ── highlight.js token theme ───────────────────────────────────────────
+   One theme for every surface that emits hljs markup: markdown fences
+   (MarkdownRenderer), artifact content payloads (ArtifactList), and shape
+   schemas (ShapeList). Colors drawn from the palette the app already
+   speaks — confidence green for keys, decision amber for strings, a muted
+   blue for numbers and keywords, dim italic comments — so a fence reads as
+   part of the page rather than as an embedded stock theme. Scoped to
+   `.hljs` so nothing else on the page can inherit a token color. */
+.hljs .hljs-comment,
+.hljs .hljs-quote {
+	color: var(--color-quiet-dim);
+	font-style: italic;
+}
+.hljs .hljs-attr,
+.hljs .hljs-attribute,
+.hljs .hljs-property,
+.hljs .hljs-selector-tag,
+.hljs .hljs-name {
+	color: #8fd8a8;
+}
+.hljs .hljs-string,
+.hljs .hljs-regexp {
+	color: var(--decision-amber-lt);
+}
+.hljs .hljs-number,
+.hljs .hljs-literal,
+.hljs .hljs-keyword,
+.hljs .hljs-built_in,
+.hljs .hljs-type {
+	color: #93c5fd;
+}
+.hljs .hljs-title,
+.hljs .hljs-title.function_ {
+	color: rgba(255, 255, 255, 0.88);
+}
+.hljs .hljs-meta,
+.hljs .hljs-symbol,
+.hljs .hljs-bullet,
+.hljs .hljs-addition {
+	color: #8fd8a8;
+}
+.hljs .hljs-deletion {
+	color: #f0a8a8;
+}
+.hljs .hljs-emphasis {
+	font-style: italic;
+}
+.hljs .hljs-strong {
+	font-weight: 600;
+}

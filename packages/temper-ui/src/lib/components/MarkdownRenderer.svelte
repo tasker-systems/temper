@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { marked } from 'marked';
 	import { browser } from '$app/environment';
+	import { parseMarkdown } from '$lib/markdown';
 
 	interface Props {
 		markdown: string;
@@ -19,7 +19,7 @@
 
 	let html = $derived.by(() => {
 		if (!markdown) return '';
-		const raw = marked.parse(markdown, { async: false }) as string;
+		const raw = parseMarkdown(markdown);
 		return sanitizer ? sanitizer(raw) : raw;
 	});
 </script>
@@ -175,6 +175,9 @@
 		font-size: 0.8rem;
 		line-height: 1.65;
 	}
+
+	/* hljs token colors live in app.css (`.hljs-*`), shared with the direct-code JSON
+	   viewers — one theme, or the markdown fences and the artifact/schema viewers drift. */
 
 	/* ── Blockquotes ──────────────────────────────────────────────────── */
 

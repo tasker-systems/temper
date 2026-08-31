@@ -38,6 +38,12 @@ export interface VaultFilters {
 	contextRef: string | null;
 	q: string | null;
 	tags: string[];
+	/**
+	 * Artifact-ownership filter, tri-state: `null` = any (no narrowing), `true` = owns at
+	 * least one data artifact, `false` = owns none. Ownership, not liveness — folded
+	 * artifacts still count, per the door's contract (`ResourceListParams.has_artifacts`).
+	 */
+	hasArtifacts: boolean | null;
 }
 
 /**
@@ -82,6 +88,7 @@ export const FILTER_PARAM_KEYS = [
 	'context_ref',
 	'q',
 	'tags',
+	'has_artifacts',
 ] as const;
 
 /**
@@ -148,7 +155,17 @@ export function parseFilters(url: URL): VaultFilters {
 		contextRef: scalar(p, 'context_ref'),
 		q: scalar(p, 'q'),
 		tags: csv(p, 'tags'),
+		// Only the door's own spellings count as present: anything else (a typo'd value the
+		// door will refuse) is displayed as no filter rather than guessed at.
+		hasArtifacts: triBool(scalar(p, 'has_artifacts')),
 	};
+}
+
+/** `'true'` → true, `'false'` → false, anything else (absent, empty, a typo) → null. */
+function triBool(v: string | null): boolean | null {
+	if (v === 'true') return true;
+	if (v === 'false') return false;
+	return null;
 }
 
 function withParams(base: URL, mutate: (p: URLSearchParams) => void): string {
@@ -175,6 +192,8 @@ export function buildFilterUrl(base: URL, patch: Partial<VaultFilters>): string 
 		if ('contextRef' in patch) setScalar('context_ref', patch.contextRef);
 		if ('q' in patch) setScalar('q', patch.q);
 		if ('tags' in patch) setCsv('tags', patch.tags);
+		if ('hasArtifacts' in patch)
+			setScalar('has_artifacts', patch.hasArtifacts === null ? null : String(patch.hasArtifacts));
 		p.delete('offset');
 	});
 }

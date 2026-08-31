@@ -5048,6 +5048,18 @@
             }
           },
           {
+            "name": "has_artifacts",
+            "in": "query",
+            "description": "Artifact-ownership filter: `true` → only resources owning at least one data artifact;\n`false` → only resources owning none. **Ownership, not liveness** — a folded artifact\nstill means \"owns\", because the clause this serves says \"own at least one artifact and\nwhich own none\", with no liveness qualifier. Absent = no narrowing.\n\nEvaluated inside the caller's visible set (the predicate sits under the same\n`resources_visible_to` join as every other filter here), so the answer can never widen\nwhat the caller can read — and a caller who cannot read a resource gets no existence\nsignal about its artifacts either way.",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          {
             "name": "sort",
             "in": "query",
             "required": false,

@@ -27,6 +27,7 @@ export function flattenPayload(value: unknown, prefix = ''): PayloadRow[] {
 function scalar(v: unknown): string {
 	if (v === null) return 'null';
 	if (typeof v === 'string') return v;
+	if (typeof v === 'bigint') return v.toString();
 	if (typeof v === 'number' || typeof v === 'boolean') return String(v);
 	return JSON.stringify(v);
 }

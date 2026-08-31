@@ -6,6 +6,7 @@ import { ApiError, apiGet, apiPatch } from '$lib/server/api';
 import { bounded } from '$lib/server/bounded';
 import { readResourceEdges, readTrail } from '$lib/server/graph-reads';
 import type { ContentResponse, DocTypeDescription, ResourceView } from '$lib/types';
+import type { ArtifactView } from '$lib/types/generated/data_artifact';
 import type { Actions, PageServerLoad } from './$types';
 
 /**
@@ -131,6 +132,14 @@ export const load: PageServerLoad = async ({ locals, params, parent }) => {
 	);
 	const trail = bounded(readTrail(accessToken, 'node', id), 'history');
 	const edges = bounded(readResourceEdges(accessToken, id), 'connections');
+	// Folded artifacts are INCLUDED, deliberately: whether an artifact is live is often the
+	// reader's question, and the default read (folded hidden) would answer it silently wrong.
+	// Like the other three fills, a failed read must reach the template as a failure — never
+	// degrade into "this resource owns no artifacts".
+	const artifacts = bounded(
+		apiGet<ArtifactView[]>(`/api/resources/${id}/artifacts?include_folded=true`, accessToken),
+		'data artifacts',
+	);
 
 	// GET /api/resources/{id} returns a ResourceView — the one shape, with both meta
 	// tiers filled. Do NOT read the tiers off /content: get_content_select hardcodes
@@ -159,7 +168,7 @@ export const load: PageServerLoad = async ({ locals, params, parent }) => {
 		? await readStateVocabulary(resource.doc_type_name, accessToken)
 		: null;
 
-	return { resource, content, trail, edges, mayChange, stateVocabulary };
+	return { resource, content, trail, edges, artifacts, mayChange, stateVocabulary };
 };
 
 export const actions: Actions = {

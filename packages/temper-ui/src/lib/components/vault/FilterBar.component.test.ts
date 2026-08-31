@@ -20,6 +20,7 @@ const NO_FILTERS: VaultFilters = {
 	contextRef: null,
 	q: null,
 	tags: [],
+	hasArtifacts: null,
 };
 
 /** `contexts` defaults to `[]` — a read that answered with nothing, not a read that failed. */
@@ -91,6 +92,39 @@ describe('FilterBar — the control that mutates the URL', () => {
 		// debounce would be a different defect from being wired to nothing at all.
 		expect(goto).toHaveBeenCalledTimes(1);
 		expect(gotoTarget().searchParams.get('stage')).toBe('done');
+	});
+
+	it('navigates on the data-artifacts select changing, both partitions and back to any', async () => {
+		setPage('/vault/all?context_ref=%40me%2Ftemper&offset=40');
+
+		const { getByLabelText, rerender } = mount(null);
+
+		await fireEvent.change(getByLabelText('data artifacts'), { target: { value: 'true' } });
+		expect(goto).toHaveBeenCalledTimes(1);
+		expect(gotoTarget().searchParams.get('has_artifacts')).toBe('true');
+		expect(gotoTarget().searchParams.has('offset')).toBe(false);
+
+		rerender({
+			filters: { ...NO_FILTERS, hasArtifacts: true },
+			revealed: null,
+			fixedContext: false,
+			contexts: [],
+		});
+
+		await fireEvent.change(getByLabelText('data artifacts'), { target: { value: 'false' } });
+		expect(goto).toHaveBeenCalledTimes(2);
+		expect(gotoTarget(1).searchParams.get('has_artifacts')).toBe('false');
+
+		rerender({
+			filters: { ...NO_FILTERS, hasArtifacts: false },
+			revealed: null,
+			fixedContext: false,
+			contexts: [],
+		});
+
+		await fireEvent.change(getByLabelText('data artifacts'), { target: { value: '' } });
+		expect(goto).toHaveBeenCalledTimes(3);
+		expect(gotoTarget(2).searchParams.has('has_artifacts')).toBe(false);
 	});
 });
 
