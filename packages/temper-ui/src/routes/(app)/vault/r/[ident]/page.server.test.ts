@@ -62,6 +62,10 @@ beforeEach(() => {
 	// never-settling promise to the resource read and time out for the wrong reason.
 	apiGet.mockImplementation((path: string) => {
 		if (path.endsWith('/content')) return new Promise(() => {});
+		// The artifacts fill never settles by default, like the other three: the load's contract
+		// is that it hands the template promises, and a settled default would let a load that
+		// awaits this read pass C1 by accident.
+		if (path.includes('/artifacts')) return new Promise(() => {});
 		if (path.includes('/api/schema/doc-types/'))
 			return Promise.resolve({ enum_fields: { 'temper-stage': ['backlog', 'done'] } });
 		return Promise.resolve({
@@ -87,6 +91,29 @@ describe('the resource page does not block on its fill', () => {
 		expect(data.trail).toBeInstanceOf(Promise);
 		expect(data.edges).toBeInstanceOf(Promise);
 		expect(data.content).toBeInstanceOf(Promise);
+		expect(data.artifacts).toBeInstanceOf(Promise);
+	});
+});
+
+describe('the artifacts read', () => {
+	it("asks for the folded ones too — whether an artifact is live is the reader's question", async () => {
+		apiGet.mockImplementation((path: string) => {
+			if (path.includes('/artifacts')) return Promise.resolve([]);
+			if (path.endsWith('/content')) return Promise.resolve({ markdown: '# b' });
+			if (path.includes('/api/schema/doc-types/')) return Promise.resolve({ enum_fields: {} });
+			return Promise.resolve({
+				id: 'r1',
+				title: 'A resource',
+				doc_type_name: 'task',
+				kb_context_id: CTX,
+				owner_profile_id: 'p-someone-else',
+				is_active: true,
+			});
+		});
+		const data = await run();
+		await expect(data.artifacts).resolves.toEqual([]);
+		const asked = apiGet.mock.calls.map(([path]) => String(path));
+		expect(asked).toContain('/api/resources/r1/artifacts?include_folded=true');
 	});
 });
 

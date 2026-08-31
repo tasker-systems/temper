@@ -89,7 +89,7 @@ const edge = (n: number): GraphEdgeRow => ({
  * real load rather than by a hand-written double.
  */
 type Fill = Partial<
-	Pick<PageData, 'content' | 'trail' | 'edges' | 'mayChange' | 'stateVocabulary'>
+	Pick<PageData, 'content' | 'trail' | 'edges' | 'artifacts' | 'mayChange' | 'stateVocabulary'>
 >;
 
 const RESOURCE = makeRow({
@@ -120,6 +120,10 @@ const data = (fill: Fill = {}): PageData =>
 		content: fill.content ?? Promise.resolve('# A body\n\nWith a paragraph in it.'),
 		trail: fill.trail ?? Promise.resolve(trailOf(2)),
 		edges: fill.edges ?? Promise.resolve([edge(1)]),
+		// The default is the shape the overwhelming majority of resources arrive in — owning no
+		// artifacts — because every pre-existing assertion in this file is about that page, and
+		// the artifacts region's contract is that such a page renders exactly as it always did.
+		artifacts: fill.artifacts ?? Promise.resolve([]),
 		// The default is the shape a reader WITHOUT change authority gets: nothing offered,
 		// and no vocabulary asked for. Every pre-existing assertion in this file is about that
 		// reader, so the write arm must leave all of them standing.
@@ -768,5 +772,69 @@ describe('a reader attaches and revises their own descriptions where they read t
 		expect(sentenceOf(container.querySelector('.props > .err'))).toBe(
 			'"temper-stage" is a name the system owns.',
 		);
+	});
+});
+
+describe('the data artifacts region', () => {
+	// Scoped to the main column: the artifacts region renders below the body, never in the
+	// rail, and the rail scopes above must be able to tell the two apart.
+	const mainRegion = (c: HTMLElement): Element | null => c.querySelector('.main');
+
+	const artifact = {
+		artifact_id: '01a00000000000000000000000000001',
+		resource_id: 'res-1',
+		kind_owner_table: 'kb_profiles',
+		kind_owner_id: 'p-1',
+		artifact_kind: 'measurement',
+		intent: 'member',
+		precedence: 0,
+		content_hash: 'a'.repeat(64),
+		content_bytes: 1536n,
+		shape_state: 'never_declared',
+		is_folded: false,
+		created: '2026-08-20T10:00:00Z',
+		content: { run: 2 },
+	};
+
+	it('renders a resource that owns no artifacts exactly as before — no section, no placeholder', async () => {
+		const { container, unmount } = render(Page, { data: data(), form: null });
+		await vi.waitFor(() => expect(container.querySelector('.props')).not.toBeNull());
+		expect(container.querySelector('.main')?.textContent).not.toContain('Data artifacts');
+		unmount();
+	});
+
+	it('keeps rendering nothing while the artifacts read is still in flight', () => {
+		const { container } = render(Page, {
+			data: data({ artifacts: pending<never[]>() }),
+			form: null,
+		});
+		expect(container.querySelector('.main')?.textContent).not.toContain('Data artifacts');
+	});
+
+	it('renders the section whole when the resource owns artifacts', async () => {
+		const { container, unmount } = render(Page, {
+			data: data({ artifacts: Promise.resolve([artifact]) }),
+			form: null,
+		});
+		await vi.waitFor(() => {
+			expect(container.querySelector('.main')?.textContent).toContain('Data artifacts · 1');
+		});
+		expect(container.querySelector('.main')?.textContent).toContain('measurement');
+		expect(container.querySelector('.main')?.textContent).toContain('1.5 KB');
+		unmount();
+	});
+
+	it('never renders a read that gave up as absence — the stopping names itself', async () => {
+		const words = await wordsOf(
+			{ artifacts: gaveUpOn('data artifacts') },
+			mainRegion,
+			'region-gave-up',
+		);
+		expect(words.toLowerCase()).toContain('data artifacts');
+	});
+
+	it('never renders a failed read as absence — the failure names itself', async () => {
+		const words = await wordsOf({ artifacts: broken() }, mainRegion, 'region-failed');
+		expect(words.toLowerCase()).toContain('data artifacts');
 	});
 });

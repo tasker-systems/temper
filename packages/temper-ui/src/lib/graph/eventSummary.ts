@@ -4,6 +4,8 @@
 // summaries resolve a target
 // TITLE from the loaded subgraph nodes when present, else fall back to the label.
 // Never throws — a malformed/unknown payload yields null (row shows kind + actor only).
+import { humanBytes } from '$lib/bytes';
+
 export function summarizeEvent(
 	kind: string,
 	payload: unknown,
@@ -54,21 +56,6 @@ function scalarish(v: unknown): string | null {
 	if (typeof v === 'string') return v;
 	if (typeof v === 'number' || typeof v === 'boolean') return String(v);
 	return null;
-}
-
-/** 1024-based size with one decimal, trailing .0 trimmed — a legibility aid;
- *  the payload's `content_bytes` stays the exact count. */
-function humanBytes(v: unknown): string | null {
-	if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) return null;
-	const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-	let n = v;
-	let u = 0;
-	while (n >= 1024 && u < units.length - 1) {
-		n /= 1024;
-		u += 1;
-	}
-	const magnitude = u === 0 ? String(n) : n.toFixed(1).replace(/\.0$/, '');
-	return `${magnitude} ${units[u]}`;
 }
 
 /** A short, honestly-labeled hash prefix — a pointer to the content's identity,
