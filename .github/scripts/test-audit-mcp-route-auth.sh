@@ -193,6 +193,19 @@ awk '{ print } /\.merge\(health\)/ { print "            .merge(admin_routes()),"
 run_test ".merge of a helper router: fails" "$HELPER_MERGE" 1 \
     "outside the reviewed groups" "$(stage_fixture_src "$HELPER_MERGE")"
 
+# --- (10b) same-line laundering: a whitelisted merge must not hide a second merge beside it ---
+LAUNDERED_MERGE="${FIXTURE_DIR}/laundered_merge.rs"
+awk '{ print } /\.merge\(discovery_routes\)/ { print "            .merge(discovery_routes).merge(admin_routes())," ; next }' "$REAL_ROUTER" > "$LAUNDERED_MERGE"
+run_test "whitelisted merge beside a smuggled one: fails per-occurrence" "$LAUNDERED_MERGE" 1 \
+    "outside the reviewed groups" "$(stage_fixture_src "$LAUNDERED_MERGE")"
+
+# --- (10c) a block comment naming require_mcp_auth must not satisfy the wiring assertion ---
+BLOCK_COMMENT_AUTH="${FIXTURE_DIR}/block_comment_auth.rs"
+awk '{ print } /            require_mcp_auth,/ { print "            /* auth wiring unchanged: require_mcp_auth still gates /mcp */" ; next }' "$REAL_ROUTER" \
+  | sed 's/            require_mcp_auth,/            lax_auth,/' > "$BLOCK_COMMENT_AUTH"
+run_test "require_mcp_auth only in a block comment: fails wiring" "$BLOCK_COMMENT_AUTH" 1 \
+    "'require_mcp_auth' not mounted in the mcp_routes" "$(stage_fixture_src "$BLOCK_COMMENT_AUTH")"
+
 # --- (11) .nest( inside build_router: refused outright ---
 NESTED="${FIXTURE_DIR}/nested.rs"
 awk '{ print } /\.merge\(health\)/ { print "            .nest(\"/admin\", admin_router())," }' "$REAL_ROUTER" > "$NESTED"

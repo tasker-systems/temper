@@ -28,10 +28,13 @@
 #       `trailingSlash`, `proxy` can each map or alter a public path, and `crons` vends
 #       scheduled unauthenticated GETs. The whole file IS the deployment mapping — any change,
 #       including a reorder (first match wins) or a benign-looking build tweak, gets human eyes.
-#   (f) the three api/*.rs BINS carry no router-assembly tokens. They are workspace binaries a
-#       normal-looking edit could turn into second assembly sites one file boundary away from
-#       every other guard's field of view. (Doc comments are stripped first — prose may say
-#       "Router".) What the bins do BEYOND assembly stays with the crates' guards.
+#   (f) the three api/*.rs BINS carry no router-assembly OR route-declaration tokens. They are
+#       workspace binaries a normal-looking edit could turn into second assembly sites — or into
+#       a `.route(` appended to the crate-built router — one file boundary away from every other
+#       guard's field of view. (Doc comments are stripped first — prose may say "Router".) What
+#       the bins do BEYOND assembly stays with the crates' guards.
+#   (g) no sibling Vercel config (vercel.toml / vercel.ts) may exist: only one config file is
+#       honored per project, and this guard freezes only vercel.json.
 #
 # FIELD OF VIEW — stated so green is never mistaken for more than it checks:
 #   - THIS guard watches `find api -type f`, vercel.json's parsed content, and the three bins'
@@ -65,7 +68,13 @@ GUARD_NAME="audit-as-entry-points"
 
 # The three Vercel bins — the files vercel.json's `functions` map configures. None may assemble
 # its own router (f); the routers live in the crates, whose guards freeze them. API_BINS_OVERRIDE
-# exists for the test harness (fixtures live outside api/); CI never sets it.
+# exists for the test harness (fixtures live outside api/); CI never sets it. A SET-BUT-EMPTY
+# override is refused before the default expansion can mask it: silently checking zero bins while
+# reporting "bins assembly-free" is the failure this guard exists to prevent.
+if [[ -n "${API_BINS_OVERRIDE+x}" && -z "$API_BINS_OVERRIDE" ]]; then
+  echo "$GUARD_NAME: FAIL — API_BINS_OVERRIDE is set but empty; refusing to check zero bins." >&2
+  exit 1
+fi
 API_BINS_OVERRIDE="${API_BINS_OVERRIDE:-api/mcp.rs api/axum.rs api/internal.rs}"
 read -r -a API_BINS <<< "$API_BINS_OVERRIDE"
 
@@ -190,14 +199,28 @@ if [[ "$VERCEL_CURRENT" != "$VERCEL_BASELINE" ]]; then
   fail=1
 fi
 
-# (f) The api bins must not assemble their own router — a second assembly site one file boundary
-# outside every crate guard's field of view. Comments stripped: prose may say "Router".
+# (f) The api bins must not assemble OR extend a router — a second assembly site one file
+# boundary outside every crate guard's field of view, or a `.route(` appended to the crate-built
+# router before Vercel wrapping (reachable via the /mcp(.*) mapping without any baseline entry).
+# Comments stripped: prose may say "Router". (The set-but-empty override refusal lives at the
+# top of the script, before the default expansion would mask it.)
 for bin in "${API_BINS[@]}"; do
-  if [[ -f "$bin" ]] && sed 's#//.*##' "$bin" | grep -q 'Router::'; then
-    echo "$GUARD_NAME: FAIL — router assembly token in $bin." >&2
+  if [[ -f "$bin" ]] && sed 's#//.*##' "$bin" | grep -qE 'Router::|\.route\(|\.nest\(|\.merge\(|\.nest_service\('; then
+    echo "$GUARD_NAME: FAIL — router assembly or route-declaration token in $bin." >&2
     echo "  The Vercel bins are entry points, not assembly sites; the routers live in the crates," >&2
     echo "  whose guards freeze them. Route through temper_mcp::build_router / temper_api's" >&2
     echo "  create_app, or extend this guard deliberately." >&2
+    fail=1
+  fi
+done
+
+# (g) Exactly ONE Vercel configuration file may exist per project, and this guard freezes only
+# vercel.json. A sibling config would supersede the frozen mapping without tripping anything.
+for alt in vercel.toml vercel.ts; do
+  if [[ -f "$alt" ]]; then
+    echo "$GUARD_NAME: FAIL — $alt exists. Only one Vercel config file is honored per project," >&2
+    echo "  and this guard freezes only vercel.json; a sibling config can supersede it. Remove" >&2
+    echo "  the file or fold this guard's freeze onto it deliberately." >&2
     fail=1
   fi
 done

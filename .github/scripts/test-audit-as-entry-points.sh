@@ -158,14 +158,32 @@ SCRATCH_BIN="${FIXTURE_DIR}/mcp-assembly.rs"
 cp "${REPO_ROOT}/api/mcp.rs" "$SCRATCH_BIN"
 printf '\nfn stray() { let _r = Router::new(); }\n' >> "$SCRATCH_BIN"
 run_test "assembly token in api bin: fails bin check" "api" "$REAL_VERCEL" 1 \
-    "router assembly token" "API_BINS_OVERRIDE=${SCRATCH_BIN}"
+    "router assembly or route-declaration token" "API_BINS_OVERRIDE=${SCRATCH_BIN}"
 
-# --- (12) a comment saying "Router" in an api bin: GREEN direction — prose is not assembly ---
+# --- (11b) a .route( appended in a bin: reachable via the /mcp(.*) mapping, refused ---
+SCRATCH_BIN_ROUTE="${FIXTURE_DIR}/mcp-route.rs"
+cp "${REPO_ROOT}/api/mcp.rs" "$SCRATCH_BIN_ROUTE"
+printf '\nlet r = r.route("/mcp/admin/ping", get(|| async { "ok" }));\n' >> "$SCRATCH_BIN_ROUTE"
+run_test ".route( appended in api bin: fails bin check" "api" "$REAL_VERCEL" 1 \
+    "route-declaration token" "API_BINS_OVERRIDE=${SCRATCH_BIN_ROUTE}"
+
+# --- (11c) an EMPTY API_BINS_OVERRIDE: refused — it would silently check zero bins ---
+run_test "empty API_BINS_OVERRIDE: refused" "api" "$REAL_VERCEL" 1 \
+    "refusing to check zero bins" "API_BINS_OVERRIDE="
+
+# --- (11d) a comment saying "Router" in an api bin: GREEN direction — prose is not assembly ---
 SCRATCH_BIN_COMMENT="${FIXTURE_DIR}/mcp-comment.rs"
 cp "${REPO_ROOT}/api/mcp.rs" "$SCRATCH_BIN_COMMENT"
 printf '\n// the axum Router::new lives in the crate, not here\n' >> "$SCRATCH_BIN_COMMENT"
 run_test "comment saying Router in api bin: stays green" "api" "$REAL_VERCEL" 0 "" \
     "API_BINS_OVERRIDE=${SCRATCH_BIN_COMMENT}"
+
+# --- (12) a sibling Vercel config: only one config file is honored, and only vercel.json is frozen ---
+touch vercel.toml
+run_test "vercel.toml sibling: fails" "api" "$REAL_VERCEL" 1 \
+    "vercel.toml exists"
+rm -f vercel.toml
+run_test "sibling config removed: green again" "api" "$REAL_VERCEL" 0
 
 # --- (13) UPDATE_BASELINE=1 on a failing tree: refused, cannot launder ---
 API_COPY="$(fresh_api_copy)"

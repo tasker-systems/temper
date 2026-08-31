@@ -54,9 +54,31 @@
 #     (see vercel.json); the AS guard freezes that mapping half.
 #
 # COMMENTS are stripped before matching, so prose may name route-shaped text; a comment cannot
-# freeze or trip anything. (This assumes no `//` inside a string literal in build_router — true
-# of every path and handler in the file today; a route path containing `//` would truncate its
-# line at the wrong place and RED here, which is the safe direction.)
+# freeze or trip anything — `//` to end-of-line AND `/* ... */` across lines (a block comment
+# naming require_mcp_auth must not satisfy the wiring assertion). (This assumes no `//` or `/*`
+# inside a string literal in build_router — true of every path and handler in the file today; a
+# route path containing either would truncate its line at the wrong place and RED here, which is
+# the safe direction.)
+strip_comments() {
+  awk '
+    BEGIN { in_block=0 }
+    {
+      line=$0; out=""
+      while (length(line) > 0) {
+        if (in_block) {
+          e = index(line, "*/")
+          if (e == 0) { line="" } else { in_block=0; line=substr(line, e+2) }
+        } else {
+          s = index(line, "/*"); h = index(line, "//")
+          if (s == 0 && h == 0) { out = out line; line = "" }
+          else if (s > 0 && (h == 0 || s < h)) { out = out substr(line, 1, s-1); in_block=1; line=substr(line, s+2) }
+          else { out = out substr(line, 1, h-1); line = "" }
+        }
+      }
+      print out
+    }
+  '
+}
 #
 # UPDATE_BASELINE=1 rewrites nothing and only prints the current set, and refuses to run at all
 # in CI or while any check above is failing — update mode cannot launder an unresolved failure.
@@ -118,13 +140,27 @@ EOF
 # an UNPARSEABLE marker — a non-literal path cannot be frozen, and the guard fails on the marker.
 extract() {
   awk '
+    BEGIN { in_block=0 }
     # Slice to build_router first.
     /^(pub )?fn build_router\(/ { inside=1 }
     inside && /^}/ { exit }
     !inside { next }
     {
       line=$0
-      sub(/\/\/.*/, "", line)
+      # Strip // to EOL and /* ... */ across lines, so prose can neither freeze nor trip.
+      out=""
+      while (length(line) > 0) {
+        if (in_block) {
+          e = index(line, "*/")
+          if (e == 0) { line="" } else { in_block=0; line=substr(line, e+2) }
+        } else {
+          s = index(line, "/*"); h = index(line, "//")
+          if (s == 0 && h == 0) { out = out line; line = "" }
+          else if (s > 0 && (h == 0 || s < h)) { out = out substr(line, 1, s-1); in_block=1; line=substr(line, s+2) }
+          else { out = out substr(line, 1, h-1); line = "" }
+        }
+      }
+      line=out
       # New sub-router declaration: it becomes the current attribution group. Do NOT skip the
       # rest of the line — rustfmt may lay the first `.route(` on it — but DO blank the
       # declaration itself, or the ident scan below would freeze `Router::new` as a handler.
@@ -183,8 +219,9 @@ fi
 fail=0
 
 # (a) An unknown sub-router group = a declaration with no reviewed posture. Fail even if it is
-# empty: its posture is unreviewed by definition.
-UNKNOWN_GROUPS="$(printf '%s\n' "$ALL" | cut -f1 | sort -u | grep -Ev "^($KNOWN_GROUPS)$" || true)"
+# empty: its posture is unreviewed by definition. UNPARSEABLE rows are not groups — they are
+# already reported by (a5) with their own message.
+UNKNOWN_GROUPS="$(printf '%s\n' "$ALL" | grep -v '^UNPARSEABLE' | cut -f1 | sort -u | grep -Ev "^($KNOWN_GROUPS)$" || true)"
 if [[ -n "$UNKNOWN_GROUPS" ]]; then
   echo "$GUARD_NAME: FAIL — sub-router group(s) with UNKNOWN auth posture:" >&2
   printf '  %s\n' $UNKNOWN_GROUPS >&2
@@ -211,15 +248,16 @@ fi
 
 # The build_router body, comments stripped — the slice every structural check below reads, so
 # prose can neither satisfy nor evade them.
-ROUTER_BODY="$(awk '/^(pub )?fn build_router\(/ {inside=1} inside && !/^(pub )?fn build_router\(/ {print} inside && /^\}/ {exit}' "$ROUTER_FILE" | sed 's#//.*##')"
+ROUTER_BODY="$(awk '/^(pub )?fn build_router\(/ {inside=1} inside && !/^(pub )?fn build_router\(/ {print} inside && /^\}/ {exit}' "$ROUTER_FILE" | strip_comments)"
 
-# (a3) `.merge(` may name only the reviewed group idents. A merged helper function's router —
-# whose routes live outside this file's baseline — is the one assembly shape the triple-freeze
-# cannot see from inside build_router.
-BAD_MERGE="$(printf '%s\n' "$ROUTER_BODY" | grep -E '\.merge\(' | grep -vE "\.merge\(($REVIEWED_MERGES)\)" || true)"
-if [[ -n "$BAD_MERGE" ]]; then
+# (a3) `.merge(` may name only the reviewed group idents — checked PER OCCURRENCE, not per line:
+# one whitelisted merge on a line must not launder a second, non-whitelisted merge beside it.
+# A nested or multiline merge argument does not match the extractable form and is flagged too.
+BAD_MERGE="$(printf '%s\n' "$ROUTER_BODY" | grep -oE '\.merge\([^)]*\)' | grep -vE "^\.merge\(($REVIEWED_MERGES)\)$" || true)"
+TRAILING_MERGE="$(printf '%s\n' "$ROUTER_BODY" | grep -E '\.merge\([[:space:]]*$' || true)"
+if [[ -n "$BAD_MERGE" || -n "$TRAILING_MERGE" ]]; then
   echo "$GUARD_NAME: FAIL — .merge() argument outside the reviewed groups:" >&2
-  printf '  %s\n' "$BAD_MERGE" >&2
+  printf '  %s\n' $BAD_MERGE $TRAILING_MERGE >&2
   echo "  A merged router whose routes are declared elsewhere is invisible to the frozen" >&2
   echo "  baseline. Inline the routes into a named group in build_router, or extend this" >&2
   echo "  guard deliberately." >&2
@@ -262,7 +300,7 @@ auth_block_body="$(awk -v blk="$AUTH_BLOCK" '
   $0 ~ "let "blk" = Router::new\\(\\)" { inside=1 }
   inside { print }
   inside && /;[[:space:]]*$/ { exit }
-' "$ROUTER_FILE" | sed 's#//.*##')"
+' "$ROUTER_FILE" | strip_comments)"
 if [[ -z "$auth_block_body" ]]; then
   echo "$GUARD_NAME: FAIL — sub-router group '$AUTH_BLOCK' not found in $ROUTER_FILE (renamed or" >&2
   echo "  removed?). /mcp is the gated surface; the guard must be re-read, not re-baselined blind." >&2
