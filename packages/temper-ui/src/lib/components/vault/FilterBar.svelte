@@ -70,6 +70,11 @@
 		navigate({ status: value || null });
 	}
 
+	function onHasArtifactsChange(event: Event) {
+		const value = (event.target as HTMLSelectElement).value;
+		navigate({ hasArtifacts: value === '' ? null : value === 'true' });
+	}
+
 	function addTagDraft() {
 		const name = tagDraft.trim();
 		tagDraft = '';
@@ -173,6 +178,23 @@
 				class="min-w-16 flex-1 bg-transparent text-xs text-zinc-200 placeholder:text-zinc-600 outline-none"
 			/>
 		</div>
+	</div>
+
+	<div class="flex flex-col gap-1">
+		<label for="filter-has-artifacts" class="text-[10px] uppercase tracking-widest text-zinc-500"
+			>data artifacts</label
+		>
+		<select
+			id="filter-has-artifacts"
+			value={filters.hasArtifacts === null ? '' : String(filters.hasArtifacts)}
+			onchange={onHasArtifactsChange}
+			class="rounded border border-zinc-700/50 bg-zinc-800/50 px-2.5 py-1 text-xs text-zinc-200
+			       outline-none focus:border-quiet-border"
+		>
+			<option value="">Any</option>
+			<option value="true">has artifacts</option>
+			<option value="false">no artifacts</option>
+		</select>
 	</div>
 
 	{#if revealed === 'task'}

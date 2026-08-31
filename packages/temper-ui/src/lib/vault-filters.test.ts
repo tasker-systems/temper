@@ -25,7 +25,25 @@ describe('parseFilters', () => {
 			contextRef: null,
 			q: null,
 			tags: [],
+			hasArtifacts: null,
 		});
+	});
+
+	// Tri-state: only the door's own spellings parse as present; a typo'd value displays as
+	// no filter (the door will refuse it, and the refusal surfaces as an error — the UI does
+	// not guess at what a value it does not understand "really" meant).
+	it('parses the has_artifacts tri-state', () => {
+		expect(parseFilters(at('?has_artifacts=true')).hasArtifacts).toBe(true);
+		expect(parseFilters(at('?has_artifacts=false')).hasArtifacts).toBe(false);
+		expect(parseFilters(at('?has_artifacts=')).hasArtifacts).toBeNull();
+		expect(parseFilters(at('?has_artifacts=perhaps')).hasArtifacts).toBeNull();
+	});
+
+	it('builds and strips the has_artifacts param through the filter URL', () => {
+		const set = buildFilterUrl(at('?'), { hasArtifacts: true });
+		expect(set).toBe('/vault/all?has_artifacts=true');
+		const clear = buildFilterUrl(at('?has_artifacts=true'), { hasArtifacts: null });
+		expect(clear).toBe('/vault/all');
 	});
 
 	it('splits doc_type_name as CSV', () => {
@@ -78,7 +96,10 @@ describe('doorParams', () => {
 	it('drops an empty filter param instead of forwarding it', () => {
 		expect(door('?stage=').has('stage')).toBe(false);
 		expect(door('?q=').has('q')).toBe(false);
-		expect([...door('?stage=&status=&context_ref=&q=&doc_type_name=&tags=').keys()]).toEqual([]);
+		expect(door('?has_artifacts=').has('has_artifacts')).toBe(false);
+		expect([
+			...door('?stage=&status=&context_ref=&q=&doc_type_name=&tags=&has_artifacts=').keys(),
+		]).toEqual([]);
 	});
 
 	// The regression the parse-only fix introduced: `?stage=%20` used to count as one filter and
@@ -121,12 +142,21 @@ describe('doorParams', () => {
 	// `parseFilters` reads but `doorParams` does not strip is the exact shape of the original
 	// finding, and one it strips but the parse ignores would silently drop a live filter.
 	it('strips exactly the params parseFilters interprets', () => {
-		for (const key of FILTER_PARAM_KEYS) {
+		// `has_artifacts` is tri-state, not scalar: an unparseable value (`=x`) is displayed as
+		// no filter and forwarded untouched — the door refuses it with a 400 the page surfaces,
+		// the same philosophy as `?limit=`. Its strip/interpret agreement is asserted above;
+		// the loop below holds for the scalar and CSV keys only.
+		for (const key of FILTER_PARAM_KEYS.filter((k) => k !== 'has_artifacts')) {
 			expect(activeFilterCount(parseFilters(at(`?${key}=x`))), key).toBe(1);
 			expect(door(`?${key}=x`).get(key), key).toBe('x');
 			expect(activeFilterCount(parseFilters(at(`?${key}=%20`))), key).toBe(0);
 			expect(door(`?${key}=%20`).has(key), key).toBe(false);
 		}
+		// The key is still IN the stripped set (empty strips) and the parse still reads it
+		// when it carries a door-legal value — the tri-state tests above pin both; this pins
+		// that the membership itself doesn't drift.
+		expect(FILTER_PARAM_KEYS).toContain('has_artifacts');
+		expect(door('?has_artifacts=true').get('has_artifacts')).toBe('true');
 	});
 });
 
