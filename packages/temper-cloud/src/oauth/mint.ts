@@ -32,11 +32,15 @@ export function accessTtlSeconds(): number {
  * signing key and AS_ISSUER / AS_AUDIENCE / AS_ACCESS_TTL_SECONDS env config.
  *
  * `audience` is the RFC 8707 resource indicator the authorization flow was granted — what the
- * caller requested and the flow validated. When omitted (the refresh grant, whose chain does not
- * carry the original request) the token is minted with the instance audience, AS_AUDIENCE; the
- * MCP middleware accepts both audiences, so a refreshed MCP session survives the omission.
+ * caller requested, the flow validated, and (since the refresh chain carries it) every rotation
+ * of that chain re-states. When null/omitted — a chain with no recorded audience, or a machine
+ * mint that never had one — the token carries the instance audience, AS_AUDIENCE. The MCP
+ * middleware accepts both audiences, so a legacy chain's refreshed session still survives.
  */
-export async function mintAccessToken(claims: MintedClaims, audience?: string): Promise<string> {
+export async function mintAccessToken(
+  claims: MintedClaims,
+  audience?: string | null,
+): Promise<string> {
   const { key, kid } = await getSigningKey();
   const issuer = requireEnv("AS_ISSUER");
   const resolvedAudience = audience?.trim() || requireEnv("AS_AUDIENCE");

@@ -14,7 +14,7 @@ import {
   validateAssertion,
 } from "../saml/sp.js";
 import { isRedirectUriAllowed, loadClientRegistry } from "./clients.js";
-import { requireEnv } from "./env.js";
+import { requireEnv, servedAudiences } from "./env.js";
 import {
   bindCodeToFlow,
   consumeCode,
@@ -306,13 +306,13 @@ export async function handleAuthorize(req: Request, db: NeonClient): Promise<Res
   // token carried AS_AUDIENCE, which is precisely the mismatch that makes a strict MCP client
   // refuse the flow: the metadata promises one resource and the mint delivers another.
   // Fail-closed on anything the instance does not serve, per the same discipline as the
-  // redirect-URI allowlist above.
-  const asAudience = requireEnv("AS_AUDIENCE");
-  const mcpAudience = process.env.MCP_AUDIENCE?.trim() || asAudience;
+  // redirect-URI allowlist above. The set is `servedAudiences()` — shared with the refresh
+  // chain's write-time check in `storeRefreshToken`, so the audience authorize accepts is the
+  // audience a chain is allowed to carry, by construction.
   const requestedAudience = params.get("resource")?.trim() || params.get("audience")?.trim() || "";
-  let audience = asAudience;
+  let audience = requireEnv("AS_AUDIENCE").trim();
   if (requestedAudience) {
-    if (requestedAudience !== asAudience && requestedAudience !== mcpAudience) {
+    if (!servedAudiences().includes(requestedAudience)) {
       return badRequest("requested resource is not served by this authorization server");
     }
     audience = requestedAudience;
@@ -518,20 +518,30 @@ function oauthError(error: string, status = 400): Response {
  * (scoped to `clientId`), and returns the RFC 6749 §5.1 success body. Shared by both the
  * authorization_code and refresh_token grants in `handleToken`.
  *
- * `chain` is the load-bearing parameter, and both of its inherited halves work the same way: the
+ * `chain` is the load-bearing parameter, and all of its inherited halves work the same way: the
  * authorization_code grant computes a fresh deadline and passes `id: null` (start a chain), and the
- * refresh grant passes back both the deadline and the identity it read off the token it rotated.
- * There is deliberately no default on either — a caller that omits one fails to compile rather than
- * choosing a deadline, or forking a chain, by accident.
+ * refresh grant passes back the deadline, the identity, and the audience it read off the token it
+ * rotated. There is deliberately no default on any of them — a caller that omits one fails to
+ * compile rather than choosing a deadline, forking a chain, or switching the session's audience,
+ * by accident.
+ *
+ * The audience is the RFC 8707 resource the chain's login was authorized for: it is stamped into
+ * the access token's `aud` AND onto the chain row, so every successor mint stays on the audience
+ * the flow originally asked for. `null` (a chain with no recorded audience) mints the instance
+ * audience and stores NULL — the fallback chains predating the column have always had.
  */
 async function issueTokenPair(
   db: NeonClient,
   claims: MintedClaims,
   clientId: string,
-  chain: { id: string | null; expiresAt: string; profileId: string | null },
-  audience?: string,
+  chain: {
+    id: string | null;
+    expiresAt: string;
+    profileId: string | null;
+    audience: string | null;
+  },
 ): Promise<TokenResponse> {
-  const accessToken = await mintAccessToken(claims, audience);
+  const accessToken = await mintAccessToken(claims, chain.audience);
   const refreshToken = newOpaqueToken();
   const chainId = await storeRefreshToken(db, {
     token: refreshToken,
@@ -541,6 +551,7 @@ async function issueTokenPair(
     chainExpiresAt: chain.expiresAt,
     chainId: chain.id,
     profileId: chain.profileId,
+    audience: chain.audience,
   });
 
   if (chainId === null) {
@@ -638,23 +649,17 @@ export async function handleToken(req: Request, db: NeonClient): Promise<Respons
     // an access token and no refresh token, and the revoke that ended their standing is not undone
     // by their next sign-in.
     return oauthJson(
-      await issueTokenPair(
-        db,
-        consumed.claims,
-        clientId,
-        {
-          // A fresh login starts a chain, so it has no identity to inherit — `storeRefreshToken`
-          // roots the new one at this very token.
-          id: null,
-          expiresAt: chainDeadline,
-          profileId: consumed.profileId,
-        },
+      await issueTokenPair(db, consumed.claims, clientId, {
+        // A fresh login starts a chain, so it has no identity to inherit — `storeRefreshToken`
+        // roots the new one at this very token.
+        id: null,
+        expiresAt: chainDeadline,
+        profileId: consumed.profileId,
         // The audience the flow was authorized for — what the PRM promised and the caller
-        // requested. The refresh grant below omits it (the chain does not carry it) and mints
-        // the instance audience; the MCP middleware accepts both, so a refreshed MCP session
-        // survives.
-        consumed.audience,
-      ),
+        // requested. Stamped onto the chain so every rotation mints it too; the refresh grant
+        // below reads it back off the token it rotates rather than re-deriving it.
+        audience: consumed.audience,
+      }),
       200,
     );
   }
@@ -716,13 +721,40 @@ export async function handleToken(req: Request, db: NeonClient): Promise<Respons
       }
     }
 
-    const pair = await issueTokenPair(db, rotated.claims, rotated.clientId, {
-      // Handed back UNCHANGED — both of them. The deadline is what makes the bound absolute; the
-      // identity is what lets a later replay of ANY token in this chain reach the live one.
-      id: rotated.chainId,
-      expiresAt: rotated.chainExpiresAt,
-      profileId,
-    });
+    // The issue/store leg is server-side and can throw — the chain-audience check in
+    // `storeRefreshToken` on config drift, or the mint's own env reads. But the rotation guard has
+    // ALREADY revoked and marked the presented token by the time it runs, so letting the throw
+    // escape would answer a platform 500 that names nothing, leave the row claiming a rotation
+    // that produced no successor, and turn the client's next retry into a recorded replay — a
+    // deployment fault reported as a theft. Answer `temporarily_unavailable` instead: the client
+    // retries when the operator has fixed the config, and the mark is withdrawn best-effort, by
+    // the same reasoning as the admission-decline branch below.
+    let pair: TokenResponse;
+    try {
+      pair = await issueTokenPair(db, rotated.claims, rotated.clientId, {
+        // Handed back UNCHANGED — all of them. The deadline is what makes the bound absolute; the
+        // identity is what lets a later replay of ANY token in this chain reach the live one; the
+        // audience is what keeps a refreshed session on the resource its login was authorized for.
+        id: rotated.chainId,
+        expiresAt: rotated.chainExpiresAt,
+        profileId,
+        audience: rotated.audience,
+      });
+    } catch (issueErr) {
+      logger.error(
+        { err: issueErr instanceof Error ? issueErr.message : String(issueErr) },
+        "token: could not issue the refreshed pair after a successful rotation (config or store fault)",
+      );
+      try {
+        await unmarkRotation(db, rotated.tokenId);
+      } catch (unmarkErr) {
+        logger.error(
+          { err: unmarkErr instanceof Error ? unmarkErr.message : String(unmarkErr) },
+          "token: could not withdraw the rotation mark from a failed issue — a later retry may be reported as a replay",
+        );
+      }
+      return oauthError("temporarily_unavailable", 503);
+    }
 
     // No successor chain means the admission predicate inside the INSERT declined — the principal's
     // standing has reached a terminal. Refused HERE rather than only at the API gate the access

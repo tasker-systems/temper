@@ -34,6 +34,7 @@ function authorizeRequest(opts?: {
   challenge?: string;
   codeChallengeMethod?: string | null;
   responseType?: string;
+  resource?: string;
 }): Request {
   const { challenge } = pkcePair();
   const params = new URLSearchParams({
@@ -43,6 +44,9 @@ function authorizeRequest(opts?: {
     code_challenge: opts?.challenge ?? challenge,
     state: opts?.state ?? "st-123",
   });
+  if (opts?.resource !== undefined) {
+    params.set("resource", opts.resource);
+  }
   const method = opts?.codeChallengeMethod === undefined ? "S256" : opts.codeChallengeMethod;
   if (method !== null) {
     params.set("code_challenge_method", method);
@@ -107,6 +111,35 @@ describe("oauth endpoints", () => {
     it("rejects an unsupported response_type", async () => {
       const res = await handleAuthorize(authorizeRequest({ responseType: "token" }), db);
       expect(res.status).toBe(400);
+    });
+
+    it("stores a requested resource the instance serves on the flow (RFC 8707)", async () => {
+      // The exact set the chain write will later re-ask against — the same servedAudiences()
+      // definition, so what authorize accepts is what a chain is allowed to carry.
+      process.env.MCP_AUDIENCE = "https://inst.test/mcp";
+      try {
+        const res = await handleAuthorize(
+          authorizeRequest({ state: "st-res", resource: "https://inst.test/mcp" }),
+          db,
+        );
+        expect(res.status).toBe(302);
+        const rs = relayStateFromLocation(res.headers.get("location") as string);
+        const rows = await sql`SELECT audience FROM kb_oauth_flow WHERE relay_state = ${rs}`;
+        expect(rows[0]).toMatchObject({ audience: "https://inst.test/mcp" });
+      } finally {
+        delete process.env.MCP_AUDIENCE;
+      }
+    });
+
+    it("fails closed on a requested resource the instance does not serve", async () => {
+      const res = await handleAuthorize(
+        authorizeRequest({ state: "st-bad-res", resource: "https://evil.test/unrelated" }),
+        db,
+      );
+      expect(res.status).toBe(400);
+      // And nothing is stashed: an unserved request must not leave a pending flow behind.
+      const rows = await sql`SELECT count(*)::int AS n FROM kb_oauth_flow`;
+      expect((rows[0] as { n: number }).n).toBe(0);
     });
 
     it("rejects a missing/non-S256 code_challenge_method", async () => {
