@@ -102,6 +102,7 @@ class AccessApi:
             '400': "ErrorBody",
             '401': "ErrorBody",
             '409': "ErrorBody",
+            '429': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -175,6 +176,7 @@ class AccessApi:
             '400': "ErrorBody",
             '401': "ErrorBody",
             '409': "ErrorBody",
+            '429': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -248,6 +250,7 @@ class AccessApi:
             '400': "ErrorBody",
             '401': "ErrorBody",
             '409': "ErrorBody",
+            '429': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,

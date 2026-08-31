@@ -194,6 +194,9 @@ require_layer_in 'require_system_access'             create_app
 require_layer_in 'require_internal_signature'        $APP_BUILDERS
 require_layer_in 'require_slack_link_signature'      $APP_BUILDERS
 require_layer_in 'require_slack_mint_signature'      $APP_BUILDERS
+# The rate-limit layer rides the reconcile pair's router, so it is served by BOTH builders
+# the same way — one surface serving it unlimited while the other enforces is a posture split.
+require_layer_in 'require_route_rate_limit'          $APP_BUILDERS
 
 # (c) The review-required route set must match the reviewed baseline.
 NORM_BASELINE="$(printf '%s\n' "$BASELINE" | sort -u)"

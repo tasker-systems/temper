@@ -610,10 +610,20 @@ pub fn create_app(state: AppState) -> Router {
     let (auth_only, _) = auth_only.split_for_parts();
     let (gated, _) = gated.split_for_parts();
 
-    let internal = internal_routes().layer(axum::middleware::from_fn_with_state(
-        state.clone(),
-        crate::middleware::internal_auth::require_internal_signature,
-    ));
+    // The rate-limit layer is added BEFORE the signature gate so it sits INSIDE it:
+    // layers run outermost-first, so the signature check runs first on every request,
+    // and an unsigned caller cannot spend the signed caller's budget — garbage gets the
+    // 401 and the counter never hears of it. With the seam unconfigured (`rate_limit:
+    // None`) the middleware passes straight through, so this wiring is inert by default.
+    let internal = internal_routes()
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            temper_services::rate_limit::require_route_rate_limit,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::internal_auth::require_internal_signature,
+        ));
 
     let slack_link_internal =
         slack_link_internal_routes().layer(axum::middleware::from_fn_with_state(
@@ -679,10 +689,19 @@ pub fn create_app(state: AppState) -> Router {
 /// surface from one binary — the split matters only for Vercel's per-function
 /// timeout model.
 pub fn create_internal_app(state: AppState) -> Router {
-    let internal = internal_routes().layer(axum::middleware::from_fn_with_state(
-        state.clone(),
-        crate::middleware::internal_auth::require_internal_signature,
-    ));
+    // Same layering as `create_app`'s `internal`: rate limit innermost, signature
+    // outermost, per the merge-site discipline — the internal function must carry the
+    // seam identically to the public one, or the second serving path would be the
+    // unlimited copy of the first.
+    let internal = internal_routes()
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            temper_services::rate_limit::require_route_rate_limit,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::internal_auth::require_internal_signature,
+        ));
     let slack_link_internal =
         slack_link_internal_routes().layer(axum::middleware::from_fn_with_state(
             state.clone(),
