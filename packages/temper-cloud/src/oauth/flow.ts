@@ -1,4 +1,5 @@
 import type { NeonClient } from "../db.js";
+import { servedAudiences } from "./env.js";
 import type { MintedClaims } from "./mint.js";
 import { hashToken } from "./mint.js";
 import { verifyPkceS256 } from "./pkce.js";
@@ -180,6 +181,15 @@ export interface StoreRefreshTokenArgs {
   chainId: string | null;
   /** The principal who owns this chain, so an administrator can end it. `null` if unresolved. */
   profileId: string | null;
+  /**
+   * The RFC 8707 resource this chain's login was authorized for. Stamped at the chain's first
+   * token and handed back UNCHANGED by every rotation, so a refreshed session mints the audience
+   * it originally asked for rather than silently switching to the instance audience behind the
+   * MCP middleware's dual-accept. `null` means "no audience recorded" — a chain minted before
+   * the column existed, or a login with no requested resource — and rotation falls back to the
+   * instance audience, which is the behaviour those chains have always had.
+   */
+  audience: string | null;
 }
 
 /**
@@ -212,6 +222,20 @@ export interface StoreRefreshTokenArgs {
  * `expires_at` is `LEAST(requested, chain_expires_at)`, so a stored token never outlives the chain
  * it belongs to and the rotation guard never has to choose between two disagreeing bounds.
  *
+ * **The audience is validated HERE, at the write, and an out-of-set value is never persisted.**
+ * Same fail-closed discipline as the `/oauth/authorize` handler, asked against the same
+ * `servedAudiences()` set — but at the opposite end of the flow's life. The value being checked
+ * arrives from the flow row, so no client input can reach this check unserved; what CAN put an
+ * out-of-set value here is configuration, because the set itself is env — drift between the
+ * authorize moment and this write, or a misconfigured deployment. That is a deployment fault,
+ * and the response is a throw naming the fault rather than a silent skip. Silently declining the
+ * chain the way the admission predicate does would hand the client an access token with no
+ * refresh token and log nothing about why, on every login, for as long as the drift lasted. The
+ * throw is not free either — the refresh grant's rotation has already burned the presented token
+ * by the time this fires, which is why `handleToken`'s refresh branch catches it, withdraws the
+ * rotation mark, and answers `temporarily_unavailable` instead of letting a platform 500 name
+ * nothing and leave the mark reading as a replay.
+ *
  * Only the COMPARISON happens in SQL. Both operands originate on the AS host clock (`Date.now()`
  * at the call site), while the rotation guard's `now()` is the database's — so host/DB skew shifts
  * a chain's real length by that skew. Small in practice, named here because "computed in SQL"
@@ -224,16 +248,22 @@ export async function storeRefreshToken(
   db: NeonClient,
   args: StoreRefreshTokenArgs,
 ): Promise<string | null> {
+  if (args.audience !== null && !servedAudiences().includes(args.audience)) {
+    throw new Error(
+      `refresh chain audience is not served by this authorization server: ${args.audience}`,
+    );
+  }
   const rows = await db`
     INSERT INTO kb_oauth_refresh_tokens (
-      id, token_hash, client_id, claims, expires_at, chain_expires_at, chain_id, profile_id
+      id, token_hash, client_id, claims, expires_at, chain_expires_at, chain_id, profile_id, audience
     )
     SELECT
       g.new_id, ${hashToken(args.token)}, ${args.clientId}, ${JSON.stringify(args.claims)}::jsonb,
       LEAST(${args.expiresAt.toISOString()}::timestamptz, ${args.chainExpiresAt}::timestamptz),
       ${args.chainExpiresAt}::timestamptz,
       COALESCE(${args.chainId}::uuid, g.new_id),
-      ${args.profileId}
+      ${args.profileId},
+      ${args.audience}
     FROM (SELECT uuid_generate_v7() AS new_id) g
     WHERE (${args.profileId}::uuid IS NULL
            OR principal_may_refresh(${args.profileId}::uuid))
@@ -261,6 +291,13 @@ export interface RotateRefreshTokenResult {
   chainId: string;
   /** The chain's owner, if one was resolved when it was minted. */
   profileId: string | null;
+  /**
+   * The RFC 8707 resource the chain's login was authorized for, handed to the successor
+   * UNCHANGED — the same inheritance rule as the chain deadline. `null` on a chain with no
+   * recorded audience (predating the column, or no requested resource): the caller then mints
+   * the instance audience, the fallback those chains have always had.
+   */
+  audience: string | null;
 }
 
 /**
@@ -290,7 +327,7 @@ export async function rotateRefreshToken(
     SET revoked_at = now(), rotated_at = now()
     WHERE token_hash = ${hashToken(token)} AND revoked_at IS NULL AND expires_at > now()
       AND chain_expires_at > now()
-    RETURNING id, claims, client_id, chain_expires_at, chain_id, profile_id
+    RETURNING id, claims, client_id, chain_expires_at, chain_id, profile_id, audience
   `;
   const row = rows[0] as
     | {
@@ -300,6 +337,7 @@ export async function rotateRefreshToken(
         chain_expires_at: unknown;
         chain_id: string;
         profile_id: string | null;
+        audience: string | null;
       }
     | undefined;
   if (!row) {
@@ -312,6 +350,7 @@ export async function rotateRefreshToken(
     chainExpiresAt: normalizeTimestamp(row.chain_expires_at),
     chainId: row.chain_id,
     profileId: row.profile_id ?? null,
+    audience: row.audience ?? null,
   };
 }
 

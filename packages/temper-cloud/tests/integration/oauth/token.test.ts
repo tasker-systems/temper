@@ -153,27 +153,34 @@ describe("handleToken", () => {
   it("authorization_code: mints the aud the flow was authorized for (RFC 8707 resource)", async () => {
     // An MCP client's flow: `/oauth/authorize` validated the requested `resource` and stored it
     // on the flow; the exchange must stamp that exact value into the token's `aud` — not the
-    // instance audience — so the token is usable at the resource the PRM advertised.
-    const { code, verifier } = await seedCode(db, null, "https://inst.test/mcp");
+    // instance audience — so the token is usable at the resource the PRM advertised. The MCP
+    // audience is only servable when the instance advertises it, so the test stands the env up
+    // the way a real deployment does.
+    process.env.MCP_AUDIENCE = "https://inst.test/mcp";
+    try {
+      const { code, verifier } = await seedCode(db, null, "https://inst.test/mcp");
 
-    const res = await handleToken(
-      tokenRequest({
-        grant_type: "authorization_code",
-        code,
-        code_verifier: verifier,
-        client_id: "cli",
-      }),
-      db,
-    );
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as TokenSuccessBody;
+      const res = await handleToken(
+        tokenRequest({
+          grant_type: "authorization_code",
+          code,
+          code_verifier: verifier,
+          client_id: "cli",
+        }),
+        db,
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as TokenSuccessBody;
 
-    const JWKS = createLocalJWKSet(await getPublicJwks());
-    const { payload } = await jwtVerify(body.access_token, JWKS, {
-      issuer: process.env.AS_ISSUER,
-      audience: "https://inst.test/mcp",
-    });
-    expect(payload.sub).toBe("u1");
+      const JWKS = createLocalJWKSet(await getPublicJwks());
+      const { payload } = await jwtVerify(body.access_token, JWKS, {
+        issuer: process.env.AS_ISSUER,
+        audience: "https://inst.test/mcp",
+      });
+      expect(payload.sub).toBe("u1");
+    } finally {
+      delete process.env.MCP_AUDIENCE;
+    }
   });
 
   it("rejects an unsupported grant_type", async () => {
