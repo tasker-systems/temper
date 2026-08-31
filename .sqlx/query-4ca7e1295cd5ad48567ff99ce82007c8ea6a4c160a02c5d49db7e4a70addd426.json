@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT count(*) AS \"count!\",\n               COALESCE(min(created), now()) AS \"oldest!\"\n          FROM kb_join_requests\n         WHERE requesting_profile_id = $1\n           AND created > now() - make_interval(secs => $2)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "oldest!",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "4ca7e1295cd5ad48567ff99ce82007c8ea6a4c160a02c5d49db7e4a70addd426"
+}

@@ -71,3 +71,6 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
 serde_urlencoded = "0.7"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+# `oneshot` drives the rate-limit middleware directly in the seam's witnesses, the same
+# way temper-mcp's transport layer tests drive theirs.
+tower = { version = "0.5", features = ["util"] }

@@ -6033,6 +6033,7 @@ dependencies = [
  "temper-telemetry",
  "temper-workflow",
  "tokio",
+ "tower",
  "tracing",
  "tracing-subscriber",
  "utoipa",

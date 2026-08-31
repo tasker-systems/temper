@@ -709,6 +709,7 @@ async fn setup_with_recorder(pool: PgPool, recorder: Option<RequestLog>) -> E2eT
         vercel_connect: None,
         slack_link: None,
         slack_mint_secret: None,
+        rate_limit: None,
     };
 
     let state = AppState::new(pool.clone(), jwks_store, api_config);
@@ -826,6 +827,7 @@ pub async fn setup_eddsa_with_provider(pool: PgPool, provider: &str) -> E2eTestA
         vercel_connect: None,
         slack_link: None,
         slack_mint_secret: None,
+        rate_limit: None,
     };
 
     let state = AppState::new(pool.clone(), jwks_store, api_config);

@@ -1,4 +1,4 @@
-use axum::http::StatusCode;
+use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 use utoipa::ToSchema;
@@ -57,6 +57,17 @@ pub enum ApiError {
     /// are wrong and `block_append` refuses to overwrite a seq, so the caller must discard + re-upload.
     #[error("Content integrity check failed: {0}")]
     ContentIntegrity(String),
+    /// A request exceeding a chosen rate bound (the rate-limit seam,
+    /// `crate::rate_limit`). This is the refusal face's *"a well-formed request the
+    /// system says no to, not an error"*: a 429 with the house structured body, not a
+    /// bare status — and a `Retry-After` computed from the window, so a well-behaved
+    /// caller backs off to the moment a retry can actually succeed. Authorized as an
+    /// EXTEND by the seam design's A6.
+    #[error("Too many requests: {message}")]
+    TooManyRequests {
+        message: String,
+        retry_after_secs: i64,
+    },
     #[error("Internal error: {0}")]
     Internal(String),
 }
@@ -127,6 +138,9 @@ impl IntoResponse for ApiError {
             ApiError::ContentIntegrity(_) => {
                 (StatusCode::UNPROCESSABLE_ENTITY, "CONTENT_INTEGRITY")
             }
+            ApiError::TooManyRequests { .. } => {
+                (StatusCode::TOO_MANY_REQUESTS, "TOO_MANY_REQUESTS")
+            }
             ApiError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR"),
         };
 
@@ -147,6 +161,21 @@ impl IntoResponse for ApiError {
             }
             ApiError::ContentIntegrity(_) => {
                 tracing::warn!(status_code, error_code = code, %message, "content integrity");
+            }
+            // Info, not warn: a 429 is the system working as configured — pressure the
+            // operator chose to bound — not an instance fault. The retry value is the
+            // actionable half; the message is caller-shaped text and quotes nothing
+            // sensitive by construction (it names a route or a door).
+            ApiError::TooManyRequests {
+                retry_after_secs, ..
+            } => {
+                tracing::info!(
+                    status_code,
+                    error_code = code,
+                    retry_after_secs,
+                    %message,
+                    "rate limited"
+                );
             }
             ApiError::Unauthorized(_) | ApiError::Forbidden | ApiError::ForbiddenDetail(_) => {
                 tracing::warn!(status_code, error_code = code, %message, "auth error");
@@ -208,7 +237,21 @@ impl IntoResponse for ApiError {
                 details: details_json,
             },
         };
-        (status, axum::Json(body)).into_response()
+        let mut response = (status, axum::Json(body)).into_response();
+
+        // Retry-After rides only the 429 — it is that arm's semantics, and computing it
+        // was the refusal's whole point. `to_string` of an i64 is a valid header value,
+        // so the insert cannot fail; the match guards the semantics, not the bytes.
+        if let ApiError::TooManyRequests {
+            retry_after_secs, ..
+        } = &self
+        {
+            if let Ok(value) = axum::http::HeaderValue::from_str(&retry_after_secs.to_string()) {
+                response.headers_mut().insert(header::RETRY_AFTER, value);
+            }
+        }
+
+        response
     }
 }
 
@@ -256,6 +299,14 @@ impl From<ApiError> for temper_core::error::TemperError {
             ),
             ApiError::Conflict(s) => TemperError::Conflict(s),
             ApiError::ContentIntegrity(s) => TemperError::ContentIntegrity(s),
+            // Degrades to BadRequest text rather than earning a `TemperError` arm of its
+            // own — the CLI renders errors as text, has no status to preserve, and the
+            // retry value is exactly what the caller needs next, so it rides along. Same
+            // shape as the `PlanRefused` degradation above and for the same reason.
+            ApiError::TooManyRequests {
+                message,
+                retry_after_secs,
+            } => TemperError::BadRequest(format!("{message} (retry after {retry_after_secs}s)")),
             ApiError::Internal(s) => TemperError::Api(format!("internal: {s}")),
             ApiError::SystemAccessRequired { details } => {
                 TemperError::SystemAccessRequired(Box::new(CliAccessDetails {

@@ -325,6 +325,7 @@ pub async fn setup_test_app(pool: PgPool) -> TestApp {
         vercel_connect: None,
         slack_link: None,
         slack_mint_secret: None,
+        rate_limit: None,
     };
 
     let state = AppState::new(pool.clone(), jwks_store, config);
@@ -383,6 +384,7 @@ pub async fn setup_test_app_with_state(
         vercel_connect: None,
         slack_link: None,
         slack_mint_secret: None,
+        rate_limit: None,
     };
 
     let mut state = AppState::new(pool.clone(), jwks_store, config);
@@ -436,6 +438,7 @@ pub async fn setup_test_app_with_config(
         vercel_connect: None,
         slack_link: None,
         slack_mint_secret: None,
+        rate_limit: None,
     };
     configure(&mut config);
 

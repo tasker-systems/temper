@@ -420,6 +420,7 @@ mod tests {
             vercel_connect: None,
             slack_link: None,
             slack_mint_secret: None,
+            rate_limit: None,
         };
         AppState::new(
             pool,

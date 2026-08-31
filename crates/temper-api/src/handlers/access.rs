@@ -67,6 +67,7 @@ pub struct CloseReviewBody {
         (status = 201, description = "Join request created", body = JoinRequest),
         (status = 400, description = "The request is not legal from the caller's standing", body = ErrorBody),
         (status = 409, description = "A request is already pending, or access is already granted", body = ErrorBody),
+        (status = 429, description = "Too many requests in the current window (rate limit configured by the operator; default unlimited)", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
     )
 )]
@@ -82,7 +83,12 @@ pub async fn create_request(
         accepted_terms_version: body.accepted_terms_version,
     };
 
-    let request = access_service::create_join_request(&state.pool, params).await?;
+    let request = access_service::create_join_request(
+        &state.pool,
+        params,
+        state.config.rate_limit.and_then(|r| r.create_request),
+    )
+    .await?;
     Ok((StatusCode::CREATED, Json(request)))
 }
 

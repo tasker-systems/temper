@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT id AS \"id!: Uuid\", cogmap_id AS \"cogmap_id!: Uuid\", attempts AS \"attempts!: i32\"\n          FROM workflow_job_claim($1, $2, $3, $4, $5)\n        ",
+  "query": "\n        SELECT id AS \"id!: Uuid\", cogmap_id AS \"cogmap_id!: Uuid\", attempts AS \"attempts!: i32\"\n          FROM workflow_job_claim($1, $2, $3, $4, $5, $6)\n        ",
   "describe": {
     "columns": [
       {
@@ -25,6 +25,7 @@
         "Text",
         "Int4",
         "Int4",
+        "Uuid",
         "Uuid"
       ]
     },
@@ -34,5 +35,5 @@
       null
     ]
   },
-  "hash": "10bec7de214fcbadcfdd9f2fa891bab9d71ee846fc62e9bc84f243d2b1b604d0"
+  "hash": "99a5057b602b8d11bcb64ea46b3a34b2978514aa444e01810bfc2148af28b3f0"
 }
