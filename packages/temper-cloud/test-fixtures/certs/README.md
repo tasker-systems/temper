@@ -15,4 +15,6 @@ they are not secrets that leaked, they are inputs.
 Both are self-signed RSA-2048, `CN=test-idp.example.com`, generated with `openssl req -x509`.
 They are checked in rather than generated per run because a SAML fixture needs a matching
 *certificate*, not just a keypair, and making a fresh clone mint one would be a setup step
-contributors have to know about.
+contributors have to know about. Each private key also carries this statement in-file (a
+leading comment — the consumer here is xml-crypto/OpenSSL, which skips text before `BEGIN`;
+jose-based consumers cannot tolerate comments at all).
