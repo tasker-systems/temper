@@ -233,6 +233,9 @@ describe("oauth flow store", () => {
         chainExpiresAt: futureDate(90 * 24 * 60 * 60).toISOString(),
         chainId: null,
         profileId: null,
+        // `null` — these tests exercise rotation mechanics, not audiences, so they take the
+        // legacy shape and need no served-audience configuration.
+        audience: null,
       });
 
       const result = await rotateRefreshToken(db, "refresh-token-1");
@@ -252,6 +255,7 @@ describe("oauth flow store", () => {
         chainExpiresAt: futureDate(90 * 24 * 60 * 60).toISOString(),
         chainId: null,
         profileId: null,
+        audience: null,
       });
 
       await rotateRefreshToken(db, "refresh-token-2");

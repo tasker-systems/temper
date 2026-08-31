@@ -359,6 +359,7 @@ describe("replayed refresh token", () => {
     expect(await endRefreshChain(db, rotated.chainId)).toBe(0);
 
     // …and the successor is refused anyway, because the ending was recorded and not merely applied.
+    // `audience: null` — this test is about the chain-ends marker, so it mints in the legacy shape.
     const minted = await storeRefreshToken(db, {
       token: "successor-that-must-not-land",
       clientId: rotated.clientId,
@@ -367,6 +368,7 @@ describe("replayed refresh token", () => {
       chainExpiresAt: rotated.chainExpiresAt,
       chainId: rotated.chainId,
       profileId: rotated.profileId,
+      audience: null,
     });
     expect(minted, "an ended chain does not come back to life behind the responder").toBeNull();
     expect(await liveInChain(rotated.chainId)).toBe(0);

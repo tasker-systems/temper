@@ -36,8 +36,13 @@ export interface TokenErrorBody {
  */
 export async function attemptLogin(
   db: NeonClient,
-  opts: { relay: string; code: string; profileId: string | null },
+  opts: { relay: string; code: string; profileId: string | null; audience?: string },
 ): Promise<Response> {
+  const asAudience = process.env.AS_AUDIENCE;
+  expect(
+    asAudience,
+    "the suite must configure AS_AUDIENCE — the login fixture is authorized for the instance audience",
+  ).toBeTruthy();
   await createPendingFlow(db, {
     relayState: opts.relay,
     clientId: "cli",
@@ -45,7 +50,13 @@ export async function attemptLogin(
     codeChallenge: CHALLENGE,
     codeChallengeMethod: "S256",
     oauthState: "st",
-    audience: "aud",
+    // The instance audience — what a login with no requested resource is authorized for, and the
+    // value `/oauth/authorize` would store. Must be a SERVED audience: the chain write
+    // (`storeRefreshToken`) validates fail-closed against `servedAudiences()`, so a fixture
+    // audience the instance does not serve now fails the login it is meant to set up. A suite
+    // testing a resource-scoped login overrides it — and is responsible for the env (e.g.
+    // MCP_AUDIENCE) that makes that override served.
+    audience: opts.audience ?? (asAudience as string),
     expiresAt: new Date(Date.now() + 600000),
   });
   await bindCodeToFlow(db, opts.relay, {
@@ -72,7 +83,7 @@ export async function attemptLogin(
 /** Runs one full login, returning the first refresh token of a brand-new chain. */
 export async function login(
   db: NeonClient,
-  opts: { relay: string; code: string; profileId: string | null },
+  opts: { relay: string; code: string; profileId: string | null; audience?: string },
 ): Promise<TokenSuccessBody> {
   const res = await attemptLogin(db, opts);
   expect(res.status).toBe(200);
