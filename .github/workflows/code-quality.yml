@@ -178,6 +178,17 @@ jobs:
       - name: Security tripwire — route auth posture
         run: bash .github/scripts/audit-route-auth.sh
 
+      # The two sibling guards extending route-auth's frozen-route-set property to the surfaces
+      # that guard cannot see: temper-mcp's router (a second in-code routing shape) and the AS's
+      # api/** + vercel.json pair (a filesystem-convention shape). One parser for all three would
+      # be fragile in exactly the way audit-route-auth.sh's header warns; each surface gets its
+      # own guard, each stating its own field of view.
+      - name: Security tripwire — MCP route auth posture
+        run: bash .github/scripts/audit-mcp-route-auth.sh
+
+      - name: Security tripwire — AS entry-point set vs vercel.json
+        run: bash .github/scripts/audit-as-entry-points.sh
+
       - name: Security tripwire — handler-side authz drift
         run: bash .github/scripts/audit-handler-authz-drift.sh
 
@@ -376,6 +387,12 @@ jobs:
 
       - name: Guard test — audit-route-auth (per-builder layer wiring)
         run: bash .github/scripts/test-audit-route-auth.sh
+
+      - name: Guard test — audit-mcp-route-auth (router freeze + block-level wiring)
+        run: bash .github/scripts/test-audit-mcp-route-auth.sh
+
+      - name: Guard test — audit-as-entry-points (entry set × vercel.json cross-check)
+        run: bash .github/scripts/test-audit-as-entry-points.sh
 
       - name: Guard test — audit-signature-secrets (distinct keys)
         run: bash .github/scripts/test-audit-signature-secrets.sh
