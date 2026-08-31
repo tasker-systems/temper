@@ -186,15 +186,27 @@ rm -f vercel.toml
 run_test "sibling config removed: green again" "api" "$REAL_VERCEL" 0
 
 # --- (13) UPDATE_BASELINE=1 on a failing tree: refused, cannot launder ---
+# In CI the guard refuses update mode outright (CI check fires first), so the expected message
+# depends on where the harness runs; the exit is 1 either way.
 API_COPY="$(fresh_api_copy)"
 mkdir -p "${FIXTURE_DIR}/api/admin"
 : > "${FIXTURE_DIR}/api/admin/ping.ts"
+if [[ -n "${CI:-}" ]]; then
+    UPDATE_FAIL_MSG="UPDATE_BASELINE is not available in CI"
+else
+    UPDATE_FAIL_MSG="UPDATE_BASELINE refused"
+fi
 run_test "UPDATE_BASELINE on failing tree: refused" "$API_COPY" "$REAL_VERCEL" 1 \
-    "UPDATE_BASELINE refused" "UPDATE_BASELINE=1"
+    "$UPDATE_FAIL_MSG" "UPDATE_BASELINE=1"
 
-# --- (14) UPDATE_BASELINE=1 on the clean tree: prints the baseline, exits 0 ---
-run_test "UPDATE_BASELINE on clean tree: prints and exits 0" "api" "$REAL_VERCEL" 0 \
-    "copy into BASELINE" "UPDATE_BASELINE=1"
+# --- (14) UPDATE_BASELINE=1 on the clean tree: prints the baseline, exits 0 — locally only ---
+if [[ -n "${CI:-}" ]]; then
+    run_test "UPDATE_BASELINE on clean tree: refused in CI" "api" "$REAL_VERCEL" 1 \
+        "UPDATE_BASELINE is not available in CI" "UPDATE_BASELINE=1"
+else
+    run_test "UPDATE_BASELINE on clean tree: prints and exits 0" "api" "$REAL_VERCEL" 0 \
+        "copy into BASELINE" "UPDATE_BASELINE=1"
+fi
 
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed (total: $((PASS + FAIL)))"

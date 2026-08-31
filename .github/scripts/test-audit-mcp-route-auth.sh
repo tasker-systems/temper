@@ -244,12 +244,24 @@ run_test "route-shaped comment: stays green" "${FIXTURE_DIR}/green_src/router.rs
     "MCP_SRC_DIR=${FIXTURE_DIR}/green_src"
 
 # --- (14) UPDATE_BASELINE=1 on a failing fixture: refused, cannot launder ---
+# In CI the guard refuses update mode outright (CI check fires first), so the expected message
+# depends on where the harness runs; the exit is 1 either way.
+if [[ -n "${CI:-}" ]]; then
+    UPDATE_FAIL_MSG="UPDATE_BASELINE is not available in CI"
+else
+    UPDATE_FAIL_MSG="UPDATE_BASELINE refused"
+fi
 run_test "UPDATE_BASELINE on failing fixture: refused" "$NO_AUTH" 1 \
-    "UPDATE_BASELINE refused" "$(stage_fixture_src "$NO_AUTH") UPDATE_BASELINE=1"
+    "$UPDATE_FAIL_MSG" "$(stage_fixture_src "$NO_AUTH") UPDATE_BASELINE=1"
 
-# --- (15) UPDATE_BASELINE=1 on the clean tree: prints the baseline, exits 0 ---
-run_test "UPDATE_BASELINE on clean tree: prints and exits 0" "$REAL_ROUTER" 0 \
-    "copy into BASELINE" "UPDATE_BASELINE=1"
+# --- (15) UPDATE_BASELINE=1 on the clean tree: prints the baseline, exits 0 — locally only ---
+if [[ -n "${CI:-}" ]]; then
+    run_test "UPDATE_BASELINE on clean tree: refused in CI" "$REAL_ROUTER" 1 \
+        "UPDATE_BASELINE is not available in CI" "UPDATE_BASELINE=1"
+else
+    run_test "UPDATE_BASELINE on clean tree: prints and exits 0" "$REAL_ROUTER" 0 \
+        "copy into BASELINE" "UPDATE_BASELINE=1"
+fi
 
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed (total: $((PASS + FAIL)))"
