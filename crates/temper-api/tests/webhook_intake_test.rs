@@ -31,9 +31,8 @@ const CONNECTOR_UID: &str = "github/acme-temper";
 /// An Ed25519 keypair for signing test attestations. Same pair `broker::vercel_connect`'s own
 /// tests use — the algorithm differs from production RS256, but `JwksKeyStore::with_static_key`
 /// carries the algorithm with the key, so the verifier under test is the deployed one.
-const ED_PRIV: &str = "-----BEGIN PRIVATE KEY-----\n\
-    MC4CAQAwBQYDK2VwBCIEIMBUy9dWl8ECx1v9KN+aoEl/fI80u7Qcv9F8OTVxWW0G\n\
-    -----END PRIVATE KEY-----\n";
+#[rustfmt::skip]
+const ED_PRIV: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIMBUy9dWl8ECx1v9KN+aoEl/fI80u7Qcv9F8OTVxWW0G\n-----END PRIVATE KEY-----\n"; // gitleaks:allow — inline test keypair, no production trust relationship
 const ED_PUB: &str = "-----BEGIN PUBLIC KEY-----\n\
     MCowBQYDK2VwAyEAcCE6sWGL6rcfOATmlUSiuWLQAl+hpPAPp/aTR1yxqdc=\n\
     -----END PUBLIC KEY-----\n";

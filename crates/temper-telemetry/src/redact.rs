@@ -91,7 +91,7 @@ mod tests {
     #[test]
     fn an_invitation_token_never_survives_into_a_span_attribute() {
         // A real-shaped token: 128 CSPRNG bits, hex-encoded, per `invitation_service`.
-        let token = "9f8e7d6c5b4a39281706f5e4d3c2b1a0";
+        let token = "9f8e7d6c5b4a39281706f5e4d3c2b1a0"; // gitleaks:allow — fake token literal in a redaction regression test
 
         for (path, expected) in [
             (

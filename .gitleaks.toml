@@ -1,0 +1,44 @@
+# Gitleaks configuration — the in-tree secret scanner (CI + pre-commit).
+#
+# FIELD OF VIEW, stated so green is never mistaken for more than it checked:
+#   Watches: tracked content at the scanned tree (CI: the checkout; local: staged
+#   changes via `gitleaks git --pre-commit --staged` in githooks/pre-commit).
+#   Does NOT watch: git history (a secret that already landed is a server-side
+#   problem — enable GitHub push protection; this config cannot retroactively
+#   decline it) and untracked working-tree files.
+#
+# The allowlists below are named exceptions, each with its reason. An exception
+# without a recorded reason is a hole wearing an allowlist's clothes.
+
+[extend]
+# The default ruleset (aws, gcp, generic api keys, private keys, ...).
+useDefault = true
+
+# ---------------------------------------------------------------------------
+# Named exceptions, each with its reason:
+#
+# 1. Committed test-fixture keys — test-only, no production trust relationship.
+#    Rationale lives beside the keys: tests/e2e/tests/fixtures/FIXTURES.md,
+#    crates/temper-api/tests/common/FIXTURES.md, and
+#    packages/temper-cloud/test-fixtures/certs/README.md. If a path moves or a
+#    key is added, update this list AND the doc that carries its reason.
+# 2. Build output and vendored dependencies — never source. `gitleaks dir`
+#    does not honor .gitignore, so without this the local/CI tree scan grinds
+#    through target/ and node_modules/ for nothing.
+# ---------------------------------------------------------------------------
+[allowlist]
+description = "Fixture keys (test-only, see FIXTURES.md beside each) + build output and vendored deps (not source)"
+paths = [
+  # --- fixture keys --- (the (^|/) prefix keeps these matching whether the
+  # scan reports repo-relative or absolute paths)
+  '''(^|/)tests/e2e/tests/fixtures/test_rsa\.key$''',
+  '''(^|/)tests/e2e/tests/fixtures/test_ed25519\.pkcs8$''',
+  '''(^|/)crates/temper-api/tests/common/test_rsa\.key$''',
+  '''(^|/)crates/temper-api/tests/common/test_ed25519\.key$''',
+  '''(^|/)packages/temper-cloud/test-fixtures/certs/idp-key\.pem$''',
+  '''(^|/)packages/temper-cloud/test-fixtures/certs/idp-key-secondary\.pem$''',
+  # --- build output / vendored deps ---
+  '''(^|/)(target|node_modules|\.bun|dist|coverage|\.next|\.svelte-kit|src-tauri)/''',
+  '''(^|/)\.sqlx/''',
+  '''\.lock$''',
+]

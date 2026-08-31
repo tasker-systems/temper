@@ -16,7 +16,7 @@ pub struct GeneratedKey {
     pub kid: String,
 }
 
-/// Generate an Ed25519 signing key as a PKCS#8 PEM (`-----BEGIN PRIVATE KEY-----`), compatible
+/// Generate an Ed25519 signing key as a PKCS#8 PEM private key, compatible
 /// with the TypeScript AS's `importPKCS8(pem, "EdDSA")`. `kid` defaults to `as-<YYYY-MM>`.
 pub fn generate_signing_key(
     kid_override: Option<String>,
@@ -186,7 +186,7 @@ mod tests {
     #[test]
     fn keygen_emits_pkcs8_pem_and_kid() {
         let k = generate_signing_key(None, "2026-07").unwrap();
-        assert!(k.pem.starts_with("-----BEGIN PRIVATE KEY-----"));
+        assert!(k.pem.starts_with("-----BEGIN PRIVATE KEY-----")); // gitleaks:allow — bare PEM delimiter literal, not key material
         assert!(k.pem.trim_end().ends_with("-----END PRIVATE KEY-----"));
         assert_eq!(k.kid, "as-2026-07");
         // Re-parse proves it's a valid PKCS#8 Ed25519 key (what jose will do).
