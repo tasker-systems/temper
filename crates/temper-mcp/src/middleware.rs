@@ -67,15 +67,24 @@ pub async fn require_mcp_auth(
         }
     };
 
-    // Both surfaces read the ONE audience off the shared AuthConfig. temper-mcp used to carry its
-    // own `mcp_audience`, parsed separately — two parsers for one concept, which is how the two
-    // surfaces came to answer an empty value in opposite ways.
-    let issuer = &state.api_state.config.auth.issuer;
-    let audience = state.api_state.config.auth.audience.as_str();
+    // The MCP surface validates its own RFC 8707 resource audience — `mcp_audience`, the value
+    // its PRM advertises and what conformant MCP clients request — and still accepts the API
+    // audience: machine tokens (`client_credentials`) and sessions minted before `MCP_AUDIENCE`
+    // was introduced carry it, and both surfaces are one instance, so a token naming either
+    // audience names us. The audience split exists to satisfy MCP clients' client-side PRM check
+    // (resource must equal the MCP server URL or its origin), not to separate trust domains.
+    // When `MCP_AUDIENCE` is unset the two resolve to one value and this is the single-audience
+    // check it always was — which is also why the set is deduped.
+    let auth = &state.api_state.config.auth;
+    let audiences: &[&str] = if auth.mcp_audience == auth.audience {
+        &[&auth.audience]
+    } else {
+        &[&auth.mcp_audience, &auth.audience]
+    };
     let validation = state
         .api_state
         .jwks_store
-        .validation(issuer, audience, vk.algorithm);
+        .validation(&auth.issuer, audiences, vk.algorithm);
 
     match decode::<RawJwtClaims>(&token, &vk.key, &validation) {
         Ok(data) => {

@@ -1,18 +1,20 @@
 //! The one place an instance's auth identity is parsed.
 //!
-//! Four environment variables have to agree — `AUTH_AUDIENCE`, `MCP_AUDIENCE`, `AS_AUDIENCE`,
+//! The environment variables that describe it — `AUTH_AUDIENCE`, `MCP_AUDIENCE`, `AS_AUDIENCE`,
 //! `AS_ISSUER` (plus `AUTH_ISSUER` and `JWKS_URL`, which in AS mode must point at that same AS) —
-//! and before this module nothing made them. Worse, `AUTH_AUDIENCE` resolved empty-or-unset to
-//! `None`, and `None` disabled JWT audience validation outright.
+//! used to be related only by convention, and before this module nothing made them agree. Worse,
+//! `AUTH_AUDIENCE` resolved empty-or-unset to `None`, and `None` disabled JWT audience validation
+//! outright.
 //!
 //! So `audience` here is a `String`, never an `Option<String>`. The fall-open branch has nothing
-//! left to branch on: it is *unconstructible*, not merely forbidden.
+//! left to branch on: it is *unconstructible*, not merely forbidden. The same is true of
+//! `mcp_audience`: `MCP_AUDIENCE` defaults to the API audience, so an instance that never sets it
+//! behaves exactly as it did when the two were required to be equal.
 //!
-//! The coherence rules below are **not new policy**. The temper AS mints every token — human and
-//! machine — with a single `AS_AUDIENCE`, so a working AS instance already satisfies all of them:
-//! a divergent audience verifies nothing, a divergent issuer trusts the wrong party, and a
-//! misdirected `JWKS_URL` checks no signature. We name rules that were already true, and fail fast
-//! when they are not.
+//! The coherence rules below are **not new policy**. The temper AS mints tokens with a single
+//! `AS_AUDIENCE`, so a working AS instance already satisfies them: a divergent audience verifies
+//! nothing, a divergent issuer trusts the wrong party, and a misdirected `JWKS_URL` checks no
+//! signature. We name rules that were already true, and fail fast when they are not.
 
 use std::fmt;
 
@@ -40,8 +42,14 @@ impl fmt::Display for AuthMode {
 pub struct AuthConfig {
     pub issuer: String,
     pub jwks_url: String,
-    /// The one audience this instance validates, on both surfaces. Never optional.
+    /// The audience the REST API validates. Never optional.
     pub audience: String,
+    /// The RFC 8707 resource indicator of the MCP surface: what its protected-resource metadata
+    /// advertises, what conformant MCP clients request, and (alongside [`Self::audience`]) what
+    /// the MCP middleware accepts. `MCP_AUDIENCE` when set, else [`Self::audience`] — resolved
+    /// here so no caller re-derives the fallback. Never optional, for the same reason `audience`
+    /// is not.
+    pub mcp_audience: String,
     pub mode: AuthMode,
 }
 
@@ -62,10 +70,12 @@ pub enum ConfigError {
     MissingAudience,
 
     #[error(
-        "MCP_AUDIENCE is set but does not equal AUTH_AUDIENCE. This instance validates one \
-         audience on both surfaces. Set them to the same value, or unset MCP_AUDIENCE."
+        "MCP_AUDIENCE must be a URI. It is advertised as the `resource` indicator in the MCP \
+         surface's RFC 9728 protected-resource metadata, which requires a URI — and conformant \
+         MCP clients additionally refuse a resource that is neither the MCP server URL nor its \
+         origin. Use an absolute URI such as https://<instance>/mcp."
     )]
-    McpAudienceMismatch,
+    McpAudienceNotUri,
 
     #[error(
         "AS_ISSUER is set, so this instance mints its own tokens — but AS_AUDIENCE does not equal \
@@ -133,13 +143,18 @@ pub fn parse_auth_config(
     // checks below, which the MCP_AUDIENCE check already models.
     url::Url::parse(&audience).map_err(|_| ConfigError::AudienceNotUri)?;
 
-    // MCP_AUDIENCE is no longer a *value* — it is an agreement assertion. An instance has exactly
-    // one audience; this variable may only restate it.
-    if let Some(mcp_audience) = get(&lookup, "MCP_AUDIENCE") {
-        if mcp_audience != audience {
-            return Err(ConfigError::McpAudienceMismatch);
-        }
-    }
+    // MCP_AUDIENCE is the MCP surface's own RFC 8707 resource indicator: what that surface's
+    // protected-resource metadata advertises, what conformant MCP clients request as `resource`,
+    // and the first audience the MCP middleware accepts. It defaults to the API audience — unset,
+    // the instance behaves exactly as it did when this variable was required to restate
+    // AUTH_AUDIENCE. When set it is independent, and that independence is the point: MCP clients
+    // validate that the advertised resource equals the MCP server URL or its origin, so a
+    // dedicated audience shaped like the MCP endpoint URL (e.g. `$INSTANCE/mcp`) is the only
+    // value that satisfies both the client-side check and the `aud` the AS actually mints.
+    // URI-validated for the same reason AUTH_AUDIENCE is: this value is served in a document
+    // that requires a URI.
+    let mcp_audience = get(&lookup, "MCP_AUDIENCE").unwrap_or_else(|| audience.clone());
+    url::Url::parse(&mcp_audience).map_err(|_| ConfigError::McpAudienceNotUri)?;
 
     let mode = match get(&lookup, "AS_ISSUER") {
         None => AuthMode::ExternalIdp,
@@ -179,6 +194,7 @@ pub fn parse_auth_config(
         issuer,
         jwks_url,
         audience,
+        mcp_audience,
         mode,
     })
 }
@@ -253,17 +269,21 @@ mod tests {
     fn mcp_audience_equal_to_auth_audience_is_accepted() {
         // The current live shape on BOTH deployments.
         let e = with(external_idp(), "MCP_AUDIENCE", "https://temperkb.io/api");
-        assert!(parse_auth_config(env(&e)).is_ok());
+        let cfg = parse_auth_config(env(&e)).expect("equal audiences remain valid");
+        assert_eq!(cfg.mcp_audience, cfg.audience);
     }
 
     #[test]
-    fn an_empty_mcp_audience_is_absent_not_a_mismatch() {
+    fn an_empty_mcp_audience_falls_back_to_the_api_audience() {
         // Empty means absent, uniformly. This is the value that used to mean two OPPOSITE things:
         // temper-api filtered it to None and disabled validation; temper-mcp did not filter it and
         // enforced `aud == ""`, rejecting every token. One typo, one variable, two failures.
         let e = with(external_idp(), "MCP_AUDIENCE", "   ");
         let cfg = parse_auth_config(env(&e)).expect("whitespace-only is absent, not a mismatch");
-        assert_eq!(cfg.audience, "https://temperkb.io/api");
+        assert_eq!(
+            cfg.mcp_audience, cfg.audience,
+            "absent MCP_AUDIENCE resolves to the API audience — the pre-split behavior"
+        );
     }
 
     #[test]
@@ -355,11 +375,28 @@ mod tests {
     // --- one bite test per rule: each violates exactly that rule and nothing else ---
 
     #[test]
-    fn divergent_mcp_audience_is_refused() {
-        let e = with(external_idp(), "MCP_AUDIENCE", "https://other.example/api");
+    fn a_distinct_mcp_audience_becomes_the_mcp_resource_audience() {
+        // The dedicated-MCP-resource shape: the MCP surface carries its own RFC 8707 resource
+        // indicator, independent of the API audience. This is what lets the PRM advertise a
+        // value MCP clients accept (the MCP server URL) while the API keeps its own audience —
+        // and no CLI, M2M, or stored config anywhere has to change.
+        let e = with(external_idp(), "MCP_AUDIENCE", "https://temperkb.io/mcp");
+        let cfg = parse_auth_config(env(&e)).expect("a distinct MCP audience is the feature");
+        assert_eq!(cfg.mcp_audience, "https://temperkb.io/mcp");
+        assert_eq!(
+            cfg.audience, "https://temperkb.io/api",
+            "the API audience is untouched by MCP_AUDIENCE"
+        );
+    }
+
+    #[test]
+    fn a_non_uri_mcp_audience_is_refused() {
+        // The PRM advertises this value as the RFC 9728 `resource`, which must be a URI — the
+        // same boot fault a non-URI AUTH_AUDIENCE gets.
+        let e = with(external_idp(), "MCP_AUDIENCE", "temper-mcp");
         assert_eq!(
             parse_auth_config(env(&e)),
-            Err(ConfigError::McpAudienceMismatch)
+            Err(ConfigError::McpAudienceNotUri)
         );
     }
 
@@ -449,15 +486,11 @@ mod tests {
         let e = with(
             external_idp(),
             "MCP_AUDIENCE",
-            "https://secret-enterprise.internal/api",
+            "not-a-uri-secret-enterprise.internal",
         );
         let err = parse_auth_config(env(&e)).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("MCP_AUDIENCE"), "must name the offending var");
-        assert!(
-            msg.contains("AUTH_AUDIENCE"),
-            "must name the relation's other side"
-        );
         assert!(
             !msg.contains("secret-enterprise.internal"),
             "must NEVER print a config value: {msg}"

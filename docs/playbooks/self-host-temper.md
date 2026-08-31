@@ -162,10 +162,19 @@ an optional confidential web-app client if you deploy the
 ### 1. API resource server
 
 Create an API in Auth0. The **identifier** you assign becomes the OAuth
-audience — the one audience your instance validates, on both surfaces. It
-appears as `AUTH_AUDIENCE` in your Vercel environment. A conventional value is
+audience — the one audience your REST surface validates. It appears as
+`AUTH_AUDIENCE` in your Vercel environment; a conventional value is
 `https://<instance>/api`. See [auth identity](../concepts/auth-identity.md) for
 the full contract, including the optional `MCP_AUDIENCE` restatement.
+
+**Recommended: create a second API for MCP.** An instance can serve a second
+audience — `MCP_AUDIENCE`, conventionally `https://<instance>/mcp` — that the
+MCP surface validates and advertises as its OAuth `resource`. This matters
+because conformant MCP clients validate that the advertised `resource` equals
+the MCP server URL or its origin, and refuse the sign-in flow otherwise. With
+`MCP_AUDIENCE` set, MCP clients get tokens for `https://<instance>/mcp` while
+the CLI and machine clients keep `https://<instance>/api` — nothing else
+changes for either. Unset, both surfaces share the one API audience.
 
 ### 2. CLI native application
 
@@ -218,9 +227,9 @@ in an agentic session.
 | ----------- | -------------------- | ----- |
 | Tenant domain | `AUTH_ISSUER` | `https://<tenant>.auth0.com/` — trailing slash required |
 | Tenant JWKS endpoint | `JWKS_URL` | `https://<tenant>.auth0.com/.well-known/jwks.json` |
-| API identifier | `AUTH_AUDIENCE` | The one audience — validated by **both** the REST API and the MCP server |
+| API identifier | `AUTH_AUDIENCE` | The API audience — validated by the REST API and (with `MCP_AUDIENCE` unset) the MCP server |
 | Auth provider | `AUTH_PROVIDER_NAME` | Always `auth0` |
-| API identifier (MCP) | `MCP_AUDIENCE` | Optional. If set, it **must equal** `AUTH_AUDIENCE` — it restates the one audience, it does not add a second one |
+| API identifier (MCP) | `MCP_AUDIENCE` | Optional. The MCP surface's own OAuth `resource` (conventionally `https://<instance>/mcp`). Unset, it defaults to `AUTH_AUDIENCE` — see the [second API note](#1-api-resource-server) for why setting it is recommended |
 | MCP app client_id | `MCP_CLIENT_ID` | The MCP native application's client_id |
 | Instance base URL | `MCP_BASE_URL` | `https://<instance>` — no trailing slash |
 | Proxy state secret | `MCP_PROXY_SECRET` | Not an Auth0 value — you generate it: a random string of **at least 32 characters** (`openssl rand -base64 48`). The Auth0 loopback redirect proxy derives its state-token encryption key from this secret alone, so keep it secret and out of source control |
@@ -240,9 +249,9 @@ deployment.
 | `DATABASE_URL_UNPOOLED` | deploy step | Yes | Direct Neon connection string (migrations only) |
 | `AUTH_ISSUER` | api, mcp | Yes | `https://<tenant>.auth0.com/` — trailing slash required |
 | `JWKS_URL` | api, mcp | Yes | `https://<tenant>.auth0.com/.well-known/jwks.json` |
-| `AUTH_AUDIENCE` | api, mcp | Yes | The one audience both surfaces validate (e.g. `https://<instance>/api`). Boot fails if unset or empty |
+| `AUTH_AUDIENCE` | api, mcp | Yes | The API audience the REST surface validates (e.g. `https://<instance>/api`). Boot fails if unset or empty |
 | `AUTH_PROVIDER_NAME` | api, mcp | Yes | Set to `auth0` |
-| `MCP_AUDIENCE` | api, mcp | No | An optional restatement of `AUTH_AUDIENCE`. If set it must **equal** it; unset is the normal configuration |
+| `MCP_AUDIENCE` | mcp | No | The MCP surface's own OAuth `resource` (e.g. `https://<instance>/mcp`). Unset, it defaults to `AUTH_AUDIENCE` |
 | `MCP_CLIENT_ID` | mcp | Yes | MCP native application client_id |
 | `MCP_BASE_URL` | mcp | Yes | `https://<instance>` — used in OAuth discovery responses |
 | `MCP_PROXY_SECRET` | mcp | Yes | At least 32 characters (`openssl rand -base64 48`). Encrypts the state token in the loopback redirect proxy that every externally-fronted instance serves (Auth0 or Okta). Requests that need that key — a loopback `/oauth/authorize` and the `/api/auth/mcp-callback` relay — answer `503` naming this variable until it is set, so an MCP CLI client cannot sign in without it. `temper auth login` and browser clients with an HTTPS callback do not use the proxy's crypto and are unaffected. **Set it before the first deployment and redeploy after any change** — a function's environment is bound to its deployment. Rotating it fails sign-ins already in flight for up to 10 minutes; they succeed on retry. Not used in the SAML path |
@@ -285,8 +294,9 @@ INSTANCE="https://temper.acme.com"
 AS_ISSUER="$INSTANCE"                     # the mode signal
 AUTH_ISSUER="$INSTANCE"                   # == AS_ISSUER
 JWKS_URL="$INSTANCE/oauth/jwks"           # == $AS_ISSUER/oauth/jwks
-AS_AUDIENCE="$INSTANCE/api"               # what the AS mints
-AUTH_AUDIENCE="$INSTANCE/api"             # == AS_AUDIENCE — what both surfaces validate
+AS_AUDIENCE="$INSTANCE/api"               # what the AS mints for API flows
+AUTH_AUDIENCE="$INSTANCE/api"             # == AS_AUDIENCE — what the REST surface validates
+MCP_AUDIENCE="$INSTANCE/mcp"              # optional — the MCP surface's own resource indicator
 ```
 
 Confirm the mode the instance booted in — `temper-AS` or `external-IdP`:

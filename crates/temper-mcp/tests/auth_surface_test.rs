@@ -18,6 +18,8 @@
 
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
+use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+use serde::Serialize;
 use tower::ServiceExt;
 
 mod common;
@@ -87,6 +89,91 @@ async fn the_mcp_endpoint_refuses_a_malformed_token() {
         StatusCode::UNAUTHORIZED,
         "a malformed bearer must be refused by validation, not passed through"
     );
+}
+
+/// A token minted for an audience the gate does not know is refused by validation, not passed
+/// through. Every accepted-audience assertion below leans on this negative: without it, a pass
+/// could mean "the gate is open" rather than "this audience is in the set".
+#[tokio::test]
+async fn the_mcp_gate_refuses_a_token_for_an_unknown_audience() {
+    let token = hs256_token("https://elsewhere.example/api");
+    let status = mcp_status_with_token(&token).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "a token for a third-party audience must be refused by validation"
+    );
+}
+
+/// The dedicated-MCP-resource audience contract: the gate accepts a token carrying the MCP
+/// resource audience (`MCP_AUDIENCE`, what the PRM advertises and MCP clients request) AND one
+/// carrying the API audience — machine tokens and sessions minted before `MCP_AUDIENCE` existed
+/// carry the latter. A token for neither audience is refused (assertion above). If either
+/// accepted case ever fails, the audience set in `require_mcp_auth` and the fixtures here have
+/// drifted apart.
+#[tokio::test]
+async fn the_mcp_gate_accepts_a_token_for_either_surface_audience() {
+    let mcp_token = hs256_token("https://inst.test/mcp");
+    let api_token = hs256_token("https://inst.test/api");
+
+    for (label, token) in [
+        ("the MCP resource audience", mcp_token.as_str()),
+        ("the API audience", api_token.as_str()),
+    ] {
+        let status = mcp_status_with_token(token).await;
+        assert_ne!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "a token carrying {label} must pass the MCP gate"
+        );
+    }
+}
+
+#[derive(Serialize)]
+struct TestTokenClaims<'a> {
+    sub: &'a str,
+    iss: &'a str,
+    aud: &'a str,
+    exp: i64,
+    iat: i64,
+}
+
+/// Signs an HS256 bearer naming the given audience, for the static-key fixture. `iss` must match
+/// the fixture's configured issuer — the gate checks it too.
+fn hs256_token(aud: &str) -> String {
+    let claims = TestTokenClaims {
+        sub: "auth|test-user",
+        iss: "https://as.test",
+        aud,
+        exp: i64::MAX / 2,
+        iat: 0,
+    };
+    encode(
+        &Header::new(Algorithm::HS256),
+        &claims,
+        &EncodingKey::from_secret(b"witness"),
+    )
+    .expect("token signs")
+}
+
+async fn mcp_status_with_token(token: &str) -> StatusCode {
+    let router = temper_mcp::build_router(
+        common::state_with_distinct_audiences(),
+        common::mcp_config(),
+    );
+    router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from("{}"))
+                .expect("request builds"),
+        )
+        .await
+        .expect("router answers")
+        .status()
 }
 
 /// The refusal carries `WWW-Authenticate` pointing at the protected-resource metadata. MCP clients

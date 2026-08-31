@@ -137,7 +137,7 @@ async fn verify_inbound_impl(
     // 3. Verify signature + standard claims. `validation` carries the hard-won
     //    `set_required_spec_claims` fix, so a token missing `exp`/`iss`/`aud` is
     //    refused rather than silently accepted.
-    let validation = jwks.validation(expected_iss, expected_aud, vk.algorithm);
+    let validation = jwks.validation(expected_iss, &[expected_aud], vk.algorithm);
     let data = decode::<serde_json::Value>(token, &vk.key, &validation)
         .map_err(|e| BrokerError::Verification(format!("attestation signature/claims: {e}")))?;
 

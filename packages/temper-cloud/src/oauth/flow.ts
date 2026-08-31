@@ -106,6 +106,11 @@ export interface ConsumedCode {
   claims: MintedClaims;
   /** The profile the ACS resolved for this login; `null` when it could not be resolved. */
   profileId: string | null;
+  /**
+   * The RFC 8707 resource indicator this flow was authorized for — validated against the
+   * instance's served audiences at `/oauth/authorize` and minted into the access token's `aud`.
+   */
+  audience: string;
 }
 
 export async function consumeCode(
@@ -135,9 +140,15 @@ export async function consumeCode(
     UPDATE kb_oauth_flow
     SET status = 'consumed'
     WHERE code_hash = ${codeHash} AND status = 'code_issued' AND client_id = ${clientId}
-    RETURNING claims, profile_id
+    RETURNING claims, profile_id, audience
   `;
-  const claimedRow = claimed[0] as { claims: unknown; profile_id: string | null } | undefined;
+  const claimedRow = claimed[0] as
+    | {
+        claims: unknown;
+        profile_id: string | null;
+        audience: string;
+      }
+    | undefined;
   if (!claimedRow) {
     throw new Error("authorization code was consumed concurrently");
   }
@@ -145,6 +156,7 @@ export async function consumeCode(
   return {
     claims: normalizeClaims(claimedRow.claims),
     profileId: claimedRow.profile_id ?? null,
+    audience: claimedRow.audience,
   };
 }
 

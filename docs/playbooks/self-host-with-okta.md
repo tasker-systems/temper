@@ -53,9 +53,11 @@ enabled before continuing.** Without it, there is no supported way to host Tempe
 In the Okta Admin Console: **Security → API → Authorization Servers → Add Authorization Server.**
 
 1. **Name** — e.g. `temper`.
-2. **Audience** — set this to the value you will use for `AUTH_AUDIENCE` and `MCP_AUDIENCE`
+2. **Audience** — set this to the value you will use for `AUTH_AUDIENCE`
    (e.g. `https://<instance>/api`). The access-token `aud` claim will carry this value, and
-   Temper checks it on every request.
+   Temper checks it on every request. Note: an Okta custom authorization server stamps one
+   audience on every token it mints, so an Okta instance serves the MCP surface with that same
+   audience (`MCP_AUDIENCE` stays unset) — see [auth identity](../concepts/auth-identity.md).
 
 Once created, note the authorization server's **issuer URI**, shown on its Settings tab. It
 has the form:
@@ -173,7 +175,7 @@ values differ.
 | `AUTH_ISSUER` | api, mcp | `https://<okta-domain>/oauth2/<authServerId>` — **no trailing slash** |
 | `JWKS_URL` | api, mcp | `https://<okta-domain>/oauth2/<authServerId>/v1/keys` |
 | `AUTH_AUDIENCE` | api | The custom authorization server's **Audience** value (e.g. `https://<instance>/api`) |
-| `MCP_AUDIENCE` | — | **Optional.** An instance has one audience; both surfaces read `AUTH_AUDIENCE`. If you set this, it must **equal** `AUTH_AUDIENCE` or the instance refuses to boot. |
+| `MCP_AUDIENCE` | mcp | **Optional.** The MCP surface's own OAuth `resource`, defaulting to `AUTH_AUDIENCE`. An Okta custom authorization server stamps one audience on every token, so leave this unset unless you run a second authorization server for MCP |
 | `AUTH_PROVIDER_NAME` | api, mcp | **Keep `auth0`.** It is a profile label and email-cache key, not a validation switch; leave it at the default rather than inventing an `okta` value |
 | `MCP_CLIENT_ID` | mcp | The MCP native application's Client ID |
 | `MCP_BASE_URL` | mcp | `https://<instance>` — no trailing slash |

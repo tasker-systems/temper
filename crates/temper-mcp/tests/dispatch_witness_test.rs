@@ -57,6 +57,7 @@ fn service_for_dispatch_witness() -> TemperMcpService {
             issuer: "unused".to_string(),
             jwks_url: "unused".to_string(),
             audience: "unused".to_string(),
+            mcp_audience: "unused".to_string(),
             mode: AuthMode::ExternalIdp,
         },
         auth_provider_name: "unused".to_string(),

@@ -30,14 +30,15 @@ struct ProtectedResourceMetadata {
 
 /// Build RFC 9728 protected-resource metadata for the given server base URL.
 ///
-/// `resource` is the ONE audience both surfaces validate, passed in from the boot-gated
-/// `AuthConfig` rather than derived here. It used to be `format!("{base}/")`, which equals the
-/// audience only if the operator sets them equal — and on the documented instance shape it never
-/// is: `MCP_BASE_URL` is the apex (`https://<instance>`) while `AUTH_AUDIENCE` is conventionally
-/// `$INSTANCE/api`. The PRM is a surface that TELLS clients what to ask for, so it may not
-/// advertise a resource indicator the issued tokens do not carry — the cloud side already fixed
-/// its own copy of this fact (`metadata.ts` reads `AUTH_AUDIENCE` for the same reason), and the
-/// two doors now state one fact with one authority.
+/// `resource` is the MCP surface's own RFC 8707 resource indicator — the boot-gated
+/// `mcp_audience`, not a value derived from `MCP_BASE_URL`. It is what this document advertises,
+/// what conformant MCP clients therefore request as `resource` during authorization, and what
+/// the minted token must carry as `aud` for the middleware to accept it. Conformant MCP clients
+/// additionally validate that this value equals the MCP server URL or its origin before starting
+/// the flow, so an instance whose MCP audience is a dedicated `$INSTANCE/mcp` identifier is the
+/// shape that passes; the old derivations (`base + "/"`, or the bare API audience) each failed
+/// one side of that. `MCP_AUDIENCE` unset falls back to the API audience, restoring the
+/// pre-split single-audience behavior.
 ///
 /// `offline_access` is advertised so conformant MCP clients request it
 /// during the authorization code flow, prompting Auth0 to issue a refresh
@@ -55,7 +56,7 @@ fn protected_resource_metadata(base: &str, resource: &str) -> ProtectedResourceM
 pub async fn oauth_protected_resource(State(state): State<Arc<McpAppState>>) -> impl IntoResponse {
     Json(protected_resource_metadata(
         &state.mcp_config.mcp_base_url,
-        &state.api_state.config.auth.audience,
+        &state.api_state.config.auth.mcp_audience,
     ))
 }
 
@@ -171,17 +172,17 @@ mod tests {
         );
     }
 
-    /// The PRM's `resource` is the audience the auth middleware validates `aud` against — the one
-    /// authority — not a value derived from `MCP_BASE_URL`. The documented instance shape is the
-    /// witness: base is the apex, the audience conventionally `$INSTANCE/api`, and the retired
-    /// derivation (`base + "/"`) advertised a resource indicator no issued token carries on it.
+    /// The PRM's `resource` is the MCP surface's own RFC 8707 resource indicator — the value
+    /// conformant MCP clients request and validate against the MCP server URL/origin — not a
+    /// value derived from `MCP_BASE_URL` and not the API audience. The dedicated-MCP-resource
+    /// instance shape is the witness: base is the apex, the API audience is `$INSTANCE/api`, and
+    /// the advertised resource is `$INSTANCE/mcp` — equal to neither derivation.
     #[test]
-    fn the_prm_advertises_the_validated_audience_not_the_base_url() {
-        let meta =
-            protected_resource_metadata("https://temper.acme.com", "https://temper.acme.com/api");
+    fn the_prm_advertises_the_mcp_resource_audience_not_a_derivation() {
+        let meta = protected_resource_metadata("https://temperkb.io", "https://temperkb.io/mcp");
         assert_eq!(
-            meta.resource, "https://temper.acme.com/api",
-            "the PRM must advertise the validated audience, not the server base URL"
+            meta.resource, "https://temperkb.io/mcp",
+            "the PRM must advertise the MCP resource audience, not the server base URL or the API audience"
         );
     }
 

@@ -71,7 +71,7 @@ export function buildAsMetadata(issuer: string): AsMetadata {
 export function buildAuth0AsMetadata(cfg: {
   base: string;
   auth0Domain: string;
-  mcpAudience: string;
+  audience: string;
 }): Auth0AsMetadata {
   const auth0 = cfg.auth0Domain.replace(/\/+$/, "");
   const base = cfg.base.replace(/\/+$/, "");
@@ -90,7 +90,7 @@ export function buildAuth0AsMetadata(cfg: {
     // client_credentials (Stage 4a): lets M2M agent principals mint tokens via Auth0.
     grant_types_supported: ["authorization_code", "refresh_token", "client_credentials"],
     code_challenge_methods_supported: ["S256"],
-    resource: cfg.mcpAudience,
+    resource: cfg.audience,
   };
 }
 
@@ -143,14 +143,16 @@ export async function handleAuthorizationServer(req: Request): Promise<Response>
     : buildAuth0AsMetadata({
         base: requireEnv("MCP_BASE_URL"),
         auth0Domain: requireEnv("AUTH_ISSUER"),
-        // AUTH_AUDIENCE, not `MCP_AUDIENCE ?? AUTH_AUDIENCE`. An instance has exactly ONE audience:
-        // the Rust boot gate (temper-services `auth_config`) refuses to start unless a present
-        // MCP_AUDIENCE *equals* AUTH_AUDIENCE, so reading it here could only ever produce the same
-        // value — or a different one, which is the bug. `??` is nullish-coalescing and does NOT
-        // catch `""`, so an empty MCP_AUDIENCE used to advertise `resource: ""` here while the Rust
-        // side treated it as absent. That is the one-typo-two-behaviors split this whole change
-        // exists to kill; it must not survive in the surface that TELLS clients what to ask for.
-        mcpAudience: requireEnv("AUTH_AUDIENCE"),
+        // This document's `resource` answers API callers — the temper CLI and M2M clients read
+        // it to learn what `aud` their tokens must carry — so it is AUTH_AUDIENCE, the API
+        // audience. The MCP surface has its own resource indicator now: `MCP_AUDIENCE`, the
+        // value the Rust PRM (`crates/temper-mcp/src/discovery.rs`) advertises because
+        // conformant MCP clients refuse a resource that is neither the MCP server URL nor its
+        // origin. Each discovery door states the fact for the audience that discovers through
+        // it; they agree by construction when `MCP_AUDIENCE` is unset, which is the fallback
+        // both sides resolve identically (`?.trim() ||` here, `unwrap_or_else` there — an
+        // empty value must mean "absent", never a literal empty audience).
+        audience: process.env.AUTH_AUDIENCE?.trim() || requireEnv("AUTH_AUDIENCE"),
       });
 
   return new Response(JSON.stringify(body), {

@@ -145,6 +145,23 @@ describe("oauth flow store", () => {
       expect(claims.email_verified).toBe(CLAIMS.email_verified);
     });
 
+    it("returns the audience the flow was authorized for", async () => {
+      // The audience is what the mint stamps into the access token's `aud` — the flow's stored
+      // value is the only place the requested resource survives between `/oauth/authorize` and
+      // the token exchange, so it must round-trip through the consumed code.
+      await seedPendingFlow("relay-3b");
+      await bindCodeToFlow(db, "relay-3b", {
+        code: "auth-code-3b",
+        claims: CLAIMS,
+        expiresAt: futureDate(),
+        profileId: null,
+      });
+
+      const { audience } = await consumeCode(db, "auth-code-3b", CODE_VERIFIER, "client-1");
+
+      expect(audience).toBe("https://api.example.com");
+    });
+
     it("throws on a second consumption of the same code (single-use)", async () => {
       await seedPendingFlow("relay-4");
       await bindCodeToFlow(db, "relay-4", {

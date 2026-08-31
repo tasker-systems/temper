@@ -432,7 +432,7 @@ impl JwksKeyStore {
     /// **Two separate things must be true for the audience to actually be checked**, and only the
     /// first is obvious:
     ///
-    /// 1. The config must carry an audience. It used to be an `Option`, and a `None` set
+    /// 1. The config must carry at least one audience. It used to be an `Option`, and a `None` set
     ///    `validate_aud = false` — so an unset `AUTH_AUDIENCE` disabled the check outright. There is
     ///    no `None` left to hand in (see [`crate::auth_config`]).
     /// 2. **The token must actually carry an `aud` claim.** `set_audience` alone does NOT enforce
@@ -441,16 +441,20 @@ impl JwksKeyStore {
     ///    `aud` — or a malformed one that fails to parse as a string — hits the fallthrough arm and
     ///    is **accepted**. Fixing (1) without (2) closes half the door and documents the other half
     ///    as shut.
+    /// 3. The audience set is a SET, not a single value: the MCP surface passes its own RFC 8707
+    ///    resource audience *plus* the API audience, because machine tokens and sessions minted
+    ///    before `MCP_AUDIENCE` existed carry the API audience and both surfaces are one instance.
+    ///    A token naming EITHER audience verifies; one naming neither does not.
     ///
     /// `iss` is required for the same reason: the issuer match has the same present-only semantics,
     /// so a claims-minimal token signed by any key in the trusted JWKS would otherwise walk in.
-    pub fn validation(&self, issuer: &str, audience: &str, algorithm: Algorithm) -> Validation {
+    pub fn validation(&self, issuer: &str, audiences: &[&str], algorithm: Algorithm) -> Validation {
         let mut v = Validation::new(algorithm);
         v.algorithms = vec![algorithm];
         v.leeway = Self::CLOCK_SKEW_LEEWAY_SECONDS;
         v.set_required_spec_claims(&["exp", "iss", "aud"]);
         v.set_issuer(&[issuer]);
-        v.set_audience(&[audience]);
+        v.set_audience(audiences);
         v
     }
 
@@ -643,7 +647,7 @@ mod tests {
 
     fn verify(vk: &VerificationKey, store: &JwksKeyStore, token: &str) -> Result<String, String> {
         let validation =
-            store.validation("https://as.example", "https://api.example", vk.algorithm);
+            store.validation("https://as.example", &["https://api.example"], vk.algorithm);
         jsonwebtoken::decode::<TestClaims>(token, &vk.key, &validation)
             .map(|d| d.claims.sub)
             .map_err(|e| e.to_string())
@@ -1061,7 +1065,11 @@ mod tests {
     #[test]
     fn validation_always_enables_the_aud_check() {
         let store = JwksKeyStore::new("https://example.com/.well-known/jwks.json".to_string());
-        let v = store.validation("https://auth.example.com", "temper-api", Algorithm::RS256);
+        let v = store.validation(
+            "https://auth.example.com",
+            &["temper-api"],
+            Algorithm::RS256,
+        );
         assert!(
             v.validate_aud,
             "audience validation must never be disabled — the caller cannot express 'no audience'"
@@ -1084,7 +1092,11 @@ mod tests {
     #[test]
     fn the_clock_skew_tolerance_is_the_stated_value_not_the_library_default() {
         let store = JwksKeyStore::new("https://example.com/.well-known/jwks.json".to_string());
-        let v = store.validation("https://auth.example.com", "temper-api", Algorithm::RS256);
+        let v = store.validation(
+            "https://auth.example.com",
+            &["temper-api"],
+            Algorithm::RS256,
+        );
         assert_eq!(
             v.leeway,
             JwksKeyStore::CLOCK_SKEW_LEEWAY_SECONDS,
@@ -1103,7 +1115,11 @@ mod tests {
     #[test]
     fn aud_and_iss_are_required_to_be_present_not_merely_matched() {
         let store = JwksKeyStore::new("https://example.com/.well-known/jwks.json".to_string());
-        let v = store.validation("https://auth.example.com", "temper-api", Algorithm::RS256);
+        let v = store.validation(
+            "https://auth.example.com",
+            &["temper-api"],
+            Algorithm::RS256,
+        );
 
         assert!(
             v.required_spec_claims.contains("aud"),
@@ -1228,7 +1244,7 @@ mod tests {
 
         let validation = store.validation(
             "https://as.example",
-            "https://api.example",
+            &["https://api.example"],
             Algorithm::EdDSA,
         );
 
