@@ -353,6 +353,18 @@ async fn filtered_visible_page(
                    WHERE pe.owner_table = 'kb_resources' AND pe.owner_id = r.id
                      AND pe.property_key = 'tags'
                 ) @> $9)
+            -- Artifact-ownership filter ($10): pure EXISTS over the resource's artifacts, folded
+            -- included — the clause is owns-at-least-one and owns-none, which is ownership, not
+            -- liveness; a liveness qualifier would have to name itself. Like the goal and tag
+            -- filters it has no facet histogram (a boolean has no alternatives to show), so
+            -- filtering it here in SQL is free. It sits under the same visibility join as every
+            -- predicate above, so the partition it computes is over what the caller can already
+            -- read and leaks nothing about what they cannot.
+            AND ($10::bool IS NULL
+                 OR ($10 AND EXISTS (
+                      SELECT 1 FROM kb_data_artifacts da WHERE da.resource_id = r.id))
+                 OR (NOT $10 AND NOT EXISTS (
+                      SELECT 1 FROM kb_data_artifacts da WHERE da.resource_id = r.id)))
           ORDER BY {sort_col} {dir}, r.id ASC",
         sort_col = sort_column_sql(sort),
     );
@@ -360,11 +372,11 @@ async fn filtered_visible_page(
     // The goal filter matches the live `advances`→goal edge minted by the create/update
     // projection — same `edge_kind`='leads_to' and label (`GOAL_EDGE_LABEL`). They must agree.
     //
-    // The binds are POSITIONAL: this sequence is `$1..$9` in order, and nothing checks the
+    // The binds are POSITIONAL: this sequence is `$1..$10` in order, and nothing checks the
     // correspondence at compile time — a bind dropped or added out of order silently applies one
     // caller's filter as another's. Read it against the WHERE clause above, one for one:
     // $1 profile_id, $2 context_id, $3 owner_self, $4 owner_handle, $5 q, $6 goal,
-    // $7 GOAL_EDGE_LABEL, $8 cogmap_ids, $9 tag_filter.
+    // $7 GOAL_EDGE_LABEL, $8 cogmap_ids, $9 tag_filter, $10 has_artifacts.
     let rows = sqlx::query(&sql)
         .bind(profile_id)
         .bind(context_id)
@@ -375,6 +387,7 @@ async fn filtered_visible_page(
         .bind(super::db_backend::GOAL_EDGE_LABEL)
         .bind(cogmap_ids)
         .bind(tag_filter.as_deref())
+        .bind(params.has_artifacts)
         .fetch_all(pool)
         .await
         .map_err(api_err)?;

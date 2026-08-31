@@ -15,7 +15,7 @@ from pydantic import validate_call, Field, StrictFloat, StrictStr, StrictInt
 from typing import Any, Dict, List, Optional, Tuple, Union
 from typing_extensions import Annotated
 
-from pydantic import Field, StrictInt, StrictStr, field_validator
+from pydantic import Field, StrictBool, StrictInt, StrictStr, field_validator
 from typing import Any, List, Optional
 from typing_extensions import Annotated
 from uuid import UUID
@@ -2508,6 +2508,7 @@ class ResourcesApi:
         goal: Annotated[Optional[UUID], Field(description="Goal filter (task only): the resolved goal `ResourceId` (as UUID). Returns only resources joined to this goal via a live `advances`→goal edge. The CLI/MCP resolve the caller's `--goal <ref>` to this UUID (trailing-UUID-only) before the query. `None` = no goal filter.")] = None,
         tags: Annotated[Optional[StrictStr], Field(description="Tag filter: a comma-separated list of tags. Returns only resources whose `open_meta.tags` contains **every** tag listed (AND, so each added tag narrows — the same direction every other filter here composes in). Matching is exact per tag and **case-insensitive**: the fold happens receive-side in `filtered_visible_page`, so the CLI, MCP and raw HTTP cannot disagree about it.  A CSV string rather than a `Vec` for the same reason as `cogmap_ids`: the list endpoint is a GET whose params ride the query string (serde_urlencoded, which does not encode sequences). No tag in the corpus contains a comma (verified against production, 580 distinct tags), and a tag containing one cannot be expressed through this transport — which is a constraint on the tag vocabulary, not a silent truncation: the split is on `,` and each piece is trimmed.  Unlike `stage` (task-only) and `status` (goal-only), tags are **not** doc-type-scoped — 14 doc types carry them in production. So there is deliberately no mismatched-filter refusal for this field; pairing it with any `doc_type_name`, or with none, is meaningful.")] = None,
         cogmap_ids: Annotated[Optional[StrictStr], Field(description="Cognitive-map scope: a comma-separated list of cogmap UUIDs. Returns only resources homed in one of these maps (`anchor_table = 'kb_cogmaps'`), intersected with the caller's visible set. A CSV string rather than a `Vec` because the list endpoint is a GET whose params ride the query string (serde_urlencoded, which does not encode sequences); the CLI/MCP resolve each `--cogmap <ref>` (trailing-UUID-only) and join here. `None`/empty = no cogmap filter.")] = None,
+        has_artifacts: Annotated[Optional[StrictBool], Field(description="Artifact-ownership filter: `true` → only resources owning at least one data artifact; `false` → only resources owning none. **Ownership, not liveness** — a folded artifact still means \"owns\", because the clause this serves says \"own at least one artifact and which own none\", with no liveness qualifier. Absent = no narrowing.  Evaluated inside the caller's visible set (the predicate sits under the same `resources_visible_to` join as every other filter here), so the answer can never widen what the caller can read — and a caller who cannot read a resource gets no existence signal about its artifacts either way.")] = None,
         sort: Optional[Any] = None,
         order: Optional[Any] = None,
         limit: Optional[StrictInt] = None,
@@ -2551,6 +2552,8 @@ class ResourcesApi:
         :type tags: str
         :param cogmap_ids: Cognitive-map scope: a comma-separated list of cogmap UUIDs. Returns only resources homed in one of these maps (`anchor_table = 'kb_cogmaps'`), intersected with the caller's visible set. A CSV string rather than a `Vec` because the list endpoint is a GET whose params ride the query string (serde_urlencoded, which does not encode sequences); the CLI/MCP resolve each `--cogmap <ref>` (trailing-UUID-only) and join here. `None`/empty = no cogmap filter.
         :type cogmap_ids: str
+        :param has_artifacts: Artifact-ownership filter: `true` → only resources owning at least one data artifact; `false` → only resources owning none. **Ownership, not liveness** — a folded artifact still means \"owns\", because the clause this serves says \"own at least one artifact and which own none\", with no liveness qualifier. Absent = no narrowing.  Evaluated inside the caller's visible set (the predicate sits under the same `resources_visible_to` join as every other filter here), so the answer can never widen what the caller can read — and a caller who cannot read a resource gets no existence signal about its artifacts either way.
+        :type has_artifacts: bool
         :param sort:
         :type sort: ResourceSortField
         :param order:
@@ -2596,6 +2599,7 @@ class ResourcesApi:
             goal=goal,
             tags=tags,
             cogmap_ids=cogmap_ids,
+            has_artifacts=has_artifacts,
             sort=sort,
             order=order,
             limit=limit,
@@ -2637,6 +2641,7 @@ class ResourcesApi:
         goal: Annotated[Optional[UUID], Field(description="Goal filter (task only): the resolved goal `ResourceId` (as UUID). Returns only resources joined to this goal via a live `advances`→goal edge. The CLI/MCP resolve the caller's `--goal <ref>` to this UUID (trailing-UUID-only) before the query. `None` = no goal filter.")] = None,
         tags: Annotated[Optional[StrictStr], Field(description="Tag filter: a comma-separated list of tags. Returns only resources whose `open_meta.tags` contains **every** tag listed (AND, so each added tag narrows — the same direction every other filter here composes in). Matching is exact per tag and **case-insensitive**: the fold happens receive-side in `filtered_visible_page`, so the CLI, MCP and raw HTTP cannot disagree about it.  A CSV string rather than a `Vec` for the same reason as `cogmap_ids`: the list endpoint is a GET whose params ride the query string (serde_urlencoded, which does not encode sequences). No tag in the corpus contains a comma (verified against production, 580 distinct tags), and a tag containing one cannot be expressed through this transport — which is a constraint on the tag vocabulary, not a silent truncation: the split is on `,` and each piece is trimmed.  Unlike `stage` (task-only) and `status` (goal-only), tags are **not** doc-type-scoped — 14 doc types carry them in production. So there is deliberately no mismatched-filter refusal for this field; pairing it with any `doc_type_name`, or with none, is meaningful.")] = None,
         cogmap_ids: Annotated[Optional[StrictStr], Field(description="Cognitive-map scope: a comma-separated list of cogmap UUIDs. Returns only resources homed in one of these maps (`anchor_table = 'kb_cogmaps'`), intersected with the caller's visible set. A CSV string rather than a `Vec` because the list endpoint is a GET whose params ride the query string (serde_urlencoded, which does not encode sequences); the CLI/MCP resolve each `--cogmap <ref>` (trailing-UUID-only) and join here. `None`/empty = no cogmap filter.")] = None,
+        has_artifacts: Annotated[Optional[StrictBool], Field(description="Artifact-ownership filter: `true` → only resources owning at least one data artifact; `false` → only resources owning none. **Ownership, not liveness** — a folded artifact still means \"owns\", because the clause this serves says \"own at least one artifact and which own none\", with no liveness qualifier. Absent = no narrowing.  Evaluated inside the caller's visible set (the predicate sits under the same `resources_visible_to` join as every other filter here), so the answer can never widen what the caller can read — and a caller who cannot read a resource gets no existence signal about its artifacts either way.")] = None,
         sort: Optional[Any] = None,
         order: Optional[Any] = None,
         limit: Optional[StrictInt] = None,
@@ -2680,6 +2685,8 @@ class ResourcesApi:
         :type tags: str
         :param cogmap_ids: Cognitive-map scope: a comma-separated list of cogmap UUIDs. Returns only resources homed in one of these maps (`anchor_table = 'kb_cogmaps'`), intersected with the caller's visible set. A CSV string rather than a `Vec` because the list endpoint is a GET whose params ride the query string (serde_urlencoded, which does not encode sequences); the CLI/MCP resolve each `--cogmap <ref>` (trailing-UUID-only) and join here. `None`/empty = no cogmap filter.
         :type cogmap_ids: str
+        :param has_artifacts: Artifact-ownership filter: `true` → only resources owning at least one data artifact; `false` → only resources owning none. **Ownership, not liveness** — a folded artifact still means \"owns\", because the clause this serves says \"own at least one artifact and which own none\", with no liveness qualifier. Absent = no narrowing.  Evaluated inside the caller's visible set (the predicate sits under the same `resources_visible_to` join as every other filter here), so the answer can never widen what the caller can read — and a caller who cannot read a resource gets no existence signal about its artifacts either way.
+        :type has_artifacts: bool
         :param sort:
         :type sort: ResourceSortField
         :param order:
@@ -2725,6 +2732,7 @@ class ResourcesApi:
             goal=goal,
             tags=tags,
             cogmap_ids=cogmap_ids,
+            has_artifacts=has_artifacts,
             sort=sort,
             order=order,
             limit=limit,
@@ -2766,6 +2774,7 @@ class ResourcesApi:
         goal: Annotated[Optional[UUID], Field(description="Goal filter (task only): the resolved goal `ResourceId` (as UUID). Returns only resources joined to this goal via a live `advances`→goal edge. The CLI/MCP resolve the caller's `--goal <ref>` to this UUID (trailing-UUID-only) before the query. `None` = no goal filter.")] = None,
         tags: Annotated[Optional[StrictStr], Field(description="Tag filter: a comma-separated list of tags. Returns only resources whose `open_meta.tags` contains **every** tag listed (AND, so each added tag narrows — the same direction every other filter here composes in). Matching is exact per tag and **case-insensitive**: the fold happens receive-side in `filtered_visible_page`, so the CLI, MCP and raw HTTP cannot disagree about it.  A CSV string rather than a `Vec` for the same reason as `cogmap_ids`: the list endpoint is a GET whose params ride the query string (serde_urlencoded, which does not encode sequences). No tag in the corpus contains a comma (verified against production, 580 distinct tags), and a tag containing one cannot be expressed through this transport — which is a constraint on the tag vocabulary, not a silent truncation: the split is on `,` and each piece is trimmed.  Unlike `stage` (task-only) and `status` (goal-only), tags are **not** doc-type-scoped — 14 doc types carry them in production. So there is deliberately no mismatched-filter refusal for this field; pairing it with any `doc_type_name`, or with none, is meaningful.")] = None,
         cogmap_ids: Annotated[Optional[StrictStr], Field(description="Cognitive-map scope: a comma-separated list of cogmap UUIDs. Returns only resources homed in one of these maps (`anchor_table = 'kb_cogmaps'`), intersected with the caller's visible set. A CSV string rather than a `Vec` because the list endpoint is a GET whose params ride the query string (serde_urlencoded, which does not encode sequences); the CLI/MCP resolve each `--cogmap <ref>` (trailing-UUID-only) and join here. `None`/empty = no cogmap filter.")] = None,
+        has_artifacts: Annotated[Optional[StrictBool], Field(description="Artifact-ownership filter: `true` → only resources owning at least one data artifact; `false` → only resources owning none. **Ownership, not liveness** — a folded artifact still means \"owns\", because the clause this serves says \"own at least one artifact and which own none\", with no liveness qualifier. Absent = no narrowing.  Evaluated inside the caller's visible set (the predicate sits under the same `resources_visible_to` join as every other filter here), so the answer can never widen what the caller can read — and a caller who cannot read a resource gets no existence signal about its artifacts either way.")] = None,
         sort: Optional[Any] = None,
         order: Optional[Any] = None,
         limit: Optional[StrictInt] = None,
@@ -2809,6 +2818,8 @@ class ResourcesApi:
         :type tags: str
         :param cogmap_ids: Cognitive-map scope: a comma-separated list of cogmap UUIDs. Returns only resources homed in one of these maps (`anchor_table = 'kb_cogmaps'`), intersected with the caller's visible set. A CSV string rather than a `Vec` because the list endpoint is a GET whose params ride the query string (serde_urlencoded, which does not encode sequences); the CLI/MCP resolve each `--cogmap <ref>` (trailing-UUID-only) and join here. `None`/empty = no cogmap filter.
         :type cogmap_ids: str
+        :param has_artifacts: Artifact-ownership filter: `true` → only resources owning at least one data artifact; `false` → only resources owning none. **Ownership, not liveness** — a folded artifact still means \"owns\", because the clause this serves says \"own at least one artifact and which own none\", with no liveness qualifier. Absent = no narrowing.  Evaluated inside the caller's visible set (the predicate sits under the same `resources_visible_to` join as every other filter here), so the answer can never widen what the caller can read — and a caller who cannot read a resource gets no existence signal about its artifacts either way.
+        :type has_artifacts: bool
         :param sort:
         :type sort: ResourceSortField
         :param order:
@@ -2854,6 +2865,7 @@ class ResourcesApi:
             goal=goal,
             tags=tags,
             cogmap_ids=cogmap_ids,
+            has_artifacts=has_artifacts,
             sort=sort,
             order=order,
             limit=limit,
@@ -2890,6 +2902,7 @@ class ResourcesApi:
         goal,
         tags,
         cogmap_ids,
+        has_artifacts,
         sort,
         order,
         limit,
@@ -2957,6 +2970,10 @@ class ResourcesApi:
         if cogmap_ids is not None:
             
             _query_params.append(('cogmap_ids', cogmap_ids))
+            
+        if has_artifacts is not None:
+            
+            _query_params.append(('has_artifacts', has_artifacts))
             
         if sort is not None:
             

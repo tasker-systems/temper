@@ -145,7 +145,19 @@ tags: string | null,
  * query string (serde_urlencoded, which does not encode sequences); the CLI/MCP resolve each
  * `--cogmap <ref>` (trailing-UUID-only) and join here. `None`/empty = no cogmap filter.
  */
-cogmap_ids: string | null, sort: ResourceSortField | null, order: SortOrder | null, limit: number | null, offset: number | null, 
+cogmap_ids: string | null, 
+/**
+ * Artifact-ownership filter: `true` → only resources owning at least one data artifact;
+ * `false` → only resources owning none. **Ownership, not liveness** — a folded artifact
+ * still means "owns", because the clause this serves says "own at least one artifact and
+ * which own none", with no liveness qualifier. Absent = no narrowing.
+ *
+ * Evaluated inside the caller's visible set (the predicate sits under the same
+ * `resources_visible_to` join as every other filter here), so the answer can never widen
+ * what the caller can read — and a caller who cannot read a resource gets no existence
+ * signal about its artifacts either way.
+ */
+has_artifacts: boolean | null, sort: ResourceSortField | null, order: SortOrder | null, limit: number | null, offset: number | null, 
 /**
  * Optional sections to fill on each returned [`ResourceView`]. **On this door the vocabulary
  * is `open-meta` and nothing else** — a comma-separated list, though there is currently one

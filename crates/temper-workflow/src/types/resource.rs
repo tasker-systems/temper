@@ -119,6 +119,17 @@ pub struct ResourceListParams {
     /// `--cogmap <ref>` (trailing-UUID-only) and join here. `None`/empty = no cogmap filter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cogmap_ids: Option<String>,
+    /// Artifact-ownership filter: `true` → only resources owning at least one data artifact;
+    /// `false` → only resources owning none. **Ownership, not liveness** — a folded artifact
+    /// still means "owns", because the clause this serves says "own at least one artifact and
+    /// which own none", with no liveness qualifier. Absent = no narrowing.
+    ///
+    /// Evaluated inside the caller's visible set (the predicate sits under the same
+    /// `resources_visible_to` join as every other filter here), so the answer can never widen
+    /// what the caller can read — and a caller who cannot read a resource gets no existence
+    /// signal about its artifacts either way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_artifacts: Option<bool>,
     pub sort: Option<ResourceSortField>,
     pub order: Option<SortOrder>,
     #[cfg_attr(feature = "typescript", ts(type = "number | null"))]
