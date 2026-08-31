@@ -206,8 +206,9 @@ class TestClientCredentialAdmission:
     def test_refuses_a_client_id_in_the_client_secret_slot(self):
         # A temper client_id is `tmpr_` + base64url; a temper secret is base64url with
         # no prefix, so a secret starting with those five characters is a swap.
+        swapped_id = "tmpr_AbCdEf0123456789"  # gitleaks:allow — fake, swapped-slot case
         with pytest.raises(ValueError, match="swapped"):
-            ClientCredentials(**self.base(client_secret="tmpr_AbCdEf0123456789"))  # gitleaks:allow — fake id in the secret slot; the test proves the swap is refused
+            ClientCredentials(**self.base(client_secret=swapped_id))
 
     def test_a_real_temper_client_id_is_still_fine_in_the_client_id_slot(self):
         creds = ClientCredentials(**self.base(client_id="tmpr_AbCdEf0123456789"))
