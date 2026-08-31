@@ -34,7 +34,35 @@
 	const resourceData = $derived({
 		resource,
 		content: Promise.resolve(
-			'# Quarterly latency measurements\n\nA fixture body, so the document region has something to render.'
+			[
+				'# Quarterly latency measurements',
+				'',
+				'A fixture body, so the document region has something to render — including a fenced',
+				'block or two, because the markdown renderer highlights the languages it knows.',
+				'',
+				'```json',
+				'{',
+				'  "route": "/api/resources",',
+				'  "p50_ms": 412,',
+				'  "p95_ms": 880,',
+				'  "runs": 12,',
+				'  "note": "sampled from the edge"',
+				'}',
+				'```',
+				'',
+				'And a TypeScript one, plus an unknown language rendering as plain text:',
+				'',
+				'```ts',
+				'const percentile = (xs: number[], p: number): number => {',
+				'  const sorted = [...xs].sort((a, b) => a - b); // ascending',
+				'  return sorted[Math.floor((p / 100) * sorted.length)];',
+				'};',
+				'```',
+				'',
+				'```klingon',
+				'Hab SoSlI’ Quch!',
+				'```'
+			].join('\n')
 		),
 		trail: Promise.resolve(trail),
 		edges: Promise.resolve(edges),
