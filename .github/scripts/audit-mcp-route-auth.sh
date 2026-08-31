@@ -17,37 +17,58 @@
 #   mcp_routes          require_mcp_auth (JWT — authenticated)
 #
 # The baseline freezes every (group, path, handler) triple in build_router — auth-covered entries
-# too — so a route added to ANY group, including mcp_routes itself, fails until reviewed. Handler
-# idents are part of the frozen triple: swapping the function behind a reviewed path is exactly the
-# edit a baseline keyed on paths alone would wave through. Routes whose handler is an inline
-# closure are frozen as `<inline>`, keyed by their path.
+# too — so a route added to ANY group, including mcp_routes itself, fails until reviewed. The
+# handler column freezes the full `::`-chained ident set, joined with `+` when one route carries
+# several (a method appended to a reviewed route changes the triple); routes whose handler is an
+# inline closure are frozen as `<inline>`, keyed by their path.
 #
 # The wiring assertion is made WITHIN the `let mcp_routes` block, not over the file — the same
 # lesson audit-route-auth.sh learned at its (b): a name grepped anywhere is a name that can be
-# present elsewhere in the file while the block that needs it has lost it. If the `let mcp_routes`
-# declaration is renamed or removed, this fails loudly rather than silently skipping.
+# present elsewhere in the file while the block that needs it has lost it. The match is a WHOLE
+# ident on a comment-stripped line, so `require_mcp_auth_v2` or the name surviving only in a
+# comment does not satisfy it. If the `let mcp_routes` declaration is renamed or removed, this
+# fails loudly rather than silently skipping.
+#
+# ASSEMBLY SHAPES the parser cannot freeze are refused, not skipped:
+#   - `.merge(` may name only the four reviewed group idents — a helper function's router merged
+#     in, whose routes live outside build_router, is exactly a new public surface the baseline
+#     cannot see;
+#   - `.nest(` fails outright (its inner routes would live outside every triple);
+#   - `.nest_service(` must be the reviewed `("/mcp", mcp_service)` and nothing else;
+#   - a `.route(` call that yields no literal path string (a const path, a concatenated path)
+#     prints an UNPARSEABLE marker and fails — a non-literal path cannot be frozen.
 #
 # FIELD OF VIEW — stated so green is never mistaken for more than it checks:
 #   - THIS guard watches build_router's body in crates/temper-mcp/src/router.rs ONLY — and it
-#     MECHANICALLY backs the "only" with check (a2): Router::new() anywhere else under
-#     crates/temper-mcp/src fails, so a second router-assembly site cannot grow silently outside
-#     the frozen one.
+#     MECHANICALLY backs the "only" with check (a2): Router::new() or Router::default() anywhere
+#     else under crates/temper-mcp/src fails, so a second router-assembly site cannot grow
+#     silently outside the frozen one.
 #   - It does not watch temper-api's routes (audit-route-auth.sh), the AS's api/** entry points
 #     (audit-as-entry-points.sh), or service-layer predicate drift (audit-handler-authz-drift.sh).
-#   - It watches the routes and layers declared INSIDE build_router. Layers applied outside it
-#     (apply_base_layers, cors, root_span) are transport/observability; if auth logic ever moves
-#     outside build_router, re-read this guard before trusting it.
+#     The api/*.rs BINS' contents are checked for assembly tokens by the AS guard, which owns
+#     those files.
+#   - Layers applied outside build_router (apply_base_layers, cors, root_span) are
+#     transport/observability; if auth logic ever moves outside build_router, re-read this guard
+#     before trusting it.
 #   - Vercel maps /mcp(.*) and the /.well-known, /oauth catch-alls at api/mcp.rs to THIS router
 #     (see vercel.json); the AS guard freezes that mapping half.
+#
+# COMMENTS are stripped before matching, so prose may name route-shaped text; a comment cannot
+# freeze or trip anything. (This assumes no `//` inside a string literal in build_router — true
+# of every path and handler in the file today; a route path containing `//` would truncate its
+# line at the wrong place and RED here, which is the safe direction.)
+#
+# UPDATE_BASELINE=1 rewrites nothing and only prints the current set, and refuses to run at all
+# in CI or while any check above is failing — update mode cannot launder an unresolved failure.
 #
 # USAGE
 #   .github/scripts/audit-mcp-route-auth.sh          # verify (CI mode)
 #   .github/scripts/audit-mcp-route-auth.sh --list   # print the current frozen route set
-#   UPDATE_BASELINE=1 .github/scripts/audit-mcp-route-auth.sh   # rewrite baseline after review
+#   UPDATE_BASELINE=1 .github/scripts/audit-mcp-route-auth.sh   # print baseline after review
 #
-# ROUTER_FILE may be overridden to point at a fixture (see test-audit-mcp-route-auth.sh). Under a
-# fixture the baseline (c) will of course disagree, which is why the test harness asserts on the
-# FAIL MESSAGE, not just the exit code.
+# ROUTER_FILE / MCP_SRC_DIR may be overridden to point at fixtures (see
+# test-audit-mcp-route-auth.sh). Under a fixture the baseline (c) will of course disagree, which
+# is why the test harness asserts on the FAIL MESSAGE, not just the exit code.
 
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
@@ -62,6 +83,9 @@ GUARD_NAME="audit-mcp-route-auth"
 # The sub-router declarations in build_router and their reviewed posture. A new `let X =
 # Router::new()` declaration fails until classified, even if it carries no routes yet.
 KNOWN_GROUPS='discovery_routes|registration_routes|health|mcp_routes'
+# The only group idents `.merge(` may name — anything else is router assembly this guard's
+# baseline cannot see (the routes would live outside build_router's slice).
+REVIEWED_MERGES='discovery_routes|registration_routes|health|mcp_routes'
 
 # The block whose body must carry the auth layer. Both halves are asserted inside the slice:
 # the nest that mounts the protected service, and the layer that gates it. A block that lost
@@ -82,13 +106,16 @@ EOF
 # Every (group, path, handler) triple declared in build_router, attributed to the most recent
 # `let NAME = Router::new()` declaration. Bash 3.2 compatible.
 #
+# Preprocessing: `//` comments are stripped first, so prose can never freeze or trip anything.
+#
 # The route-call state machine: `.route(` and `.nest_service(` open a call that rustfmt lays out
 # across up to three lines (open / path / handler / close) — or one, when the declaration and its
 # first route share a line (`let health = Router::new().route(...)`). While inside one, the first
-# `"/..."` string is the path and any `mod::fn` ident is the handler; the call ends on any line
-# whose last non-space character closes a paren (`)`, `),`, `);`, `));`, `)),`). A `"/path"`
-# string outside any route call is not collected — layers and state wiring carry none today, and
-# one that did must be reviewed here before the guard can say what it is.
+# `"/..."` string is the path and every `::`-chained ident NOT preceded by an identifier char is
+# collected (joined with `+`), so a method appended to a reviewed route changes the triple and
+# `Router::new` yields nothing. The call ends on any line whose last non-space character closes a
+# paren (`)`, `),`, `);`, `));`, `)),`); a call that closes WITHOUT a captured literal path emits
+# an UNPARSEABLE marker — a non-literal path cannot be frozen, and the guard fails on the marker.
 extract() {
   awk '
     # Slice to build_router first.
@@ -97,10 +124,13 @@ extract() {
     !inside { next }
     {
       line=$0
+      sub(/\/\/.*/, "", line)
       # New sub-router declaration: it becomes the current attribution group. Do NOT skip the
-      # rest of the line — rustfmt may lay the first `.route(` on it.
+      # rest of the line — rustfmt may lay the first `.route(` on it — but DO blank the
+      # declaration itself, or the ident scan below would freeze `Router::new` as a handler.
       if (match(line, /let [a-z_]+ = Router::new\(\)/)) {
-        grp=substr(line, RSTART+4, RLENGTH-4)
+        line=substr(line, 1, RSTART-1) substr(line, RSTART+RLENGTH)
+        grp=substr($0, RSTART+4, RLENGTH-4)
         sub(/ = Router::new\(\).*$/, "", grp)
       }
       # Open a route call.
@@ -111,22 +141,26 @@ extract() {
           path=substr(line, RSTART+1, RLENGTH-2)
           got_path=1
         }
-        if (!is_nest && line ~ /[a-z_]+::[a-z_]+/) {
-          # First ident NOT preceded by an identifier char — `Router::new` must not yield
-          # `outer::new`, but `get(discovery::handler)` must yield the handler.
+        if (!is_nest && line ~ /[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)+/) {
           s=line
-          while (match(s, /[a-z_]+::[a-z_]+/)) {
+          while (match(s, /[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)+/)) {
             pre = (RSTART==1) ? " " : substr(s,RSTART-1,1)
-            if (pre !~ /[A-Za-z0-9_]/) { handler=substr(s,RSTART,RLENGTH); break }
+            post = (RSTART+RLENGTH > length(s)) ? " " : substr(s,RSTART+RLENGTH,1)
+            if (pre !~ /[A-Za-z0-9_]/ && post !~ /[A-Za-z0-9_]/) {
+              cand=substr(s,RSTART,RLENGTH)
+              if (index(handler, cand) == 0) handler = (handler=="") ? cand : handler "+" cand
+            }
             s=substr(s, RSTART+RLENGTH)
           }
         }
-        # Close the call: any line whose last non-space char closes a paren. The declaration line
-        # itself cannot be this (it ends in `)` of Router::new() — checked AFTER capture, and a
-        # same-line route has already been captured by then).
-        if (got_path && line ~ /\)[,;]?[[:space:]]*$/) {
-          if (is_nest) { h="<nest_service>" } else if (handler=="") { h="<inline>" } else { h=handler }
-          print grp"\t"path"\t"h
+        # Close the call: any line whose last non-space char closes a paren.
+        if (line ~ /\)[,;]?[[:space:]]*$/) {
+          if (got_path) {
+            if (is_nest) { h="<nest_service>" } else if (handler=="") { h="<inline>" } else { h=handler }
+            print grp"\t"path"\t"h
+          } else {
+            print "UNPARSEABLE\t"grp"\t<no literal path>"
+          }
           in_route=0; is_nest=0
         }
       }
@@ -159,15 +193,15 @@ if [[ -n "$UNKNOWN_GROUPS" ]]; then
   fail=1
 fi
 
-# (a2) Router assembly must stay inside the one file this guard freezes. A second
-# Router::new() site elsewhere under the crate would be invisible to every check above —
+# (a2) Router assembly must stay inside the one file this guard freezes. A second Router::new()
+# or Router::default() site elsewhere under the crate would be invisible to every check above —
 # this is the mechanical form of the field-of-view statement in the header.
-OTHER_ASSEMBLY="$(grep -rl 'Router::new' "$MCP_SRC_DIR" --include='*.rs' | while IFS= read -r p; do
+OTHER_ASSEMBLY="$(grep -rlE 'Router::(new|default)' "$MCP_SRC_DIR" --include='*.rs' | while IFS= read -r p; do
   p_abs="$(cd "$(dirname "$p")" && pwd)/$(basename "$p")"
   [[ "$p_abs" != "$ROUTER_ABS" ]] && printf '%s\n' "$p"
 done || true)"
 if [[ -n "$OTHER_ASSEMBLY" ]]; then
-  echo "$GUARD_NAME: FAIL — Router::new() outside the frozen router file:" >&2
+  echo "$GUARD_NAME: FAIL — router assembly outside the frozen router file:" >&2
   printf '  %s\n' $OTHER_ASSEMBLY >&2
   echo "  This guard can only see build_router in $ROUTER_FILE. A second assembly site" >&2
   echo "  needs its own reviewed posture BEFORE it can go green — extend this guard or fold" >&2
@@ -175,13 +209,60 @@ if [[ -n "$OTHER_ASSEMBLY" ]]; then
   fail=1
 fi
 
-# (b) The auth wiring must still be present — asserted WITHIN the mcp_routes block, not the file.
-# Slice from the `let mcp_routes = Router::new()` line through the first line ending the let.
+# The build_router body, comments stripped — the slice every structural check below reads, so
+# prose can neither satisfy nor evade them.
+ROUTER_BODY="$(awk '/^(pub )?fn build_router\(/ {inside=1} inside && !/^(pub )?fn build_router\(/ {print} inside && /^\}/ {exit}' "$ROUTER_FILE" | sed 's#//.*##')"
+
+# (a3) `.merge(` may name only the reviewed group idents. A merged helper function's router —
+# whose routes live outside this file's baseline — is the one assembly shape the triple-freeze
+# cannot see from inside build_router.
+BAD_MERGE="$(printf '%s\n' "$ROUTER_BODY" | grep -E '\.merge\(' | grep -vE "\.merge\(($REVIEWED_MERGES)\)" || true)"
+if [[ -n "$BAD_MERGE" ]]; then
+  echo "$GUARD_NAME: FAIL — .merge() argument outside the reviewed groups:" >&2
+  printf '  %s\n' "$BAD_MERGE" >&2
+  echo "  A merged router whose routes are declared elsewhere is invisible to the frozen" >&2
+  echo "  baseline. Inline the routes into a named group in build_router, or extend this" >&2
+  echo "  guard deliberately." >&2
+  fail=1
+fi
+
+# (a4) `.nest(` is refused outright: its inner routes would live outside every frozen triple.
+# `.nest_service(` must be the reviewed ("/mcp", mcp_service) form and nothing else.
+BAD_NEST="$(printf '%s\n' "$ROUTER_BODY" | grep -E '\.nest\(' || true)"
+if [[ -n "$BAD_NEST" ]]; then
+  echo "$GUARD_NAME: FAIL — .nest() found in build_router:" >&2
+  printf '  %s\n' "$BAD_NEST" >&2
+  echo "  A nested inline router's routes live outside every frozen triple. Inline them into" >&2
+  echo "  a named group, or re-read and extend this guard deliberately." >&2
+  fail=1
+fi
+BAD_NEST_SVC="$(printf '%s\n' "$ROUTER_BODY" | grep -E '\.nest_service\(' | grep -vE '\.nest_service\("/mcp", *mcp_service\)' || true)"
+if [[ -n "$BAD_NEST_SVC" ]]; then
+  echo "$GUARD_NAME: FAIL — .nest_service() with an unreviewed argument:" >&2
+  printf '  %s\n' "$BAD_NEST_SVC" >&2
+  echo "  The only reviewed nest is nest_service(\"/mcp\", mcp_service), gated by the auth layer" >&2
+  echo "  asserted in (b). Any other nest serves its target outside the frozen baseline." >&2
+  fail=1
+fi
+
+# (a5) A route call that closed without a literal path cannot be frozen — a const or composed
+# path would be invisible to the baseline while its route serves.
+if printf '%s\n' "$ALL" | grep -q '^UNPARSEABLE'; then
+  echo "$GUARD_NAME: FAIL — a .route( call produced no literal path string:" >&2
+  printf '%s\n' "$(printf '%s\n' "$ALL" | grep '^UNPARSEABLE')" >&2
+  echo "  Paths must be literals in build_router; a const or composed path cannot be frozen by" >&2
+  echo "  this guard. Inline the literal, or re-read and extend this guard deliberately." >&2
+  fail=1
+fi
+
+# (b) The auth wiring must still be present — asserted WITHIN the mcp_routes block, not the file,
+# against a comment-stripped slice, as a WHOLE ident: `require_mcp_auth_v2` does not satisfy it,
+# and the real name surviving only in a comment does not either.
 auth_block_body="$(awk -v blk="$AUTH_BLOCK" '
   $0 ~ "let "blk" = Router::new\\(\\)" { inside=1 }
   inside { print }
   inside && /;[[:space:]]*$/ { exit }
-' "$ROUTER_FILE")"
+' "$ROUTER_FILE" | sed 's#//.*##')"
 if [[ -z "$auth_block_body" ]]; then
   echo "$GUARD_NAME: FAIL — sub-router group '$AUTH_BLOCK' not found in $ROUTER_FILE (renamed or" >&2
   echo "  removed?). /mcp is the gated surface; the guard must be re-read, not re-baselined blind." >&2
@@ -193,22 +274,18 @@ else
     echo "  gates it. Re-read the router, then re-baseline." >&2
     fail=1
   }
-  printf '%s\n' "$auth_block_body" | grep -qF -- "$AUTH_LAYER" || {
+  printf '%s\n' "$auth_block_body" | grep -Eq "(^|[^A-Za-z0-9_])${AUTH_LAYER}([^A-Za-z0-9_]|$)" || {
     echo "$GUARD_NAME: FAIL — missing auth wiring: '$AUTH_LAYER' not mounted in the $AUTH_BLOCK" >&2
-    echo "  block of $ROUTER_FILE. A name elsewhere in the file does not gate THIS block; a /mcp" >&2
-    echo "  request would be served ungated. See the block-level lesson in audit-route-auth.sh (b)." >&2
+    echo "  block of $ROUTER_FILE (as a whole ident on a non-comment line). A name elsewhere in" >&2
+    echo "  the file does not gate THIS block; a /mcp request would be served ungated. See the" >&2
+    echo "  block-level lesson in audit-route-auth.sh (b)." >&2
     fail=1
   }
 fi
 
-# (c) The frozen route set must match the reviewed baseline — additions, removals, and handler
-# swaps all land here.
+# (c) The frozen route set must match the reviewed baseline — additions, removals, handler swaps,
+# and appended methods all land here.
 NORM_BASELINE="$(printf '%s\n' "$BASELINE" | sort -u)"
-if [[ "${UPDATE_BASELINE:-}" == "1" ]]; then
-  printf '%s\n' "$ALL"
-  echo "^^^ copy into BASELINE after confirming each route's posture." >&2
-  exit 0
-fi
 DIFF_FILE="$(mktemp)"
 trap 'rm -f "$DIFF_FILE"' EXIT
 if ! diff <(printf '%s\n' "$NORM_BASELINE") <(printf '%s\n' "$ALL") >"$DIFF_FILE" 2>&1; then
@@ -221,7 +298,23 @@ if ! diff <(printf '%s\n' "$NORM_BASELINE") <(printf '%s\n' "$ALL") >"$DIFF_FILE
   fail=1
 fi
 
+# Update mode runs LAST and refuses to launder: not in CI, and not while any check is failing.
+if [[ -n "${UPDATE_BASELINE:-}" ]]; then
+  if [[ -n "${CI:-}" ]]; then
+    echo "$GUARD_NAME: UPDATE_BASELINE is not available in CI — re-baseline locally after review." >&2
+    exit 1
+  fi
+  if [[ "$fail" != "0" ]]; then
+    echo "$GUARD_NAME: UPDATE_BASELINE refused — resolve the failures above first; update mode" >&2
+    echo "  cannot launder an unresolved wiring or assembly failure." >&2
+    exit 1
+  fi
+  printf '%s\n' "$ALL"
+  echo "^^^ copy into BASELINE after confirming each route's posture." >&2
+  exit 0
+fi
+
 if [[ "$fail" == "0" ]]; then
-  echo "$GUARD_NAME: OK — $(printf '%s\n' "$ALL" | grep -c .) frozen routes (3 public-by-design, /mcp gated); auth wiring present in $AUTH_BLOCK."
+  echo "$GUARD_NAME: OK — $(printf '%s\n' "$ALL" | grep -c .) frozen routes (3 public-by-design, /mcp gated); auth wiring present in $AUTH_BLOCK; assembly shapes clean."
 fi
 exit "$fail"

@@ -11,6 +11,12 @@
 #   - a vercel.json functions key with no file behind it fails
 #   - a new api/** file PLUS the route naming it still fails: the file is the thing without a
 #     baseline entry — wiring it does not review it
+#   - a NEW public path at an ALREADY-REVIEWED file fails the whole-file freeze
+#   - a reorder of the routes array fails the whole-file freeze (first-match semantics)
+#   - a `rewrites` key — a reachability channel outside the routes array — fails the freeze
+#   - a crons schedule change fails the freeze (crons are scheduled unauthenticated GETs)
+#   - a router-assembly token in an api bin fails the bin check
+#   - UPDATE_BASELINE=1 refuses to run on a failing tree, and runs clean on a passing one
 #
 # WHY A HARNESS RATHER THAN A COMMENT
 # -----------------------------------
@@ -37,17 +43,19 @@ FIXTURE_DIR="${SCRIPT_DIR}/.tmp-test-as-entry-points.$$"
 mkdir -p "$FIXTURE_DIR"
 trap 'rm -rf "$FIXTURE_DIR"' EXIT
 
-# run_test NAME API_DIR VERCEL_JSON EXPECTED_EXIT [EXPECTED_SUBSTRING]
+# run_test NAME API_DIR VERCEL_JSON EXPECTED_EXIT [EXPECTED_SUBSTRING] [EXTRA_ENV]
 run_test() {
     local test_name="$1"
     local api_dir="$2"
     local vercel_json="$3"
     local expected_exit="$4"
     local expected_substr="${5:-}"
+    local extra_env="${6:-}"
 
     local output actual_exit
     set +e
-    output="$(API_DIR="$api_dir" VERCEL_JSON="$vercel_json" bash "$AUDIT_SCRIPT" 2>&1)"
+    # shellcheck disable=SC2086
+    output="$(env $extra_env API_DIR="$api_dir" VERCEL_JSON="$vercel_json" bash "$AUDIT_SCRIPT" 2>&1)"
     actual_exit=$?
     set -e
 
@@ -70,7 +78,10 @@ run_test() {
 }
 
 # fresh_api_copy — a full copy of the live api/ tree inside the fixture dir (relative path).
+# rm -rf first: a second cp -R into an existing target would NEST the copy (api/api/...) and
+# poison every later probe.
 fresh_api_copy() {
+    rm -rf "${FIXTURE_DIR}/api"
     cp -R "${REPO_ROOT}/api" "${FIXTURE_DIR}/api"
     printf '%s' ".github/scripts/.tmp-test-as-entry-points.$$/api"
 }
@@ -116,17 +127,56 @@ run_test "new file wired by a new route: still fails (the file lacks a baseline 
     "$API_COPY" "$WIRED_VERCEL" 1 \
     "entry-point set changed"
 
-# --- (7) a new public path at an ALREADY-REVIEWED file: the frozen routes array is the trip ---
+# --- (7) a new public path at an ALREADY-REVIEWED file: the whole-file freeze is the trip ---
 NEW_SRC_VERCEL="${FIXTURE_DIR}/vercel-new-src.json"
 jq '.routes += [{"src": "/anything", "dest": "/api/oauth/token"}]' "$REAL_VERCEL" > "$NEW_SRC_VERCEL"
-run_test "new public path at reviewed file: fails frozen routes array" "api" "$NEW_SRC_VERCEL" 1 \
-    "routes array changed"
+run_test "new public path at reviewed file: fails the freeze" "api" "$NEW_SRC_VERCEL" 1 \
+    "vercel.json changed"
 
 # --- (8) a reorder: first-match semantics are part of the mapping, and the freeze bites ---
 REORDER_VERCEL="${FIXTURE_DIR}/vercel-reorder.json"
 jq '.routes = (.routes | reverse)' "$REAL_VERCEL" > "$REORDER_VERCEL"
-run_test "routes reordered: fails frozen routes array" "api" "$REORDER_VERCEL" 1 \
-    "routes array changed"
+run_test "routes reordered: fails the freeze" "api" "$REORDER_VERCEL" 1 \
+    "vercel.json changed"
+
+# --- (9) a `rewrites` key: a reachability channel the routes array never carried ---
+REWRITES_VERCEL="${FIXTURE_DIR}/vercel-rewrites.json"
+jq '.rewrites = [{"source": "/hidden", "destination": "/api/internal"}]' "$REAL_VERCEL" > "$REWRITES_VERCEL"
+run_test "rewrites key: fails the freeze" "api" "$REWRITES_VERCEL" 1 \
+    "vercel.json changed"
+
+# --- (10) a crons change: crons are scheduled unauthenticated GETs, and are frozen ---
+CRONS_VERCEL="${FIXTURE_DIR}/vercel-crons.json"
+jq '.crons[0].schedule = "0 0 31 2 *"' "$REAL_VERCEL" > "$CRONS_VERCEL"
+run_test "crons schedule change: fails the freeze" "api" "$CRONS_VERCEL" 1 \
+    "vercel.json changed"
+
+# --- (11) a router-assembly token in an api bin: the bin check bites ---
+# API_BINS_OVERRIDE points at a scratch copy — with the real tree as API_DIR, check (a) stays
+# green and the bin check is the ONLY thing that can fire.
+SCRATCH_BIN="${FIXTURE_DIR}/mcp-assembly.rs"
+cp "${REPO_ROOT}/api/mcp.rs" "$SCRATCH_BIN"
+printf '\nfn stray() { let _r = Router::new(); }\n' >> "$SCRATCH_BIN"
+run_test "assembly token in api bin: fails bin check" "api" "$REAL_VERCEL" 1 \
+    "router assembly token" "API_BINS_OVERRIDE=${SCRATCH_BIN}"
+
+# --- (12) a comment saying "Router" in an api bin: GREEN direction — prose is not assembly ---
+SCRATCH_BIN_COMMENT="${FIXTURE_DIR}/mcp-comment.rs"
+cp "${REPO_ROOT}/api/mcp.rs" "$SCRATCH_BIN_COMMENT"
+printf '\n// the axum Router::new lives in the crate, not here\n' >> "$SCRATCH_BIN_COMMENT"
+run_test "comment saying Router in api bin: stays green" "api" "$REAL_VERCEL" 0 "" \
+    "API_BINS_OVERRIDE=${SCRATCH_BIN_COMMENT}"
+
+# --- (13) UPDATE_BASELINE=1 on a failing tree: refused, cannot launder ---
+API_COPY="$(fresh_api_copy)"
+mkdir -p "${FIXTURE_DIR}/api/admin"
+: > "${FIXTURE_DIR}/api/admin/ping.ts"
+run_test "UPDATE_BASELINE on failing tree: refused" "$API_COPY" "$REAL_VERCEL" 1 \
+    "UPDATE_BASELINE refused" "UPDATE_BASELINE=1"
+
+# --- (14) UPDATE_BASELINE=1 on the clean tree: prints the baseline, exits 0 ---
+run_test "UPDATE_BASELINE on clean tree: prints and exits 0" "api" "$REAL_VERCEL" 0 \
+    "copy into BASELINE" "UPDATE_BASELINE=1"
 
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed (total: $((PASS + FAIL)))"

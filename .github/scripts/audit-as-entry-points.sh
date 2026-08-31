@@ -23,15 +23,21 @@
 #       mapping a public path at nothing fails;
 #   (d) every vercel.json `functions` key is a file that exists — a renamed/deleted file left in
 #       the functions map fails;
-#   (e) the `routes` array itself is frozen, jq-normalized, as a whole — a NEW route line mapping
-#       a public path at an ALREADY-REVIEWED file is a new public path, and freezing only the
-#       dest/file pairs would wave it through. Reordering is also a semantic change in
-#       vercel.json (first match wins) and fails with the rest.
+#   (e) vercel.json is frozen WHOLE, jq-normalized. Freezing only the routes array left the other
+#       reachability channels unread: `rewrites`, `redirects`, `headers`, `cleanUrls`,
+#       `trailingSlash`, `proxy` can each map or alter a public path, and `crons` vends
+#       scheduled unauthenticated GETs. The whole file IS the deployment mapping — any change,
+#       including a reorder (first match wins) or a benign-looking build tweak, gets human eyes.
+#   (f) the three api/*.rs BINS carry no router-assembly tokens. They are workspace binaries a
+#       normal-looking edit could turn into second assembly sites one file boundary away from
+#       every other guard's field of view. (Doc comments are stripped first — prose may say
+#       "Router".) What the bins do BEYOND assembly stays with the crates' guards.
 #
 # FIELD OF VIEW — stated so green is never mistaken for more than it checks:
-#   - THIS guard watches `find api -type f` and vercel.json's `functions` and `routes` arrays.
-#     It does not read the crons (their dests are checked transitively via routes) and does not
-#     parse the served files' contents — what each function does is the other guards' job.
+#   - THIS guard watches `find api -type f`, vercel.json's parsed content, and the three bins'
+#     text for `Router::` assembly tokens only. It does not parse handler logic, and it does not
+#     watch temper-api's route set (audit-route-auth.sh) or temper-mcp's router
+#     (audit-mcp-route-auth.sh).
 #   - `routes[0]` is `{ "handle": "filesystem" }`: every api/** file is ALSO reachable at its own
 #     path with no vercel.json line naming it. That is why there is no "orphan file" check — a
 #     file no route names is still wired, legitimately. The baseline's reach column records which
@@ -40,12 +46,15 @@
 #
 # USAGE
 #   .github/scripts/audit-as-entry-points.sh          # verify (CI mode)
-#   .github/scripts/audit-as-entry-points.sh --list   # print the current entry set
-#   UPDATE_BASELINE=1 .github/scripts/audit-as-entry-points.sh   # rewrite baseline after review
+#   .github/scripts/audit-as-entry-points.sh --list   # print the current entry set and mapping
+#   UPDATE_BASELINE=1 .github/scripts/audit-as-entry-points.sh   # print baseline after review
 #
-# VERCEL_JSON and API_DIR may be overridden to point at fixtures (see
-# test-audit-as-entry-points.sh). Under fixtures the baseline diff (a/b) will of course disagree,
-# which is why the test harness asserts on the FAIL MESSAGE, not just the exit code.
+# UPDATE_BASELINE=1 rewrites nothing and only prints the current sets, and refuses to run at all
+# in CI or while any check above is failing — update mode cannot launder an unresolved failure.
+#
+# API_DIR and VERCEL_JSON may be overridden to point at fixtures (see
+# test-audit-as-entry-points.sh). Under fixtures the baseline diffs (a/b/e) will of course
+# disagree, which is why the test harness asserts on the FAIL MESSAGE, not just the exit code.
 
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
@@ -53,6 +62,12 @@ cd "$(git rev-parse --show-toplevel)"
 API_DIR="${API_DIR:-api}"
 VERCEL_JSON="${VERCEL_JSON:-vercel.json}"
 GUARD_NAME="audit-as-entry-points"
+
+# The three Vercel bins — the files vercel.json's `functions` map configures. None may assemble
+# its own router (f); the routers live in the crates, whose guards freeze them. API_BINS_OVERRIDE
+# exists for the test harness (fixtures live outside api/); CI never sets it.
+API_BINS_OVERRIDE="${API_BINS_OVERRIDE:-api/mcp.rs api/axum.rs api/internal.rs}"
+read -r -a API_BINS <<< "$API_BINS_OVERRIDE"
 
 # Reviewed baseline: <file>\t<reach>\t<role> for every AS entry point. The reach column is how a
 # request reaches it (filesystem path, a named vercel.json route, the functions map); the role is
@@ -72,14 +87,12 @@ api/oauth/saml/metadata.ts	route /oauth/saml/metadata	SAML metadata
 api/oauth/token.ts	route /oauth/token	token endpoint
 EOF
 
-# The frozen vercel.json routes array, jq-normalized (-S sorts object keys, -c one line). This is
-# the public-path mapping itself: a NEW route line mapping a public path at an ALREADY-REVIEWED
-# file is still a new public path, and dest/file checks alone cannot see it; a reorder changes
-# first-match semantics. A change here means confirm every src is intentional, then
-# UPDATE_BASELINE=1.
-read -r -d '' ROUTES_BASELINE <<'ROUTES_EOF' || true
-[{"handle":"filesystem"},{"dest":"/api/mcp","src":"/mcp"},{"dest":"/api/mcp","src":"/mcp/(.*)"},{"dest":"/api/internal","src":"/api/embed/dispatch"},{"dest":"/api/internal","src":"/api/embed/warm"},{"dest":"/api/internal","src":"/api/slack/intents/reap"},{"dest":"/api/internal","src":"/api/region/dispatch"},{"dest":"/api/internal","src":"/api/as/reap"},{"dest":"/api/internal","src":"/api/internal-calls/health"},{"dest":"/api/internal","src":"/internal/(.*)"},{"dest":"/api/oauth/authorization-server","src":"/.well-known/oauth-authorization-server"},{"dest":"/api/oauth/authorization-server?issuer_path=$issuer_path","src":"/.well-known/oauth-authorization-server/(?<issuer_path>.*)"},{"dest":"/api/oauth/jwks","src":"/oauth/jwks"},{"dest":"/api/oauth/authorize","src":"/oauth/authorize"},{"dest":"/api/oauth/saml/login","src":"/oauth/saml/login"},{"dest":"/api/oauth/saml/acs","src":"/oauth/saml/acs"},{"dest":"/api/oauth/saml/metadata","src":"/oauth/saml/metadata"},{"dest":"/api/oauth/token","src":"/oauth/token"},{"dest":"/api/mcp","src":"/oauth/(.*)"},{"dest":"/api/mcp","src":"/.well-known/(.*)"},{"dest":"/api/axum","src":"/(.*)"}]
-ROUTES_EOF
+# The frozen vercel.json, jq-normalized (-S sorts keys, -c one line). This is the deployment
+# mapping ENTIRE — routes, crons, functions config, and every future reachability key. A change
+# here means confirm it with human eyes, then UPDATE_BASELINE=1.
+read -r -d '' VERCEL_BASELINE <<'VERCEL_EOF' || true
+{"$schema":"https://openapi.vercel.sh/vercel.json","build":{"env":{"SQLX_OFFLINE":"true"}},"buildCommand":"sh scripts/vercel-build.sh","crons":[{"path":"/api/embed/dispatch?shard=0","schedule":"* * * * *"},{"path":"/api/embed/dispatch?shard=1","schedule":"* * * * *"},{"path":"/api/embed/dispatch?shard=2","schedule":"* * * * *"},{"path":"/api/embed/dispatch?shard=3","schedule":"* * * * *"},{"path":"/api/embed/warm","schedule":"*/2 * * * *"},{"path":"/api/slack/intents/reap","schedule":"0 * * * *"},{"path":"/api/region/dispatch","schedule":"* * * * *"},{"path":"/api/as/reap","schedule":"17 3 * * *"},{"path":"/api/internal-calls/health","schedule":"*/15 * * * *"}],"framework":null,"functions":{"api/axum.rs":{"maxDuration":60,"memory":3009},"api/internal.rs":{"maxDuration":300,"memory":3009},"api/mcp.rs":{"maxDuration":60,"memory":3009}},"ignoreCommand":"sh \"$(git rev-parse --show-toplevel)/scripts/vercel-ignore-build.sh\" temper-cloud","installCommand":"cd packages/temper-cloud && bun install","routes":[{"handle":"filesystem"},{"dest":"/api/mcp","src":"/mcp"},{"dest":"/api/mcp","src":"/mcp/(.*)"},{"dest":"/api/internal","src":"/api/embed/dispatch"},{"dest":"/api/internal","src":"/api/embed/warm"},{"dest":"/api/internal","src":"/api/slack/intents/reap"},{"dest":"/api/internal","src":"/api/region/dispatch"},{"dest":"/api/internal","src":"/api/as/reap"},{"dest":"/api/internal","src":"/api/internal-calls/health"},{"dest":"/api/internal","src":"/internal/(.*)"},{"dest":"/api/oauth/authorization-server","src":"/.well-known/oauth-authorization-server"},{"dest":"/api/oauth/authorization-server?issuer_path=$issuer_path","src":"/.well-known/oauth-authorization-server/(?<issuer_path>.*)"},{"dest":"/api/oauth/jwks","src":"/oauth/jwks"},{"dest":"/api/oauth/authorize","src":"/oauth/authorize"},{"dest":"/api/oauth/saml/login","src":"/oauth/saml/login"},{"dest":"/api/oauth/saml/acs","src":"/oauth/saml/acs"},{"dest":"/api/oauth/saml/metadata","src":"/oauth/saml/metadata"},{"dest":"/api/oauth/token","src":"/oauth/token"},{"dest":"/api/mcp","src":"/oauth/(.*)"},{"dest":"/api/mcp","src":"/.well-known/(.*)"},{"dest":"/api/axum","src":"/(.*)"}]}
+VERCEL_EOF
 
 fail=0
 
@@ -106,6 +119,7 @@ resolve_dest() {
 # iterate with while-read. `|| true` because grep exits 1 on zero matches under pipefail.
 DEST_LIST="$(jq -r '.routes[]? | .dest // empty' "$VERCEL_JSON" | grep '^/api/' | sort -u || true)"
 FNKEY_LIST="$(jq -r '.functions // {} | keys[]' "$VERCEL_JSON" | sort -u || true)"
+VERCEL_CURRENT="$(jq -S -c '.' "$VERCEL_JSON")"
 
 REFERENCE_CURRENT="$(
   {
@@ -119,25 +133,12 @@ if [[ "${1:-}" == "--list" ]]; then
   printf '%s\n' "$ENTRY_CURRENT"
   echo "# named by vercel.json (routes dests + functions keys):"
   printf '%s\n' "$REFERENCE_CURRENT"
-  echo "# frozen routes array:"
-  jq -S -c '.routes' "$VERCEL_JSON"
+  echo "# frozen vercel.json:"
+  printf '%s\n' "$VERCEL_CURRENT"
   exit 0
 fi
 
 # (a/b) The entry set must match the reviewed baseline, both directions.
-ROUTES_CURRENT="$(jq -S -c '.routes' "$VERCEL_JSON")"
-if [[ "${UPDATE_BASELINE:-}" == "1" ]]; then
-  while IFS= read -r f; do
-    role="$(printf '%s\n' "$BASELINE" | awk -F'\t' -v f="$f" '$1==f {print $2"\t"$3; found=1} END{if(!found) print "UNREVIEWED\tUNREVIEWED"}')"
-    printf '%s\t%s\n' "$f" "$role"
-  done <<< "$ENTRY_CURRENT"
-  echo "" >&2
-  echo "# frozen routes array — copy into ROUTES_BASELINE after confirming every src:" >&2
-  printf '%s\n' "$ROUTES_CURRENT" >&2
-  echo "^^^ copy into BASELINE after confirming each entry is intentionally public-by-protocol" >&2
-  echo "    (or a reviewed server) and the reach column says how a request reaches it." >&2
-  exit 0
-fi
 BASELINE_FILES="$(printf '%s\n' "$BASELINE" | cut -f1 | sort -u)"
 DIFF_FILE="$(mktemp)"
 trap 'rm -f "$DIFF_FILE"' EXIT
@@ -174,19 +175,57 @@ printf '%s\n' "$FNKEY_LIST" | while IFS= read -r k; do
   fi
 done || fail=1
 
-# (e) The routes array is frozen whole. A new src naming an already-reviewed file is still a new
-# public path; a reorder changes first-match semantics. Neither is visible to (c)/(d).
-if [[ "$ROUTES_CURRENT" != "$ROUTES_BASELINE" ]]; then
-  echo "$GUARD_NAME: FAIL — the vercel.json routes array changed." >&2
-  echo "The routes array IS the public-path mapping. A new line mapping a public path at an" >&2
-  echo "already-reviewed file is still a new public path, and reordering changes which route" >&2
-  echo "wins. diff (baseline -> current), one element per line:" >&2
-  diff <(printf '%s' "$ROUTES_BASELINE" | jq '.[]') <(printf '%s' "$ROUTES_CURRENT" | jq '.[]') >&2 || true
+# (e) vercel.json is frozen whole. A new src naming an already-reviewed file is still a new
+# public path; a reorder changes first-match semantics; and `rewrites`, `redirects`, `headers`,
+# `cleanUrls`, `trailingSlash`, `proxy` and `crons` are reachability channels the routes array
+# alone never froze.
+if [[ "$VERCEL_CURRENT" != "$VERCEL_BASELINE" ]]; then
+  echo "$GUARD_NAME: FAIL — vercel.json changed." >&2
+  echo "The whole file is frozen: it IS the deployment mapping. routes/reorders/rewrites/" >&2
+  echo "redirects/headers/crons are all reachability channels; even a build tweak gets human" >&2
+  echo "eyes here. diff (baseline -> current):" >&2
+  diff <(printf '%s' "$VERCEL_BASELINE" | jq 'del(.routes)' ) <(printf '%s' "$VERCEL_CURRENT" | jq 'del(.routes)') >&2 || true
+  diff <(printf '%s' "$VERCEL_BASELINE" | jq -c '.routes[]') <(printf '%s' "$VERCEL_CURRENT" | jq -c '.routes[]') >&2 || true
   echo "If reviewed and correct: UPDATE_BASELINE=1 .github/scripts/$GUARD_NAME.sh" >&2
   fail=1
 fi
 
+# (f) The api bins must not assemble their own router — a second assembly site one file boundary
+# outside every crate guard's field of view. Comments stripped: prose may say "Router".
+for bin in "${API_BINS[@]}"; do
+  if [[ -f "$bin" ]] && sed 's#//.*##' "$bin" | grep -q 'Router::'; then
+    echo "$GUARD_NAME: FAIL — router assembly token in $bin." >&2
+    echo "  The Vercel bins are entry points, not assembly sites; the routers live in the crates," >&2
+    echo "  whose guards freeze them. Route through temper_mcp::build_router / temper_api's" >&2
+    echo "  create_app, or extend this guard deliberately." >&2
+    fail=1
+  fi
+done
+
+# Update mode runs LAST and refuses to launder: not in CI, and not while any check is failing.
+if [[ -n "${UPDATE_BASELINE:-}" ]]; then
+  if [[ -n "${CI:-}" ]]; then
+    echo "$GUARD_NAME: UPDATE_BASELINE is not available in CI — re-baseline locally after review." >&2
+    exit 1
+  fi
+  if [[ "$fail" != "0" ]]; then
+    echo "$GUARD_NAME: UPDATE_BASELINE refused — resolve the failures above first; update mode" >&2
+    echo "  cannot launder an unresolved failure." >&2
+    exit 1
+  fi
+  while IFS= read -r f; do
+    role="$(printf '%s\n' "$BASELINE" | awk -F'\t' -v f="$f" '$1==f {print $2"\t"$3; found=1} END{if(!found) print "UNREVIEWED\tUNREVIEWED"}')"
+    printf '%s\t%s\n' "$f" "$role"
+  done <<< "$ENTRY_CURRENT"
+  echo "" >&2
+  echo "# frozen vercel.json — copy into VERCEL_BASELINE after confirming every line:" >&2
+  printf '%s\n' "$VERCEL_CURRENT" >&2
+  echo "^^^ copy into BASELINE after confirming each entry is intentionally public-by-protocol" >&2
+  echo "    (or a reviewed server) and the reach column says how a request reaches it." >&2
+  exit 0
+fi
+
 if [[ "$fail" == "0" ]]; then
-  echo "$GUARD_NAME: OK — $(printf '%s\n' "$ENTRY_CURRENT" | grep -c .) entry points, all reviewed; $(printf '%s\n' "$DEST_LIST" | grep -c . || true) /api/ dests and $(printf '%s\n' "$FNKEY_LIST" | grep -c . || true) functions keys resolve; routes array frozen."
+  echo "$GUARD_NAME: OK — $(printf '%s\n' "$ENTRY_CURRENT" | grep -c .) entry points, all reviewed; $(printf '%s\n' "$DEST_LIST" | grep -c . || true) /api/ dests and $(printf '%s\n' "$FNKEY_LIST" | grep -c . || true) functions keys resolve; vercel.json frozen; bins assembly-free."
 fi
 exit "$fail"
