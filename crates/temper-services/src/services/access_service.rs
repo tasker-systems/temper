@@ -871,10 +871,27 @@ pub struct CreateJoinRequestParams {
 /// Fires `Act::Request` (Denied → Requested) before writing the request row, so an illegal request
 /// (from Revoked or Approved) is refused first. `requested` standing is now the duplicate guard
 /// (D12); the old open-mode rejection is gone — under D11 a request is legitimate in any mode.
+///
+/// `request_rate` is the rate-limit seam's per-principal bound on this door
+/// (`crate::rate_limit`); `None` is the shipped default-off posture and skips the guard
+/// entirely. The guard is *the requirement in the service signature* — a caller cannot
+/// reach the standing write or the INSERT without stating whether the door is limited —
+/// the same enclosure posture the admin acts use for authorization. Keyed on the
+/// verified principal (spec A1: a controlled input), counted from this table's own rows
+/// (spec A2: count the canonical artifact), and evaluated before any read or write: a
+/// rate-limited caller is refused before `get_system_settings`, so pressure costs the
+/// instance one indexed count and nothing else.
 pub async fn create_join_request(
     pool: &PgPool,
     params: CreateJoinRequestParams,
+    request_rate: Option<crate::rate_limit::WindowLimit>,
 ) -> ApiResult<JoinRequest> {
+    // Pressure before standing: the guard reads a windowed COUNT over this table's own
+    // rows — no new table, no second bookkeeping (spec A2's "count the canonical
+    // artifact"). Refused here, the caller never triggers the standing transition below,
+    // which is a write.
+    crate::rate_limit::guard_join_request(pool, *params.profile_id, request_rate).await?;
+
     // Resolve the request's target FIRST. These are READS, so doing them before any standing write
     // keeps auth-before-writes honest: an unconfigured gating team must fail BEFORE standing moves,
     // or a Denied principal would land in `Requested` with no request row and no legal retry

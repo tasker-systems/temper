@@ -289,7 +289,7 @@ async fn join_request_refuses_a_soft_deleted_gating_team(pool: sqlx::PgPool) {
 
     // (a) ACTIVE gating team: the request is filed against it.
     let first = denied_profile(&pool, "sd-joiner-1@test.example.com").await;
-    let req = access_service::create_join_request(&pool, request_for(first))
+    let req = access_service::create_join_request(&pool, request_for(first), None)
         .await
         .expect("a request against an ACTIVE gating team should be filed");
     assert_eq!(req.team_id, team_id);
@@ -299,7 +299,7 @@ async fn join_request_refuses_a_soft_deleted_gating_team(pool: sqlx::PgPool) {
     soft_delete_team(&pool, team_id).await;
 
     let second = denied_profile(&pool, "sd-joiner-2@test.example.com").await;
-    let err = access_service::create_join_request(&pool, request_for(second))
+    let err = access_service::create_join_request(&pool, request_for(second), None)
         .await
         .expect_err("a soft-deleted gating team must accept no join request");
     let temper_services::error::ApiError::Internal(msg) = err else {
@@ -317,7 +317,7 @@ async fn join_request_refuses_a_soft_deleted_gating_team(pool: sqlx::PgPool) {
     // Indistinguishable from a gating slug that names no team at all.
     point_gating_at(&pool, "sd-gating-absent").await;
     let third = denied_profile(&pool, "sd-joiner-3@test.example.com").await;
-    let absent_err = access_service::create_join_request(&pool, request_for(third))
+    let absent_err = access_service::create_join_request(&pool, request_for(third), None)
         .await
         .expect_err("a gating slug naming no team must accept no join request either");
     let temper_services::error::ApiError::Internal(absent_msg) = absent_err else {

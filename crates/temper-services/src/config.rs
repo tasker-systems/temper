@@ -59,6 +59,13 @@ pub struct ApiConfig {
     ///    live in production today. Additive and independent keeps that from being a cliff: an
     ///    unset mint secret disables minting only, and the link flow is untouched.
     pub slack_mint_secret: Option<String>,
+    /// Per-route rate limits (the seam in [`crate::rate_limit`]). `None` when no door's
+    /// limit pair is set — the shipped default: the seam exists in the tree, the
+    /// enforcement does not, and every door is unlimited until an operator chooses
+    /// numbers. Parse rules (all-or-nothing per pair, validated values) live in
+    /// [`crate::rate_limit::parse_rate_limit`], because a limit is the one config whose
+    /// half-presence is worse than its absence.
+    pub rate_limit: Option<crate::rate_limit::RateLimitConfig>,
 }
 
 /// Slack account-link configuration. `None` when the three values are not all present —
@@ -111,6 +118,7 @@ impl std::fmt::Debug for ApiConfig {
                 "slack_mint_secret",
                 &self.slack_mint_secret.as_ref().map(|_| "redacted"),
             )
+            .field("rate_limit", &self.rate_limit)
             .finish()
     }
 }
@@ -182,6 +190,7 @@ impl ApiConfig {
             vercel_connect: parse_vercel_connect(&lookup),
             slack_link: parse_slack_link(&lookup),
             slack_mint_secret: lookup("SLACK_MINT_SECRET").filter(|s| !s.is_empty()),
+            rate_limit: crate::rate_limit::parse_rate_limit(&lookup)?,
         })
     }
 }

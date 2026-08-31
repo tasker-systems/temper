@@ -113,6 +113,26 @@ pub enum ConfigError {
          expensive one. Give each its own: `openssl rand -base64 32`."
     )]
     SecretCollision(&'static str, &'static str),
+
+    // --- the rate-limit seam (spec A7/A9: chosen values, default off) ---
+    //
+    // Both arms name the variable and the shape it must take, and print no value — the
+    // house rule every message above follows. They exist because a limit that fails to
+    // parse must refuse to boot, not silently degrade to an unlimited door: an operator
+    // who set a limit and made a typo would otherwise ship the exact posture the seam
+    // exists to close, believing it bounded.
+    #[error(
+        "{0} must be {1}. The value is read once at boot; a value boot cannot read is a limit \
+         that does not exist, so the instance refuses to start rather than run unlimited while \
+         appearing bounded."
+    )]
+    NotAnInteger(&'static str, &'static str),
+
+    #[error(
+        "{0} must be {1}. A value outside that shape silently does nothing — a limit no window \
+         ever counts is an absent limit wearing a configured one's clothes."
+    )]
+    RateLimitOutOfRange(&'static str, &'static str),
 }
 
 /// Read a variable, treating whitespace-only and empty as absent — uniformly, for every variable.

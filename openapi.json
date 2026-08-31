@@ -82,6 +82,16 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "Too many requests in the current window (rate limit configured by the operator; default unlimited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [

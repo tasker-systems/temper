@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kb_cogmap_regions r SET content_cohesion   = cogmap_region_content_cohesion(r.id), telos_alignment    = nullif(1 - (r.centroid <=> ($2::text)::vector), 'NaN'::double precision), reference_standing = cogmap_region_reference_standing(r.id), centrality         = cogmap_region_centrality(r.id), internal_tension   = cogmap_region_internal_tension(r.id, ARRAY['contradicts']) WHERE r.id=$1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5c23ee7634952a65d76cb21c266c5d6ff4ea6dfeb06bf1076a1825798878154d"
+}

@@ -306,6 +306,7 @@ async fn mcp_requests_produce_a_root_span(pool: sqlx::PgPool) {
         vercel_connect: None,
         slack_link: None,
         slack_mint_secret: None,
+        rate_limit: None,
     };
     let state = AppState::new(pool, jwks_store, api_config);
     let mcp_config = temper_mcp::McpConfig {
