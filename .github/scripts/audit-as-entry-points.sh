@@ -31,8 +31,11 @@
 #   (f) the three api/*.rs BINS carry no router-assembly OR route-declaration tokens. They are
 #       workspace binaries a normal-looking edit could turn into second assembly sites — or into
 #       a `.route(` appended to the crate-built router — one file boundary away from every other
-#       guard's field of view. (Doc comments are stripped first — prose may say "Router".) What
-#       the bins do BEYOND assembly stays with the crates' guards.
+#       guard's field of view. (Doc comments are stripped first — prose may say "Router". The
+#       bin strip is `//`-to-EOL, and the bins carry no block comments today. Whitespace before
+#       a call paren is not a shape these greps read — that class is held by `cargo fmt --all
+#       -- --check`, which runs earlier in the same CI job.) What the bins do BEYOND assembly
+#       stays with the crates' guards.
 #   (g) no sibling Vercel config (vercel.toml / vercel.ts) may exist: only one config file is
 #       honored per project, and this guard freezes only vercel.json.
 #

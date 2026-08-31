@@ -54,24 +54,31 @@
 #     (see vercel.json); the AS guard freezes that mapping half.
 #
 # COMMENTS are stripped before matching, so prose may name route-shaped text; a comment cannot
-# freeze or trip anything — `//` to end-of-line AND `/* ... */` across lines (a block comment
-# naming require_mcp_auth must not satisfy the wiring assertion). (This assumes no `//` or `/*`
-# inside a string literal in build_router — true of every path and handler in the file today; a
-# route path containing either would truncate its line at the wrong place and RED here, which is
-# the safe direction.)
+# freeze or trip anything — `//` to end-of-line AND `/* ... */` across lines, DEPTH-AWARE
+# (Rust block comments nest, so a nested comment naming require_mcp_auth cannot satisfy the
+# wiring assertion either). (This assumes no `//` or `/*` inside a string literal in
+# build_router — true of every path and handler in the file today; a route path containing
+# either would truncate its line at the wrong place and RED here, which is the safe direction.)
+#
+# WHITESPACE before a call paren (`.merge (`, `.route (`) is not a shape this parser reads. That
+# class is held by `cargo fmt --all -- --check`, which runs earlier in the same CI job — stated
+# so this guard's green is never read as covering it.
 strip_comments() {
   awk '
-    BEGIN { in_block=0 }
+    BEGIN { depth=0 }
     {
       line=$0; out=""
       while (length(line) > 0) {
-        if (in_block) {
-          e = index(line, "*/")
-          if (e == 0) { line="" } else { in_block=0; line=substr(line, e+2) }
+        if (depth > 0) {
+          # Rust block comments nest: count depth, close only at 0.
+          o = index(line, "/*"); e = index(line, "*/")
+          if (e == 0) { line = "" }
+          else if (o > 0 && o < e) { depth++; line = substr(line, o+2) }
+          else { depth--; line = substr(line, e+2) }
         } else {
           s = index(line, "/*"); h = index(line, "//")
           if (s == 0 && h == 0) { out = out line; line = "" }
-          else if (s > 0 && (h == 0 || s < h)) { out = out substr(line, 1, s-1); in_block=1; line=substr(line, s+2) }
+          else if (s > 0 && (h == 0 || s < h)) { out = out substr(line, 1, s-1); depth=1; line = substr(line, s+2) }
           else { out = out substr(line, 1, h-1); line = "" }
         }
       }
@@ -140,23 +147,26 @@ EOF
 # an UNPARSEABLE marker — a non-literal path cannot be frozen, and the guard fails on the marker.
 extract() {
   awk '
-    BEGIN { in_block=0 }
+    BEGIN { depth=0 }
     # Slice to build_router first.
     /^(pub )?fn build_router\(/ { inside=1 }
     inside && /^}/ { exit }
     !inside { next }
     {
       line=$0
-      # Strip // to EOL and /* ... */ across lines, so prose can neither freeze nor trip.
+      # Strip // to EOL and /* ... */ across lines (depth-aware: Rust block comments nest), so
+      # prose can neither freeze nor trip.
       out=""
       while (length(line) > 0) {
-        if (in_block) {
-          e = index(line, "*/")
-          if (e == 0) { line="" } else { in_block=0; line=substr(line, e+2) }
+        if (depth > 0) {
+          o = index(line, "/*"); e = index(line, "*/")
+          if (e == 0) { line = "" }
+          else if (o > 0 && o < e) { depth++; line = substr(line, o+2) }
+          else { depth--; line = substr(line, e+2) }
         } else {
           s = index(line, "/*"); h = index(line, "//")
           if (s == 0 && h == 0) { out = out line; line = "" }
-          else if (s > 0 && (h == 0 || s < h)) { out = out substr(line, 1, s-1); in_block=1; line=substr(line, s+2) }
+          else if (s > 0 && (h == 0 || s < h)) { out = out substr(line, 1, s-1); depth=1; line = substr(line, s+2) }
           else { out = out substr(line, 1, h-1); line = "" }
         }
       }

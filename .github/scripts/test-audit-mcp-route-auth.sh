@@ -206,6 +206,21 @@ awk '{ print } /            require_mcp_auth,/ { print "            /* auth wiri
 run_test "require_mcp_auth only in a block comment: fails wiring" "$BLOCK_COMMENT_AUTH" 1 \
     "'require_mcp_auth' not mounted in the mcp_routes" "$(stage_fixture_src "$BLOCK_COMMENT_AUTH")"
 
+# --- (10d) a NESTED block comment: Rust comments nest, and the stripper counts depth ---
+NESTED_COMMENT_AUTH="${FIXTURE_DIR}/nested_comment_auth.rs"
+awk '{ print } /            require_mcp_auth,/ { print "            /* /* trial note */ require_mcp_auth remains the gate while lax_auth is measured */" ; next }' "$REAL_ROUTER" \
+  | sed 's/            require_mcp_auth,/            lax_auth,/' > "$NESTED_COMMENT_AUTH"
+run_test "require_mcp_auth in a nested block comment: fails wiring" "$NESTED_COMMENT_AUTH" 1 \
+    "'require_mcp_auth' not mounted in the mcp_routes" "$(stage_fixture_src "$NESTED_COMMENT_AUTH")"
+
+# --- (10e) GREEN direction: a nested block comment containing route text strips to nothing ---
+NESTED_COMMENT_ROUTE="${FIXTURE_DIR}/nested_comment_route.rs"
+awk '{ print } /let health = Router::new\(\)/ { print "    /* /* trial */ legacy: .route(\"/mcp/healthz\", get(health::probe)) — do not re-add */" }' "$REAL_ROUTER" > "$NESTED_COMMENT_ROUTE"
+mkdir -p "${FIXTURE_DIR}/nested_green_src"
+cp "$NESTED_COMMENT_ROUTE" "${FIXTURE_DIR}/nested_green_src/router.rs"
+run_test "route text in nested block comment: stays green" "${FIXTURE_DIR}/nested_green_src/router.rs" 0 "" \
+    "MCP_SRC_DIR=${FIXTURE_DIR}/nested_green_src"
+
 # --- (11) .nest( inside build_router: refused outright ---
 NESTED="${FIXTURE_DIR}/nested.rs"
 awk '{ print } /\.merge\(health\)/ { print "            .nest(\"/admin\", admin_router())," }' "$REAL_ROUTER" > "$NESTED"
