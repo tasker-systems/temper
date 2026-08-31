@@ -25,6 +25,15 @@
 	);
 	let openArtifact = $state<string | null>(null);
 
+	const shapeClass = (s: string): string | null =>
+		s === 'declared_satisfied'
+			? 'shape satisfied'
+			: s === 'declared_not_satisfied'
+				? 'shape not-satisfied'
+				: s === 'declared_not_yet_checked'
+					? 'shape'
+					: null;
+
 	const shapeLabel = (s: string): string | null =>
 		s === 'never_declared' ? null : s.replaceAll('_', ' ');
 
@@ -54,7 +63,7 @@
 			<div class="summary">
 				{artifact.intent}{#if artifact.is_folded}
 					· <span class="fold">folded</span>{/if}{#if shapeLabel(artifact.shape_state)}
-					· <span class="shape">{shapeLabel(artifact.shape_state)}</span>{/if}{#if humanBytes(artifact.content_bytes)}
+					· <span class={shapeClass(artifact.shape_state)}>{shapeLabel(artifact.shape_state)}</span>{/if}{#if humanBytes(artifact.content_bytes)}
 					· {humanBytes(artifact.content_bytes)}{/if}
 			</div>
 			<div class="meta">{relativeTime(artifact.created)}</div>
@@ -126,6 +135,16 @@
 		text-transform: uppercase;
 		letter-spacing: var(--track-label);
 		font-size: 9px;
+	}
+	/* Conformance, colored to be found rather than to alarm: satisfied in the confidence
+	   green the event history already uses; non-conforming in the decision amber — it is a
+	   recorded advisory verdict or a badge on a folded row, never a refusal aimed at the
+	   reader; not-yet-checked stays quiet, because "unchecked" must not dress up as either. */
+	.shape.satisfied {
+		color: #8fd8a8;
+	}
+	.shape.not-satisfied {
+		color: var(--decision-amber-lt);
 	}
 	.meta {
 		font-family: var(--font-mono);

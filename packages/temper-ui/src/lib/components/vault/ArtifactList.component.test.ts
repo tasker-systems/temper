@@ -67,7 +67,23 @@ describe('ArtifactList', () => {
 			artifacts: [artifact({ shape_state: 'declared_not_satisfied' })],
 		});
 		expect(governed.container.textContent).toContain('declared not satisfied');
+		expect(governed.container.querySelector('.shape.not-satisfied')).not.toBeNull();
 		governed.unmount();
+
+		const satisfied = render(ArtifactList, {
+			artifacts: [artifact({ shape_state: 'declared_satisfied' })],
+		});
+		expect(satisfied.container.querySelector('.shape.satisfied')).not.toBeNull();
+		satisfied.unmount();
+
+		const unchecked = render(ArtifactList, {
+			artifacts: [artifact({ shape_state: 'declared_not_yet_checked' })],
+		});
+		// Present and honest, but colored as neither verdict — unchecked never reads as checked.
+		expect(
+			unchecked.container.querySelector('.shape:not(.satisfied):not(.not-satisfied)'),
+		).not.toBeNull();
+		unchecked.unmount();
 
 		const ungoverned = render(ArtifactList, {
 			artifacts: [artifact({ shape_state: 'never_declared' })],
