@@ -27,17 +27,8 @@ use temper_substrate::payloads::{AnchorRef, AnchorTable};
 use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
-
-/// The refusal for an unconfigured instance. Names the vocabulary — the two config postures
-/// S1 landed — rather than a bare "unavailable", so an operator knows what enables the door.
-fn blob_disabled() -> ApiError {
-    ApiError::BadRequest(
-        "blob endpoints are disabled — this instance has no blob store configured; set \
-         BLOB_STORE_ID (on Vercel, OIDC-first) or BLOB_READ_WRITE_TOKEN (off Vercel) to enable \
-         them"
-            .to_string(),
-    )
-}
+use crate::middleware::surface::RequestSurface;
+use temper_services::services::blob_service::blob_disabled;
 
 /// Commit bytes as a blob — one multipart request at or under the D7 threshold
 ///
@@ -70,6 +61,7 @@ fn blob_disabled() -> ApiError {
 pub async fn commit(
     State(state): State<AppState>,
     auth: AuthUser,
+    RequestSurface(surface): RequestSurface,
     mut multipart: Multipart,
 ) -> ApiResult<Json<BlobCommitResponse>> {
     let store = state.blob_store.as_deref().ok_or_else(blob_disabled)?;
@@ -139,16 +131,20 @@ pub async fn commit(
                 .to_string(),
         )
     })?;
-    let home = parse_home(home_table, home_id)?;
-
+    // The home strings pass through verbatim: the parse (and its one-voice refusal) lives in
+    // the service, shared with the MCP surface.
     let outcome = temper_services::services::blob_service::commit_blob(
         &state.pool,
         store,
         &config,
-        caller,
-        home,
-        content_type.clone(),
-        bytes.into(),
+        temper_services::services::blob_service::BlobCommitCommand {
+            caller,
+            home_table,
+            home_id,
+            content_type: content_type.clone(),
+            bytes: bytes.into(),
+            surface,
+        },
     )
     .await?;
 
@@ -215,34 +211,6 @@ pub async fn get(
         header::HeaderValue::from(blob.content_bytes),
     );
     Ok(response)
-}
-
-/// Parse the home form fields into an `AnchorRef`. The wrapper refuses an unknown home table
-/// with its own vocabulary; this parse exists because the wire type is an enum — and the
-/// refusal mirrors the wrapper's terms (a kb_contexts or kb_cogmaps anchor) so the caller
-/// hears one vocabulary regardless of which gate declined.
-fn parse_home(home_table: Option<String>, home_id: Option<String>) -> ApiResult<AnchorRef> {
-    let table = match home_table.as_deref() {
-        Some("kb_contexts") => AnchorTable::Contexts,
-        Some("kb_cogmaps") => AnchorTable::Cogmaps,
-        other => {
-            return Err(ApiError::BadRequest(format!(
-                "blob_commit: a blob needs a home (a kb_contexts or kb_cogmaps anchor) — got \
-                 home table {}",
-                other.unwrap_or("<absent>")
-            )))
-        }
-    };
-    let id = home_id
-        .as_deref()
-        .and_then(|s| Uuid::parse_str(s).ok())
-        .ok_or_else(|| {
-            ApiError::BadRequest(format!(
-                "blob_commit: home id must be a uuid — got {}",
-                home_id.as_deref().unwrap_or("<absent>")
-            ))
-        })?;
-    Ok(AnchorRef { table, id })
 }
 
 // ── Segmented upload (S3, D7) ─────────────────────────────────────────────────────
@@ -440,6 +408,7 @@ pub async fn upload_progress(
 pub async fn finalize_upload(
     State(state): State<AppState>,
     auth: AuthUser,
+    RequestSurface(surface): RequestSurface,
     Path(upload_id): Path<Uuid>,
     Json(payload): Json<BlobUploadFinalizeRequest>,
 ) -> ApiResult<Json<BlobCommitResponse>> {
@@ -453,6 +422,7 @@ pub async fn finalize_upload(
         caller,
         upload_id,
         &payload,
+        surface,
     )
     .await?;
     Ok(Json(BlobCommitResponse {
@@ -507,44 +477,16 @@ pub async fn list(
         return Err(blob_disabled());
     }
     let caller = ProfileId::from(auth.0.profile().id);
-    let home = parse_home_scope(q.home_table, q.home_id)?;
-    let rows =
-        temper_services::services::blob_service::list_blobs(&state.pool, caller, home).await?;
+    // The home-scope strings pass through verbatim — the parse lives in the service
+    // (the `parse_home` rule), shared with the MCP surface.
+    let rows = temper_services::services::blob_service::list_blobs(
+        &state.pool,
+        caller,
+        q.home_table,
+        q.home_id,
+    )
+    .await?;
     Ok(Json(rows))
-}
-
-/// The optional home scope for the list, in `parse_home`'s terms: a home is a
-/// kb_contexts or kb_cogmaps anchor, and the refusal says so in one voice.
-fn parse_home_scope(
-    home_table: Option<String>,
-    home_id: Option<Uuid>,
-) -> ApiResult<Option<temper_substrate::payloads::AnchorRef>> {
-    use temper_substrate::payloads::{AnchorRef, AnchorTable};
-    match (home_table, home_id) {
-        (None, None) => Ok(None),
-        (Some(table), Some(id)) => {
-            let anchor_table = match table.as_str() {
-                "kb_contexts" => AnchorTable::Contexts,
-                "kb_cogmaps" => AnchorTable::Cogmaps,
-                other => {
-                    return Err(ApiError::BadRequest(format!(
-                        "blob_list: a home anchor is a kb_contexts or kb_cogmaps anchor — got \
-                         home table {other}"
-                    )))
-                }
-            };
-            Ok(Some(AnchorRef {
-                table: anchor_table,
-                id,
-            }))
-        }
-        (table, id) => Err(ApiError::BadRequest(format!(
-            "blob_list: home_table and home_id are a pair — got home_table {} and home_id {}",
-            table.as_deref().unwrap_or("<absent>"),
-            id.map(|u| u.to_string())
-                .unwrap_or_else(|| "<absent>".into())
-        ))),
-    }
 }
 
 /// Assert one relation between a blob and another anchor
@@ -573,6 +515,7 @@ fn parse_home_scope(
 pub async fn relate(
     State(state): State<AppState>,
     auth: AuthUser,
+    RequestSurface(surface): RequestSurface,
     Path(blob_id): Path<Uuid>,
     Json(req): Json<BlobRelationAssertRequest>,
 ) -> ApiResult<Json<BlobRelationAck>> {
@@ -587,6 +530,7 @@ pub async fn relate(
         temper_core::types::ids::BlobId::from(blob_id),
         &req,
         act,
+        surface,
     )
     .await?;
     Ok(Json(ack))

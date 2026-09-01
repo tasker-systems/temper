@@ -272,6 +272,32 @@ impl TemperMcpService {
         tools::trail::element_trail(self, input).await
     }
 
+    // ── Blob (read 2→1, manage 2→1) ────────────────────────────────────
+
+    #[tool(
+        description = "Read blob surfaces with an `action` discriminator. Actions: `read` (one blob's bytes back whole, base64, with its stored media type, byte count, and content hash — refused over the read ceiling, which names the streaming API/CLI surfaces), `list` (the blobs you can read, optionally scoped to one home anchor via `home_table`/`home_id` — the response is your readable set, never a discovery oracle). An invisible-or-absent blob renders the same not-found an unknown id gets."
+    )]
+    async fn blob_read(
+        &self,
+        Parameters(input): Parameters<tools::blobs::BlobReadInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::blobs::blob_read(self, input).await
+    }
+
+    #[tool(
+        description = "Manage blobs with an `action` discriminator. Actions: `commit` (commit base64 `content` bytes as a blob homed in `home_table`/`home_id` under `content_type` — get-or-create on the content hash, a dedup hit returns the EXISTING id whose first home stands; the server allowlist-checks the media type and refuses over its single-request threshold, naming the CLI's segmented path), `relate` (assert one relation between `blob_id` and a `peer_table`/`peer_id` anchor — `direction` picks which end the blob occupies, default `blob_as_source`; retraction rides the incumbent fold endpoint, not this tool). Relations are only assertable to anchors you can already see. Per-act authorship fields accepted on `relate`."
+    )]
+    async fn blob_manage(
+        &self,
+        Parameters(input): Parameters<tools::blobs::BlobManageInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::blobs::blob_manage(self, input).await
+    }
+
     // ── Relationship (consolidated 4→1 write) ──────────────────────────
 
     #[tool(
@@ -800,6 +826,26 @@ mod tests {
             names.iter().any(|n| n == "context_manage"),
             "context_manage is not advertised; router has {names:?}"
         );
+    }
+
+    /// Same failure mode as `context_manage`, asserted as a PAIR because the pairing is the
+    /// invariant: the read door and the manage door must both exist, or one anchor of the
+    /// blob surface (bytes vs relations) is unreachable from MCP while the other is.
+    #[test]
+    fn both_blob_doors_are_advertised_by_the_router() {
+        let names: Vec<String> = TemperMcpService::tool_router()
+            .list_all()
+            .into_iter()
+            .map(|t| t.name.to_string())
+            .collect();
+
+        for peer in ["blob_read", "blob_manage"] {
+            assert!(
+                names.iter().any(|n| n == peer),
+                "{peer} is not advertised, so half the blob surface is unreachable from MCP; \
+                 router has {names:?}"
+            );
+        }
     }
 
     /// **The two anchor kinds materialize through PEER tools, and both must be advertised.**

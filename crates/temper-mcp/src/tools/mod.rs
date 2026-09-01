@@ -1,4 +1,5 @@
 pub mod admin_ledger;
+pub mod blobs;
 pub mod citation_audits;
 pub mod cognitive_maps;
 pub mod contexts;

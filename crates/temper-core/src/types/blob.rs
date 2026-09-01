@@ -171,6 +171,10 @@ pub struct BlobRelationRow {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+// Inline the enum in MCP tool input schemas — as a named type schemars would emit a `$ref`
+// into `$defs`, which the Anthropic tool-use layer reads with no type signal and sends back
+// as `null` (the EdgeKind/Polarity constraint; see tools/relationships.rs).
+#[cfg_attr(feature = "mcp", schemars(inline))]
 #[serde(rename_all = "snake_case")]
 pub enum BlobRelationDirection {
     #[default]

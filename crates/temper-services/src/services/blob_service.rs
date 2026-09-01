@@ -22,6 +22,7 @@ use temper_core::types::blob::{
 };
 use temper_core::types::ids::{BlobId, ProfileId};
 use temper_substrate::uploads::LandedSegment;
+use temper_workflow::operations::Surface;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
@@ -65,6 +66,50 @@ fn home_gate_tables(
             "blob_commit: a blob needs a home (a kb_contexts or kb_cogmaps anchor)".to_string(),
         )),
     }
+}
+
+/// The home parse for the single-request commit, shared by every committing surface (the
+/// API handler's multipart fields, the MCP tool's input strings) so the vocabulary and the
+/// `AnchorRef` are built in one place. The refusal mirrors the wrapper's terms, and an
+/// absent field is named `<absent>` exactly as the handler-side parse always rendered it.
+fn parse_home(
+    home_table: Option<String>,
+    home_id: Option<String>,
+) -> ApiResult<temper_substrate::payloads::AnchorRef> {
+    use temper_substrate::payloads::{AnchorRef, AnchorTable};
+    let table = match home_table.as_deref() {
+        Some("kb_contexts") => AnchorTable::Contexts,
+        Some("kb_cogmaps") => AnchorTable::Cogmaps,
+        other => {
+            return Err(ApiError::BadRequest(format!(
+                "blob_commit: a blob needs a home (a kb_contexts or kb_cogmaps anchor) — got \
+                 home table {}",
+                other.unwrap_or("<absent>")
+            )))
+        }
+    };
+    let id = home_id
+        .as_deref()
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .ok_or_else(|| {
+            ApiError::BadRequest(format!(
+                "blob_commit: home id must be a uuid — got {}",
+                home_id.as_deref().unwrap_or("<absent>")
+            ))
+        })?;
+    Ok(AnchorRef { table, id })
+}
+
+/// The refusal for an unconfigured instance, shared by every blob surface so the sentence
+/// is spelled once. Names the two config postures S1 landed — the vocabulary, not a bare
+/// "unavailable" — so an operator knows what enables the door.
+pub fn blob_disabled() -> ApiError {
+    ApiError::BadRequest(
+        "blob endpoints are disabled — this instance has no blob store configured; set \
+         BLOB_STORE_ID (on Vercel, OIDC-first) or BLOB_READ_WRITE_TOKEN (off Vercel) to enable \
+         them"
+            .to_string(),
+    )
 }
 
 /// Auth before writes — the placement gate, mirroring the incumbent two-step exactly:
@@ -124,20 +169,45 @@ async fn check_home_standing(
     Ok(())
 }
 
+/// What a committing surface passes to [`commit_blob`]: who acts, what the bytes are,
+/// where the blob homes, and which surface the act arrived on (the emitter marker — the
+/// write is attributed to the caller's `<handle>@<marker>` entity).
+pub struct BlobCommitCommand {
+    pub caller: ProfileId,
+    pub home_table: Option<String>,
+    pub home_id: Option<String>,
+    pub content_type: String,
+    pub bytes: Bytes,
+    pub surface: Surface,
+}
+
 /// Commit bytes as a blob: dedup pre-check, provider put at the content-addressed pathname,
 /// then the substrate's attributed write (`commit_blob_with` — provider presence verified
 /// before the ledger ever sees the event, D4). The caller acts as themselves: owner is the
-/// authenticated profile, the emitter is their `web` surface entity. Home standing is gated
-/// before any of it (auth before writes).
+/// authenticated profile, the emitter is their entity on the surface the commit arrived on
+/// (`surface.marker()` — the API degrades untrusted claims to `web`, so the emitter is always
+/// a surface the caller actually reached). Home standing is gated before any of it (auth
+/// before writes).
+///
+/// The home parse lives here rather than in any handler (the `parse_home` rule — the
+/// peer-table parse's reasoning): the wire type is an enum-shaped string, and the refusal
+/// mirrors the wrapper's terms (a kb_contexts or kb_cogmaps anchor) so every surface hears
+/// one vocabulary regardless of which gate declined.
 pub async fn commit_blob(
     pool: &PgPool,
     store: &dyn temper_substrate::blob_store::BlobStore,
     config: &crate::config::BlobConfig,
-    caller: ProfileId,
-    home: temper_substrate::payloads::AnchorRef,
-    content_type: String,
-    bytes: Bytes,
+    cmd: BlobCommitCommand,
 ) -> ApiResult<BlobCommitOutcome> {
+    let BlobCommitCommand {
+        caller,
+        home_table,
+        home_id,
+        content_type,
+        bytes,
+        surface,
+    } = cmd;
+    let home = parse_home(home_table, home_id)?;
     check_home_standing(pool, caller, &home).await?;
 
     let content_hash = temper_core::hash::sha256_hex(&bytes);
@@ -159,7 +229,7 @@ pub async fn commit_blob(
             .map_err(|e| ApiError::Internal(format!("blob provider put failed: {e}")))?;
     }
 
-    let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
+    let emitter = temper_substrate::writes::resolve_emitter(pool, caller, surface.marker())
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
@@ -375,6 +445,7 @@ pub async fn finalize_upload(
     caller: ProfileId,
     upload_id: Uuid,
     req: &BlobUploadFinalizeRequest,
+    surface: Surface,
 ) -> ApiResult<BlobUploadFinalizeOutcome> {
     let session = temper_substrate::uploads::load_session(pool, caller, upload_id)
         .await
@@ -435,7 +506,7 @@ pub async fn finalize_upload(
             .map_err(|e| ApiError::Internal(format!("blob provider put failed: {e}")))?;
     }
 
-    let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
+    let emitter = temper_substrate::writes::resolve_emitter(pool, caller, surface.marker())
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
@@ -598,6 +669,7 @@ pub async fn relate_blob(
     blob: BlobId,
     req: &BlobRelationAssertRequest,
     act: temper_core::types::authorship::ActContext,
+    surface: Surface,
 ) -> ApiResult<WireRelationAck> {
     let (home_table, home_id) = blob_home(pool, caller, blob)
         .await?
@@ -654,7 +726,7 @@ pub async fn relate_blob(
         WirePolarity::Forward => temper_substrate::payloads::EdgePolarity::Forward,
         WirePolarity::Inverse => temper_substrate::payloads::EdgePolarity::Inverse,
     };
-    let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
+    let emitter = temper_substrate::writes::resolve_emitter(pool, caller, surface.marker())
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     let label = (!req.label.is_empty()).then_some(req.label.as_str());
@@ -688,11 +760,17 @@ pub async fn relate_blob(
 /// List the blobs the caller can read, optionally scoped to one home anchor. The gate is
 /// the substrate's set read — `blob_readable_by_profile`, the NAMED predicate — so this
 /// surface honors visibility and cannot redefine it (the register's list-surfaces arm).
+///
+/// The optional home scope's parse lives here (the `parse_home` rule): the pair constraint
+/// and the two-kind vocabulary are stated once, and every surface passes its wire strings
+/// straight through.
 pub async fn list_blobs(
     pool: &PgPool,
     caller: ProfileId,
-    home: Option<temper_substrate::payloads::AnchorRef>,
+    home_table: Option<String>,
+    home_id: Option<Uuid>,
 ) -> ApiResult<Vec<WireBlobSummary>> {
+    let home = parse_home_scope(home_table, home_id)?;
     let rows = temper_substrate::readback::blobs_readable_by_profile(pool, caller, home.as_ref())
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -759,6 +837,40 @@ fn parse_wire_polarity(s: &str) -> ApiResult<WirePolarity> {
         "inverse" => Ok(WirePolarity::Inverse),
         other => Err(ApiError::Internal(format!(
             "unknown edge_polarity value in kb_edges: {other}"
+        ))),
+    }
+}
+
+/// The optional home scope for the list, in `parse_home`'s terms: a home is a
+/// kb_contexts or kb_cogmaps anchor, and the refusal says so in one voice.
+fn parse_home_scope(
+    home_table: Option<String>,
+    home_id: Option<Uuid>,
+) -> ApiResult<Option<temper_substrate::payloads::AnchorRef>> {
+    use temper_substrate::payloads::{AnchorRef, AnchorTable};
+    match (home_table, home_id) {
+        (None, None) => Ok(None),
+        (Some(table), Some(id)) => {
+            let anchor_table = match table.as_str() {
+                "kb_contexts" => AnchorTable::Contexts,
+                "kb_cogmaps" => AnchorTable::Cogmaps,
+                other => {
+                    return Err(ApiError::BadRequest(format!(
+                        "blob_list: a home anchor is a kb_contexts or kb_cogmaps anchor — got \
+                         home table {other}"
+                    )))
+                }
+            };
+            Ok(Some(AnchorRef {
+                table: anchor_table,
+                id,
+            }))
+        }
+        (table, id) => Err(ApiError::BadRequest(format!(
+            "blob_list: home_table and home_id are a pair — got home_table {} and home_id {}",
+            table.as_deref().unwrap_or("<absent>"),
+            id.map(|u| u.to_string())
+                .unwrap_or_else(|| "<absent>".into())
         ))),
     }
 }
