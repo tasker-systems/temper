@@ -226,6 +226,115 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/blobs/uploads": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Begin a segmented upload — declare the home and media type, get the session id
+         * @description A staged session is not a blob: it has no hash yet, it appears in no list, no graph
+         *     walk, no read surface — only its owner can append to it, read its progress, or finalize
+         *     it. Home standing is checked here (fail fast) AND at finalize (authoritative — standing
+         *     can change mid-upload); the allowlist is not consulted at all until the wrapper sees
+         *     the commit. Same disabled refusal as the single-request path: a session begun on an
+         *     unconfigured instance could never finalize.
+         */
+        post: operations["begin_blob_upload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/blobs/uploads/{id}": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a staged upload's progress — the resume read
+         * @description Returns the currently-landed segment set and the running byte total: the values a
+         *     finalize echoes back as its concurrency tokens. The staging is caller-private until
+         *     finalized — another profile's session answers 404, the same absent-not-refused posture
+         *     every visibility gate renders.
+         */
+        get: operations["blob_upload_progress"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/blobs/uploads/{id}/finalize": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Finalize a staged upload — assemble, hash, commit
+         * @description Assembles the staged segments in seq order and runs the exact single-request commit
+         *     path: standing re-run (the gate the put answers to), concurrency tokens checked (409,
+         *     resumable), optional integrity hash checked (422 — the ingest precedent's face), the
+         *     readability-gated dedup pre-check, the provider put unless deduped, then the SQL
+         *     wrapper whose cap/allowlist refusals surface verbatim. Staging dies on success only —
+         *     every failure keeps it, resumable.
+         */
+        post: operations["finalize_blob_upload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/blobs/uploads/{id}/segments": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Append one segment to a staged upload — raw bytes as the request body
+         * @description The segment's sha256 rides `x-segment-sha256` (bare hex, the idempotent-append
+         *     identity): re-sending the same segment at the same seq is a no-op; a DIFFERENT segment
+         *     at an occupied seq is a 409 — occupied seqs are never superseded. The staging ceiling
+         *     (`BlobConfig::max_bytes`, the cumulative bound across appends) is enforced in the
+         *     service; the per-request body bound is the platform's, raised for this door only.
+         */
+        post: operations["append_blob_segment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/blobs/{id}": {
         parameters: {
             query?: never;
@@ -2700,6 +2809,78 @@ export interface components {
          *     resource and related to resources by edges (spec: binary blobs, 2026-09-01).
          */
         BlobId: string;
+        /**
+         * @description Begin a segmented upload — `POST /api/blobs/uploads`. Declares the whole upload up
+         *     front: the home the assembled blob will commit into, and the media type it will
+         *     commit under. Both are re-examined at finalize — standing by the service (it can
+         *     change mid-upload), the allowlist by the SQL wrapper (the sole authority, D9).
+         */
+        BlobUploadBeginRequest: {
+            /** @description The media type the assembled blob will commit under. */
+            content_type: string;
+            /** Format: uuid */
+            home_id: string;
+            /** @description `kb_contexts` or `kb_cogmaps` — a blob needs a home (D2), and so does its upload. */
+            home_table: string;
+        };
+        /**
+         * @description The response of `POST /api/blobs/uploads`. The upload id is server-minted and is the
+         *     only handle the remaining requests carry — a staged session is not a blob (it has no
+         *     hash yet), not a resource, and invisible to every other surface.
+         */
+        BlobUploadBeginResponse: {
+            /** Format: uuid */
+            upload_id: string;
+        };
+        /**
+         * @description Declare a segmented upload complete — `POST /api/blobs/uploads/{id}/finalize`. The
+         *     expected values are CONCURRENCY tokens ("nothing landed since my last append"): both
+         *     are server-handed in [`BlobUploadProgress`], echoed back verbatim, never parsed. A
+         *     mismatch refuses with the staging kept, resumable — the ingest precedent's posture.
+         */
+        BlobUploadFinalizeRequest: {
+            /**
+             * @description Bare sha256 hex of the FULL assembled body — an INTEGRITY check over the actual
+             *     bytes, distinct from the concurrency tokens. The client that holds the whole file
+             *     derives it itself; `None` from a caller that does not (the check is then skipped,
+             *     the ingest precedent's honest exemption). A mismatch refuses with the staging
+             *     kept, resumable — never silently committed.
+             */
+            expected_content_hash?: string | null;
+            /** Format: int32 */
+            expected_segments: number;
+            /** Format: int64 */
+            expected_total_bytes: number;
+        };
+        /**
+         * @description The currently-landed segment set — the response of append and of the progress read
+         *     `GET /api/blobs/uploads/{id}` (the ingest precedent's `BlocksResponse`, in blob terms:
+         *     the caller's resume manifest and the source of the finalize echo).
+         */
+        BlobUploadProgress: {
+            segments: components["schemas"]["BlobUploadSegmentInfo"][];
+            /**
+             * Format: int64
+             * @description Running byte total across landed segments — the server-handed half of the
+             *     finalize echo (`BlobUploadFinalizeRequest::expected_total_bytes`).
+             */
+            total_bytes: number;
+            /** Format: uuid */
+            upload_id: string;
+        };
+        /** @description One landed segment, as the progress read and every append report it. */
+        BlobUploadSegmentInfo: {
+            /** Format: int64 */
+            segment_bytes: number;
+            /**
+             * @description Bare sha256 hex of the segment's raw bytes — the client's resume check and the
+             *     idempotent-append identity (same segment re-sent is a no-op; a DIFFERENT segment
+             *     at an occupied seq is a conflict, the assembled whole must stay unambiguous).
+             */
+            segment_hash: string;
+            /** Format: int32 */
+            seq: number;
+        };
         /**
          * Format: uuid
          * @description A `kb_content_blocks.id` value — a resource's addressable interior unit.
@@ -7967,6 +8148,258 @@ export interface operations {
             };
             /** @description Unauthorized */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    begin_blob_upload: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BlobUploadBeginRequest"];
+            };
+        };
+        responses: {
+            /** @description Upload session created */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlobUploadBeginResponse"];
+                };
+            };
+            /** @description Refused — unknown home anchor table, or the instance has no blob store configured */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Home readable but not authorable */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Home not found or not readable — indistinguishable by design */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    blob_upload_progress: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Upload session ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The currently-landed segment set */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlobUploadProgress"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Session absent or not the caller's — indistinguishable by design */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    finalize_blob_upload: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Upload session ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BlobUploadFinalizeRequest"];
+            };
+        };
+        responses: {
+            /** @description Committed (or dedup-hit) blob — the same shape the single-request path returns */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlobCommitResponse"];
+                };
+            };
+            /** @description Refused — the wrapper's cap/allowlist vocabulary, verbatim */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Session absent or not the caller's — indistinguishable by design */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Concurrency tokens stale — segments landed since the caller's last append (staging kept, resumable) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Assembled bytes do not hash to the declared expected_content_hash (staging kept) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    append_blob_segment: {
+        parameters: {
+            query: {
+                /** @description Segment ordinal — the seq order is the assembly order at finalize */
+                seq: number;
+            };
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Upload session ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        /** @description The segment's raw bytes */
+        requestBody?: {
+            content: {
+                "application/octet-stream": unknown;
+            };
+        };
+        responses: {
+            /** @description Segment landed (or already landed — idempotent); the currently-landed set returned */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlobUploadProgress"];
+                };
+            };
+            /** @description Refused — staging ceiling, missing or malformed x-segment-sha256 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Session absent or not the caller's — indistinguishable by design */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A different segment occupies this seq */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

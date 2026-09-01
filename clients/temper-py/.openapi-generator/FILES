@@ -59,6 +59,11 @@ temper/generated/models/auditor_job_complete_ack.py
 temper/generated/models/bind_team_outcome.py
 temper/generated/models/bind_team_request.py
 temper/generated/models/blob_commit_response.py
+temper/generated/models/blob_upload_begin_request.py
+temper/generated/models/blob_upload_begin_response.py
+temper/generated/models/blob_upload_finalize_request.py
+temper/generated/models/blob_upload_progress.py
+temper/generated/models/blob_upload_segment_info.py
 temper/generated/models/block_provenance_row.py
 temper/generated/models/blocks_response.py
 temper/generated/models/body_storage.py

@@ -17,7 +17,11 @@
 
 use bytes::Bytes;
 use sqlx::PgPool;
+use temper_core::types::blob::{
+    BlobUploadFinalizeRequest, BlobUploadProgress, BlobUploadSegmentInfo,
+};
 use temper_core::types::ids::{BlobId, ProfileId};
+use temper_substrate::uploads::LandedSegment;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
@@ -225,4 +229,246 @@ fn map_commit_err(e: anyhow::Error) -> ApiError {
         }
     }
     ApiError::Internal(format!("blob commit failed: {e}"))
+}
+
+// ── Segmented upload (S3, D7) ─────────────────────────────────────────────────────
+// The segmented-INGEST precedent (begin/append/finalize over the same content-addressed
+// target), in blob terms. The staging rows are pre-ledger transport state owned by
+// `temper_substrate::uploads` — their gate is owner-equality on the session row, never
+// `blob_readable_by_profile` (a staged session is not a blob; it has no hash yet). What
+// this service adds around those rows is exactly what it adds around the single-request
+// commit: the F-2 standing two-step, the readability-gated dedup pre-check, the provider
+// put, and the wrapper's verbatim refusals — same ordering, same authorities.
+
+/// What a finalize reports to its surface: the commit outcome plus the two fields the
+/// wire response needs that live on the session (the media type it declared at begin,
+/// and the assembled whole's byte count).
+pub struct BlobUploadFinalizeOutcome {
+    pub blob_id: BlobId,
+    pub content_hash: String,
+    pub deduped: bool,
+    pub content_type: String,
+    pub content_bytes: i64,
+}
+
+/// Begin a staged upload: standing two-step on the declared home (fail fast — no orphan
+/// session for the unauthorized), then the server-minted session row. The allowlist is
+/// NOT examined here: the SQL wrapper is the sole allowlist authority, at finalize (D9).
+pub async fn begin_upload(
+    pool: &PgPool,
+    caller: ProfileId,
+    home: temper_substrate::payloads::AnchorRef,
+    content_type: String,
+) -> ApiResult<Uuid> {
+    check_home_standing(pool, caller, &home).await?;
+    temper_substrate::uploads::create_session(pool, caller, &home, &content_type)
+        .await
+        .map_err(|e| ApiError::Internal(format!("blob upload begin failed: {e}")))
+}
+
+/// The landed set as the wire sees it. `None` from the substrate means the session is
+/// absent OR not the caller's — the same 404 either way (a probe over upload ids learns
+/// nothing).
+fn progress_from(upload_id: Uuid, landed: Vec<LandedSegment>) -> BlobUploadProgress {
+    let total_bytes = landed.iter().map(|s| s.segment_bytes).sum();
+    BlobUploadProgress {
+        upload_id,
+        segments: landed
+            .into_iter()
+            .map(|s| BlobUploadSegmentInfo {
+                seq: s.seq as u32,
+                segment_hash: s.segment_hash,
+                segment_bytes: s.segment_bytes,
+            })
+            .collect(),
+        total_bytes,
+    }
+}
+
+/// Append one segment. Owner gate via the substrate's reads (absent-or-not-yours ⇒ 404),
+/// then the staging bound: staged total plus this segment may not exceed
+/// `BlobConfig::max_bytes`. The bound is the staging ceiling — how many bytes this
+/// server will hold between begin and finalize, the D7-threshold's segmented twin — and
+/// it is what makes finalize's put-before-commit safe: an assembled whole over the cap
+/// can never exist to reach the provider. The commit-time cap itself stays the SQL
+/// wrapper's authority, enforced at finalize.
+pub async fn append_to_upload(
+    pool: &PgPool,
+    config: &crate::config::BlobConfig,
+    caller: ProfileId,
+    upload_id: Uuid,
+    seq: u32,
+    bytes: Bytes,
+) -> ApiResult<BlobUploadProgress> {
+    let landed = temper_substrate::uploads::landed_segments(pool, caller, upload_id)
+        .await
+        .map_err(|e| ApiError::Internal(format!("blob upload read failed: {e}")))?
+        .ok_or_else(|| ApiError::NotFound("upload not found".to_string()))?;
+    let staged: i64 = landed.iter().map(|s| s.segment_bytes).sum();
+    let incoming = bytes.len() as i64;
+    if staged + incoming > config.max_bytes {
+        return Err(ApiError::BadRequest(format!(
+            "blob_upload: this append would put staged bytes at {} against a staging ceiling \
+             of {} — an upload stages at most one blob's worth of bytes; the cap the commit \
+             enforces at finalize is the same ceiling",
+            staged + incoming,
+            config.max_bytes
+        )));
+    }
+
+    let segment_hash = temper_core::hash::sha256_hex(&bytes);
+    let outcome = temper_substrate::uploads::append_segment(
+        pool,
+        caller,
+        upload_id,
+        seq as i32,
+        &bytes,
+        &segment_hash,
+    )
+    .await
+    .map_err(|e| ApiError::Internal(format!("blob upload append failed: {e}")))?;
+    match outcome {
+        None => Err(ApiError::NotFound("upload not found".to_string())),
+        Some(temper_substrate::uploads::AppendOutcome::Conflict { existing_hash }) => {
+            Err(ApiError::Conflict(format!(
+                "segment seq {seq} already landed with hash {existing_hash} — occupied seqs \
+                 are never superseded; the assembled whole must stay unambiguous"
+            )))
+        }
+        Some(_) => {
+            let landed = temper_substrate::uploads::landed_segments(pool, caller, upload_id)
+                .await
+                .map_err(|e| ApiError::Internal(format!("blob upload read failed: {e}")))?
+                .ok_or_else(|| ApiError::NotFound("upload not found".to_string()))?;
+            Ok(progress_from(upload_id, landed))
+        }
+    }
+}
+
+/// The resume/progress read: the currently-landed set plus the running byte total — the
+/// server-handed values a finalize echoes back (`expected_segments`, `expected_total_bytes`).
+pub async fn upload_progress(
+    pool: &PgPool,
+    caller: ProfileId,
+    upload_id: Uuid,
+) -> ApiResult<BlobUploadProgress> {
+    let landed = temper_substrate::uploads::landed_segments(pool, caller, upload_id)
+        .await
+        .map_err(|e| ApiError::Internal(format!("blob upload read failed: {e}")))?
+        .ok_or_else(|| ApiError::NotFound("upload not found".to_string()))?;
+    Ok(progress_from(upload_id, landed))
+}
+
+/// Finalize a staged upload: assemble in seq order, hash, then exactly the S2 commit
+/// path — standing re-run (authoritative: standing can change mid-upload, and it gates
+/// the put), concurrency tokens checked (a mismatch is [`ApiError::Conflict`] —
+/// resumable, staging kept), optional integrity hash checked (a mismatch is
+/// [`ApiError::ContentIntegrity`] — the ingest precedent's face for "the assembled bytes
+/// do not hash to the declaration"), readability-gated dedup pre-check, provider put
+/// unless deduped, then `commit_blob` whose cap/allowlist refusals surface verbatim.
+/// Staging dies on success only; every failure keeps it (keep-and-declare — a TTL
+/// reaper is a declared hole, never silently clean).
+pub async fn finalize_upload(
+    pool: &PgPool,
+    store: &dyn temper_substrate::blob_store::BlobStore,
+    config: &crate::config::BlobConfig,
+    caller: ProfileId,
+    upload_id: Uuid,
+    req: &BlobUploadFinalizeRequest,
+) -> ApiResult<BlobUploadFinalizeOutcome> {
+    let session = temper_substrate::uploads::load_session(pool, caller, upload_id)
+        .await
+        .map_err(|e| ApiError::Internal(format!("blob upload read failed: {e}")))?
+        .ok_or_else(|| ApiError::NotFound("upload not found".to_string()))?;
+
+    // Auth before writes, again: the begin-time standing was a fail-fast courtesy; this
+    // is the gate the put answers to.
+    check_home_standing(pool, caller, &session.home).await?;
+
+    let landed = temper_substrate::uploads::landed_segments(pool, caller, upload_id)
+        .await
+        .map_err(|e| ApiError::Internal(format!("blob upload read failed: {e}")))?
+        .ok_or_else(|| ApiError::NotFound("upload not found".to_string()))?;
+    let total_bytes: i64 = landed.iter().map(|s| s.segment_bytes).sum();
+    // Concurrency tokens — "nothing landed since my last append". A mismatch leaves the
+    // staging exactly as it is: resumable (re-read progress, re-finalize).
+    if landed.len() as u32 != req.expected_segments || total_bytes != req.expected_total_bytes {
+        return Err(ApiError::Conflict(format!(
+            "staged state is {} segments / {} bytes against expected {} / {} — landed since \
+             your last append; re-read the progress and re-finalize",
+            landed.len(),
+            total_bytes,
+            req.expected_segments,
+            req.expected_total_bytes
+        )));
+    }
+
+    let body = temper_substrate::uploads::assemble_body(pool, upload_id)
+        .await
+        .map_err(|e| ApiError::Internal(format!("blob upload assemble failed: {e}")))?;
+    let content_hash = temper_core::hash::sha256_hex(&body);
+    if let Some(expected) = &req.expected_content_hash {
+        if expected != &content_hash {
+            // The ingest precedent's ContentIntegrity face: the stored bytes do not hash
+            // to the declaration, and an occupied seq is never superseded — the caller
+            // begins a new session rather than patching this one.
+            return Err(ApiError::ContentIntegrity(format!(
+                "the assembled bytes hash to {content_hash}, not the declared {expected} — \
+                 staged seqs are never superseded; begin a new upload"
+            )));
+        }
+    }
+
+    let deduped = temper_substrate::readback::readable_blob_id_by_hash(pool, caller, &content_hash)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .is_some();
+    if !deduped {
+        store
+            .put(
+                &temper_substrate::blob_store::blob_pathname(&content_hash),
+                &session.content_type,
+                body.clone().into(),
+                IMMUTABLE_CACHE_MAX_AGE,
+            )
+            .await
+            .map_err(|e| ApiError::Internal(format!("blob provider put failed: {e}")))?;
+    }
+
+    let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    let blob_id = temper_substrate::writes::commit_blob(
+        pool,
+        store,
+        temper_substrate::writes::CommitBlobParams {
+            id: BlobId::from(Uuid::now_v7()),
+            home: session.home,
+            owner: caller,
+            originator: None,
+            content_hash: content_hash.clone(),
+            content_type: session.content_type.clone(),
+            content_bytes: body.len() as i64,
+            max_bytes: config.max_bytes,
+            allowlist: &config.allowlist,
+            emitter,
+        },
+    )
+    .await
+    .map_err(map_commit_err)?;
+
+    // Success only. A refusal above leaves the staging in place — resumable, and honest
+    // about it (the TTL reaper is the declared hole, not a silent sweep).
+    temper_substrate::uploads::delete_session(pool, upload_id)
+        .await
+        .map_err(|e| ApiError::Internal(format!("blob upload cleanup failed: {e}")))?;
+
+    Ok(BlobUploadFinalizeOutcome {
+        blob_id,
+        content_hash,
+        deduped,
+        content_type: session.content_type,
+        content_bytes: body.len() as i64,
+    })
 }

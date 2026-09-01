@@ -696,6 +696,401 @@
         "x-apidog-folder": "Reference/API Reference/Blobs"
       }
     },
+    "/api/blobs/uploads": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Blobs"
+        ],
+        "summary": "Begin a segmented upload — declare the home and media type, get the session id",
+        "description": "A staged session is not a blob: it has no hash yet, it appears in no list, no graph\nwalk, no read surface — only its owner can append to it, read its progress, or finalize\nit. Home standing is checked here (fail fast) AND at finalize (authoritative — standing\ncan change mid-upload); the allowlist is not consulted at all until the wrapper sees\nthe commit. Same disabled refusal as the single-request path: a session begun on an\nunconfigured instance could never finalize.",
+        "operationId": "begin_blob_upload",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlobUploadBeginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Upload session created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlobUploadBeginResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused — unknown home anchor table, or the instance has no blob store configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Home readable but not authorable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Home not found or not readable — indistinguishable by design",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Blobs"
+      }
+    },
+    "/api/blobs/uploads/{id}": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Blobs"
+        ],
+        "summary": "Read a staged upload's progress — the resume read",
+        "description": "Returns the currently-landed segment set and the running byte total: the values a\nfinalize echoes back as its concurrency tokens. The staging is caller-private until\nfinalized — another profile's session answers 404, the same absent-not-refused posture\nevery visibility gate renders.",
+        "operationId": "blob_upload_progress",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Upload session ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The currently-landed segment set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlobUploadProgress"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Session absent or not the caller's — indistinguishable by design",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Blobs"
+      }
+    },
+    "/api/blobs/uploads/{id}/finalize": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Blobs"
+        ],
+        "summary": "Finalize a staged upload — assemble, hash, commit",
+        "description": "Assembles the staged segments in seq order and runs the exact single-request commit\npath: standing re-run (the gate the put answers to), concurrency tokens checked (409,\nresumable), optional integrity hash checked (422 — the ingest precedent's face), the\nreadability-gated dedup pre-check, the provider put unless deduped, then the SQL\nwrapper whose cap/allowlist refusals surface verbatim. Staging dies on success only —\nevery failure keeps it, resumable.",
+        "operationId": "finalize_blob_upload",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Upload session ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlobUploadFinalizeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Committed (or dedup-hit) blob — the same shape the single-request path returns",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlobCommitResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused — the wrapper's cap/allowlist vocabulary, verbatim",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Session absent or not the caller's — indistinguishable by design",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Concurrency tokens stale — segments landed since the caller's last append (staging kept, resumable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Assembled bytes do not hash to the declared expected_content_hash (staging kept)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Blobs"
+      }
+    },
+    "/api/blobs/uploads/{id}/segments": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Blobs"
+        ],
+        "summary": "Append one segment to a staged upload — raw bytes as the request body",
+        "description": "The segment's sha256 rides `x-segment-sha256` (bare hex, the idempotent-append\nidentity): re-sending the same segment at the same seq is a no-op; a DIFFERENT segment\nat an occupied seq is a 409 — occupied seqs are never superseded. The staging ceiling\n(`BlobConfig::max_bytes`, the cumulative bound across appends) is enforced in the\nservice; the per-request body bound is the platform's, raised for this door only.",
+        "operationId": "append_blob_segment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Upload session ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "seq",
+            "in": "query",
+            "description": "Segment ordinal — the seq order is the assembly order at finalize",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The segment's raw bytes",
+          "content": {
+            "application/octet-stream": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Segment landed (or already landed — idempotent); the currently-landed set returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlobUploadProgress"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused — staging ceiling, missing or malformed x-segment-sha256",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Session absent or not the caller's — indistinguishable by design",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A different segment occupies this seq",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Blobs"
+      }
+    },
     "/api/blobs/{id}": {
       "parameters": [
         {
@@ -9577,6 +9972,118 @@
         "type": "string",
         "format": "uuid",
         "description": "A `kb_blobs.id` value — one immutable, content-addressed binary blob, homed like a\nresource and related to resources by edges (spec: binary blobs, 2026-09-01)."
+      },
+      "BlobUploadBeginRequest": {
+        "type": "object",
+        "description": "Begin a segmented upload — `POST /api/blobs/uploads`. Declares the whole upload up\nfront: the home the assembled blob will commit into, and the media type it will\ncommit under. Both are re-examined at finalize — standing by the service (it can\nchange mid-upload), the allowlist by the SQL wrapper (the sole authority, D9).",
+        "required": [
+          "home_table",
+          "home_id",
+          "content_type"
+        ],
+        "properties": {
+          "content_type": {
+            "type": "string",
+            "description": "The media type the assembled blob will commit under."
+          },
+          "home_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "home_table": {
+            "type": "string",
+            "description": "`kb_contexts` or `kb_cogmaps` — a blob needs a home (D2), and so does its upload."
+          }
+        }
+      },
+      "BlobUploadBeginResponse": {
+        "type": "object",
+        "description": "The response of `POST /api/blobs/uploads`. The upload id is server-minted and is the\nonly handle the remaining requests carry — a staged session is not a blob (it has no\nhash yet), not a resource, and invisible to every other surface.",
+        "required": [
+          "upload_id"
+        ],
+        "properties": {
+          "upload_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "BlobUploadFinalizeRequest": {
+        "type": "object",
+        "description": "Declare a segmented upload complete — `POST /api/blobs/uploads/{id}/finalize`. The\nexpected values are CONCURRENCY tokens (\"nothing landed since my last append\"): both\nare server-handed in [`BlobUploadProgress`], echoed back verbatim, never parsed. A\nmismatch refuses with the staging kept, resumable — the ingest precedent's posture.",
+        "required": [
+          "expected_segments",
+          "expected_total_bytes"
+        ],
+        "properties": {
+          "expected_content_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Bare sha256 hex of the FULL assembled body — an INTEGRITY check over the actual\nbytes, distinct from the concurrency tokens. The client that holds the whole file\nderives it itself; `None` from a caller that does not (the check is then skipped,\nthe ingest precedent's honest exemption). A mismatch refuses with the staging\nkept, resumable — never silently committed."
+          },
+          "expected_segments": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "expected_total_bytes": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "BlobUploadProgress": {
+        "type": "object",
+        "description": "The currently-landed segment set — the response of append and of the progress read\n`GET /api/blobs/uploads/{id}` (the ingest precedent's `BlocksResponse`, in blob terms:\nthe caller's resume manifest and the source of the finalize echo).",
+        "required": [
+          "upload_id",
+          "segments",
+          "total_bytes"
+        ],
+        "properties": {
+          "segments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BlobUploadSegmentInfo"
+            }
+          },
+          "total_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Running byte total across landed segments — the server-handed half of the\nfinalize echo (`BlobUploadFinalizeRequest::expected_total_bytes`)."
+          },
+          "upload_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "BlobUploadSegmentInfo": {
+        "type": "object",
+        "description": "One landed segment, as the progress read and every append report it.",
+        "required": [
+          "seq",
+          "segment_hash",
+          "segment_bytes"
+        ],
+        "properties": {
+          "segment_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "segment_hash": {
+            "type": "string",
+            "description": "Bare sha256 hex of the segment's raw bytes — the client's resume check and the\nidempotent-append identity (same segment re-sent is a no-op; a DIFFERENT segment\nat an occupied seq is a conflict, the assembled whole must stay unambiguous)."
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
       },
       "BlockId": {
         "type": "string",

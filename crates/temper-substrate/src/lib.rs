@@ -26,6 +26,7 @@ pub mod replay;
 pub mod scenario;
 pub mod substrate;
 pub mod text;
+pub mod uploads;
 pub mod write;
 pub mod writes;
 

@@ -19,3 +19,65 @@ content_hash: string,
  * The media type the blob was committed under (allowlist-checked, D9).
  */
 content_type: string, content_bytes: bigint, deduped: boolean, };
+
+/**
+ * Begin a segmented upload — `POST /api/blobs/uploads`. Declares the whole upload up
+ * front: the home the assembled blob will commit into, and the media type it will
+ * commit under. Both are re-examined at finalize — standing by the service (it can
+ * change mid-upload), the allowlist by the SQL wrapper (the sole authority, D9).
+ */
+export type BlobUploadBeginRequest = { 
+/**
+ * `kb_contexts` or `kb_cogmaps` — a blob needs a home (D2), and so does its upload.
+ */
+home_table: string, home_id: string, 
+/**
+ * The media type the assembled blob will commit under.
+ */
+content_type: string, };
+
+/**
+ * The response of `POST /api/blobs/uploads`. The upload id is server-minted and is the
+ * only handle the remaining requests carry — a staged session is not a blob (it has no
+ * hash yet), not a resource, and invisible to every other surface.
+ */
+export type BlobUploadBeginResponse = { upload_id: string, };
+
+/**
+ * Declare a segmented upload complete — `POST /api/blobs/uploads/{id}/finalize`. The
+ * expected values are CONCURRENCY tokens ("nothing landed since my last append"): both
+ * are server-handed in [`BlobUploadProgress`], echoed back verbatim, never parsed. A
+ * mismatch refuses with the staging kept, resumable — the ingest precedent's posture.
+ */
+export type BlobUploadFinalizeRequest = { expected_segments: number, expected_total_bytes: bigint, 
+/**
+ * Bare sha256 hex of the FULL assembled body — an INTEGRITY check over the actual
+ * bytes, distinct from the concurrency tokens. The client that holds the whole file
+ * derives it itself; `None` from a caller that does not (the check is then skipped,
+ * the ingest precedent's honest exemption). A mismatch refuses with the staging
+ * kept, resumable — never silently committed.
+ */
+expected_content_hash: string | null, };
+
+/**
+ * The currently-landed segment set — the response of append and of the progress read
+ * `GET /api/blobs/uploads/{id}` (the ingest precedent's `BlocksResponse`, in blob terms:
+ * the caller's resume manifest and the source of the finalize echo).
+ */
+export type BlobUploadProgress = { upload_id: string, segments: Array<BlobUploadSegmentInfo>, 
+/**
+ * Running byte total across landed segments — the server-handed half of the
+ * finalize echo (`BlobUploadFinalizeRequest::expected_total_bytes`).
+ */
+total_bytes: bigint, };
+
+/**
+ * One landed segment, as the progress read and every append report it.
+ */
+export type BlobUploadSegmentInfo = { seq: number, 
+/**
+ * Bare sha256 hex of the segment's raw bytes — the client's resume check and the
+ * idempotent-append identity (same segment re-sent is a no-op; a DIFFERENT segment
+ * at an occupied seq is a conflict, the assembled whole must stay unambiguous).
+ */
+segment_hash: string, segment_bytes: bigint, };

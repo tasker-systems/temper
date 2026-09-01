@@ -19,6 +19,237 @@ module Temper::Generated
     def initialize(api_client = ApiClient.default)
       @api_client = api_client
     end
+    # Append one segment to a staged upload — raw bytes as the request body
+    # The segment's sha256 rides `x-segment-sha256` (bare hex, the idempotent-append identity): re-sending the same segment at the same seq is a no-op; a DIFFERENT segment at an occupied seq is a 409 — occupied seqs are never superseded. The staging ceiling (`BlobConfig::max_bytes`, the cumulative bound across appends) is enforced in the service; the per-request body bound is the platform's, raised for this door only.
+    # @param id [String] Upload session ID
+    # @param seq [Integer] Segment ordinal — the seq order is the assembly order at finalize
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [BlobUploadProgress]
+    def append_blob_segment(id, seq, opts = {})
+      data, _status_code, _headers = append_blob_segment_with_http_info(id, seq, opts)
+      data
+    end
+
+    # Append one segment to a staged upload — raw bytes as the request body
+    # The segment&#39;s sha256 rides &#x60;x-segment-sha256&#x60; (bare hex, the idempotent-append identity): re-sending the same segment at the same seq is a no-op; a DIFFERENT segment at an occupied seq is a 409 — occupied seqs are never superseded. The staging ceiling (&#x60;BlobConfig::max_bytes&#x60;, the cumulative bound across appends) is enforced in the service; the per-request body bound is the platform&#39;s, raised for this door only.
+    # @param id [String] Upload session ID
+    # @param seq [Integer] Segment ordinal — the seq order is the assembly order at finalize
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(BlobUploadProgress, Integer, Hash)>] BlobUploadProgress data, response status code and response headers
+    def append_blob_segment_with_http_info(id, seq, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: BlobsApi.append_blob_segment ...'
+      end
+      # verify the required parameter 'id' is set
+      if @api_client.config.client_side_validation && id.nil?
+        fail ArgumentError, "Missing the required parameter 'id' when calling BlobsApi.append_blob_segment"
+      end
+      # verify the required parameter 'seq' is set
+      if @api_client.config.client_side_validation && seq.nil?
+        fail ArgumentError, "Missing the required parameter 'seq' when calling BlobsApi.append_blob_segment"
+      end
+      if @api_client.config.client_side_validation && seq < 0
+        fail ArgumentError, 'invalid value for "seq" when calling BlobsApi.append_blob_segment, must be greater than or equal to 0.'
+      end
+
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/blobs/uploads/{id}/segments'.sub('{id}', CGI.escape(id.to_s))
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+      query_params[:'seq'] = seq
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      # HTTP header 'Content-Type'
+      content_type = @api_client.select_header_content_type(['application/octet-stream'])
+      if !content_type.nil?
+          header_params['Content-Type'] = content_type
+      end
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body]
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'BlobUploadProgress'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"BlobsApi.append_blob_segment",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:POST, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: BlobsApi#append_blob_segment\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
+    # Begin a segmented upload — declare the home and media type, get the session id
+    # A staged session is not a blob: it has no hash yet, it appears in no list, no graph walk, no read surface — only its owner can append to it, read its progress, or finalize it. Home standing is checked here (fail fast) AND at finalize (authoritative — standing can change mid-upload); the allowlist is not consulted at all until the wrapper sees the commit. Same disabled refusal as the single-request path: a session begun on an unconfigured instance could never finalize.
+    # @param blob_upload_begin_request [BlobUploadBeginRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [BlobUploadBeginResponse]
+    def begin_blob_upload(blob_upload_begin_request, opts = {})
+      data, _status_code, _headers = begin_blob_upload_with_http_info(blob_upload_begin_request, opts)
+      data
+    end
+
+    # Begin a segmented upload — declare the home and media type, get the session id
+    # A staged session is not a blob: it has no hash yet, it appears in no list, no graph walk, no read surface — only its owner can append to it, read its progress, or finalize it. Home standing is checked here (fail fast) AND at finalize (authoritative — standing can change mid-upload); the allowlist is not consulted at all until the wrapper sees the commit. Same disabled refusal as the single-request path: a session begun on an unconfigured instance could never finalize.
+    # @param blob_upload_begin_request [BlobUploadBeginRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(BlobUploadBeginResponse, Integer, Hash)>] BlobUploadBeginResponse data, response status code and response headers
+    def begin_blob_upload_with_http_info(blob_upload_begin_request, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: BlobsApi.begin_blob_upload ...'
+      end
+      # verify the required parameter 'blob_upload_begin_request' is set
+      if @api_client.config.client_side_validation && blob_upload_begin_request.nil?
+        fail ArgumentError, "Missing the required parameter 'blob_upload_begin_request' when calling BlobsApi.begin_blob_upload"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/blobs/uploads'
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      # HTTP header 'Content-Type'
+      content_type = @api_client.select_header_content_type(['application/json'])
+      if !content_type.nil?
+          header_params['Content-Type'] = content_type
+      end
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body] || @api_client.object_to_http_body(blob_upload_begin_request)
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'BlobUploadBeginResponse'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"BlobsApi.begin_blob_upload",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:POST, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: BlobsApi#begin_blob_upload\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
+    # Read a staged upload's progress — the resume read
+    # Returns the currently-landed segment set and the running byte total: the values a finalize echoes back as its concurrency tokens. The staging is caller-private until finalized — another profile's session answers 404, the same absent-not-refused posture every visibility gate renders.
+    # @param id [String] Upload session ID
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [BlobUploadProgress]
+    def blob_upload_progress(id, opts = {})
+      data, _status_code, _headers = blob_upload_progress_with_http_info(id, opts)
+      data
+    end
+
+    # Read a staged upload&#39;s progress — the resume read
+    # Returns the currently-landed segment set and the running byte total: the values a finalize echoes back as its concurrency tokens. The staging is caller-private until finalized — another profile&#39;s session answers 404, the same absent-not-refused posture every visibility gate renders.
+    # @param id [String] Upload session ID
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(BlobUploadProgress, Integer, Hash)>] BlobUploadProgress data, response status code and response headers
+    def blob_upload_progress_with_http_info(id, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: BlobsApi.blob_upload_progress ...'
+      end
+      # verify the required parameter 'id' is set
+      if @api_client.config.client_side_validation && id.nil?
+        fail ArgumentError, "Missing the required parameter 'id' when calling BlobsApi.blob_upload_progress"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/blobs/uploads/{id}'.sub('{id}', CGI.escape(id.to_s))
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body]
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'BlobUploadProgress'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"BlobsApi.blob_upload_progress",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:GET, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: BlobsApi#blob_upload_progress\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
     # Commit bytes as a blob — one multipart request at or under the D7 threshold
     # Form fields: `file` (the bytes; its content type is the media type committed), `home_table` (`kb_contexts` or `kb_cogmaps` — a blob needs a home, D2), `home_id` (the anchor's id). The caller acts as themselves: owner is the authenticated profile.  The threshold is enforced WHILE the file field streams, so an over-threshold body is refused before it is ever fully buffered, and the refusal names the vocabulary — the threshold in force and the segmented path beyond it. Cap and allowlist stay the SQL wrapper's authority: the substrate write passes this config's numbers through, and a refusal from there surfaces verbatim (`blob_service::map_commit_err`).
     # @param [Hash] opts the optional parameters
@@ -84,6 +315,87 @@ module Temper::Generated
       data, status_code, headers = @api_client.call_api(:POST, local_var_path, new_options)
       if @api_client.config.debugging
         @api_client.config.logger.debug "API called: BlobsApi#commit_blob\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
+    # Finalize a staged upload — assemble, hash, commit
+    # Assembles the staged segments in seq order and runs the exact single-request commit path: standing re-run (the gate the put answers to), concurrency tokens checked (409, resumable), optional integrity hash checked (422 — the ingest precedent's face), the readability-gated dedup pre-check, the provider put unless deduped, then the SQL wrapper whose cap/allowlist refusals surface verbatim. Staging dies on success only — every failure keeps it, resumable.
+    # @param id [String] Upload session ID
+    # @param blob_upload_finalize_request [BlobUploadFinalizeRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [BlobCommitResponse]
+    def finalize_blob_upload(id, blob_upload_finalize_request, opts = {})
+      data, _status_code, _headers = finalize_blob_upload_with_http_info(id, blob_upload_finalize_request, opts)
+      data
+    end
+
+    # Finalize a staged upload — assemble, hash, commit
+    # Assembles the staged segments in seq order and runs the exact single-request commit path: standing re-run (the gate the put answers to), concurrency tokens checked (409, resumable), optional integrity hash checked (422 — the ingest precedent&#39;s face), the readability-gated dedup pre-check, the provider put unless deduped, then the SQL wrapper whose cap/allowlist refusals surface verbatim. Staging dies on success only — every failure keeps it, resumable.
+    # @param id [String] Upload session ID
+    # @param blob_upload_finalize_request [BlobUploadFinalizeRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(BlobCommitResponse, Integer, Hash)>] BlobCommitResponse data, response status code and response headers
+    def finalize_blob_upload_with_http_info(id, blob_upload_finalize_request, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: BlobsApi.finalize_blob_upload ...'
+      end
+      # verify the required parameter 'id' is set
+      if @api_client.config.client_side_validation && id.nil?
+        fail ArgumentError, "Missing the required parameter 'id' when calling BlobsApi.finalize_blob_upload"
+      end
+      # verify the required parameter 'blob_upload_finalize_request' is set
+      if @api_client.config.client_side_validation && blob_upload_finalize_request.nil?
+        fail ArgumentError, "Missing the required parameter 'blob_upload_finalize_request' when calling BlobsApi.finalize_blob_upload"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/blobs/uploads/{id}/finalize'.sub('{id}', CGI.escape(id.to_s))
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      # HTTP header 'Content-Type'
+      content_type = @api_client.select_header_content_type(['application/json'])
+      if !content_type.nil?
+          header_params['Content-Type'] = content_type
+      end
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body] || @api_client.object_to_http_body(blob_upload_finalize_request)
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'BlobCommitResponse'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"BlobsApi.finalize_blob_upload",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:POST, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: BlobsApi#finalize_blob_upload\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
       end
       return data, status_code, headers
     end

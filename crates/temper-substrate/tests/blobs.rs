@@ -553,3 +553,176 @@ async fn replay_reproduces_blob_projections(pool: sqlx::PgPool) {
         assert_eq!(a, b, "projection table {table_a} diverged under replay");
     }
 }
+
+// ── S3: staged uploads — the pre-ledger transport half (D7) ──────────────────────────────────
+// The begin/append/finalize precedent's row mechanics, owned by `temper_substrate::uploads`.
+// What is unknown here, and therefore what these pin:
+//
+// 1. **Append is idempotent, and an occupied seq is NEVER superseded** — the assembled whole
+//    must stay unambiguous; a differing segment at an occupied seq is a conflict, not a revision.
+// 2. **A staged session is owner-private** — absent and not-yours are the same `None`, the
+//    one-face posture; owner-equality is the ONLY gate (never `blob_readable_by_profile` —
+//    a staged session is not a blob, it has no hash yet).
+// 3. **Staging rides NO events** — the strongest form of the pre-ledger claim: a full
+//    stage cycle moves the event ledger by zero rows.
+// 4. **The staging pair is outside replay's diff set** — pinned structurally against
+//    `dump_projections`' real table list, not by reading a constant.
+
+use temper_substrate::uploads::{self, AppendOutcome};
+
+async fn staged_session(
+    pool: &sqlx::PgPool,
+    owner: ProfileId,
+    home: ContextId,
+    content_type: &str,
+) -> Uuid {
+    uploads::create_session(pool, owner, &AnchorRef::context(home), content_type)
+        .await
+        .unwrap()
+}
+
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn staging_appends_are_idempotent_and_occupied_seqs_never_supersede(pool: sqlx::PgPool) {
+    let (owner, _emitter, home) = blob_world(&pool, "staged-append").await;
+    let id = staged_session(&pool, owner, home, "image/png").await;
+    let a: &[u8] = b"AAAA-segment";
+    let b: &[u8] = b"BBBB-segment";
+
+    assert_eq!(
+        uploads::append_segment(&pool, owner, id, 0, a, &sha(a))
+            .await
+            .unwrap(),
+        Some(AppendOutcome::Landed),
+        "a fresh seq lands"
+    );
+    assert_eq!(
+        uploads::append_segment(&pool, owner, id, 0, a, &sha(a))
+            .await
+            .unwrap(),
+        Some(AppendOutcome::AlreadyLanded {
+            segment_hash: sha(a)
+        }),
+        "the SAME segment re-sent is the idempotent no-op"
+    );
+    assert_eq!(
+        uploads::append_segment(&pool, owner, id, 0, b, &sha(b))
+            .await
+            .unwrap(),
+        Some(AppendOutcome::Conflict {
+            existing_hash: sha(a)
+        }),
+        "a DIFFERENT segment at an occupied seq is a conflict — never a supersede"
+    );
+    assert_eq!(
+        uploads::append_segment(&pool, owner, id, 1, b, &sha(b))
+            .await
+            .unwrap(),
+        Some(AppendOutcome::Landed)
+    );
+
+    let landed = uploads::landed_segments(&pool, owner, id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        landed.len(),
+        2,
+        "the conflict and the no-op changed nothing"
+    );
+    assert_eq!(landed[0].seq, 0);
+    assert_eq!(landed[1].seq, 1, "seq order is the assembly order");
+    assert_eq!(
+        uploads::assemble_body(&pool, id).await.unwrap(),
+        [a, b].concat(),
+        "assembly is the seq-ordered concatenation"
+    );
+}
+
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_staged_session_is_owner_private(pool: sqlx::PgPool) {
+    let (owner, _emitter, home) = blob_world(&pool, "staged-private").await;
+    let id = staged_session(&pool, owner, home, "image/png").await;
+    let outsider = ProfileId::from(common::insert_profile(&pool, "staging-outsider").await);
+
+    assert!(
+        uploads::load_session(&pool, outsider, id)
+            .await
+            .unwrap()
+            .is_none(),
+        "another profile's session does not exist for them"
+    );
+    assert!(
+        uploads::landed_segments(&pool, outsider, id)
+            .await
+            .unwrap()
+            .is_none(),
+        "another profile's landed set does not exist for them"
+    );
+    assert_eq!(
+        uploads::append_segment(&pool, outsider, id, 0, b"x", &sha(b"x"))
+            .await
+            .unwrap(),
+        None,
+        "another profile cannot append"
+    );
+    assert!(
+        uploads::load_session(&pool, owner, Uuid::now_v7())
+            .await
+            .unwrap()
+            .is_none(),
+        "an unknown id renders the same None — absent == not-yours, one face"
+    );
+}
+
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn staging_rides_no_events_and_dies_on_delete(pool: sqlx::PgPool) {
+    let (owner, _emitter, home) = blob_world(&pool, "staged-no-ledger").await;
+    let id = staged_session(&pool, owner, home, "image/png").await;
+
+    let events_before: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_events")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    uploads::append_segment(&pool, owner, id, 0, b"zero", &sha(b"zero"))
+        .await
+        .unwrap();
+    uploads::append_segment(&pool, owner, id, 1, b"one", &sha(b"one"))
+        .await
+        .unwrap();
+    let events_after: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_events")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        events_before, events_after,
+        "a full stage cycle moves the ledger by zero rows — the pre-ledger contract, witnessed"
+    );
+
+    uploads::delete_session(&pool, id).await.unwrap();
+    let uploads_left: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_blob_uploads")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let segments_left: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_blob_upload_segments")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(uploads_left, 0, "delete removes the session");
+    assert_eq!(segments_left, 0, "the segments row cascades");
+}
+
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_staging_pair_is_outside_replays_diff_set(pool: sqlx::PgPool) {
+    let dumps = temper_substrate::replay::dump_projections(&pool)
+        .await
+        .unwrap();
+    assert!(
+        !dumps
+            .iter()
+            .any(|(table, _)| table.contains("kb_blob_uploads")
+                || table.contains("kb_blob_upload_segments")),
+        "the staging pair must not join replay's diff set — its exclusion is the contract, \
+         pinned against the real table list: {:?}",
+        dumps.iter().map(|(t, _)| t).collect::<Vec<_>>()
+    );
+}

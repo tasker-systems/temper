@@ -413,3 +413,455 @@ async fn the_home_gate_refuses_under_scoped_writes(pool: PgPool) {
     .expect("request failed");
     assert_eq!(resp.status().as_u16(), 200, "owner: body {resp:?}");
 }
+
+// ─── S3 witnesses: the segmented upload path ─────────────────────────────────
+
+fn sha_hex(bytes: &[u8]) -> String {
+    temper_core::hash::sha256_hex(bytes)
+}
+
+async fn begin_upload(
+    app: &TestApp,
+    token: &str,
+    home_table: &str,
+    home_id: Uuid,
+) -> reqwest::Response {
+    app.client
+        .post(app.url("/api/blobs/uploads"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({
+            "home_table": home_table,
+            "home_id": home_id,
+            "content_type": "image/png",
+        }))
+        .send()
+        .await
+        .expect("request failed")
+}
+
+fn append_segment_req(
+    app: &TestApp,
+    token: &str,
+    upload_id: Uuid,
+    seq: u32,
+    bytes: &[u8],
+) -> reqwest::RequestBuilder {
+    app.client
+        .post(app.url(&format!(
+            "/api/blobs/uploads/{upload_id}/segments?seq={seq}"
+        )))
+        .header("Authorization", format!("Bearer {token}"))
+        .header("x-segment-sha256", sha_hex(bytes))
+        .header("content-type", "application/octet-stream")
+        .body(bytes.to_vec())
+}
+
+async fn finalize_upload(
+    app: &TestApp,
+    token: &str,
+    upload_id: Uuid,
+    expected_segments: u32,
+    expected_total_bytes: i64,
+    expected_content_hash: Option<String>,
+) -> reqwest::Response {
+    let mut payload = serde_json::json!({
+        "expected_segments": expected_segments,
+        "expected_total_bytes": expected_total_bytes,
+    });
+    if let Some(hash) = expected_content_hash {
+        payload["expected_content_hash"] = serde_json::Value::String(hash);
+    }
+    app.client
+        .post(app.url(&format!("/api/blobs/uploads/{upload_id}/finalize")))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&payload)
+        .send()
+        .await
+        .expect("request failed")
+}
+
+/// The whole path, end to end: staged segments commit bytes WHOLE (identical hash and bytes
+/// to what a single-request commit of the same file produces), the media type declared at
+/// begin is the one the read-back speaks, and the same bytes committed again through the
+/// OTHER path are a dedup hit on the same id — one content-addressed blob, two upload paths.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn segmented_upload_commits_bytes_whole_and_dedups_across_paths(pool: PgPool) {
+    let cfg = blob_cfg(1 << 20, &["image/png"], 64 * 1024);
+    let app = blob_app(pool, cfg).await;
+    let (_profile, ctx, token) = owner(&app.pool).await;
+
+    let seg_a: Vec<u8> = (0..10_000u32).map(|i| (i % 251) as u8).collect();
+    let seg_b: Vec<u8> = (0..10_480u32).map(|i| (i * 13 % 241) as u8).collect();
+    let whole = [seg_a.clone(), seg_b.clone()].concat();
+
+    let resp = begin_upload(&app, &token, "kb_contexts", ctx).await;
+    assert_eq!(resp.status().as_u16(), 200, "begin must succeed");
+    let upload_id: Uuid = resp.json::<serde_json::Value>().await.expect("json")["upload_id"]
+        .as_str()
+        .expect("upload_id")
+        .parse()
+        .expect("uuid");
+
+    let resp = append_segment_req(&app, &token, upload_id, 0, &seg_a)
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(resp.status().as_u16(), 200);
+    let progress: serde_json::Value = resp.json().await.expect("json");
+    assert_eq!(progress["segments"].as_array().unwrap().len(), 1);
+    assert_eq!(progress["total_bytes"], seg_a.len() as i64);
+    assert_eq!(
+        progress["segments"][0]["segment_hash"],
+        sha_hex(&seg_a),
+        "the progress read reports the landed segment's hash"
+    );
+
+    let resp = append_segment_req(&app, &token, upload_id, 1, &seg_b)
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(resp.status().as_u16(), 200);
+    // The idempotent re-send: same segment, same seq — a no-op, same progress.
+    let resp = append_segment_req(&app, &token, upload_id, 1, &seg_b)
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(resp.status().as_u16(), 200, "idempotent re-send succeeds");
+    let progress: serde_json::Value = resp.json().await.expect("json");
+    assert_eq!(
+        progress["segments"].as_array().unwrap().len(),
+        2,
+        "the re-send landed nothing new"
+    );
+    assert_eq!(progress["total_bytes"], (seg_a.len() + seg_b.len()) as i64);
+
+    let resp = finalize_upload(
+        &app,
+        &token,
+        upload_id,
+        2,
+        (seg_a.len() + seg_b.len()) as i64,
+        Some(sha_hex(&whole)),
+    )
+    .await;
+    assert_eq!(resp.status().as_u16(), 200, "finalize must succeed");
+    let committed: serde_json::Value = resp.json().await.expect("json");
+    assert_eq!(
+        committed["deduped"], false,
+        "fresh bytes are not a dedup hit"
+    );
+    assert_eq!(
+        committed["content_hash"],
+        sha_hex(&whole),
+        "the committed hash is the assembled whole's"
+    );
+    assert_eq!(
+        committed["content_type"], "image/png",
+        "the type declared at begin is stored"
+    );
+    assert_eq!(committed["content_bytes"], whole.len() as i64);
+    let blob_id = committed["blob_id"].as_str().unwrap().to_string();
+
+    let resp = app
+        .client
+        .get(app.url(&format!("/api/blobs/{blob_id}")))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(resp.status().as_u16(), 200);
+    let back = resp.bytes().await.expect("body");
+    assert_eq!(
+        back.as_ref(),
+        whole.as_slice(),
+        "staged in two segments, read back whole — byte for byte"
+    );
+
+    // The single-request path, same bytes: a dedup hit on the SAME id.
+    let resp = commit_multipart(&app, &token, whole, "image/png", "kb_contexts", ctx)
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(resp.status().as_u16(), 200);
+    let again: serde_json::Value = resp.json().await.expect("json");
+    assert_eq!(
+        again["deduped"], true,
+        "the second path's commit is a dedup hit"
+    );
+    assert_eq!(
+        again["blob_id"], committed["blob_id"],
+        "one blob, two upload paths"
+    );
+
+    // Success deleted the staging: the session is gone for its owner too.
+    let resp = app
+        .client
+        .get(app.url(&format!("/api/blobs/uploads/{upload_id}")))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(
+        resp.status().as_u16(),
+        404,
+        "a finalized session no longer exists"
+    );
+}
+
+/// The staging ceiling (`max_bytes`, the cumulative bound across appends) refuses with its
+/// own vocabulary — `blob_upload:`, naming the ceiling in force — and the refused append
+/// changed nothing.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_staging_ceiling_refuses_and_names_itself(pool: PgPool) {
+    let cfg = blob_cfg(1024, &["image/png"], 64 * 1024);
+    let app = blob_app(pool, cfg).await;
+    let (_profile, ctx, token) = owner(&app.pool).await;
+
+    let resp = begin_upload(&app, &token, "kb_contexts", ctx).await;
+    assert_eq!(resp.status().as_u16(), 200);
+    let upload_id: Uuid = resp.json::<serde_json::Value>().await.expect("json")["upload_id"]
+        .as_str()
+        .expect("upload_id")
+        .parse()
+        .expect("uuid");
+
+    let first: Vec<u8> = vec![7u8; 600];
+    let resp = append_segment_req(&app, &token, upload_id, 0, &first)
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(resp.status().as_u16(), 200, "under the ceiling lands");
+
+    let second: Vec<u8> = vec![8u8; 600];
+    let resp = append_segment_req(&app, &token, upload_id, 1, &second)
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(resp.status().as_u16(), 400, "over the ceiling refuses");
+    let text = resp.text().await.unwrap_or_default();
+    assert!(
+        text.contains("blob_upload:") && text.contains("1024"),
+        "the refusal must name the staging vocabulary and the ceiling in force: {text}"
+    );
+
+    let resp = app
+        .client
+        .get(app.url(&format!("/api/blobs/uploads/{upload_id}")))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("request failed");
+    let progress: serde_json::Value = resp.json().await.expect("json");
+    assert_eq!(
+        progress["total_bytes"], 600i64,
+        "the refused append changed nothing"
+    );
+}
+
+/// The finalize refusals keep the staging: stale concurrency tokens are 409 (resumable —
+/// re-read the progress, re-finalize), an integrity mismatch is 422 (the ingest precedent's
+/// face), and after both the staging is intact and the finalize with the right tokens
+/// succeeds — a refusal never commits, and a success deletes the staging.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn finalize_failures_keep_the_staging_resumable(pool: PgPool) {
+    let cfg = blob_cfg(1 << 20, &["image/png"], 64 * 1024);
+    let app = blob_app(pool, cfg).await;
+    let (_profile, ctx, token) = owner(&app.pool).await;
+
+    let seg_a: Vec<u8> = vec![1u8; 512];
+    let seg_b: Vec<u8> = vec![2u8; 512];
+    let whole = [seg_a.clone(), seg_b.clone()].concat();
+
+    let resp = begin_upload(&app, &token, "kb_contexts", ctx).await;
+    let upload_id: Uuid = resp.json::<serde_json::Value>().await.expect("json")["upload_id"]
+        .as_str()
+        .expect("upload_id")
+        .parse()
+        .expect("uuid");
+    append_segment_req(&app, &token, upload_id, 0, &seg_a)
+        .send()
+        .await
+        .expect("request failed");
+    append_segment_req(&app, &token, upload_id, 1, &seg_b)
+        .send()
+        .await
+        .expect("request failed");
+
+    let resp = finalize_upload(&app, &token, upload_id, 3, 1024, None).await;
+    assert_eq!(resp.status().as_u16(), 409, "stale segment count refuses");
+    let text = resp.text().await.unwrap_or_default();
+    assert!(
+        text.contains("2") && text.contains("3"),
+        "the refusal names both counts: {text}"
+    );
+
+    let resp = finalize_upload(&app, &token, upload_id, 2, 999, None).await;
+    assert_eq!(resp.status().as_u16(), 409, "stale byte total refuses");
+
+    let resp = finalize_upload(
+        &app,
+        &token,
+        upload_id,
+        2,
+        1024,
+        Some(sha_hex(b"not-the-bytes")),
+    )
+    .await;
+    assert_eq!(resp.status().as_u16(), 422, "an integrity mismatch is 422");
+    let text = resp.text().await.unwrap_or_default();
+    assert!(
+        text.contains("never superseded"),
+        "the integrity refusal says the staging cannot be patched in place: {text}"
+    );
+
+    // Staging intact through every refusal.
+    let resp = app
+        .client
+        .get(app.url(&format!("/api/blobs/uploads/{upload_id}")))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "the staging survives every refusal"
+    );
+    let progress: serde_json::Value = resp.json().await.expect("json");
+    assert_eq!(progress["segments"].as_array().unwrap().len(), 2);
+    assert_eq!(progress["total_bytes"], 1024i64);
+
+    // The correct tokens and hash commit.
+    let resp = finalize_upload(&app, &token, upload_id, 2, 1024, Some(sha_hex(&whole))).await;
+    assert_eq!(resp.status().as_u16(), 200, "the correct finalize commits");
+}
+
+/// A staged session is caller-private at the HTTP layer: append, progress, and finalize all
+/// answer another profile with the SAME 404 an unknown id gets — a probe over upload ids
+/// learns nothing.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_staged_session_is_caller_private(pool: PgPool) {
+    let cfg = blob_cfg(1 << 20, &["image/png"], 64 * 1024);
+    let app = blob_app(pool, cfg).await;
+    let (_profile, ctx, token) = owner(&app.pool).await;
+    let out_email = format!("staging-out-{}@example.com", Uuid::new_v4());
+    let (outsider, _) = fixtures::create_test_profile_with_context(&app.pool, &out_email).await;
+    let outsider_token = generate_test_jwt(&format!("test|{outsider}"), &out_email);
+
+    let resp = begin_upload(&app, &token, "kb_contexts", ctx).await;
+    assert_eq!(resp.status().as_u16(), 200);
+    let upload_id: Uuid = resp.json::<serde_json::Value>().await.expect("json")["upload_id"]
+        .as_str()
+        .expect("upload_id")
+        .parse()
+        .expect("uuid");
+
+    for (label, resp) in [
+        (
+            "append",
+            append_segment_req(&app, &outsider_token, upload_id, 0, b"x")
+                .send()
+                .await
+                .expect("request failed"),
+        ),
+        (
+            "progress",
+            app.client
+                .get(app.url(&format!("/api/blobs/uploads/{upload_id}")))
+                .header("Authorization", format!("Bearer {outsider_token}"))
+                .send()
+                .await
+                .expect("request failed"),
+        ),
+        (
+            "finalize",
+            finalize_upload(&app, &outsider_token, upload_id, 0, 0, None).await,
+        ),
+        (
+            "owner probing an unknown id",
+            app.client
+                .get(app.url(&format!("/api/blobs/uploads/{}", Uuid::now_v7())))
+                .header("Authorization", format!("Bearer {token}"))
+                .send()
+                .await
+                .expect("request failed"),
+        ),
+    ] {
+        assert_eq!(
+            resp.status().as_u16(),
+            404,
+            "{label} must render as plain absence"
+        );
+    }
+
+    let resp = app
+        .client
+        .get(app.url(&format!("/api/blobs/uploads/{upload_id}")))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "the owner still sees their session"
+    );
+}
+
+/// The home gate at begin: an unreadable home is 404 (absent), a readable-but-not-writable
+/// home is 403, the owner is 200 — the F-2 two-step, at the segmented door too. (The
+/// finalize re-run of the same gate is the same function at the same layer; the
+/// standing-revoked-mid-upload arm has no surface to revoke with and stays declared.)
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn begin_refuses_under_scoped_homes(pool: PgPool) {
+    let cfg = blob_cfg(1 << 20, &["image/png"], 64 * 1024);
+    let app = blob_app(pool, cfg).await;
+    let (_owner_profile, ctx, owner_token) = owner(&app.pool).await;
+
+    let out_email = format!("staging-gate-out-{}@example.com", Uuid::new_v4());
+    let (outsider, _) = fixtures::create_test_profile_with_context(&app.pool, &out_email).await;
+    let outsider_token = generate_test_jwt(&format!("test|{outsider}"), &out_email);
+    let resp = begin_upload(&app, &outsider_token, "kb_contexts", ctx).await;
+    assert_eq!(resp.status().as_u16(), 404, "an unreadable home is absent");
+
+    let reader_email = format!("staging-gate-ro-{}@example.com", Uuid::new_v4());
+    let (reader, _) = fixtures::create_test_profile_with_context(&app.pool, &reader_email).await;
+    sqlx::query(
+        "INSERT INTO kb_access_grants \
+             (subject_table, subject_id, principal_table, principal_id, can_read, can_write, \
+              granted_by_profile_id) \
+         VALUES ('kb_contexts', $1, 'kb_profiles', $2, true, false, $2) \
+         ON CONFLICT (subject_table, subject_id, principal_table, principal_id) DO NOTHING",
+    )
+    .bind(ctx)
+    .bind(reader)
+    .execute(&app.pool)
+    .await
+    .expect("grant read");
+    let reader_token = generate_test_jwt(&format!("test|{reader}"), &reader_email);
+    let resp = begin_upload(&app, &reader_token, "kb_contexts", ctx).await;
+    assert_eq!(
+        resp.status().as_u16(),
+        403,
+        "read is strictly broader than write: a reader cannot begin staging into the home"
+    );
+
+    let resp = begin_upload(&app, &owner_token, "kb_contexts", ctx).await;
+    assert_eq!(resp.status().as_u16(), 200, "the owner begins");
+}
+
+/// An unknown home TABLE is refused in the wrapper's terms at begin — the same one
+/// vocabulary the single-request path speaks.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn begin_refuses_an_unknown_home_table(pool: PgPool) {
+    let cfg = blob_cfg(1 << 20, &["image/png"], 64 * 1024);
+    let app = blob_app(pool, cfg).await;
+    let (_profile, _ctx, token) = owner(&app.pool).await;
+    let resp = begin_upload(&app, &token, "kb_teams", Uuid::now_v7()).await;
+    assert_eq!(resp.status().as_u16(), 400);
+    let text = resp.text().await.unwrap_or_default();
+    assert!(
+        text.contains("kb_contexts") && text.contains("kb_cogmaps"),
+        "refusal must name the home vocabulary: {text}"
+    );
+}

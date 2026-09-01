@@ -58,6 +58,13 @@ fn gated_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::data_artifacts::commit))
         .routes(routes!(handlers::blobs::commit))
         .routes(routes!(handlers::blobs::get))
+        // One `.routes()` per handler: the multi-handler form is for same-path method
+        // grouping (the ingest blocks GET+POST shape); distinct paths in one call mangle
+        // the mounted patterns into overlaps.
+        .routes(routes!(handlers::blobs::begin_upload))
+        .routes(routes!(handlers::blobs::upload_progress))
+        .routes(routes!(handlers::blobs::finalize_upload))
+        .merge(blob_segment_routes())
         .routes(routes!(handlers::data_artifact_shapes::list_shapes))
         .routes(routes!(handlers::data_artifact_shapes::get_shape))
         .routes(routes!(handlers::data_artifact_shapes::declare_shape))
@@ -539,6 +546,25 @@ fn query_routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(handlers::query::query))
         .layer(DefaultBodyLimit::max(QUERY_MAX_BODY_BYTES))
+}
+
+/// `/api/blobs/uploads/{id}/segments` alone — the one blob door whose request body is raw
+/// segment bytes. The staging ceiling (the cumulative bound across appends) is
+/// `BlobConfig::max_bytes`, enforced with its own vocabulary in the service; this layer
+/// exists so the per-request body is bounded by the platform's own ceiling rather than
+/// axum's inherited 2 MB default, which would refuse legal segments in a door whose whole
+/// point is bodies past the single-request threshold. Same scoping argument as
+/// [`query_routes`]: a `DefaultBodyLimit` applies to every route in the router it is
+/// attached to, and no other blob route accepts a body at all. It stays inside
+/// `gated_routes`' auth layers, applied to the merged whole in [`create_app`].
+const BLOB_SEGMENT_MAX_BODY_BYTES: usize = 4_500_000;
+
+fn blob_segment_routes() -> OpenApiRouter<AppState> {
+    use axum::extract::DefaultBodyLimit;
+
+    OpenApiRouter::new()
+        .routes(routes!(handlers::blobs::append_segment))
+        .layer(DefaultBodyLimit::max(BLOB_SEGMENT_MAX_BODY_BYTES))
 }
 
 /// The largest composition `/api/query` will read.

@@ -81,6 +81,11 @@ __all__ = [
     "BindTeamOutcome",
     "BindTeamRequest",
     "BlobCommitResponse",
+    "BlobUploadBeginRequest",
+    "BlobUploadBeginResponse",
+    "BlobUploadFinalizeRequest",
+    "BlobUploadProgress",
+    "BlobUploadSegmentInfo",
     "BlockProvenanceRow",
     "BlocksResponse",
     "BodyStorage",
@@ -413,6 +418,11 @@ from temper.generated.models.auditor_job_complete_ack import AuditorJobCompleteA
 from temper.generated.models.bind_team_outcome import BindTeamOutcome as BindTeamOutcome
 from temper.generated.models.bind_team_request import BindTeamRequest as BindTeamRequest
 from temper.generated.models.blob_commit_response import BlobCommitResponse as BlobCommitResponse
+from temper.generated.models.blob_upload_begin_request import BlobUploadBeginRequest as BlobUploadBeginRequest
+from temper.generated.models.blob_upload_begin_response import BlobUploadBeginResponse as BlobUploadBeginResponse
+from temper.generated.models.blob_upload_finalize_request import BlobUploadFinalizeRequest as BlobUploadFinalizeRequest
+from temper.generated.models.blob_upload_progress import BlobUploadProgress as BlobUploadProgress
+from temper.generated.models.blob_upload_segment_info import BlobUploadSegmentInfo as BlobUploadSegmentInfo
 from temper.generated.models.block_provenance_row import BlockProvenanceRow as BlockProvenanceRow
 from temper.generated.models.blocks_response import BlocksResponse as BlocksResponse
 from temper.generated.models.body_storage import BodyStorage as BodyStorage
