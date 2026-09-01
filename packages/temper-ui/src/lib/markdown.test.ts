@@ -86,6 +86,45 @@ describe('renderMarkdown', () => {
 	it('passes an empty body through as empty', () => {
 		expect(renderMarkdown('')).toBe('');
 	});
+
+	// The remaining cases are the payload classes a security review flagged as unrepresented:
+	// namespace-confusion mXSS (the class behind the historical DOMPurify CVEs), obfuscated
+	// URI schemes, DOM-clobbering names, and raw templates/iframes/base tags.
+	it('defuses namespace-confusion mXSS across math/style boundaries', () => {
+		const html = renderMarkdown(
+			'<math><mtext><form><mglyph><style></math><img src onerror=alert(1)>',
+		);
+		expect(html).not.toContain('onerror');
+		expect(html).not.toContain('<mglyph');
+	});
+
+	it('drops hrefs whose scheme hides behind entities or data payloads', () => {
+		const entity = renderMarkdown('<a href="jav&#x09;ascript:alert(1)">x</a>');
+		expect(entity).not.toContain('javascript:');
+		expect(entity).not.toContain('alert');
+
+		const dataUri = renderMarkdown('[x](data:text/html;base64,PHNjcmlwdD4=)');
+		expect(dataUri).not.toContain('data:text/html');
+	});
+
+	it('strips DOM-clobbering name attributes from form controls', () => {
+		const html = renderMarkdown('<form><input name="attributes"><input name="tagName"></form>');
+		expect(html).not.toContain('name="attributes"');
+		expect(html).not.toContain('name="tagName"');
+	});
+
+	it('strips template contents and removes iframe and base wholesale', () => {
+		const html = renderMarkdown(
+			'<template><script>alert(1)</script></template><iframe srcdoc="<script>alert(1)</script>"></iframe><base href="https://evil.example/">',
+		);
+		// DOMPurify keeps an inert empty <template> shell but strips everything inside it;
+		// iframe and base are dropped entirely.
+		expect(html).not.toContain('<script');
+		expect(html).not.toContain('alert');
+		expect(html).not.toContain('<iframe');
+		expect(html).not.toContain('<base');
+		expect(html).not.toContain('evil.example');
+	});
 });
 
 describe('highlightCode', () => {
