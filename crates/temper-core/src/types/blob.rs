@@ -10,6 +10,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::types::authorship::ActInput;
+use crate::types::graph::{EdgeKind, Polarity};
 use crate::types::ids::BlobId;
 
 /// The response of `POST /api/blobs` — get-or-create on the content hash (D2). `blob_id` is
@@ -113,4 +115,103 @@ pub struct BlobUploadFinalizeRequest {
     /// kept, resumable — never silently committed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_content_hash: Option<String>,
+}
+
+// ── Blob list + relations (S4) ────────────────────────────────────────────────────
+
+/// One blob as the list surface reports it (`GET /api/blobs`). The list can only ever
+/// contain blobs the caller can read — the gate lives server-side on the same
+/// `blob_readable_by_profile` predicate the read-through uses, so this shape is a view of
+/// the caller's own blob set, never a discovery oracle.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "blob.ts"))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct BlobSummary {
+    pub blob_id: BlobId,
+    /// Bare sha256 hex — the dedup key and the erasure join key.
+    pub content_hash: String,
+    /// The stored media type; `None` only on a post-erasure row (metadata nulled, bytes
+    /// unreachable — the erased shape renders honestly rather than being hidden).
+    pub content_type: Option<String>,
+    pub content_bytes: i64,
+    pub created: chrono::DateTime<chrono::Utc>,
+}
+
+/// One edge incident to a blob, as `GET /api/blobs/{id}/relations` reports it. The peer is
+/// whatever sits on the other end — a resource (with its title), a cogmap, or another blob
+/// — so `peer_table` rides along and `peer_title` is null for non-resource peers.
+/// `direction` is the edge listing's own vocabulary (`outgoing` = the blob is the source).
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "blob.ts"))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct BlobRelationRow {
+    pub edge_id: uuid::Uuid,
+    /// `kb_resources` | `kb_cogmaps` | `kb_blobs` — spelled exactly as the DDL.
+    pub peer_table: String,
+    pub peer_id: uuid::Uuid,
+    pub peer_title: Option<String>,
+    pub edge_kind: EdgeKind,
+    pub polarity: Polarity,
+    pub label: Option<String>,
+    pub direction: String,
+    pub weight: f64,
+    pub created: chrono::DateTime<chrono::Utc>,
+}
+
+/// Which end of the asserted edge the blob occupies. `blob_as_source` is the natural
+/// `figure_of`-shaped act (the figure points at what it figures); `blob_as_target` is the
+/// derivation-source act (resource → blob, the file it was created from). Typed, not a
+/// free string: the refusal for a malformed value must name the two admissible values.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "blob.ts"))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum BlobRelationDirection {
+    #[default]
+    BlobAsSource,
+    BlobAsTarget,
+}
+
+/// Assert a relation between a blob and another anchor — `POST /api/blobs/{id}/relations`.
+/// The edge homes on the BLOB's home anchor (the blob-scoped surface answers to the blob's
+/// standing), and the peer must be readable by the caller (`endpoint_readable_by_profile`)
+/// — "relations are to resources the actor can already see", generalized to all three
+/// endpoint kinds.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "blob.ts"))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct BlobRelationAssertRequest {
+    #[serde(default)]
+    pub direction: BlobRelationDirection,
+    /// `kb_resources` | `kb_cogmaps` | `kb_blobs` — the peer endpoint's table.
+    pub peer_table: String,
+    pub peer_id: uuid::Uuid,
+    pub edge_kind: EdgeKind,
+    pub polarity: Polarity,
+    pub label: String,
+    pub weight: f64,
+    /// Per-act correlation + discrete agent authorship, the relationship endpoints' shape.
+    #[serde(default, flatten)]
+    pub act: ActInput,
+}
+
+/// The acknowledgement of `POST /api/blobs/{id}/relations` — the edge handle, feeding the
+/// incumbent fold endpoint (`POST /api/relationships/{edge_handle}/fold`) for retraction.
+/// Relations come and go individually (`one-blob-many-relations`); folding rides the
+/// relationship machinery every edge already answers to.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "blob.ts"))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct BlobRelationAck {
+    pub edge_handle: uuid::Uuid,
 }

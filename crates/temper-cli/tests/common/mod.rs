@@ -68,6 +68,7 @@ pub fn create_goal(config: &temper_cli::config::Config, context: &str, title: &s
             sources: Vec::new(),
             sources_as_edges: false,
             no_source: false,
+            preserve_source: false,
         },
     )
     .unwrap();
@@ -110,6 +111,7 @@ pub fn create_task(
             sources: Vec::new(),
             sources_as_edges: false,
             no_source: false,
+            preserve_source: false,
         },
     )
     .unwrap();

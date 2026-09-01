@@ -472,3 +472,293 @@ pub async fn finalize_upload(
         content_bytes: body.len() as i64,
     })
 }
+
+// ── Blob list + relations (S4) ────────────────────────────────────────────────────
+// The relate surface is the D3 commitment made addressable: relations are ordinary
+// `kb_edges` rows (the endpoint CHECK admitted `kb_blobs` at S1), so asserting one is the
+// substrate's ordinary relationship write — what this service adds is the blob-scoped
+// gate train and the home resolution the generic write deliberately does not do. The
+// list/relations reads gate through the NAMED predicates (`blob_readable_by_profile`,
+// `edges_visible_to`) — never a restatement, so the two doors onto one anchor cannot
+// disagree about which blobs or which edges exist.
+
+use temper_core::types::blob::{
+    BlobRelationAck as WireRelationAck, BlobRelationAssertRequest, BlobRelationDirection,
+    BlobRelationRow as WireRelationRow, BlobSummary as WireBlobSummary,
+};
+use temper_core::types::graph::{EdgeKind as WireEdgeKind, Polarity as WirePolarity};
+
+/// The blob's home anchor, readable-gated: `None` means the blob is absent OR not the
+/// caller's — indistinguishable, the 404 either way (a probe over blob ids learns
+/// nothing). This is the existence gate and the home read in ONE query, so the gate cannot
+/// pass while the home read fails — the S3 `landed_segments` lesson applied at the shape
+/// level: the gate is the row fetch, never a filter emptied afterwards.
+async fn blob_home(
+    pool: &PgPool,
+    caller: ProfileId,
+    blob: BlobId,
+) -> ApiResult<Option<(temper_substrate::payloads::AnchorTable, uuid::Uuid)>> {
+    let row = sqlx::query!(
+        r#"SELECT h.anchor_table, h.anchor_id
+             FROM kb_blob_homes h
+            WHERE h.blob_id = $1
+              AND blob_readable_by_profile($2, $1)"#,
+        blob.uuid(),
+        caller.uuid(),
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    Ok(row.map(|r| {
+        let table = match r.anchor_table.as_str() {
+            "kb_contexts" => temper_substrate::payloads::AnchorTable::Contexts,
+            _ => temper_substrate::payloads::AnchorTable::Cogmaps,
+        };
+        (table, r.anchor_id)
+    }))
+}
+
+/// Container-write gate on an anchor of either kind — the `check_container_authorable`
+/// rule in service terms: an edge is an object HOMED in the anchor, so authoring one is
+/// authoring into that container. Reachable only after the read gate passed, so the 403
+/// discloses nothing an earlier read did not (the F-2 leak analysis).
+async fn check_home_authorable(
+    pool: &PgPool,
+    caller: ProfileId,
+    table: temper_substrate::payloads::AnchorTable,
+    anchor_id: uuid::Uuid,
+) -> ApiResult<()> {
+    let authorable: Option<bool> = match table {
+        temper_substrate::payloads::AnchorTable::Contexts => sqlx::query_scalar!(
+            "SELECT context_authorable_by_profile($1, $2)",
+            caller.uuid(),
+            anchor_id,
+        )
+        .fetch_one(pool)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?,
+        _ => sqlx::query_scalar!(
+            "SELECT cogmap_authorable_by_profile($1, $2)",
+            caller.uuid(),
+            anchor_id,
+        )
+        .fetch_one(pool)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?,
+    };
+    if !authorable.unwrap_or(false) {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(())
+}
+
+/// The peer-endpoint gate: you may point at what you can see (`endpoint_readable_by_profile`,
+/// the same predicate the incumbent edge writes apply — its `kb_blobs` arm landed with the S1
+/// reads migration). Invisible-or-absent renders `NotFound`: the write must not become an
+/// existence oracle over anchors the caller cannot read.
+async fn check_peer_readable(
+    pool: &PgPool,
+    caller: ProfileId,
+    peer: &temper_substrate::payloads::AnchorRef,
+) -> ApiResult<()> {
+    let readable: Option<bool> = sqlx::query_scalar!(
+        "SELECT endpoint_readable_by_profile($1, $2, $3)",
+        caller.uuid(),
+        peer.table.as_str(),
+        peer.id,
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|e| ApiError::Internal(e.to_string()))?;
+    if !readable.unwrap_or(false) {
+        return Err(ApiError::NotFound(
+            "relation peer not found or not readable".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Assert one relation between a blob and a peer anchor. Gate train, in order (auth before
+/// writes): blob readable → 404; home authorable → 403; peer readable → 404. Then the
+/// substrate's ordinary relationship write, homed on the BLOB's home — the blob-scoped
+/// surface answers to the blob's standing, and the edge is therefore readable by exactly
+/// the blob-home's readers, which is the visibility story D3's negative face rides on.
+///
+/// Idempotent by the projector's active-edge invariant: re-asserting the same
+/// (source, target, kind, label, home) updates the weight and returns the SAME edge — a
+/// relation neither created nor removed any other (`one-blob-many-relations`).
+///
+/// Refusals speak the `blob_relate:` vocabulary for the parts this surface owns (the peer
+/// table parse lives handler-side, in the same one-parse-point terms as `parse_home`);
+/// everything downstream is the substrate's own voice.
+pub async fn relate_blob(
+    pool: &PgPool,
+    caller: ProfileId,
+    blob: BlobId,
+    req: &BlobRelationAssertRequest,
+    act: temper_core::types::authorship::ActContext,
+) -> ApiResult<WireRelationAck> {
+    let (home_table, home_id) = blob_home(pool, caller, blob)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("blob not found".to_string()))?;
+    check_home_authorable(pool, caller, home_table, home_id).await?;
+
+    // The peer-table parse lives here rather than the handler so the vocabulary and the
+    // AnchorRef are built in one place (the `parse_home` rule): the refusal mirrors the
+    // substrate's endpoint terms, so the caller hears one voice regardless of which gate
+    // declined.
+    use temper_substrate::payloads::AnchorTable as T;
+    let peer_table = match req.peer_table.as_str() {
+        "kb_resources" => T::Resources,
+        "kb_cogmaps" => T::Cogmaps,
+        "kb_blobs" => T::Blobs,
+        other => {
+            return Err(ApiError::BadRequest(format!(
+                "blob_relate: a relation points at a kb_resources, kb_cogmaps or kb_blobs \
+                 anchor — got peer table {other}"
+            )))
+        }
+    };
+    let peer = temper_substrate::payloads::AnchorRef {
+        table: peer_table,
+        id: req.peer_id,
+    };
+    check_peer_readable(pool, caller, &peer).await?;
+
+    let home = match home_table {
+        temper_substrate::payloads::AnchorTable::Contexts => {
+            temper_substrate::events::EdgeHome::Context(temper_core::types::ids::ContextId::from(
+                home_id,
+            ))
+        }
+        _ => temper_substrate::events::EdgeHome::Cogmap(temper_core::types::ids::CogmapId::from(
+            home_id,
+        )),
+    };
+    let (source, target) = match req.direction {
+        BlobRelationDirection::BlobAsSource => {
+            (temper_substrate::payloads::AnchorRef::blob(blob), peer)
+        }
+        BlobRelationDirection::BlobAsTarget => {
+            (peer, temper_substrate::payloads::AnchorRef::blob(blob))
+        }
+    };
+    let kind = match req.edge_kind {
+        WireEdgeKind::Express => temper_substrate::affinity::EdgeKind::Express,
+        WireEdgeKind::Contains => temper_substrate::affinity::EdgeKind::Contains,
+        WireEdgeKind::LeadsTo => temper_substrate::affinity::EdgeKind::LeadsTo,
+        WireEdgeKind::Near => temper_substrate::affinity::EdgeKind::Near,
+    };
+    let polarity = match req.polarity {
+        WirePolarity::Forward => temper_substrate::payloads::EdgePolarity::Forward,
+        WirePolarity::Inverse => temper_substrate::payloads::EdgePolarity::Inverse,
+    };
+    let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let label = (!req.label.is_empty()).then_some(req.label.as_str());
+
+    let edge = temper_substrate::writes::assert_anchored_edge_with(
+        pool,
+        temper_substrate::writes::AssertAnchoredEdgeParams {
+            source,
+            target,
+            kind,
+            polarity,
+            label,
+            weight: req.weight,
+            home,
+            emitter,
+        },
+        temper_substrate::events::EventContext {
+            authorship: act.authorship,
+            invocation: act.invocation,
+            correlation: act.correlation,
+        },
+    )
+    .await
+    .map_err(|e| ApiError::Internal(format!("blob relation assert failed: {e}")))?;
+
+    Ok(WireRelationAck {
+        edge_handle: edge.uuid(),
+    })
+}
+
+/// List the blobs the caller can read, optionally scoped to one home anchor. The gate is
+/// the substrate's set read — `blob_readable_by_profile`, the NAMED predicate — so this
+/// surface honors visibility and cannot redefine it (the register's list-surfaces arm).
+pub async fn list_blobs(
+    pool: &PgPool,
+    caller: ProfileId,
+    home: Option<temper_substrate::payloads::AnchorRef>,
+) -> ApiResult<Vec<WireBlobSummary>> {
+    let rows = temper_substrate::readback::blobs_readable_by_profile(pool, caller, home.as_ref())
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(rows
+        .into_iter()
+        .map(|r| WireBlobSummary {
+            blob_id: r.blob_id,
+            content_hash: r.content_hash,
+            content_type: r.content_type,
+            content_bytes: r.content_bytes,
+            created: r.created,
+        })
+        .collect())
+}
+
+/// The edges incident to one blob, visible under the caller's standing — the dedicated
+/// read surface D3 promises ("what relates to this blob"). An invisible-or-absent blob is
+/// `NotFound` (the read-through's face); a visible blob with no relations is an empty list.
+pub async fn blob_relations(
+    pool: &PgPool,
+    caller: ProfileId,
+    blob: BlobId,
+) -> ApiResult<Vec<WireRelationRow>> {
+    let rows = temper_substrate::readback::blob_relations(pool, caller, blob)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .ok_or_else(|| ApiError::NotFound("blob not found".to_string()))?;
+
+    rows.into_iter()
+        .map(|r| {
+            Ok(WireRelationRow {
+                edge_id: r.edge_id.uuid(),
+                peer_table: r.peer_table,
+                peer_id: r.peer_id,
+                peer_title: r.peer_title,
+                edge_kind: parse_wire_edge_kind(&r.edge_kind)?,
+                polarity: parse_wire_polarity(&r.polarity)?,
+                label: r.label,
+                direction: r.direction,
+                weight: r.weight,
+                created: r.created,
+            })
+        })
+        .collect()
+}
+
+/// The SQL enum's value set is fixed by DDL; a miss means the DB and the code disagree,
+/// which is a 500, never a caller-facing refusal.
+fn parse_wire_edge_kind(s: &str) -> ApiResult<WireEdgeKind> {
+    match s {
+        "express" => Ok(WireEdgeKind::Express),
+        "contains" => Ok(WireEdgeKind::Contains),
+        "leads_to" => Ok(WireEdgeKind::LeadsTo),
+        "near" => Ok(WireEdgeKind::Near),
+        other => Err(ApiError::Internal(format!(
+            "unknown edge_kind value in kb_edges: {other}"
+        ))),
+    }
+}
+
+fn parse_wire_polarity(s: &str) -> ApiResult<WirePolarity> {
+    match s {
+        "forward" => Ok(WirePolarity::Forward),
+        "inverse" => Ok(WirePolarity::Inverse),
+        other => Err(ApiError::Internal(format!(
+            "unknown edge_polarity value in kb_edges: {other}"
+        ))),
+    }
+}

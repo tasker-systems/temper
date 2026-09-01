@@ -566,16 +566,16 @@ async fn insert_edges(
     edges: &mut HashMap<String, Uuid>,
 ) -> Result<()> {
     for e in &world.edges {
-        let src = ResourceId::from(
+        let src = crate::payloads::AnchorRef::resource(ResourceId::from(
             *resources
                 .get(&e.from)
                 .with_context(|| format!("edge from unknown key {}", e.from))?,
-        );
-        let tgt = ResourceId::from(
+        ));
+        let tgt = crate::payloads::AnchorRef::resource(ResourceId::from(
             *resources
                 .get(&e.to)
                 .with_context(|| format!("edge to unknown key {}", e.to))?,
-        );
+        ));
         let home = match &e.home {
             EdgeHomeDef::Cogmap { name } => EdgeHome::Cogmap(CogmapId::from(
                 *cogmaps

@@ -54,6 +54,7 @@ fn mirror_kind(k: AnchorTable) -> LedgerRefKind {
     match k {
         AnchorTable::Contexts => LedgerRefKind::Contexts,
         AnchorTable::Cogmaps => LedgerRefKind::Cogmaps,
+        AnchorTable::Blobs => LedgerRefKind::Blobs,
         AnchorTable::Resources => LedgerRefKind::Resources,
         AnchorTable::Edges => LedgerRefKind::Edges,
         AnchorTable::ContentBlocks => LedgerRefKind::ContentBlocks,
@@ -76,6 +77,7 @@ const ALL_RELS: &[RefRel] = &[
 const ALL_KINDS: &[AnchorTable] = &[
     AnchorTable::Contexts,
     AnchorTable::Cogmaps,
+    AnchorTable::Blobs,
     AnchorTable::Resources,
     AnchorTable::Edges,
     AnchorTable::ContentBlocks,

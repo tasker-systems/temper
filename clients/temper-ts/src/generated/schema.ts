@@ -205,7 +205,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List the blobs the caller can read (optionally scoped to one home)
+         * @description Visibility is `blob_readable_by_profile` — the same predicate the read-through gates
+         *     on, never restated here — so the response IS the caller's blob set and nothing more.
+         */
+        get: operations["list_blobs"];
         put?: never;
         /**
          * Commit bytes as a blob — one multipart request at or under the D7 threshold
@@ -357,6 +362,39 @@ export interface paths {
         get: operations["get_blob"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/blobs/{id}/relations": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the edges incident to a blob — "what relates to this blob" (D3)
+         * @description Edges are narrowed by `edges_visible_to` after the blob's own readability gate, so a
+         *     relation across a visibility boundary leaks neither side: the response holds only
+         *     edges whose home AND both readable endpoints the caller already has standing for.
+         */
+        get: operations["blob_relations"];
+        put?: never;
+        /**
+         * Assert one relation between a blob and another anchor
+         * @description The edge homes on the BLOB's home anchor — the blob-scoped surface answers to the
+         *     blob's standing — and the peer must be readable by the caller (`endpoint_readable_
+         *     by_profile`), so a relation can never point at an anchor the caller cannot see. Gate
+         *     train, in order: blob readable → 404; home authorable → 403; peer readable → 404.
+         *     Retraction rides the incumbent fold endpoint; relations come and go individually.
+         */
+        post: operations["relate_blob"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2809,6 +2847,86 @@ export interface components {
          *     resource and related to resources by edges (spec: binary blobs, 2026-09-01).
          */
         BlobId: string;
+        /**
+         * @description The acknowledgement of `POST /api/blobs/{id}/relations` — the edge handle, feeding the
+         *     incumbent fold endpoint (`POST /api/relationships/{edge_handle}/fold`) for retraction.
+         *     Relations come and go individually (`one-blob-many-relations`); folding rides the
+         *     relationship machinery every edge already answers to.
+         */
+        BlobRelationAck: {
+            /** Format: uuid */
+            edge_handle: string;
+        };
+        /**
+         * @description Assert a relation between a blob and another anchor — `POST /api/blobs/{id}/relations`.
+         *     The edge homes on the BLOB's home anchor (the blob-scoped surface answers to the blob's
+         *     standing), and the peer must be readable by the caller (`endpoint_readable_by_profile`)
+         *     — "relations are to resources the actor can already see", generalized to all three
+         *     endpoint kinds.
+         */
+        BlobRelationAssertRequest: components["schemas"]["ActInput"] & {
+            direction?: components["schemas"]["BlobRelationDirection"];
+            edge_kind: components["schemas"]["EdgeKind"];
+            label: string;
+            /** Format: uuid */
+            peer_id: string;
+            /** @description `kb_resources` | `kb_cogmaps` | `kb_blobs` — the peer endpoint's table. */
+            peer_table: string;
+            polarity: components["schemas"]["Polarity"];
+            /** Format: double */
+            weight: number;
+        };
+        /**
+         * @description Which end of the asserted edge the blob occupies. `blob_as_source` is the natural
+         *     `figure_of`-shaped act (the figure points at what it figures); `blob_as_target` is the
+         *     derivation-source act (resource → blob, the file it was created from). Typed, not a
+         *     free string: the refusal for a malformed value must name the two admissible values.
+         * @enum {string}
+         */
+        BlobRelationDirection: "blob_as_source" | "blob_as_target";
+        /**
+         * @description One edge incident to a blob, as `GET /api/blobs/{id}/relations` reports it. The peer is
+         *     whatever sits on the other end — a resource (with its title), a cogmap, or another blob
+         *     — so `peer_table` rides along and `peer_title` is null for non-resource peers.
+         *     `direction` is the edge listing's own vocabulary (`outgoing` = the blob is the source).
+         */
+        BlobRelationRow: {
+            /** Format: date-time */
+            created: string;
+            direction: string;
+            /** Format: uuid */
+            edge_id: string;
+            edge_kind: components["schemas"]["EdgeKind"];
+            label?: string | null;
+            /** Format: uuid */
+            peer_id: string;
+            /** @description `kb_resources` | `kb_cogmaps` | `kb_blobs` — spelled exactly as the DDL. */
+            peer_table: string;
+            peer_title?: string | null;
+            polarity: components["schemas"]["Polarity"];
+            /** Format: double */
+            weight: number;
+        };
+        /**
+         * @description One blob as the list surface reports it (`GET /api/blobs`). The list can only ever
+         *     contain blobs the caller can read — the gate lives server-side on the same
+         *     `blob_readable_by_profile` predicate the read-through uses, so this shape is a view of
+         *     the caller's own blob set, never a discovery oracle.
+         */
+        BlobSummary: {
+            blob_id: components["schemas"]["BlobId"];
+            /** Format: int64 */
+            content_bytes: number;
+            /** @description Bare sha256 hex — the dedup key and the erasure join key. */
+            content_hash: string;
+            /**
+             * @description The stored media type; `None` only on a post-erasure row (metadata nulled, bytes
+             *     unreachable — the erased shape renders honestly rather than being hidden).
+             */
+            content_type?: string | null;
+            /** Format: date-time */
+            created: string;
+        };
         /**
          * @description Begin a segmented upload — `POST /api/blobs/uploads`. Declares the whole upload up
          *     front: the home the assembled blob will commit into, and the media type it will
@@ -8111,6 +8229,52 @@ export interface operations {
             };
         };
     };
+    list_blobs: {
+        parameters: {
+            query?: {
+                /** @description `kb_contexts` or `kb_cogmaps` — scope to one home anchor */
+                home_table?: string;
+                /** @description The home anchor's id (with home_table) */
+                home_id?: string;
+            };
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's readable blobs, newest commit first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlobSummary"][];
+                };
+            };
+            /** @description Malformed home scope, or the instance has no blob store configured */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     commit_blob: {
         parameters: {
             query?: never;
@@ -8443,6 +8607,116 @@ export interface operations {
                 };
             };
             /** @description Not found or not visible — indistinguishable by design */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    blob_relations: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Blob ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The visible edges incident to the blob, both directions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlobRelationRow"][];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Blob absent or not visible — indistinguishable by design */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    relate_blob: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Blob ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BlobRelationAssertRequest"];
+            };
+        };
+        responses: {
+            /** @description Relation asserted (idempotent — re-asserting the same edge returns its handle) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlobRelationAck"];
+                };
+            };
+            /** @description Refused — malformed peer table or label, or the instance has no blob store configured */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The blob's home is readable but not authorable */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Blob absent or not visible, or the peer not readable — each indistinguishable from absent by design */
             404: {
                 headers: {
                     [name: string]: unknown;

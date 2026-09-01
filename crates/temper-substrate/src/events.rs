@@ -295,8 +295,14 @@ pub enum SeedAction<'a> {
         segmented: bool,
     },
     RelationshipAssert {
-        src: ResourceId,
-        tgt: ResourceId,
+        /// The edge's source — polymorphic per [`payloads::AnchorRef`]: a resource on every
+        /// incumbent path, and a **blob** on the blob-relation write path (D3: relations are
+        /// ordinary edges; the kb_edges endpoint CHECK admits `kb_blobs`). The projector reads
+        /// the table straight from the payload, so no SQL changed when this widened.
+        src: payloads::AnchorRef,
+        /// The edge's target — same polymorphism as `src`. A blob target on the
+        /// derivation-source write path (resource → blob, `derivation_source`).
+        tgt: payloads::AnchorRef,
         kind: EdgeKind,
         /// The edge's polarity, carried verbatim (§4). The scenario paths pass
         /// `payloads::EdgePolarity::Forward`; synthesis carries the production value.
@@ -898,8 +904,8 @@ pub async fn fire_with(
         } => {
             let payload = payloads::RelationshipAsserted {
                 edge_id: EdgeId::from(Uuid::now_v7()),
-                source: payloads::AnchorRef::resource(src),
-                target: payloads::AnchorRef::resource(tgt),
+                source: src,
+                target: tgt,
                 edge_kind: kind,
                 polarity,
                 label: label.map(str::to_owned),

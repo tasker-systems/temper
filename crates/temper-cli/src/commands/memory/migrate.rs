@@ -355,6 +355,7 @@ fn write_proposal(
     crate::commands::resource::create(
         config,
         crate::commands::resource::CreateResourceArgs {
+            preserve_source: false,
             doc_type: MEMORY_DOC_TYPE,
             title: &proposal.title,
             context: Some(context_ref),

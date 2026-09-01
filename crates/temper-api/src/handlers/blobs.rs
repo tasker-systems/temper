@@ -17,8 +17,8 @@ use axum::response::Response;
 use axum::Json;
 use serde::Deserialize;
 use temper_core::types::blob::{
-    BlobCommitResponse, BlobUploadBeginRequest, BlobUploadBeginResponse, BlobUploadFinalizeRequest,
-    BlobUploadProgress,
+    BlobCommitResponse, BlobRelationAck, BlobRelationAssertRequest, BlobSummary,
+    BlobUploadBeginRequest, BlobUploadBeginResponse, BlobUploadFinalizeRequest, BlobUploadProgress,
 };
 use temper_core::types::ids::{BlobId, ProfileId};
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
@@ -462,4 +462,171 @@ pub async fn finalize_upload(
         content_bytes: outcome.content_bytes,
         deduped: outcome.deduped,
     }))
+}
+
+// ── Blob list + relations (S4) ────────────────────────────────────────────────────
+// Same thin shape as every handler in this file: AuthUser → service → ApiError. The
+// gates live in the service (the NAMED predicates) — these handlers parse wire strings
+// and route, never restate visibility.
+
+#[derive(Debug, Deserialize)]
+pub struct BlobListQuery {
+    /// Optional home scope: `kb_contexts` or `kb_cogmaps`. With `home_id`, scopes the
+    /// list to blobs homed in that anchor; absent, the list is every blob the caller
+    /// can read — which is the caller's own view, never a discovery oracle.
+    pub home_table: Option<String>,
+    pub home_id: Option<Uuid>,
+}
+
+/// List the blobs the caller can read (optionally scoped to one home)
+///
+/// Visibility is `blob_readable_by_profile` — the same predicate the read-through gates
+/// on, never restated here — so the response IS the caller's blob set and nothing more.
+#[utoipa::path(
+    get,
+    operation_id = "list_blobs",
+    path = "/api/blobs",
+    tag = "Blobs",
+    params(
+        ("home_table" = Option<String>, Query, description = "`kb_contexts` or `kb_cogmaps` — scope to one home anchor"),
+        ("home_id" = Option<Uuid>, Query, description = "The home anchor's id (with home_table)"),
+    ),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The caller's readable blobs, newest commit first", body = [BlobSummary]),
+        (status = 400, description = "Malformed home scope, or the instance has no blob store configured", body = ErrorBody),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    )
+)]
+pub async fn list(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(q): Query<BlobListQuery>,
+) -> ApiResult<Json<Vec<BlobSummary>>> {
+    if state.blob_store.is_none() {
+        return Err(blob_disabled());
+    }
+    let caller = ProfileId::from(auth.0.profile().id);
+    let home = parse_home_scope(q.home_table, q.home_id)?;
+    let rows =
+        temper_services::services::blob_service::list_blobs(&state.pool, caller, home).await?;
+    Ok(Json(rows))
+}
+
+/// The optional home scope for the list, in `parse_home`'s terms: a home is a
+/// kb_contexts or kb_cogmaps anchor, and the refusal says so in one voice.
+fn parse_home_scope(
+    home_table: Option<String>,
+    home_id: Option<Uuid>,
+) -> ApiResult<Option<temper_substrate::payloads::AnchorRef>> {
+    use temper_substrate::payloads::{AnchorRef, AnchorTable};
+    match (home_table, home_id) {
+        (None, None) => Ok(None),
+        (Some(table), Some(id)) => {
+            let anchor_table = match table.as_str() {
+                "kb_contexts" => AnchorTable::Contexts,
+                "kb_cogmaps" => AnchorTable::Cogmaps,
+                other => {
+                    return Err(ApiError::BadRequest(format!(
+                        "blob_list: a home anchor is a kb_contexts or kb_cogmaps anchor — got \
+                         home table {other}"
+                    )))
+                }
+            };
+            Ok(Some(AnchorRef {
+                table: anchor_table,
+                id,
+            }))
+        }
+        (table, id) => Err(ApiError::BadRequest(format!(
+            "blob_list: home_table and home_id are a pair — got home_table {} and home_id {}",
+            table.as_deref().unwrap_or("<absent>"),
+            id.map(|u| u.to_string())
+                .unwrap_or_else(|| "<absent>".into())
+        ))),
+    }
+}
+
+/// Assert one relation between a blob and another anchor
+///
+/// The edge homes on the BLOB's home anchor — the blob-scoped surface answers to the
+/// blob's standing — and the peer must be readable by the caller (`endpoint_readable_
+/// by_profile`), so a relation can never point at an anchor the caller cannot see. Gate
+/// train, in order: blob readable → 404; home authorable → 403; peer readable → 404.
+/// Retraction rides the incumbent fold endpoint; relations come and go individually.
+#[utoipa::path(
+    post,
+    operation_id = "relate_blob",
+    path = "/api/blobs/{id}/relations",
+    tag = "Blobs",
+    params(("id" = Uuid, Path, description = "Blob ID")),
+    security(("bearer_auth" = [])),
+    request_body = BlobRelationAssertRequest,
+    responses(
+        (status = 200, description = "Relation asserted (idempotent — re-asserting the same edge returns its handle)", body = BlobRelationAck),
+        (status = 400, description = "Refused — malformed peer table or label, or the instance has no blob store configured", body = ErrorBody),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "The blob's home is readable but not authorable", body = ErrorBody),
+        (status = 404, description = "Blob absent or not visible, or the peer not readable — each indistinguishable from absent by design", body = ErrorBody),
+    )
+)]
+pub async fn relate(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(blob_id): Path<Uuid>,
+    Json(req): Json<BlobRelationAssertRequest>,
+) -> ApiResult<Json<BlobRelationAck>> {
+    if state.blob_store.is_none() {
+        return Err(blob_disabled());
+    }
+    let caller = ProfileId::from(auth.0.profile().id);
+    let act = req.act.clone().into_act_context().map_err(ApiError::from)?;
+    let ack = temper_services::services::blob_service::relate_blob(
+        &state.pool,
+        caller,
+        temper_core::types::ids::BlobId::from(blob_id),
+        &req,
+        act,
+    )
+    .await?;
+    Ok(Json(ack))
+}
+
+/// List the edges incident to a blob — "what relates to this blob" (D3)
+///
+/// Edges are narrowed by `edges_visible_to` after the blob's own readability gate, so a
+/// relation across a visibility boundary leaks neither side: the response holds only
+/// edges whose home AND both readable endpoints the caller already has standing for.
+#[utoipa::path(
+    get,
+    operation_id = "blob_relations",
+    path = "/api/blobs/{id}/relations",
+    tag = "Blobs",
+    params(("id" = Uuid, Path, description = "Blob ID")),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The visible edges incident to the blob, both directions", body = [temper_core::types::blob::BlobRelationRow]),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 404, description = "Blob absent or not visible — indistinguishable by design", body = ErrorBody),
+    )
+)]
+pub async fn relations(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(blob_id): Path<Uuid>,
+) -> ApiResult<Json<Vec<temper_core::types::blob::BlobRelationRow>>> {
+    // Blob-scoped read, so the same disabled refusal as `get`: an unconfigured instance
+    // has no blobs, and the operator should hear WHY, not just silence. (Only the
+    // owner-private staging reads skip the gate — no session can exist for one to find.)
+    if state.blob_store.is_none() {
+        return Err(blob_disabled());
+    }
+    let caller = ProfileId::from(auth.0.profile().id);
+    let rows = temper_services::services::blob_service::blob_relations(
+        &state.pool,
+        caller,
+        temper_core::types::ids::BlobId::from(blob_id),
+    )
+    .await?;
+    Ok(Json(rows))
 }

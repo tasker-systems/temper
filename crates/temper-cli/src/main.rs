@@ -169,6 +169,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     sources,
                     sources_as_edges,
                     no_source,
+                    preserve_source,
                     act,
                 } => {
                     if show_template {
@@ -199,6 +200,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                             sources,
                             sources_as_edges,
                             no_source,
+                            preserve_source,
                             format: output_format,
                             act: act.into_act_input()?,
                         },
@@ -1587,6 +1589,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
             )
         }
         Commands::Edge { action } => temper_cli::commands::edge::run(action, output_format),
+        Commands::Blob { action } => temper_cli::commands::blob::run(action, output_format),
         Commands::Cogmap { cmd } => match cmd {
             CogmapCmd::List {
                 name_contains,

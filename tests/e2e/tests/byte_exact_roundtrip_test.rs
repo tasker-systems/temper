@@ -128,6 +128,7 @@ async fn byte_exact_roundtrip(pool: PgPool) {
                 temper_cli::commands::resource::create(
                     &cli_config,
                     temper_cli::commands::resource::CreateResourceArgs {
+                        preserve_source: false,
                         open_meta: None,
                         goal: None,
                         doc_type: "research",

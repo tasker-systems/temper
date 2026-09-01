@@ -180,6 +180,76 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # List the edges incident to a blob — \"what relates to this blob\" (D3)
+    # Edges are narrowed by `edges_visible_to` after the blob's own readability gate, so a relation across a visibility boundary leaks neither side: the response holds only edges whose home AND both readable endpoints the caller already has standing for.
+    # @param id [String] Blob ID
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<BlobRelationRow>]
+    def blob_relations(id, opts = {})
+      data, _status_code, _headers = blob_relations_with_http_info(id, opts)
+      data
+    end
+
+    # List the edges incident to a blob — \&quot;what relates to this blob\&quot; (D3)
+    # Edges are narrowed by &#x60;edges_visible_to&#x60; after the blob&#39;s own readability gate, so a relation across a visibility boundary leaks neither side: the response holds only edges whose home AND both readable endpoints the caller already has standing for.
+    # @param id [String] Blob ID
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(Array<BlobRelationRow>, Integer, Hash)>] Array<BlobRelationRow> data, response status code and response headers
+    def blob_relations_with_http_info(id, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: BlobsApi.blob_relations ...'
+      end
+      # verify the required parameter 'id' is set
+      if @api_client.config.client_side_validation && id.nil?
+        fail ArgumentError, "Missing the required parameter 'id' when calling BlobsApi.blob_relations"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/blobs/{id}/relations'.sub('{id}', CGI.escape(id.to_s))
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body]
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'Array<BlobRelationRow>'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"BlobsApi.blob_relations",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:GET, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: BlobsApi#blob_relations\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
     # Read a staged upload's progress — the resume read
     # Returns the currently-landed segment set and the running byte total: the values a finalize echoes back as its concurrency tokens. The staging is caller-private until finalized — another profile's session answers 404, the same absent-not-refused posture every visibility gate renders.
     # @param id [String] Upload session ID
@@ -466,6 +536,157 @@ module Temper::Generated
       data, status_code, headers = @api_client.call_api(:GET, local_var_path, new_options)
       if @api_client.config.debugging
         @api_client.config.logger.debug "API called: BlobsApi#get_blob\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
+    # List the blobs the caller can read (optionally scoped to one home)
+    # Visibility is `blob_readable_by_profile` — the same predicate the read-through gates on, never restated here — so the response IS the caller's blob set and nothing more.
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :home_table &#x60;kb_contexts&#x60; or &#x60;kb_cogmaps&#x60; — scope to one home anchor
+    # @option opts [String] :home_id The home anchor&#39;s id (with home_table)
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<BlobSummary>]
+    def list_blobs(opts = {})
+      data, _status_code, _headers = list_blobs_with_http_info(opts)
+      data
+    end
+
+    # List the blobs the caller can read (optionally scoped to one home)
+    # Visibility is &#x60;blob_readable_by_profile&#x60; — the same predicate the read-through gates on, never restated here — so the response IS the caller&#39;s blob set and nothing more.
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :home_table &#x60;kb_contexts&#x60; or &#x60;kb_cogmaps&#x60; — scope to one home anchor
+    # @option opts [String] :home_id The home anchor&#39;s id (with home_table)
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(Array<BlobSummary>, Integer, Hash)>] Array<BlobSummary> data, response status code and response headers
+    def list_blobs_with_http_info(opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: BlobsApi.list_blobs ...'
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/blobs'
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+      query_params[:'home_table'] = opts[:'home_table'] if !opts[:'home_table'].nil?
+      query_params[:'home_id'] = opts[:'home_id'] if !opts[:'home_id'].nil?
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body]
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'Array<BlobSummary>'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"BlobsApi.list_blobs",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:GET, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: BlobsApi#list_blobs\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
+    # Assert one relation between a blob and another anchor
+    # The edge homes on the BLOB's home anchor — the blob-scoped surface answers to the blob's standing — and the peer must be readable by the caller (`endpoint_readable_ by_profile`), so a relation can never point at an anchor the caller cannot see. Gate train, in order: blob readable → 404; home authorable → 403; peer readable → 404. Retraction rides the incumbent fold endpoint; relations come and go individually.
+    # @param id [String] Blob ID
+    # @param blob_relation_assert_request [BlobRelationAssertRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [BlobRelationAck]
+    def relate_blob(id, blob_relation_assert_request, opts = {})
+      data, _status_code, _headers = relate_blob_with_http_info(id, blob_relation_assert_request, opts)
+      data
+    end
+
+    # Assert one relation between a blob and another anchor
+    # The edge homes on the BLOB&#39;s home anchor — the blob-scoped surface answers to the blob&#39;s standing — and the peer must be readable by the caller (&#x60;endpoint_readable_ by_profile&#x60;), so a relation can never point at an anchor the caller cannot see. Gate train, in order: blob readable → 404; home authorable → 403; peer readable → 404. Retraction rides the incumbent fold endpoint; relations come and go individually.
+    # @param id [String] Blob ID
+    # @param blob_relation_assert_request [BlobRelationAssertRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(BlobRelationAck, Integer, Hash)>] BlobRelationAck data, response status code and response headers
+    def relate_blob_with_http_info(id, blob_relation_assert_request, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: BlobsApi.relate_blob ...'
+      end
+      # verify the required parameter 'id' is set
+      if @api_client.config.client_side_validation && id.nil?
+        fail ArgumentError, "Missing the required parameter 'id' when calling BlobsApi.relate_blob"
+      end
+      # verify the required parameter 'blob_relation_assert_request' is set
+      if @api_client.config.client_side_validation && blob_relation_assert_request.nil?
+        fail ArgumentError, "Missing the required parameter 'blob_relation_assert_request' when calling BlobsApi.relate_blob"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/blobs/{id}/relations'.sub('{id}', CGI.escape(id.to_s))
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      # HTTP header 'Content-Type'
+      content_type = @api_client.select_header_content_type(['application/json'])
+      if !content_type.nil?
+          header_params['Content-Type'] = content_type
+      end
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body] || @api_client.object_to_http_body(blob_relation_assert_request)
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'BlobRelationAck'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"BlobsApi.relate_blob",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:POST, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: BlobsApi#relate_blob\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
       end
       return data, status_code, headers
     end

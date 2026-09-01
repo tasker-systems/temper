@@ -643,6 +643,76 @@
           }
         }
       ],
+      "get": {
+        "tags": [
+          "Blobs"
+        ],
+        "summary": "List the blobs the caller can read (optionally scoped to one home)",
+        "description": "Visibility is `blob_readable_by_profile` — the same predicate the read-through gates\non, never restated here — so the response IS the caller's blob set and nothing more.",
+        "operationId": "list_blobs",
+        "parameters": [
+          {
+            "name": "home_table",
+            "in": "query",
+            "description": "`kb_contexts` or `kb_cogmaps` — scope to one home anchor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "home_id",
+            "in": "query",
+            "description": "The home anchor's id (with home_table)",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The caller's readable blobs, newest commit first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BlobSummary"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed home scope, or the instance has no blob store configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Blobs"
+      },
       "post": {
         "tags": [
           "Blobs"
@@ -1145,6 +1215,172 @@
           },
           "404": {
             "description": "Not found or not visible — indistinguishable by design",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Blobs"
+      }
+    },
+    "/api/blobs/{id}/relations": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Blobs"
+        ],
+        "summary": "List the edges incident to a blob — \"what relates to this blob\" (D3)",
+        "description": "Edges are narrowed by `edges_visible_to` after the blob's own readability gate, so a\nrelation across a visibility boundary leaks neither side: the response holds only\nedges whose home AND both readable endpoints the caller already has standing for.",
+        "operationId": "blob_relations",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Blob ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The visible edges incident to the blob, both directions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BlobRelationRow"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Blob absent or not visible — indistinguishable by design",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Blobs"
+      },
+      "post": {
+        "tags": [
+          "Blobs"
+        ],
+        "summary": "Assert one relation between a blob and another anchor",
+        "description": "The edge homes on the BLOB's home anchor — the blob-scoped surface answers to the\nblob's standing — and the peer must be readable by the caller (`endpoint_readable_\nby_profile`), so a relation can never point at an anchor the caller cannot see. Gate\ntrain, in order: blob readable → 404; home authorable → 403; peer readable → 404.\nRetraction rides the incumbent fold endpoint; relations come and go individually.",
+        "operationId": "relate_blob",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Blob ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlobRelationAssertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Relation asserted (idempotent — re-asserting the same edge returns its handle)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlobRelationAck"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused — malformed peer table or label, or the instance has no blob store configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The blob's home is readable but not authorable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Blob absent or not visible, or the peer not readable — each indistinguishable from absent by design",
             "content": {
               "application/json": {
                 "schema": {
@@ -9972,6 +10208,164 @@
         "type": "string",
         "format": "uuid",
         "description": "A `kb_blobs.id` value — one immutable, content-addressed binary blob, homed like a\nresource and related to resources by edges (spec: binary blobs, 2026-09-01)."
+      },
+      "BlobRelationAck": {
+        "type": "object",
+        "description": "The acknowledgement of `POST /api/blobs/{id}/relations` — the edge handle, feeding the\nincumbent fold endpoint (`POST /api/relationships/{edge_handle}/fold`) for retraction.\nRelations come and go individually (`one-blob-many-relations`); folding rides the\nrelationship machinery every edge already answers to.",
+        "required": [
+          "edge_handle"
+        ],
+        "properties": {
+          "edge_handle": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "BlobRelationAssertRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ActInput",
+            "description": "Per-act correlation + discrete agent authorship, the relationship endpoints' shape."
+          },
+          {
+            "type": "object",
+            "required": [
+              "peer_table",
+              "peer_id",
+              "edge_kind",
+              "polarity",
+              "label",
+              "weight"
+            ],
+            "properties": {
+              "direction": {
+                "$ref": "#/components/schemas/BlobRelationDirection"
+              },
+              "edge_kind": {
+                "$ref": "#/components/schemas/EdgeKind"
+              },
+              "label": {
+                "type": "string"
+              },
+              "peer_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "peer_table": {
+                "type": "string",
+                "description": "`kb_resources` | `kb_cogmaps` | `kb_blobs` — the peer endpoint's table."
+              },
+              "polarity": {
+                "$ref": "#/components/schemas/Polarity"
+              },
+              "weight": {
+                "type": "number",
+                "format": "double"
+              }
+            }
+          }
+        ],
+        "description": "Assert a relation between a blob and another anchor — `POST /api/blobs/{id}/relations`.\nThe edge homes on the BLOB's home anchor (the blob-scoped surface answers to the blob's\nstanding), and the peer must be readable by the caller (`endpoint_readable_by_profile`)\n— \"relations are to resources the actor can already see\", generalized to all three\nendpoint kinds."
+      },
+      "BlobRelationDirection": {
+        "type": "string",
+        "description": "Which end of the asserted edge the blob occupies. `blob_as_source` is the natural\n`figure_of`-shaped act (the figure points at what it figures); `blob_as_target` is the\nderivation-source act (resource → blob, the file it was created from). Typed, not a\nfree string: the refusal for a malformed value must name the two admissible values.",
+        "enum": [
+          "blob_as_source",
+          "blob_as_target"
+        ]
+      },
+      "BlobRelationRow": {
+        "type": "object",
+        "description": "One edge incident to a blob, as `GET /api/blobs/{id}/relations` reports it. The peer is\nwhatever sits on the other end — a resource (with its title), a cogmap, or another blob\n— so `peer_table` rides along and `peer_title` is null for non-resource peers.\n`direction` is the edge listing's own vocabulary (`outgoing` = the blob is the source).",
+        "required": [
+          "edge_id",
+          "peer_table",
+          "peer_id",
+          "edge_kind",
+          "polarity",
+          "direction",
+          "weight",
+          "created"
+        ],
+        "properties": {
+          "created": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "direction": {
+            "type": "string"
+          },
+          "edge_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "edge_kind": {
+            "$ref": "#/components/schemas/EdgeKind"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "peer_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "peer_table": {
+            "type": "string",
+            "description": "`kb_resources` | `kb_cogmaps` | `kb_blobs` — spelled exactly as the DDL."
+          },
+          "peer_title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "polarity": {
+            "$ref": "#/components/schemas/Polarity"
+          },
+          "weight": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "BlobSummary": {
+        "type": "object",
+        "description": "One blob as the list surface reports it (`GET /api/blobs`). The list can only ever\ncontain blobs the caller can read — the gate lives server-side on the same\n`blob_readable_by_profile` predicate the read-through uses, so this shape is a view of\nthe caller's own blob set, never a discovery oracle.",
+        "required": [
+          "blob_id",
+          "content_hash",
+          "content_bytes",
+          "created"
+        ],
+        "properties": {
+          "blob_id": {
+            "$ref": "#/components/schemas/BlobId"
+          },
+          "content_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "content_hash": {
+            "type": "string",
+            "description": "Bare sha256 hex — the dedup key and the erasure join key."
+          },
+          "content_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The stored media type; `None` only on a post-erasure row (metadata nulled, bytes\nunreachable — the erased shape renders honestly rather than being hidden)."
+          },
+          "created": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
       },
       "BlobUploadBeginRequest": {
         "type": "object",

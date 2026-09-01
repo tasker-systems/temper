@@ -123,8 +123,8 @@ async fn assert_edge(
     let id = fire(
         &mut tx,
         SeedAction::RelationshipAssert {
-            src,
-            tgt,
+            src: temper_substrate::payloads::AnchorRef::resource(src),
+            tgt: temper_substrate::payloads::AnchorRef::resource(tgt),
             kind,
             polarity: EdgePolarity::Forward,
             label,

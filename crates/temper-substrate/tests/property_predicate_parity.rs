@@ -131,8 +131,8 @@ async fn edge_with(
     let id = fire(
         &mut tx,
         SeedAction::RelationshipAssert {
-            src,
-            tgt,
+            src: temper_substrate::payloads::AnchorRef::resource(src),
+            tgt: temper_substrate::payloads::AnchorRef::resource(tgt),
             kind: EdgeKind::LeadsTo,
             polarity: EdgePolarity::Forward,
             label: Some("rel"),

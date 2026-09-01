@@ -861,16 +861,46 @@ impl DbBackend {
     /// caller who legitimately sees the edge but may not author into its home.
     async fn check_edge_mutable(&self, edge_id: uuid::Uuid) -> Result<(), TemperError> {
         let home = sqlx::query!(
-            "SELECT source_id, target_table, target_id, home_anchor_table, home_anchor_id \
+            "SELECT source_table, source_id, target_table, target_id, home_anchor_table, \
+                    home_anchor_id \
              FROM kb_edges \
-             WHERE id = $1 AND source_table = 'kb_resources' AND NOT is_folded",
+             WHERE id = $1 AND NOT is_folded",
             edge_id,
         )
         .fetch_optional(&self.pool)
         .await
         .map_err(api_err)?
         .ok_or_else(|| TemperError::NotFound(format!("edge {edge_id} not found")))?;
-        self.check_can_modify_next(home.source_id).await?;
+
+        // Clause 1 is SOURCE-TYPED, because blob-endpoint edges (D3) have no
+        // `can_modify_resource` to run — a blob is immutable and homed like a resource, so
+        // its floor is: live row (`NOT is_folded`, the tombstone floor restated for the one
+        // table that keeps one) AND the caller can read the blob. The authority arm proper
+        // stays clause 2 (container-write on the home), exactly as it subsumes clause 1's
+        // authority arms for context-homed resources. `kb_cogmaps` as a SOURCE admits no
+        // authorization decision yet (no surface asserts one), so it denies — a new endpoint
+        // kind must arrive with its own decision, never inherit one by default.
+        match home.source_table.as_str() {
+            "kb_resources" => self.check_can_modify_next(home.source_id).await?,
+            "kb_blobs" => {
+                let live_and_readable: Option<bool> = sqlx::query_scalar!(
+                    r#"SELECT (NOT b.is_folded AND blob_readable_by_profile($1, b.id)) AS "ok!"
+                         FROM kb_blobs b
+                        WHERE b.id = $2"#,
+                    *self.profile_id,
+                    home.source_id,
+                )
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(api_err)?;
+                if !live_and_readable.unwrap_or(false) {
+                    // The edge row was visible, but its blob is gone from under it (erasure
+                    // pre-pass) or unreadable — an inconsistent probe, refused as absent.
+                    return Err(TemperError::NotFound(format!("edge {edge_id} not found")));
+                }
+            }
+            _ => return Err(TemperError::Forbidden),
+        }
         self.check_container_authorable(&home.home_anchor_table, home.home_anchor_id)
             .await?;
         self.check_endpoint_readable(&home.target_table, home.target_id)

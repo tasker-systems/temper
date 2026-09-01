@@ -57,6 +57,11 @@ lib/temper/generated/models/auditor_job_complete_ack.rb
 lib/temper/generated/models/bind_team_outcome.rb
 lib/temper/generated/models/bind_team_request.rb
 lib/temper/generated/models/blob_commit_response.rb
+lib/temper/generated/models/blob_relation_ack.rb
+lib/temper/generated/models/blob_relation_assert_request.rb
+lib/temper/generated/models/blob_relation_direction.rb
+lib/temper/generated/models/blob_relation_row.rb
+lib/temper/generated/models/blob_summary.rb
 lib/temper/generated/models/blob_upload_begin_request.rb
 lib/temper/generated/models/blob_upload_begin_response.rb
 lib/temper/generated/models/blob_upload_finalize_request.rb

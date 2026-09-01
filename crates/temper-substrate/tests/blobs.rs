@@ -309,9 +309,10 @@ async fn a_commit_without_provider_bytes_is_refused(pool: sqlx::PgPool) {
     assert_eq!(rows, 0, "a refused commit leaves no row");
 }
 
-/// Assert an edge whose TARGET is a blob, homed in the given context — driven through the SQL
-/// wrapper directly, because the Rust SeedAction endpoints are resource-typed today and the
-/// relate surface is the SURFACES task's deliverable. This is the write path as it exists.
+/// Assert an edge whose TARGET is a blob, homed in the given context — driven through the
+/// real Rust write path (`writes::assert_anchored_edge_with`, whose SeedAction endpoints
+/// widened to polymorphic `AnchorRef`s with the S4 relate surface; the SQL wrapper and the
+/// projector were polymorphic from the start).
 async fn assert_edge_to_blob(
     pool: &sqlx::PgPool,
     emitter: EntityId,
@@ -319,22 +320,23 @@ async fn assert_edge_to_blob(
     blob: BlobId,
     home: ContextId,
 ) -> Uuid {
-    let payload = serde_json::json!({
-        "edge_id": Uuid::now_v7(),
-        "source": {"table": "kb_resources", "id": src.uuid()},
-        "target": {"table": "kb_blobs", "id": blob.uuid()},
-        "edge_kind": "express",
-        "polarity": "forward",
-        "label": "evidence_for",
-        "weight": 1.0,
-        "home": {"table": "kb_contexts", "id": home.uuid()},
-    });
-    sqlx::query_scalar("SELECT relationship_assert($1, $2)")
-        .bind(payload)
-        .bind(emitter.uuid())
-        .fetch_one(pool)
-        .await
-        .unwrap()
+    let edge = writes::assert_anchored_edge_with(
+        pool,
+        writes::AssertAnchoredEdgeParams {
+            source: AnchorRef::resource(src),
+            target: AnchorRef::blob(blob),
+            kind: temper_substrate::affinity::EdgeKind::Express,
+            polarity: temper_substrate::payloads::EdgePolarity::Forward,
+            label: Some("evidence_for"),
+            weight: 1.0,
+            home: temper_substrate::events::EdgeHome::Context(home),
+            emitter,
+        },
+        EventContext::default(),
+    )
+    .await
+    .unwrap();
+    edge.uuid()
 }
 
 /// Grant `profile` READ on `context` — the access_grants_context_edge pattern: one grant row
@@ -725,4 +727,121 @@ async fn the_staging_pair_is_outside_replays_diff_set(pool: sqlx::PgPool) {
          pinned against the real table list: {:?}",
         dumps.iter().map(|(t, _)| t).collect::<Vec<_>>()
     );
+}
+
+// ── S4: the anchored (blob-endpoint) edge write — the relate surface's substrate half ────────
+// What is unknown here, and therefore what this pins:
+//
+// 1. **The widened SeedAction really projects a blob endpoint** — the payload's
+//    source/target tables ARE what `_project_relationship_asserted` writes; no SQL changed,
+//    and the row proves it (source_table = 'kb_blobs').
+// 2. **Idempotent re-assert is the active-edge invariant** — same (source, target, kind,
+//    label, home) returns the SAME edge id with the weight updated (`one-blob-many-relations`:
+//    a re-assert neither duplicates nor removes any other relation).
+// 3. **Replay reproduces blob-endpoint edges** — the projection is payload-driven, so replay
+//    must rebuild the kb_blobs-endpoint row exactly; a fire-path widening that broke replay
+//    would be a ledger divergence, the worst kind.
+
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_anchored_edge_write_carries_blob_endpoints_and_replays(pool: sqlx::PgPool) {
+    use temper_substrate::replay;
+
+    let (owner, emitter, home) = blob_world(&pool, "anchored-blob-edge").await;
+    grant_context_read(&pool, home.uuid(), owner.uuid(), owner.uuid()).await;
+    let resource = temper_substrate_test_resource(&pool, owner, emitter, home).await;
+    let bytes = b"relation-provenance.png".to_vec();
+    let (p, _hash, pathname) = params(home, owner, &bytes, "image/png", emitter);
+    let store = InMemoryBlobStore::default().with_object(pathname);
+    let blob = writes::commit_blob(&pool, &store, p).await.unwrap();
+
+    // Fire blob → resource through the real write path (the relate surface's shape,
+    // blob-as-source: the figure points at what it figures).
+    let mk = || writes::AssertAnchoredEdgeParams {
+        source: AnchorRef::blob(blob),
+        target: AnchorRef::resource(resource),
+        kind: temper_substrate::affinity::EdgeKind::Express,
+        polarity: temper_substrate::payloads::EdgePolarity::Forward,
+        label: Some("figure_of"),
+        weight: 1.0,
+        home: temper_substrate::events::EdgeHome::Context(home),
+        emitter,
+    };
+    let edge = writes::assert_anchored_edge(&pool, mk()).await.unwrap();
+
+    let (src_table, tgt_table, tgt_id): (String, String, Uuid) =
+        sqlx::query_as("SELECT source_table, target_table, target_id FROM kb_edges WHERE id = $1")
+            .bind(edge.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        src_table, "kb_blobs",
+        "the payload's table IS the endpoint table"
+    );
+    assert_eq!(tgt_table, "kb_resources");
+    assert_eq!(tgt_id, resource.uuid());
+
+    // Idempotent re-assert: same identity, new weight → the SAME edge, the weight updated.
+    let again = writes::assert_anchored_edge(
+        &pool,
+        writes::AssertAnchoredEdgeParams {
+            weight: 0.5,
+            ..mk()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        again.uuid(),
+        edge.uuid(),
+        "re-assert upserts, never duplicates"
+    );
+    let weight: f64 = sqlx::query_scalar("SELECT weight FROM kb_edges WHERE id = $1")
+        .bind(edge.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(weight, 0.5, "the re-assert's weight is the edge's weight");
+
+    // The other relation is untouched by all of the above: a second blob-related edge to a
+    // different peer survives the re-assert of the first.
+    let resource2 = temper_substrate_test_resource(&pool, owner, emitter, home).await;
+    let _other = writes::assert_anchored_edge(
+        &pool,
+        writes::AssertAnchoredEdgeParams {
+            target: AnchorRef::resource(resource2),
+            ..mk()
+        },
+    )
+    .await
+    .unwrap();
+    let live: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_edges \
+         WHERE source_table = 'kb_blobs' AND source_id = $1 AND NOT is_folded",
+    )
+    .bind(blob.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(live, 2, "two peers, two live relations");
+
+    // Replay: snapshot, reset, replay — every projection table must come back identical,
+    // blob-endpoint edges included (they are ordinary payload-driven projections).
+    let before = replay::dump_projections(&pool).await.unwrap();
+    let snap = replay::snapshot(&pool).await.unwrap();
+    common::reset_schema(&pool).await;
+    replay::replay(&pool, &snap).await.unwrap();
+    let after = replay::dump_projections(&pool).await.unwrap();
+    for ((table_a, a), (_table_b, b)) in before.iter().zip(after.iter()) {
+        assert_eq!(a, b, "projection table {table_a} diverged under replay");
+    }
+    let replayed: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_edges \
+         WHERE source_table = 'kb_blobs' AND source_id = $1 AND NOT is_folded",
+    )
+    .bind(blob.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(replayed, 2, "both blob-endpoint edges survive replay");
 }

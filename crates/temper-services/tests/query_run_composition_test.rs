@@ -626,8 +626,8 @@ async fn edge(pool: &PgPool, src: Uuid, tgt: Uuid, home: ContextId, emitter: Ent
     fire(
         &mut tx,
         SeedAction::RelationshipAssert {
-            src: ResourceId::from(src),
-            tgt: ResourceId::from(tgt),
+            src: temper_substrate::payloads::AnchorRef::resource(ResourceId::from(src)),
+            tgt: temper_substrate::payloads::AnchorRef::resource(ResourceId::from(tgt)),
             kind: EdgeKind::LeadsTo,
             polarity: EdgePolarity::Forward,
             label: Some("rel"),

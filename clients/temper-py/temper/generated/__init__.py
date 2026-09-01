@@ -81,6 +81,11 @@ __all__ = [
     "BindTeamOutcome",
     "BindTeamRequest",
     "BlobCommitResponse",
+    "BlobRelationAck",
+    "BlobRelationAssertRequest",
+    "BlobRelationDirection",
+    "BlobRelationRow",
+    "BlobSummary",
     "BlobUploadBeginRequest",
     "BlobUploadBeginResponse",
     "BlobUploadFinalizeRequest",
@@ -418,6 +423,11 @@ from temper.generated.models.auditor_job_complete_ack import AuditorJobCompleteA
 from temper.generated.models.bind_team_outcome import BindTeamOutcome as BindTeamOutcome
 from temper.generated.models.bind_team_request import BindTeamRequest as BindTeamRequest
 from temper.generated.models.blob_commit_response import BlobCommitResponse as BlobCommitResponse
+from temper.generated.models.blob_relation_ack import BlobRelationAck as BlobRelationAck
+from temper.generated.models.blob_relation_assert_request import BlobRelationAssertRequest as BlobRelationAssertRequest
+from temper.generated.models.blob_relation_direction import BlobRelationDirection as BlobRelationDirection
+from temper.generated.models.blob_relation_row import BlobRelationRow as BlobRelationRow
+from temper.generated.models.blob_summary import BlobSummary as BlobSummary
 from temper.generated.models.blob_upload_begin_request import BlobUploadBeginRequest as BlobUploadBeginRequest
 from temper.generated.models.blob_upload_begin_response import BlobUploadBeginResponse as BlobUploadBeginResponse
 from temper.generated.models.blob_upload_finalize_request import BlobUploadFinalizeRequest as BlobUploadFinalizeRequest

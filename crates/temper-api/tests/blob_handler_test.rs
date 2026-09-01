@@ -865,3 +865,460 @@ async fn begin_refuses_an_unknown_home_table(pool: PgPool) {
         "refusal must name the home vocabulary: {text}"
     );
 }
+
+// ─── S4 witnesses: the list + relations surfaces (the relate face of D3) ─────────────────────
+
+/// The relate request body, in the wire's own vocabulary.
+fn relate_body(
+    direction: &str,
+    peer_table: &str,
+    peer_id: Uuid,
+    label: &str,
+    weight: f64,
+) -> String {
+    format!(
+        r#"{{"direction":"{direction}","peer_table":"{peer_table}","peer_id":"{peer_id}","edge_kind":"express","polarity":"forward","label":"{label}","weight":{weight}}}"#
+    )
+}
+
+fn relate(app: &TestApp, token: &str, blob: Uuid, body: String) -> reqwest::RequestBuilder {
+    app.client
+        .post(app.url(&format!("/api/blobs/{blob}/relations")))
+        .header("Authorization", format!("Bearer {token}"))
+        .header("content-type", "application/json")
+        .body(body)
+}
+
+async fn relations_of(app: &TestApp, token: &str, blob: Uuid) -> (u16, serde_json::Value) {
+    let resp = app
+        .client
+        .get(app.url(&format!("/api/blobs/{blob}/relations")))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("request failed");
+    let status = resp.status().as_u16();
+    let body: serde_json::Value = resp.json().await.expect("json body");
+    (status, body)
+}
+
+async fn seed_witness_resource(app: &TestApp, ctx: Uuid, profile: Uuid, title: &str) -> Uuid {
+    let event = common::seed_genesis_event(&app.pool, profile, ctx).await;
+    common::seed_resource(&app.pool, ctx, profile, event, title, "research").await
+}
+
+/// one-blob-many-relations, at the surface the goal's actors actually drive: relating a
+/// blob to a second resource neither created nor removed the first; folding one leaves the
+/// other; and a re-assert upserts (same handle, new weight) rather than duplicating.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn one_blob_many_relations_come_and_go_individually(pool: PgPool) {
+    let cfg = blob_cfg(1 << 20, &["image/png"], 64 * 1024);
+    let app = blob_app(pool, cfg).await;
+    let (profile, ctx, token) = owner(&app.pool).await;
+
+    let resp = commit_multipart(
+        &app,
+        &token,
+        b"figure-bytes".to_vec(),
+        "image/png",
+        "kb_contexts",
+        ctx,
+    )
+    .send()
+    .await
+    .expect("request failed");
+    let blob: serde_json::Value = resp.json().await.expect("json body");
+    let blob_id: Uuid = blob["blob_id"]
+        .as_str()
+        .expect("blob_id")
+        .parse()
+        .expect("uuid");
+
+    let r1 = seed_witness_resource(&app, ctx, profile, "First figure target").await;
+    let r2 = seed_witness_resource(&app, ctx, profile, "Second figure target").await;
+
+    let resp = relate(
+        &app,
+        &token,
+        blob_id,
+        relate_body("blob_as_source", "kb_resources", r1, "figure_of", 1.0),
+    )
+    .send()
+    .await
+    .expect("request failed");
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "relate #1; body: {}",
+        resp.text().await.unwrap_or_default()
+    );
+    let handle1: Uuid = resp.json::<serde_json::Value>().await.unwrap()["edge_handle"]
+        .as_str()
+        .expect("edge_handle")
+        .parse()
+        .expect("uuid");
+    let resp = relate(
+        &app,
+        &token,
+        blob_id,
+        relate_body("blob_as_source", "kb_resources", r2, "figure_of", 1.0),
+    )
+    .send()
+    .await
+    .expect("request failed");
+    assert_eq!(resp.status().as_u16(), 200);
+    let handle2: Uuid = resp.json::<serde_json::Value>().await.unwrap()["edge_handle"]
+        .as_str()
+        .expect("edge_handle")
+        .parse()
+        .expect("uuid");
+    assert_ne!(handle1, handle2, "two relations, two handles");
+
+    let (status, body) = relations_of(&app, &token, blob_id).await;
+    assert_eq!(status, 200);
+    let rows = body.as_array().expect("array");
+    assert_eq!(rows.len(), 2, "both relations list");
+    assert!(rows.iter().all(|r| r["direction"] == "outgoing"));
+    assert!(rows.iter().all(|r| r["peer_table"] == "kb_resources"));
+    assert!(
+        rows.iter()
+            .any(|r| r["peer_title"] == "First figure target"),
+        "resource peers carry their title"
+    );
+
+    // Fold relation #1 through the INCUMBENT fold endpoint — retraction rides the
+    // relationship machinery every edge already answers to, blob endpoints included.
+    let resp = app
+        .client
+        .post(app.url(&format!("/api/relationships/{handle1}/fold")))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({"reason": "witness: fold one of two"}))
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(resp.status().as_u16(), 200, "fold must succeed");
+
+    let (status, body) = relations_of(&app, &token, blob_id).await;
+    assert_eq!(status, 200);
+    let rows = body.as_array().expect("array");
+    assert_eq!(rows.len(), 1, "folding one leaves the other");
+    assert_eq!(
+        rows[0]["edge_id"],
+        serde_json::json!(handle2),
+        "the SURVIVOR is relation #2"
+    );
+
+    // Re-assert #2 with a new weight: the same handle, the weight updated — never a
+    // duplicate active edge.
+    let resp = relate(
+        &app,
+        &token,
+        blob_id,
+        relate_body("blob_as_source", "kb_resources", r2, "figure_of", 2.0),
+    )
+    .send()
+    .await
+    .expect("request failed");
+    assert_eq!(resp.status().as_u16(), 200);
+    let reasserted: Uuid = resp.json::<serde_json::Value>().await.unwrap()["edge_handle"]
+        .as_str()
+        .expect("edge_handle")
+        .parse()
+        .expect("uuid");
+    assert_eq!(reasserted, handle2, "re-assert upserts the active edge");
+    let (_status, body) = relations_of(&app, &token, blob_id).await;
+    assert_eq!(
+        body.as_array().expect("array").len(),
+        1,
+        "still exactly one live relation"
+    );
+}
+
+/// The list and relations surfaces HONOR blob-visibility-self-contained — they gate on the
+/// same predicate the read-through uses and never widen it: an outsider's list excludes the
+/// blob, the outsider's relations read is the SAME 404 an unknown id gets, and a
+/// readable-but-not-authorable reader cannot relate (the edge homes in the blob's home).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn list_and_relations_surfaces_honor_blob_visibility(pool: PgPool) {
+    let cfg = blob_cfg(1 << 20, &["image/png"], 64 * 1024);
+    let app = blob_app(pool, cfg).await;
+    let (_profile, ctx, token) = owner(&app.pool).await;
+
+    let resp = commit_multipart(
+        &app,
+        &token,
+        b"visible-only-at-home".to_vec(),
+        "image/png",
+        "kb_contexts",
+        ctx,
+    )
+    .send()
+    .await
+    .expect("request failed");
+    let blob: serde_json::Value = resp.json().await.expect("json body");
+    let blob_id: Uuid = blob["blob_id"]
+        .as_str()
+        .expect("blob_id")
+        .parse()
+        .expect("uuid");
+
+    // The owner's list contains it; an outsider's list does not say it exists.
+    let resp = app
+        .client
+        .get(app.url("/api/blobs"))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(resp.status().as_u16(), 200);
+    let rows: Vec<serde_json::Value> = resp.json().await.expect("array");
+    assert!(rows
+        .iter()
+        .any(|r| r["blob_id"] == serde_json::json!(blob_id)));
+
+    let out_email = format!("blob-list-out-{}@example.com", Uuid::new_v4());
+    let (outsider, _) = fixtures::create_test_profile_with_context(&app.pool, &out_email).await;
+    let outsider_token = generate_test_jwt(&format!("test|{outsider}"), &out_email);
+    let resp = app
+        .client
+        .get(app.url("/api/blobs"))
+        .header("Authorization", format!("Bearer {outsider_token}"))
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(resp.status().as_u16(), 200);
+    let rows: Vec<serde_json::Value> = resp.json().await.expect("array");
+    assert!(
+        rows.iter()
+            .all(|r| r["blob_id"] != serde_json::json!(blob_id)),
+        "an outsider's list never names the blob"
+    );
+
+    // Relations: the SAME 404 for an invisible blob and an unknown one (probe learns nothing).
+    let (out_status, _) = relations_of(&app, &outsider_token, blob_id).await;
+    assert_eq!(out_status, 404);
+    let (unknown_status, _) = relations_of(&app, &outsider_token, Uuid::now_v7()).await;
+    assert_eq!(
+        unknown_status, 404,
+        "invisible and absent are indistinguishable"
+    );
+
+    // The home-authorable gate: an explicit context READ grant can list and read relations
+    // (visibility), but relating is authoring into the home → 403.
+    let reader_email = format!("blob-relate-ro-{}@example.com", Uuid::new_v4());
+    let (reader, _) = fixtures::create_test_profile_with_context(&app.pool, &reader_email).await;
+    sqlx::query(
+        "INSERT INTO kb_access_grants \
+             (subject_table, subject_id, principal_table, principal_id, can_read, can_write, \
+              granted_by_profile_id) \
+         VALUES ('kb_contexts', $1, 'kb_profiles', $2, true, false, $2) \
+         ON CONFLICT (subject_table, subject_id, principal_table, principal_id) DO NOTHING",
+    )
+    .bind(ctx)
+    .bind(reader)
+    .execute(&app.pool)
+    .await
+    .expect("grant read");
+    let reader_token = generate_test_jwt(&format!("test|{reader}"), &reader_email);
+    let resp = app
+        .client
+        .get(app.url("/api/blobs"))
+        .header("Authorization", format!("Bearer {reader_token}"))
+        .send()
+        .await
+        .expect("request failed");
+    let rows: Vec<serde_json::Value> = resp.json().await.expect("array");
+    assert!(
+        rows.iter()
+            .any(|r| r["blob_id"] == serde_json::json!(blob_id)),
+        "a reader can list it"
+    );
+    let resp = relate(
+        &app,
+        &reader_token,
+        blob_id,
+        relate_body(
+            "blob_as_source",
+            "kb_resources",
+            Uuid::now_v7(),
+            "figure_of",
+            1.0,
+        ),
+    )
+    .send()
+    .await
+    .expect("request failed");
+    assert_eq!(
+        resp.status().as_u16(),
+        403,
+        "read is not author: relating is authoring into the home"
+    );
+}
+
+/// The relate face's refusals name their vocabulary: a malformed peer table speaks
+/// `blob_relate:`; an unreadable peer is 404 without confirming it exists; an invisible
+/// blob is the ordinary not-found.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn relate_refusals_name_their_vocabulary(pool: PgPool) {
+    let cfg = blob_cfg(1 << 20, &["image/png"], 64 * 1024);
+    let app = blob_app(pool, cfg).await;
+    let (profile, ctx, token) = owner(&app.pool).await;
+
+    let resp = commit_multipart(
+        &app,
+        &token,
+        b"vocab".to_vec(),
+        "image/png",
+        "kb_contexts",
+        ctx,
+    )
+    .send()
+    .await
+    .expect("request failed");
+    let blob: serde_json::Value = resp.json().await.expect("json body");
+    let blob_id: Uuid = blob["blob_id"]
+        .as_str()
+        .expect("blob_id")
+        .parse()
+        .expect("uuid");
+
+    // Malformed peer table → 400 naming the three admissible anchors.
+    let resp = relate(
+        &app,
+        &token,
+        blob_id,
+        relate_body("blob_as_source", "kb_files", Uuid::now_v7(), "x", 1.0),
+    )
+    .send()
+    .await
+    .expect("request failed");
+    assert_eq!(resp.status().as_u16(), 400);
+    let text = resp.text().await.unwrap_or_default();
+    assert!(
+        text.contains("blob_relate:"),
+        "the refusal speaks its vocabulary: {text}"
+    );
+    assert!(
+        text.contains("kb_resources"),
+        "and names the admissible set: {text}"
+    );
+
+    // A peer the caller cannot read → 404 that does not confirm existence: seed a resource
+    // in ANOTHER profile's context and point at it.
+    let other_email = format!("blob-peer-{}@example.com", Uuid::new_v4());
+    let (other, other_ctx) =
+        fixtures::create_test_profile_with_context(&app.pool, &other_email).await;
+    let hidden = seed_witness_resource(&app, other_ctx, other, "Hidden peer").await;
+    let resp = relate(
+        &app,
+        &token,
+        blob_id,
+        relate_body("blob_as_source", "kb_resources", hidden, "figure_of", 1.0),
+    )
+    .send()
+    .await
+    .expect("request failed");
+    assert_eq!(
+        resp.status().as_u16(),
+        404,
+        "an unreadable peer is absent, not forbidden"
+    );
+    let text = resp.text().await.unwrap_or_default();
+    assert!(
+        text.contains("not found or not readable"),
+        "the refusal says the same thing an unknown id would: {text}"
+    );
+
+    // An invisible BLOB is the ordinary not-found, and the body cannot even be reached
+    // through a peer the caller DOES own: the blob gate runs first.
+    let own = seed_witness_resource(&app, ctx, profile, "Own peer").await;
+    let out_email = format!("blob-rel-out-{}@example.com", Uuid::new_v4());
+    let (outsider, out_ctx) =
+        fixtures::create_test_profile_with_context(&app.pool, &out_email).await;
+    let outsider_token = generate_test_jwt(&format!("test|{outsider}"), &out_email);
+    let outsiders_own = seed_witness_resource(&app, out_ctx, outsider, "Outsider peer").await;
+    let resp = relate(
+        &app,
+        &outsider_token,
+        blob_id,
+        relate_body(
+            "blob_as_source",
+            "kb_resources",
+            outsiders_own,
+            "figure_of",
+            1.0,
+        ),
+    )
+    .send()
+    .await
+    .expect("request failed");
+    assert_eq!(
+        resp.status().as_u16(),
+        404,
+        "the blob gate answers before the peer is even read"
+    );
+    let _ = own;
+}
+
+/// The derivation-source act at the surface: resource → blob (`blob_as_target`), the exact
+/// two calls the CLI's `--preserve-source` hook composes — commit the file, then relate it
+/// as the resource's derivation source. The relations read is the graph read D3 promises.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_derivation_source_edge_names_the_file_a_resource_came_from(pool: PgPool) {
+    let cfg = blob_cfg(1 << 20, &["image/png", "application/pdf"], 64 * 1024);
+    let app = blob_app(pool, cfg).await;
+    let (profile, ctx, token) = owner(&app.pool).await;
+
+    // "The file": committed as a blob (the CLI hook's first call).
+    let resp = commit_multipart(
+        &app,
+        &token,
+        b"%PDF-1.4 original".to_vec(),
+        "application/pdf",
+        "kb_contexts",
+        ctx,
+    )
+    .send()
+    .await
+    .expect("request failed");
+    let blob: serde_json::Value = resp.json().await.expect("json body");
+    let blob_id: Uuid = blob["blob_id"]
+        .as_str()
+        .expect("blob_id")
+        .parse()
+        .expect("uuid");
+
+    let resource = seed_witness_resource(&app, ctx, profile, "Derived research").await;
+    // The hook's second call: relate blob-as-target so the resource's derivation source is
+    // the blob.
+    let resp = relate(
+        &app,
+        &token,
+        blob_id,
+        relate_body(
+            "blob_as_target",
+            "kb_resources",
+            resource,
+            "derivation_source",
+            1.0,
+        ),
+    )
+    .send()
+    .await
+    .expect("request failed");
+    assert_eq!(resp.status().as_u16(), 200);
+
+    let (status, body) = relations_of(&app, &token, blob_id).await;
+    assert_eq!(status, 200);
+    let rows = body.as_array().expect("array");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0]["direction"], "incoming",
+        "the edge points AT the blob"
+    );
+    assert_eq!(rows[0]["label"], "derivation_source");
+    assert_eq!(
+        rows[0]["peer_title"], "Derived research",
+        "the graph read names the resource"
+    );
+}

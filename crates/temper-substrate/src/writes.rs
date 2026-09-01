@@ -1109,8 +1109,8 @@ pub async fn assert_kernel_edge_in_tx(
     let edge = fire_with(
         conn,
         SeedAction::RelationshipAssert {
-            src: p.src,
-            tgt: p.tgt,
+            src: payloads::AnchorRef::resource(p.src),
+            tgt: payloads::AnchorRef::resource(p.tgt),
             kind: p.kind,
             polarity: p.polarity,
             label: p.label,
@@ -1155,13 +1155,72 @@ pub async fn assert_relationship_with(
     let edge = fire_with(
         &mut tx,
         SeedAction::RelationshipAssert {
-            src: p.src,
-            tgt: p.tgt,
+            src: payloads::AnchorRef::resource(p.src),
+            tgt: payloads::AnchorRef::resource(p.tgt),
             kind: p.kind,
             polarity: p.polarity,
             label: p.label,
             weight: p.weight,
             home: EdgeHome::Context(p.home),
+            emitter: p.emitter,
+        },
+        ctx,
+    )
+    .await?
+    .relationship()?;
+    tx.commit().await?;
+    Ok(edge)
+}
+
+/// Params for [`assert_anchored_edge_with`] — the polymorphic generalisation of
+/// [`AssertParams`]: the source and target are whatever the payload's
+/// [`payloads::AnchorRef`] admits as an edge endpoint (resources and cogmaps on the
+/// incumbent paths, plus **blobs** since the kb_edges endpoint CHECK admitted `kb_blobs` —
+/// D3: relations are ordinary edges).
+#[derive(Debug)]
+pub struct AssertAnchoredEdgeParams<'a> {
+    pub source: payloads::AnchorRef,
+    pub target: payloads::AnchorRef,
+    pub kind: EdgeKind,
+    pub polarity: EdgePolarity,
+    pub label: Option<&'a str>,
+    pub weight: f64,
+    /// The edge's home anchor, supplied by the caller. As on every edge write, this
+    /// function performs NO authorization — the caller gates first (the incumbent
+    /// contract: the home is authorized as the same value it is written to).
+    pub home: EdgeHome,
+    pub emitter: EntityId,
+}
+
+pub async fn assert_anchored_edge(
+    pool: &PgPool,
+    p: AssertAnchoredEdgeParams<'_>,
+) -> Result<EdgeId> {
+    assert_anchored_edge_with(pool, p, EventContext::default()).await
+}
+
+/// [`assert_anchored_edge`] under an explicit [`EventContext`] — the authored
+/// `relationship_asserted` act carries the caller's authorship + invocation correlator,
+/// exactly as [`assert_relationship_with`] does. One fire path for every endpoint pairing:
+/// the payload's `source`/`target` tables ARE the endpoint tables the projector writes,
+/// so a blob endpoint needs no new event type, no new SQL function, and no replay
+/// divergence (the projector has been polymorphic since the canonical schema).
+pub async fn assert_anchored_edge_with(
+    pool: &PgPool,
+    p: AssertAnchoredEdgeParams<'_>,
+    ctx: EventContext,
+) -> Result<EdgeId> {
+    let mut tx = begin_scoped(pool).await?;
+    let edge = fire_with(
+        &mut tx,
+        SeedAction::RelationshipAssert {
+            src: p.source,
+            tgt: p.target,
+            kind: p.kind,
+            polarity: p.polarity,
+            label: p.label,
+            weight: p.weight,
+            home: p.home,
             emitter: p.emitter,
         },
         ctx,

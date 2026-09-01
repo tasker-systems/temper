@@ -49,6 +49,14 @@ pub enum AnchorTable {
     Connections,
     #[serde(rename = "kb_machine_clients")]
     MachineClients,
+    // A binary blob (D3): an edge ENDPOINT — the kb_edges endpoint CHECK admits 'kb_blobs' —
+    // and, as the relationship payload's source/target, a participant of `relationship_asserted`.
+    // Never an anchor: a blob is not a home for anything (properties, membership and region
+    // CHECKs stay closed), which is why there is no `EdgeHome::Blob` beside `Context`/`Cogmap`.
+    // Plain comment on purpose — a doc comment would split the flat enum into a oneOf branch and
+    // reshape nine published payload schemas (see `Events` below).
+    #[serde(rename = "kb_blobs")]
+    Blobs,
     // An **event**, and the only variant that is never an *anchor*.
     //
     // It exists for one thing: `references`' `derived_from`, which is event-to-event lineage and
@@ -85,6 +93,7 @@ impl AnchorTable {
         match self {
             AnchorTable::Contexts => "kb_contexts",
             AnchorTable::Cogmaps => "kb_cogmaps",
+            AnchorTable::Blobs => "kb_blobs",
             AnchorTable::Resources => "kb_resources",
             AnchorTable::Edges => "kb_edges",
             AnchorTable::ContentBlocks => "kb_content_blocks",
@@ -228,6 +237,16 @@ impl AnchorRef {
     pub fn context(id: ContextId) -> Self {
         AnchorRef {
             table: AnchorTable::Contexts,
+            id: id.uuid(),
+        }
+    }
+    /// A **blob** as an edge endpoint — the `relationship_asserted` payload's source/target for a
+    /// blob-related edge (D3). A blob is never a home and never a property owner: this constructor
+    /// exists for the relation write path alone, which is why `PropertyOwner::from(AnchorRef)` and
+    /// `_property_owner_anchor` have no blob arm to keep honest.
+    pub fn blob(id: BlobId) -> Self {
+        AnchorRef {
+            table: AnchorTable::Blobs,
             id: id.uuid(),
         }
     }
@@ -1784,6 +1803,7 @@ mod tests {
         for t in [
             AnchorTable::Contexts,
             AnchorTable::Cogmaps,
+            AnchorTable::Blobs,
             AnchorTable::Resources,
             AnchorTable::Edges,
             AnchorTable::ContentBlocks,

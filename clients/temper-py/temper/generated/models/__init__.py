@@ -43,6 +43,11 @@ from temper.generated.models.auditor_job_complete_ack import AuditorJobCompleteA
 from temper.generated.models.bind_team_outcome import BindTeamOutcome
 from temper.generated.models.bind_team_request import BindTeamRequest
 from temper.generated.models.blob_commit_response import BlobCommitResponse
+from temper.generated.models.blob_relation_ack import BlobRelationAck
+from temper.generated.models.blob_relation_assert_request import BlobRelationAssertRequest
+from temper.generated.models.blob_relation_direction import BlobRelationDirection
+from temper.generated.models.blob_relation_row import BlobRelationRow
+from temper.generated.models.blob_summary import BlobSummary
 from temper.generated.models.blob_upload_begin_request import BlobUploadBeginRequest
 from temper.generated.models.blob_upload_begin_response import BlobUploadBeginResponse
 from temper.generated.models.blob_upload_finalize_request import BlobUploadFinalizeRequest
