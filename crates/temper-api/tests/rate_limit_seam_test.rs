@@ -219,6 +219,7 @@ fn limited_reconcile_app(pool: sqlx::PgPool) -> axum::Router {
             reconcile: Some(BITES),
             create_request: None,
         }),
+        blob: None,
     };
     let state = AppState::new(pool, jwks, config);
 
@@ -321,6 +322,7 @@ async fn an_unconfigured_layer_neither_refuses_nor_counts(pool: sqlx::PgPool) {
         slack_link: None,
         slack_mint_secret: None,
         rate_limit: None,
+        blob: None,
     };
     let state = AppState::new(pool.clone(), jwks, config);
 
@@ -438,6 +440,7 @@ async fn an_unsigned_caller_spends_no_budget(pool: sqlx::PgPool) {
             reconcile: Some(BITES),
             create_request: None,
         }),
+        blob: None,
     };
     let state = AppState::new(pool.clone(), jwks, config);
 

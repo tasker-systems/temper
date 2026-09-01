@@ -59,6 +59,7 @@ async fn mcp_links_an_authenticated_callers_trace_and_no_one_elses(pool: sqlx::P
         slack_link: None,
         slack_mint_secret: None,
         rate_limit: None,
+        blob: None,
     };
     let state = AppState::new(pool, jwks_store, api_config);
     let mcp_config = temper_mcp::McpConfig {

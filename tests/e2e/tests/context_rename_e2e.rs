@@ -218,6 +218,7 @@ async fn mcp_service_for(pool: &sqlx::PgPool, sub: &str) -> temper_mcp::service:
         slack_link: None,
         slack_mint_secret: None,
         rate_limit: None,
+        blob: None,
     };
     let state = AppState::new(pool.clone(), jwks_store, api_config);
     let svc = temper_mcp::service::TemperMcpService::new(state);

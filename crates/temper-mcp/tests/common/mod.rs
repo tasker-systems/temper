@@ -59,6 +59,7 @@ pub fn state_with_cors_origins(cors_origins: Vec<String>) -> AppState {
         slack_link: None,
         slack_mint_secret: None,
         rate_limit: None,
+        blob: None,
     };
 
     let jwks = JwksKeyStore::new("https://example.invalid/.well-known/jwks.json".to_string());
@@ -93,6 +94,7 @@ pub fn state_with_distinct_audiences() -> AppState {
         slack_link: None,
         slack_mint_secret: None,
         rate_limit: None,
+        blob: None,
     };
 
     let jwks =

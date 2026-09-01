@@ -45,6 +45,7 @@ fn mcp_app_state(pool: &sqlx::PgPool) -> AppState {
         slack_link: None,
         slack_mint_secret: None,
         rate_limit: None,
+        blob: None,
     };
     AppState::new(pool.clone(), jwks_store, api_config)
 }

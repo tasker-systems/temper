@@ -70,6 +70,7 @@ fn service_for_dispatch_witness() -> TemperMcpService {
         slack_link: None,
         slack_mint_secret: None,
         rate_limit: None,
+        blob: None,
     };
 
     let jwks = JwksKeyStore::new("https://example.invalid/.well-known/jwks.json".to_string());

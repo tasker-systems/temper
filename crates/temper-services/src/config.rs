@@ -66,6 +66,93 @@ pub struct ApiConfig {
     /// [`crate::rate_limit::parse_rate_limit`], because a limit is the one config whose
     /// half-presence is worse than its absence.
     pub rate_limit: Option<crate::rate_limit::RateLimitConfig>,
+    /// Blob provider + policy configuration (spec: binary blobs, 2026-09-01 — D7/D9).
+    /// `None` when no credential is configured: the blob endpoints are then disabled
+    /// rather than half-configured (the `parse_vercel_connect` precedent).
+    pub blob: Option<BlobConfig>,
+}
+
+/// Blob provider credentials + the D9 policy vocabularies the SQL wrapper's refusals
+/// teach from. `Debug` is hand-written to REDACT `read_write_token` — a derived `Debug`
+/// would print a long-lived provider credential verbatim wherever this or the enclosing
+/// `ApiConfig` is formatted. (The OIDC credential is never held here at all: it rotates,
+/// so it is re-read at request time through [`BlobConfig::oidc_token_source`].)
+#[derive(Clone)]
+pub struct BlobConfig {
+    /// The bare store id (any `store_` prefix stripped, as the provider API requires).
+    /// Sent as `x-vercel-blob-store-id` on every provider call and used to build the
+    /// private-storage read host.
+    pub store_id: String,
+    /// The long-lived static token — the off-Vercel fallback (local dev, self-host).
+    /// `None` under OIDC-first resolution when `BLOB_STORE_ID` is set.
+    pub read_write_token: Option<String>,
+    /// Credential posture: `Oidc` re-reads `VERCEL_OIDC_TOKEN` per request (the provider's
+    /// documented default on connected projects — the token rotates, so it must never be
+    /// cached); `Token` uses [`Self::read_write_token`]. Resolution order matches the
+    /// provider SDK: explicit store id wins, then the read-write token.
+    pub credential_mode: BlobCredentialMode,
+    /// How the OIDC token is fetched at request time. Production points this at the
+    /// environment; tests inject a closure, so the rotation contract is testable without
+    /// env-var races.
+    pub oidc_token_source: std::sync::Arc<dyn Fn() -> Option<String> + Send + Sync>,
+    /// The D9 per-blob size cap — the vocabulary a declined commit teaches from.
+    /// Default 100 MB (`BLOB_MAX_BYTES`).
+    pub max_bytes: i64,
+    /// The D9 content-type allowlist — same passage as `max_bytes`.
+    /// Default the spec's six (`BLOB_CONTENT_TYPE_ALLOWLIST`, comma-separated).
+    pub allowlist: Vec<String>,
+    /// The D7 single-request upload threshold: bodies at or under this ride one request;
+    /// beyond it, segmented upload. Deliberately under the platform's hard 4.5 MB
+    /// request-body cap so the threshold is the vocabulary and the platform cap is
+    /// never the thing a user discovers. Default 4 MB (`BLOB_SINGLE_REQUEST_MAX_BYTES`).
+    pub single_request_max_bytes: usize,
+}
+
+/// The credential posture decided at parse time.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BlobCredentialMode {
+    /// OIDC-first: `VERCEL_OIDC_TOKEN` re-read per request. On-Vercel default.
+    Oidc,
+    /// Static token fallback: off-Vercel runs (local dev, CI, self-host).
+    Token,
+}
+
+impl std::fmt::Debug for BlobConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BlobConfig")
+            .field("store_id", &self.store_id)
+            .field(
+                "read_write_token",
+                &self.read_write_token.as_ref().map(|_| "redacted"),
+            )
+            .field("credential_mode", &self.credential_mode)
+            .field("max_bytes", &self.max_bytes)
+            .field("allowlist", &self.allowlist)
+            .field("single_request_max_bytes", &self.single_request_max_bytes)
+            .finish()
+    }
+}
+
+impl BlobConfig {
+    /// Resolve the bearer token for one provider call: the current OIDC token under
+    /// `Oidc`, the static token under `Token`. `Err` under `Oidc` when the environment
+    /// holds none — the caller surfaces it as a provider-configured-wrongly refusal,
+    /// never a silent fallthrough.
+    pub fn bearer_token(&self) -> anyhow::Result<String> {
+        match self.credential_mode {
+            BlobCredentialMode::Oidc => (self.oidc_token_source)()
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .ok_or_else(|| anyhow::anyhow!(
+                    "blob store is configured for OIDC auth but VERCEL_OIDC_TOKEN is absent right now \
+                     (the token rotates; a blank value is treated as absent)"
+                )),
+            BlobCredentialMode::Token => self
+                .read_write_token
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("blob store is configured for token auth but no token is set")),
+        }
+    }
 }
 
 /// Slack account-link configuration. `None` when the three values are not all present —
@@ -119,6 +206,7 @@ impl std::fmt::Debug for ApiConfig {
                 &self.slack_mint_secret.as_ref().map(|_| "redacted"),
             )
             .field("rate_limit", &self.rate_limit)
+            .field("blob", &self.blob)
             .finish()
     }
 }
@@ -191,8 +279,106 @@ impl ApiConfig {
             slack_link: parse_slack_link(&lookup),
             slack_mint_secret: lookup("SLACK_MINT_SECRET").filter(|s| !s.is_empty()),
             rate_limit: crate::rate_limit::parse_rate_limit(&lookup)?,
+            blob: parse_blob(&lookup),
         })
     }
+}
+
+/// Build the blob config from env — `Some` only when a credential is resolvable (spec:
+/// binary blobs, D7/D9; the values were pulled from the Vercel plan numbers, not assumed:
+/// the single-request threshold sits under the platform's hard 4.5 MB request-body cap,
+/// and the default per-blob cap is Vercel's own multipart-guidance boundary).
+///
+/// Credential resolution is OIDC-first with token fallback, mirroring the provider SDK's
+/// documented order: `BLOB_STORE_ID` set ⇒ OIDC (the token is re-read per request — it
+/// rotates); else `BLOB_READ_WRITE_TOKEN` ⇒ static token, whose 4th `_`-delimited segment
+/// carries the store id the same way the SDK parses it.
+///
+/// A malformed numeric cap or an unparseable token DISABLES the flow with a loud error
+/// (the `parse_slack_link` precedent): the D9 vocabulary must never half-exist.
+fn parse_blob(lookup: impl Fn(&str) -> Option<String>) -> Option<BlobConfig> {
+    let get = |k| lookup(k).filter(|s: &String| !s.is_empty());
+
+    let store_id: String;
+    let credential_mode;
+    let read_write_token;
+    if let Some(raw) = get("BLOB_STORE_ID") {
+        store_id = raw.strip_prefix("store_").unwrap_or(&raw).to_string();
+        credential_mode = BlobCredentialMode::Oidc;
+        read_write_token = None;
+    } else {
+        let token = get("BLOB_READ_WRITE_TOKEN")?;
+        // The token embeds the store id as its 4th `_`-delimited segment (the SDK's
+        // `parseStoreIdFromReadWriteToken`). Unparseable ⇒ disabled, loudly.
+        let Some(parsed) = token.split('_').nth(3).filter(|s| !s.is_empty()) else {
+            tracing::error!(
+                "BLOB_READ_WRITE_TOKEN is set but its store id is unreadable; the blob flow is disabled. \
+                 Expected the provider's vercel_blob_rw_…_<store-id>_… shape, or set BLOB_STORE_ID."
+            );
+            return None;
+        };
+        store_id = parsed.to_string();
+        credential_mode = BlobCredentialMode::Token;
+        read_write_token = Some(token);
+    }
+
+    let max_bytes = match lookup("BLOB_MAX_BYTES") {
+        None => 100 * 1024 * 1024,
+        Some(raw) => match raw.trim().parse::<i64>() {
+            Ok(n) if n > 0 => n,
+            _ => {
+                tracing::error!(
+                    "BLOB_MAX_BYTES is set but unparseable ({raw}); the blob flow is disabled."
+                );
+                return None;
+            }
+        },
+    };
+
+    let allowlist = lookup("BLOB_CONTENT_TYPE_ALLOWLIST")
+        .map(|raw| {
+            raw.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| {
+            vec![
+                "image/png".into(),
+                "image/jpeg".into(),
+                "image/webp".into(),
+                "image/svg+xml".into(),
+                "image/gif".into(),
+                "application/pdf".into(),
+            ]
+        });
+    if allowlist.is_empty() {
+        tracing::error!("BLOB_CONTENT_TYPE_ALLOWLIST is set but empty; the blob flow is disabled.");
+        return None;
+    }
+
+    let single_request_max_bytes = match lookup("BLOB_SINGLE_REQUEST_MAX_BYTES") {
+        None => 4 * 1024 * 1024,
+        Some(raw) => match raw.trim().parse::<usize>() {
+            Ok(n) if n > 0 => n,
+            _ => {
+                tracing::error!(
+                    "BLOB_SINGLE_REQUEST_MAX_BYTES is set but unparseable ({raw}); the blob flow is disabled."
+                );
+                return None;
+            }
+        },
+    };
+
+    Some(BlobConfig {
+        store_id,
+        read_write_token,
+        credential_mode,
+        oidc_token_source: std::sync::Arc::new(|| env::var("VERCEL_OIDC_TOKEN").ok()),
+        max_bytes,
+        allowlist,
+        single_request_max_bytes,
+    })
 }
 
 /// Build the Vercel Connect config from env — `Some` only when all four values are
@@ -491,5 +677,201 @@ mod tests {
     fn from_lookup_accepts_a_deployment_with_distinct_secrets() {
         let pairs = with_secrets(&distinct_secrets());
         assert!(ApiConfig::from_lookup(lookup_of(&pairs)).is_ok());
+    }
+
+    // ------------------------------------------------------------------
+    // Blob config (spec: binary blobs — D7/D9; the handoff RULE said the cap
+    // and allowlist come from plan numbers, never assumed).
+    // ------------------------------------------------------------------
+
+    fn blob_pairs(extra: &[(&str, &str)]) -> Vec<(String, String)> {
+        let mut pairs = with_secrets(&distinct_secrets());
+        for (k, v) in extra {
+            pairs.push(((*k).to_string(), (*v).to_string()));
+        }
+        pairs
+    }
+
+    /// The grounded token shape: the SDK reads the store id as `token.split('_')[3]`,
+    /// so segment 4 is the store id, verbatim.
+    fn fake_rw_token() -> String {
+        "vercel_blob_rw_store-id-abc_RANDOMSEGMENT_SIGNATURE".to_string()
+    }
+
+    // FAILS IF: blob endpoints appear (or half-appear) on a deployment that has no
+    // provider credential — absent must mean absent, not broken.
+    #[test]
+    fn blob_config_is_none_without_any_credential() {
+        let cfg = ApiConfig::from_lookup(lookup_of(&blob_pairs(&[]))).unwrap();
+        assert!(cfg.blob.is_none());
+    }
+
+    // FAILS IF: OIDC-first resolution is not OIDC-first, or the `store_` prefix
+    // the provider API must NOT see leaks into the bare store id.
+    #[test]
+    fn blob_store_id_selects_oidc_and_strips_the_store_prefix() {
+        let cfg = ApiConfig::from_lookup(lookup_of(&blob_pairs(&[
+            ("BLOB_STORE_ID", "store_abc123"),
+            ("BLOB_READ_WRITE_TOKEN", &fake_rw_token()),
+        ])))
+        .unwrap()
+        .blob
+        .unwrap();
+        assert_eq!(cfg.credential_mode, BlobCredentialMode::Oidc);
+        assert_eq!(cfg.store_id, "abc123");
+        assert!(cfg.read_write_token.is_none());
+    }
+
+    // FAILS IF: the token fallback does not carry the store id the read host and
+    // the store-id header both need.
+    #[test]
+    fn blob_rw_token_falls_back_and_parses_the_store_id() {
+        let cfg = ApiConfig::from_lookup(lookup_of(&blob_pairs(&[(
+            "BLOB_READ_WRITE_TOKEN",
+            &fake_rw_token(),
+        )])))
+        .unwrap()
+        .blob
+        .unwrap();
+        assert_eq!(cfg.credential_mode, BlobCredentialMode::Token);
+        assert_eq!(cfg.store_id, "store-id-abc");
+    }
+
+    // FAILS IF: an unparseable token half-configures the flow instead of
+    // disabling it loudly (the parse_slack_link precedent).
+    #[test]
+    fn blob_unparseable_rw_token_disables_the_flow() {
+        let cfg = ApiConfig::from_lookup(lookup_of(&blob_pairs(&[(
+            "BLOB_READ_WRITE_TOKEN",
+            "no-store-id-inside",
+        )])))
+        .unwrap();
+        assert!(cfg.blob.is_none());
+    }
+
+    // FAILS IF: the D9 vocabulary drifts from the plan-pulled values — cap 100 MB
+    // (Vercel's multipart-guidance boundary), the spec's six content types, and a
+    // single-request threshold under the platform's hard 4.5 MB request-body cap.
+    #[test]
+    fn blob_defaults_are_the_plan_pulled_values() {
+        let cfg =
+            ApiConfig::from_lookup(lookup_of(&blob_pairs(&[("BLOB_STORE_ID", "store_abc123")])))
+                .unwrap()
+                .blob
+                .unwrap();
+        assert_eq!(cfg.max_bytes, 100 * 1024 * 1024);
+        assert_eq!(
+            cfg.allowlist,
+            vec![
+                "image/png".to_string(),
+                "image/jpeg".to_string(),
+                "image/webp".to_string(),
+                "image/svg+xml".to_string(),
+                "image/gif".to_string(),
+                "application/pdf".to_string(),
+            ]
+        );
+        assert!(cfg.single_request_max_bytes <= 4_500_000);
+    }
+
+    // FAILS IF: the vocabulary is not configuration — D7 says the cap and the
+    // segmentation threshold are config, not code.
+    #[test]
+    fn blob_custom_cap_allowlist_and_threshold_parse() {
+        let cfg = ApiConfig::from_lookup(lookup_of(&blob_pairs(&[
+            ("BLOB_STORE_ID", "store_abc123"),
+            ("BLOB_MAX_BYTES", "1048576"),
+            ("BLOB_CONTENT_TYPE_ALLOWLIST", "image/png, application/pdf"),
+            ("BLOB_SINGLE_REQUEST_MAX_BYTES", "524288"),
+        ])))
+        .unwrap()
+        .blob
+        .unwrap();
+        assert_eq!(cfg.max_bytes, 1_048_576);
+        assert_eq!(
+            cfg.allowlist,
+            vec!["image/png".to_string(), "application/pdf".to_string()]
+        );
+        assert_eq!(cfg.single_request_max_bytes, 524_288);
+    }
+
+    // FAILS IF: a malformed cap half-exists — the D9 refusal must teach from a
+    // vocabulary that is either whole or absent.
+    #[test]
+    fn blob_malformed_cap_disables_the_flow() {
+        let cfg = ApiConfig::from_lookup(lookup_of(&blob_pairs(&[
+            ("BLOB_STORE_ID", "store_abc123"),
+            ("BLOB_MAX_BYTES", "huge"),
+        ])))
+        .unwrap();
+        assert!(cfg.blob.is_none());
+    }
+
+    // FAILS IF: the OIDC token is captured at boot — the provider's token rotates,
+    // and a cached one outlives itself; the source must be consulted per call.
+    #[test]
+    fn bearer_token_reads_the_oidc_source_per_call() {
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let c = counter.clone();
+        let cfg = BlobConfig {
+            store_id: "abc123".into(),
+            read_write_token: None,
+            credential_mode: BlobCredentialMode::Oidc,
+            oidc_token_source: std::sync::Arc::new(move || {
+                let n = c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Some(format!("token-{n}"))
+            }),
+            max_bytes: 1,
+            allowlist: vec!["image/png".into()],
+            single_request_max_bytes: 1,
+        };
+        assert_eq!(cfg.bearer_token().unwrap(), "token-0");
+        assert_eq!(cfg.bearer_token().unwrap(), "token-1");
+    }
+
+    // FAILS IF: a blank OIDC token (the rotation window) silently falls through —
+    // the caller must see a refusal that names what is misconfigured.
+    #[test]
+    fn bearer_token_refuses_clearly_when_oidc_is_absent() {
+        let cfg = BlobConfig {
+            store_id: "abc123".into(),
+            read_write_token: None,
+            credential_mode: BlobCredentialMode::Oidc,
+            oidc_token_source: std::sync::Arc::new(|| Some("  ".into())),
+            max_bytes: 1,
+            allowlist: vec!["image/png".into()],
+            single_request_max_bytes: 1,
+        };
+        let err = cfg.bearer_token().unwrap_err().to_string();
+        assert!(err.contains("VERCEL_OIDC_TOKEN"), "{err}");
+    }
+
+    // FAILS IF: token-mode auth loses the static token it was configured with.
+    #[test]
+    fn bearer_token_serves_the_static_token_under_token_mode() {
+        let cfg = BlobConfig {
+            store_id: "abc123".into(),
+            read_write_token: Some("static-token".into()),
+            credential_mode: BlobCredentialMode::Token,
+            oidc_token_source: std::sync::Arc::new(|| None),
+            max_bytes: 1,
+            allowlist: vec!["image/png".into()],
+            single_request_max_bytes: 1,
+        };
+        assert_eq!(cfg.bearer_token().unwrap(), "static-token");
+    }
+
+    // FAILS IF: the redacting Debug regressed to a derive — a provider credential
+    // would print verbatim wherever ApiConfig is formatted.
+    #[test]
+    fn blob_config_debug_redacts_the_token_and_preserves_presence() {
+        let cfg = ApiConfig::from_lookup(lookup_of(&blob_pairs(&[(
+            "BLOB_READ_WRITE_TOKEN",
+            &fake_rw_token(),
+        )])))
+        .unwrap();
+        let printed = format!("{cfg:?}");
+        assert!(!printed.contains("vercel_blob_rw"), "{printed}");
+        assert!(printed.contains("redacted"), "{printed}");
     }
 }
