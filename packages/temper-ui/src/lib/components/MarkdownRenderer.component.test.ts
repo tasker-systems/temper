@@ -1,5 +1,6 @@
 import { render } from '@testing-library/svelte';
 import { describe, expect, it } from 'vitest';
+import { MAX_SOURCE_LENGTH } from '../markdown';
 import MarkdownRenderer from './MarkdownRenderer.svelte';
 
 /**
@@ -27,9 +28,12 @@ describe('MarkdownRenderer', () => {
 		expect(container.textContent).toContain('No content available.');
 	});
 
-	it('renders the refusal for a body it cannot parse, instead of failing the render', () => {
+	// Driven through the length bound rather than a parse-throwing shape: the depth at which
+	// marked overflows is a runtime-stack property (see markdown.test.ts), but the bound is
+	// deterministic everywhere.
+	it('renders the refusal for a body it cannot render, instead of failing the render', () => {
 		const { container } = render(MarkdownRenderer, {
-			props: { markdown: '>'.repeat(2000) + ' deep' },
+			props: { markdown: 'a'.repeat(MAX_SOURCE_LENGTH + 1) },
 		});
 		expect(container.querySelector('.md-refusal')).not.toBeNull();
 	});
