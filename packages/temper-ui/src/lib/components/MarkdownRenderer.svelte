@@ -1,6 +1,5 @@
 <script lang="ts">
-	import { browser } from '$app/environment';
-	import { parseMarkdown } from '$lib/markdown';
+	import { renderMarkdown } from '$lib/markdown';
 
 	interface Props {
 		markdown: string;
@@ -8,20 +7,10 @@
 
 	let { markdown }: Props = $props();
 
-	let sanitizer: ((dirty: string) => string) | null = $state(null);
-
-	// Load DOMPurify on the client only — it requires a DOM.
-	if (browser) {
-		import('dompurify').then((mod) => {
-			sanitizer = (dirty: string) => mod.default.sanitize(dirty);
-		});
-	}
-
-	let html = $derived.by(() => {
-		if (!markdown) return '';
-		const raw = parseMarkdown(markdown);
-		return sanitizer ? sanitizer(raw) : raw;
-	});
+	// `renderMarkdown` composes parse + sanitize in one synchronous pass that is identical on
+	// the server and in the browser, so the {@html} below never sees unsanitized output in
+	// either environment.
+	let html = $derived(renderMarkdown(markdown));
 </script>
 
 {#if markdown}
