@@ -26,4 +26,11 @@ describe('MarkdownRenderer', () => {
 		expect(container.querySelector('.md-body')).toBeNull();
 		expect(container.textContent).toContain('No content available.');
 	});
+
+	it('renders the refusal for a body it cannot parse, instead of failing the render', () => {
+		const { container } = render(MarkdownRenderer, {
+			props: { markdown: '>'.repeat(2000) + ' deep' },
+		});
+		expect(container.querySelector('.md-refusal')).not.toBeNull();
+	});
 });

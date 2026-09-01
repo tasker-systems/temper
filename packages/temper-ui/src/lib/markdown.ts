@@ -38,11 +38,38 @@ export function parseMarkdown(markdown: string): string {
 }
 
 /**
- * Markdown → sanitizer-approved HTML, in one synchronous pass, for both environments.
+ * Cap on source markdown entering the parse. Bounds marked's superlinear worst cases (deep
+ * nesting, emphasis runs) at the gate; real documents sit orders of magnitude below it.
+ */
+export const MAX_SOURCE_LENGTH = 262_144;
+
+/**
+ * What renders when source is past the bound or shaped so marked cannot parse it. Static, so
+ * `{@html}` receives exactly this string and nothing user-shaped.
+ */
+export const REFUSAL_HTML = '<p class="md-refusal">This document could not be rendered.</p>';
+
+// Author styling must not reach the rendered document. The CSP deliberately admits style
+// ATTRIBUTES (`style-src-attr 'unsafe-inline'` in svelte.config.js — d3 and app.html need it),
+// so this config is the gate for them. FORBID_ATTR over allowlist surgery: every other
+// DOMPurify default holds.
+const SANITIZE_CONFIG = { FORBID_ATTR: ['style'] };
+
+/**
+ * Markdown → sanitizer-approved HTML, in one synchronous pass, for both environments. Total:
+ * source past the bound, or a shape marked cannot parse, renders {@link REFUSAL_HTML} instead
+ * of throwing out of the caller's derive.
  *
  * This is the sanctioned path from markdown to `{@html}`: parse and sanitize are composed here,
  * never separately at a call site, so no consumer can ship the parse output raw.
  */
 export function renderMarkdown(markdown: string): string {
-	return DOMPurify.sanitize(parseMarkdown(markdown));
+	if (markdown.length > MAX_SOURCE_LENGTH) return REFUSAL_HTML;
+	try {
+		// `as string`: sanitize's configured overload widens to `Dirty` (string | TrustedHTML);
+		// RETURN_TRUSTED_TYPE is unset, so the result is a plain string.
+		return DOMPurify.sanitize(parseMarkdown(markdown), SANITIZE_CONFIG) as string;
+	} catch {
+		return REFUSAL_HTML;
+	}
 }

@@ -218,6 +218,16 @@
 		border-bottom: none;
 	}
 
+	/* ── Refusal ──────────────────────────────────────────────────────── */
+
+	/* The refusal paragraph arrives from `renderMarkdown` through `{@html}` (REFUSAL_HTML),
+	   so the rule must be :global to reach it. Same muted register as blockquotes: a verdict,
+	   not an alarm. */
+	.md-body :global(.md-refusal) {
+		color: rgba(255, 255, 255, 0.55);
+		font-style: italic;
+	}
+
 	/* ── Images ───────────────────────────────────────────────────────── */
 
 	.md-body :global(img) {
