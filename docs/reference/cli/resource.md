@@ -100,6 +100,9 @@ Options:
       --no-source
           Suppress the `--from <url>` provenance default. By default a URL `--from` sets the resource's origin and seeds a Remote block-provenance record from it (so `create --from <url>` is citation-grade with no extra flags); `--no-source` opts out, leaving the origin empty and recording no provenance. Mutually exclusive with `--sources`
 
+      --preserve-source
+          Preserve the original as a blob (`derivation-source-preservable`, D3): with a LOCAL file `--from`, the file's raw bytes are committed as a blob homed in the same context/cogmap, and a `derivation_source` edge is asserted from the resource to the blob — the provenance question later is a graph read (`blob relations`/`blob get`). Not atomic: blob + edge assert after the create commits, warnings rather than failures (re-running is safe on the blob; the create is not re-runnable)
+
       --invocation <INVOCATION>
           Correlate this act with an open invocation envelope (its ref/UUID from `invocation open`)
 
