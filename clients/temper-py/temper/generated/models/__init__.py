@@ -42,6 +42,7 @@ from temper.generated.models.auditor_dispatch_tick_response import AuditorDispat
 from temper.generated.models.auditor_job_complete_ack import AuditorJobCompleteAck
 from temper.generated.models.bind_team_outcome import BindTeamOutcome
 from temper.generated.models.bind_team_request import BindTeamRequest
+from temper.generated.models.blob_commit_response import BlobCommitResponse
 from temper.generated.models.block_provenance_row import BlockProvenanceRow
 from temper.generated.models.blocks_response import BlocksResponse
 from temper.generated.models.body_storage import BodyStorage

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT b.id AS \"blob_id!\"\n             FROM kb_blobs b\n            WHERE b.content_hash = $2\n              AND blob_readable_by_profile($1, b.id)\n            LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "blob_id!",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "6df7f3fece5376d2b22348becc12032bdc07ac624d263d276ae705e6b3d854bd"
+}

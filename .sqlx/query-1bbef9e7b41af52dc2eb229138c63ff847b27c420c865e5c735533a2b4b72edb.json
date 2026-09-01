@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT b.id            AS \"blob_id!\",\n                  b.content_hash  AS \"content_hash!\",\n                  b.blob_pathname AS \"blob_pathname!\",\n                  b.content_type  AS \"content_type!\",\n                  b.content_bytes AS \"content_bytes!\",\n                  b.created       AS \"created!\"\n             FROM kb_blobs b\n            WHERE b.id = $2\n              AND blob_readable_by_profile($1, b.id)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "blob_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "content_hash!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "blob_pathname!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "content_type!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "content_bytes!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "created!",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "1bbef9e7b41af52dc2eb229138c63ff847b27c420c865e5c735533a2b4b72edb"
+}

@@ -1593,10 +1593,12 @@ pub struct CommitBlobParams<'a> {
     pub emitter: EntityId,
 }
 
-/// [`commit_blob_with`] under the default (un-attributed) context.
+/// [`commit_blob_with`] under the default (un-attributed) context. The store is `&dyn` —
+/// the surfaces hold an `Arc<dyn BlobStore>` (AppState), and the `&impl` spelling refused
+/// that coercion, so the fire path takes the trait object its only surface caller has.
 pub async fn commit_blob(
     pool: &PgPool,
-    store: &impl crate::blob_store::BlobStore,
+    store: &dyn crate::blob_store::BlobStore,
     p: CommitBlobParams<'_>,
 ) -> Result<BlobId> {
     commit_blob_with(pool, store, p, EventContext::default()).await
@@ -1609,7 +1611,7 @@ pub async fn commit_blob(
 /// the row id — the EXISTING id on a dedup hit), and commits.
 pub async fn commit_blob_with(
     pool: &PgPool,
-    store: &impl crate::blob_store::BlobStore,
+    store: &dyn crate::blob_store::BlobStore,
     p: CommitBlobParams<'_>,
     ctx: EventContext,
 ) -> Result<BlobId> {

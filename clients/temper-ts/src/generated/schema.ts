@@ -195,6 +195,65 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/blobs": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Commit bytes as a blob — one multipart request at or under the D7 threshold
+         * @description Form fields: `file` (the bytes; its content type is the media type committed),
+         *     `home_table` (`kb_contexts` or `kb_cogmaps` — a blob needs a home, D2), `home_id` (the
+         *     anchor's id). The caller acts as themselves: owner is the authenticated profile.
+         *
+         *     The threshold is enforced WHILE the file field streams, so an over-threshold body is
+         *     refused before it is ever fully buffered, and the refusal names the vocabulary — the
+         *     threshold in force and the segmented path beyond it. Cap and allowlist stay the SQL
+         *     wrapper's authority: the substrate write passes this config's numbers through, and a
+         *     refusal from there surfaces verbatim (`blob_service::map_commit_err`).
+         */
+        post: operations["commit_blob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/blobs/{id}": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a blob's bytes back, whole, streamed (D6)
+         * @description Visibility gates on the blob's own home via
+         *     `blob_readable_by_profile` — not visible renders as 404, the same not-found an unknown id
+         *     gets, so a probe learns nothing either way. The response speaks the STORED media type and
+         *     carries the byte count plus `Cache-Control: immutable` — content addressing is what earns
+         *     it (D1), and the provider address never appears anywhere in the response (D6: the API is
+         *     the only reader of the provider).
+         */
+        get: operations["get_blob"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cogmaps/{id}/graph/slice": {
         parameters: {
             query?: never;
@@ -2614,6 +2673,33 @@ export interface components {
              */
             team_id: string;
         };
+        /**
+         * @description The response of `POST /api/blobs` — get-or-create on the content hash (D2). `blob_id` is
+         *     the id the bytes live under: freshly minted for a new commit, the EXISTING id on a dedup
+         *     hit (whose first home stands, and which the caller may not be able to read back if that
+         *     home is not theirs — substrate get-or-create semantics, D2, decide this). `deduped`
+         *     reports that a blob the caller can already read held these bytes, so the provider upload
+         *     was skipped; the ledger still records the re-commit as provenance.
+         */
+        BlobCommitResponse: {
+            blob_id: components["schemas"]["BlobId"];
+            /** Format: int64 */
+            content_bytes: number;
+            /**
+             * @description Bare sha256 hex — the dedup key, the erasure join key, and the proof the ledger keeps
+             *     instead of bytes (`ledger-carries-hash-not-bytes`).
+             */
+            content_hash: string;
+            /** @description The media type the blob was committed under (allowlist-checked, D9). */
+            content_type: string;
+            deduped: boolean;
+        };
+        /**
+         * Format: uuid
+         * @description A `kb_blobs.id` value — one immutable, content-addressed binary blob, homed like a
+         *     resource and related to resources by edges (spec: binary blobs, 2026-09-01).
+         */
+        BlobId: string;
         /**
          * Format: uuid
          * @description A `kb_content_blocks.id` value — a resource's addressable interior unit.
@@ -7835,6 +7921,96 @@ export interface operations {
             };
             /** @description Authentication required, or Slack account linking is not configured on this instance */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    commit_blob: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /** @description multipart/form-data: `file` (required — the bytes, with a content type), `home_table` (`kb_contexts` or `kb_cogmaps`), `home_id` (the anchor id) */
+        requestBody?: {
+            content: {
+                "multipart/form-data": unknown;
+            };
+        };
+        responses: {
+            /** @description Committed (or dedup-hit) blob */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlobCommitResponse"];
+                };
+            };
+            /** @description Refused — over threshold, unknown home anchor, or the wrapper's cap/allowlist vocabulary */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    get_blob: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Blob ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The blob's bytes, streamed; content type is the stored media type, Cache-Control is immutable */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not found or not visible — indistinguishable by design */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

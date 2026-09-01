@@ -70,8 +70,8 @@ use temper_core::types::home::HomeAnchor;
 use uuid::Uuid;
 
 use crate::ids::{
-    BlockId, CogmapId, ContextId, DataArtifactId, EdgeId, EntityId, LensId, ProfileId, RegionId,
-    ResourceId, ShapeId,
+    BlobId, BlockId, CogmapId, ContextId, DataArtifactId, EdgeId, EntityId, LensId, ProfileId,
+    RegionId, ResourceId, ShapeId,
 };
 use crate::keys::{is_managed_property_key, MANAGED_PROPERTY_KEYS};
 use temper_core::types::managed_meta::ManagedMeta;
@@ -2572,4 +2572,87 @@ pub async fn shape_by_id(
         })
     })
     .transpose()
+}
+
+// Two reads over `kb_blobs` for the blob surfaces (spec: binary blobs, 2026-09-01 — D6). The gate
+// is `blob_readable_by_profile` — the predicate migration `20260901000020` NAMED for exactly this
+// caller ("the blob read surfaces gate on the same question and must not restate it"): a blob is
+// readable iff its OWN home is, and neither relation nor commit response ever widens that
+// (blob-visibility-self-contained). Both fail closed as `Ok(None)`, like [`artifact_by_id`] — an
+// invisible blob is absent, never an error that would confirm it exists.
+
+/// One committed blob's metadata row, as the read-through needs it: the stored media type the
+/// response must speak, the byte count for `Content-Length`, and the content-addressed pathname
+/// the provider is asked for. No bytes and no URL — the API streams and never leaks the provider
+/// address (D6: the API is the only reader of the provider).
+#[derive(Debug, Clone)]
+pub struct RetrievedBlob {
+    pub blob_id: BlobId,
+    pub content_hash: String,
+    pub blob_pathname: String,
+    /// The allowlist-checked media type the blob was committed under. `NOT NULL` on live rows —
+    /// `blob_commit` refuses a null/absent type by allowlist vocabulary — so this is a `!`
+    /// override on the macro read; the erasure pre-pass (D5.2, another task) is what nulls it.
+    pub content_type: String,
+    pub content_bytes: i64,
+    pub created: DateTime<Utc>,
+}
+
+/// One blob by id, visible only through the blob's own home. Not visible ⇒ `Ok(None)` —
+/// the read surface renders that as 404 so a probe cannot become an existence oracle.
+pub async fn blob_by_id(
+    pool: &PgPool,
+    principal: ProfileId,
+    blob: BlobId,
+) -> Result<Option<RetrievedBlob>> {
+    let row = sqlx::query!(
+        r#"SELECT b.id            AS "blob_id!",
+                  b.content_hash  AS "content_hash!",
+                  b.blob_pathname AS "blob_pathname!",
+                  b.content_type  AS "content_type!",
+                  b.content_bytes AS "content_bytes!",
+                  b.created       AS "created!"
+             FROM kb_blobs b
+            WHERE b.id = $2
+              AND blob_readable_by_profile($1, b.id)"#,
+        principal.uuid(),
+        blob.uuid(),
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| RetrievedBlob {
+        blob_id: BlobId::from(r.blob_id),
+        content_hash: r.content_hash,
+        blob_pathname: r.blob_pathname,
+        content_type: r.content_type,
+        content_bytes: r.content_bytes,
+        created: r.created,
+    }))
+}
+
+/// Does a blob the principal can READ already hold this content hash? The commit path's dedup
+/// pre-check: a hit means the bytes are provably already at their content-addressed pathname
+/// (the first commit verified provider presence), so the provider upload is skipped — D1's
+/// "dedup for free". Gated on readability so an invisible first home never answers: a caller
+/// who cannot read the existing blob gets `None` and takes the ordinary put+commit path, where
+/// get-or-create keeps the first home and the caller's re-commit rides the ledger as provenance.
+pub async fn readable_blob_id_by_hash(
+    pool: &PgPool,
+    principal: ProfileId,
+    content_hash: &str,
+) -> Result<Option<BlobId>> {
+    let row = sqlx::query!(
+        r#"SELECT b.id AS "blob_id!"
+             FROM kb_blobs b
+            WHERE b.content_hash = $2
+              AND blob_readable_by_profile($1, b.id)
+            LIMIT 1"#,
+        principal.uuid(),
+        content_hash,
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| BlobId::from(r.blob_id)))
 }

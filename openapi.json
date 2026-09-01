@@ -627,6 +627,146 @@
         "x-apidog-folder": "Reference/API Reference/Slack Link"
       }
     },
+    "/api/blobs": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Blobs"
+        ],
+        "summary": "Commit bytes as a blob — one multipart request at or under the D7 threshold",
+        "description": "Form fields: `file` (the bytes; its content type is the media type committed),\n`home_table` (`kb_contexts` or `kb_cogmaps` — a blob needs a home, D2), `home_id` (the\nanchor's id). The caller acts as themselves: owner is the authenticated profile.\n\nThe threshold is enforced WHILE the file field streams, so an over-threshold body is\nrefused before it is ever fully buffered, and the refusal names the vocabulary — the\nthreshold in force and the segmented path beyond it. Cap and allowlist stay the SQL\nwrapper's authority: the substrate write passes this config's numbers through, and a\nrefusal from there surfaces verbatim (`blob_service::map_commit_err`).",
+        "operationId": "commit_blob",
+        "requestBody": {
+          "description": "multipart/form-data: `file` (required — the bytes, with a content type), `home_table` (`kb_contexts` or `kb_cogmaps`), `home_id` (the anchor id)",
+          "content": {
+            "multipart/form-data": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Committed (or dedup-hit) blob",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlobCommitResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused — over threshold, unknown home anchor, or the wrapper's cap/allowlist vocabulary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Blobs"
+      }
+    },
+    "/api/blobs/{id}": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Blobs"
+        ],
+        "summary": "Read a blob's bytes back, whole, streamed (D6)",
+        "description": "Visibility gates on the blob's own home via\n`blob_readable_by_profile` — not visible renders as 404, the same not-found an unknown id\ngets, so a probe learns nothing either way. The response speaks the STORED media type and\ncarries the byte count plus `Cache-Control: immutable` — content addressing is what earns\nit (D1), and the provider address never appears anywhere in the response (D6: the API is\nthe only reader of the provider).",
+        "operationId": "get_blob",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Blob ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The blob's bytes, streamed; content type is the stored media type, Cache-Control is immutable",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible — indistinguishable by design",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Blobs"
+      }
+    },
     "/api/cogmaps/{id}/graph/slice": {
       "parameters": [
         {
@@ -9401,6 +9541,42 @@
             "description": "The team to bind the cognitive map to."
           }
         }
+      },
+      "BlobCommitResponse": {
+        "type": "object",
+        "description": "The response of `POST /api/blobs` — get-or-create on the content hash (D2). `blob_id` is\nthe id the bytes live under: freshly minted for a new commit, the EXISTING id on a dedup\nhit (whose first home stands, and which the caller may not be able to read back if that\nhome is not theirs — substrate get-or-create semantics, D2, decide this). `deduped`\nreports that a blob the caller can already read held these bytes, so the provider upload\nwas skipped; the ledger still records the re-commit as provenance.",
+        "required": [
+          "blob_id",
+          "content_hash",
+          "content_type",
+          "content_bytes",
+          "deduped"
+        ],
+        "properties": {
+          "blob_id": {
+            "$ref": "#/components/schemas/BlobId"
+          },
+          "content_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "content_hash": {
+            "type": "string",
+            "description": "Bare sha256 hex — the dedup key, the erasure join key, and the proof the ledger keeps\ninstead of bytes (`ledger-carries-hash-not-bytes`)."
+          },
+          "content_type": {
+            "type": "string",
+            "description": "The media type the blob was committed under (allowlist-checked, D9)."
+          },
+          "deduped": {
+            "type": "boolean"
+          }
+        }
+      },
+      "BlobId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "A `kb_blobs.id` value — one immutable, content-addressed binary blob, homed like a\nresource and related to resources by edges (spec: binary blobs, 2026-09-01)."
       },
       "BlockId": {
         "type": "string",
