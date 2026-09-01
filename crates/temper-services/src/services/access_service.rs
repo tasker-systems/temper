@@ -858,6 +858,27 @@ pub async fn demote_admin(pool: &PgPool, admin: &SystemAdmin, subject: ProfileId
 // Join request lifecycle
 // ---------------------------------------------------------------------------
 
+/// The decided-history cap on re-Request cycling — the state-machine constraint the
+/// rate-limit seam must not impersonate (spec 2026-08-31 axis A3).
+///
+/// `Withdraw` and rejection leave their rows behind, and `idx_join_requests_one_pending`
+/// bounds only *pending* rows, so the Request/Withdraw pair would otherwise pump this
+/// audit table without bound: any window × any rate still admits unbounded growth over
+/// time, which is why the seam (pressure) cannot be this bound (growth). A cooldown
+/// would re-derive the seam's window×rate shape and slow the pump without bounding it,
+/// so the shape here is a cap on *decided* history — a principal's lifetime contribution
+/// to `kb_join_requests` is at most `MAX_DECIDED_JOIN_REQUESTS + 1` rows, the +1 being
+/// the one pending row the partial unique index already bounds.
+///
+/// Always on, and never operator-configured: the seam is the operator's pressure knob
+/// and ships default-off by design, while this is admission policy, so the number is
+/// chosen here rather than delegated. 25 — reaching it means twenty-five decided
+/// requests, each a completed self-service cycle or a human review decision, which no
+/// genuine applicant is expected to reach, while one principal's share of the audit
+/// table stays small. The rows the cap counts are neither deleted nor reaped by this
+/// bound; shrinking decided history is a retention decision, and nobody has taken it.
+pub const MAX_DECIDED_JOIN_REQUESTS: i64 = 25;
+
 /// Parameters for creating a join request.
 pub struct CreateJoinRequestParams {
     pub profile_id: ProfileId,
@@ -881,6 +902,10 @@ pub struct CreateJoinRequestParams {
 /// (spec A2: count the canonical artifact), and evaluated before any read or write: a
 /// rate-limited caller is refused before `get_system_settings`, so pressure costs the
 /// instance one indexed count and nothing else.
+///
+/// Beside the seam sits the standing machine's own admission bound
+/// ([`MAX_DECIDED_JOIN_REQUESTS`]), which is never off: even on an unlimited door, a
+/// principal at the decided-history cap is refused before any write.
 pub async fn create_join_request(
     pool: &PgPool,
     params: CreateJoinRequestParams,
@@ -891,6 +916,11 @@ pub async fn create_join_request(
     // artifact"). Refused here, the caller never triggers the standing transition below,
     // which is a write.
     crate::rate_limit::guard_join_request(pool, *params.profile_id, request_rate).await?;
+
+    // Admission before standing, same position, same reason — one indexed count, refused
+    // before any read or write. This one is never off (see MAX_DECIDED_JOIN_REQUESTS):
+    // it is the growth bound the pressure guard above cannot be.
+    guard_join_request_history(pool, params.profile_id).await?;
 
     // Resolve the request's target FIRST. These are READS, so doing them before any standing write
     // keeps auth-before-writes honest: an unconfigured gating team must fail BEFORE standing moves,
@@ -962,6 +992,42 @@ pub async fn create_join_request(
     .await?;
 
     Ok(row)
+}
+
+/// The decided-history guard behind [`MAX_DECIDED_JOIN_REQUESTS`]. A principal at the
+/// cap is refused *before any write* — no standing transition, no row — and the refusal
+/// rides the standing machine's own vocabulary: the interim shape an illegal transition
+/// maps to (`BadRequest`, a 4xx naming why), not the seam's 429. Bounding growth is an
+/// admission statement about this principal, not pressure on a door.
+///
+/// The predicate counts every decided row — `withdrawn`, `rejected`, `approved` — so it
+/// states one fact with no status enumeration to drift, and it deletes nothing: the cap
+/// refuses, it never reaps.
+async fn guard_join_request_history(pool: &PgPool, profile_id: ProfileId) -> ApiResult<()> {
+    let decided: i64 = sqlx::query_scalar!(
+        r#"
+        SELECT count(*) AS "count!"
+          FROM kb_join_requests
+         WHERE requesting_profile_id = $1
+           AND status <> 'pending'
+        "#,
+        *profile_id,
+    )
+    .fetch_one(pool)
+    .await?;
+
+    if decided >= MAX_DECIDED_JOIN_REQUESTS {
+        tracing::info!(
+            decided,
+            cap = MAX_DECIDED_JOIN_REQUESTS,
+            "join-request decided-history cap reached"
+        );
+        return Err(ApiError::BadRequest(
+            "too many decided access requests are on record to file another".to_string(),
+        ));
+    }
+
+    Ok(())
 }
 
 /// Get the most recent join request for this profile against the gating team.
