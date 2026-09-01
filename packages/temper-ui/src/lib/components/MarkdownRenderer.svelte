@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { renderMarkdown } from '$lib/markdown';
+	import { browser } from '$app/environment';
+	import { prepareMarkdown, SANITIZE_CONFIG } from '$lib/markdown';
 
 	interface Props {
 		markdown: string;
@@ -7,16 +8,30 @@
 
 	let { markdown }: Props = $props();
 
-	// `renderMarkdown` composes parse + sanitize in one synchronous pass that is identical on
-	// the server and in the browser, so the {@html} below never sees unsanitized output in
-	// either environment.
-	let html = $derived(renderMarkdown(markdown));
+	// The sanitize pass is client-only and gates the {@html} below: while the sanitizer is
+	// unavailable — on the server render, and for the instant before the dynamic import
+	// resolves on the client — this component renders no body at all. It never falls back to
+	// unsanitized output, which is why `prepareMarkdown`'s parse result is safe to hold here.
+	let sanitizer: ((dirty: string) => string) | null = $state(null);
+
+	if (browser) {
+		import('dompurify').then((mod) => {
+			// `as unknown as string`: under the browser types sanitize's configured overload is
+			// typed TrustedHTML; RETURN_TRUSTED_TYPE is unset, so the runtime value is a plain
+			// string.
+			sanitizer = (dirty: string) => mod.default.sanitize(dirty, SANITIZE_CONFIG) as unknown as string;
+		});
+	}
+
+	let parsed = $derived(prepareMarkdown(markdown));
 </script>
 
 {#if markdown}
-	<div class="md-body">
-		{@html html}
-	</div>
+	{#if sanitizer}
+		<div class="md-body">
+			{@html sanitizer(parsed)}
+		</div>
+	{/if}
 {:else}
 	<div class="py-8 text-center text-sm text-zinc-500 italic">
 		No content available.
