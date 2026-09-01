@@ -132,7 +132,8 @@ kb_oauth_refresh_tokens.claims            | identifier    | full      | IdP clai
 
 # ── pseudonymous references; each ceases to identify when the profile is tombstoned ──────────
 kb_access_grants.granted_by_profile_id    | reference     | pseudonym |
-kb_blob_files.profile_id                  | reference     | pseudonym | the BLOB it points at lives outside Postgres and no delete here reaches it
+kb_blob_homes.owner_profile_id            | reference     | pseudonym | bytes live in object storage; erasure empties the row and the reconciler deletes the object (spec 2026-09-01 D5)
+kb_blob_homes.originator_profile_id       | reference     | pseudonym |
 kb_citation_audits.audited_by_profile_id  | reference     | pseudonym |
 kb_connections.profile_id                 | reference     | pseudonym |
 kb_connections.emitter_entity_id          | reference     | pseudonym |

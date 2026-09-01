@@ -58,18 +58,34 @@ async fn identity_graft_resolves(pool: sqlx::PgPool) {
         .await
         .expect("kb_profiles.email/preferences resolve");
 
-    // Each of the 6 grafted infra tables is queryable.
+    // Each of the grafted infra tables is queryable. kb_blob_files is NOT among them: the blob
+    // substrate migration (20260901000010) REPLACED it — asserted below, not assumed.
     for table in [
         "kb_profile_auth_links",
         "kb_system_settings",
         "kb_join_requests",
         "kb_team_invitations",
-        "kb_blob_files",
         "kb_ingestion_records",
+        "kb_blobs",
+        "kb_blob_homes",
     ] {
         sqlx::query(&format!("SELECT 1 FROM {table} LIMIT 1"))
             .execute(&pool)
             .await
             .unwrap_or_else(|e| panic!("grafted table {table} is queryable: {e}"));
     }
+
+    // The deprecated table is GONE, not dormant (spec D8): the drop is witnessed.
+    let blob_files_gone: bool = sqlx::query_scalar(
+        "SELECT NOT EXISTS (\
+             SELECT 1 FROM information_schema.tables \
+             WHERE table_schema = 'public' AND table_name = 'kb_blob_files')",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("probe kb_blob_files absence");
+    assert!(
+        blob_files_gone,
+        "kb_blob_files must be dropped, not extended (D8)"
+    );
 }

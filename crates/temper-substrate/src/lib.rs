@@ -10,6 +10,7 @@
 //!     kernel, and the embedding becomes the PRIMARY evidence of regionality — which is what lets a
 //!     context, carrying no facets and almost no declared edges, form regions at all.
 pub mod affinity;
+pub mod blob_store;
 pub mod cluster;
 pub mod content;
 pub mod drift;
