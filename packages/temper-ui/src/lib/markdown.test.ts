@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { highlightCode } from './highlight';
-import { parseMarkdown } from './markdown';
+import { parseMarkdown, renderMarkdown } from './markdown';
 
 /**
  * The highlighting pipeline's contract, independent of the component: fenced blocks are
  * highlighted ONLY for the registered languages; anything else — unknown, misspelled, or no
  * fence language — renders plaintext-escaped, never auto-detected; and inline code stays
- * un-highlighted. The component's DOMPurify pass runs after this, so the output here is the
- * sanitizer's INPUT — a `<script>` must arrive escaped, or the sanitizer has work to do that
- * this pipeline invented for it.
+ * un-highlighted. The sanitize pass composes with this output inside `renderMarkdown`, so the
+ * output here is the sanitizer's INPUT — a `<script>` must arrive escaped, or the sanitizer has
+ * work to do that this pipeline invented for it.
  */
 describe('parseMarkdown', () => {
 	it('highlights a registered language with hljs spans', () => {
@@ -50,6 +50,41 @@ describe('parseMarkdown', () => {
 		const html = parseMarkdown('```json\n{"a": "<script>alert(1)</script>"}\n```');
 		expect(html).not.toContain('<script>alert');
 		expect(html).toContain('&lt;script&gt;');
+	});
+});
+
+/**
+ * The composition the renderer ships: parse, then sanitize, one synchronous pass. This suite
+ * runs in plain node — the same environment the server render sanitizes in — so the node run
+ * itself is the witness that the pass is not browser-only. Both faces asserted per case: the
+ * payload gone AND the benign structure around it retained, since a probe that only checks
+ * absence passes vacuously against an empty string.
+ */
+describe('renderMarkdown', () => {
+	it('strips a script payload and keeps the readable structure around it', () => {
+		const html = renderMarkdown(
+			'# Temper\n\n<script>alert(1)</script>\n\nA [link](https://example.com).',
+		);
+		expect(html).toContain('<h1>Temper</h1>');
+		expect(html).toContain('href="https://example.com"');
+		expect(html).not.toContain('<script');
+		expect(html).not.toContain('alert');
+	});
+
+	it('keeps an element but drops its event-handler attribute', () => {
+		const html = renderMarkdown('<img src="https://example.com/a.png" onerror="alert(1)">');
+		expect(html).toContain('src="https://example.com/a.png"');
+		expect(html).not.toContain('onerror');
+	});
+
+	it('renders a javascript: link as a link with no javascript: destination', () => {
+		const html = renderMarkdown('[click](javascript:alert(1))');
+		expect(html).toContain('<a');
+		expect(html).not.toContain('javascript:');
+	});
+
+	it('passes an empty body through as empty', () => {
+		expect(renderMarkdown('')).toBe('');
 	});
 });
 
