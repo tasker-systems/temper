@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { highlightCode } from './highlight';
-import { parseMarkdown, renderMarkdown } from './markdown';
+import { MAX_SOURCE_LENGTH, parseMarkdown, REFUSAL_HTML, renderMarkdown } from './markdown';
 
 /**
  * The highlighting pipeline's contract, independent of the component: fenced blocks are
@@ -124,6 +124,50 @@ describe('renderMarkdown', () => {
 		expect(html).not.toContain('<iframe');
 		expect(html).not.toContain('<base');
 		expect(html).not.toContain('evil.example');
+	});
+});
+
+/**
+ * The bound-and-refuse contract: `renderMarkdown` is total. Source past the length bound and
+ * shapes marked cannot parse render as the static refusal — never a throw out of the derive,
+ * which on the server would fail the page for every reader. Benign content keeps rendering:
+ * each witness keeps a retention face so an over-eager refusal cannot pass.
+ */
+describe('renderMarkdown guards', () => {
+	it('refuses to parse source past the length bound', () => {
+		expect(renderMarkdown('a'.repeat(MAX_SOURCE_LENGTH + 1))).toBe(REFUSAL_HTML);
+	});
+
+	// The depth at which marked's recursive tokenizer overflows is a property of the runtime's
+	// stack, not of the input — one machine throws `RangeError` on 2000 nested blockquotes,
+	// another parses them fine. So the parser-throw arm is witnessed with the throw injected
+	// through a scoped `marked` mock: the contract "a parse throw never escapes renderMarkdown"
+	// is pinned on every platform, not on whichever stack ran the suite.
+	it('returns the refusal when the parser throws', async () => {
+		vi.resetModules();
+		vi.doMock('marked', async (importOriginal) => {
+			const actual = await importOriginal<typeof import('marked')>();
+			class ThrowingMarked {
+				parse(): string {
+					throw new RangeError('Maximum call stack size exceeded');
+				}
+			}
+			return { ...actual, Marked: ThrowingMarked as unknown as typeof actual.Marked };
+		});
+		try {
+			const isolated = await import('./markdown');
+			expect(isolated.renderMarkdown('> deep')).toBe(REFUSAL_HTML);
+		} finally {
+			vi.doUnmock('marked');
+			vi.resetModules();
+		}
+	});
+
+	it('strips style attributes and keeps the elements that carried them', () => {
+		const html = renderMarkdown('<p style="color:red;position:fixed" class="lead">stay</p>');
+		expect(html).toContain('class="lead"');
+		expect(html).toContain('stay');
+		expect(html).not.toContain('style=');
 	});
 });
 
