@@ -127,10 +127,14 @@ const INTERNAL_CLIENT_MESSAGE: &str = "An internal error occurred";
 /// attacker-influenced input (a `BadRequest` quoting a request, an internal error
 /// quoting an upstream response), so a cap is what keeps one event from being
 /// whatever size the input was.
-const MAX_LOGGED_ERROR_BYTES: usize = 2048;
+pub const MAX_LOGGED_ERROR_BYTES: usize = 2048;
 
 /// `s`, truncated on a char boundary with an ellipsis when past [`MAX_LOGGED_ERROR_BYTES`].
-fn bounded(s: &str) -> std::borrow::Cow<'_, str> {
+///
+/// Public because every surface that writes an attacker-influenced string into a log
+/// event needs the same cap — e.g. the Slack link handler logging the IdP's redirect
+/// error parameter, which anyone can craft to any length.
+pub fn bounded(s: &str) -> std::borrow::Cow<'_, str> {
     if s.len() <= MAX_LOGGED_ERROR_BYTES {
         return std::borrow::Cow::Borrowed(s);
     }

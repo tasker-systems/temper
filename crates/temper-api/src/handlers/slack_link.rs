@@ -164,7 +164,9 @@ enum CallbackOutcome {
 /// profile exists.
 async fn run_callback(state: &AppState, q: CallbackQuery) -> Result<CallbackOutcome, String> {
     if let Some(err) = q.error {
-        tracing::warn!(error = %err, "slack link: IdP returned an error");
+        // Bounded: this parameter rides the redirect URL, so its length is whatever
+        // the caller crafted, not what the IdP sent.
+        tracing::warn!(error = %temper_services::error::bounded(&err), "slack link: IdP returned an error");
         return Err("The sign-in was cancelled or refused. Mention @temper again to retry.".into());
     }
 
