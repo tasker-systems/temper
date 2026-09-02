@@ -70,11 +70,13 @@ const config = {
 				'default-src': ['none'],
 				// Hydration inline script: admitted by the appended nonce.
 				'script-src': ['self'],
-				// External stylesheet origin is Google Fonts only (app.html).
-				'style-src': ['self', 'https://fonts.googleapis.com'],
+				// Stylesheets are same-origin only — fonts are self-hosted
+				// (@fontsource-variable, +layout.svelte), so no Google Fonts origin.
+				'style-src': ['self'],
 				// d3 + app.html inline style attributes — see the note above.
 				'style-src-attr': ['unsafe-inline'],
-				'font-src': ['https://fonts.gstatic.com'],
+				// Self-hosted woff2 files, bundled into _app/immutable by Vite.
+				'font-src': ['self'],
 				'img-src': ['self', 'data:'],
 				'connect-src': ['self'],
 				'form-action': ['self'],

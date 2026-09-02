@@ -66,8 +66,11 @@
 
 	/* ─── Fonts ──────────────────────────────────────────────────── */
 	--font-sans:  "Inter", "system-ui", "sans-serif";
-	--font-serif: "Source Serif 4", "Source Serif Pro", Georgia, "Times New Roman", serif;
-	--font-mono:  "JetBrains Mono", "Fira Code", "monospace";
+	/* Self-hosted variable fonts (@fontsource-variable, imported in +layout.svelte).
+	   The " Variable" names are what the fontsource @font-face rules register; the
+	   static names stay as fallbacks for completeness. */
+	--font-serif: "Source Serif 4 Variable", "Source Serif 4", "Source Serif Pro", Georgia, "Times New Roman", serif;
+	--font-mono:  "JetBrains Mono Variable", "JetBrains Mono", "Fira Code", "monospace";
 }
 
 :root {
