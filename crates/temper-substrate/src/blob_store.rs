@@ -57,8 +57,9 @@ pub trait BlobStore: Send + Sync + std::fmt::Debug {
 
     /// Upload bytes to the content-addressed pathname (D7's single-request path — the caller
     /// has already applied the cap; the provider cannot know the vocabulary it enforces).
-    /// `cache_control_max_age` is the provider CDN's cache window for the object; content
-    /// addressing makes any value safe, because a pathname's bytes can never change.
+    /// `cache_control_max_age` is the provider CDN's cache window for the object; an
+    /// implementation applies the window the caller asks — a silently discarded parameter
+    /// would make the commit path's posture a fiction.
     async fn put(
         &self,
         pathname: &str,

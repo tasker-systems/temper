@@ -67,7 +67,7 @@ impl<'a> BlobClient<'a> {
 
     /// GET /api/blobs/{id} — the raw streaming response. The caller consumes
     /// `Response::bytes()` (whole) or `chunk()`/`bytes_stream()` (piped to a file);
-    /// content type, length, and `Cache-Control: immutable` ride the headers.
+    /// content type, length, and `Cache-Control: private, immutable` ride the headers.
     pub async fn read_response(&self, blob_id: Uuid) -> Result<reqwest::Response> {
         let token = self.http.resolve_token()?;
         let path = format!("/api/blobs/{blob_id}");

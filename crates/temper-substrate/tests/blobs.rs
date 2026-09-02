@@ -591,14 +591,14 @@ async fn staging_appends_are_idempotent_and_occupied_seqs_never_supersede(pool: 
     let b: &[u8] = b"BBBB-segment";
 
     assert_eq!(
-        uploads::append_segment(&pool, owner, id, 0, a, &sha(a))
+        uploads::append_segment(&pool, owner, id, 0, a, &sha(a), i64::MAX)
             .await
             .unwrap(),
         Some(AppendOutcome::Landed),
         "a fresh seq lands"
     );
     assert_eq!(
-        uploads::append_segment(&pool, owner, id, 0, a, &sha(a))
+        uploads::append_segment(&pool, owner, id, 0, a, &sha(a), i64::MAX)
             .await
             .unwrap(),
         Some(AppendOutcome::AlreadyLanded {
@@ -607,7 +607,7 @@ async fn staging_appends_are_idempotent_and_occupied_seqs_never_supersede(pool: 
         "the SAME segment re-sent is the idempotent no-op"
     );
     assert_eq!(
-        uploads::append_segment(&pool, owner, id, 0, b, &sha(b))
+        uploads::append_segment(&pool, owner, id, 0, b, &sha(b), i64::MAX)
             .await
             .unwrap(),
         Some(AppendOutcome::Conflict {
@@ -616,7 +616,7 @@ async fn staging_appends_are_idempotent_and_occupied_seqs_never_supersede(pool: 
         "a DIFFERENT segment at an occupied seq is a conflict — never a supersede"
     );
     assert_eq!(
-        uploads::append_segment(&pool, owner, id, 1, b, &sha(b))
+        uploads::append_segment(&pool, owner, id, 1, b, &sha(b), i64::MAX)
             .await
             .unwrap(),
         Some(AppendOutcome::Landed)
@@ -661,7 +661,7 @@ async fn a_staged_session_is_owner_private(pool: sqlx::PgPool) {
         "another profile's landed set does not exist for them"
     );
     assert_eq!(
-        uploads::append_segment(&pool, outsider, id, 0, b"x", &sha(b"x"))
+        uploads::append_segment(&pool, outsider, id, 0, b"x", &sha(b"x"), i64::MAX)
             .await
             .unwrap(),
         None,
@@ -685,10 +685,10 @@ async fn staging_rides_no_events_and_dies_on_delete(pool: sqlx::PgPool) {
         .fetch_one(&pool)
         .await
         .unwrap();
-    uploads::append_segment(&pool, owner, id, 0, b"zero", &sha(b"zero"))
+    uploads::append_segment(&pool, owner, id, 0, b"zero", &sha(b"zero"), i64::MAX)
         .await
         .unwrap();
-    uploads::append_segment(&pool, owner, id, 1, b"one", &sha(b"one"))
+    uploads::append_segment(&pool, owner, id, 1, b"one", &sha(b"one"), i64::MAX)
         .await
         .unwrap();
     let events_after: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_events")
@@ -711,6 +711,55 @@ async fn staging_rides_no_events_and_dies_on_delete(pool: sqlx::PgPool) {
         .unwrap();
     assert_eq!(uploads_left, 0, "delete removes the session");
     assert_eq!(segments_left, 0, "the segments row cascades");
+}
+
+/// FAILS IF: the staging ceiling is a read-then-insert check (the review's F4 TOCTOU) —
+/// N concurrent appends from the ONE owner each read the same staged total and ALL land,
+/// staging an over-cap whole that finalize then assembles in RAM and puts to the
+/// provider. The ceiling is decided inside the append's transaction under the session
+/// row's lock, so eight concurrent 512-byte appends against a 1024-byte ceiling land
+/// exactly two and refuse the rest — the staged total can never exceed the ceiling.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn concurrent_appends_cannot_stage_past_the_ceiling(pool: sqlx::PgPool) {
+    let (owner, _emitter, home) = blob_world(&pool, "staged-ceiling-race").await;
+    let id = staged_session(&pool, owner, home, "image/png").await;
+
+    let ceiling: i64 = 1024;
+    let segment: Vec<u8> = vec![9u8; 512];
+    let hash = sha(&segment);
+
+    let futures =
+        (0..8).map(|seq| uploads::append_segment(&pool, owner, id, seq, &segment, &hash, ceiling));
+    let outcomes = futures_util::future::join_all(futures).await;
+
+    let mut landed = 0;
+    let mut refused = 0;
+    for outcome in outcomes {
+        match outcome.unwrap() {
+            Some(AppendOutcome::Landed) => landed += 1,
+            Some(AppendOutcome::OverCeiling { staged, ceiling }) => {
+                refused += 1;
+                assert!(
+                    staged > ceiling,
+                    "a refused append's would-be total is over the ceiling: {staged} vs {ceiling}"
+                );
+            }
+            other => panic!("concurrent distinct seqs: no conflict/no-op expected, got {other:?}"),
+        }
+    }
+    assert_eq!(landed, 2, "exactly two 512-byte segments fit under 1024");
+    assert_eq!(refused, 6, "the rest are refused at the ceiling");
+
+    let staged_set = uploads::landed_segments(&pool, owner, id)
+        .await
+        .unwrap()
+        .unwrap();
+    let staged_total: i64 = staged_set.iter().map(|s| s.segment_bytes).sum();
+    assert!(
+        staged_total <= ceiling,
+        "the staged byte total can never exceed the staging ceiling: {staged_total} vs {ceiling}"
+    );
+    assert_eq!(staged_total, 1024, "the ceiling is used, not merely obeyed");
 }
 
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]

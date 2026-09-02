@@ -23,11 +23,6 @@ use crate::config::BlobConfig;
 const BLOB_API_VERSION: &str = "12";
 const DEFAULT_API_BASE: &str = "https://vercel.com/api/blob";
 
-/// The provider's CDN cache window for uploaded objects. Content addressing makes any
-/// value safe — a pathname's bytes can never change — and one month matches the
-/// provider's own default.
-const CACHE_CONTROL_MAX_AGE: u32 = 30 * 24 * 60 * 60;
-
 pub struct VercelBlobStore {
     http: reqwest::Client,
     config: BlobConfig,
@@ -109,7 +104,7 @@ impl BlobStore for VercelBlobStore {
         pathname: &str,
         content_type: &str,
         body: Bytes,
-        _cache_control_max_age: u32,
+        cache_control_max_age: u32,
     ) -> Result<PutReceipt> {
         let bearer = self.bearer()?;
         let url = self.api_url("/", &format!("pathname={pathname}"));
@@ -119,9 +114,11 @@ impl BlobStore for VercelBlobStore {
         headers.insert("x-vercel-blob-access", "private".parse()?);
         headers.insert("x-content-type", content_type.parse()?);
         headers.insert("x-add-random-suffix", "0".parse()?);
+        // The window the caller asked for rides the wire verbatim — a seam parameter
+        // silently replaced by a local default is a contract lie.
         headers.insert(
             "x-cache-control-max-age",
-            CACHE_CONTROL_MAX_AGE.to_string().parse()?,
+            cache_control_max_age.to_string().parse()?,
         );
 
         let resp = self
@@ -304,11 +301,14 @@ mod tests {
 
     // The put wire shape, grounded against the SDK: PUT with the pathname as the
     // query, access pinned private, the suffix pinned off, and the store id on the
-    // header the OIDC path requires the API to see.
+    // header the OIDC path requires the API to see. The cache window the CALLER
+    // asked for rides the wire — the commit path asks `IMMUTABLE_CACHE_MAX_AGE` and
+    // the provider must apply that, never a local default.
     #[tokio::test]
     async fn put_sends_the_grounded_wire_shape() {
         let server = MockServer::start().await;
         let store = store_with("tok-1").with_test_endpoints(&server.uri());
+        let asked = crate::services::blob_service::IMMUTABLE_CACHE_MAX_AGE;
         Mock::given(method("PUT"))
             .and(path("/api/blob/"))
             .and(query_param("pathname", "ab/abcd"))
@@ -318,6 +318,9 @@ mod tests {
             .and(header("x-vercel-blob-access", "private"))
             .and(header("x-content-type", "image/png"))
             .and(header("x-add-random-suffix", "0"))
+            // FAILS IF: the asked-for window is silently discarded for a local
+            // default — the seam parameter is a contract, not a suggestion.
+            .and(header("x-cache-control-max-age", asked.to_string()))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "url": "https://abc123.private.blob.vercel-storage.com/ab/abcd",
                 "downloadUrl": "https://abc123.private.blob.vercel-storage.com/ab/abcd",
@@ -329,7 +332,7 @@ mod tests {
             .await;
 
         let receipt = store
-            .put("ab/abcd", "image/png", Bytes::from_static(b"body"), 100)
+            .put("ab/abcd", "image/png", Bytes::from_static(b"body"), asked)
             .await
             .unwrap();
         assert_eq!(receipt.pathname, "ab/abcd");

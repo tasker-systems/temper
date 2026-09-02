@@ -83,8 +83,9 @@ fn commit_multipart(
 // ─── Witness 1: blob-bytes-retrievable-whole, at the surface layer ───────────
 
 /// What was committed is what comes back: same bytes, byte for byte; the response speaks the
-/// STORED content type; `Cache-Control: immutable` rides the read (D6 — content addressing
-/// earns the strongest cache posture); and `Content-Length` is the committed count.
+/// STORED content type; `Cache-Control` is `private, immutable` (D6 — content addressing earns
+/// `immutable`; the bytes are per-caller authorized, so a shared cache is never licensed to
+/// store them); and `Content-Length` is the committed count.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn committed_bytes_come_back_whole(pool: PgPool) {
     let cfg = blob_cfg(1 << 20, &["image/png", "application/pdf"], 64 * 1024);
@@ -125,6 +126,19 @@ async fn committed_bytes_come_back_whole(pool: PgPool) {
     assert!(
         cache_control.contains("immutable"),
         "content-addressed bytes are immutable; cache-control was {cache_control}"
+    );
+    // FAILS IF: the read-through ever licenses a SHARED cache to store per-caller-authorized
+    // bytes — `public` is exactly that license (RFC 7234 §3.2), and no `private` means an
+    // Authorization-bearing response is storable and servable to any other principal.
+    assert!(
+        !cache_control.contains("public"),
+        "an authorized read-through must never license shared caching; cache-control was \
+         {cache_control}"
+    );
+    assert!(
+        cache_control.contains("private"),
+        "per-caller-authorized bytes are privately cacheable at most; cache-control was \
+         {cache_control}"
     );
     let back = resp.bytes().await.expect("body");
     assert_eq!(

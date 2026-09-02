@@ -355,9 +355,10 @@ export interface paths {
          * @description Visibility gates on the blob's own home via
          *     `blob_readable_by_profile` — not visible renders as 404, the same not-found an unknown id
          *     gets, so a probe learns nothing either way. The response speaks the STORED media type and
-         *     carries the byte count plus `Cache-Control: immutable` — content addressing is what earns
-         *     it (D1), and the provider address never appears anywhere in the response (D6: the API is
-         *     the only reader of the provider).
+         *     carries the byte count plus `Cache-Control: private, immutable` — content addressing is what earns
+         *     `immutable` (D1), and `private` because the bytes are per-caller authorized (a shared cache
+         *     is never licensed to store them); and the provider address never appears anywhere in the
+         *     response (D6: the API is the only reader of the provider).
          */
         get: operations["get_blob"];
         put?: never;
@@ -8588,7 +8589,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The blob's bytes, streamed; content type is the stored media type, Cache-Control is immutable */
+            /** @description The blob's bytes, streamed; content type is the stored media type, Cache-Control is private, immutable */
             200: {
                 headers: {
                     [name: string]: unknown;

@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(SUM(octet_length(bytes)), 0)::bigint AS \"sum!\"\n             FROM kb_blob_upload_segments\n            WHERE upload_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "sum!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "b4c6548d118f32dbd89a2a1b4d66f3767790e5b955055a09126f842a84625daf"
+}

@@ -45,12 +45,14 @@ pub struct LandedSegment {
 
 /// What an append did. Same segment at an occupied seq is the idempotent no-op; a
 /// DIFFERENT segment there is a conflict — the assembled whole must stay unambiguous,
-/// so an occupied seq is never superseded.
+/// so an occupied seq is never superseded. `OverCeiling` is the staging ceiling refusing:
+/// `staged` is the total the append WOULD have produced, `ceiling` the bound in force.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppendOutcome {
     Landed,
     AlreadyLanded { segment_hash: String },
     Conflict { existing_hash: String },
+    OverCeiling { staged: i64, ceiling: i64 },
 }
 
 /// Begin a staged upload. The id is server-minted: a staging session is not a ledger
@@ -157,9 +159,18 @@ pub async fn landed_segments(
     ))
 }
 
-/// Append one segment. Race-free by the primary key: the INSERT either lands (new seq),
-/// or `ON CONFLICT DO NOTHING` falls through to a re-read that distinguishes the
-/// idempotent no-op (same hash) from the conflict (different bytes at an occupied seq).
+/// Append one segment under the staging ceiling, ATOMICALLY. The whole decision — owner
+/// gate, staged-total read, ceiling check, insert — runs in one transaction under the
+/// session row's `FOR UPDATE` lock, so N concurrent appends from the owning principal
+/// serialize instead of each reading the same staged total and all landing (the TOCTOU
+/// the security review's F4 found: the over-cap whole was assembled in RAM and put to
+/// the provider before the commit-time cap refused). The ceiling is the staging bound —
+/// how many bytes one session may hold between begin and finalize — passed in by the
+/// service from the same operator config the commit-time cap reads.
+///
+/// Race-free by the primary key: the INSERT either lands (new seq), or `ON CONFLICT DO
+/// NOTHING` falls through to a re-read that distinguishes the idempotent no-op (same
+/// hash) from the conflict (different bytes at an occupied seq).
 pub async fn append_segment(
     pool: &PgPool,
     caller: ProfileId,
@@ -167,17 +178,42 @@ pub async fn append_segment(
     seq: i32,
     bytes: &[u8],
     segment_hash: &str,
+    staging_ceiling: i64,
 ) -> Result<Option<AppendOutcome>> {
-    // Owner gate first: a session that is absent or not the caller's is the same None.
+    let mut txn = pool.begin().await?;
+
+    // Owner gate AND the serialization point in one statement: a session that is absent
+    // or not the caller's is the same None, and a found row is locked against every
+    // other append to this session until this transaction ends.
     let owned = sqlx::query!(
-        "SELECT true AS \"owned!\" FROM kb_blob_uploads WHERE id = $1 AND owner_profile_id = $2",
+        r#"SELECT true AS "owned!"
+             FROM kb_blob_uploads
+            WHERE id = $1 AND owner_profile_id = $2
+            FOR UPDATE"#,
         upload_id,
         caller.uuid(),
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *txn)
     .await?;
     if owned.is_none() {
         return Ok(None);
+    }
+
+    let staged: i64 = sqlx::query!(
+        r#"SELECT COALESCE(SUM(octet_length(bytes)), 0)::bigint AS "sum!"
+             FROM kb_blob_upload_segments
+            WHERE upload_id = $1"#,
+        upload_id,
+    )
+    .fetch_one(&mut *txn)
+    .await?
+    .sum;
+    let would_total = staged + bytes.len() as i64;
+    if would_total > staging_ceiling {
+        return Ok(Some(AppendOutcome::OverCeiling {
+            staged: would_total,
+            ceiling: staging_ceiling,
+        }));
     }
 
     let landed = sqlx::query!(
@@ -190,7 +226,7 @@ pub async fn append_segment(
         bytes,
         segment_hash,
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *txn)
     .await?;
 
     if landed.is_some() {
@@ -198,8 +234,9 @@ pub async fn append_segment(
             "UPDATE kb_blob_uploads SET updated = now() WHERE id = $1",
             upload_id
         )
-        .execute(pool)
+        .execute(&mut *txn)
         .await?;
+        txn.commit().await?;
         return Ok(Some(AppendOutcome::Landed));
     }
 
@@ -208,8 +245,9 @@ pub async fn append_segment(
         upload_id,
         seq,
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *txn)
     .await?;
+    txn.commit().await?;
     if existing.segment_hash == segment_hash {
         Ok(Some(AppendOutcome::AlreadyLanded {
             segment_hash: existing.segment_hash,
@@ -221,9 +259,10 @@ pub async fn append_segment(
     }
 }
 
-/// Assemble the staged whole in seq order. Bounded by the staging bound the service
-/// enforces per append, so the materialization here is bounded by the same number the
-/// operator set — never unbounded.
+/// Assemble the staged whole in seq order. Bounded by the staging ceiling `append_segment`
+/// enforces atomically per append — the sessions' staged total can never exceed the
+/// operator's number, so the materialization here is bounded by it, under concurrency as
+/// anywhere else.
 pub async fn assemble_body(pool: &PgPool, upload_id: Uuid) -> Result<Vec<u8>> {
     let rows = sqlx::query!(
         "SELECT bytes FROM kb_blob_upload_segments WHERE upload_id = $1 ORDER BY seq",

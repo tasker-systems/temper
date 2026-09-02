@@ -115,6 +115,43 @@ async fn call_tool(
     serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {name} result ({e}): {text}"))
 }
 
+/// The refusal face: a tool call the server declines arrives as a JSON-RPC error, and the
+/// error message is the refusal vocabulary.
+async fn call_tool_err(
+    peer: &ServerSink,
+    name: &str,
+    arguments: serde_json::Value,
+) -> rmcp::ErrorData {
+    let params = CallToolRequestParams::new(name.to_owned())
+        .with_arguments(arguments.as_object().expect("object args").to_owned());
+    match peer.call_tool(params).await {
+        Err(rmcp::service::ServiceError::McpError(e)) => e,
+        other => panic!("{name} must be refused with the MCP protocol error, got: {other:?}"),
+    }
+}
+
+/// A conformant client over real HTTP, with the harness token as the bearer — the setup
+/// the byte-for-byte witness runs, factored for the refusal witnesses.
+async fn connect_client(
+    mcp_addr: std::net::SocketAddr,
+    token: &str,
+) -> (
+    rmcp::service::RunningService<rmcp::RoleClient, rmcp::model::ClientInfo>,
+    ServerSink,
+) {
+    let transport = StreamableHttpClientTransport::with_client(
+        reqwest13::Client::new(),
+        StreamableHttpClientTransportConfig::with_uri(format!("http://{mcp_addr}/mcp"))
+            .auth_header(token.to_string()),
+    );
+    let service = ClientInfo::default()
+        .serve(transport)
+        .await
+        .expect("the initialize handshake must succeed over the deployed transport");
+    let peer = service.peer().clone();
+    (service, peer)
+}
+
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn blob_tools_survive_the_real_transport_byte_for_byte(pool: sqlx::PgPool) {
     // Provision through the API harness first: the approved profile + a readable context,
@@ -295,6 +332,54 @@ async fn blob_tools_survive_the_real_transport_byte_for_byte(pool: sqlx::PgPool)
     assert!(
         listed_ids.contains(&blob_id.as_str()) && listed_ids.contains(&other_id),
         "both committed blobs are in the readable set: {listed_ids:?}"
+    );
+
+    service.cancel().await.ok();
+}
+
+/// FAILS IF: the MCP commit door ever lets over-threshold bytes through — review F5's
+/// overshoot, where the threshold lived only in the HTTP multipart handler while the MCP
+/// tool decoded and provider-put past it before any size decision. The gate lives in the
+/// shared commit seam; this witness rides the REAL transport to pin the refusal's face:
+/// invalid-params naming the threshold in force and the segmented path beyond it.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_mcp_commit_door_refuses_over_threshold_bytes(pool: sqlx::PgPool) {
+    let app = common::setup_with_blob_store(pool).await;
+    let ctx = app
+        .client
+        .contexts()
+        .create("mcp-blob-threshold-e2e", None)
+        .await
+        .expect("context create failed");
+
+    // One MCP server with a deliberately tiny threshold — the refusal must name it.
+    let mut blob_config = app_blob_config();
+    blob_config.single_request_max_bytes = 1024;
+    let mcp_addr = spawn_mcp_server(app.pool.clone(), blob_config).await;
+    let (service, peer) = connect_client(mcp_addr, &app.token).await;
+
+    let over_threshold = vec![9u8; 4096]; // 4× the threshold
+    let err = call_tool_err(
+        &peer,
+        "blob_manage",
+        serde_json::json!({
+            "action": "commit",
+            "home_table": "kb_contexts",
+            "home_id": ctx.id.to_string(),
+            "content_type": "application/pdf",
+            "content": base64::engine::general_purpose::STANDARD.encode(&over_threshold),
+        }),
+    )
+    .await;
+    assert!(
+        err.message.contains("single-request threshold"),
+        "the refusal names the threshold in force: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("segmented upload path"),
+        "the refusal names the path beyond the threshold: {}",
+        err.message
     );
 
     service.cancel().await.ok();

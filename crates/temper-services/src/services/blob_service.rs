@@ -29,15 +29,38 @@ use crate::error::{ApiError, ApiResult};
 
 /// The CDN cache window a `put` asks of the provider and the `Cache-Control` the read-through
 /// response speaks — ONE number, because both name the same posture: content-addressed bytes
-/// are immutable (D1), so the strongest cache posture available is safe (D6). A year is the
-/// convention for immutable content.
+/// are immutable (D1), so a long window is safe (D6). A year is the convention for immutable
+/// content.
 pub const IMMUTABLE_CACHE_MAX_AGE: u32 = 365 * 24 * 60 * 60;
 
 /// The `Cache-Control` header value the read-through response carries, derived from
 /// [`IMMUTABLE_CACHE_MAX_AGE`] so the provider cache window and the client cache window
-/// cannot drift.
+/// cannot drift. The response is PER-CALLER AUTHORIZED bytes, so `private`: a shared cache
+/// (CDN, corporate proxy, platform edge) is never licensed to store it and serve one
+/// principal's bytes to another. `immutable` stays — content addressing, not caching policy,
+/// is what earns it (D1).
 pub fn immutable_cache_control() -> String {
-    format!("public, max-age={IMMUTABLE_CACHE_MAX_AGE}, immutable")
+    format!("private, max-age={IMMUTABLE_CACHE_MAX_AGE}, immutable")
+}
+
+/// The D7 single-request threshold refusal, spelled once and spoken by every committing
+/// surface: the HTTP multipart handler aborts mid-stream with it (before an over-threshold
+/// body is ever fully buffered), and [`commit_blob`] refuses with it before any byte reaches
+/// the provider — the MCP commit tool rides that same service seam, so no committing surface
+/// can silently skip the threshold. The refusal names the threshold in force and the
+/// segmented path beyond it.
+pub fn single_request_threshold_refusal(
+    content_bytes: usize,
+    config: &crate::config::BlobConfig,
+) -> Option<ApiError> {
+    (content_bytes > config.single_request_max_bytes).then(|| {
+        ApiError::BadRequest(format!(
+            "this request carries {content_bytes} bytes against a single-request threshold of \
+             {} — beyond it, use the segmented upload path (begin/append/finalize); the \
+             per-blob cap in force is {} bytes",
+            config.single_request_max_bytes, config.max_bytes
+        ))
+    })
 }
 
 /// What a commit reports to its surface. `blob_id` is the id the bytes live under — freshly
@@ -207,6 +230,12 @@ pub async fn commit_blob(
         bytes,
         surface,
     } = cmd;
+    // The D7 threshold is a request-shape question — how large a body this door accepts —
+    // so it is the FIRST decision, before the home parse, before standing, before the
+    // provider. A surface that reaches this function cannot skip it.
+    if let Some(err) = single_request_threshold_refusal(bytes.len(), config) {
+        return Err(err);
+    }
     let home = parse_home(home_table, home_id)?;
     check_home_standing(pool, caller, &home).await?;
 
@@ -355,13 +384,16 @@ fn progress_from(upload_id: Uuid, landed: Vec<LandedSegment>) -> BlobUploadProgr
     }
 }
 
-/// Append one segment. Owner gate via the substrate's reads (absent-or-not-yours ⇒ 404),
-/// then the staging bound: staged total plus this segment may not exceed
-/// `BlobConfig::max_bytes`. The bound is the staging ceiling — how many bytes this
-/// server will hold between begin and finalize, the D7-threshold's segmented twin — and
-/// it is what makes finalize's put-before-commit safe: an assembled whole over the cap
-/// can never exist to reach the provider. The commit-time cap itself stays the SQL
-/// wrapper's authority, enforced at finalize.
+/// Append one segment. Owner gate via the substrate's append (absent-or-not-yours ⇒ 404),
+/// then the staging bound: the substrate's append enforces the ceiling ATOMICALLY — owner
+/// gate, staged total, ceiling decision, and insert in one transaction under the session
+/// row's lock — so concurrent appends from the owning principal cannot together stage over
+/// `BlobConfig::max_bytes` (the F4 TOCTOU: N appends all read the same staged total and all
+/// landed, and the over-cap whole was assembled and put before the wrapper refused). The
+/// ceiling is the staging bound — the D7-threshold's segmented twin — and it is what makes
+/// finalize's put-before-commit safe: an assembled whole over the cap can never exist to
+/// reach the provider. The commit-time cap itself stays the SQL wrapper's authority,
+/// enforced at finalize.
 pub async fn append_to_upload(
     pool: &PgPool,
     config: &crate::config::BlobConfig,
@@ -370,22 +402,6 @@ pub async fn append_to_upload(
     seq: u32,
     bytes: Bytes,
 ) -> ApiResult<BlobUploadProgress> {
-    let landed = temper_substrate::uploads::landed_segments(pool, caller, upload_id)
-        .await
-        .map_err(|e| ApiError::Internal(format!("blob upload read failed: {e}")))?
-        .ok_or_else(|| ApiError::NotFound("upload not found".to_string()))?;
-    let staged: i64 = landed.iter().map(|s| s.segment_bytes).sum();
-    let incoming = bytes.len() as i64;
-    if staged + incoming > config.max_bytes {
-        return Err(ApiError::BadRequest(format!(
-            "blob_upload: this append would put staged bytes at {} against a staging ceiling \
-             of {} — an upload stages at most one blob's worth of bytes; the cap the commit \
-             enforces at finalize is the same ceiling",
-            staged + incoming,
-            config.max_bytes
-        )));
-    }
-
     let segment_hash = temper_core::hash::sha256_hex(&bytes);
     let outcome = temper_substrate::uploads::append_segment(
         pool,
@@ -394,11 +410,19 @@ pub async fn append_to_upload(
         seq as i32,
         &bytes,
         &segment_hash,
+        config.max_bytes,
     )
     .await
     .map_err(|e| ApiError::Internal(format!("blob upload append failed: {e}")))?;
     match outcome {
         None => Err(ApiError::NotFound("upload not found".to_string())),
+        Some(temper_substrate::uploads::AppendOutcome::OverCeiling { staged, ceiling }) => {
+            Err(ApiError::BadRequest(format!(
+                "blob_upload: this append would put staged bytes at {staged} against a \
+                 staging ceiling of {ceiling} — an upload stages at most one blob's worth \
+                 of bytes; the cap the commit enforces at finalize is the same ceiling"
+            )))
+        }
         Some(temper_substrate::uploads::AppendOutcome::Conflict { existing_hash }) => {
             Err(ApiError::Conflict(format!(
                 "segment seq {seq} already landed with hash {existing_hash} — occupied seqs \
@@ -429,15 +453,17 @@ pub async fn upload_progress(
     Ok(progress_from(upload_id, landed))
 }
 
-/// Finalize a staged upload: assemble in seq order, hash, then exactly the S2 commit
-/// path — standing re-run (authoritative: standing can change mid-upload, and it gates
-/// the put), concurrency tokens checked (a mismatch is [`ApiError::Conflict`] —
-/// resumable, staging kept), optional integrity hash checked (a mismatch is
-/// [`ApiError::ContentIntegrity`] — the ingest precedent's face for "the assembled bytes
-/// do not hash to the declaration"), readability-gated dedup pre-check, provider put
-/// unless deduped, then `commit_blob` whose cap/allowlist refusals surface verbatim.
-/// Staging dies on success only; every failure keeps it (keep-and-declare — a TTL
-/// reaper is a declared hole, never silently clean).
+/// Finalize a staged upload: standing re-run (authoritative: standing can change
+/// mid-upload, and it gates the put), concurrency tokens checked (a mismatch is
+/// [`ApiError::Conflict`] — resumable, staging kept), the staged whole re-checked against
+/// the cap BEFORE anything is assembled or put (the operator may have lowered it
+/// mid-upload — the wrapper's refusal must never cost a provider put), then assembly in
+/// seq order, hash, and exactly the S2 commit path — optional integrity hash checked (a
+/// mismatch is [`ApiError::ContentIntegrity`] — the ingest precedent's face for "the
+/// assembled bytes do not hash to the declaration"), readability-gated dedup pre-check,
+/// provider put unless deduped, then `commit_blob` whose cap/allowlist refusals surface
+/// verbatim. Staging dies on success only; every failure keeps it (keep-and-declare — a
+/// TTL reaper is a declared hole, never silently clean).
 pub async fn finalize_upload(
     pool: &PgPool,
     store: &dyn temper_substrate::blob_store::BlobStore,
@@ -471,6 +497,21 @@ pub async fn finalize_upload(
             total_bytes,
             req.expected_segments,
             req.expected_total_bytes
+        )));
+    }
+
+    // The staging ceiling held per append, so the whole is at most the operator's number —
+    // UNLESS the operator lowered the cap mid-upload and the already-staged total now
+    // exceeds it. Refuse BEFORE anything is assembled or put: an over-cap whole can never
+    // exist to reach the provider, and the provider put preceding the wrapper's refusal is
+    // exactly the orphan-bytes leak the review's F4 named. The wrapper stays the
+    // commit-time authority (D9); this is the ordering that keeps its refusal bytes-free.
+    if total_bytes > config.max_bytes {
+        return Err(ApiError::BadRequest(format!(
+            "blob_upload: the staged whole is {total_bytes} bytes against a per-blob cap of \
+             {} — the commit refuses it and nothing was uploaded; begin a new upload within \
+             the cap",
+            config.max_bytes
         )));
     }
 

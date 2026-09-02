@@ -471,7 +471,7 @@ module Temper::Generated
     end
 
     # Read a blob's bytes back, whole, streamed (D6)
-    # Visibility gates on the blob's own home via `blob_readable_by_profile` — not visible renders as 404, the same not-found an unknown id gets, so a probe learns nothing either way. The response speaks the STORED media type and carries the byte count plus `Cache-Control: immutable` — content addressing is what earns it (D1), and the provider address never appears anywhere in the response (D6: the API is the only reader of the provider).
+    # Visibility gates on the blob's own home via `blob_readable_by_profile` — not visible renders as 404, the same not-found an unknown id gets, so a probe learns nothing either way. The response speaks the STORED media type and carries the byte count plus `Cache-Control: private, immutable` — content addressing is what earns `immutable` (D1), and `private` because the bytes are per-caller authorized (a shared cache is never licensed to store them); and the provider address never appears anywhere in the response (D6: the API is the only reader of the provider).
     # @param id [String] Blob ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -482,7 +482,7 @@ module Temper::Generated
     end
 
     # Read a blob&#39;s bytes back, whole, streamed (D6)
-    # Visibility gates on the blob&#39;s own home via &#x60;blob_readable_by_profile&#x60; — not visible renders as 404, the same not-found an unknown id gets, so a probe learns nothing either way. The response speaks the STORED media type and carries the byte count plus &#x60;Cache-Control: immutable&#x60; — content addressing is what earns it (D1), and the provider address never appears anywhere in the response (D6: the API is the only reader of the provider).
+    # Visibility gates on the blob&#39;s own home via &#x60;blob_readable_by_profile&#x60; — not visible renders as 404, the same not-found an unknown id gets, so a probe learns nothing either way. The response speaks the STORED media type and carries the byte count plus &#x60;Cache-Control: private, immutable&#x60; — content addressing is what earns &#x60;immutable&#x60; (D1), and &#x60;private&#x60; because the bytes are per-caller authorized (a shared cache is never licensed to store them); and the provider address never appears anywhere in the response (D6: the API is the only reader of the provider).
     # @param id [String] Blob ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.

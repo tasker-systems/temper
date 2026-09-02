@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT b.id            AS \"blob_id!\",\n                  b.content_hash  AS \"content_hash!\",\n                  b.content_type,\n                  b.content_bytes AS \"content_bytes!\",\n                  b.created       AS \"created!\"\n             FROM kb_blobs b\n            WHERE blob_readable_by_profile($1, b.id)\n              AND ($2::text IS NULL\n                     OR (b.id IN (SELECT h.blob_id FROM kb_blob_homes h\n                                   WHERE h.anchor_table = $2::text AND h.anchor_id = $3)))",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "blob_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "content_hash!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "content_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "content_bytes!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "created!",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "3b867c81ab6649d0232a584364cecc2bdc925e2fb8509db0cdeb6b8841dc5ca3"
+}

@@ -1182,7 +1182,7 @@
           "Blobs"
         ],
         "summary": "Read a blob's bytes back, whole, streamed (D6)",
-        "description": "Visibility gates on the blob's own home via\n`blob_readable_by_profile` — not visible renders as 404, the same not-found an unknown id\ngets, so a probe learns nothing either way. The response speaks the STORED media type and\ncarries the byte count plus `Cache-Control: immutable` — content addressing is what earns\nit (D1), and the provider address never appears anywhere in the response (D6: the API is\nthe only reader of the provider).",
+        "description": "Visibility gates on the blob's own home via\n`blob_readable_by_profile` — not visible renders as 404, the same not-found an unknown id\ngets, so a probe learns nothing either way. The response speaks the STORED media type and\ncarries the byte count plus `Cache-Control: private, immutable` — content addressing is what earns\n`immutable` (D1), and `private` because the bytes are per-caller authorized (a shared cache\nis never licensed to store them); and the provider address never appears anywhere in the\nresponse (D6: the API is the only reader of the provider).",
         "operationId": "get_blob",
         "parameters": [
           {
@@ -1198,7 +1198,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The blob's bytes, streamed; content type is the stored media type, Cache-Control is immutable",
+            "description": "The blob's bytes, streamed; content type is the stored media type, Cache-Control is private, immutable",
             "content": {
               "application/octet-stream": {}
             }

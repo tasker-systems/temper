@@ -3,7 +3,9 @@
 //!
 //! `POST /api/blobs` takes one multipart upload at or under the configured single-request
 //! threshold (D7 — beyond it, the segmented path below); `GET /api/blobs/{id}` streams the
-//! bytes read-through with `Cache-Control: immutable` (D6). The segmented path
+//! bytes read-through with `Cache-Control: private, immutable` (D6 — content addressing earns
+//! `immutable`; the bytes are per-caller authorized, so no shared cache is licensed to store
+//! them). The segmented path
 //! (`/api/blobs/uploads/*`) stages bytes in Postgres between begin and finalize — pre-ledger
 //! transport state, caller-private until finalized, never a blob until the hash exists. Both
 //! paths refuse with a disabled refusal when the instance has no blob store configured —
@@ -103,15 +105,16 @@ pub async fn commit(
                     .await
                     .map_err(|e| ApiError::BadRequest(format!("bad file field: {e}")))?
                 {
-                    if buf.len() + chunk.len() > config.single_request_max_bytes {
-                        return Err(ApiError::BadRequest(format!(
-                            "this request carries {} bytes against a single-request threshold of \
-                             {} — beyond it, use the segmented upload path (begin/append/finalize); \
-                             the per-blob cap in force is {} bytes",
+                    // The shared D7 refusal (spelled once in the service) — aborting
+                    // mid-stream so an over-threshold body is never fully buffered. The
+                    // service re-asks the same question on the assembled command.
+                    if let Some(err) =
+                        temper_services::services::blob_service::single_request_threshold_refusal(
                             buf.len() + chunk.len(),
-                            config.single_request_max_bytes,
-                            config.max_bytes
-                        )));
+                            &config,
+                        )
+                    {
+                        return Err(err);
                     }
                     buf.extend_from_slice(&chunk);
                 }
@@ -162,9 +165,10 @@ pub async fn commit(
 /// Visibility gates on the blob's own home via
 /// `blob_readable_by_profile` — not visible renders as 404, the same not-found an unknown id
 /// gets, so a probe learns nothing either way. The response speaks the STORED media type and
-/// carries the byte count plus `Cache-Control: immutable` — content addressing is what earns
-/// it (D1), and the provider address never appears anywhere in the response (D6: the API is
-/// the only reader of the provider).
+/// carries the byte count plus `Cache-Control: private, immutable` — content addressing is what earns
+/// `immutable` (D1), and `private` because the bytes are per-caller authorized (a shared cache
+/// is never licensed to store them); and the provider address never appears anywhere in the
+/// response (D6: the API is the only reader of the provider).
 #[utoipa::path(
     get,
     operation_id = "get_blob",
@@ -175,7 +179,7 @@ pub async fn commit(
     ),
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "The blob's bytes, streamed; content type is the stored media type, Cache-Control is immutable", content_type = "application/octet-stream"),
+        (status = 200, description = "The blob's bytes, streamed; content type is the stored media type, Cache-Control is private, immutable", content_type = "application/octet-stream"),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 404, description = "Not found or not visible — indistinguishable by design", body = ErrorBody),
     )
