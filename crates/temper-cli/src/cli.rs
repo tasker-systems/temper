@@ -645,6 +645,14 @@ pub enum ResourceAction {
         /// Add a section (comma-separated or repeated). `show` already carries `body` and
         /// `open-meta`; `--with edges` folds this resource's graph edges into the same
         /// document (the long form of `--edges`).
+        ///
+        /// The edges section is RESOURCE↔RESOURCE by decision (2026-09-02, blob surfaces
+        /// S6): edges with a blob endpoint — the `derivation_source` edge
+        /// `--preserve-source` asserts, say — are admitted by the SQL visibility gate but
+        /// deliberately not rendered here, because the peer row is resource-typed. The
+        /// derivation answer lives one door over: `temper blob relations <blob-id>` (the
+        /// blob-side view). Widening this section to polymorphic peers is a named
+        /// follow-up, not an omission.
         #[arg(long = "with", value_delimiter = ',',
               value_parser = crate::commands::resource_sections::show_section_parser())]
         with: Vec<String>,

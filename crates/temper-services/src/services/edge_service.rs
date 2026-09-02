@@ -62,6 +62,14 @@ pub async fn list_resource_edges(
     // `edge_kind`/`polarity` take an explicit type override so the SQL enums decode straight into
     // `EdgeKind`/`Polarity` (both derive `sqlx::Type` with their `type_name`) — no `::text`
     // round-trip, matching what the runtime version decoded.
+    //
+    // DECIDED (2026-09-02, blob surfaces S6): this view is resource↔resource BY DECISION.
+    // `edges_visible_to` admits blob-ended edges (D3's "an edge listing may render the
+    // edge"), but the peer row here is resource-typed (`GraphEdgeRow`), so rendering them
+    // would need a polymorphic peer — a wire-type change, deferred as a named follow-up.
+    // The blob-side answer exists one door over: `blob_service::blob_relations` (CLI
+    // `temper blob relations`). This filter is a SURFACE decision riding a gate that admits
+    // more — never cite the wider gate as if it were this query's answer.
     let edges = sqlx::query!(
         r#"SELECT
             e.id AS edge_id,

@@ -56,6 +56,18 @@ temper-mcp = { path = "../../crates/temper-mcp" }
 # `test-support` installs an in-memory span exporter so `mcp_span_link_test` can read the spans the
 # MCP router really exported, rather than a replica of its layer stack.
 temper-telemetry = { path = "../../crates/temper-telemetry", features = ["test-support"] }
+# The REAL rmcp client, for `mcp_blob_transport_e2e`: the S5 blob tools were witnessed through
+# direct tool-fn calls; S6 drives them through the deployed streamable-HTTP transport. Dev-only —
+# nothing in production links the client side. `reqwest13` is the reqwest rmcp itself implements
+# `StreamableHttpClient` for (rmcp 1.8 pairs with reqwest 0.13; the workspace otherwise pins 0.12),
+# so the transport is built with the client type the trait impl covers.
+rmcp = { version = "1.8", features = [
+    "client",
+    "transport-streamable-http-client-reqwest",
+] }
+reqwest13 = { package = "reqwest", version = "0.13", default-features = false, features = [
+    "rustls",
+] }
 opentelemetry_sdk = { version = "0.32", features = ["testing"] }
 # `SpanKind` — `mcp_span_link_test` locates the two `mcp_request` root spans by their server kind
 # rather than by exported name, which is now the per-route `{method} {route}` rather than a constant.
