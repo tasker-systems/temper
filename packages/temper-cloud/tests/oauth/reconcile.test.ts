@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { logger } from "../../src/logger.js";
 import {
   reconcileMemberships,
   SIGNATURE_HEADER,
@@ -15,7 +16,10 @@ const payload = {
   groups: ["engineering"],
 };
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 describe("reconcileMemberships", () => {
   it("POSTs to INTERNAL_RECONCILE_URL with a valid HMAC signature over the body", async () => {
@@ -52,5 +56,21 @@ describe("reconcileMemberships", () => {
       vi.fn(async () => new Response("nope", { status: 500 })),
     );
     await expect(reconcileMemberships(payload)).rejects.toThrow();
+  });
+
+  it("binds the group count and no identifier on the success log line", async () => {
+    vi.stubEnv("INTERNAL_RECONCILE_URL", "https://api.internal/internal/saml/reconcile");
+    vi.stubEnv("INTERNAL_RECONCILE_SECRET", "s3cr3t");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 204 })),
+    );
+    const infoSpy = vi.spyOn(logger, "info").mockImplementation(() => undefined);
+
+    await reconcileMemberships(payload);
+
+    expect(infoSpy).toHaveBeenCalledOnce();
+    const [bindings] = infoSpy.mock.calls[0] as unknown as [Record<string, unknown>, string];
+    expect(bindings).toEqual({ groups: 1 });
   });
 });
