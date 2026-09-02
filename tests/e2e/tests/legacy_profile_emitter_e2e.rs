@@ -159,16 +159,24 @@ async fn legacy_profile_write_fails_then_succeeds_after_backfill(pool: PgPool) {
             "precondition: a legacy profile's first resource write must fail — this is the 500 \
              the backfill exists to prevent",
         );
-    // Pin the CAUSE, not merely the failure. Asserting "it errored" would pass for a missing
-    // context, a bad doc_type, or an auth reject — none of which this migration fixes. The
-    // observed error is a real HTTP 500 carrying `resolve_emitter`'s own context string:
-    //   Server { status: 500, message: "Internal error: no emitter entity <handle>@cli for the
-    //   resolved profile" }
+    // Pin the CONTRACT, not merely the failure. Asserting "it errored" would pass for a missing
+    // context, a bad doc_type, or an auth reject — none of which this migration fixes. So the
+    // assertion pins the status and the wire shape of the 500:
+    //   Server { status: 500, message: "An internal error occurred" }
+    //
+    // The body deliberately no longer carries `resolve_emitter`'s context string. A 5xx body is
+    // client-facing and the detail is server material — SQL text, upstream URLs, paths — so the
+    // response carries the fixed generic message while the bounded detail stays in the server's
+    // `tracing::error!` event (temper_services::error, the otel-data-surface branch). What is
+    // pinned here is everything the wire still distinguishes: a 500 from THIS door, before the
+    // backfill, on a shape the context-create path one line above accepts.
     let rendered = format!("{err:?}");
     assert!(
-        rendered.contains("500") && rendered.contains("no emitter entity"),
-        "the write must 500 on the missing emitter specifically — otherwise this test would pass \
-         for the wrong reason. Got: {rendered}",
+        rendered.contains("500")
+            && rendered.contains("An internal error occurred")
+            && !rendered.contains("no emitter entity"),
+        "the write must 500 on the missing emitter, with the generic client-facing body — the \
+         internal detail is server-side log material now. Got: {rendered}",
     );
 
     run_backfill(&pool).await;

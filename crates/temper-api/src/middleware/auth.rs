@@ -70,7 +70,9 @@ pub async fn require_auth(
             // `debug!`, not `error!`: the whole input is caller-written, so an error-level line
             // here is a log-volume lever anyone can pull, on every route this middleware covers.
             KeyLookupError::UnknownKid(kid) => {
-                tracing::debug!("token names an unpublished kid: {kid}");
+                // `kid` is read from an unverified token header — attacker-chosen
+                // content at attacker-chosen length. Bounded.
+                tracing::debug!(kid = %temper_services::error::bounded(&kid), "token names an unpublished kid");
                 ApiError::Unauthorized("Invalid or expired token".to_string())
             }
             e => {

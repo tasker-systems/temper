@@ -14,31 +14,82 @@
  * `globalThis[Symbol.for('opentelemetry.js.api.1')]`), so multiple 1.x copies across a
  * consumer and this package share one context/propagator/provider — which is why this
  * works when temper-ui also imports `@opentelemetry/api` directly for its span glue.
+ *
+ * `OTEL_SDK_DISABLED` is honored here with the Rust exporter's exact semantics
+ * (`temper-telemetry/src/export.rs`): the kill switch outranks a configured endpoint,
+ * and only the literal value `true` — case-insensitive, surrounding whitespace
+ * tolerated — disables. `1` and `yes` deliberately do not: the spec names exactly one
+ * true value, and guessing at others would let a typo silently disable observability.
  */
 import { trace } from '@opentelemetry/api';
 import { AsyncHooksContextManager } from '@opentelemetry/context-async-hooks';
 import { W3CTraceContextPropagator } from '@opentelemetry/core';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-proto';
 import { resourceFromAttributes } from '@opentelemetry/resources';
-import { BatchSpanProcessor, NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
+import { AlwaysOnSampler, BatchSpanProcessor, NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions';
 import { McpNegotiationStatusProcessor, negotiationKey } from './mcp-negotiation.js';
 let provider = null;
 let enabled = false;
 let tracerName = 'temper-telemetry-ts';
 /**
+ * The `OTEL_SDK_DISABLED` kill switch, with the Rust exporter's exact semantics:
+ * only the literal `true` — case-insensitive, surrounding whitespace tolerated —
+ * disables. `1`, `yes`, and typos leave export on; see the module comment.
+ */
+export function isSdkDisabled() {
+    return isSdkDisabledFrom(process.env);
+}
+/**
+ * Whether span export should run, from the environment alone. The ONE decision —
+ * `initTelemetry` and the agents' `otlpExportConfigured` both delegate here, so the
+ * "do we export?" answer cannot drift between building the provider and deciding
+ * whether to inject a static traceparent.
+ *
+ * Mirrors the Rust exporter: `OTEL_SDK_DISABLED` (see {@link isSdkDisabled}) is the
+ * kill switch and outranks any endpoint; otherwise the signal-specific
+ * `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` wins over the general
+ * `OTEL_EXPORTER_OTLP_ENDPOINT` — the same precedence the Rust exporter and the
+ * OTLP exporter itself apply, so a signal-specific endpoint turns every hop on or
+ * none.
+ */
+export function shouldExportSpans(env = process.env) {
+    if (isSdkDisabledFrom(env))
+        return false;
+    const endpoint = env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT?.trim() || env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim();
+    return Boolean(endpoint);
+}
+function isSdkDisabledFrom(env) {
+    return env.OTEL_SDK_DISABLED?.trim().toLowerCase() === 'true';
+}
+/**
+ * The sampler every temper hop exports with. **Always-on, deliberately ignoring the
+ * inbound `sampled` flag**: honoring a remote parent's flag would hand any caller
+ * control of whether our server spans are recorded — the sampling cost attack the
+ * Rust side pins as a violation (`temper-telemetry/src/export.rs`, the
+ * `sampled_flag_is_recorded_never_obeyed` test). Trace-id stitching survives via the
+ * remote parent; the sampling decision does not follow it.
+ */
+export function telemetrySampler() {
+    return new AlwaysOnSampler();
+}
+/**
  * Build and register the tracer provider — **once**. Idempotent, so a repeated
  * side-effecting call (dev HMR, multiple entrypoints) does not double-register.
  *
- * Mirrors the Rust "no endpoint ⇒ no export" rule: when `OTEL_EXPORTER_OTLP_ENDPOINT`
- * is unset the provider is never built, span creation stays a no-op, and we never
- * default to `localhost:4318`. The exporter reads the endpoint and headers from the
- * standard env itself, so the only thing this function decides is *whether* to register
+ * Mirrors the Rust "no endpoint ⇒ no export" rule: when no OTLP endpoint is configured
+ * the provider is never built, span creation stays a no-op, and we never
+ * default to `localhost:4318`. The exporter reads the endpoint and headers from
+ * the standard env itself, so the only thing this function decides is *whether* to register
  * (and whether to add HTTP instrumentation).
  */
 export function initTelemetry({ serviceName, instrumentHttp = false, mcpEndpoint }) {
     if (provider)
         return;
+    if (isSdkDisabled()) {
+        console.info('[telemetry] OTEL_SDK_DISABLED=true; span export disabled');
+        return;
+    }
     const endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim();
     if (!endpoint) {
         console.info('[telemetry] OTEL_EXPORTER_OTLP_ENDPOINT unset; span export disabled');
@@ -71,6 +122,7 @@ export function initTelemetry({ serviceName, instrumentHttp = false, mcpEndpoint
     spanProcessors.push(new BatchSpanProcessor(exporter));
     const built = new NodeTracerProvider({
         resource: resourceFromAttributes({ [ATTR_SERVICE_NAME]: resolvedServiceName }),
+        sampler: telemetrySampler(),
         spanProcessors
     });
     built.register({

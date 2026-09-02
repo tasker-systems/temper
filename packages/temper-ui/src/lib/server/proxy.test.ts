@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { gzipSync } from 'node:zlib';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
 	buildUpstreamUrl,
 	forwardRequest,
@@ -198,14 +198,29 @@ describe('forwardRequest (upstream failure handling)', () => {
 	const unreachable = 'http://127.0.0.1:1'; // port 1 is not listenable in practice
 
 	it('returns 502 (not a naked 500) when the upstream is unreachable', async () => {
-		const res = await forwardRequest(
-			unreachable,
-			'/api/profile',
-			'',
-			new Request('http://ui.local/api/profile'),
-		);
-		expect(res.status).toBe(502);
-		expect(await res.json()).toMatchObject({ message: expect.stringContaining('unreachable') });
+		const errors: unknown[][] = [];
+		const spy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+			errors.push(args);
+		});
+		try {
+			const res = await forwardRequest(
+				unreachable,
+				'/api/profile',
+				'?token=secret-here',
+				new Request('http://ui.local/api/profile?token=secret-here'),
+			);
+			expect(res.status).toBe(502);
+			expect(await res.json()).toMatchObject({ message: expect.stringContaining('unreachable') });
+			// The failure log joins on the path; the query string — which has carried
+			// OAuth codes and tokens — must not reach the log stream.
+			const payload = errors.find((entry) =>
+				String(entry[0]).includes('upstream unreachable'),
+			)![1] as Record<string, unknown>;
+			expect(payload.pathname).toBe('/api/profile');
+			expect(JSON.stringify(payload)).not.toContain('secret-here');
+		} finally {
+			spy.mockRestore();
+		}
 	});
 
 	it('returns 504 when the upstream does not respond within the connect timeout', async () => {

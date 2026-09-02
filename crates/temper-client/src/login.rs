@@ -190,7 +190,11 @@ async fn wait_for_code(listener: &TcpListener) -> Result<String> {
         let request = String::from_utf8_lossy(&buf[..n]);
 
         let (method, path) = parse_request_line(&request);
-        debug!(method, path, "Received request");
+        // The callback path carries the OAuth `code` and the PKCE `state` —
+        // bearer-equivalent short-lived credentials. The log names the route only;
+        // the query string is never written to stderr.
+        let path_without_query = path.split('?').next().unwrap_or(path);
+        debug!(method, path = path_without_query, "Received request");
 
         let is_callback = method == "GET"
             && (path.starts_with("/callback") || path.starts_with("/?") || path == "/");
