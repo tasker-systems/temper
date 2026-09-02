@@ -14,6 +14,12 @@
  * `globalThis[Symbol.for('opentelemetry.js.api.1')]`), so multiple 1.x copies across a
  * consumer and this package share one context/propagator/provider — which is why this
  * works when temper-ui also imports `@opentelemetry/api` directly for its span glue.
+ *
+ * `OTEL_SDK_DISABLED` is honored here with the Rust exporter's exact semantics
+ * (`temper-telemetry/src/export.rs`): the kill switch outranks a configured endpoint,
+ * and only the literal value `true` — case-insensitive, surrounding whitespace
+ * tolerated — disables. `1` and `yes` deliberately do not: the spec names exactly one
+ * true value, and guessing at others would let a typo silently disable observability.
  */
 import { type Tracer } from '@opentelemetry/api';
 export interface InitTelemetryOptions {
@@ -46,6 +52,12 @@ export interface InitTelemetryOptions {
      */
     readonly mcpEndpoint?: string;
 }
+/**
+ * The `OTEL_SDK_DISABLED` kill switch, with the Rust exporter's exact semantics:
+ * only the literal `true` — case-insensitive, surrounding whitespace tolerated —
+ * disables. `1`, `yes`, and typos leave export on; see the module comment.
+ */
+export declare function isSdkDisabled(): boolean;
 /**
  * Build and register the tracer provider — **once**. Idempotent, so a repeated
  * side-effecting call (dev HMR, multiple entrypoints) does not double-register.

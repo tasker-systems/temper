@@ -13,6 +13,7 @@ export {
 	forceFlush,
 	getTracer,
 	initTelemetry,
+	isSdkDisabled,
 	isTelemetryEnabled,
 	type InitTelemetryOptions
 } from './otel.js';
