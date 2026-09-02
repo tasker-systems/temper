@@ -640,7 +640,8 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
     // impossible values validated cleanly and failed later as a driver error behind the same opaque
     // 500: a NaN makes every cosine it touches unreadable, the all-zero vector's cosine is 0/0, and
     // a norm far from 1.0 is a vector for no model — the corpus's space is unit-normalized. The
-    // window is deliberately wide (see the constants): a consistently scaled direction is still a
+    // window is many orders of magnitude wide (see the constants): a consistently scaled
+    // direction is still a
     // question, and cosine reads direction only.
     if let Some(intention) = inv.intention.as_ref() {
         if let Some(embedding) = intention.embedding.as_ref() {

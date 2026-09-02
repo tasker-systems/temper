@@ -450,7 +450,7 @@ pub const MAX_EMBEDDING_DIM: usize = 768;
 /// The norm window a caller-supplied query vector must land in.
 ///
 /// The corpus's space is unit-normalized — every embedding this system computes for itself has
-/// norm 1.0 — so a caller's vector is plausible only near that. The window is deliberately many
+/// norm 1.0 — so a caller's vector is plausible only near that. The window is many
 /// orders of magnitude wide on both sides: a caller who pre-scaled by a constant is sending
 /// **direction**, which is all a cosine reads, and is not worth refusing; the window exists for
 /// the values that are not questions at all. Below it sits the all-zero vector, whose cosine is
