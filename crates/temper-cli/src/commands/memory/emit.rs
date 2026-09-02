@@ -14,15 +14,16 @@
 //! no-op that says why, mirroring `status`'s treatment of the same absent-config case.
 //!
 //! [`emit`] is the async I/O shell: fetch every configured context's `memory`-typed rows, run
-//! them through [`build_index`], and write the result to `index_path` (or the override),
-//! creating parent directories as needed.
+//! them through [`build_index`], and write the result — to `index_path` alone, or to BOTH the
+//! project and shared indexes when `shared_index_path` splits the render — creating parent
+//! directories as needed.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
 
 use chrono::{NaiveDate, Utc};
 
-use temper_core::types::config::{MemoryConfig, TemperConfig};
+use temper_core::types::config::{expand_tilde, MemoryConfig, TemperConfig};
 use temper_core::types::resource_view::ResourceView;
 
 use super::fetch::{fetch_context_rows, fetch_principles};
@@ -146,50 +147,153 @@ pub fn build_local_index(
 /// meaning is that it compares the file against what `emit` would write; if `check` built its
 /// render from a separately-written pipeline, a divergence between the two would surface as drift
 /// in the user's index rather than as a bug in this file.
+///
+/// **The cohort split happens at fetch time, not by matching rendered rows afterwards.** A row's
+/// `context_ref` is composed from the context's owner handle (`@j-cole-taylor/temper`), which is
+/// not the `@me/…` ref this config fetched it with — partitioning by that field would misfile
+/// every row into neither cohort. The context a row was FETCHED from is the only reliable
+/// classification, and the shared list wins a context named in both, mirroring
+/// `all_contexts`' shared-first dedup.
 pub(super) async fn render_current(
     mem: &MemoryConfig,
     path_override: Option<&str>,
-) -> Result<(String, PathBuf)> {
+) -> Result<RenderedIndexes> {
     let (_cfg, _store, client) = build_config_store_and_client()?;
 
-    let mut rows: Vec<ResourceView> = Vec::new();
+    let mut shared_rows: Vec<ResourceView> = Vec::new();
+    let mut project_rows: Vec<ResourceView> = Vec::new();
     // Principles are looked for in every configured context, not just the shared one. Where they
     // live is the author's decision, and a render that only looked in one would silently ignore a
-    // principle homed in the other rather than reporting it.
+    // principle homed in the other rather than reporting it. ONE list feeds both renders: the
+    // render's live-member filter keeps a section only where its members actually are, which is
+    // the cohort cut — a principle section belongs to the file whose cohort holds its members.
     let mut principles: Vec<PrincipleSection> = Vec::new();
-    for ctx in mem.all_contexts() {
-        let mut ctx_rows = fetch_context_rows(&client, ctx).await?;
-        rows.append(&mut ctx_rows);
+
+    let mut seen: HashSet<&str> = HashSet::new();
+    for ctx in mem
+        .shared_contexts
+        .iter()
+        .chain(mem.project_contexts.iter())
+    {
+        if !seen.insert(ctx.as_str()) {
+            continue;
+        }
+        if mem.shared_contexts.contains(ctx) {
+            shared_rows.append(&mut fetch_context_rows(&client, ctx).await?);
+        } else {
+            project_rows.append(&mut fetch_context_rows(&client, ctx).await?);
+        }
         let mut ctx_principles = fetch_principles(&client, ctx).await?;
         principles.append(&mut ctx_principles);
     }
 
-    let path = super::resolve_index_path(mem, path_override);
-    let already_migrated: HashSet<String> = rows
-        .iter()
-        .filter_map(super::status::source_file_of)
-        .collect();
     // Scanned from the CONFIGURED index path, never the override. `--path` says where the index
     // is written, not where this machine's memories live — so `emit --path /tmp/preview.md`
     // previews the real index instead of reporting an empty machine, and `check --path` still
     // compares against a render built from the same files. `migrate` reads the configured path
-    // for the same reason.
+    // for the same reason. Local files render in the PROJECT index only: they sit beside it,
+    // and `migrate` moves them into the project contexts.
+    let already_migrated: HashSet<String> = shared_rows
+        .iter()
+        .chain(project_rows.iter())
+        .filter_map(super::status::source_file_of)
+        .collect();
     let local = build_local_index(
         &scan_memory_dir(&super::resolve_index_path(mem, None)),
         &already_migrated,
     );
 
     let today = Utc::now().date_naive();
-    Ok((build_index(mem, &rows, &local, &principles, today)?, path))
+
+    // Which rows render where. Decided HERE, purely, because the pre-split shape is the one
+    // invariant a transition cannot quietly break: a machine with shared contexts configured
+    // but no `shared_index_path` must keep rendering every context into `index_path` — the
+    // merge, shared rows first, is what makes the field's absence byte-for-byte the old
+    // behavior rather than a silent cull of the shared cohort.
+    let (shared_rows, project_rows) = rows_per_cohort(mem, shared_rows, project_rows);
+
+    // Render BOTH cohorts before refusing: a defect in the shared half must not hide one in the
+    // project half — one fix-run discovers every defect, the same rule `build_index` applies
+    // within a cohort.
+    let shared_rendered = mem.shared_index_path.as_ref().map(|p| {
+        build_index(
+            mem,
+            &shared_rows,
+            &LocalIndex::default(),
+            &principles,
+            today,
+        )
+        .map(|rendered| (rendered, expand_tilde(p)))
+    });
+    let project_rendered = build_index(mem, &project_rows, &local, &principles, today)
+        .map(|rendered| (rendered, super::resolve_index_path(mem, path_override)));
+
+    let shared_err = match &shared_rendered {
+        Some(Err(e)) => Some(e.to_string()),
+        _ => None,
+    };
+    let project_err = match &project_rendered {
+        Err(e) => Some(e.to_string()),
+        _ => None,
+    };
+    match (shared_err, project_err) {
+        (Some(s), Some(p)) => return Err(TemperError::BadRequest(format!("{s}\n\n{p}"))),
+        (Some(s), None) => return Err(TemperError::BadRequest(s)),
+        (None, Some(p)) => return Err(TemperError::BadRequest(p)),
+        (None, None) => {}
+    }
+    let shared = shared_rendered.map(|r| r.expect("the error case is handled above"));
+    let project = project_rendered.expect("the error case is handled above");
+
+    Ok(RenderedIndexes { project, shared })
 }
 
-/// Resolve the write path (`path_override`, or `mem.index_path` tilde-expanded), create any
-/// missing parent directories, and write `rendered` to it.
+/// Which rows render into the shared index and which into the project index.
+///
+/// **No `shared_index_path`, no split — and no cull.** Every row lands in the project index,
+/// shared cohort first, which is byte-for-byte what a one-index machine rendered before the
+/// field existed. A pre-split machine upgrading the binary must lose nothing; only a machine
+/// that opts in gets two files.
+fn rows_per_cohort(
+    mem: &MemoryConfig,
+    shared_rows: Vec<ResourceView>,
+    project_rows: Vec<ResourceView>,
+) -> (Vec<ResourceView>, Vec<ResourceView>) {
+    if mem.shared_index_path.is_none() {
+        let mut all = shared_rows;
+        all.extend(project_rows);
+        (Vec::new(), all)
+    } else {
+        (shared_rows, project_rows)
+    }
+}
+
+/// The one or two renders a machine writes and `check` gates. `project` is always present —
+/// `index_path` is the field that turns the feature on; `shared` exists only when
+/// `shared_index_path` splits the render.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RenderedIndexes {
+    pub project: (String, PathBuf),
+    pub shared: Option<(String, PathBuf)>,
+}
+
+/// Resolve the write path (`path_override`, or `mem.index_path` tilde-expanded) and hand it to
+/// [`write_rendered`]. The project index's front door — the override rule lives here so the
+/// shared index, which has no override, cannot grow a different one.
 ///
 /// Synchronous and network-free by construction — split out from [`emit`] specifically so the
 /// half of this command whose entire job is putting bytes on disk is testable with a real
 /// filesystem (`tempfile`) without standing up or mocking a client, mirroring
 /// `commands/status.rs`'s `count_projected_md_files` tests.
+fn resolve_and_write(
+    mem: &MemoryConfig,
+    path_override: Option<&str>,
+    rendered: &str,
+) -> Result<PathBuf> {
+    write_rendered(&super::resolve_index_path(mem, path_override), rendered)
+}
+
+/// Write `rendered` to `path`, creating any missing parent directories.
 ///
 /// **Refuses to overwrite a file this command did not write.** A previously-emitted index always
 /// starts with [`GENERATED_HEADER`] — that is the one fact `emit` can check without a second
@@ -197,21 +301,17 @@ pub(super) async fn render_current(
 /// (the destructive case this guards) or content from something else entirely; either way,
 /// clobbering it silently is the bug. A target that does not exist yet, or that already carries
 /// the header (a stale render from a prior `emit` run, including an empty one), is fair game —
-/// `emit` re-renders the whole index every run by design.
-fn resolve_and_write(
-    mem: &MemoryConfig,
-    path_override: Option<&str>,
-    rendered: &str,
-) -> Result<PathBuf> {
-    let path = super::resolve_index_path(mem, path_override);
-
-    if let Ok(existing) = std::fs::read_to_string(&path) {
+/// `emit` re-renders the whole index every run by design. The check is per FILE, so a split
+/// machine's shared index is gated by exactly the same rule as its project index.
+fn write_rendered(path: &std::path::Path, rendered: &str) -> Result<PathBuf> {
+    if let Ok(existing) = std::fs::read_to_string(path) {
         if !existing.starts_with(GENERATED_HEADER) {
             return Err(TemperError::BadRequest(format!(
                 "refusing to overwrite {} — it was not generated by `temper memory emit` (it \
                  does not start with the generated-file header). This looks like a hand-written \
-                 or otherwise pre-existing file. Move it aside or point `index_path` (or --path) \
-                 somewhere else, then run `temper memory emit` again.",
+                 or otherwise pre-existing file. Move it aside or point `index_path` (or \
+                 `shared_index_path`, or --path) somewhere else, then run `temper memory emit` \
+                 again.",
                 path.display()
             )));
         }
@@ -220,21 +320,29 @@ fn resolve_and_write(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&path, rendered)?;
-    Ok(path)
+    std::fs::write(path, rendered)?;
+    Ok(path.to_path_buf())
 }
 
 /// The async I/O shell. Assumes the caller has already checked [`emit_outcome`] (the CLI
 /// dispatch does), but re-checks defensively rather than trusting the caller silently.
-pub async fn emit(config: &TemperConfig, path_override: Option<&str>) -> Result<PathBuf> {
+///
+/// Returns every path written — the project index always, the shared index when the config
+/// splits. `--path` overrides the project index only; the shared index has no override, so a
+/// machine mid-adoption gates that one file with `check --path` exactly as before.
+pub async fn emit(config: &TemperConfig, path_override: Option<&str>) -> Result<Vec<PathBuf>> {
     let mem = config.memory.as_ref().ok_or_else(|| {
         TemperError::Config(
             "no [memory] section in config.toml — the memory projection is off".to_string(),
         )
     })?;
 
-    let (rendered, _path) = render_current(mem, path_override).await?;
-    resolve_and_write(mem, path_override, &rendered)
+    let indexes = render_current(mem, path_override).await?;
+    let mut written = vec![resolve_and_write(mem, path_override, &indexes.project.0)?];
+    if let Some((rendered, path)) = &indexes.shared {
+        written.push(write_rendered(path, rendered)?);
+    }
+    Ok(written)
 }
 
 #[cfg(test)]
@@ -257,6 +365,7 @@ mod tests {
             shared_contexts: vec![],
             project_contexts: vec!["@me/temper".to_string()],
             index_path: "~/.claude/projects/p/memory/MEMORY.md".to_string(),
+            shared_index_path: None,
             stale_after_days: 90,
             reinforced_min: None,
         }
@@ -572,6 +681,155 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&index_path).unwrap(),
             "# My hand-written memory\n\nDon't touch this.",
+            "the hand-written file must survive the refused write untouched"
+        );
+    }
+
+    // ---- the cohort split ------------------------------------------------------------------
+
+    fn split_cfg() -> MemoryConfig {
+        MemoryConfig {
+            shared_contexts: vec!["@me/working-agreements".to_string()],
+            project_contexts: vec!["@me/temper".to_string()],
+            index_path: "~/p/MEMORY.md".to_string(),
+            shared_index_path: Some("~/s/MEMORY.md".to_string()),
+            stale_after_days: 90,
+            reinforced_min: None,
+        }
+    }
+
+    /// The transition invariant: a machine with shared contexts but no `shared_index_path` keeps
+    /// every row in the one index — the split's absence must never read as a cull of the shared
+    /// cohort. Shared rows stay first, the order the pre-split fetch produced.
+    #[test]
+    fn a_pre_split_config_renders_every_row_into_the_project_index() {
+        let mut mem = split_cfg();
+        mem.shared_index_path = None;
+        let shared = vec![meta_row_native("feedback one", "@me/working-agreements")];
+        let project = vec![meta_row_native("project one", "@me/temper")];
+
+        let (s, p) = rows_per_cohort(&mem, shared, project);
+
+        assert!(
+            s.is_empty(),
+            "no split configured means no shared file to write"
+        );
+        assert_eq!(p.len(), 2, "both cohorts render into the one index");
+        assert_eq!(
+            p[0].title, "feedback one",
+            "shared rows stay first, the order the pre-split fetch produced"
+        );
+    }
+
+    /// The split itself: each cohort's rows land in exactly one bucket.
+    #[test]
+    fn a_split_config_renders_each_cohort_into_its_own_file() {
+        let shared = vec![meta_row_native("feedback one", "@me/working-agreements")];
+        let project = vec![meta_row_native("project one", "@me/temper")];
+
+        let (s, p) = rows_per_cohort(&split_cfg(), shared, project);
+
+        assert_eq!(s.len(), 1);
+        assert_eq!(p.len(), 1);
+    }
+
+    /// Render-level: what one file holds, the other must not — a memory appearing in both is
+    /// the one way a reader could be shown the same memory twice per session.
+    #[test]
+    fn the_split_keeps_a_cohort_s_rows_out_of_the_other_file() {
+        let shared_rows = vec![meta_row_native("feedback one", "@me/working-agreements")];
+        let project_rows = vec![meta_row_native("project one", "@me/temper")];
+
+        let shared_out = build_index(
+            &split_cfg(),
+            &shared_rows,
+            &LocalIndex::default(),
+            &[],
+            d("2026-08-01"),
+        )
+        .expect("renders");
+        assert!(shared_out.contains("feedback one"));
+        assert!(
+            !shared_out.contains("project one"),
+            "the shared index must not carry project rows: {shared_out}"
+        );
+
+        let project_out = build_index(
+            &split_cfg(),
+            &project_rows,
+            &LocalIndex::default(),
+            &[],
+            d("2026-08-01"),
+        )
+        .expect("renders");
+        assert!(project_out.contains("project one"));
+        assert!(
+            !project_out.contains("feedback one"),
+            "the project index must not carry shared rows: {project_out}"
+        );
+    }
+
+    /// The cohort cut for principles: a section renders only in the file whose cohort holds its
+    /// members. A principle whose members span cohorts is carried by each file for the members
+    /// it holds — the render's live-member filter IS the cut, so this pins that claim.
+    #[test]
+    fn a_principle_renders_only_in_the_file_whose_cohort_holds_its_members() {
+        let pid = Uuid::now_v7();
+        let mut project_row = meta_row_native("project one", "@me/temper");
+        project_row.id = ResourceId::from(pid);
+        let principles = vec![PrincipleSection {
+            id: Uuid::now_v7(),
+            title: "The principle".to_string(),
+            statement: Some("Its statement.".to_string()),
+            members: vec![pid],
+        }];
+
+        let shared_out = build_index(
+            &split_cfg(),
+            &[meta_row_native("feedback one", "@me/working-agreements")],
+            &LocalIndex::default(),
+            &principles,
+            d("2026-08-01"),
+        )
+        .expect("renders");
+        assert!(
+            !shared_out.contains("The principle"),
+            "no member of this principle is in the shared cohort, so no section: {shared_out}"
+        );
+
+        let project_out = build_index(
+            &split_cfg(),
+            &[project_row],
+            &LocalIndex::default(),
+            &principles,
+            d("2026-08-01"),
+        )
+        .expect("renders");
+        assert!(
+            project_out.contains("The principle"),
+            "the member is here, so the section is here: {project_out}"
+        );
+    }
+
+    /// The shared index goes through the same write gate as the project index — a foreign file
+    /// at `shared_index_path` is refused by the same rule, not a looser copy.
+    #[test]
+    fn write_rendered_refuses_to_clobber_a_hand_written_shared_index() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let shared = dir.path().join("shared/MEMORY.md");
+        std::fs::create_dir_all(shared.parent().unwrap()).unwrap();
+        std::fs::write(&shared, "# hand-written").unwrap();
+
+        let err =
+            write_rendered(&shared, "rendered").expect_err("must refuse a file it did not write");
+        assert!(
+            err.to_string()
+                .contains(&shared.to_string_lossy().to_string()),
+            "the refusal must name the file: {err}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&shared).unwrap(),
+            "# hand-written",
             "the hand-written file must survive the refused write untouched"
         );
     }

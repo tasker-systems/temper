@@ -21,7 +21,7 @@ Commands:
   warmup         Context primer for new sessions — active goals, in-progress tasks, recent session pointers, and what is pending for you
   invitations    List the pending team invitations addressed to you
   skill          Manage agent skill (install for Claude Code or opencode)
-  memory         Manage the Claude Code memory projection
+  memory         Manage the memory index projected from Temper
   auth           Authenticate with temper cloud
   slack          Manage the Slack account link
   team           Manage team membership and access
@@ -62,7 +62,7 @@ Options:
 | [`temper warmup`](./warmup.md) | Context primer for new sessions — active goals, in-progress tasks, recent session pointers, and what is pending for you |
 | [`temper invitations`](./invitations.md) | List the pending team invitations addressed to you |
 | [`temper skill`](./skill.md) | Manage agent skill (install for Claude Code or opencode) |
-| [`temper memory`](./memory.md) | Manage the Claude Code memory projection |
+| [`temper memory`](./memory.md) | Manage the memory index projected from Temper |
 | [`temper auth`](./auth.md) | Authenticate with temper cloud |
 | [`temper slack`](./slack.md) | Manage the Slack account link |
 | [`temper team`](./team.md) | Manage team membership and access |

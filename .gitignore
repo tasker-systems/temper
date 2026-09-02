@@ -12,6 +12,10 @@ target/
 !.claude/workflows/
 # Shared, committed skills (lazy-loaded guidance referenced from CLAUDE.md).
 !.claude/skills/
+# Per-user opencode config only, so far — the project's memory-index registration
+# (`.opencode/opencode.json`) names a personal absolute path and must never be committed.
+# Mirrors the `.claude/*` shape: negations can re-include shared trees later.
+.opencode/*
 .env
 .vercel
 node_modules

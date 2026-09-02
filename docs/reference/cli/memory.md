@@ -2,10 +2,10 @@
 
 # `temper memory`
 
-Manage the Claude Code memory projection
+Manage the memory index projected from Temper
 
 ```text
-Manage the Claude Code memory projection
+Manage the memory index projected from Temper
 
 Usage: temper memory [OPTIONS] <COMMAND>
 
@@ -48,7 +48,7 @@ Render the index from Temper and write it
 Usage: temper memory emit [OPTIONS]
 
 Options:
-      --path <PATH>        Override the configured index_path (for a machine mid-adoption)
+      --path <PATH>        Override the configured index_path — the project-cohort file (for a machine mid-adoption). A configured shared_index_path has no override; it always emits where the config says
       --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
       --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
       --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
@@ -137,13 +137,13 @@ Options:
 ```text
 Check whether the on-disk index matches a fresh render — the LOCAL drift gate.
 
-The index lives outside the repo (per-machine, under `~/.claude/`), so nothing in git can diff it — this is the command a person or a hook runs instead, gating on the exit code. Exits non-zero when the on-disk index has drifted from Temper.
+The index lives outside the repo (per-machine, in the harness's own config space), so nothing in git can diff it — this is the command a person or a hook runs instead, gating on the exit code. Gates every configured index file; exits non-zero when any of them has drifted from Temper.
 
 Usage: temper memory check [OPTIONS]
 
 Options:
       --path <PATH>
-          Override the configured index_path — must match whatever `emit --path` last wrote, or this checks a different file than the one that was written
+          Override the configured index_path — the project-cohort file. Must match whatever `emit --path` last wrote, or this checks a different file than the one that was written
 
       --vault <VAULT>
           Path to vault (overrides TEMPER_VAULT and auto-detection)
