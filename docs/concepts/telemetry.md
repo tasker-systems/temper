@@ -97,6 +97,16 @@ Every Temper process logs through one of two variants:
 `RUST_LOG` overrides either default. An unparseable `RUST_LOG` falls back to the default rather
 than refusing to start.
 
+**sqlx slow-statement logging comes for free, and is worth keeping.** sqlx logs any statement
+whose execution reaches **1 second** at `WARN` on the target `sqlx::query` — *"slow statement:
+execution time exceeded alert threshold"*, with the statement summary, the full SQL text, row
+counts, and `elapsed_secs` (a JSON-friendly field to alert on). The default `info` filter
+inherits it; no configuration is involved, and silencing it means narrowing `RUST_LOG` against
+`sqlx::query` deliberately. Two consequences to know: the `WARN` event is **exported** (the
+export layer's fixed filter is `info`), so a trace backend receives the SQL text alongside the
+log stream; and `RUST_LOG=debug` widens sqlx from *slow statements* to **every** statement at
+`DEBUG` — see below for why that keeps `debug` out of production.
+
 ## What the architecture provides vs. what a deployment configures
 
 The trace structure, the export-on-flush model, the per-layer log filtering, the "unset means
@@ -115,10 +125,19 @@ Two defaults are Temper's rather than the SDK's, and both are operator-visible:
   collector, which would make every unconfigured process (your laptop, CI, a self-hosted
   install) export at something that is not there. Temper treats "unset" as "off."
 - **`RUST_LOG` does not control export in either direction.** Both stacks filter per layer: the
-  fmt layer follows `RUST_LOG`, the export layer carries its own fixed filter. `RUST_LOG=debug`
-  is safe on a live deployment — it widens logs, not what is billed. The surprising half:
-  `RUST_LOG=off` still exports spans. The switches that stop export are `OTEL_SDK_DISABLED=true`
-  and unsetting the endpoint.
+  fmt layer follows `RUST_LOG`, the export layer carries its own fixed filter. Widening
+  `RUST_LOG` changes what the log stream carries, never what is exported and billed. The
+  surprising half: `RUST_LOG=off` still exports spans. The switches that stop export are
+  `OTEL_SDK_DISABLED=true` and unsetting the endpoint.
+
+- **`RUST_LOG=debug` does not belong in production.** The billing is unchanged — what widens is
+  the *log stream's* leak surface, and the log stream is a third-party platform's with its own
+  retention and access list. At `debug`, dependency targets log data-bearing detail: sqlx emits
+  the **full SQL text of every statement** (not just the slow ones), HTTP clients log URLs —
+  query strings included — and any `debug!` site's payload (mint outcomes, verification
+  details) becomes log material. Diagnose a live deployment with `debug` only when the
+  alternative is worse, and narrow it again afterward; the default `info` carries the
+  slow-statement and request spans that answer most questions.
 
 ## Reading the exported spans
 
