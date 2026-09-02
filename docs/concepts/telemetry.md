@@ -47,16 +47,23 @@ backend is an ordinary span in your backend.
 Every request — HTTP or MCP — produces a **root span** that roots its own trace. Three
 properties of that structure are architectural decisions, not accidents.
 
-**Roots, not children.** Temper never parents a span from an inbound `traceparent`. A trusted
-caller's trace is joined with an OpenTelemetry **span link** recorded after authentication —
-where *trusted* means the request passed an authentication gate (a verified JWT or an HMAC
-signature over the body keyed on a secret only Temper's own services hold). So a linked trace
-in your backend is always a caller that authenticated; an anonymous request carries the inbound
-trace ids as inert log fields and joins nothing. Every trace worth joining is one Temper sent
-itself, so refusing everything else costs nothing.
+**Rust roots, not children.** The Rust hops (API, MCP, internal functions) never parent a
+span from an inbound `traceparent`. A trusted caller's trace is joined with an OpenTelemetry
+**span link** recorded after authentication — where *trusted* means the request passed an
+authentication gate (a verified JWT or an HMAC signature over the body keyed on a secret only
+Temper's own services hold). So a linked trace in your backend is always a caller that
+authenticated; an anonymous request carries the inbound trace ids as inert log fields and joins
+nothing. Every trace worth joining is one Temper sent itself, so refusing everything else costs
+nothing. **The temper-ui hop is the deliberate exception**: its server span *is* parented on
+the inbound `traceparent` so the browser request and the proxied API call share one trace id —
+but the sampler it exports with ignores the parent entirely (next paragraph), so parenting
+stitches without handing the caller a sampling vote.
 
 **The inbound `sampled` flag is recorded, never obeyed.** Honoring it would let anyone set the
-sampled bit on flood traffic and bill you for exporting every span of it.
+sampled bit on flood traffic and bill you for exporting every span of it — and the reverse
+direction matters as much: a caller sending `...-00` must not be able to silently drop spans
+that other hops link to. Every hop exports with a sampler that ignores the remote flag
+(`telemetrySampler()` in `temper-telemetry-ts`; the Rust exporter never parents at all).
 
 **Spans are flushed inside the invocation, on a budget.** Serverless platforms freeze the
 sandbox after a response rather than exiting the process, so a batch-export timer may never
@@ -107,8 +114,12 @@ profile UUID, recorded only once the request is authenticated, never the OAuth `
 **Act spans** (`#[act_span]`, one per write command): `correlation_id` and `invocation_id` —
 caller-minted UUIDs, the attribution grain. Nothing else.
 
-**temper-client** (`http_client_request`, the CLI/MCP outbound edge): method, redacted path,
-`has_auth` (a boolean — never the token), `status`, `latency_ms`.
+**temper-client** (`http_client_request`, the CLI/MCP outbound edge): method, redacted path —
+the query string is stripped, though the parameters temper-client itself builds are first-party
+(`?lens=`, `?from=`) — `has_auth` (a boolean — never the token), `status`, `latency_ms`. The
+transient-failure retry warn prints the error text, which (via the HTTP client's own
+`Display`) can include the request URL; that URL is the configured API origin plus temper's
+own parameters.
 
 **Events riding exported spans** (the export filter is `info`, so WARN and above go to the
 backend too): the structured error events carry `error_code` plus a message **bounded at 2 KiB**
@@ -126,16 +137,24 @@ response status. Page titles, slugs, handles, and resource ids do not export: th
 appears nowhere in the span. A handler exception is recorded as an OTel exception (message +
 stack of temper's own code).
 
-**eve agents**: undici auto-instrumentation emits HTTP client spans whose URL is the configured
-MCP endpoint (configuration, not user data). AI-SDK spans carry model name, tool names, and
-token usage — and **no model inputs or outputs**: `NEVER_RECORD_MODEL_IO`
-(`temper-telemetry-ts`) pins `recordInputs`/`recordOutputs` to `false`, the AI SDK's own
-default is `true`, and each agent's test suite fails if the pin is dropped.
+**eve agents**: undici auto-instrumentation registers **process-wide**, so every outbound
+`fetch` emits a client span with its URL: the configured MCP endpoint, plus the agents' REST
+calls to the API — `/api/steward/dispatch`, `/api/cognitive-maps/{id}/materialize`,
+`/api/auditor/dispatch`, the Slack link/mint internals — whose paths carry resource UUIDs.
+Those ids are temper's own identifiers on calls temper itself decided to make; narrowing the
+non-MCP spans to origin-plus-redacted-path is possible via an instrumentation `requestHook` if
+that ever stops being the right trade. AI-SDK spans carry model name, tool names, and token
+usage — and **no model inputs or outputs**: `NEVER_RECORD_MODEL_IO` (`temper-telemetry-ts`)
+pins `recordInputs`/`recordOutputs` to `false`, the AI SDK's own default is `true`, and each
+agent's test suite fails if the pin is dropped.
 
-**What never exports**: OAuth subjects; message history; page titles, slugs, and handles;
-query strings; access or refresh tokens; vault keys or ciphertext. Widening `RUST_LOG` never
-widens export — it widens the *log stream*, which is a separate surface with its own retention
-(see Logging).
+**What never exports**: OAuth subjects — with one deliberate exception, the machine-client
+identifier on the unclassifiable-token refusal (`auth/mod.rs` logs the `sub` of a token that
+shaped like a machine client and classified as neither human nor known machine; it is a client
+id, not a person); message history; page titles, slugs, and handles; query strings (except the
+first-party parameters named in the temper-client entry above); access or refresh tokens;
+vault keys or ciphertext. Widening `RUST_LOG` never widens export — it widens the *log
+stream*, which is a separate surface with its own retention (see Logging).
 
 ## Logging
 
