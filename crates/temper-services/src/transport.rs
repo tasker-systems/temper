@@ -163,6 +163,32 @@ where
     security_header_layers(app)
 }
 
+/// Bound on the echoed request path in both the `unmatched route` event and the 404
+/// body. A path is attacker-chosen input like any other; without a cap its length is
+/// whatever the client sent.
+const MAX_ECHOED_PATH_BYTES: usize = 512;
+
+/// The path as it may appear in a log event or an error body: redacted through
+/// [`temper_telemetry::redact::redact_path`] — the same function the request root
+/// spans run — and capped at [`MAX_ECHOED_PATH_BYTES`].
+///
+/// The fallback sits *outside* the root span (it is the answer when no route exists),
+/// so nothing else applies redaction to what it records. An unmatched path can also
+/// carry a credential-shaped segment — the invitation-token family this repo once
+/// leaked exactly this way — so the event and the body must not become a side door
+/// around the deny-by-default guard.
+fn sanitize_echoed_path(path: &str) -> std::borrow::Cow<'_, str> {
+    let redacted = temper_telemetry::redact::redact_path(path);
+    if redacted.len() <= MAX_ECHOED_PATH_BYTES {
+        return redacted;
+    }
+    let mut cut = MAX_ECHOED_PATH_BYTES;
+    while !redacted.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    std::borrow::Cow::Owned(format!("{}…", &redacted[..cut]))
+}
+
 /// Answer an unmatched route with temper's structured error body.
 ///
 /// Axum's default fallback returns a bare 404 with an empty body. Every other error a caller can
@@ -171,10 +197,51 @@ where
 pub async fn fallback_handler(req: axum::extract::Request) -> axum::response::Response {
     use axum::response::IntoResponse;
 
-    let path = req.uri().path().to_string();
+    let path = sanitize_echoed_path(req.uri().path());
     let method = req.method().to_string();
     tracing::warn!(path = %path, method = %method, "unmatched route");
     let body =
         crate::error::ErrorBody::new("NOT_FOUND", format!("No route matches {method} {path}"));
     (axum::http::StatusCode::NOT_FOUND, axum::Json(body)).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An unmatched request is exactly how a token-in-path would travel if a route ever
+    /// reintroduced one — the fallback must run the same redaction the root spans do,
+    /// or it becomes the one recording site a credential can pass through unredacted.
+    #[test]
+    fn the_echoed_path_is_redacted_like_a_span_attribute() {
+        let token_path = "/api/invitations/9f8e7d6c5b4a39281706f5e4d3c2b1a0".to_string(); // gitleaks:allow — fake token literal in a redaction regression test
+        let sanitized = sanitize_echoed_path(&token_path);
+        assert_eq!(sanitized, "/api/invitations/{token}");
+        assert!(!sanitized.contains("9f8e7d6c"));
+    }
+
+    /// Normal paths — the overwhelming majority — pass through untouched and unallocated.
+    #[test]
+    fn an_ordinary_path_passes_through_untouched() {
+        let sanitized = sanitize_echoed_path("/api/resources/019f97a7-ad61-7e40-b325-73028060ac06");
+        assert_eq!(
+            sanitized,
+            "/api/resources/019f97a7-ad61-7e40-b325-73028060ac06"
+        );
+        assert!(matches!(sanitized, std::borrow::Cow::Borrowed(_)));
+    }
+
+    /// The cap is what makes the echo bounded: a pathological path is cut, not
+    /// reflected at full length into the log stream and the response body.
+    #[test]
+    fn an_oversized_path_is_truncated_on_a_char_boundary() {
+        let long = format!("/{}", "a".repeat(MAX_ECHOED_PATH_BYTES * 4));
+        let sanitized = sanitize_echoed_path(&long);
+        assert!(sanitized.len() <= MAX_ECHOED_PATH_BYTES + '…'.len_utf8());
+        assert!(sanitized.ends_with('…'));
+        // A multibyte path must not be cut mid-character.
+        let multibyte = format!("/{}", "é".repeat(MAX_ECHOED_PATH_BYTES));
+        let sanitized = sanitize_echoed_path(&multibyte);
+        assert!(sanitized.is_char_boundary(sanitized.len() - '…'.len_utf8()));
+    }
 }
