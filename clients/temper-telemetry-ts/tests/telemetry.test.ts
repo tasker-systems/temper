@@ -1,9 +1,16 @@
 import { context, propagation, TraceFlags, trace } from '@opentelemetry/api';
 import { AsyncHooksContextManager } from '@opentelemetry/context-async-hooks';
 import { W3CTraceContextPropagator } from '@opentelemetry/core';
+import { SamplingDecision } from '@opentelemetry/sdk-trace-base';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { activeTraceparent, extractContext } from '../src/context.js';
-import { initTelemetry, isSdkDisabled, isTelemetryEnabled } from '../src/otel.js';
+import {
+	initTelemetry,
+	isSdkDisabled,
+	isTelemetryEnabled,
+	shouldExportSpans,
+	telemetrySampler
+} from '../src/otel.js';
 
 const TRACE_ID = '0af7651916cd43dd8448eb211c80319c';
 const SPAN_ID = 'b7ad6b7169203331';
@@ -140,3 +147,97 @@ function restore(prev: string | undefined, name: string): void {
 	if (prev === undefined) delete process.env[name];
 	else process.env[name] = prev;
 }
+
+describe('shouldExportSpans', () => {
+	const VARIABLES = [
+		'OTEL_SDK_DISABLED',
+		'OTEL_EXPORTER_OTLP_ENDPOINT',
+		'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT'
+	] as const;
+	let saved: Record<string, string | undefined>;
+
+	beforeEach(() => {
+		saved = {};
+		for (const name of VARIABLES) saved[name] = process.env[name];
+		for (const name of VARIABLES) delete process.env[name];
+	});
+
+	afterEach(() => {
+		for (const name of VARIABLES) restore(saved[name], name);
+	});
+
+	it.each([
+		// The signal-specific endpoint wins, then the general one.
+		[
+			{},
+			false,
+			'no endpoint configured — export must stay off, never default to localhost'
+		],
+		[{ OTEL_EXPORTER_OTLP_ENDPOINT: 'http://collector' }, true, undefined],
+		[
+			{ OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: 'http://collector' },
+			true,
+			'signal-specific endpoint alone is enough'
+		],
+		[
+			{
+				OTEL_EXPORTER_OTLP_ENDPOINT: 'http://metrics-only',
+				OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: 'http://collector'
+			},
+			true,
+			undefined
+		],
+		// The kill switch outranks every endpoint — that is what kill switch means.
+		[
+			{ OTEL_EXPORTER_OTLP_ENDPOINT: 'http://collector', OTEL_SDK_DISABLED: 'true' },
+			false,
+			undefined
+		],
+		[
+			{
+				OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: 'http://collector',
+				OTEL_SDK_DISABLED: 'TRUE'
+			},
+			false,
+			undefined
+		],
+		[
+			{
+				OTEL_EXPORTER_OTLP_ENDPOINT: 'http://collector',
+				OTEL_SDK_DISABLED: '1'
+			},
+			true,
+			"'1' is deliberately not a true value"
+		]
+	])('env %j → %j', (env, expected, why) => {
+		Object.assign(process.env, env);
+		const result = shouldExportSpans();
+		if (why) expect(result, why).toBe(expected);
+		else expect(result).toBe(expected);
+	});
+});
+
+describe('telemetrySampler', () => {
+	// The decision under test: the sampler must NOT follow a remote parent's sampled
+	// flag. Honoring it would hand any caller control of whether our server spans are
+	// recorded — `...-01` forces export on flood traffic, `...-00` silently drops
+	// spans whose ids other hops link to. The Rust exporter pins the same invariant.
+	it('records a span whose remote parent arrived unsampled', () => {
+		const remoteUnsampled = {
+			traceId: TRACE_ID,
+			spanId: SPAN_ID,
+			traceFlags: TraceFlags.NONE,
+			isRemote: true
+		};
+		const sampler = telemetrySampler();
+		const decision = sampler.shouldSample(
+			trace.setSpan(context.active(), trace.wrapSpanContext(remoteUnsampled)),
+			TRACE_ID,
+			'test-span',
+			1, // SpanKind.SERVER
+			{},
+			[]
+		);
+		expect(decision.decision).toBe(SamplingDecision.RECORD_AND_SAMPLED);
+	});
+});

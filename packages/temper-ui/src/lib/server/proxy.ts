@@ -313,11 +313,15 @@ export async function proxyRequest(event: RequestEvent): Promise<Response> {
 		throw error(500, 'Proxy upstream not configured: set API_BASE_URL');
 	}
 	if (isSelfReferentialUpstream(upstream, event.url.host)) {
-		throw error(
-			500,
-			`Proxy upstream (API_BASE_URL=${upstream}) resolves to this same origin (${event.url.host}); ` +
+		// Static client-facing message. The operator hint — which names the
+		// configured upstream origin — goes to the log, not into the thrown error:
+		// `traceRequest` records thrown errors as OTel exceptions, so an embedded
+		// origin would export to the span backend.
+		console.error(
+			`proxy: API_BASE_URL=${upstream} resolves to this same origin (${event.url.host}); ` +
 				`set API_BASE_URL to the API backend's own origin, not the UI origin.`,
 		);
+		throw error(500, 'Proxy upstream is misconfigured.');
 	}
 	return forwardRequest(upstream, event.url.pathname, event.url.search, event.request);
 }

@@ -139,7 +139,9 @@ async function tokenRequest(
 		body: new URLSearchParams(body),
 	});
 	if (!res.ok) {
-		const detail = await res.text().catch(() => '');
+		// Bounded: this body is the IdP's, its length is not ours to trust, and the
+		// message reaches both the log stream and the exported span (recordException).
+		const detail = (await res.text().catch(() => '')).slice(0, 512);
 		throw new Error(`OIDC token request failed (${res.status}): ${detail}`);
 	}
 	return res.json() as Promise<OidcTokenResponse>;

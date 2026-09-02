@@ -15,6 +15,8 @@ export {
 	initTelemetry,
 	isSdkDisabled,
 	isTelemetryEnabled,
+	shouldExportSpans,
+	telemetrySampler,
 	type InitTelemetryOptions
 } from './otel.js';
 export { activeTraceparent, extractContext } from './context.js';
