@@ -1864,6 +1864,44 @@ mod tests {
         }
     }
 
+    /// **A well-shaped vector carrying impossible values is refused with the wrong-shape vector.**
+    ///
+    /// Right length, wrong numbers: a NaN poisons every cosine it touches (NaN distances order as
+    /// "unknown" and a score computed from one is a score nobody can act on), an infinite value
+    /// overflows the norm the cosine divides by, and a zero or astronomic norm is a vector for no
+    /// model — the corpus's space is unit-normalized, so anything outside many orders of magnitude
+    /// around 1.0 is not a question, it is a probe. All four today reach pgvector and surface as
+    /// driver errors this door renders as an opaque 500.
+    #[test]
+    fn a_query_vector_with_non_finite_or_absurd_values_is_refused() {
+        let mut nan = vec![0.0_f32; MAX_EMBEDDING_DIM];
+        nan[0] = f32::NAN;
+        let mut inf = vec![0.0_f32; MAX_EMBEDDING_DIM];
+        inf[0] = f32::INFINITY;
+        let zero = vec![0.0_f32; MAX_EMBEDDING_DIM];
+        let absurd = vec![1.0e9_f32; MAX_EMBEDDING_DIM];
+        for (label, vector) in [
+            ("NaN", nan),
+            ("infinity", inf),
+            ("all-zero", zero),
+            ("astronomic", absurd),
+        ] {
+            let node = match act_asking("s", ActName::FindAboutAnywhere, "q") {
+                StageNode::Act(mut inv) => {
+                    inv.intention.as_mut().expect("asking").embedding = Some(vector);
+                    StageNode::Act(inv)
+                }
+                other => other,
+            };
+            let errs = validate(&plan_with_intention(vec![node], vec!["s"])).unwrap_err();
+            assert!(
+                errs.iter()
+                    .any(|e| e.reason == RefusalReason::MalformedEmbedding),
+                "a vector carrying {label} must be refused; got: {errs:?}"
+            );
+        }
+    }
+
     /// **A combinator naming one stage twice is refused**, which is what bounds a list that has no
     /// `max_items` and cannot have one — the ceiling is per-op, and only the ordered ops have one.
     ///

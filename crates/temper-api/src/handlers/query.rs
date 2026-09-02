@@ -42,10 +42,11 @@ use temper_services::state::AppState;
 // refuses it. Everything before this route built a door that nothing could knock on.
 //
 // The pipeline is not assembled here. `query_read::prepare` owns the order — shape-gate, then
-// embed, then validate — and is the only constructor of a `ValidatedComposition`, so this
-// handler cannot run an unvalidated plan even by mistake. Spelling the order out here would
-// make this the second place that knows it, and the day the MCP tool and the CLI arrive, the
-// third and fourth.
+// embed, then validate — and `validate` is the only constructor of a `ValidatedComposition`
+// (cross-crate privacy seals it: no other crate can build one). `prepare` is the only way THIS
+// crate reaches one, so the handler cannot run an unvalidated plan even by mistake. Spelling the
+// order out here would make this the second place that knows it, and the day the MCP tool and the
+// CLI arrive, the third and fourth.
 //
 // The refusal branch is the only thing that differs from `super::search::search`, whose shape
 // this otherwise copies: `search_select` takes params and answers, while `prepare` may refuse

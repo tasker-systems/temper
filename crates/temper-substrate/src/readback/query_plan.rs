@@ -26,7 +26,7 @@ use std::collections::BTreeSet;
 
 use temper_core::types::ids::ProfileId;
 use temper_core::types::query::{
-    search_family, BoundTerm, IdKind, PlanRefusal, RefusalReason, StageInput, StageNode,
+    search_family, ActName, BoundTerm, IdKind, PlanRefusal, RefusalReason, StageInput, StageNode,
     StageRelation, ValidatedComposition,
 };
 use uuid::Uuid;
@@ -1517,11 +1517,33 @@ fn emit_combine_body(cn: &temper_core::types::query::CombineNode) -> String {
 /// a NULL id, because "this row has no id" and "this row is a tally" are different claims and
 /// deriving one from the other would make an act that legitimately produced a NULL id unreadable.
 fn final_select(v: &ValidatedComposition, tallies: &[StageTally]) -> String {
-    let mut arms: Vec<String> = v
-        .returns()
-        .iter()
-        .map(|r| {
-            let s = r.stage.as_str();
+    // Returned stages arm as hits. Survey stages arm as hits TOO, returned or not — an
+    // intermediate survey stage's rows carry `region` and `region_score`, and the stage's
+    // `disclosed_regions` is documented as *which regions the stage matched and at what score*:
+    // answering `[]` there reads as "matched no regions", which is the one answer the rows
+    // contradict. This does not breach the tally's how-many-never-which rule, and the hit arms
+    // for stages nobody returned are why: that rule keeps an intermediate stage's RESOURCE ids and
+    // edge paths out of the wire (the tallies still do that work — nothing reads an intermediate
+    // stage's hits for hydration), while a survey's region set is the act's own published output
+    // vocabulary, gated by the same `visible_region_anchors` the act ran under. The non-survey
+    // intermediates stay tally-only — their ids and kinds are the pipe's internal currency.
+    let returned: std::collections::BTreeSet<&str> =
+        v.returns().iter().map(|r| r.stage.as_str()).collect();
+    let mut arm_stages: Vec<&str> = Vec::new();
+    let mut survey_stages: Vec<&str> = Vec::new();
+    for node in v.ordered() {
+        let name = node.name();
+        let s = name.as_str();
+        if returned.contains(s) {
+            arm_stages.push(s);
+        } else if matches!(node, StageNode::Act(inv) if inv.act == ActName::Survey) {
+            survey_stages.push(s);
+        }
+    }
+    let mut arms: Vec<String> = arm_stages
+        .into_iter()
+        .chain(survey_stages)
+        .map(|s| {
             format!(
                 "SELECT 'hit'::text AS row_class, '{s}'::text AS stage, id, kind, quantity, via, \
                  region, NULL::bigint AS produced, NULL::bigint AS unusable FROM \"{s}\""

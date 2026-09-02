@@ -155,7 +155,11 @@ fn the_shape_pass_emits_exactly_these_reasons() {
         // `Intention::embedding`, so it clears the bar the same way — but the refusal names the
         // SHAPE rather than the ceiling, because a vector of any other length belongs to a
         // different space and a caller told about a maximum would fix the wrong end.
-        ("MalformedEmbedding", 1),
+        // `[widened — 2026-09-02]` Count 1 → 3: the length arm was joined by the finite arm and
+        // the norm arm, all under the same reason. Three sites, one wire vocabulary — a caller
+        // cannot tell which arm fired from the reason and should not have to; the message text
+        // carries the difference.
+        ("MalformedEmbedding", 3),
         ("MissingIntention", 1),
         ("MissingProvenance", 1),
         ("NoReturns", 1),

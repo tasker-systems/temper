@@ -1062,3 +1062,178 @@ async fn the_region_column_round_trips_and_a_non_survey_act_discloses_nothing(po
         "the pair rule holds across a real round trip, not only over a hand-built QueryRows"
     );
 }
+
+/// **An intermediate survey stage discloses the regions it matched.**
+///
+/// Hit arms used to be emitted for RETURNED stages only, so a survey stage whose rows fed a
+/// combinator disclosed `[]` on a field whose doc defines what region disclosure means —
+/// indistinguishable from "matched no regions". The fix arms survey stages as hits whether
+/// returned or not: a survey's region set is the act's own published output vocabulary, gated by
+/// the same visibility the act ran under, and nothing reads an intermediate stage's hits for
+/// hydration (the tallies still keep resource ids and edge paths off the wire for everyone).
+///
+/// The regions are planted rather than formed so no ONNX is needed: the survey stage supplies its
+/// own embedding, which is the caller-supplied lane the shape pass validates.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_intermediate_survey_stage_discloses_the_regions_it_matched(pool: PgPool) {
+    use temper_substrate::content::IncomingChunk;
+
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = ctx(&pool, owner, "survey-disclosure").await;
+
+    // Two chunked members — survey's lateral join drops any resource with no current chunk.
+    let chunk = |title: &'static str, body: &'static str| IncomingChunk {
+        chunk_index: 0,
+        content_hash: format!("{:0>64}", title),
+        content: body.to_string(),
+        embedding: vec![0.1_f32; 768],
+        embedded_with: None,
+        header_path: String::new(),
+        heading_depth: 0,
+    };
+    let r1 = writes::create_resource(
+        &pool,
+        writes::CreateParams {
+            idempotency_key: None,
+            sources: vec![],
+            title: "survey member one",
+            origin_uri: "test://survey-member-one",
+            body: "about regions",
+            doc_type: "concept",
+            home: AnchorRef::context(home),
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[],
+            chunks: Some(vec![chunk("survey member one", "about regions")]),
+        },
+    )
+    .await
+    .unwrap()
+    .uuid();
+    let r2 = writes::create_resource(
+        &pool,
+        writes::CreateParams {
+            idempotency_key: None,
+            sources: vec![],
+            title: "survey member two",
+            origin_uri: "test://survey-member-two",
+            body: "about regions too",
+            doc_type: "concept",
+            home: AnchorRef::context(home),
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[],
+            chunks: Some(vec![chunk("survey member two", "about regions too")]),
+        },
+    )
+    .await
+    .unwrap()
+    .uuid();
+
+    // One planted region, keyed on the MANDATORY anchor pair (no trigger derives it), with both
+    // members. The centroid is any real vector — the score is asserted finite and positive, not
+    // against a hand-computed blend.
+    let lens: Uuid =
+        sqlx::query_scalar("SELECT id FROM kb_cogmap_lenses WHERE name = 'workflow-default'")
+            .fetch_one(&pool)
+            .await
+            .expect("seeded context lens");
+    let centroid: String = format!("[{}]", vec!["0.1"; 768].join(","));
+    let region: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_cogmap_regions \
+           (home_anchor_table, home_anchor_id, lens_id, centroid, salience, \
+            telos_alignment, reference_standing, centrality, member_count, \
+            asserted_by_event_id, last_event_id) \
+         VALUES ('kb_contexts', $1, $2, $3::vector, 0.5, 0.5, 0.5, 0.5, 2, \
+           (SELECT id FROM kb_events LIMIT 1), (SELECT id FROM kb_events LIMIT 1)) \
+         RETURNING id",
+    )
+    .bind(home)
+    .bind(lens)
+    .bind(&centroid)
+    .fetch_one(&pool)
+    .await
+    .expect("plant region");
+    for member in [r1, r2] {
+        sqlx::query(
+            "INSERT INTO kb_cogmap_region_members (region_id, member_table, member_id) \
+             VALUES ($1, 'kb_resources', $2)",
+        )
+        .bind(region)
+        .bind(member)
+        .execute(&pool)
+        .await
+        .expect("plant member");
+    }
+
+    // `mid` = survey (NOT returned), piped as the Bound the returned find-exact narrows to —
+    // the same wiring the selection tests use, and it makes `mid` intermediate without a
+    // combinator (combinator stages are not returnable, and something must consume `mid`).
+    let v = validate(&Composition {
+        outcome: OutcomeDeclaration {
+            returns: vec![ReturnSpec {
+                stage: StageName::parse("hits").unwrap(),
+                with: vec![],
+            }],
+        },
+        stages: vec![
+            StageNode::Act(ActInvocation {
+                name: StageName::parse("mid").unwrap(),
+                act: ActName::Survey,
+                intention: Some(Intention {
+                    query: "about regions".to_string(),
+                    embedding: Some(vec![0.1; 768]),
+                }),
+                inputs: vec![],
+                terms: Default::default(),
+                resource_filter: None,
+                edge_filter: None,
+                properties: vec![],
+            }),
+            StageNode::Act(ActInvocation {
+                name: StageName::parse("hits").unwrap(),
+                act: ActName::FindExact,
+                intention: Some(Intention {
+                    query: "regions".to_string(),
+                    embedding: None,
+                }),
+                inputs: vec![StageInput::Upstream {
+                    relation: StageRelation::Bound,
+                    stage: StageName::parse("mid").unwrap(),
+                }],
+                terms: Default::default(),
+                resource_filter: None,
+                edge_filter: None,
+                properties: vec![],
+            }),
+        ],
+    })
+    .expect("the plan is valid");
+    let r = run_composition(&pool, owner, &v)
+        .await
+        .expect("the widened arm emission must still be valid SQL");
+
+    let mid = r
+        .trace
+        .stages
+        .iter()
+        .find(|s| s.stage == StageName::parse("mid").unwrap())
+        .expect("every stage is traced");
+    assert_eq!(
+        mid.disclosed_regions.len(),
+        1,
+        "the intermediate survey stage matched the planted region and must say so; \
+         got {:?}",
+        mid.disclosed_regions
+    );
+    let disclosure = &mid.disclosed_regions[0];
+    assert_eq!(disclosure.region_id, region, "the planted region's id");
+    assert!(
+        disclosure.region_score.is_finite() && disclosure.region_score > 0.0,
+        "the disclosure carries the score the stage matched at: {}",
+        disclosure.region_score
+    );
+}
