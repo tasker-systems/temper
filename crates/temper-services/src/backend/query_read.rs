@@ -44,10 +44,11 @@ use temper_substrate::readback::query_plan::compile;
 /// runs BEFORE `validate`** (a `ValidatedComposition` is sealed, and filling vectors into it after
 /// the fact would need a side-channel this contract refuses).
 ///
-/// **This function does not perform that step — [`prepare`] does, and it is the only way to build
-/// the argument.** Taking a `ValidatedComposition` is what makes that structural rather than
-/// remembered: there is no way to reach here having skipped the embed, because there is no other
-/// constructor.
+/// **This function does not perform that step — [`prepare`] does, and it is the only way this
+/// crate reaches the argument.** Taking a `ValidatedComposition` is what makes that structural
+/// rather than remembered: `validate` is the only constructor of the type (cross-crate privacy
+/// seals it), and `prepare` = shape + embed + validate — so there is no way to reach here having
+/// skipped the embed.
 pub async fn run_composition(
     pool: &PgPool,
     principal: ProfileId,
