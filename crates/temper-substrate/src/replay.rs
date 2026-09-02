@@ -891,6 +891,38 @@ pub async fn formation_touched_count_since(
     .await?)
 }
 
+/// Whether any `resource_deleted` event touched this anchor after `watermark` — the delete gate
+/// beside [`formation_touched_count_since`]'s count gate.
+///
+/// A delete is not drift volume, so it must not wait for the count: the projection it invalidates is
+/// a STORED AGGREGATE, and the aggregate is wrong the moment the event lands — the dead member is
+/// still inside every centroid it contributed to, and unlike drift the wrongness does not dilute as
+/// more events arrive, it persists. An anchor that goes quiet after one delete would otherwise keep
+/// that wrong centroid indefinitely (no further events, no tick, no cron on the substrate side), which
+/// is the same stability that made the prod ghost regions a finding. One EXISTS over the same
+/// anchor-scoped slice the count uses — deliberately cheap, deliberately the same predicate, so the
+/// two gates can never disagree on what a delete is.
+pub async fn resource_deleted_since(
+    pool: &PgPool,
+    anchor: HomeAnchor,
+    watermark: Option<Uuid>,
+) -> Result<bool> {
+    // Macro-checked, unlike the count twin beside this: the query is static, so the runtime form
+    // would buy nothing but invisibility to the schema/binary change detector.
+    Ok(sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+           SELECT 1 FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id
+          WHERE ($3::uuid IS NULL OR e.id > $3)
+            AND e.producing_anchor_table = $1 AND e.producing_anchor_id = $2
+            AND et.name = 'resource_deleted') AS "exists!""#,
+        anchor.table(),
+        anchor.uuid(),
+        watermark,
+    )
+    .fetch_one(pool)
+    .await?)
+}
+
 /// The RESOURCES whose content moved on this cogmap after `watermark` (distinct) — the members behind
 /// each CONTENT event (a block-body revision / add / fold, the readout-only formation inputs), resolved
 /// block → owning resource. Incremental materialization refreshes a reused region's readouts only when

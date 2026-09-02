@@ -83,10 +83,18 @@ pub async fn tick(
 
     // ── clock 2: formation. One count(*) against the materialize watermark — deliberately cheaper
     // than the load-and-cluster it guards, so below threshold this costs a single query.
+    //
+    // `OR deleted` — a delete does not ride the count. The count measures DRIFT: N edits of
+    // settlement-worthy pressure. A delete makes a stored aggregate WRONG — a dead member inside
+    // every centroid it contributed to — and that wrongness is not diluted by arriving events, it
+    // persists until a materialize re-derives the aggregate without it. Gating it on the count is
+    // exactly how a quiet anchor keeps a dead member's contribution indefinitely (see
+    // `resource_deleted_since`); so one delete settles at the next drain, whatever the count says.
     let watermark = shape_watermark(pool, anchor).await?;
     let events = replay::formation_touched_count_since(pool, anchor, watermark).await?;
     let threshold = threshold.unwrap_or(DEFAULT_MATERIALIZE_THRESHOLD);
-    if events >= threshold {
+    let deleted = replay::resource_deleted_since(pool, anchor, watermark).await?;
+    if events >= threshold || deleted {
         write::incremental_materialize(pool, anchor, lens_name, emitter).await?;
         tick.materialized = true;
     }
