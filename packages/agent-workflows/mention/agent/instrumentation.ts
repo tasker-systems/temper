@@ -1,5 +1,5 @@
 import { defineInstrumentation } from "eve/instrumentation";
-import { initTelemetry } from "temper-telemetry-ts";
+import { initTelemetry, NEVER_RECORD_MODEL_IO } from "temper-telemetry-ts";
 
 /**
  * OTLP span export for the mention agent — the same shape as the steward's
@@ -19,13 +19,13 @@ import { initTelemetry } from "temper-telemetry-ts";
  * response shape and the endpoint, never on which agent made the call, so it covers every MCP
  * client we run. See `mcp-negotiation.ts`.
  *
- * **`recordInputs`/`recordOutputs: false`** — this agent reads a mentioning user's temper data
- * under their own credential; do not export model I/O to Grafana. Same reasoning as the
- * steward. Task `019fbf24` §Item-2.
+ * **`NEVER_RECORD_MODEL_IO`** (`recordInputs`/`recordOutputs: false`) — this agent reads a
+ * mentioning user's temper data under their own credential; do not export model I/O to Grafana.
+ * The constant is the one place the rule is decided, and each agent's test suite asserts the
+ * pin survived. Task `019fbf24` §Item-2.
  */
 export default defineInstrumentation({
-  recordInputs: false,
-  recordOutputs: false,
+  ...NEVER_RECORD_MODEL_IO,
   setup: ({ agentName }) => {
     initTelemetry({
       serviceName: agentName,

@@ -1,5 +1,5 @@
 import { defineInstrumentation } from "eve/instrumentation";
-import { initTelemetry } from "temper-telemetry-ts";
+import { initTelemetry, NEVER_RECORD_MODEL_IO } from "temper-telemetry-ts";
 
 /**
  * OTLP span export for the steward (and its declared auditor subagent).
@@ -27,14 +27,15 @@ import { initTelemetry } from "temper-telemetry-ts";
  * stays visible. Read straight from the env rather than through `requireEnv` because a missing
  * value must degrade telemetry, never fail startup; the connections already require it.
  *
- * **`recordInputs`/`recordOutputs: false`** — do NOT export full model message history or
- * outputs. The steward's model I/O carries team knowledge-base content; this extends PR #613's
- * 2a decision (no cross-linkable identifiers on exported spans) from span attributes to model
- * I/O. Task `019fbf24` §Item-2 spike.
+ * **`NEVER_RECORD_MODEL_IO`** (`recordInputs`/`recordOutputs: false`) — do NOT export full model
+ * message history or outputs. The steward's model I/O carries team knowledge-base content; this
+ * extends PR #613's 2a decision (no cross-linkable identifiers on exported spans) from span
+ * attributes to model I/O. The constant is the one place the rule is decided — the AI SDK's own
+ * default is `true` — and each agent's test suite asserts the pin survived.
+ * Task `019fbf24` §Item-2 spike.
  */
 export default defineInstrumentation({
-  recordInputs: false,
-  recordOutputs: false,
+  ...NEVER_RECORD_MODEL_IO,
   setup: ({ agentName }) => {
     initTelemetry({
       serviceName: agentName,

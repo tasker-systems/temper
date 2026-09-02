@@ -19,3 +19,4 @@ export {
 } from './otel.js';
 export { activeTraceparent, extractContext } from './context.js';
 export { McpNegotiationStatusProcessor, negotiationKey } from './mcp-negotiation.js';
+export { NEVER_RECORD_MODEL_IO } from './model-io.js';
