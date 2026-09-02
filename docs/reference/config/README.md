@@ -100,14 +100,15 @@ LLM configuration section.
 
 ### `[memory]`
 
-Claude Code memory projection. **Absent means the feature is off** — this is `Option` rather than `#[serde(default)]` precisely so "not configured" and "configured empty" stay distinguishable.
+Memory index projection — the rendered file a harness auto-loads. **Absent means the feature is off** — this is `Option` rather than `#[serde(default)]` precisely so "not configured" and "configured empty" stay distinguishable.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `index_path` | string **(required)** | _unset_ | Where the rendered index is written. |
+| `index_path` | string **(required)** | _unset_ | Where the rendered index is written. Under a split (see `shared_index_path`) this file carries the `project_contexts` cohort only. |
 | `project_contexts` | array of string | `[]` | Contexts for this project. A list — a project may legitimately span contexts. |
 | `reinforced_min` | integer (optional) | _unset_ | How many distinct `open_meta.reinforced` dates a memory needs before the index renders it on its own line. Below it, the memory is **collapsed into a per-section tail line** — demoted, never dropped. **`None` is not "off by default", it is the only honest starting value, and it must stay undefaulted.** A threshold is a number that can only be set from months of real reinforcement data; picking one here would be a constant with no evidence behind it, and every machine would inherit the guess. So this is `Option` with **no** `#[serde(default)]` — deliberately unlike `stale_after_days` directly above, whose 90 is a rendering nicety rather than a claim about which memories matter. Absent means the index renders exactly what it rendered before this key existed, which `render::tests::an_absent_threshold_renders_byte_for_byte_what_it_rendered_before` asserts against the whole string. |
 | `shared_contexts` | array of string | `[]` | Contexts whose memories reach EVERY project on this machine. |
+| `shared_index_path` | string (optional) | _unset_ | Where the **shared cohort's** index is written — the file that reaches every project on this machine. `None` is the pre-split shape: every configured context renders into `index_path`, byte-for-byte what earlier versions wrote. **Set, the render splits along the context lists rather than growing a second code path**: `shared_contexts` renders here, `project_contexts` render into `index_path`. What is deliberately NOT this field's job is the harness half — which file a session auto-loads, and how the file is registered (an instructions entry, a session hook). The projection writes files; the harness config decides what reads them. Keeping the two independent is what lets the same emitted index serve a family of harnesses instead of one, and is why this field is a path rather than a target name. |
 | `stale_after_days` | integer | `90` | Days after which a memory's `verified` date is rendered as UNEXAMINED. |
 
 ### `[skill]`
@@ -140,7 +141,7 @@ Vault path reference in cloud config.
 
 ## Undocumented fields
 
-9 of 27 fields carry no doc comment on the Rust struct, so this reference cannot describe them. They are listed rather than left as blank cells, because a documentation hole that renders as whitespace reads as documentation.
+9 of 28 fields carry no doc comment on the Rust struct, so this reference cannot describe them. They are listed rather than left as blank cells, because a documentation hole that renders as whitespace reads as documentation.
 
 - `auth.provider`
 - `auth.providers.audience`

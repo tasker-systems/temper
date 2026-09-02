@@ -64,6 +64,19 @@ Input: { "id": "<task uuid>", "managed_meta": { "temper-stage": "done" }, "open_
 // Both tiers are required fields. Each is a per-key patch, so `"open_meta": {}` touches nothing.
 ```
 
+**Reinforce a memory that did work.** If a memory caught you this session — the trap it names fired
+and the memory stopped the mistake, or the situation it describes recurred — record the date before
+you stop. And if the catch revealed a shape the memory's body does not describe, **amend the body
+too**: that is the act, not a note about it. `memories.md` carries the full contract.
+
+```
+Tool: get_resource         // read the stored open_meta.reinforced list first
+Tool: update_resource_meta
+Input: { "id": "<memory uuid>", "managed_meta": {}, "open_meta": { "reinforced": ["<merged distinct dates, ascending>"] } }
+// open_meta is a per-key SET here, not a union — read-merge-write is what keeps the dates
+// already stored from being silently replaced.
+```
+
 **If the session moved a goal's criteria, close on them too.** Update the goal's *Exercise status*
 and its declared coverage state — what now runs as distinct from what merely merged, and which
 criteria are still uncovered and why. Coverage is never inferred from absence, so a hole that has

@@ -152,6 +152,13 @@ Three things go stale the moment a session ends, and each is cheap now and expen
 - **Work that was extracted rather than done.** Scope that moved must land somewhere addressable —
   a task, with the reasoning that moved it. Scope that is only mentioned in a session note has been
   dropped, slowly.
+- **A memory that did work.** Did a memory catch you this session? The trap it names fired and it
+  stopped the mistake, or the situation it describes recurred — either counts, and the catch is the
+  half that matters, because a memory that works prevents its own situation from recurring: counted
+  on recurrence alone it would decay out of the index exactly by having worked. Reinforce the date;
+  if the catch revealed a shape the memory's body does not describe, **amend the body** — a metadata
+  note *about* the gap is the memory-system version of a "for now" comment. The command is in
+  `session-lifecycle.md`; the full contract is in `memories.md`.
 
 Scaling work down is the user's call, never yours. Recommend the extraction, and say plainly that it
 is a recommendation.

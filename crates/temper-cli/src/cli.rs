@@ -246,7 +246,7 @@ pub enum Commands {
         #[command(subcommand)]
         action: SkillAction,
     },
-    /// Manage the Claude Code memory projection
+    /// Manage the memory index projected from Temper
     Memory {
         #[command(subcommand)]
         action: MemoryAction,
@@ -2132,7 +2132,9 @@ pub enum MemoryAction {
     Status,
     /// Render the index from Temper and write it
     Emit {
-        /// Override the configured index_path (for a machine mid-adoption)
+        /// Override the configured index_path — the project-cohort file (for a machine
+        /// mid-adoption). A configured shared_index_path has no override; it always emits
+        /// where the config says.
         #[arg(long)]
         path: Option<String>,
     },
@@ -2185,12 +2187,14 @@ pub enum MemoryAction {
     },
     /// Check whether the on-disk index matches a fresh render — the LOCAL drift gate.
     ///
-    /// The index lives outside the repo (per-machine, under `~/.claude/`), so nothing in git can
-    /// diff it — this is the command a person or a hook runs instead, gating on the exit code.
-    /// Exits non-zero when the on-disk index has drifted from Temper.
+    /// The index lives outside the repo (per-machine, in the harness's own config space), so
+    /// nothing in git can diff it — this is the command a person or a hook runs instead, gating
+    /// on the exit code. Gates every configured index file; exits non-zero when any of them has
+    /// drifted from Temper.
     Check {
-        /// Override the configured index_path — must match whatever `emit --path` last wrote,
-        /// or this checks a different file than the one that was written.
+        /// Override the configured index_path — the project-cohort file. Must match whatever
+        /// `emit --path` last wrote, or this checks a different file than the one that was
+        /// written.
         #[arg(long)]
         path: Option<String>,
     },
