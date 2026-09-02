@@ -75,19 +75,27 @@ pub struct Intention {
     /// echoes no intention. Should a trace ever carry one, that stops being incidental and becomes
     /// a constraint — a 768-float array must not serialize back to the caller.
     ///
-    /// **Exactly [`MAX_EMBEDDING_DIM`] floats**, refused as
+    /// **Exactly [`MAX_EMBEDDING_DIM`] floats, every value finite, norm within
+    /// [`MIN_EMBEDDING_NORM`]..[`MAX_EMBEDDING_NORM`]**, refused as
     /// [`super::disposition::RefusalReason::MalformedEmbedding`]. `[added — 2026-08-28, found in
     /// review]` This carried no bound of any kind, which made it the largest unbounded field on the
     /// contract: a million floats on one stage is 4 MB that validates cleanly, and there are
     /// [`MAX_STAGES`] stages. A wrong-sized vector also reached pgvector and came back as an
     /// **opaque 500** — the caller told nothing, in the door whose promise is a typed refusal.
+    /// `[widened — 2026-09-02]` Length alone still let impossible values through: a NaN poisons
+    /// every cosine computed from it, and the all-zero vector's cosine is 0/0 — both surfaced as
+    /// driver errors behind the same opaque 500. The norm window is wide enough that any
+    /// consistently scaled direction passes; only values that are not vectors for this space at
+    /// all are refused.
     ///
     /// **Published as a min AND a max, because the check is an equality.** `[corrected —
     /// 2026-08-28, found in review]` Publishing only the maximum stated half the rule: a 384-float
     /// vector cleared every generated client and was then refused by the server, which is exactly
     /// the gap the shape pass exists to close — a client must be able to refuse what the server
     /// would refuse. The two bounds are the same number because a vector of any other length is
-    /// not a large question, it is a vector for a different space.
+    /// not a large question, it is a vector for a different space. The norm window is published in
+    /// the field's description text rather than as numeric constraints: a client that scales
+    /// legitimately is not an error the bounds are for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "web-api", schema(min_items = 768, max_items = 768))]
     #[cfg_attr(feature = "mcp", schemars(length(min = 768, max = 768)))]
@@ -438,6 +446,22 @@ pub const MAX_INTENTION_QUERY_BYTES: usize = 4096;
 /// generated client and be refused by the server — the enforced rule was an equality and the
 /// published one was an inequality, so a client could not refuse what the server would.
 pub const MAX_EMBEDDING_DIM: usize = 768;
+
+/// The norm window a caller-supplied query vector must land in.
+///
+/// The corpus's space is unit-normalized — every embedding this system computes for itself has
+/// norm 1.0 — so a caller's vector is plausible only near that. The window is deliberately many
+/// orders of magnitude wide on both sides: a caller who pre-scaled by a constant is sending
+/// **direction**, which is all a cosine reads, and is not worth refusing; the window exists for
+/// the values that are not questions at all. Below it sits the all-zero vector, whose cosine is
+/// 0/0 — a NaN that orders as "unknown" and turns every score computed from it into a score
+/// nobody can act on. Above it, float accumulation in the distance computation itself overflows:
+/// 768 components of 1e9 square-sum to ~8e20, which survives `f32`, and a caller with no such
+/// ceiling has no reason not to send one that does not. Both ends today reached pgvector and came
+/// back as driver errors this door renders as an opaque 500. Values that are not finite are
+/// refused by the same check — a NaN poisons every cosine it touches, for the same reason.
+pub const MIN_EMBEDDING_NORM: f32 = 1.0e-6;
+pub const MAX_EMBEDDING_NORM: f32 = 1.0e6;
 
 /// The most question text ONE COMPOSITION may hand the server to embed, summed across its stages.
 ///

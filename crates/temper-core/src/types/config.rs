@@ -115,12 +115,12 @@ impl Default for SkillConfig {
     }
 }
 
-/// Claude Code memory projection. **Absent means the feature is off** — this is
-/// `Option` rather than `#[serde(default)]` precisely so "not configured" and
-/// "configured empty" stay distinguishable.
+/// Memory index projection — the rendered file a harness auto-loads. **Absent means the
+/// feature is off** — this is `Option` rather than `#[serde(default)]` precisely so
+/// "not configured" and "configured empty" stay distinguishable.
 #[cfg_attr(feature = "config-schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
-#[validate(schema(function = "validate_has_a_context"))]
+#[validate(schema(function = "validate_memory_config"))]
 pub struct MemoryConfig {
     /// Contexts whose memories reach EVERY project on this machine.
     #[serde(default)]
@@ -128,9 +128,24 @@ pub struct MemoryConfig {
     /// Contexts for this project. A list — a project may legitimately span contexts.
     #[serde(default)]
     pub project_contexts: Vec<String>,
-    /// Where the rendered index is written.
+    /// Where the rendered index is written. Under a split (see
+    /// [`shared_index_path`](Self::shared_index_path)) this file carries the
+    /// `project_contexts` cohort only.
     #[validate(length(min = 1, message = "memory index_path cannot be empty"))]
     pub index_path: String,
+    /// Where the **shared cohort's** index is written — the file that reaches every project
+    /// on this machine. `None` is the pre-split shape: every configured context renders
+    /// into [`index_path`](Self::index_path), byte-for-byte what earlier versions wrote.
+    ///
+    /// **Set, the render splits along the context lists rather than growing a second code
+    /// path**: `shared_contexts` renders here, `project_contexts` render into `index_path`.
+    /// What is deliberately NOT this field's job is the harness half — which file a session
+    /// auto-loads, and how the file is registered (an instructions entry, a session hook).
+    /// The projection writes files; the harness config decides what reads them. Keeping the
+    /// two independent is what lets the same emitted index serve a family of harnesses
+    /// instead of one, and is why this field is a path rather than a target name.
+    #[validate(length(min = 1, message = "memory shared_index_path cannot be empty"))]
+    pub shared_index_path: Option<String>,
     /// Days after which a memory's `verified` date is rendered as UNEXAMINED.
     #[serde(default = "default_stale_after_days")]
     pub stale_after_days: u32,
@@ -171,9 +186,18 @@ impl MemoryConfig {
     }
 }
 
-fn validate_has_a_context(cfg: &MemoryConfig) -> Result<(), validator::ValidationError> {
+fn validate_memory_config(cfg: &MemoryConfig) -> Result<(), validator::ValidationError> {
     if cfg.shared_contexts.is_empty() && cfg.project_contexts.is_empty() {
         return Err(validator::ValidationError::new("memory_no_contexts"));
+    }
+    // A shared index over no shared contexts is not an empty file that says so — registered
+    // with a harness it is a file auto-loaded into EVERY session on the machine that carries
+    // no memories and reports no error. Fail the config instead; the split is opt-in and a
+    // misconfigured opt-in must refuse to start, not render a stub.
+    if cfg.shared_index_path.is_some() && cfg.shared_contexts.is_empty() {
+        return Err(validator::ValidationError::new(
+            "memory_shared_index_without_shared_contexts",
+        ));
     }
     Ok(())
 }
@@ -405,7 +429,7 @@ pub struct TemperConfig {
     #[serde(default)]
     #[validate(nested)]
     pub cli: CliSection,
-    /// Claude Code memory projection. `None` = feature off.
+    /// Memory index projection. `None` = feature off.
     #[serde(default)]
     #[validate(nested)]
     pub memory: Option<MemoryConfig>,
@@ -878,6 +902,7 @@ path = "~/vault"
             ],
             project_contexts: vec!["@me/temper".to_string(), "@me/knowledge".to_string()],
             index_path: "~/x/MEMORY.md".to_string(),
+            shared_index_path: None,
             stale_after_days: 90,
             reinforced_min: None,
         };
@@ -904,6 +929,72 @@ path = "~/vault"
         assert!(
             cfg.validate().is_err(),
             "an opted-in section naming no context renders an empty index silently"
+        );
+    }
+
+    #[test]
+    fn a_shared_index_path_is_read_as_written() {
+        let cfg: TemperConfig = toml::from_str(
+            r#"
+            [vault]
+            path = "~/x"
+            [memory]
+            shared_contexts = ["@me/working-agreements"]
+            project_contexts = ["@me/temper"]
+            index_path = "~/x/project/MEMORY.md"
+            shared_index_path = "~/x/shared/MEMORY.md"
+        "#,
+        )
+        .expect("parses");
+        assert!(
+            cfg.validate().is_ok(),
+            "a well-formed split config is valid"
+        );
+        let mem = cfg.memory.expect("present");
+        assert_eq!(
+            mem.shared_index_path.as_deref(),
+            Some("~/x/shared/MEMORY.md"),
+            "the split is opt-in by presence: the field must arrive exactly as written"
+        );
+    }
+
+    #[test]
+    fn an_absent_shared_index_path_parses_as_none() {
+        let cfg: TemperConfig = toml::from_str(
+            r#"
+            [vault]
+            path = "~/x"
+            [memory]
+            project_contexts = ["@me/temper"]
+            index_path = "~/x/MEMORY.md"
+        "#,
+        )
+        .expect("parses");
+        assert!(
+            cfg.memory.expect("present").shared_index_path.is_none(),
+            "the pre-split shape must keep parsing: absence is the single-index behavior, \
+             never a default"
+        );
+    }
+
+    #[test]
+    fn a_shared_index_path_without_shared_contexts_is_refused() {
+        let cfg: TemperConfig = toml::from_str(
+            r#"
+            [vault]
+            path = "~/x"
+            [memory]
+            shared_contexts = []
+            project_contexts = ["@me/temper"]
+            index_path = "~/x/MEMORY.md"
+            shared_index_path = "~/x/shared/MEMORY.md"
+        "#,
+        )
+        .expect("parses");
+        let err = cfg.validate().expect_err("must refuse");
+        assert!(
+            format!("{err}").contains("shared"),
+            "the error must name the misconfigured half, not a generic memory failure: {err}"
         );
     }
 }

@@ -1,5 +1,6 @@
-//! `temper memory` — Claude Code's `MEMORY.md` as a rendered projection of
-//! `memory`-typed Temper resources.
+//! `temper memory` — the harness-loaded index (`MEMORY.md` and siblings) as a rendered
+//! projection of `memory`-typed Temper resources. The projection writes files; whichever
+//! harness config points a session at them decides how they load.
 
 use std::path::PathBuf;
 
@@ -35,6 +36,7 @@ mod tests {
             shared_contexts: vec![],
             project_contexts: vec!["@me/temper".to_string()],
             index_path: "~/.claude/projects/p/memory/MEMORY.md".to_string(),
+            shared_index_path: None,
             stale_after_days: 90,
             reinforced_min: None,
         }

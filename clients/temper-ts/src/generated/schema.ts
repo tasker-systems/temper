@@ -4366,19 +4366,27 @@ export interface components {
              *     echoes no intention. Should a trace ever carry one, that stops being incidental and becomes
              *     a constraint — a 768-float array must not serialize back to the caller.
              *
-             *     **Exactly [`MAX_EMBEDDING_DIM`] floats**, refused as
+             *     **Exactly [`MAX_EMBEDDING_DIM`] floats, every value finite, norm within
+             *     [`MIN_EMBEDDING_NORM`]..[`MAX_EMBEDDING_NORM`]**, refused as
              *     [`super::disposition::RefusalReason::MalformedEmbedding`]. `[added — 2026-08-28, found in
              *     review]` This carried no bound of any kind, which made it the largest unbounded field on the
              *     contract: a million floats on one stage is 4 MB that validates cleanly, and there are
              *     [`MAX_STAGES`] stages. A wrong-sized vector also reached pgvector and came back as an
              *     **opaque 500** — the caller told nothing, in the door whose promise is a typed refusal.
+             *     `[widened — 2026-09-02]` Length alone still let impossible values through: a NaN poisons
+             *     every cosine computed from it, and the all-zero vector's cosine is 0/0 — both surfaced as
+             *     driver errors behind the same opaque 500. The norm window is wide enough that any
+             *     consistently scaled direction passes; only values that are not vectors for this space at
+             *     all are refused.
              *
              *     **Published as a min AND a max, because the check is an equality.** `[corrected —
              *     2026-08-28, found in review]` Publishing only the maximum stated half the rule: a 384-float
              *     vector cleared every generated client and was then refused by the server, which is exactly
              *     the gap the shape pass exists to close — a client must be able to refuse what the server
              *     would refuse. The two bounds are the same number because a vector of any other length is
-             *     not a large question, it is a vector for a different space.
+             *     not a large question, it is a vector for a different space. The norm window is published in
+             *     the field's description text rather than as numeric constraints: a client that scales
+             *     legitimately is not an error the bounds are for.
              */
             embedding?: number[] | null;
             /**
