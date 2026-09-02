@@ -193,7 +193,7 @@ async fn wait_for_code(listener: &TcpListener) -> Result<String> {
         // The callback path carries the OAuth `code` and the PKCE `state` —
         // bearer-equivalent short-lived credentials. The log names the route only;
         // the query string is never written to stderr.
-        let path_without_query = path.split('?').next().unwrap_or(&path);
+        let path_without_query = path.split('?').next().unwrap_or(path);
         debug!(method, path = path_without_query, "Received request");
 
         let is_callback = method == "GET"
