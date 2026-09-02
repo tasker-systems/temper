@@ -81,8 +81,14 @@ pub enum AuthzError {
     /// sourced from `kb_principal_standing` since Phase 2 dropped `kb_profiles.is_active`.
     Deactivated { profile_id: uuid::Uuid },
     /// The profile lacks approved standing (`kb_principal_standing`).
-    /// Carries the id so a surface can build its own denial payload.
-    SystemAccessDenied { profile_id: uuid::Uuid },
+    /// Carries the id so a surface can build its own denial payload, and the
+    /// standing machine's typed [`temper_principal::Refusal`] for the state that
+    /// failed the gate — computed once, here, so every surface renders the same
+    /// refusal kind rather than re-deriving (or dropping) it.
+    SystemAccessDenied {
+        profile_id: uuid::Uuid,
+        refusal: temper_principal::Refusal,
+    },
 }
 
 /// **The token path.** A verified JWT ⇒ an authenticated, active profile.
@@ -349,8 +355,19 @@ pub async fn require_system_access(
     .map_err(AuthzError::AccessCheck)?;
 
     if !has_access {
+        // The typed reason comes straight from the standing machine at the gate — the one
+        // computation every surface inherits. `admit` returns `Err(Refusal)` for exactly the
+        // state that just failed; the `Ok` arm is only reachable on a race (approved between
+        // the gate check and here), in which case the generic `NoStanding` is the safe
+        // fallback. Read-only: `admit` decides, it never writes.
+        let refusal =
+            crate::services::standing_service::admit(pool, ProfileId::from(authed.profile.id))
+                .await
+                .err()
+                .unwrap_or(temper_principal::Refusal::NoStanding);
         return Err(AuthzError::SystemAccessDenied {
             profile_id: authed.profile.id,
+            refusal,
         });
     }
 
@@ -882,7 +899,7 @@ mod tests {
             .await
             .expect_err("gated profile should be refused");
         assert!(
-            matches!(err, AuthzError::SystemAccessDenied { profile_id } if profile_id == id),
+            matches!(err, AuthzError::SystemAccessDenied { profile_id, .. } if profile_id == id),
             "expected SystemAccessDenied, got {err:?}",
         );
     }

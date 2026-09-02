@@ -236,6 +236,20 @@ async fn no_system_access_refused_on_both_surfaces(pool: sqlx::PgPool) {
         "API must refuse profile with no system access"
     );
 
+    // Refusal-kind parity, case A — a minted profile is born `denied` (D11), and the
+    // standing machine's typed refusal must reach both surfaces as the SAME kind: the
+    // API's 403 carries it at `error.details.refusal.kind`, MCP in the error `data` at
+    // `refusal.kind`. Asserting kind equality here (not just a status) is what stops
+    // one surface from silently collapsing the refusal to a generic string.
+    let kind = |v: &serde_json::Value, surface: &str| -> String {
+        v["refusal"]["kind"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{surface}: refusal kind missing from denial payload: {v}"))
+            .to_string()
+    };
+    let api_body: serde_json::Value = api.json().await.expect("api 403 body");
+    let api_kind = kind(&api_body["error"]["details"], "API");
+
     // MCP surface: the `e2e-second-user` profile now exists; the gate must
     // refuse it for lack of system access through the real service gate.
     let svc = build_mcp_service(&pool).await;
@@ -247,6 +261,63 @@ async fn no_system_access_refused_on_both_surfaces(pool: sqlx::PgPool) {
         err.message.contains("requires approval"),
         "MCP system-access message expected, got: {}",
         err.message
+    );
+    let mcp_data = err
+        .data
+        .expect("MCP system-access denial must carry typed data");
+    let mcp_kind = kind(&mcp_data, "MCP");
+
+    assert_eq!(
+        api_kind, mcp_kind,
+        "both surfaces must render the same refusal kind for the same standing"
+    );
+    assert_eq!(api_kind, "denied", "a minted profile is born denied");
+
+    // Refusal-kind parity, case B — flip the standing to `requested` (the pending-review
+    // state a denied principal reaches from the self-service door) directly at the
+    // persistence layer, as the deactivation test above does. The kind must FOLLOW the
+    // standing on both surfaces: equality on one standing could be a constant echoing
+    // itself; two standing kinds cannot.
+    sqlx::query(
+        "INSERT INTO kb_principal_standing (profile_id, state) \
+         SELECT profile_id, 'requested' FROM kb_profile_auth_links \
+          WHERE auth_provider_user_id = 'e2e-second-user' \
+         ON CONFLICT (profile_id) DO UPDATE SET state = 'requested'",
+    )
+    .execute(&pool)
+    .await
+    .expect("flip second user to requested");
+
+    let api_requested = app
+        .reqwest_client
+        .get(app.url("/api/resources"))
+        .header("Authorization", format!("Bearer {second}"))
+        .send()
+        .await
+        .expect("api request");
+    assert_eq!(
+        api_requested.status(),
+        StatusCode::FORBIDDEN,
+        "a requested standing still lacks system access"
+    );
+    let api_requested_body: serde_json::Value = api_requested.json().await.expect("api 403 body");
+    assert_eq!(
+        kind(&api_requested_body["error"]["details"], "API"),
+        "requested",
+        "API refusal kind must follow the standing"
+    );
+
+    let err_requested = svc
+        .ensure_profile_from_parts(&mcp_parts("e2e-second-user"))
+        .await
+        .expect_err("MCP must refuse requested standing");
+    let mcp_requested_data = err_requested
+        .data
+        .expect("MCP requested-standing denial must carry typed data");
+    assert_eq!(
+        kind(&mcp_requested_data, "MCP"),
+        "requested",
+        "MCP refusal kind must follow the standing, matching the API"
     );
 }
 
