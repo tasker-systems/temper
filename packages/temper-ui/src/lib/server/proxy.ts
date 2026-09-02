@@ -261,9 +261,13 @@ export async function forwardRequest(
 			// logs. `x-vercel-id` is the upstream invocation's id; `traceparent` is
 			// the cross-service one. Healthy responses stay unlogged — this is the
 			// per-request hot path.
+			//
+			// The log names the PATH, never the full URL: the query string is
+			// attacker/chosen caller input (OAuth codes, tokens, search terms have
+			// all ridden there) and does not belong in the log stream.
 			if (response.status >= 500) {
 				console.error('proxy: upstream server error', {
-					target,
+					pathname,
 					method: request.method,
 					status: response.status,
 					traceparent,
@@ -282,8 +286,10 @@ export async function forwardRequest(
 	// logs. There is no upstream response to read an `x-vercel-id` from here,
 	// precisely because the fetch never completed.
 	const timedOut = isTimeout(lastErr);
+	// Same rule as the 5xx arm above: the path joins the logs, the query string
+	// never leaves the request.
 	console.error('proxy: upstream unreachable', {
-		target,
+		pathname,
 		method: request.method,
 		traceparent,
 		attempts: retries + 1,
