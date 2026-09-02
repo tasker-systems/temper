@@ -85,6 +85,58 @@ same backend. Temper injects `traceparent` on its own outbound calls, so a link 
 resolves to a real span rather than dangling. `tracestate` is omitted rather than sent empty —
 W3C makes it optional, and a valueless header on every request is noise.
 
+## What the telemetry contains — the inventory
+
+What a deployment's telemetry actually carries, hop by hop. Audited 2026-09-02; each field set
+has one definition in code, cited beside it. This section records the **post-audit** state: the
+audit's findings (raw page paths in temper-ui spans, unbounded error detail, query strings in
+proxy logs, model I/O one convention away from export) were fixed in the same pass that wrote
+this.
+
+**Rust request roots** (`http_request`, `mcp_request` — one constructor,
+`temper_telemetry::root_span!`): `method`; `path` — the real request path, run through the
+deny-by-default redaction (`temper_telemetry::redact::redact_path`) that rewrites
+credential-shaped segments under `/api/invitations/`; `http.route` and the exported name — the
+matched route *template* (`/api/resources/{id}`); `version`; `profile_id` — temper's internal
+profile UUID, recorded only once the request is authenticated, never the OAuth `sub` (PR #613's
+2a decision); when the caller sent them, the inbound trace fields (`trace_id`,
+`parent_span_id`, `trace_sampled`); `vercel_id` / `vercel_invocation_id`; and at the end,
+`status` + `latency_ms`. A panicking handler records an ERROR span and a `panic` event with
+`latency_ms` — the panic payload itself is never recorded.
+
+**Act spans** (`#[act_span]`, one per write command): `correlation_id` and `invocation_id` —
+caller-minted UUIDs, the attribution grain. Nothing else.
+
+**temper-client** (`http_client_request`, the CLI/MCP outbound edge): method, redacted path,
+`has_auth` (a boolean — never the token), `status`, `latency_ms`.
+
+**Events riding exported spans** (the export filter is `info`, so WARN and above go to the
+backend too): the structured error events carry `error_code` plus a message **bounded at 2 KiB**
+(`temper_services::error::bounded`); a 5xx body carries the fixed generic string while only the
+*event* keeps the bounded detail. The `unmatched route` event carries the path redacted and
+capped at 512 bytes. sqlx slow statements (WARN, >1s) carry the statement's full SQL text —
+documented under Logging. Slack lifecycle events carry the principal id
+(`slack:<team>:<user>`, length-validated) and bounded IdP error text; the mint outcome's
+hand-written `Debug` redacts the access token it wraps.
+
+**temper-ui request spans**: `method`; the **door** — the route pattern
+(`/vault/[owner]/[context]`) for matched pages, the proxy group (`/api/*`, `/mcp/*`) for
+proxied paths, `unmatched` otherwise; scheme; `server.address` (the deployment's own host);
+response status. Page titles, slugs, handles, and resource ids do not export: the raw pathname
+appears nowhere in the span. A handler exception is recorded as an OTel exception (message +
+stack of temper's own code).
+
+**eve agents**: undici auto-instrumentation emits HTTP client spans whose URL is the configured
+MCP endpoint (configuration, not user data). AI-SDK spans carry model name, tool names, and
+token usage — and **no model inputs or outputs**: `NEVER_RECORD_MODEL_IO`
+(`temper-telemetry-ts`) pins `recordInputs`/`recordOutputs` to `false`, the AI SDK's own
+default is `true`, and each agent's test suite fails if the pin is dropped.
+
+**What never exports**: OAuth subjects; message history; page titles, slugs, and handles;
+query strings; access or refresh tokens; vault keys or ciphertext. Widening `RUST_LOG` never
+widens export — it widens the *log stream*, which is a separate surface with its own retention
+(see Logging).
+
 ## Logging
 
 Every Temper process logs through one of two variants:
