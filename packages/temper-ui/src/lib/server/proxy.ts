@@ -28,13 +28,18 @@ import { env } from '$env/dynamic/private';
 const PROXIED_ROOTS = ['/mcp', '/oauth', '/.well-known', '/api'];
 
 /**
- * Whether an inbound request path should be reverse-proxied to the upstream
- * rather than handled by SvelteKit. Matches each root exactly or as a path
+ * Which proxied root a path belongs to (`/mcp`, `/oauth`, `/.well-known`, `/api`),
+ * or null when the path is not proxied. Matches each root exactly or as a path
  * prefix (`/mcp` and `/mcp/...`), but not paths that merely share a leading
  * substring (`/mcpfoo`).
  */
+export function proxiedRoot(pathname: string): string | null {
+	return PROXIED_ROOTS.find((root) => pathname === root || pathname.startsWith(`${root}/`)) ?? null;
+}
+
+/** Whether an inbound request path should be reverse-proxied to the upstream. */
 export function isProxiedPath(pathname: string): boolean {
-	return PROXIED_ROOTS.some((root) => pathname === root || pathname.startsWith(`${root}/`));
+	return proxiedRoot(pathname) !== null;
 }
 
 /** Join the upstream base (trailing slash tolerated) with the request path + query. */

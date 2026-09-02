@@ -9,6 +9,27 @@ import { context, SpanKind, SpanStatusCode, trace } from '@opentelemetry/api';
 import type { RequestEvent } from '@sveltejs/kit';
 import { waitUntil } from '@vercel/functions';
 import { extractContext, forceFlush, getTracer, isTelemetryEnabled } from 'temper-telemetry-ts';
+import { proxiedRoot } from '$lib/server/proxy';
+
+/**
+ * The identifying-free name of the door a request hit.
+ *
+ * A matched UI route contributes its **pattern** — `/vault/[owner]/[context]`, never
+ * the owner or context actually requested. A proxied path contributes its root group
+ * — `/api/*`, `/mcp/*` — because proxied requests short-circuit before SvelteKit
+ * routes them and their precise, redacted path is already carried by the upstream
+ * API's own root span. Anything else is `unmatched`.
+ *
+ * This replaces the raw `url.pathname` this span used to carry in its name and
+ * `url.path` attribute: page paths carry titles, slugs, handles, and resource ids,
+ * and none of that belongs in an exported span.
+ */
+function requestDoor(event: RequestEvent): string {
+	const routeId = event.route?.id;
+	if (routeId) return routeId;
+	const root = proxiedRoot(event.url.pathname);
+	return root ? `${root}/*` : 'unmatched';
+}
 
 /**
  * Wrap the whole `handle` body in a SERVER span whose parent is the inbound
@@ -33,14 +54,18 @@ export async function traceRequest(
 
 	const parentCtx = extractContext(event.request.headers);
 	const { url, request } = event;
+	const door = requestDoor(event);
 
 	const span = getTracer().startSpan(
-		`${request.method} ${event.route?.id ?? url.pathname}`,
+		`${request.method} ${door}`,
 		{
 			kind: SpanKind.SERVER,
 			attributes: {
 				'http.request.method': request.method,
-				'url.path': url.pathname,
+				// The door, not the URL: a route pattern or proxy group, per the module
+				// decision above. The semantic name is kept so TraceQL on `url.path`
+				// keeps working — the value is deliberately not the raw path.
+				'url.path': door,
 				'url.scheme': url.protocol.replace(/:$/, ''),
 				'server.address': url.host,
 				// NB: NO end-user identifiers (sub / email / name) as span attributes.
