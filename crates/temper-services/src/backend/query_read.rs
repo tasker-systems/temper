@@ -87,7 +87,8 @@ pub async fn run_composition(
 /// Found in review. Not an RBAC hole — but internal function names and argument types are exactly
 /// what this codebase refuses to echo everywhere else.
 fn opaque(e: anyhow::Error) -> ApiError {
-    tracing::error!(error = %e, "query read failed");
+    let detail = e.to_string();
+    tracing::error!(error = %crate::error::bounded(&detail), "query read failed");
     ApiError::Internal("An internal error occurred".to_string())
 }
 

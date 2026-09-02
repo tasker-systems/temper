@@ -370,7 +370,8 @@ async fn resolve_existing(
             // — but the two walk the identical JWKS path deliberately, and a divergence in how
             // they classify a refusal is how they start answering the same question differently.
             KeyLookupError::UnknownKid(kid) => {
-                tracing::debug!("slack link: token names an unpublished kid: {kid}");
+                // Unverified-header value: attacker-chosen length. Bounded.
+                tracing::debug!(kid = %temper_services::error::bounded(&kid), "slack link: token names an unpublished kid");
                 ApiError::Unauthorized("Invalid or expired token".to_string())
             }
             e => {

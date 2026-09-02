@@ -58,7 +58,8 @@ pub async fn require_mcp_auth(
         // client to come back later and never re-authenticate, and would let anyone make this
         // surface claim it is down by naming a `kid` at random.
         Err(KeyLookupError::UnknownKid(kid)) => {
-            tracing::debug!("token names an unpublished kid: {kid}");
+            // Unverified-header value: attacker-chosen length. Bounded.
+            tracing::debug!(kid = %temper_services::error::bounded(&kid), "token names an unpublished kid");
             return unauthorized(&state);
         }
         Err(e) => {

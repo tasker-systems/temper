@@ -142,11 +142,17 @@ struct ApiRequest<'a> {
 
 impl fmt::Display for ApiRequest<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The exported span attribute carries the path, never the query string. The
+        // query parameters temper-client itself builds are first-party, but the
+        // convention this export lives under is "no query strings in spans" — and
+        // `Display` is also what the retry warn prints, where a future caller-built
+        // URL must not become a leak.
+        let path = self.path.split('?').next().unwrap_or(self.path);
         write!(
             f,
             "{} {}",
             self.method,
-            temper_telemetry::redact::redact_path(self.path)
+            temper_telemetry::redact::redact_path(path)
         )
     }
 }

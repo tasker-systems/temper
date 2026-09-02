@@ -301,7 +301,13 @@ impl From<sqlx::Error> for ApiError {
                 ApiError::Conflict("Resource already exists".to_string())
             }
             _ => {
-                tracing::error!("Database error: {err}");
+                // Postgres embeds the offending value in several error classes
+                // (`invalid input syntax for type uuid: "<value>"`), and this codebase
+                // binds caller strings against `::uuid` casts — so the raw text is
+                // caller-chosen content at caller-chosen length. Bounded like every
+                // other error event; the client body is the generic string regardless.
+                let err_text = err.to_string();
+                tracing::error!(error = %bounded(&err_text), "database error");
                 ApiError::Internal("An internal error occurred".to_string())
             }
         }
