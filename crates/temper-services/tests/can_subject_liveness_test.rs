@@ -46,6 +46,16 @@ async fn insert_context(pool: &sqlx::PgPool, owner: Uuid, slug: &str) -> Uuid {
     .unwrap()
 }
 
+/// The capability bits of one grant row. `false` by default so a call site states only the bits
+/// it means (`..Capabilities::default()`), mirroring how the SQL table itself defaults them.
+#[derive(Default)]
+struct Capabilities {
+    can_read: bool,
+    can_write: bool,
+    can_delete: bool,
+    can_grant: bool,
+}
+
 /// Explicit profile-anchored grant. Capability bits beyond `read` require `read` (the carried
 /// coherence CHECK), so callers pass the full bit pattern they mean.
 async fn grant(
@@ -54,10 +64,7 @@ async fn grant(
     subject: Uuid,
     principal: Uuid,
     granted_by: Uuid,
-    can_read: bool,
-    can_write: bool,
-    can_delete: bool,
-    can_grant: bool,
+    caps: Capabilities,
 ) {
     sqlx::query(
         "INSERT INTO kb_access_grants \
@@ -68,10 +75,10 @@ async fn grant(
     .bind(subject_table)
     .bind(subject)
     .bind(principal)
-    .bind(can_read)
-    .bind(can_write)
-    .bind(can_delete)
-    .bind(can_grant)
+    .bind(caps.can_read)
+    .bind(caps.can_write)
+    .bind(caps.can_delete)
+    .bind(caps.can_grant)
     .bind(granted_by)
     .execute(pool)
     .await
@@ -147,10 +154,12 @@ async fn a_tombstoned_resource_closes_cans_explicit_grant_arm(pool: sqlx::PgPool
         resource,
         holder,
         grantor,
-        true,  // can_read
-        false, // can_write
-        true,  // can_delete
-        true,  // can_grant
+        Capabilities {
+            can_read: true,
+            can_delete: true,
+            can_grant: true,
+            ..Capabilities::default()
+        },
     )
     .await;
 
@@ -212,10 +221,11 @@ async fn a_retired_context_leaves_can_agreeing_with_the_write_gate(pool: sqlx::P
         context,
         holder,
         grantor,
-        true,  // can_read
-        true,  // can_write
-        false, // can_delete
-        false, // can_grant
+        Capabilities {
+            can_read: true,
+            can_write: true,
+            ..Capabilities::default()
+        },
     )
     .await;
 
@@ -269,10 +279,10 @@ async fn a_grant_row_on_a_subject_that_was_never_created_answers_false(pool: sql
         dangling,
         holder,
         grantor,
-        true,  // can_read
-        false, // can_write
-        false, // can_delete
-        false, // can_grant
+        Capabilities {
+            can_read: true,
+            ..Capabilities::default()
+        },
     )
     .await;
 
@@ -311,10 +321,10 @@ async fn a_subject_kind_without_a_liveness_column_stays_answerable(pool: sqlx::P
         connection,
         holder,
         grantor,
-        true,  // can_read
-        false, // can_write
-        false, // can_delete
-        false, // can_grant
+        Capabilities {
+            can_read: true,
+            ..Capabilities::default()
+        },
     )
     .await;
 
