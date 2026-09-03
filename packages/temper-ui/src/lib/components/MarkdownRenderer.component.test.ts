@@ -5,7 +5,7 @@ import MarkdownRenderer from './MarkdownRenderer.svelte';
 
 /**
  * The component layer — the wiring, not the sanitizer's decision table in the abstract: the
- * sanitizer runs HERE (client-side, dynamic import, `SANITIZE_CONFIG`), so the payload battery
+ * sanitizer runs HERE (client-side, dynamic import of `$lib/sanitize`), so the payload battery
  * lives on this layer too. In jsdom `browser` is true, so these mount the real client path.
  *
  * The gate is the property only this layer can see: while the sanitizer is unavailable the body
@@ -33,13 +33,36 @@ describe('MarkdownRenderer', () => {
 		expect(container.textContent).not.toContain('alert');
 	});
 
-	it('keeps style attributes out of the rendered document', async () => {
+	it('keeps style attributes and non-allowlisted classes out of the rendered document', async () => {
 		const { container } = render(MarkdownRenderer, {
 			props: { markdown: '<p style="color:red;position:fixed" class="lead">stay</p>' },
 		});
-		await waitFor(() => expect(container.querySelector('.lead')).not.toBeNull());
+		await waitFor(() => expect(container.querySelector('p')).not.toBeNull());
 		expect(container.textContent).toContain('stay');
 		expect(container.innerHTML).not.toContain('style=');
+		// `lead` is not in the sanitize allowlist — its survival would mean the class
+		// attribute channel is not fully closed.
+		expect(container.innerHTML).not.toContain('lead');
+	});
+
+	it('keeps positioning utilities out of the rendered document — content survives, styling does not', async () => {
+		const { container } = render(MarkdownRenderer, {
+			props: { markdown: '<div class="fixed inset-0 z-50 bg-black/80">overlay</div>' },
+		});
+		await waitFor(() => expect(container.textContent).toContain('overlay'));
+		for (const utility of ['fixed', 'inset-0', 'z-50', 'bg-black']) {
+			expect(container.innerHTML).not.toContain(utility);
+		}
+	});
+
+	it('preserves the classes the markdown pipeline legitimately emits', async () => {
+		const { container } = render(MarkdownRenderer, {
+			props: { markdown: '```json\n{"a":1}\n```' },
+		});
+		await waitFor(() => expect(container.querySelector('code')).not.toBeNull());
+		const html = container.innerHTML;
+		expect(html).toContain('class="hljs language-json"');
+		expect(html).toContain('hljs-');
 	});
 
 	it('keeps an element but drops its event-handler attribute', async () => {
