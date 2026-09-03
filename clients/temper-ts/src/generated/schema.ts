@@ -327,9 +327,11 @@ export interface paths {
         put?: never;
         /**
          * Append one segment to a staged upload — raw bytes as the request body
-         * @description The segment's sha256 rides `x-segment-sha256` (bare hex, the idempotent-append
-         *     identity): re-sending the same segment at the same seq is a no-op; a DIFFERENT segment
-         *     at an occupied seq is a 409 — occupied seqs are never superseded. The staging ceiling
+         * @description The segment's identity is the SERVER's own sha256 of the exact bytes received — the
+         *     caller sends no integrity claim, so none can be consumed unverified: re-sending the
+         *     same segment at the same seq is a no-op; a DIFFERENT segment at an occupied seq is a
+         *     409 — occupied seqs are never superseded. The whole assembly's integrity is
+         *     finalize's `expected_content_hash` (422 on a mismatch). The staging ceiling
          *     (`BlobConfig::max_bytes`, the cumulative bound across appends) is enforced in the
          *     service; the per-request body bound is the platform's, raised for this door only.
          */
@@ -357,8 +359,11 @@ export interface paths {
          *     gets, so a probe learns nothing either way. The response speaks the STORED media type and
          *     carries the byte count plus `Cache-Control: private, immutable` — content addressing is what earns
          *     `immutable` (D1), and `private` because the bytes are per-caller authorized (a shared cache
-         *     is never licensed to store them); and the provider address never appears anywhere in the
-         *     response (D6: the API is the only reader of the provider).
+         *     is never licensed to store them); and `Content-Disposition: attachment` — a blob read is a
+         *     bytes fetch, never a rendering invitation (the F10 ruling: the posture survives the
+         *     operational changes — cookie auth, CSP relaxation, a commit-time-only allowlist — that
+         *     would otherwise turn stored active content into stored XSS). The provider address never
+         *     appears anywhere in the response (D6: the API is the only reader of the provider).
          */
         get: operations["get_blob"];
         put?: never;
@@ -2992,9 +2997,12 @@ export interface components {
             /** Format: int64 */
             segment_bytes: number;
             /**
-             * @description Bare sha256 hex of the segment's raw bytes — the client's resume check and the
-             *     idempotent-append identity (same segment re-sent is a no-op; a DIFFERENT segment
-             *     at an occupied seq is a conflict, the assembled whole must stay unambiguous).
+             * @description The SERVER's bare sha256 hex of the segment's raw bytes as received — the caller's
+             *     resume check and the idempotent-append identity (the same bytes re-sent at the
+             *     same seq is a no-op; DIFFERENT bytes at an occupied seq is a conflict, the
+             *     assembled whole must stay unambiguous). The server computes it; the caller sends
+             *     no integrity claim, and the whole assembly's check is finalize's
+             *     `expected_content_hash`.
              */
             segment_hash: string;
             /** Format: int32 */
@@ -8536,7 +8544,7 @@ export interface operations {
                     "application/json": components["schemas"]["BlobUploadProgress"];
                 };
             };
-            /** @description Refused — staging ceiling, missing or malformed x-segment-sha256 */
+            /** @description Refused — staging ceiling */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -8589,7 +8597,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The blob's bytes, streamed; content type is the stored media type, Cache-Control is private, immutable */
+            /** @description The blob's bytes, streamed; content type is the stored media type, Cache-Control is private, immutable, Content-Disposition is attachment */
             200: {
                 headers: {
                     [name: string]: unknown;

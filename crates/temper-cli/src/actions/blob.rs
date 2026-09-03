@@ -213,9 +213,10 @@ pub async fn put(
     }
 
     // Segmented: chunk under the SAME bound (each segment is a request body of its own,
-    // so it must also respect the threshold), sha256 per segment, whole-file sha256 into
-    // finalize as the integrity check. The progress tokens are the SERVER's — each append
-    // response carries the landed set, and finalize echoes the LAST one verbatim.
+    // so it must also respect the threshold), whole-file sha256 into finalize as the
+    // integrity check. The segment identity is the server's own hash of the bytes it
+    // receives; the progress tokens are the SERVER's — each append response carries the
+    // landed set, and finalize echoes the LAST one verbatim.
     let whole_hash = sha256_hex(&params.bytes);
     let upload_id = client
         .blobs()
@@ -232,10 +233,9 @@ pub async fn put(
     let total_chunks = params.bytes.len().div_ceil(chunk_size);
     let mut last_progress = None;
     for (seq, chunk) in params.bytes.chunks(chunk_size).enumerate() {
-        let segment_hash = sha256_hex(chunk);
         let progress = client
             .blobs()
-            .append(upload_id, seq as u32, &segment_hash, chunk.to_vec())
+            .append(upload_id, seq as u32, chunk.to_vec())
             .await
             .map_err(crate::actions::runtime::client_err_to_temper)?;
         on_segment(seq + 1, total_chunks, progress.total_bytes as u64);

@@ -74,6 +74,20 @@ pub enum ApiError {
 
 pub type ApiResult<T> = Result<T, ApiError>;
 
+impl ApiError {
+    /// A 5xx whose body names the DOOR, never the failure (F9). The crate's own
+    /// `From<sqlx::Error>` posture — log the full error, render a generic message —
+    /// applied wherever the error text is third-party content: a provider bail carries
+    /// the provider's response body, a database error the database's message, and an
+    /// `anyhow` chain concatenates whatever sits underneath it. None of it belongs on
+    /// the wire; all of it goes to the log, prefixed by the context that routes the
+    /// failure to an operator — the context string is what the caller sees.
+    pub fn internal_scrubbed(context: &str, err: impl std::fmt::Display) -> Self {
+        tracing::error!(context, error = %err, "internal error (scrubbed from the response)");
+        ApiError::Internal(context.to_string())
+    }
+}
+
 #[derive(Serialize, ToSchema)]
 pub struct ErrorBody {
     error: ErrorDetail,

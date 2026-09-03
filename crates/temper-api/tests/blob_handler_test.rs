@@ -140,6 +140,16 @@ async fn committed_bytes_come_back_whole(pool: PgPool) {
         "per-caller-authorized bytes are privately cacheable at most; cache-control was \
          {cache_control}"
     );
+    // FAILS IF: the read-through ever renders instead of downloading. `attachment` is the
+    // F10 ruling — the posture that survives a cookie-auth flip, a CSP relaxation, or an
+    // allowlist edit (commit-time only, so committed SVG stays served): navigation
+    // downloads instead of executing in the app's origin, while `<img>`/`<video>`
+    // subresource rendering (which ignores this header) is unaffected.
+    assert_eq!(
+        resp.headers()["content-disposition"],
+        temper_services::services::blob_service::BLOB_CONTENT_DISPOSITION,
+        "a blob read is a bytes fetch, never a rendering invitation"
+    );
     let back = resp.bytes().await.expect("body");
     assert_eq!(
         back.as_ref(),
@@ -460,12 +470,14 @@ fn append_segment_req(
     seq: u32,
     bytes: &[u8],
 ) -> reqwest::RequestBuilder {
+    // No integrity header: the segment's identity is the SERVER's own sha256 of the
+    // bytes received (F7 ruling — the client-sent `x-segment-sha256` was validated then
+    // discarded, a dead check inviting a future caller to consume it unverified).
     app.client
         .post(app.url(&format!(
             "/api/blobs/uploads/{upload_id}/segments?seq={seq}"
         )))
         .header("Authorization", format!("Bearer {token}"))
-        .header("x-segment-sha256", sha_hex(bytes))
         .header("content-type", "application/octet-stream")
         .body(bytes.to_vec())
 }
@@ -1334,5 +1346,123 @@ async fn a_derivation_source_edge_names_the_file_a_resource_came_from(pool: PgPo
     assert_eq!(
         rows[0]["peer_title"], "Derived research",
         "the graph read names the resource"
+    );
+}
+
+// ─── F8: the commit door's transport bound is the config's threshold, not axum's 2 MB ──
+
+/// A multipart commit between axum's inherited 2 MB default and the D7 threshold must
+/// SUCCEED: mounted plain, the door inherited the app-wide 2 MB transport default and a
+/// legal 2–4 MB upload died as a misleading `malformed multipart body` instead of the
+/// threshold vocabulary. The limit is derived from the config, so a legal body reaches
+/// the handler and an over-threshold body hears the threshold refusal, never the
+/// transport's.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_commit_between_the_old_transport_default_and_the_threshold_succeeds(pool: PgPool) {
+    let threshold = 4 * 1024 * 1024;
+    let cfg = blob_cfg(8 * 1024 * 1024, &["application/octet-stream"], threshold);
+    let app = blob_app(pool, cfg).await;
+    let (_profile, ctx, token) = owner(&app.pool).await;
+
+    // Between 2 MB (the old inherited default) and the 4 MB threshold.
+    let bytes: Vec<u8> = (0..2_500_000u32).map(|i| (i % 251) as u8).collect();
+    let resp = commit_multipart(
+        &app,
+        &token,
+        bytes.clone(),
+        "application/octet-stream",
+        "kb_contexts",
+        ctx,
+    )
+    .send()
+    .await
+    .expect("request failed");
+    let status = resp.status().as_u16();
+    let body: serde_json::Value = resp.json().await.unwrap_or_default();
+    assert_eq!(
+        status, 200,
+        "a legal over-2MB commit must not die at the transport; body: {body}"
+    );
+}
+
+// ─── F9: a 5xx from a blob door names the door, never the provider ──────────────
+
+/// A provider whose `put` bails with provider-shaped text (status + response body, the
+/// `VercelBlobStore` failure shape). The commit must render a 500 whose body carries NO
+/// byte of the provider's response — the crate's own `From<sqlx::Error>` scrub, applied
+/// to the blob doors: the full error goes to the log, the wire names the door.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_provider_bail_is_scrubbed_from_the_wire(pool: PgPool) {
+    struct FailingStore;
+
+    impl std::fmt::Debug for FailingStore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("FailingStore")
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl temper_substrate::blob_store::BlobStore for FailingStore {
+        async fn exists(&self, _pathname: &str) -> anyhow::Result<bool> {
+            Ok(false)
+        }
+        async fn put(
+            &self,
+            _pathname: &str,
+            _content_type: &str,
+            _body: bytes::Bytes,
+            _cache_control_max_age: u32,
+        ) -> anyhow::Result<temper_substrate::blob_store::PutReceipt> {
+            anyhow::bail!(
+                "blob provider put: 503 Service Unavailable: {{\"error\":{{\"code\":\"store_maintenance\",\"message\":\"SECRET-PROVIDER-TEXT the bucket is draining\"}}}}"
+            );
+        }
+        async fn get(
+            &self,
+            _pathname: &str,
+            _consistent: bool,
+        ) -> anyhow::Result<temper_substrate::blob_store::ByteStream> {
+            unreachable!("the commit path never reads")
+        }
+        async fn head(
+            &self,
+            _pathname: &str,
+        ) -> anyhow::Result<Option<temper_substrate::blob_store::BlobHead>> {
+            unreachable!("the commit path never heads")
+        }
+    }
+
+    let cfg = blob_cfg(1 << 20, &["image/png"], 64 * 1024);
+    let app = setup_test_app_with_state(pool, move |state| {
+        state.blob_store = Some(Arc::new(FailingStore));
+        let mut config = (*state.config).clone();
+        config.blob = Some(cfg);
+        state.config = Arc::new(config);
+    })
+    .await;
+    let (_profile, ctx, token) = owner(&app.pool).await;
+
+    let resp = commit_multipart(
+        &app,
+        &token,
+        b"bytes".to_vec(),
+        "image/png",
+        "kb_contexts",
+        ctx,
+    )
+    .send()
+    .await
+    .expect("request failed");
+    let status = resp.status().as_u16();
+    let body: serde_json::Value = resp.json().await.expect("json body");
+    assert_eq!(status, 500, "a provider bail is a 500; body: {body}");
+    let wire = serde_json::to_string(&body).expect("body string");
+    assert!(
+        !wire.contains("SECRET-PROVIDER-TEXT") && !wire.contains("store_maintenance"),
+        "the provider's own response text must never reach the wire; body was {wire}"
+    );
+    assert!(
+        wire.contains("blob provider put"),
+        "the 5xx still names the DOOR so an operator can route it; body was {wire}"
     );
 }

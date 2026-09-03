@@ -2,8 +2,9 @@
 //!
 //! Bytes over the wire as bytes: the commit is one multipart request (at or under the
 //! server's single-request threshold, D7), the segmented append carries RAW BINARY
-//! segments with `x-segment-sha256` (the idempotent-append identity), and the read
-//! streams the response body — the CLI writes it to a file or stdout without ever
+//! segments — the segment's identity is the SERVER's own sha256 of the bytes received,
+//! and the whole assembly's integrity is finalize's `expected_content_hash` — and the
+//! read streams the response body: the CLI writes it to a file or stdout without ever
 //! needing the whole blob in memory unless it wants it.
 
 use reqwest::Method;
@@ -85,24 +86,19 @@ impl<'a> BlobClient<'a> {
             .await
     }
 
-    /// POST /api/blobs/uploads/{id}/segments — append one RAW segment. `segment_hash` is
-    /// the bare sha256 hex of `bytes`: the idempotent-append identity (same segment at
-    /// the same seq is a no-op; a different one is a 409 — occupied seqs are never
-    /// superseded).
+    /// POST /api/blobs/uploads/{id}/segments — append one RAW segment. The segment's
+    /// identity is the SERVER's own sha256 of the exact bytes received: re-sending the
+    /// same segment at the same seq is a no-op; a different one is a 409 — occupied
+    /// seqs are never superseded.
     pub async fn append(
         &self,
         upload_id: Uuid,
         seq: u32,
-        segment_hash: &str,
         bytes: Vec<u8>,
     ) -> Result<BlobUploadProgress> {
         let token = self.http.resolve_token()?;
         let path = format!("/api/blobs/uploads/{upload_id}/segments?seq={seq}");
-        let req = self
-            .http
-            .post(&path)
-            .header("x-segment-sha256", segment_hash)
-            .body(bytes);
+        let req = self.http.post(&path).body(bytes);
         self.http
             .send_json(&Method::POST, &path, req, Some(&token))
             .await

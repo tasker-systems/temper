@@ -13,6 +13,24 @@
 //! unreadable one; resource AND cogmap (non-kb_resources) endpoints; folded edges; an
 //! invisible endpoint; a soft-deleted endpoint (the chunk-2 is_active floor); and an
 //! unknown endpoint table (the CASE ELSE false arm).
+//!
+//! **The enclosure hierarchy (2026-09-02, review F2 + lead #1).** The original fixture's
+//! memberships were all DIRECT, and under direct membership the pre-20260712000010 flat arms
+//! and the correct ancestor-expanded arms are INDISTINGUISHABLE — which is exactly why the
+//! oracle stayed green through the S6 drift. The fixture now carries an enclosing team
+//! (`team_parent` over `team_a`, the viewer a direct member of `team_a` only) with a context
+//! OWNED by the ancestor and one SHARED to it: under the flat arms both flip invisible, so
+//! the seeds actually discriminate the arms they claim to cover.
+//!
+//! **The blob arms (2026-09-02, review F2).** `20260901000020`'s header claimed this oracle
+//! "keeps function == scalar-gates honest for the new arm too" — false at land time: the
+//! test carried ZERO `kb_blobs` seeds, so a revert of `readable_blobs` or the per-endpoint
+//! blob OR arms left every blob-related edge wrongly (in)visible with the oracle green.
+//! The claim is made TRUE here: blob-endpoint edges homed personal, team-owned,
+//! ancestor-team-owned, ancestor-shared, and in readable and unreadable cogmaps, on both
+//! the source and the target arm — the scalar oracle covers them through
+//! `endpoint_readable_by_profile`'s `kb_blobs` arm → `blob_readable_by_profile`, the
+//! function through its `readable_blobs` set, and the equality now has something to bite.
 #![cfg(feature = "test-db")]
 
 mod common;
@@ -93,6 +111,29 @@ async fn home(pool: &PgPool, resource: Uuid, anchor_table: &str, anchor_id: Uuid
     .execute(pool)
     .await
     .expect("insert home");
+}
+
+/// A committed blob row, homed per-home (D2 as amended — the home rides the row). Hash and
+/// pathname are fixture-unique text: the equivalence question is VISIBILITY, not addressing.
+async fn mk_blob(pool: &PgPool, event: Uuid, home_table: &str, home_id: Uuid, owner: Uuid) -> Uuid {
+    sqlx::query_scalar(
+        "INSERT INTO kb_blobs
+           (id, content_hash, blob_pathname, content_type, content_bytes,
+            home_table, home_id, owner_profile_id, originator_profile_id,
+            asserted_by_event_id, last_event_id)
+         VALUES ($1, $2, $3, 'application/octet-stream', 4, $4, $5, $6, $6, $7, $7)
+         RETURNING id",
+    )
+    .bind(Uuid::now_v7())
+    .bind(format!("eq-hash-{}", Uuid::new_v4()))
+    .bind(format!("eq/{}", Uuid::new_v4()))
+    .bind(home_table)
+    .bind(home_id)
+    .bind(owner)
+    .bind(event)
+    .fetch_one(pool)
+    .await
+    .expect("insert blob")
 }
 
 async fn grant_read(
@@ -189,11 +230,22 @@ async fn edges_visible_to_matches_per_row_oracle(pool: PgPool) {
             .await;
     let event = any_event(&pool).await;
 
-    // Teams: viewer ∈ team_a, other ∈ team_b.
+    // Teams: viewer ∈ team_a, other ∈ team_b, and team_parent ENCLOSES team_a —
+    // the enclosure hierarchy. Viewer's membership is DIRECT in team_a only, so a thing
+    // attached to team_parent is reachable ONLY through the ancestor expansion (lead #1:
+    // the original fixture was all-direct, where flat and expanded arms are
+    // indistinguishable — which is why the oracle stayed green through the S6 drift).
     let team_a = mk_team(&pool, "eq-team-a").await;
     let team_b = mk_team(&pool, "eq-team-b").await;
+    let team_parent = mk_team(&pool, "eq-team-parent").await;
     add_member(&pool, team_a, viewer).await;
     add_member(&pool, team_b, other).await;
+    sqlx::query("INSERT INTO kb_teams_parents (child_id, parent_id) VALUES ($1, $2)")
+        .bind(team_a)
+        .bind(team_parent)
+        .execute(&pool)
+        .await
+        .expect("enclose team_a under team_parent");
 
     // Cogmap anchors: m1 readable by viewer (team join), m2 not (team_b only),
     // m3 readable by viewer via explicit cogmap read-grant.
@@ -233,6 +285,18 @@ async fn edges_visible_to_matches_per_row_oracle(pool: PgPool) {
     .await;
     let c_hidden = mk_context(&pool, "kb_profiles", other, "eq-hidden").await;
 
+    // Ancestor-team contexts: one OWNED by team_parent (the read-inherits-up arm —
+    // invisible under the flat team-owned arm) and one SHARED to team_parent (the
+    // reachable-share arm — invisible when reachable_teams stays flat).
+    let c_ancestor_owned = mk_context(&pool, "kb_teams", team_parent, "eq-ancestor-owned").await;
+    let c_shared_ancestor = mk_context(&pool, "kb_profiles", other, "eq-shared-ancestor").await;
+    sqlx::query("INSERT INTO kb_team_contexts (team_id, context_id) VALUES ($1, $2)")
+        .bind(team_parent)
+        .bind(c_shared_ancestor)
+        .execute(&pool)
+        .await
+        .expect("share context to the ancestor team");
+
     // Endpoint resources: visible (viewer-owned), invisible (other's, unshared), granted
     // (other's + resource read-grant), and soft-deleted (viewer-owned, is_active=false —
     // the chunk-2 READ floor must hide edges touching it).
@@ -258,6 +322,29 @@ async fn edges_visible_to_matches_per_row_oracle(pool: PgPool) {
         .execute(&pool)
         .await
         .expect("soft-delete r_del");
+    let r_ancestor = mk_resource(&pool, "eq-r-ancestor").await;
+    home(&pool, r_ancestor, "kb_contexts", c_ancestor_owned, other).await;
+    let r_shared_ancestor = mk_resource(&pool, "eq-r-shared-anc").await;
+    home(
+        &pool,
+        r_shared_ancestor,
+        "kb_contexts",
+        c_shared_ancestor,
+        other,
+    )
+    .await;
+
+    // Blobs (F2): one per homing class the blob arms must answer. Every fixture blob is
+    // owned by `other` where the home is `other`'s — visibility is home-based, never
+    // owner-based (blob-visibility-self-contained), and asserting through another
+    // principal's home is exactly what a cross-visibility seed exercises.
+    let blob_personal = mk_blob(&pool, event, "kb_contexts", c_personal, viewer).await;
+    let blob_hidden = mk_blob(&pool, event, "kb_contexts", c_hidden, other).await;
+    let blob_teamowned = mk_blob(&pool, event, "kb_contexts", c_teamowned, other).await;
+    let blob_ancestor_owned = mk_blob(&pool, event, "kb_contexts", c_ancestor_owned, other).await;
+    let blob_shared_ancestor = mk_blob(&pool, event, "kb_contexts", c_shared_ancestor, other).await;
+    let blob_map = mk_blob(&pool, event, "kb_cogmaps", m1, other).await;
+    let blob_bad_map = mk_blob(&pool, event, "kb_cogmaps", m2, other).await;
 
     // Edges, one per branch class. Expected visibility (for viewer) in the comments.
     let e_ok_cogmap = mk_edge(
@@ -419,6 +506,120 @@ async fn edges_visible_to_matches_per_row_oracle(pool: PgPool) {
             // (No unknown-endpoint-table edge: kb_edges_source_table_check forbids anything but
             // kb_resources/kb_cogmaps at the data layer, so the CASE ELSE false arm is unreachable.)
 
+    // Hierarchy-homed edges (lead #1): visible to viewer ONLY through the ancestor
+    // expansion — under the flat arms both flip, so these seeds discriminate.
+    let e_ok_ancestor_owned = mk_edge(
+        &pool,
+        event,
+        "kb_resources",
+        r_vis,
+        "kb_resources",
+        r_granted,
+        "kb_contexts",
+        c_ancestor_owned,
+        false,
+    )
+    .await; // visible (owned by the ENCLOSING team — the read-inherits-up arm)
+    let e_ok_shared_ancestor = mk_edge(
+        &pool,
+        event,
+        "kb_resources",
+        r_vis,
+        "kb_resources",
+        r_granted,
+        "kb_contexts",
+        c_shared_ancestor,
+        false,
+    )
+    .await; // visible (shared to the ENCLOSING team — the reachable-share arm)
+
+    // Blob-endpoint edges (F2): the `readable_blobs` set and the per-endpoint blob OR arms
+    // versus the scalar oracle's `kb_blobs` arm, across every homing class.
+    let e_ok_blob_source = mk_edge(
+        &pool,
+        event,
+        "kb_blobs",
+        blob_personal,
+        "kb_resources",
+        r_granted,
+        "kb_cogmaps",
+        m1,
+        false,
+    )
+    .await; // visible (blob homed in the viewer's personal context, source arm)
+    let e_bad_blob_target = mk_edge(
+        &pool,
+        event,
+        "kb_resources",
+        r_vis,
+        "kb_blobs",
+        blob_hidden,
+        "kb_cogmaps",
+        m1,
+        false,
+    )
+    .await; // invisible (blob homed in an unreadable context, target arm)
+    let e_ok_blob_target = mk_edge(
+        &pool,
+        event,
+        "kb_resources",
+        r_vis,
+        "kb_blobs",
+        blob_teamowned,
+        "kb_contexts",
+        c_personal,
+        false,
+    )
+    .await; // visible (team-owned context home, target arm)
+    let e_ok_blob_ancestor = mk_edge(
+        &pool,
+        event,
+        "kb_blobs",
+        blob_ancestor_owned,
+        "kb_resources",
+        r_granted,
+        "kb_cogmaps",
+        m1,
+        false,
+    )
+    .await; // visible (blob homed in the ANCESTOR team's own context)
+    let e_ok_blob_shared_ancestor = mk_edge(
+        &pool,
+        event,
+        "kb_blobs",
+        blob_shared_ancestor,
+        "kb_resources",
+        r_granted,
+        "kb_cogmaps",
+        m1,
+        false,
+    )
+    .await; // visible (blob homed in a context shared to the ANCESTOR team)
+    let e_ok_blob_map = mk_edge(
+        &pool,
+        event,
+        "kb_blobs",
+        blob_map,
+        "kb_resources",
+        r_granted,
+        "kb_cogmaps",
+        m1,
+        false,
+    )
+    .await; // visible (blob homed in a readable COGMAP)
+    let e_bad_blob_map = mk_edge(
+        &pool,
+        event,
+        "kb_blobs",
+        blob_bad_map,
+        "kb_resources",
+        r_granted,
+        "kb_cogmaps",
+        m1,
+        false,
+    )
+    .await; // invisible (blob homed in an unreadable COGMAP)
+
     let fixture: HashSet<Uuid> = [
         e_ok_cogmap,
         e_bad_target,
@@ -433,6 +634,15 @@ async fn edges_visible_to_matches_per_row_oracle(pool: PgPool) {
         e_bad_map_endpoint,
         e_folded,
         e_deleted_endpoint,
+        e_ok_ancestor_owned,
+        e_ok_shared_ancestor,
+        e_ok_blob_source,
+        e_bad_blob_target,
+        e_ok_blob_target,
+        e_ok_blob_ancestor,
+        e_ok_blob_shared_ancestor,
+        e_ok_blob_map,
+        e_bad_blob_map,
     ]
     .into_iter()
     .collect();
@@ -444,6 +654,13 @@ async fn edges_visible_to_matches_per_row_oracle(pool: PgPool) {
         e_ok_teamowned,
         e_ok_ctx_grant,
         e_ok_map_endpoint,
+        e_ok_ancestor_owned,
+        e_ok_shared_ancestor,
+        e_ok_blob_source,
+        e_ok_blob_target,
+        e_ok_blob_ancestor,
+        e_ok_blob_shared_ancestor,
+        e_ok_blob_map,
     ]
     .into_iter()
     .collect();
@@ -479,8 +696,10 @@ async fn edges_visible_to_matches_per_row_oracle(pool: PgPool) {
             .collect::<Vec<_>>(),
     );
 
-    // `other` cannot see any fixture edge: every edge touches r_vis (invisible to other) or
-    // is folded — including e_bad_anchor whose anchor (m2) other CAN read.
+    // `other` cannot see any fixture edge: every edge touches r_vis, a blob endpoint or a
+    // home anchor invisible to `other` (team_a/team_parent-side contexts and maps; its own
+    // r_granted never saves an edge whose other half or home is out of reach), or is folded —
+    // including e_bad_anchor whose anchor (m2) other CAN read.
     let other_fixture: HashSet<Uuid> = function_edges(&pool, other)
         .await
         .intersection(&fixture)

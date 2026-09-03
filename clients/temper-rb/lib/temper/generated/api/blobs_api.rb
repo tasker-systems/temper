@@ -20,7 +20,7 @@ module Temper::Generated
       @api_client = api_client
     end
     # Append one segment to a staged upload — raw bytes as the request body
-    # The segment's sha256 rides `x-segment-sha256` (bare hex, the idempotent-append identity): re-sending the same segment at the same seq is a no-op; a DIFFERENT segment at an occupied seq is a 409 — occupied seqs are never superseded. The staging ceiling (`BlobConfig::max_bytes`, the cumulative bound across appends) is enforced in the service; the per-request body bound is the platform's, raised for this door only.
+    # The segment's identity is the SERVER's own sha256 of the exact bytes received — the caller sends no integrity claim, so none can be consumed unverified: re-sending the same segment at the same seq is a no-op; a DIFFERENT segment at an occupied seq is a 409 — occupied seqs are never superseded. The whole assembly's integrity is finalize's `expected_content_hash` (422 on a mismatch). The staging ceiling (`BlobConfig::max_bytes`, the cumulative bound across appends) is enforced in the service; the per-request body bound is the platform's, raised for this door only.
     # @param id [String] Upload session ID
     # @param seq [Integer] Segment ordinal — the seq order is the assembly order at finalize
     # @param [Hash] opts the optional parameters
@@ -32,7 +32,7 @@ module Temper::Generated
     end
 
     # Append one segment to a staged upload — raw bytes as the request body
-    # The segment&#39;s sha256 rides &#x60;x-segment-sha256&#x60; (bare hex, the idempotent-append identity): re-sending the same segment at the same seq is a no-op; a DIFFERENT segment at an occupied seq is a 409 — occupied seqs are never superseded. The staging ceiling (&#x60;BlobConfig::max_bytes&#x60;, the cumulative bound across appends) is enforced in the service; the per-request body bound is the platform&#39;s, raised for this door only.
+    # The segment&#39;s identity is the SERVER&#39;s own sha256 of the exact bytes received — the caller sends no integrity claim, so none can be consumed unverified: re-sending the same segment at the same seq is a no-op; a DIFFERENT segment at an occupied seq is a 409 — occupied seqs are never superseded. The whole assembly&#39;s integrity is finalize&#39;s &#x60;expected_content_hash&#x60; (422 on a mismatch). The staging ceiling (&#x60;BlobConfig::max_bytes&#x60;, the cumulative bound across appends) is enforced in the service; the per-request body bound is the platform&#39;s, raised for this door only.
     # @param id [String] Upload session ID
     # @param seq [Integer] Segment ordinal — the seq order is the assembly order at finalize
     # @param [Hash] opts the optional parameters
@@ -471,7 +471,7 @@ module Temper::Generated
     end
 
     # Read a blob's bytes back, whole, streamed (D6)
-    # Visibility gates on the blob's own home via `blob_readable_by_profile` — not visible renders as 404, the same not-found an unknown id gets, so a probe learns nothing either way. The response speaks the STORED media type and carries the byte count plus `Cache-Control: private, immutable` — content addressing is what earns `immutable` (D1), and `private` because the bytes are per-caller authorized (a shared cache is never licensed to store them); and the provider address never appears anywhere in the response (D6: the API is the only reader of the provider).
+    # Visibility gates on the blob's own home via `blob_readable_by_profile` — not visible renders as 404, the same not-found an unknown id gets, so a probe learns nothing either way. The response speaks the STORED media type and carries the byte count plus `Cache-Control: private, immutable` — content addressing is what earns `immutable` (D1), and `private` because the bytes are per-caller authorized (a shared cache is never licensed to store them); and `Content-Disposition: attachment` — a blob read is a bytes fetch, never a rendering invitation (the F10 ruling: the posture survives the operational changes — cookie auth, CSP relaxation, a commit-time-only allowlist — that would otherwise turn stored active content into stored XSS). The provider address never appears anywhere in the response (D6: the API is the only reader of the provider).
     # @param id [String] Blob ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -482,7 +482,7 @@ module Temper::Generated
     end
 
     # Read a blob&#39;s bytes back, whole, streamed (D6)
-    # Visibility gates on the blob&#39;s own home via &#x60;blob_readable_by_profile&#x60; — not visible renders as 404, the same not-found an unknown id gets, so a probe learns nothing either way. The response speaks the STORED media type and carries the byte count plus &#x60;Cache-Control: private, immutable&#x60; — content addressing is what earns &#x60;immutable&#x60; (D1), and &#x60;private&#x60; because the bytes are per-caller authorized (a shared cache is never licensed to store them); and the provider address never appears anywhere in the response (D6: the API is the only reader of the provider).
+    # Visibility gates on the blob&#39;s own home via &#x60;blob_readable_by_profile&#x60; — not visible renders as 404, the same not-found an unknown id gets, so a probe learns nothing either way. The response speaks the STORED media type and carries the byte count plus &#x60;Cache-Control: private, immutable&#x60; — content addressing is what earns &#x60;immutable&#x60; (D1), and &#x60;private&#x60; because the bytes are per-caller authorized (a shared cache is never licensed to store them); and &#x60;Content-Disposition: attachment&#x60; — a blob read is a bytes fetch, never a rendering invitation (the F10 ruling: the posture survives the operational changes — cookie auth, CSP relaxation, a commit-time-only allowlist — that would otherwise turn stored active content into stored XSS). The provider address never appears anywhere in the response (D6: the API is the only reader of the provider).
     # @param id [String] Blob ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.

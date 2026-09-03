@@ -45,6 +45,17 @@ pub fn immutable_cache_control() -> String {
     format!("private, max-age={IMMUTABLE_CACHE_MAX_AGE}, immutable")
 }
 
+/// The `Content-Disposition` every read-through response carries (F10 ruling,
+/// 2026-09-02): `attachment`, unconditionally. A blob read is a bytes fetch, never a
+/// rendering invitation — and the posture must survive the operational changes the
+/// review named: a cookie-auth flip, a CSP relaxation, an allowlist edit (the allowlist
+/// is commit-time only, so removing a type never stops serving committed bytes).
+/// Subresource rendering (`<img>`, `<video>`, `<audio>`) ignores the header, so
+/// legitimate embedding is unaffected; what `attachment` stops is NAVIGATION — the
+/// browser downloads instead of rendering, so stored active content (SVG included)
+/// cannot execute in the app's origin.
+pub const BLOB_CONTENT_DISPOSITION: &str = "attachment";
+
 /// The D7 single-request threshold refusal, spelled once and spoken by every committing
 /// surface: the HTTP multipart handler aborts mid-stream with it (before an over-threshold
 /// body is ever fully buffered), and [`commit_blob`] refuses with it before any byte reaches
@@ -164,29 +175,30 @@ async fn check_home_standing(
         home.id,
     )
     .fetch_one(pool)
-    .await
-    .map_err(|e| ApiError::Internal(e.to_string()))?;
+    .await?;
     if !readable {
         return Err(ApiError::NotFound("home not found".to_string()));
     }
 
     let authorable: Option<bool> = match authorable_fn {
-        "context_authorable_by_profile" => sqlx::query_scalar!(
-            "SELECT context_authorable_by_profile($1, $2)",
-            caller.uuid(),
-            home.id,
-        )
-        .fetch_one(pool)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?,
-        _ => sqlx::query_scalar!(
-            "SELECT cogmap_authorable_by_profile($1, $2)",
-            caller.uuid(),
-            home.id,
-        )
-        .fetch_one(pool)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?,
+        "context_authorable_by_profile" => {
+            sqlx::query_scalar!(
+                "SELECT context_authorable_by_profile($1, $2)",
+                caller.uuid(),
+                home.id,
+            )
+            .fetch_one(pool)
+            .await?
+        }
+        _ => {
+            sqlx::query_scalar!(
+                "SELECT cogmap_authorable_by_profile($1, $2)",
+                caller.uuid(),
+                home.id,
+            )
+            .fetch_one(pool)
+            .await?
+        }
     };
     if !authorable.unwrap_or(false) {
         return Err(ApiError::Forbidden);
@@ -247,7 +259,7 @@ pub async fn commit_blob(
     // The dedup pre-check is home-scoped (D2 as amended): only the caller's own home answers.
     let deduped = temper_substrate::readback::home_blob_id_by_hash(pool, &home, &content_hash)
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .map_err(|e| ApiError::internal_scrubbed("blob dedup pre-check failed", e))?
         .is_some();
     if !deduped {
         store
@@ -258,12 +270,12 @@ pub async fn commit_blob(
                 IMMUTABLE_CACHE_MAX_AGE,
             )
             .await
-            .map_err(|e| ApiError::Internal(format!("blob provider put failed: {e}")))?;
+            .map_err(|e| ApiError::internal_scrubbed("blob provider put failed", e))?;
     }
 
     let emitter = temper_substrate::writes::resolve_emitter(pool, caller, surface.marker())
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+        .map_err(|e| ApiError::internal_scrubbed("blob emitter resolve failed", e))?;
 
     let id = temper_substrate::writes::commit_blob(
         pool,
@@ -307,13 +319,13 @@ pub async fn read_through(
 )> {
     let row = temper_substrate::readback::blob_by_id(pool, caller, blob)
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .map_err(|e| ApiError::internal_scrubbed("blob read failed", e))?
         .ok_or_else(|| ApiError::NotFound("blob not found".to_string()))?;
 
     let stream = store
         .get(&row.blob_pathname, false)
         .await
-        .map_err(|e| ApiError::Internal(format!("blob provider read failed: {e}")))?;
+        .map_err(|e| ApiError::internal_scrubbed("blob provider read failed", e))?;
 
     Ok((row, stream))
 }
@@ -330,7 +342,7 @@ fn map_commit_err(e: anyhow::Error) -> ApiError {
             }
         }
     }
-    ApiError::Internal(format!("blob commit failed: {e}"))
+    ApiError::internal_scrubbed("blob commit failed", e)
 }
 
 // ── Segmented upload (S3, D7) ─────────────────────────────────────────────────────
@@ -365,7 +377,7 @@ pub async fn begin_upload(
     check_home_standing(pool, caller, &home).await?;
     temper_substrate::uploads::create_session(pool, caller, &home, &content_type)
         .await
-        .map_err(|e| ApiError::Internal(format!("blob upload begin failed: {e}")))
+        .map_err(|e| ApiError::internal_scrubbed("blob upload begin failed", e))
 }
 
 /// The landed set as the wire sees it. `None` from the substrate means the session is
@@ -416,7 +428,7 @@ pub async fn append_to_upload(
         config.max_bytes,
     )
     .await
-    .map_err(|e| ApiError::Internal(format!("blob upload append failed: {e}")))?;
+    .map_err(|e| ApiError::internal_scrubbed("blob upload append failed", e))?;
     match outcome {
         None => Err(ApiError::NotFound("upload not found".to_string())),
         Some(temper_substrate::uploads::AppendOutcome::OverCeiling { staged, ceiling }) => {
@@ -435,7 +447,7 @@ pub async fn append_to_upload(
         Some(_) => {
             let landed = temper_substrate::uploads::landed_segments(pool, caller, upload_id)
                 .await
-                .map_err(|e| ApiError::Internal(format!("blob upload read failed: {e}")))?
+                .map_err(|e| ApiError::internal_scrubbed("blob upload read failed", e))?
                 .ok_or_else(|| ApiError::NotFound("upload not found".to_string()))?;
             Ok(progress_from(upload_id, landed))
         }
@@ -451,7 +463,7 @@ pub async fn upload_progress(
 ) -> ApiResult<BlobUploadProgress> {
     let landed = temper_substrate::uploads::landed_segments(pool, caller, upload_id)
         .await
-        .map_err(|e| ApiError::Internal(format!("blob upload read failed: {e}")))?
+        .map_err(|e| ApiError::internal_scrubbed("blob upload read failed", e))?
         .ok_or_else(|| ApiError::NotFound("upload not found".to_string()))?;
     Ok(progress_from(upload_id, landed))
 }
@@ -478,7 +490,7 @@ pub async fn finalize_upload(
 ) -> ApiResult<BlobUploadFinalizeOutcome> {
     let session = temper_substrate::uploads::load_session(pool, caller, upload_id)
         .await
-        .map_err(|e| ApiError::Internal(format!("blob upload read failed: {e}")))?
+        .map_err(|e| ApiError::internal_scrubbed("blob upload read failed", e))?
         .ok_or_else(|| ApiError::NotFound("upload not found".to_string()))?;
 
     // Auth before writes, again: the begin-time standing was a fail-fast courtesy; this
@@ -487,7 +499,7 @@ pub async fn finalize_upload(
 
     let landed = temper_substrate::uploads::landed_segments(pool, caller, upload_id)
         .await
-        .map_err(|e| ApiError::Internal(format!("blob upload read failed: {e}")))?
+        .map_err(|e| ApiError::internal_scrubbed("blob upload read failed", e))?
         .ok_or_else(|| ApiError::NotFound("upload not found".to_string()))?;
     let total_bytes: i64 = landed.iter().map(|s| s.segment_bytes).sum();
     // Concurrency tokens — "nothing landed since my last append". A mismatch leaves the
@@ -520,7 +532,7 @@ pub async fn finalize_upload(
 
     let body = temper_substrate::uploads::assemble_body(pool, upload_id)
         .await
-        .map_err(|e| ApiError::Internal(format!("blob upload assemble failed: {e}")))?;
+        .map_err(|e| ApiError::internal_scrubbed("blob upload assemble failed", e))?;
     let content_hash = temper_core::hash::sha256_hex(&body);
     if let Some(expected) = &req.expected_content_hash {
         if expected != &content_hash {
@@ -538,7 +550,7 @@ pub async fn finalize_upload(
     let deduped =
         temper_substrate::readback::home_blob_id_by_hash(pool, &session.home, &content_hash)
             .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .map_err(|e| ApiError::internal_scrubbed("blob dedup pre-check failed", e))?
             .is_some();
     if !deduped {
         store
@@ -549,12 +561,12 @@ pub async fn finalize_upload(
                 IMMUTABLE_CACHE_MAX_AGE,
             )
             .await
-            .map_err(|e| ApiError::Internal(format!("blob provider put failed: {e}")))?;
+            .map_err(|e| ApiError::internal_scrubbed("blob provider put failed", e))?;
     }
 
     let emitter = temper_substrate::writes::resolve_emitter(pool, caller, surface.marker())
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+        .map_err(|e| ApiError::internal_scrubbed("blob emitter resolve failed", e))?;
 
     let blob_id = temper_substrate::writes::commit_blob(
         pool,
@@ -579,7 +591,7 @@ pub async fn finalize_upload(
     // about it (the TTL reaper is the declared hole, not a silent sweep).
     temper_substrate::uploads::delete_session(pool, upload_id)
         .await
-        .map_err(|e| ApiError::Internal(format!("blob upload cleanup failed: {e}")))?;
+        .map_err(|e| ApiError::internal_scrubbed("blob upload cleanup failed", e))?;
 
     Ok(BlobUploadFinalizeOutcome {
         blob_id,
@@ -625,8 +637,7 @@ async fn blob_home(
         caller.uuid(),
     )
     .fetch_optional(pool)
-    .await
-    .map_err(|e| ApiError::Internal(e.to_string()))?;
+    .await?;
 
     Ok(row.map(|r| {
         let table = match r.home_table.as_str() {
@@ -648,22 +659,24 @@ async fn check_home_authorable(
     anchor_id: uuid::Uuid,
 ) -> ApiResult<()> {
     let authorable: Option<bool> = match table {
-        temper_substrate::payloads::AnchorTable::Contexts => sqlx::query_scalar!(
-            "SELECT context_authorable_by_profile($1, $2)",
-            caller.uuid(),
-            anchor_id,
-        )
-        .fetch_one(pool)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?,
-        _ => sqlx::query_scalar!(
-            "SELECT cogmap_authorable_by_profile($1, $2)",
-            caller.uuid(),
-            anchor_id,
-        )
-        .fetch_one(pool)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?,
+        temper_substrate::payloads::AnchorTable::Contexts => {
+            sqlx::query_scalar!(
+                "SELECT context_authorable_by_profile($1, $2)",
+                caller.uuid(),
+                anchor_id,
+            )
+            .fetch_one(pool)
+            .await?
+        }
+        _ => {
+            sqlx::query_scalar!(
+                "SELECT cogmap_authorable_by_profile($1, $2)",
+                caller.uuid(),
+                anchor_id,
+            )
+            .fetch_one(pool)
+            .await?
+        }
     };
     if !authorable.unwrap_or(false) {
         return Err(ApiError::Forbidden);
@@ -687,8 +700,7 @@ async fn check_peer_readable(
         peer.id,
     )
     .fetch_one(pool)
-    .await
-    .map_err(|e| ApiError::Internal(e.to_string()))?;
+    .await?;
     if !readable.unwrap_or(false) {
         return Err(ApiError::NotFound(
             "relation peer not found or not readable".to_string(),
@@ -775,7 +787,7 @@ pub async fn relate_blob(
     };
     let emitter = temper_substrate::writes::resolve_emitter(pool, caller, surface.marker())
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+        .map_err(|e| ApiError::internal_scrubbed("blob emitter resolve failed", e))?;
     let label = (!req.label.is_empty()).then_some(req.label.as_str());
 
     let edge = temper_substrate::writes::assert_anchored_edge_with(
@@ -797,7 +809,7 @@ pub async fn relate_blob(
         },
     )
     .await
-    .map_err(|e| ApiError::Internal(format!("blob relation assert failed: {e}")))?;
+    .map_err(|e| ApiError::internal_scrubbed("blob relation assert failed", e))?;
 
     Ok(WireRelationAck {
         edge_handle: edge.uuid(),
@@ -820,7 +832,7 @@ pub async fn list_blobs(
     let home = parse_home_scope(home_table, home_id)?;
     let rows = temper_substrate::readback::blobs_readable_by_profile(pool, caller, home.as_ref())
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+        .map_err(|e| ApiError::internal_scrubbed("blob list failed", e))?;
     Ok(rows
         .into_iter()
         .map(|r| WireBlobSummary {
@@ -843,7 +855,7 @@ pub async fn blob_relations(
 ) -> ApiResult<Vec<WireRelationRow>> {
     let rows = temper_substrate::readback::blob_relations(pool, caller, blob)
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .map_err(|e| ApiError::internal_scrubbed("blob relations read failed", e))?
         .ok_or_else(|| ApiError::NotFound("blob not found".to_string()))?;
 
     rows.into_iter()

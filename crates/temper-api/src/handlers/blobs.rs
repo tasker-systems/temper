@@ -14,7 +14,7 @@
 
 use axum::body::{Body, Bytes};
 use axum::extract::{Multipart, Path, Query, State};
-use axum::http::{header, HeaderMap};
+use axum::http::header;
 use axum::response::Response;
 use axum::Json;
 use serde::Deserialize;
@@ -167,8 +167,11 @@ pub async fn commit(
 /// gets, so a probe learns nothing either way. The response speaks the STORED media type and
 /// carries the byte count plus `Cache-Control: private, immutable` — content addressing is what earns
 /// `immutable` (D1), and `private` because the bytes are per-caller authorized (a shared cache
-/// is never licensed to store them); and the provider address never appears anywhere in the
-/// response (D6: the API is the only reader of the provider).
+/// is never licensed to store them); and `Content-Disposition: attachment` — a blob read is a
+/// bytes fetch, never a rendering invitation (the F10 ruling: the posture survives the
+/// operational changes — cookie auth, CSP relaxation, a commit-time-only allowlist — that
+/// would otherwise turn stored active content into stored XSS). The provider address never
+/// appears anywhere in the response (D6: the API is the only reader of the provider).
 #[utoipa::path(
     get,
     operation_id = "get_blob",
@@ -179,7 +182,7 @@ pub async fn commit(
     ),
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "The blob's bytes, streamed; content type is the stored media type, Cache-Control is private, immutable", content_type = "application/octet-stream"),
+        (status = 200, description = "The blob's bytes, streamed; content type is the stored media type, Cache-Control is private, immutable, Content-Disposition is attachment", content_type = "application/octet-stream"),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 404, description = "Not found or not visible — indistinguishable by design", body = ErrorBody),
     )
@@ -210,6 +213,12 @@ pub async fn get(
     ) {
         response.headers_mut().insert(header::CACHE_CONTROL, cc);
     }
+    response.headers_mut().insert(
+        header::CONTENT_DISPOSITION,
+        header::HeaderValue::from_static(
+            temper_services::services::blob_service::BLOB_CONTENT_DISPOSITION,
+        ),
+    );
     response.headers_mut().insert(
         header::CONTENT_LENGTH,
         header::HeaderValue::from(blob.content_bytes),
@@ -289,9 +298,11 @@ pub struct SegmentQuery {
 
 /// Append one segment to a staged upload — raw bytes as the request body
 ///
-/// The segment's sha256 rides `x-segment-sha256` (bare hex, the idempotent-append
-/// identity): re-sending the same segment at the same seq is a no-op; a DIFFERENT segment
-/// at an occupied seq is a 409 — occupied seqs are never superseded. The staging ceiling
+/// The segment's identity is the SERVER's own sha256 of the exact bytes received — the
+/// caller sends no integrity claim, so none can be consumed unverified: re-sending the
+/// same segment at the same seq is a no-op; a DIFFERENT segment at an occupied seq is a
+/// 409 — occupied seqs are never superseded. The whole assembly's integrity is
+/// finalize's `expected_content_hash` (422 on a mismatch). The staging ceiling
 /// (`BlobConfig::max_bytes`, the cumulative bound across appends) is enforced in the
 /// service; the per-request body bound is the platform's, raised for this door only.
 #[utoipa::path(
@@ -307,7 +318,7 @@ pub struct SegmentQuery {
     request_body(content_type = "application/octet-stream", description = "The segment's raw bytes"),
     responses(
         (status = 200, description = "Segment landed (or already landed — idempotent); the currently-landed set returned", body = BlobUploadProgress),
-        (status = 400, description = "Refused — staging ceiling, missing or malformed x-segment-sha256", body = ErrorBody),
+        (status = 400, description = "Refused — staging ceiling", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 404, description = "Session absent or not the caller's — indistinguishable by design", body = ErrorBody),
         (status = 409, description = "A different segment occupies this seq", body = ErrorBody),
@@ -318,26 +329,9 @@ pub async fn append_segment(
     auth: AuthUser,
     Path(upload_id): Path<Uuid>,
     Query(q): Query<SegmentQuery>,
-    headers: HeaderMap,
     body: Bytes,
 ) -> ApiResult<Json<BlobUploadProgress>> {
     let config = state.config.blob.clone().ok_or_else(blob_disabled)?;
-    let segment_hash = headers
-        .get("x-segment-sha256")
-        .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| {
-            ApiError::BadRequest(
-                "x-segment-sha256 is required — the segment's sha256 is the idempotent-append \
-                 identity"
-                    .to_string(),
-            )
-        })?;
-    if segment_hash.len() != 64 {
-        return Err(ApiError::BadRequest(format!(
-            "x-segment-sha256 must be bare sha256 hex (64 chars) — got {} chars",
-            segment_hash.len()
-        )));
-    }
     let caller = ProfileId::from(auth.0.profile().id);
     let progress = temper_services::services::blob_service::append_to_upload(
         &state.pool,

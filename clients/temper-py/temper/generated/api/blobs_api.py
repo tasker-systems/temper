@@ -68,7 +68,7 @@ class BlobsApi:
     ) -> BlobUploadProgress:
         """Append one segment to a staged upload — raw bytes as the request body
 
-        The segment's sha256 rides `x-segment-sha256` (bare hex, the idempotent-append identity): re-sending the same segment at the same seq is a no-op; a DIFFERENT segment at an occupied seq is a 409 — occupied seqs are never superseded. The staging ceiling (`BlobConfig::max_bytes`, the cumulative bound across appends) is enforced in the service; the per-request body bound is the platform's, raised for this door only.
+        The segment's identity is the SERVER's own sha256 of the exact bytes received — the caller sends no integrity claim, so none can be consumed unverified: re-sending the same segment at the same seq is a no-op; a DIFFERENT segment at an occupied seq is a 409 — occupied seqs are never superseded. The whole assembly's integrity is finalize's `expected_content_hash` (422 on a mismatch). The staging ceiling (`BlobConfig::max_bytes`, the cumulative bound across appends) is enforced in the service; the per-request body bound is the platform's, raised for this door only.
 
         :param id: Upload session ID (required)
         :type id: UUID
@@ -147,7 +147,7 @@ class BlobsApi:
     ) -> ApiResponse[BlobUploadProgress]:
         """Append one segment to a staged upload — raw bytes as the request body
 
-        The segment's sha256 rides `x-segment-sha256` (bare hex, the idempotent-append identity): re-sending the same segment at the same seq is a no-op; a DIFFERENT segment at an occupied seq is a 409 — occupied seqs are never superseded. The staging ceiling (`BlobConfig::max_bytes`, the cumulative bound across appends) is enforced in the service; the per-request body bound is the platform's, raised for this door only.
+        The segment's identity is the SERVER's own sha256 of the exact bytes received — the caller sends no integrity claim, so none can be consumed unverified: re-sending the same segment at the same seq is a no-op; a DIFFERENT segment at an occupied seq is a 409 — occupied seqs are never superseded. The whole assembly's integrity is finalize's `expected_content_hash` (422 on a mismatch). The staging ceiling (`BlobConfig::max_bytes`, the cumulative bound across appends) is enforced in the service; the per-request body bound is the platform's, raised for this door only.
 
         :param id: Upload session ID (required)
         :type id: UUID
@@ -226,7 +226,7 @@ class BlobsApi:
     ) -> RESTResponseType:
         """Append one segment to a staged upload — raw bytes as the request body
 
-        The segment's sha256 rides `x-segment-sha256` (bare hex, the idempotent-append identity): re-sending the same segment at the same seq is a no-op; a DIFFERENT segment at an occupied seq is a 409 — occupied seqs are never superseded. The staging ceiling (`BlobConfig::max_bytes`, the cumulative bound across appends) is enforced in the service; the per-request body bound is the platform's, raised for this door only.
+        The segment's identity is the SERVER's own sha256 of the exact bytes received — the caller sends no integrity claim, so none can be consumed unverified: re-sending the same segment at the same seq is a no-op; a DIFFERENT segment at an occupied seq is a 409 — occupied seqs are never superseded. The whole assembly's integrity is finalize's `expected_content_hash` (422 on a mismatch). The staging ceiling (`BlobConfig::max_bytes`, the cumulative bound across appends) is enforced in the service; the per-request body bound is the platform's, raised for this door only.
 
         :param id: Upload session ID (required)
         :type id: UUID
@@ -1849,7 +1849,7 @@ class BlobsApi:
     ) -> None:
         """Read a blob's bytes back, whole, streamed (D6)
 
-        Visibility gates on the blob's own home via `blob_readable_by_profile` — not visible renders as 404, the same not-found an unknown id gets, so a probe learns nothing either way. The response speaks the STORED media type and carries the byte count plus `Cache-Control: private, immutable` — content addressing is what earns `immutable` (D1), and `private` because the bytes are per-caller authorized (a shared cache is never licensed to store them); and the provider address never appears anywhere in the response (D6: the API is the only reader of the provider).
+        Visibility gates on the blob's own home via `blob_readable_by_profile` — not visible renders as 404, the same not-found an unknown id gets, so a probe learns nothing either way. The response speaks the STORED media type and carries the byte count plus `Cache-Control: private, immutable` — content addressing is what earns `immutable` (D1), and `private` because the bytes are per-caller authorized (a shared cache is never licensed to store them); and `Content-Disposition: attachment` — a blob read is a bytes fetch, never a rendering invitation (the F10 ruling: the posture survives the operational changes — cookie auth, CSP relaxation, a commit-time-only allowlist — that would otherwise turn stored active content into stored XSS). The provider address never appears anywhere in the response (D6: the API is the only reader of the provider).
 
         :param id: Blob ID (required)
         :type id: UUID
@@ -1922,7 +1922,7 @@ class BlobsApi:
     ) -> ApiResponse[None]:
         """Read a blob's bytes back, whole, streamed (D6)
 
-        Visibility gates on the blob's own home via `blob_readable_by_profile` — not visible renders as 404, the same not-found an unknown id gets, so a probe learns nothing either way. The response speaks the STORED media type and carries the byte count plus `Cache-Control: private, immutable` — content addressing is what earns `immutable` (D1), and `private` because the bytes are per-caller authorized (a shared cache is never licensed to store them); and the provider address never appears anywhere in the response (D6: the API is the only reader of the provider).
+        Visibility gates on the blob's own home via `blob_readable_by_profile` — not visible renders as 404, the same not-found an unknown id gets, so a probe learns nothing either way. The response speaks the STORED media type and carries the byte count plus `Cache-Control: private, immutable` — content addressing is what earns `immutable` (D1), and `private` because the bytes are per-caller authorized (a shared cache is never licensed to store them); and `Content-Disposition: attachment` — a blob read is a bytes fetch, never a rendering invitation (the F10 ruling: the posture survives the operational changes — cookie auth, CSP relaxation, a commit-time-only allowlist — that would otherwise turn stored active content into stored XSS). The provider address never appears anywhere in the response (D6: the API is the only reader of the provider).
 
         :param id: Blob ID (required)
         :type id: UUID
@@ -1995,7 +1995,7 @@ class BlobsApi:
     ) -> RESTResponseType:
         """Read a blob's bytes back, whole, streamed (D6)
 
-        Visibility gates on the blob's own home via `blob_readable_by_profile` — not visible renders as 404, the same not-found an unknown id gets, so a probe learns nothing either way. The response speaks the STORED media type and carries the byte count plus `Cache-Control: private, immutable` — content addressing is what earns `immutable` (D1), and `private` because the bytes are per-caller authorized (a shared cache is never licensed to store them); and the provider address never appears anywhere in the response (D6: the API is the only reader of the provider).
+        Visibility gates on the blob's own home via `blob_readable_by_profile` — not visible renders as 404, the same not-found an unknown id gets, so a probe learns nothing either way. The response speaks the STORED media type and carries the byte count plus `Cache-Control: private, immutable` — content addressing is what earns `immutable` (D1), and `private` because the bytes are per-caller authorized (a shared cache is never licensed to store them); and `Content-Disposition: attachment` — a blob read is a bytes fetch, never a rendering invitation (the F10 ruling: the posture survives the operational changes — cookie auth, CSP relaxation, a commit-time-only allowlist — that would otherwise turn stored active content into stored XSS). The provider address never appears anywhere in the response (D6: the API is the only reader of the provider).
 
         :param id: Blob ID (required)
         :type id: UUID

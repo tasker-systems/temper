@@ -29,7 +29,7 @@ class BlobUploadSegmentInfo(BaseModel):
     One landed segment, as the progress read and every append report it.
     """ # noqa: E501
     segment_bytes: StrictInt
-    segment_hash: StrictStr = Field(description="Bare sha256 hex of the segment's raw bytes — the client's resume check and the idempotent-append identity (same segment re-sent is a no-op; a DIFFERENT segment at an occupied seq is a conflict, the assembled whole must stay unambiguous).")
+    segment_hash: StrictStr = Field(description="The SERVER's bare sha256 hex of the segment's raw bytes as received — the caller's resume check and the idempotent-append identity (the same bytes re-sent at the same seq is a no-op; DIFFERENT bytes at an occupied seq is a conflict, the assembled whole must stay unambiguous). The server computes it; the caller sends no integrity claim, and the whole assembly's check is finalize's `expected_content_hash`.")
     seq: Annotated[int, Field(strict=True, ge=0)]
     __properties: ClassVar[List[str]] = ["segment_bytes", "segment_hash", "seq"]
 

@@ -1070,7 +1070,7 @@
           "Blobs"
         ],
         "summary": "Append one segment to a staged upload — raw bytes as the request body",
-        "description": "The segment's sha256 rides `x-segment-sha256` (bare hex, the idempotent-append\nidentity): re-sending the same segment at the same seq is a no-op; a DIFFERENT segment\nat an occupied seq is a 409 — occupied seqs are never superseded. The staging ceiling\n(`BlobConfig::max_bytes`, the cumulative bound across appends) is enforced in the\nservice; the per-request body bound is the platform's, raised for this door only.",
+        "description": "The segment's identity is the SERVER's own sha256 of the exact bytes received — the\ncaller sends no integrity claim, so none can be consumed unverified: re-sending the\nsame segment at the same seq is a no-op; a DIFFERENT segment at an occupied seq is a\n409 — occupied seqs are never superseded. The whole assembly's integrity is\nfinalize's `expected_content_hash` (422 on a mismatch). The staging ceiling\n(`BlobConfig::max_bytes`, the cumulative bound across appends) is enforced in the\nservice; the per-request body bound is the platform's, raised for this door only.",
         "operationId": "append_blob_segment",
         "parameters": [
           {
@@ -1113,7 +1113,7 @@
             }
           },
           "400": {
-            "description": "Refused — staging ceiling, missing or malformed x-segment-sha256",
+            "description": "Refused — staging ceiling",
             "content": {
               "application/json": {
                 "schema": {
@@ -1182,7 +1182,7 @@
           "Blobs"
         ],
         "summary": "Read a blob's bytes back, whole, streamed (D6)",
-        "description": "Visibility gates on the blob's own home via\n`blob_readable_by_profile` — not visible renders as 404, the same not-found an unknown id\ngets, so a probe learns nothing either way. The response speaks the STORED media type and\ncarries the byte count plus `Cache-Control: private, immutable` — content addressing is what earns\n`immutable` (D1), and `private` because the bytes are per-caller authorized (a shared cache\nis never licensed to store them); and the provider address never appears anywhere in the\nresponse (D6: the API is the only reader of the provider).",
+        "description": "Visibility gates on the blob's own home via\n`blob_readable_by_profile` — not visible renders as 404, the same not-found an unknown id\ngets, so a probe learns nothing either way. The response speaks the STORED media type and\ncarries the byte count plus `Cache-Control: private, immutable` — content addressing is what earns\n`immutable` (D1), and `private` because the bytes are per-caller authorized (a shared cache\nis never licensed to store them); and `Content-Disposition: attachment` — a blob read is a\nbytes fetch, never a rendering invitation (the F10 ruling: the posture survives the\noperational changes — cookie auth, CSP relaxation, a commit-time-only allowlist — that\nwould otherwise turn stored active content into stored XSS). The provider address never\nappears anywhere in the response (D6: the API is the only reader of the provider).",
         "operationId": "get_blob",
         "parameters": [
           {
@@ -1198,7 +1198,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The blob's bytes, streamed; content type is the stored media type, Cache-Control is private, immutable",
+            "description": "The blob's bytes, streamed; content type is the stored media type, Cache-Control is private, immutable, Content-Disposition is attachment",
             "content": {
               "application/octet-stream": {}
             }
@@ -10470,7 +10470,7 @@
           },
           "segment_hash": {
             "type": "string",
-            "description": "Bare sha256 hex of the segment's raw bytes — the client's resume check and the\nidempotent-append identity (same segment re-sent is a no-op; a DIFFERENT segment\nat an occupied seq is a conflict, the assembled whole must stay unambiguous)."
+            "description": "The SERVER's bare sha256 hex of the segment's raw bytes as received — the caller's\nresume check and the idempotent-append identity (the same bytes re-sent at the\nsame seq is a no-op; DIFFERENT bytes at an occupied seq is a conflict, the\nassembled whole must stay unambiguous). The server computes it; the caller sends\nno integrity claim, and the whole assembly's check is finalize's\n`expected_content_hash`."
           },
           "seq": {
             "type": "integer",

@@ -15,7 +15,7 @@
 #   * The test fails on any derived candidate with no line here, and on any line here naming a
 #     column that no longer exists. Neither half can drift silently.
 #
-# The derivations are six, and each exists because the one before it is blind to something:
+# The derivations are seven, and each exists because the one before it is blind to something:
 #
 #   fk       foreign keys into kb_profiles / kb_entities.
 #   poly     polymorphic (`*_table` + `*_id`) references, which carry NO foreign key at all —
@@ -23,6 +23,10 @@
 #   prin     every column of the principal tables themselves, where identity actually lives.
 #   vec      vector / tsvector columns: representations derived from content.
 #   json     every jsonb column, because that is where unbounded free-form data lives.
+#   bytes    every bytea column. NO structural derivation above sees BYTEA — raw binary content
+#            is invisible to type-keyed nomination alike, which is how staged upload bytes went
+#            undeclared (review F3). Binary content is personal content the moment a person
+#            uploads it, so every bytea column nominates.
 #   named    a NAME-PATTERN heuristic over text columns. It is the only derivation that is not
 #            structural, and it exists because four identifier columns have no structure to find
 #            them by: kb_team_invitations.invited_email, kb_slack_link_intents.slack_principal_id,
@@ -114,7 +118,12 @@ kb_contexts.telos_centroid                | derived       | recompute | an immut
 kb_team_invitations.invited_email         | identifier    | full      | an email for someone who may have NO profile at all
 kb_slack_link_intents.slack_principal_id  | identifier    | full      | no profile FK; an unconsumed intent is reachable only by this value
 kb_slack_grant_vault.slack_principal_id   | identifier    | full      |
+kb_slack_grant_vault.rt_ciphertext        | identifier    | full      | AEAD-sealed Slack refresh token — the durable grant (found by the `bytes` derivation; invisible to every type-keyed source before it)
+kb_slack_grant_vault.at_ciphertext        | identifier    | full      | AEAD-sealed cached Slack access token
+kb_slack_grant_vault.rt_nonce             | none          | n-a       | per-row random AEAD nonce — no personal data
+kb_slack_grant_vault.at_nonce             | none          | n-a       | per-row random AEAD nonce — no personal data
 kb_saml_idp.email_attr                    | none          | n-a       | an attribute NAME, not a value
+_sqlx_migrations.checksum                 | none          | n-a       | test/migration bookkeeping bytea, not user data
 
 # ── free-form columns that may carry personal data ───────────────────────────────────────────
 kb_properties.property_value              | incidental    | full      | the projection is erasable; its copy in kb_events.payload is not
@@ -124,6 +133,7 @@ kb_connections.credential                 | incidental    | full      | an exter
 kb_connections.observed_reach             | incidental    | full      |
 kb_connections.tool_manifest              | none          | n-a       | the provider's tool schema
 kb_data_artifact_content.content          | content       | full      |
+kb_blob_upload_segments.bytes             | content       | full      | raw staged bytes (D7 transport state); pre-ledger, no event/replay copy; segments cascade when the session row goes
 kb_data_artifact_shapes.schema            | none          | n-a       | a JSON schema
 kb_data_artifact_verdicts.detail          | incidental    | full      |
 kb_subscriptions.selector                 | none          | n-a       |

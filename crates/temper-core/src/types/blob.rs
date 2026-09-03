@@ -73,9 +73,12 @@ pub struct BlobUploadBeginResponse {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct BlobUploadSegmentInfo {
     pub seq: u32,
-    /// Bare sha256 hex of the segment's raw bytes — the client's resume check and the
-    /// idempotent-append identity (same segment re-sent is a no-op; a DIFFERENT segment
-    /// at an occupied seq is a conflict, the assembled whole must stay unambiguous).
+    /// The SERVER's bare sha256 hex of the segment's raw bytes as received — the caller's
+    /// resume check and the idempotent-append identity (the same bytes re-sent at the
+    /// same seq is a no-op; DIFFERENT bytes at an occupied seq is a conflict, the
+    /// assembled whole must stay unambiguous). The server computes it; the caller sends
+    /// no integrity claim, and the whole assembly's check is finalize's
+    /// `expected_content_hash`.
     pub segment_hash: String,
     pub segment_bytes: i64,
 }
