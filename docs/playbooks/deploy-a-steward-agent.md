@@ -88,7 +88,13 @@ and fail fast when missing (e.g. `TEMPER_MCP_URL is required`, thrown by the con
 
 Vercel env changes still require a redeploy to take effect: setting a new `TEMPER_M2M_*` or
 `STEWARD_MODEL` value in the dashboard does nothing until the next deployment. A cron running
-against stale env looks exactly like a code bug.
+against stale env looks exactly like a code bug. And in this repository an env-only change does
+not trigger that deployment on its own: the Ignored Build Step (`scripts/vercel-ignore-build.sh`)
+skips builds whose changeset does not reach the agent tree, a skipped deployment does not advance
+that changeset base, and a manual redeploy re-derives the same changeset — so an env-only change
+ships with the next changeset that reaches the agent tree (anything under
+`packages/agent-workflows/steward/`, `clients/temper-ts/`, `clients/temper-telemetry-ts/`, or
+`scripts/vercel-*.sh`; a doc change under the agent's own tree counts).
 
 > **Do not run `eve deploy` / `vercel deploy` from inside the agent directory.** The CLI
 > uploads only the directory it is invoked from, and the sibling `temper-ts` dependency lives
@@ -188,12 +194,17 @@ temper admin machine issue --label "citation-auditor" \
   the sources it distills (via `--team` membership) and **write** on the map(s) it tends. The
   auditor needs read on both the findings and their cited sources — `--team` membership — and
   **must not** have cogmap write.
+- **Team-owned-from-birth is the default.** Every machine principal registers with an
+  `--owner-team` — the team whose owners manage the machine. Read and write reach are declared
+  separately, via `--team` and `--cogmap`, at registration: the principal is born with exactly
+  the reach its job names, and widening it later is a deliberate act (`team add-member`,
+  `cogmap grant`).
 - If you need to widen reach after the fact, use `temper team add-member` and
   `temper cogmap grant --to-profile <agent-profile-id> --write` — the profile already exists,
   because registration created it. For the auditor, grant **without** `--write`.
 - Rotating the IdP **secret** needs no temper action (the client id is unchanged, so
-  authorship history stays continuous). Rotating the IdP **application** needs
-  `temper admin machine rebind`, which binds the new client id to the existing agent profile.
+  authorship history stays continuous). Rotating the IdP **application** is the re-mint
+  runbook [below](#re-minting-a-principal-rotating-the-idp-application).
 
 ### Admission: the gate with no deploy-time symptom
 
@@ -210,6 +221,24 @@ deploy-time signal whatsoever**: the token mints, the claims are perfect,
 `kb_machine_clients` looks right, and every request returns `403 SYSTEM_ACCESS_REQUIRED`. If
 you are debugging an agent whose credential is demonstrably valid, check standing before
 anything else.
+
+### Re-minting a principal (rotating the IdP application)
+
+Rotating the IdP **secret** needs no temper action. Rotating the IdP **application** re-mints
+the principal, and the runbook is mint-forward — one deployment, one principal, one reach:
+
+1. Register the new client id. `rebind --no-revoke-old` points it at the existing agent
+   profile — team ownership, reach, and authorship history all stay — and is the right tool
+   when the profile is already right. When the principal must change shape (different owner
+   team, different reach), `provision` a new one with the full owner team and reach instead.
+2. Approve admission for the new profile — it is per profile, and the new one births denied.
+3. Swap the deployment's `*_M2M_CLIENT_ID` / `*_M2M_CLIENT_SECRET` env and get a deployment
+   carrying it (see the env-and-redeploy note above — an env-only change alone does not ship).
+4. Verify a full tick under the new credential — `vw_agent_exercise`'s rungs advance on the
+   new client — **before** revoking the old client id. A bad swap plus an early revocation
+   orphans the agent.
+5. `admin machine revoke` the old client. Revocation denies authentication and nothing else:
+   grants, memberships, and authorship history stay intact.
 
 ### The two issuer variants, side by side
 
