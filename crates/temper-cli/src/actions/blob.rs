@@ -4,9 +4,10 @@
 //! CLIENT-side choice — the CLI cannot read the server's config, so it carries its own
 //! `BLOB_SINGLE_REQUEST_MAX_BYTES`, defaulting to the server's 4 MB default, both
 //! deliberately under the platform's 4.5 MB request cap), chunks the segmented path under
-//! the same bound, sha256s each segment (the idempotent-append identity) and the whole
-//! (the finalize integrity echo), and carries the server-handed progress tokens into
-//! finalize verbatim. Everything else is a thin client call.
+//! the same bound — the segment's identity is the SERVER's own sha256 of the bytes it
+//! receives — hashes the whole (the finalize integrity echo), and carries the
+//! server-handed progress tokens into finalize verbatim. Everything else is a thin client
+//! call.
 
 use std::path::PathBuf;
 

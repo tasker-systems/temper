@@ -2231,8 +2231,9 @@ pub enum BlobAction {
     /// At or under the single-request threshold (BLOB_SINGLE_REQUEST_MAX_BYTES, default
     /// 4 MB — deliberately under the platform's 4.5 MB request cap) this is ONE multipart
     /// call. Beyond it the segmented upload takes over automatically: begin/append/finalize
-    /// over chunks of the same size, each segment's sha256 carried as its idempotent-append
-    /// identity, the whole file's sha256 echoed into finalize as the integrity check.
+    /// over chunks of the same size, each segment's identity being the server's own sha256
+    /// of the bytes it receives, the whole file's sha256 echoed into finalize as the
+    /// integrity check.
     Put {
         /// Path of the file to commit, or `-` for stdin (stdin commits have no filename,
         /// so pass --filename or --content-type).
