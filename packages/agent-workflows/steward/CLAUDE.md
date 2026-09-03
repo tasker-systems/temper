@@ -90,6 +90,16 @@ as `AuditAuthority::Author`, which 404s every audit it attempts with nothing fai
 — see `docs/auth/machine-token-contract.md` §C. Both schedules need `TEMPER_API_URL`; both
 connections need `TEMPER_MCP_URL`.
 
+**One principal per agent, team-owned from birth.** Each agent authenticates as its own machine
+principal, registered with an `--owner-team` whose owners manage it, and with explicit, plural
+reach — `--team` for source read, `--cogmap` for map reach — never inferred from the owner team.
+Rotating the credential's secret is an IdP-side act; rotating the IdP **application** re-mints the
+principal: register the new client id (`admin machine rebind --no-revoke-old` when the profile's
+ownership and reach are already right, otherwise a fresh `provision`), approve the new profile's
+admission, swap the deployment's `*_M2M_CLIENT_ID` / `*_M2M_CLIENT_SECRET` env, redeploy, and
+verify a full tick under the new credential **before** revoking the old client id. Revocation
+denies authentication and leaves authorship history intact.
+
 **Tests:** `npm test` (vitest, `tests/`). They run in CI via `.github/workflows/test-agents-ts.yml`.
 
 @AGENTS.md
