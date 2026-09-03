@@ -62,15 +62,13 @@ const PROJECTION_DUMPS: &[(&str, &str)] = &[
         "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.artifact_id), '[]'::jsonb) FROM kb_data_artifact_content t",
     ),
     // Blobs diff in FULL — every column is payload-derivable (identity-as-input; pathname is a
-    // pure function of the hash), so there is nothing to mask. The bytes are external and ride
+    // pure function of the hash; the home/owner columns ride the payload — D2 as amended,
+    // per-home identity), so there is nothing to mask. The bytes are external and ride
     // no sidecar: replay proves the rows, the provider object's presence is D4's commit gate.
+    // (kb_blob_homes no longer exists: the home folds into this row — 20260901000050.)
     (
         "kb_blobs",
         "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.id), '[]'::jsonb) FROM kb_blobs t",
-    ),
-    (
-        "kb_blob_homes",
-        "SELECT coalesce(jsonb_agg((to_jsonb(t) - 'id') ORDER BY t.blob_id), '[]'::jsonb) FROM kb_blob_homes t",
     ),
     (
         "kb_block_revisions",

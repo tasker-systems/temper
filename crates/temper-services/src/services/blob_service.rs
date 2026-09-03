@@ -11,9 +11,11 @@
 //! vocabulary — the threshold and the segmented path beyond it.
 //!
 //! **Visibility is never decided here.** Reads gate through `blob_readable_by_profile` (the
-//! predicate migration `20260901000020` named for this caller); the commit path's dedup
-//! pre-check is readability-gated too, so an invisible first home can never be discovered by
-//! committing its bytes a second time.
+//! predicate migration named for this caller). Identity is PER-HOME (D2 as amended
+//! 2026-09-02): the commit's dedup pre-check asks only about the caller's OWN home, so the
+//! same bytes in a scope the caller cannot see are invisible and commit as the caller's own
+//! fresh row — a principal's record is asserted by their own event, never another
+//! principal's identity.
 
 use bytes::Bytes;
 use sqlx::PgPool;
@@ -64,9 +66,9 @@ pub fn single_request_threshold_refusal(
 }
 
 /// What a commit reports to its surface. `blob_id` is the id the bytes live under — freshly
-/// minted, or the EXISTING id on a dedup hit (first home stands, D2). `deduped` reports a
-/// readability-gated hit: the caller can already read a blob holding these bytes, so the
-/// provider upload was skipped.
+/// minted, or the EXISTING id on a dedup hit within the caller's own home (get-or-create is
+/// per-home, D2 as amended; a hash known only to other scopes is the caller's fresh row).
+/// `deduped` reports a hit in the caller's home: the provider upload was skipped.
 pub struct BlobCommitOutcome {
     pub blob_id: BlobId,
     pub content_hash: String,
@@ -242,7 +244,8 @@ pub async fn commit_blob(
     let content_hash = temper_core::hash::sha256_hex(&bytes);
     let pathname = temper_substrate::blob_store::blob_pathname(&content_hash);
 
-    let deduped = temper_substrate::readback::readable_blob_id_by_hash(pool, caller, &content_hash)
+    // The dedup pre-check is home-scoped (D2 as amended): only the caller's own home answers.
+    let deduped = temper_substrate::readback::home_blob_id_by_hash(pool, &home, &content_hash)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?
         .is_some();
@@ -531,10 +534,12 @@ pub async fn finalize_upload(
         }
     }
 
-    let deduped = temper_substrate::readback::readable_blob_id_by_hash(pool, caller, &content_hash)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?
-        .is_some();
+    // Home-scoped dedup pre-check (D2 as amended): the staging session's own home answers.
+    let deduped =
+        temper_substrate::readback::home_blob_id_by_hash(pool, &session.home, &content_hash)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .is_some();
     if !deduped {
         store
             .put(
@@ -604,16 +609,17 @@ use temper_core::types::graph::{EdgeKind as WireEdgeKind, Polarity as WirePolari
 /// caller's — indistinguishable, the 404 either way (a probe over blob ids learns
 /// nothing). This is the existence gate and the home read in ONE query, so the gate cannot
 /// pass while the home read fails — the S3 `landed_segments` lesson applied at the shape
-/// level: the gate is the row fetch, never a filter emptied afterwards.
+/// level: the gate is the row fetch, never a filter emptied afterwards. The home rides the
+/// row (D2 as amended — one row, one home).
 async fn blob_home(
     pool: &PgPool,
     caller: ProfileId,
     blob: BlobId,
 ) -> ApiResult<Option<(temper_substrate::payloads::AnchorTable, uuid::Uuid)>> {
     let row = sqlx::query!(
-        r#"SELECT h.anchor_table, h.anchor_id
-             FROM kb_blob_homes h
-            WHERE h.blob_id = $1
+        r#"SELECT b.home_table, b.home_id
+             FROM kb_blobs b
+            WHERE b.id = $1
               AND blob_readable_by_profile($2, $1)"#,
         blob.uuid(),
         caller.uuid(),
@@ -623,11 +629,11 @@ async fn blob_home(
     .map_err(|e| ApiError::Internal(e.to_string()))?;
 
     Ok(row.map(|r| {
-        let table = match r.anchor_table.as_str() {
+        let table = match r.home_table.as_str() {
             "kb_contexts" => temper_substrate::payloads::AnchorTable::Contexts,
             _ => temper_substrate::payloads::AnchorTable::Cogmaps,
         };
-        (table, r.anchor_id)
+        (table, r.home_id)
     }))
 }
 

@@ -65,8 +65,10 @@ pub struct BlobReadInput {
 #[schemars(inline)]
 #[serde(rename_all = "snake_case")]
 pub enum BlobManageAction {
-    /// Commit bytes as a blob (get-or-create on the content hash; a dedup hit returns the
-    /// EXISTING id, whose first home stands).
+    /// Commit bytes as a blob (get-or-create on the content hash, PER-HOME: a re-commit of
+    /// bytes this home already holds returns the same id — always a row you can read; the
+    /// same bytes in someone else's scope are that principal's own row and never surface
+    /// here).
     Commit,
     /// Assert one relation between a blob and another anchor. Retraction rides the
     /// incumbent fold endpoint (`edge fold`), not this tool.

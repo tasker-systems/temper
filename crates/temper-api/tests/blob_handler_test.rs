@@ -289,10 +289,10 @@ async fn refusals_name_their_vocabulary(pool: PgPool) {
     );
 }
 
-// ─── Witness 4: dedup for free, first home stands (D1/D2) ────────────────────
+// ─── Witness 4: dedup for free, per-home get-or-create (D1/D2 as amended) ─────
 
-/// The same bytes committed twice are ONE row: the second commit reports deduped=true with the
-/// existing id, and no second row exists behind the hash.
+/// The same bytes committed twice to the SAME home are ONE row: the second commit reports
+/// deduped=true with the same id, and no second row exists behind the hash.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn the_same_bytes_committed_twice_are_one_blob(pool: PgPool) {
     let cfg = blob_cfg(1 << 20, &["image/png"], 64 * 1024);
@@ -317,7 +317,7 @@ async fn the_same_bytes_committed_twice_are_one_blob(pool: PgPool) {
     assert_eq!(second["deduped"], true, "the second commit is a dedup hit");
     assert_eq!(
         first["blob_id"], second["blob_id"],
-        "dedup returns the existing blob — the first home stands"
+        "dedup within a home returns the same blob (per-home get-or-create)"
     );
 
     let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_blobs WHERE content_hash = $1")

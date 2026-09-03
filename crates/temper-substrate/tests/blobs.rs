@@ -7,8 +7,9 @@
 //!
 //! What is actually unknown here, and therefore what these pin:
 //!
-//! 1. **Dedup is get-or-create, not a second row** — and the FIRST home stands (D2). Reaching
-//!    another audience is a relation (D3), never a second home.
+//! 1. **Dedup is get-or-create PER-HOME, not a second row in the same scope** (D2 as amended
+//!    2026-09-02): same bytes, same home, twice is one row; the same bytes in another home are
+//!    that home's own row with its own identity. Reaching another audience is a relation (D3).
 //! 2. **The ledger carries the hash, never the bytes** (D4) — there is not even a sidecar
 //!    argument to split; a smuggled payload key is refused outright, and the pathname is the
 //!    hash's address (D1), enforced rather than assumed.
@@ -103,10 +104,12 @@ fn params(
 
 // ── the clauses ───────────────────────────────────────────────────────────────────────────────
 
-/// `one-blob-many-relations` rests on dedup being REAL: same bytes committed twice is ONE row,
-/// the second commit returns the EXISTING id, and the first home stands (D2).
+/// `upload-record-own-provenance` rests on get-or-create being PER-HOME (D2 as amended
+/// 2026-09-02): same bytes, same HOME, twice is ONE row and the second commit returns the SAME
+/// id; the same bytes in a different home are that home's own row, never the first home's
+/// identity. Reaching another audience is a relation (D3), never a second identity.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn dedup_gets_or_creates_and_the_first_home_stands(pool: sqlx::PgPool) {
+async fn dedup_gets_or_creates_within_a_home(pool: sqlx::PgPool) {
     let (owner, emitter, home) = blob_world(&pool, "dedup").await;
     let bytes = b"\x89PNG-representative-bytes".to_vec();
     let (p1, _hash, pathname) = params(home, owner, &bytes, "image/png", emitter);
@@ -114,18 +117,13 @@ async fn dedup_gets_or_creates_and_the_first_home_stands(pool: sqlx::PgPool) {
 
     let first = writes::commit_blob(&pool, &store, p1).await.unwrap();
 
-    // A second CONTEXT — the second committer homed "their" copy somewhere else entirely.
-    let second_ctx = ContextId::from(
-        common::insert_context(&pool, "kb_profiles", owner.uuid(), "dedup-2", "dedup-2")
-            .await
-            .unwrap(),
-    );
-    let (p2, _h, _) = params(second_ctx, owner, &bytes, "image/png", emitter);
+    // The SAME home again: get-or-create returns the SAME row id.
+    let (p2, _h, _) = params(home, owner, &bytes, "image/png", emitter);
     let second = writes::commit_blob(&pool, &store, p2).await.unwrap();
 
     assert_eq!(
         first, second,
-        "get-or-create returns the EXISTING row id (D2)"
+        "get-or-create within a home returns the EXISTING row id (D2, scoped)"
     );
 
     let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_blobs")
@@ -134,25 +132,108 @@ async fn dedup_gets_or_creates_and_the_first_home_stands(pool: sqlx::PgPool) {
         .unwrap();
     assert_eq!(
         rows, 1,
-        "same bytes is one row — dedup is a constraint, not a habit"
+        "same home + same bytes is one row — dedup is a constraint, not a habit"
     );
 
-    let homes: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_blob_homes")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(
-        homes, 1,
-        "the FIRST home stands; reaching another audience is a relation (D3), never a second home"
-    );
-
-    let (h_anchor, h_owner): (String, Uuid) =
-        sqlx::query_as("SELECT anchor_table, owner_profile_id FROM kb_blob_homes")
+    // The home rides the row now (the homes table is folded into it).
+    let (h_table, h_id, h_owner): (String, Uuid, Uuid) =
+        sqlx::query_as("SELECT home_table, home_id, owner_profile_id FROM kb_blobs")
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(h_anchor, "kb_contexts");
+    assert_eq!(h_table, "kb_contexts");
+    assert_eq!(h_id, home.uuid());
     assert_eq!(h_owner, owner.uuid());
+
+    // A DIFFERENT home — even the same principal — holds its own identity: the row-per-home
+    // shape, not the old global first-home-stands.
+    let second_ctx = ContextId::from(
+        common::insert_context(&pool, "kb_profiles", owner.uuid(), "dedup-2", "dedup-2")
+            .await
+            .unwrap(),
+    );
+    let (p3, _h2, _) = params(second_ctx, owner, &bytes, "image/png", emitter);
+    let third = writes::commit_blob(&pool, &store, p3).await.unwrap();
+
+    assert_ne!(
+        first, third,
+        "a different home commits its own row — never the first home's identity"
+    );
+}
+
+/// FAILS IF: a principal committing byte-identical bytes that another principal committed
+/// first receives the OTHER principal's row — the pre-amendment D2's dead end (review F6's
+/// merged-provenance defect). Under per-home identity B's commit is B's OWN readable row,
+/// asserted by B's event, carrying B's identity; A's row is untouched and stays invisible to
+/// B. The storage layer still dedups (one pathname), which is D1's job, not the ledger's.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_cross_principal_recommit_is_the_committers_own_row(pool: sqlx::PgPool) {
+    let (owner_a, emitter_a, home_a) = blob_world(&pool, "dedup-a").await;
+    // B is a REAL second principal — own profile, own emitter, own context. (blob_world's
+    // owner is the bootseed's system actor; reusing it for "B" would make B the same
+    // principal and prove nothing about cross-principal visibility.)
+    let owner_b = ProfileId::from(common::insert_profile(&pool, "dedup-b").await);
+    let emitter_b = EntityId::from(
+        sqlx::query_scalar::<sqlx::Postgres, Uuid>(
+            "INSERT INTO kb_entities (profile_id, name, metadata) \
+             VALUES ($1, 'dedup-b@web', '{}'::jsonb) RETURNING id",
+        )
+        .bind(owner_b.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+    );
+    let home_b = ContextId::from(
+        common::insert_context(&pool, "kb_profiles", owner_b.uuid(), "dedup-b", "dedup-b")
+            .await
+            .unwrap(),
+    );
+    let bytes = b"cross-principal-bytes".to_vec();
+
+    let (pa, _hash, pathname) = params(home_a, owner_a, &bytes, "image/png", emitter_a);
+    let store = InMemoryBlobStore::default().with_object(pathname.clone());
+    let a_id = writes::commit_blob(&pool, &store, pa).await.unwrap();
+
+    let (pb, _h, _p) = params(home_b, owner_b, &bytes, "image/png", emitter_b);
+    let b_id = writes::commit_blob(&pool, &store, pb).await.unwrap();
+
+    assert_ne!(
+        a_id, b_id,
+        "B's commit returns B's own identity, never A's row id"
+    );
+
+    // B reads their own row whole; A's row does not exist for B (the SAME 404-shape None).
+    let b_row = temper_substrate::readback::blob_by_id(&pool, owner_b, b_id)
+        .await
+        .unwrap()
+        .expect("B reads their own committed row");
+    assert_eq!(b_row.content_hash, sha(&bytes));
+    assert!(
+        temper_substrate::readback::blob_by_id(&pool, owner_b, a_id)
+            .await
+            .unwrap()
+            .is_none(),
+        "A's row stays invisible to B — a probe over ids learns nothing"
+    );
+
+    // A's row is untouched: A's home, A's owner, asserted by A's event.
+    let (a_owner, a_home): (Uuid, Uuid) =
+        sqlx::query_as("SELECT owner_profile_id, home_id FROM kb_blobs WHERE id = $1")
+            .bind(a_id.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(a_owner, owner_a.uuid(), "A's row keeps A's provenance");
+    assert_eq!(a_home, home_a.uuid());
+
+    // B's row asserts B's provenance: the event that created it is B's commit.
+    let (b_asserted_owner,): (Uuid,) =
+        sqlx::query_as("SELECT owner_profile_id FROM kb_blobs WHERE id = $1")
+            .bind(b_id.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(b_asserted_owner, owner_b.uuid());
 }
 
 /// `ledger-carries-hash-not-bytes` (D4) and D1's enforced addressing: there is no bytes argument

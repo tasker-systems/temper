@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT b.id            AS \"blob_id!\",\n                  b.content_hash  AS \"content_hash!\",\n                  b.content_type,\n                  b.content_bytes AS \"content_bytes!\",\n                  b.created       AS \"created!\"\n             FROM kb_blobs b\n            WHERE blob_readable_by_profile($1, b.id)\n              AND ($2::text IS NULL\n                     OR (b.id IN (SELECT h.blob_id FROM kb_blob_homes h\n                                   WHERE h.anchor_table = $2::text AND h.anchor_id = $3)))",
+  "query": "SELECT b.id            AS \"blob_id!\",\n                  b.content_hash  AS \"content_hash!\",\n                  b.content_type,\n                  b.content_bytes AS \"content_bytes!\",\n                  b.created       AS \"created!\"\n             FROM kb_blobs b\n            WHERE blob_readable_by_profile($1, b.id)\n              AND ($2::text IS NULL\n                     OR (b.home_table = $2::text AND b.home_id = $3))",
   "describe": {
     "columns": [
       {
@@ -44,5 +44,5 @@
       false
     ]
   },
-  "hash": "3b867c81ab6649d0232a584364cecc2bdc925e2fb8509db0cdeb6b8841dc5ca3"
+  "hash": "3afb2d75bc3c488a29b9463ea213f01cc38d3390ac85dcda4c5083c3778c5269"
 }

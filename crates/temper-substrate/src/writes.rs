@@ -1667,7 +1667,8 @@ pub async fn commit_blob(
 /// the content-addressed pathname FIRST (D4's gate — a commit whose bytes are absent from the
 /// provider is refused before the ledger sees it), then opens one transaction, fires the
 /// `BlobCommit` seed action (which derives the pathname, calls `blob_commit()` SQL, and returns
-/// the row id — the EXISTING id on a dedup hit), and commits.
+/// the row id — the EXISTING id on a dedup hit within the commit's own home, D2 as amended),
+/// and commits.
 pub async fn commit_blob_with(
     pool: &PgPool,
     store: &dyn crate::blob_store::BlobStore,

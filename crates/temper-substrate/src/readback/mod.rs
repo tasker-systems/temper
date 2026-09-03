@@ -2631,25 +2631,28 @@ pub async fn blob_by_id(
     }))
 }
 
-/// Does a blob the principal can READ already hold this content hash? The commit path's dedup
-/// pre-check: a hit means the bytes are provably already at their content-addressed pathname
-/// (the first commit verified provider presence), so the provider upload is skipped — D1's
-/// "dedup for free". Gated on readability so an invisible first home never answers: a caller
-/// who cannot read the existing blob gets `None` and takes the ordinary put+commit path, where
-/// get-or-create keeps the first home and the caller's re-commit rides the ledger as provenance.
-pub async fn readable_blob_id_by_hash(
+/// Does the caller's OWN home already hold this content hash? The commit path's dedup
+/// pre-check, per-home (D2 as amended 2026-09-02): a hit means the bytes are provably already
+/// at their content-addressed pathname (the first commit verified provider presence), so the
+/// provider upload is skipped — D1's "dedup for free", scoped. A hash homed in a scope the
+/// caller cannot see never answers here — and under per-home identity it never answers
+/// ANYWHERE for them: their commit is a fresh row of their own, asserted by their own event,
+/// carrying their own identity. Storage dedup is pathname-level and unaffected.
+pub async fn home_blob_id_by_hash(
     pool: &PgPool,
-    principal: ProfileId,
+    home: &crate::payloads::AnchorRef,
     content_hash: &str,
 ) -> Result<Option<BlobId>> {
     let row = sqlx::query!(
         r#"SELECT b.id AS "blob_id!"
              FROM kb_blobs b
-            WHERE b.content_hash = $2
-              AND blob_readable_by_profile($1, b.id)
+            WHERE b.content_hash = $1
+              AND b.home_table = $2
+              AND b.home_id = $3
             LIMIT 1"#,
-        principal.uuid(),
         content_hash,
+        home.table.as_str(),
+        home.id,
     )
     .fetch_optional(pool)
     .await?;
@@ -2698,8 +2701,7 @@ pub async fn blobs_readable_by_profile(
              FROM kb_blobs b
             WHERE blob_readable_by_profile($1, b.id)
               AND ($2::text IS NULL
-                     OR (b.id IN (SELECT h.blob_id FROM kb_blob_homes h
-                                   WHERE h.anchor_table = $2::text AND h.anchor_id = $3)))"#,
+                     OR (b.home_table = $2::text AND b.home_id = $3))"#,
         principal.uuid(),
         home_table,
         home_id,

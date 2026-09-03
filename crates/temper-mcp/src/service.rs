@@ -287,7 +287,7 @@ impl TemperMcpService {
     }
 
     #[tool(
-        description = "Manage blobs with an `action` discriminator. Actions: `commit` (commit base64 `content` bytes as a blob homed in `home_table`/`home_id` under `content_type` — get-or-create on the content hash, a dedup hit returns the EXISTING id whose first home stands; the server allowlist-checks the media type and refuses over its single-request threshold, naming the CLI's segmented path), `relate` (assert one relation between `blob_id` and a `peer_table`/`peer_id` anchor — `direction` picks which end the blob occupies, default `blob_as_source`; retraction rides the incumbent fold endpoint, not this tool). Relations are only assertable to anchors you can already see. Per-act authorship fields accepted on `relate`."
+        description = "Manage blobs with an `action` discriminator. Actions: `commit` (commit base64 `content` bytes as a blob homed in `home_table`/`home_id` under `content_type` — get-or-create PER-HOME on the content hash: a re-commit of bytes this home already holds returns the same id, always a row you can read; the same bytes in another principal's scope never surface here; the server allowlist-checks the media type and refuses over its single-request threshold, naming the CLI's segmented path), `relate` (assert one relation between `blob_id` and a `peer_table`/`peer_id` anchor — `direction` picks which end the blob occupies, default `blob_as_source`; retraction rides the incumbent fold endpoint, not this tool). Relations are only assertable to anchors you can already see. Per-act authorship fields accepted on `relate`."
     )]
     async fn blob_manage(
         &self,

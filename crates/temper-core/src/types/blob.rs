@@ -14,12 +14,12 @@ use crate::types::authorship::ActInput;
 use crate::types::graph::{EdgeKind, Polarity};
 use crate::types::ids::BlobId;
 
-/// The response of `POST /api/blobs` — get-or-create on the content hash (D2). `blob_id` is
-/// the id the bytes live under: freshly minted for a new commit, the EXISTING id on a dedup
-/// hit (whose first home stands, and which the caller may not be able to read back if that
-/// home is not theirs — substrate get-or-create semantics, D2, decide this). `deduped`
-/// reports that a blob the caller can already read held these bytes, so the provider upload
-/// was skipped; the ledger still records the re-commit as provenance.
+/// The response of `POST /api/blobs` — get-or-create on the content hash, PER-HOME (D2 as
+/// amended 2026-09-02). `blob_id` is the id the bytes live under: freshly minted for a new
+/// commit, the SAME id on a re-commit of bytes the caller's own home already holds — always a
+/// row the caller can read, asserted by their own event (the same bytes in another
+/// principal's scope are that principal's row and never surface here). `deduped` reports
+/// that the caller's home already held these bytes, so the provider upload was skipped.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "blob.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]

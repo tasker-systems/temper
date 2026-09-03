@@ -129,8 +129,9 @@ pub enum EventKind {
     /// like `BlockProvenanceAnnotated`, by the post-canonical-seed migration `20260724000110`.
     CitationAudited,
     /// Commit one blob (spec: binary blobs — external, content-addressed, related by edges,
-    /// 2026-09-01, D4). Fires `blob_committed`, projected by `_project_blob_committed` into
-    /// `kb_blobs` (+ its homes row) get-or-create by content hash. TYPED, with the committed
+    /// 2026-09-01, D4; identity per home — D2 as amended). Fires `blob_committed`, projected
+    /// by `_project_blob_committed` into `kb_blobs` get-or-create on (home, content_hash) —
+    /// the home rides the row; there is no homes table. TYPED, with the committed
     /// schemars fixture stamped by the boot-seed and registered by `20260901000010`. The payload
     /// carries the hash, never the bytes — the bytes live at the content-addressed pathname in
     /// external object storage.
@@ -640,8 +641,9 @@ pub enum Fired {
     /// The shape row a `ShapeDeclare` fire produced. Singular — one declaration, one shape row
     /// (assert/fold: a prior row is folded, not superseded in place).
     Shape(ShapeId),
-    /// The blob row a `BlobCommit` fire produced — the EXISTING id on a dedup hit (D2
-    /// get-or-create: same bytes is one row; the returned id is the caller's handle either way).
+    /// The blob row a `BlobCommit` fire produced — the EXISTING id on a dedup hit within the
+    /// payload's own home (D2 get-or-create, per-home as amended: same bytes in one scope is
+    /// one row; the returned id is always the caller's own handle).
     Blob(BlobId),
 }
 
