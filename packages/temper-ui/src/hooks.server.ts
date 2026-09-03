@@ -64,9 +64,14 @@ export const handleError: HandleServerError = ({ error, message, status, event }
 	// flag is duck-typed rather than an imported class so a load can mark its own expected
 	// rejections without this file learning about every one of them.
 	const expected = (error as { expected?: boolean } | null)?.expected === true;
-	const where = `[${status}] ${event.request.method} ${event.url.pathname}`;
+	// The pathname and the error's own fields are caller-influenced and bounded; the
+	// error OBJECT is not logged — an `ApiError` carries the upstream response body
+	// as `body`, and Node's inspect of it would dump that into the log stream.
+	const where = `[${status}] ${event.request.method} ${event.url.pathname.slice(0, 512)}`;
+	const err = error as { name?: string; message?: string } | null;
+	const summary = `${err?.name ?? 'Error'}: ${String(err?.message ?? message).slice(0, 512)}`;
 	if (status === 404 || expected) console.error(where);
-	else console.error(where, error);
+	else console.error(where, summary, error instanceof Error ? error.stack : undefined);
 
 	return describeFailure(error, message);
 };

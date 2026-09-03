@@ -1,14 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { highlightCode } from './highlight';
-import { parseMarkdown, renderMarkdown } from './markdown';
+import { MAX_SOURCE_LENGTH, parseMarkdown, prepareMarkdown, REFUSAL_HTML } from './markdown';
 
 /**
  * The highlighting pipeline's contract, independent of the component: fenced blocks are
  * highlighted ONLY for the registered languages; anything else — unknown, misspelled, or no
  * fence language — renders plaintext-escaped, never auto-detected; and inline code stays
- * un-highlighted. The sanitize pass composes with this output inside `renderMarkdown`, so the
- * output here is the sanitizer's INPUT — a `<script>` must arrive escaped, or the sanitizer has
- * work to do that this pipeline invented for it.
+ * un-highlighted. The client-side sanitizer composes with this output in `MarkdownRenderer`, so
+ * the output here is the sanitizer's INPUT — a `<script>` must arrive escaped, or the sanitizer
+ * has work to do that this pipeline invented for it.
  */
 describe('parseMarkdown', () => {
 	it('highlights a registered language with hljs spans', () => {
@@ -54,76 +54,44 @@ describe('parseMarkdown', () => {
 });
 
 /**
- * The composition the renderer ships: parse, then sanitize, one synchronous pass. This suite
- * runs in plain node — the same environment the server render sanitizes in — so the node run
- * itself is the witness that the pass is not browser-only. Both faces asserted per case: the
- * payload gone AND the benign structure around it retained, since a probe that only checks
- * absence passes vacuously against an empty string.
+ * The bound-and-refuse contract: `prepareMarkdown` is total. Source past the length bound and
+ * shapes marked cannot parse render as the static refusal — never a throw out of the derive,
+ * which on the server would fail the page for every reader. Its output is not safe for
+ * `{@html}` by itself — the client-side sanitizer owns that step — so the payload battery lives
+ * in the component suite, on the layer where sanitization actually runs.
  */
-describe('renderMarkdown', () => {
-	it('strips a script payload and keeps the readable structure around it', () => {
-		const html = renderMarkdown(
-			'# Temper\n\n<script>alert(1)</script>\n\nA [link](https://example.com).',
-		);
-		expect(html).toContain('<h1>Temper</h1>');
-		expect(html).toContain('href="https://example.com"');
-		expect(html).not.toContain('<script');
-		expect(html).not.toContain('alert');
-	});
-
-	it('keeps an element but drops its event-handler attribute', () => {
-		const html = renderMarkdown('<img src="https://example.com/a.png" onerror="alert(1)">');
-		expect(html).toContain('src="https://example.com/a.png"');
-		expect(html).not.toContain('onerror');
-	});
-
-	it('renders a javascript: link as a link with no javascript: destination', () => {
-		const html = renderMarkdown('[click](javascript:alert(1))');
-		expect(html).toContain('<a');
-		expect(html).not.toContain('javascript:');
-	});
-
+describe('prepareMarkdown', () => {
 	it('passes an empty body through as empty', () => {
-		expect(renderMarkdown('')).toBe('');
+		expect(prepareMarkdown('')).toBe('');
 	});
 
-	// The remaining cases are the payload classes a security review flagged as unrepresented:
-	// namespace-confusion mXSS (the class behind the historical DOMPurify CVEs), obfuscated
-	// URI schemes, DOM-clobbering names, and raw templates/iframes/base tags.
-	it('defuses namespace-confusion mXSS across math/style boundaries', () => {
-		const html = renderMarkdown(
-			'<math><mtext><form><mglyph><style></math><img src onerror=alert(1)>',
-		);
-		expect(html).not.toContain('onerror');
-		expect(html).not.toContain('<mglyph');
+	it('refuses to parse source past the length bound', () => {
+		expect(prepareMarkdown('a'.repeat(MAX_SOURCE_LENGTH + 1))).toBe(REFUSAL_HTML);
 	});
 
-	it('drops hrefs whose scheme hides behind entities or data payloads', () => {
-		const entity = renderMarkdown('<a href="jav&#x09;ascript:alert(1)">x</a>');
-		expect(entity).not.toContain('javascript:');
-		expect(entity).not.toContain('alert');
-
-		const dataUri = renderMarkdown('[x](data:text/html;base64,PHNjcmlwdD4=)');
-		expect(dataUri).not.toContain('data:text/html');
-	});
-
-	it('strips DOM-clobbering name attributes from form controls', () => {
-		const html = renderMarkdown('<form><input name="attributes"><input name="tagName"></form>');
-		expect(html).not.toContain('name="attributes"');
-		expect(html).not.toContain('name="tagName"');
-	});
-
-	it('strips template contents and removes iframe and base wholesale', () => {
-		const html = renderMarkdown(
-			'<template><script>alert(1)</script></template><iframe srcdoc="<script>alert(1)</script>"></iframe><base href="https://evil.example/">',
-		);
-		// DOMPurify keeps an inert empty <template> shell but strips everything inside it;
-		// iframe and base are dropped entirely.
-		expect(html).not.toContain('<script');
-		expect(html).not.toContain('alert');
-		expect(html).not.toContain('<iframe');
-		expect(html).not.toContain('<base');
-		expect(html).not.toContain('evil.example');
+	// The depth at which marked's recursive tokenizer overflows is a property of the runtime's
+	// stack, not of the input — one machine throws `RangeError` on 2000 nested blockquotes,
+	// another parses them fine. So the parser-throw arm is witnessed with the throw injected
+	// through a scoped `marked` mock: the contract "a parse throw never escapes prepareMarkdown"
+	// is pinned on every platform, not on whichever stack ran the suite.
+	it('returns the refusal when the parser throws', async () => {
+		vi.resetModules();
+		vi.doMock('marked', async (importOriginal) => {
+			const actual = await importOriginal<typeof import('marked')>();
+			class ThrowingMarked {
+				parse(): string {
+					throw new RangeError('Maximum call stack size exceeded');
+				}
+			}
+			return { ...actual, Marked: ThrowingMarked as unknown as typeof actual.Marked };
+		});
+		try {
+			const isolated = await import('./markdown');
+			expect(isolated.prepareMarkdown('> deep')).toBe(REFUSAL_HTML);
+		} finally {
+			vi.doUnmock('marked');
+			vi.resetModules();
+		}
 	});
 });
 

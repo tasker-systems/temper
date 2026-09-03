@@ -130,6 +130,35 @@ pub struct ErrorDetail {
     details: Option<serde_json::Value>,
 }
 
+/// What a 5xx body tells the client, in place of the internal detail.
+///
+/// The detail is server material — it can quote SQL, upstream URLs, or filesystem
+/// paths, and its length is whatever produced the failure. The full text goes to the
+/// `tracing::error!` event (bounded, [`MAX_LOGGED_ERROR_BYTES`]); the client gets this.
+const INTERNAL_CLIENT_MESSAGE: &str = "An internal error occurred";
+
+/// Bound on any single error message written to a log event. Messages are
+/// attacker-influenced input (a `BadRequest` quoting a request, an internal error
+/// quoting an upstream response), so a cap is what keeps one event from being
+/// whatever size the input was.
+pub const MAX_LOGGED_ERROR_BYTES: usize = 2048;
+
+/// `s`, truncated on a char boundary with an ellipsis when past [`MAX_LOGGED_ERROR_BYTES`].
+///
+/// Public because every surface that writes an attacker-influenced string into a log
+/// event needs the same cap — e.g. the Slack link handler logging the IdP's redirect
+/// error parameter, which anyone can craft to any length.
+pub fn bounded(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.len() <= MAX_LOGGED_ERROR_BYTES {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    let mut cut = MAX_LOGGED_ERROR_BYTES;
+    while !s.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    std::borrow::Cow::Owned(format!("{}…", &s[..cut]))
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, code) = match &self {
@@ -162,19 +191,21 @@ impl IntoResponse for ApiError {
             ApiError::SystemAccessRequired { .. } => {
                 "This system requires approved access.".to_string()
             }
+            // The generic string, never the detail — see `INTERNAL_CLIENT_MESSAGE`.
+            ApiError::Internal(_) => INTERNAL_CLIENT_MESSAGE.to_string(),
             other => other.to_string(),
         };
         let status_code = status.as_u16();
 
         match &self {
             ApiError::NotFound(_) => {
-                tracing::debug!(status_code, error_code = code, %message, "not found");
+                tracing::debug!(status_code, error_code = code, message = %bounded(&message), "not found");
             }
             ApiError::Conflict(_) => {
-                tracing::info!(status_code, error_code = code, %message, "conflict");
+                tracing::info!(status_code, error_code = code, message = %bounded(&message), "conflict");
             }
             ApiError::ContentIntegrity(_) => {
-                tracing::warn!(status_code, error_code = code, %message, "content integrity");
+                tracing::warn!(status_code, error_code = code, message = %bounded(&message), "content integrity");
             }
             // Info, not warn: a 429 is the system working as configured — pressure the
             // operator chose to bound — not an instance fault. The retry value is the
@@ -187,18 +218,18 @@ impl IntoResponse for ApiError {
                     status_code,
                     error_code = code,
                     retry_after_secs,
-                    %message,
+                    message = %bounded(&message),
                     "rate limited"
                 );
             }
             ApiError::Unauthorized(_) | ApiError::Forbidden | ApiError::ForbiddenDetail(_) => {
-                tracing::warn!(status_code, error_code = code, %message, "auth error");
+                tracing::warn!(status_code, error_code = code, message = %bounded(&message), "auth error");
             }
             ApiError::SystemAccessRequired { .. } => {
                 tracing::info!(status_code, error_code = code, "system access required");
             }
             ApiError::BadRequest(_) => {
-                tracing::warn!(status_code, error_code = code, %message, "bad request");
+                tracing::warn!(status_code, error_code = code, message = %bounded(&message), "bad request");
             }
             ApiError::PlanRefused { refusals } => {
                 // The count and the REASONS, never the refusals themselves — a composition is
@@ -223,8 +254,15 @@ impl IntoResponse for ApiError {
                     "plan refused"
                 );
             }
-            ApiError::Internal(_) => {
-                tracing::error!(status_code, error_code = code, %message, "internal error");
+            ApiError::Internal(detail) => {
+                // `message` above is now the generic client string; the log keeps the
+                // bounded detail, which is server material the body must not carry.
+                tracing::error!(
+                    status_code,
+                    error_code = code,
+                    detail = %bounded(detail),
+                    "internal error"
+                );
             }
         }
 
@@ -277,7 +315,13 @@ impl From<sqlx::Error> for ApiError {
                 ApiError::Conflict("Resource already exists".to_string())
             }
             _ => {
-                tracing::error!("Database error: {err}");
+                // Postgres embeds the offending value in several error classes
+                // (`invalid input syntax for type uuid: "<value>"`), and this codebase
+                // binds caller strings against `::uuid` casts — so the raw text is
+                // caller-chosen content at caller-chosen length. Bounded like every
+                // other error event; the client body is the generic string regardless.
+                let err_text = err.to_string();
+                tracing::error!(error = %bounded(&err_text), "database error");
                 ApiError::Internal("An internal error occurred".to_string())
             }
         }
@@ -689,5 +733,45 @@ mod tests {
             ApiError::Internal(s) => assert!(s.contains("vault not found")),
             other => panic!("expected Internal, got {other:?}"),
         }
+    }
+
+    /// The 5xx body is client-facing, and the internal detail is server material — SQL,
+    /// upstream URLs, paths — whose length is whatever produced the failure. The body
+    /// carries the fixed generic string; the full text stays in the `tracing::error!`
+    /// event, bounded.
+    #[tokio::test]
+    async fn a_5xx_body_carries_the_generic_message_never_the_internal_detail() {
+        let detail = format!(
+            "extraction failed near /var/tmp/{}</usr/local/very/long",
+            "x".repeat(64)
+        );
+        let (status, body) = rendered(ApiError::Internal(detail.clone())).await;
+
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body["error"]["message"], INTERNAL_CLIENT_MESSAGE);
+        let echoed = serde_json::to_string(&body).expect("body reserializes");
+        assert!(
+            !echoed.contains("/var/tmp/"),
+            "the internal detail leaked into the client body: {echoed}"
+        );
+    }
+
+    /// The cap is what keeps one log event from being whatever size the input was.
+    #[test]
+    fn bounded_truncates_past_the_cap_on_a_char_boundary() {
+        let short = "short message";
+        assert!(matches!(bounded(short), std::borrow::Cow::Borrowed(_)));
+
+        let long = "y".repeat(MAX_LOGGED_ERROR_BYTES * 3);
+        let cut = bounded(&long);
+        assert!(cut.len() <= MAX_LOGGED_ERROR_BYTES + '…'.len_utf8());
+        assert!(cut.ends_with('…'));
+
+        let multibyte = "é".repeat(MAX_LOGGED_ERROR_BYTES);
+        let cut = bounded(&multibyte);
+        assert!(
+            cut.is_char_boundary(cut.len() - '…'.len_utf8()),
+            "truncated mid-character: {cut}"
+        );
     }
 }

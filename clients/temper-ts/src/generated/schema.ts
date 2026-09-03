@@ -4764,19 +4764,27 @@ export interface components {
              *     echoes no intention. Should a trace ever carry one, that stops being incidental and becomes
              *     a constraint — a 768-float array must not serialize back to the caller.
              *
-             *     **Exactly [`MAX_EMBEDDING_DIM`] floats**, refused as
+             *     **Exactly [`MAX_EMBEDDING_DIM`] floats, every value finite, norm within
+             *     [`MIN_EMBEDDING_NORM`]..[`MAX_EMBEDDING_NORM`]**, refused as
              *     [`super::disposition::RefusalReason::MalformedEmbedding`]. `[added — 2026-08-28, found in
              *     review]` This carried no bound of any kind, which made it the largest unbounded field on the
              *     contract: a million floats on one stage is 4 MB that validates cleanly, and there are
              *     [`MAX_STAGES`] stages. A wrong-sized vector also reached pgvector and came back as an
              *     **opaque 500** — the caller told nothing, in the door whose promise is a typed refusal.
+             *     `[widened — 2026-09-02]` Length alone still let impossible values through: a NaN poisons
+             *     every cosine computed from it, and the all-zero vector's cosine is 0/0 — both surfaced as
+             *     driver errors behind the same opaque 500. The norm window is wide enough that any
+             *     consistently scaled direction passes; only values that are not vectors for this space at
+             *     all are refused.
              *
              *     **Published as a min AND a max, because the check is an equality.** `[corrected —
              *     2026-08-28, found in review]` Publishing only the maximum stated half the rule: a 384-float
              *     vector cleared every generated client and was then refused by the server, which is exactly
              *     the gap the shape pass exists to close — a client must be able to refuse what the server
              *     would refuse. The two bounds are the same number because a vector of any other length is
-             *     not a large question, it is a vector for a different space.
+             *     not a large question, it is a vector for a different space. The norm window is published in
+             *     the field's description text rather than as numeric constraints: a client that scales
+             *     legitimately is not an error the bounds are for.
              */
             embedding?: number[] | null;
             /**
@@ -7417,6 +7425,10 @@ export interface components {
          *     non-nullable: the access gate is INSIDE the SQL (a `gated` CTE over `resources_readable_by`),
          *     so an unreadable finding yields zero rows — never a partial/nullable row — and the caller-side
          *     read returns `Option<StandingShape>`, `None` for "not readable."
+         *
+         *     Reader-independent by decision: one value for every caller who can read the finding, with
+         *     per-contributor attribution on the citation-audit trail, never on the shape (stored-aggregates
+         *     exception: `internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`).
          */
         StandingShape: {
             /**
@@ -7424,12 +7436,22 @@ export interface components {
              * @description How many of those distinct sources carry at least one audit. Monotone under the append-only
              *     audit trail (spec §4.1) — once a source is audited it stays covered. The *evaluated-ness*
              *     axis, and the thing that tells "nobody tried" apart from "N sources were evaluated."
+             *
+             *     Reader-independent by decision: one value for every caller who can read the finding, with
+             *     per-contributor attribution on the citation-audit trail, never on the shape
+             *     (stored-aggregates exception:
+             *     `internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`).
              */
             audit_coverage: number;
             /**
              * @description Lossy read-time summary band (`provisional` / `reinforced` / `disputed` / `near-canonical`)
-             *     computed over
-             *     the shape above. Carried WITH the shape, never presented instead of it (spec §1.1).
+             *     computed over the shape above. Carried WITH the shape, never presented instead of it
+             *     (spec §1.1).
+             *
+             *     Reader-independent by decision: one value for every caller who can read the finding, with
+             *     per-contributor attribution on the citation-audit trail, never on the shape
+             *     (stored-aggregates exception:
+             *     `internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`).
              */
             band: string;
             /**
@@ -7439,6 +7461,11 @@ export interface components {
              *     counts provenance rows including duplicates. Ten citations of one source is
              *     `r_parent = 10, citation_magnitude = 1`, and collapsing the two reintroduces the
              *     actor-count fallacy.
+             *
+             *     Reader-independent by decision: one value for every caller who can read the finding, with
+             *     per-contributor attribution on the citation-audit trail, never on the shape
+             *     (stored-aggregates exception:
+             *     `internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`).
              */
             citation_magnitude: number;
             /**
@@ -7447,24 +7474,49 @@ export interface components {
              *     in `[-1.0, 1.0]`. Reads as a neutral `0.0` when `audit_coverage = 0`: an unaudited finding
              *     makes no quality claim, and its low standing comes from the band gate, never from a poisoned
              *     mean (spec §3.2).
+             *
+             *     Reader-independent by decision: one value for every caller who can read the finding, with
+             *     per-contributor attribution on the citation-audit trail, never on the shape
+             *     (stored-aggregates exception:
+             *     `internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`).
              */
             citation_quality: number;
             /**
              * Format: double
              * @description Supports minus contradicts, as a vector-sum over declared edges (spec §1) — not a headcount.
+             *
+             *     Reader-independent by decision: one value for every caller who can read the finding, with
+             *     per-contributor attribution on the citation-audit trail, never on the shape
+             *     (stored-aggregates exception:
+             *     `internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`).
              */
             contradiction_balance: number;
-            /** @description `kb_resources.id` of the finding this shape describes. */
+            /**
+             * @description `kb_resources.id` of the finding this shape describes. Reader-independent by decision: one
+             *     value for every caller who can read the finding, with per-contributor attribution on the
+             *     citation-audit trail, never on the shape (stored-aggregates exception:
+             *     `internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`).
+             */
             finding_id: components["schemas"]["ResourceId"];
             /**
              * Format: double
              * @description Reversible time-decay off the finding's most recent uncorrected reinforcement; computed
              *     live at read (never from the memo) because it must reflect the current moment.
+             *
+             *     Reader-independent by decision: one value for every caller who can read the finding, with
+             *     per-contributor attribution on the citation-audit trail, never on the shape
+             *     (stored-aggregates exception:
+             *     `internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`).
              */
             freshness: number;
             /**
              * Format: double
              * @description Reinforcement breadth: count of uncorrected provenance over the finding's live blocks.
+             *
+             *     Reader-independent by decision: one value for every caller who can read the finding, with
+             *     per-contributor attribution on the citation-audit trail, never on the shape
+             *     (stored-aggregates exception:
+             *     `internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`).
              */
             r_parent: number;
         };

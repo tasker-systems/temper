@@ -7,6 +7,10 @@ description = "Shared business-logic + auth-infra layer for temper-api and tempe
 [dependencies]
 temper-auth = { path = "../temper-auth" }
 temper-core = { path = "../temper-core", features = ["web-api"] }
+# `sanitize_echoed_path` — the fallback handler must run the same path redaction the
+# request root spans do (both crates already depend on temper-telemetry in every binary
+# that links this one, so this adds no new code to the graph).
+temper-telemetry = { path = "../temper-telemetry" }
 # `#[act_span]` — the one declaration of the act-grain span field set that `ACT_SPAN_FIELDS` names.
 temper-macros = { path = "../temper-macros" }
 temper-principal = { path = "../temper-principal" }

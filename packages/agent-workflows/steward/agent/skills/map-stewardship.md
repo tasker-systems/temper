@@ -18,8 +18,8 @@ delta = temper__steward_ingest_delta(cogmap=cogmap, threshold=threshold)   # sta
 # OMIT parent_cogmap. A scheduled tick is not spawned beneath another map, and the only other
 # id in your prompt is the DISPATCH JOB id — not a cogmap. Passing it here trips the delegation
 # gate ("cogmaps ... share no team") and the whole tick fails before it authors anything.
-inv   = temper__invocation_open(originating_cogmap=cogmap, trigger_kind="scheduled")
-telos = temper__cogmap_read_charter(cogmap=cogmap)        # orient
+inv   = temper__invocation_manage(action="open", originating_cogmap=cogmap, trigger_kind="scheduled")
+telos = temper__cogmap_read(view="charter", cogmap=cogmap)          # orient
 
 # act = { invocation_id: inv.id, reasoning: "<why>", confidence: <band> }
 # EVERY authored-4 call below carries `act`. No exceptions — see Authorship.
@@ -31,18 +31,18 @@ telos = temper__cogmap_read_charter(cogmap=cogmap)        # orient
 for src in delta.new_or_changed:
   existing = temper__search(query=<what src is about>, cogmap_id=cogmap)  # dedup — and find PRIOR-RUN nodes to link into
   if materially_changed(src, existing):                   # your judgment (below)
-    temper__fold_relationship(edge_handle=existing.derived_from, act)
+    temper__relationship(action="fold", edge_handle=existing.derived_from, act)
     existing = none
   if not existing:
     identity = understand(src.body)                       # resolve from the BODY, not frontmatter; see "Understand before distilling"
     # `sources` = every resource this node distills from (block provenance); see Source attribution.
     node = temper__create_resource(cogmap=cogmap, doc_type_name=<label>, title=<node title>,
                                    sources=[<src id(s)>], act)
-    temper__assert_relationship(source=node, target=src, label="derived_from",
-                                edge_kind="leads_to", polarity="inverse", weight=<0.0-1.0>, act)
+    temper__relationship(action="assert", source=node, target=src, label="derived_from",
+                         edge_kind="leads_to", polarity="inverse", weight=<0.0-1.0>, act)
     for other in inter_node_relationships(node) + prior_run_nodes(node):  # link into EARLIER runs too; see "Link across runs"
-      temper__assert_relationship(source=node, target=other, edge_kind=<kind>, polarity=<pol>,
-                                  label=<label>, weight=<0.0-1.0>, act)
+      temper__relationship(action="assert", source=node, target=other, edge_kind=<kind>, polarity=<pol>,
+                           label=<label>, weight=<0.0-1.0>, act)
     for f in facets(node):                                # stamp `as_of` on any volatile claim; see "Dated grounding"
       temper__facet_set(resource=node, values=f, act)
 
@@ -51,7 +51,7 @@ for src in delta.new_or_changed:
 # OMIT it when max_event_id is null, but still make this call: the fingerprint must be recorded.
 temper__steward_advance_watermark(cogmap=cogmap, event_id=delta.max_event_id,
                                   boundary_fingerprint=delta.boundary_fingerprint)   # see "Advancing the watermark"
-temper__invocation_close(invocation=inv.id, disposition="completed", outcome=<outcome>)
+temper__invocation_manage(action="close", invocation=inv.id, disposition="completed", outcome=<outcome>)
 ```
 
 ## Understand before distilling
@@ -146,7 +146,7 @@ from the act envelope:
 - `temper-provenance` — `"llm-discovered"` when the act carries a `model`, `"user-created"`
   when it doesn't.
 - `temper-llm-model` — the act's `model`, i.e. the model authoring this tick.
-- `temper-llm-run` — the act's `invocation_id` from `invocation_open`, so the node's
+- `temper-llm-run` — the act's `invocation_id` from `temper__invocation_manage`'s `open`, so the node's
   frontmatter joins back to the run that authored it.
 
 So carry `model` and `invocation_id` on the act and the trio follows. Pass `managed_meta`
@@ -184,7 +184,7 @@ and a constant weight is an under-described edge — exactly what to avoid.
 **`derived_from` is `(leads_to, inverse)` — not `(express, forward)`.** It is a lineage
 edge pointing *back* at a source, so its shape is `leads_to` with `inverse` polarity — the
 same triple the CLI's `--sources-as-edges` writes (`EdgeType::DerivedFrom.legacy_mapping()`).
-The MCP `assert_relationship` takes your `edge_kind`/`polarity` **literally** — nothing maps
+The MCP `relationship` tool's `assert` action takes your `edge_kind`/`polarity` **literally** — nothing maps
 the `derived_from` label to a shape for you — so you must pass this triple by hand. Asserting
 it as `(express, forward)` makes an edge that shares the *label* but not the *shape*, and the
 region math distinguishes the two — a wrong-shaped provenance edge is silently mis-counted.
@@ -201,17 +201,17 @@ the whole).
 Worked examples — label + polarity + weight, each with the act envelope:
 
     # a concept answers an open question — strong, directional
-    temper__assert_relationship(source=concept, target=question, edge_kind="leads_to", polarity="forward",
+    temper__relationship(action="assert", source=concept, target=question, edge_kind="leads_to", polarity="forward",
         label="answers", weight=0.9, invocation_id=inv.id, confidence="confident",
         reasoning="answers: this concept resolves the question's open ask")
 
     # two nodes in tension — inverse polarity carries "contradicts"
-    temper__assert_relationship(source=node_a, target=node_b, edge_kind="leads_to", polarity="inverse",
+    temper__relationship(action="assert", source=node_a, target=node_b, edge_kind="leads_to", polarity="inverse",
         label="contradicts", weight=0.7, invocation_id=inv.id, confidence="probable",
         reasoning="contradicts: a's stance reverses b's")
 
     # a loose thematic affinity — real but weak
-    temper__assert_relationship(source=node, target=theme, edge_kind="near", polarity="forward",
+    temper__relationship(action="assert", source=node, target=theme, edge_kind="near", polarity="forward",
         label="relates_to", weight=0.45, invocation_id=inv.id, confidence="tentative",
         reasoning="relates_to: tangential thematic overlap, noted not leaned on")
 
@@ -255,13 +255,13 @@ prefer leaving the node and lowering your confidence over churning a fold.
 
 ## Authorship — a hard invariant on every authored act
 
-Every one of the authored-4 — `create_resource`, `assert_relationship`,
-`facet_set`, `fold_relationship` — **MUST** carry the act envelope. This is not
+Every one of the authored-4 — `create_resource`, `relationship` (action `assert`),
+`facet_set`, `relationship` (action `fold`) — **MUST** carry the act envelope. This is not
 per-call discretionary; a node or edge without it is real but *orphaned*.
 
-- **`invocation_id`** — the id returned by `invocation_open`. This is what
+- **`invocation_id`** — the id returned by `temper__invocation_manage`'s `open`. This is what
   correlates the act to the run. **Drop it and the act does not appear under
-  `invocation_show`** — the map's nodes/edges become uncorrelated to the tick that
+  `temper__invocation_read` (view `show`)** — the map's nodes/edges become uncorrelated to the tick that
   authored them, breaking the accountability chain. Carry it on *every* call.
 - **`confidence`** — `tentative` / `probable` / `confident`. Required whenever any
   other authorship field is set — it is the gate for the whole envelope. Which band
@@ -275,7 +275,7 @@ per-call discretionary; a node or edge without it is real but *orphaned*.
 
 Same envelope on every call — not just `create`:
 
-    temper__assert_relationship(source, target, edge_kind, polarity, label, weight,
+    temper__relationship(action="assert", source, target, edge_kind, polarity, label, weight,
         invocation_id=inv.id, confidence="confident",
         reasoning="derived_from: this node distills source 019f…")
 
@@ -283,11 +283,11 @@ Same envelope on every call — not just `create`:
         invocation_id=inv.id, confidence="confident",
         reasoning="marks the map's own question node resolved")
 
-    temper__fold_relationship(edge_handle,
+    temper__relationship(action="fold", edge_handle,
         invocation_id=inv.id, confidence="probable",
         reasoning="source materially changed; folding the stale derived_from")
 
-**Before `invocation_close`, self-check:** every act you emitted this tick carried
+**Before `temper__invocation_manage`'s `close`, self-check:** every act you emitted this tick carried
 `invocation_id` and `confidence`. If you authored a node, edge, or facet without
 them, you broke the accountability chain — the acts exist but nothing ties them to
 this run. Close with an outcome summarizing nodes / edges / facets / folds.
@@ -298,7 +298,7 @@ this run. Close with an outcome summarizing nodes / edges / facets / folds.
 including on a tick that has no event id to pass:
 
 - **Sequence — after everything, never mid-run.** Advance only once *all* authored-4 acts
-  are done, immediately before `invocation_close`. The watermark marks the whole delta as
+  are done, immediately before the envelope's `close`. The watermark marks the whole delta as
   ingested; firing it partway through claims sources you have not distilled yet. Do not
   call it between `create_resource` batches or before your edges and facets land.
 - **Id hygiene — a `kb_events.id`, not a `resource_id`.** Advance to the `max_event_id`
@@ -338,7 +338,7 @@ next run re-reads the **same delta** and processes it from the top.
 The re-run does not duplicate what already landed *because* of search-before-create. This
 is why that step is load-bearing on a resume, not just politeness:
 
-- `assert_relationship` is **idempotent** — it upserts on the active-edge invariant
+- The `relationship` tool's `assert` action is **idempotent** — it upserts on the active-edge invariant
   (`uq_kb_edges_assertion`), so re-asserting an edge the crashed run already wrote is a
   no-op, not a duplicate.
 - `create_resource` is **not** idempotent — content dedup was retired (#219). A blind

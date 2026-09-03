@@ -22,7 +22,7 @@ use temper_core::types::ids::{CogmapId, ContextId, ProfileId};
 use temper_core::types::ingest::{pack_chunks, PackedChunk};
 use temper_services::backend::DbBackend;
 use temper_services::services::region_service;
-use temper_workflow::operations::{Backend, BodyUpdate, CreateResource, Surface};
+use temper_workflow::operations::{Backend, BodyUpdate, CreateResource, DeleteResource, Surface};
 use temper_workflow::types::managed_meta::ManagedMeta;
 
 /// Seed a profile plus its three surface emitter entities — the write path resolves
@@ -331,5 +331,277 @@ async fn concurrent_arrivals_on_one_anchor_collapse_to_a_single_job(pool: PgPool
         queued_jobs(&pool, anchor).await,
         1,
         "three arrivals on one anchor must leave ONE queued job, not three"
+    );
+}
+
+// ── the delete window ────────────────────────────────────────────────────────────────────────
+//
+// A soft delete invalidates a STORED AGGREGATE, not just the ledger: the deleted member's chunk
+// vectors stay inside every region centroid it contributed to until a materialize re-derives them.
+// The count threshold cannot be relied on to carry that — an anchor that goes quiet after one
+// delete accumulates no further events, so under a count-only gate the wrong centroid persists
+// indefinitely (the same stability that made the prod ghost regions a finding). So the tick's gate
+// treats a delete as its own pressure, and the delete joins the enqueue posture of every other
+// write: settled by the next drain, not inline in the request.
+
+/// A unit 768-dim vector along axis `d`.
+fn axis(d: usize) -> Vec<f32> {
+    let mut e = vec![0.0_f32; 768];
+    e[d] = 1.0;
+    e
+}
+
+/// The `[...]` text literal a `::vector` bind takes.
+fn vec_text(v: &[f32]) -> String {
+    let parts: Vec<String> = v.iter().map(|f| format!("{f}")).collect();
+    format!("[{}]", parts.join(","))
+}
+
+/// One-chunk create whose chunk carries a CALLER-CHOSEN embedding — the region this fixture forms
+/// is embedding-clustered (`workflow-default` holds `w_cos = 1.0`), so the embeddings are the
+/// membership and the centroid is computable in the test, exactly.
+fn create_cmd_embedded(home: HomeAnchor, slug: &str, embedding: Vec<f32>) -> CreateResource {
+    let content = format!("body of {slug}");
+    let chunk = PackedChunk {
+        chunk_index: 0,
+        header_path: String::new(),
+        heading_depth: 0,
+        content: content.clone(),
+        content_hash: {
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut h = DefaultHasher::new();
+            slug.hash(&mut h);
+            format!("{:0>64}", h.finish())
+        },
+        embedding,
+        embedded_with: None,
+    };
+    CreateResource {
+        idempotency_key: None,
+        slug: slug.to_string(),
+        doctype: "research".to_string(),
+        home,
+        title: slug.to_string(),
+        body: Some(BodyUpdate {
+            content: content.clone(),
+            content_hash: None,
+            chunks_packed: None,
+            sources: Vec::new(),
+            content_block: None,
+        }),
+        managed_meta: ManagedMeta::default(),
+        open_meta: None,
+        goal: None,
+        origin_uri: Some(format!("test://{slug}")),
+        chunks_packed: Some(pack_chunks(&[chunk]).expect("pack chunk")),
+        content_hash: None,
+        act: ActContext::default(),
+        origin: Surface::ApiHttp,
+    }
+}
+
+/// Cosine similarity in f64 — what `<=>` computes 1-minus.
+fn cos(a: &[f64], b: &[f64]) -> f64 {
+    let dot: f64 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+    let na: f64 = a.iter().map(|x| x.powi(2)).sum::<f64>().sqrt();
+    let nb: f64 = b.iter().map(|x| x.powi(2)).sum::<f64>().sqrt();
+    dot / (na * nb)
+}
+
+fn f64ify(v: &[f32]) -> Vec<f64> {
+    v.iter().map(|x| *x as f64).collect()
+}
+
+async fn live_region_centroid(pool: &PgPool, context: uuid::Uuid) -> Vec<f64> {
+    let raw: String = sqlx::query_scalar(
+        "SELECT r.centroid::text FROM kb_cogmap_regions r \
+         WHERE r.home_anchor_table = 'kb_contexts' AND r.home_anchor_id = $1 \
+           AND NOT r.is_folded",
+    )
+    .bind(context)
+    .fetch_one(pool)
+    .await
+    .expect("one live region");
+    // pgvector text: `[0.1,0.2,...]`
+    raw.trim_matches(|c| c == '[' || c == ']')
+        .split(',')
+        .map(|p| p.trim().parse::<f64>().expect("centroid component"))
+        .collect()
+}
+
+/// **THE WITNESS.** A soft delete settles at the next drain, and the next drain alone — no
+/// threshold of unrelated writes, and no settling inside the request.
+///
+/// Five embedding-clustered resources form one region; the stored centroid is then computable to
+/// the test exactly. Deleting one member and draining must leave the centroid equal to the
+/// LIVE-ONLY mean, not the stale all-members mean — and the differential probe (two chosen
+/// vectors, difference the region scores) must resolve the live centroid's direction, which is
+/// everything the caller can already compute, rather than the stale one's, which is not.
+///
+/// Fails against the pre-change code in two independent ways: with the delete enqueueing nothing,
+/// the drain has no job to claim; with a count-only gate, the drain claims the job and declines to
+/// materialize (one event < threshold 5) — the centroid stays stale under both.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_delete_settles_the_anchor_at_the_next_drain_without_further_writes(pool: PgPool) {
+    let (profile, context) = seed_profile_with_context(&pool, "delete-window@example.com").await;
+    let anchor = HomeAnchor::Context(ContextId::from(context));
+
+    // Four members on axis 0, one at cosine 0.9 off it — all pairwise above any plausible
+    // resolution, so the fixture forms ONE region whose membership is exactly these five.
+    let mut b = axis(0);
+    let off = (1.0_f32 - 0.9 * 0.9).sqrt();
+    b[0] = 0.9;
+    b[1] = off;
+
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
+    for i in 0..4 {
+        backend
+            .create_resource(create_cmd_embedded(
+                anchor,
+                &format!("live-member-{i}"),
+                axis(0),
+            ))
+            .await
+            .expect("create live member");
+    }
+    let deleted_id = backend
+        .create_resource(create_cmd_embedded(anchor, "deleted-member", b.clone()))
+        .await
+        .expect("create deleted member")
+        .value
+        .id;
+
+    // First drain: five structural events, watermark NULL — the count gate crosses and the region
+    // forms. Precondition, not subject: asserted so a fixture that failed to form fails HERE.
+    let summary = region_service::dispatch_tick(&pool, None)
+        .await
+        .expect("drain 1");
+    assert_eq!(summary.claimed, 1, "the creates queued exactly one settle");
+    assert_eq!(
+        summary.materialized, 1,
+        "count 5 >= threshold: it materialized"
+    );
+
+    // The region exists with all five members, and the centroid is the all-members mean.
+    let member_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_cogmap_region_members m \
+         JOIN kb_cogmap_regions r ON r.id = m.region_id \
+         WHERE r.home_anchor_table = 'kb_contexts' AND r.home_anchor_id = $1 AND NOT r.is_folded",
+    )
+    .bind(context)
+    .fetch_one(&pool)
+    .await
+    .expect("member count");
+    assert_eq!(
+        member_count, 5,
+        "fixture precondition: one region, five members"
+    );
+
+    let centroid = live_region_centroid(&pool, context).await;
+    let e0 = axis(0);
+    let all_mean: Vec<f32> = (0..768).map(|d| (4.0 * e0[d] + b[d]) / 5.0).collect();
+    let cos_all = cos(&centroid, &f64ify(&all_mean));
+    assert!(
+        cos_all > 0.999_999,
+        "precondition: the stored centroid is the all-members mean (cosine {cos_all})"
+    );
+
+    // THE DELETE. Same posture as every write: enqueue, return, settle later.
+    backend
+        .delete_resource(DeleteResource {
+            resource: deleted_id,
+            force: true,
+            act: ActContext::default(),
+            origin: Surface::ApiHttp,
+        })
+        .await
+        .expect("delete");
+
+    assert_eq!(
+        queued_jobs(&pool, anchor).await,
+        1,
+        "the delete must queue the settle — a write returns without waiting on projection"
+    );
+    assert_eq!(
+        materialized_count(&pool, anchor).await,
+        1,
+        "and must not have settled inline"
+    );
+
+    // THE NEXT DRAIN ALONE closes the window: no further resource events exist to cross a count.
+    let summary = region_service::dispatch_tick(&pool, None)
+        .await
+        .expect("drain 2");
+    assert_eq!(summary.claimed, 1, "the delete queued a job for this pass");
+    assert_eq!(
+        summary.materialized, 1,
+        "a delete is its own pressure: one event < threshold 5 must still materialize"
+    );
+
+    // The stored centroid is now the LIVE-ONLY mean — e0, four identical members — and not the
+    // stale all-members mean (cosine 0.9961... — near, but measurably not 1).
+    let centroid = live_region_centroid(&pool, context).await;
+    let cos_live = cos(&centroid, &f64ify(&e0));
+    let cos_stale = cos(&centroid, &f64ify(&all_mean));
+    assert!(
+        (cos_live - 1.0).abs() < 1e-9,
+        "the centroid must be the live-only mean after the drain (cosine {cos_live}); \
+         cosine {cos_stale} against the all-members mean means the dead member is still inside it"
+    );
+    let member_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_cogmap_region_members m \
+         JOIN kb_cogmap_regions r ON r.id = m.region_id \
+         WHERE r.home_anchor_table = 'kb_contexts' AND r.home_anchor_id = $1 AND NOT r.is_folded",
+    )
+    .bind(context)
+    .fetch_one(&pool)
+    .await
+    .expect("member count after");
+    assert_eq!(
+        member_count, 4,
+        "the dead member is out of the membership too"
+    );
+
+    // THE DIFFERENTIAL PROBE. Two chosen vectors, difference the scores: with sal_norm and prior
+    // constant for a fixed candidate pool, the difference is 0.6 × the query-cosine difference, so
+    // the probes recover the centroid's projection onto the two vectors' span. Post-settle that
+    // projection is the live centroid's — everything the caller can already compute from visible
+    // members — and NOT the stale centroid's, whose off-axis weight came from a member the caller
+    // can no longer read. Values are computed from the fixture, not hand-baked.
+    let qcos_axis0 = {
+        let emb_text = vec_text(&axis(0));
+        sqlx::query_scalar::<_, f64>(
+            "SELECT query_cos::float8 FROM wayfind_region_scores(\
+               $1, NULL::uuid, $2::vector, 20, 'kb_contexts', $3)",
+        )
+        .bind(profile)
+        .bind(&emb_text)
+        .bind(context)
+        .fetch_one(&pool)
+        .await
+        .expect("probe axis0")
+    };
+    let qcos_axis1 = {
+        let emb_text = vec_text(&axis(1));
+        sqlx::query_scalar::<_, f64>(
+            "SELECT query_cos::float8 FROM wayfind_region_scores(\
+               $1, NULL::uuid, $2::vector, 20, 'kb_contexts', $3)",
+        )
+        .bind(profile)
+        .bind(&emb_text)
+        .bind(context)
+        .fetch_one(&pool)
+        .await
+        .expect("probe axis1")
+    };
+    let delta = qcos_axis0 - qcos_axis1;
+    // Live centroid ∝ axis 0 → Δquery_cos = 1 − 0 = 1. Stale centroid → Δ = cos(c,e0) − cos(c,e1)
+    // ≈ 0.9075. The probe must resolve the LIVE direction.
+    assert!(
+        (delta - 1.0).abs() < 1e-3,
+        "the differenced probes must resolve the live-only centroid direction (Δ = {delta}); \
+         a Δ near {} means the probes still resolve the stale centroid, dead member included",
+        cos(&f64ify(&all_mean), &f64ify(&axis(0))) - cos(&f64ify(&all_mean), &f64ify(&axis(1)))
     );
 }

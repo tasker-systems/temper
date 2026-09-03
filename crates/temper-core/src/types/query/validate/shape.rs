@@ -39,7 +39,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::types::query::act::ActName;
 use crate::types::query::composition::{
-    Composition, StageNode, MAX_EMBEDDING_DIM, MAX_INTENTION_QUERY_BYTES, MAX_STAGES,
+    Composition, StageNode, MAX_EMBEDDING_DIM, MAX_EMBEDDING_NORM, MAX_INTENTION_QUERY_BYTES,
+    MAX_STAGES, MIN_EMBEDDING_NORM,
 };
 use crate::types::query::disposition::RefusalReason;
 use crate::types::query::envelope::ActInvocation;
@@ -625,14 +626,23 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
         }
     }
 
-    // **A caller-supplied vector must be this space's shape.** `[added — 2026-08-28, found in
-    // review]` It was the one field on the contract with no bound of any kind, and the largest:
-    // a million floats on one stage is 4 MB that validated cleanly, times `MAX_STAGES`.
+    // **A caller-supplied vector must be this space's shape, carrying possible values.**
+    // `[added — 2026-08-28, found in review]` It was the one field on the contract with no bound of
+    // any kind, and the largest: a million floats on one stage is 4 MB that validated cleanly, times
+    // `MAX_STAGES`.
     //
     // Shape, and published as `max_items` on the field like its neighbours — but the refusal names
     // the SHAPE rather than a maximum, because 767 floats is exactly as wrong as 769 and a caller
     // told about a ceiling would fix the wrong end. What it replaces is worse than a bad message:
     // the vector reached pgvector, and this door redacts that dimension complaint to an opaque 500.
+    //
+    // `[widened — 2026-09-02]` Length was the only thing checked, so a right-length vector of
+    // impossible values validated cleanly and failed later as a driver error behind the same opaque
+    // 500: a NaN makes every cosine it touches unreadable, the all-zero vector's cosine is 0/0, and
+    // a norm far from 1.0 is a vector for no model — the corpus's space is unit-normalized. The
+    // window is many orders of magnitude wide (see the constants): a consistently scaled
+    // direction is still a
+    // question, and cosine reads direction only.
     if let Some(intention) = inv.intention.as_ref() {
         if let Some(embedding) = intention.embedding.as_ref() {
             if embedding.len() != MAX_EMBEDDING_DIM {
@@ -647,6 +657,31 @@ fn check_act(inv: &ActInvocation, name: &StageName, errs: &mut Vec<PlanRefusal>)
                         embedding.len()
                     ),
                 ));
+            } else if embedding.iter().any(|v| !v.is_finite()) {
+                errs.push(refusal(
+                    Some(name),
+                    RefusalReason::MalformedEmbedding,
+                    "a query vector must carry finite floats; this stage supplied one that is NaN \
+                     or infinite, and every cosine computed from such a value is one no reader can \
+                     act on — omit the vector and the server will embed on your behalf"
+                        .to_string(),
+                ));
+            } else {
+                let norm = embedding.iter().map(|v| *v * *v).sum::<f32>().sqrt();
+                if !(MIN_EMBEDDING_NORM..=MAX_EMBEDDING_NORM).contains(&norm) {
+                    errs.push(refusal(
+                        Some(name),
+                        RefusalReason::MalformedEmbedding,
+                        format!(
+                            "a query vector must have a norm between {MIN_EMBEDDING_NORM} and \
+                             {MAX_EMBEDDING_NORM}; this stage supplied {norm}. This corpus's space \
+                             is unit-normalized, so a vector this far from it is not a question — \
+                             the all-zero vector has no direction at all, and one scaled absurdly \
+                             overflows the arithmetic the distance computation runs in — omit it \
+                             and the server will embed on your behalf"
+                        ),
+                    ));
+                }
             }
         }
     }

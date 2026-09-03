@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { shouldExportSpans } from "temper-telemetry-ts";
 
 /**
  * A W3C `traceparent` for an outbound MCP call, grouping every call made within
@@ -48,5 +49,8 @@ export function makeTraceparent(sessionId: string): string {
  * `OTEL_EXPORTER_OTLP_ENDPOINT`), so the "do we export?" decision is the same on both sides.
  */
 export function otlpExportConfigured(): boolean {
-  return Boolean(process.env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim());
+  // One decision, shared with the provider bootstrap: the kill switch and the
+  // signal-specific endpoint live there, so "do we export?" cannot drift between
+  // the connection's traceparent choice and the provider itself.
+  return shouldExportSpans();
 }

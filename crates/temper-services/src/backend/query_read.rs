@@ -44,10 +44,11 @@ use temper_substrate::readback::query_plan::compile;
 /// runs BEFORE `validate`** (a `ValidatedComposition` is sealed, and filling vectors into it after
 /// the fact would need a side-channel this contract refuses).
 ///
-/// **This function does not perform that step — [`prepare`] does, and it is the only way to build
-/// the argument.** Taking a `ValidatedComposition` is what makes that structural rather than
-/// remembered: there is no way to reach here having skipped the embed, because there is no other
-/// constructor.
+/// **This function does not perform that step — [`prepare`] does, and it is the only way this
+/// crate reaches the argument.** Taking a `ValidatedComposition` is what makes that structural
+/// rather than remembered: `validate` is the only constructor of the type (cross-crate privacy
+/// seals it), and `prepare` = shape + embed + validate — so there is no way to reach here having
+/// skipped the embed.
 pub async fn run_composition(
     pool: &PgPool,
     principal: ProfileId,
@@ -86,7 +87,8 @@ pub async fn run_composition(
 /// Found in review. Not an RBAC hole — but internal function names and argument types are exactly
 /// what this codebase refuses to echo everywhere else.
 fn opaque(e: anyhow::Error) -> ApiError {
-    tracing::error!(error = %e, "query read failed");
+    let detail = e.to_string();
+    tracing::error!(error = %crate::error::bounded(&detail), "query read failed");
     ApiError::Internal("An internal error occurred".to_string())
 }
 

@@ -38,7 +38,10 @@ export async function fetchWithRetry(
       if (res.status < 500) {
         return res;
       }
-      lastError = `${res.status} ${await res.text()}`;
+      // The body is external text with untrusted length; only a bounded prefix
+      // enters `lastError`, which is logged and embedded in the thrown message.
+      const body = (await res.text().catch(() => '')).slice(0, 300);
+      lastError = `${res.status} ${body}`;
     } catch (err) {
       // Network-level failure (DNS, connection reset, …) — also transient.
       lastError = err instanceof Error ? err.message : String(err);

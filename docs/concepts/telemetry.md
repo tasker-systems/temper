@@ -47,16 +47,23 @@ backend is an ordinary span in your backend.
 Every request — HTTP or MCP — produces a **root span** that roots its own trace. Three
 properties of that structure are architectural decisions, not accidents.
 
-**Roots, not children.** Temper never parents a span from an inbound `traceparent`. A trusted
-caller's trace is joined with an OpenTelemetry **span link** recorded after authentication —
-where *trusted* means the request passed an authentication gate (a verified JWT or an HMAC
-signature over the body keyed on a secret only Temper's own services hold). So a linked trace
-in your backend is always a caller that authenticated; an anonymous request carries the inbound
-trace ids as inert log fields and joins nothing. Every trace worth joining is one Temper sent
-itself, so refusing everything else costs nothing.
+**Rust roots, not children.** The Rust hops (API, MCP, internal functions) never parent a
+span from an inbound `traceparent`. A trusted caller's trace is joined with an OpenTelemetry
+**span link** recorded after authentication — where *trusted* means the request passed an
+authentication gate (a verified JWT or an HMAC signature over the body keyed on a secret only
+Temper's own services hold). So a linked trace in your backend is always a caller that
+authenticated; an anonymous request carries the inbound trace ids as inert log fields and joins
+nothing. Every trace worth joining is one Temper sent itself, so refusing everything else costs
+nothing. **The temper-ui hop is the deliberate exception**: its server span *is* parented on
+the inbound `traceparent` so the browser request and the proxied API call share one trace id —
+but the sampler it exports with ignores the parent entirely (next paragraph), so parenting
+stitches without handing the caller a sampling vote.
 
 **The inbound `sampled` flag is recorded, never obeyed.** Honoring it would let anyone set the
-sampled bit on flood traffic and bill you for exporting every span of it.
+sampled bit on flood traffic and bill you for exporting every span of it — and the reverse
+direction matters as much: a caller sending `...-00` must not be able to silently drop spans
+that other hops link to. Every hop exports with a sampler that ignores the remote flag
+(`telemetrySampler()` in `temper-telemetry-ts`; the Rust exporter never parents at all).
 
 **Spans are flushed inside the invocation, on a budget.** Serverless platforms freeze the
 sandbox after a response rather than exiting the process, so a batch-export timer may never
@@ -85,6 +92,70 @@ same backend. Temper injects `traceparent` on its own outbound calls, so a link 
 resolves to a real span rather than dangling. `tracestate` is omitted rather than sent empty —
 W3C makes it optional, and a valueless header on every request is noise.
 
+## What the telemetry contains — the inventory
+
+What a deployment's telemetry actually carries, hop by hop. Audited 2026-09-02; each field set
+has one definition in code, cited beside it. This section records the **post-audit** state: the
+audit's findings (raw page paths in temper-ui spans, unbounded error detail, query strings in
+proxy logs, model I/O one convention away from export) were fixed in the same pass that wrote
+this.
+
+**Rust request roots** (`http_request`, `mcp_request` — one constructor,
+`temper_telemetry::root_span!`): `method`; `path` — the real request path, run through the
+deny-by-default redaction (`temper_telemetry::redact::redact_path`) that rewrites
+credential-shaped segments under `/api/invitations/`; `http.route` and the exported name — the
+matched route *template* (`/api/resources/{id}`); `version`; `profile_id` — temper's internal
+profile UUID, recorded only once the request is authenticated, never the OAuth `sub` (PR #613's
+2a decision); when the caller sent them, the inbound trace fields (`trace_id`,
+`parent_span_id`, `trace_sampled`); `vercel_id` / `vercel_invocation_id`; and at the end,
+`status` + `latency_ms`. A panicking handler records an ERROR span and a `panic` event with
+`latency_ms` — the panic payload itself is never recorded.
+
+**Act spans** (`#[act_span]`, one per write command): `correlation_id` and `invocation_id` —
+caller-minted UUIDs, the attribution grain. Nothing else.
+
+**temper-client** (`http_client_request`, the CLI/MCP outbound edge): method, redacted path —
+the query string is stripped, though the parameters temper-client itself builds are first-party
+(`?lens=`, `?from=`) — `has_auth` (a boolean — never the token), `status`, `latency_ms`. The
+transient-failure retry warn prints the error text, which (via the HTTP client's own
+`Display`) can include the request URL; that URL is the configured API origin plus temper's
+own parameters.
+
+**Events riding exported spans** (the export filter is `info`, so WARN and above go to the
+backend too): the structured error events carry `error_code` plus a message **bounded at 2 KiB**
+(`temper_services::error::bounded`); a 5xx body carries the fixed generic string while only the
+*event* keeps the bounded detail. The `unmatched route` event carries the path redacted and
+capped at 512 bytes. sqlx slow statements (WARN, >1s) carry the statement's full SQL text —
+documented under Logging. Slack lifecycle events carry the principal id
+(`slack:<team>:<user>`, length-validated) and bounded IdP error text; the mint outcome's
+hand-written `Debug` redacts the access token it wraps.
+
+**temper-ui request spans**: `method`; the **door** — the route pattern
+(`/vault/[owner]/[context]`) for matched pages, the proxy group (`/api/*`, `/mcp/*`) for
+proxied paths, `unmatched` otherwise; scheme; `server.address` (the deployment's own host);
+response status. Page titles, slugs, handles, and resource ids do not export: the raw pathname
+appears nowhere in the span. A handler exception is recorded as an OTel exception (message +
+stack of temper's own code).
+
+**eve agents**: undici auto-instrumentation registers **process-wide**, so every outbound
+`fetch` emits a client span with its URL: the configured MCP endpoint, plus the agents' REST
+calls to the API — `/api/steward/dispatch`, `/api/cognitive-maps/{id}/materialize`,
+`/api/auditor/dispatch`, the Slack link/mint internals — whose paths carry resource UUIDs.
+Those ids are temper's own identifiers on calls temper itself decided to make; narrowing the
+non-MCP spans to origin-plus-redacted-path is possible via an instrumentation `requestHook` if
+that ever stops being the right trade. AI-SDK spans carry model name, tool names, and token
+usage — and **no model inputs or outputs**: `NEVER_RECORD_MODEL_IO` (`temper-telemetry-ts`)
+pins `recordInputs`/`recordOutputs` to `false`, the AI SDK's own default is `true`, and each
+agent's test suite fails if the pin is dropped.
+
+**What never exports**: OAuth subjects — with one deliberate exception, the machine-client
+identifier on the unclassifiable-token refusal (`auth/mod.rs` logs the `sub` of a token that
+shaped like a machine client and classified as neither human nor known machine; it is a client
+id, not a person); message history; page titles, slugs, and handles; query strings (except the
+first-party parameters named in the temper-client entry above); access or refresh tokens;
+vault keys or ciphertext. Widening `RUST_LOG` never widens export — it widens the *log
+stream*, which is a separate surface with its own retention (see Logging).
+
 ## Logging
 
 Every Temper process logs through one of two variants:
@@ -96,6 +167,16 @@ Every Temper process logs through one of two variants:
 
 `RUST_LOG` overrides either default. An unparseable `RUST_LOG` falls back to the default rather
 than refusing to start.
+
+**sqlx slow-statement logging comes for free, and is worth keeping.** sqlx logs any statement
+whose execution reaches **1 second** at `WARN` on the target `sqlx::query` — *"slow statement:
+execution time exceeded alert threshold"*, with the statement summary, the full SQL text, row
+counts, and `elapsed_secs` (a JSON-friendly field to alert on). The default `info` filter
+inherits it; no configuration is involved, and silencing it means narrowing `RUST_LOG` against
+`sqlx::query` deliberately. Two consequences to know: the `WARN` event is **exported** (the
+export layer's fixed filter is `info`), so a trace backend receives the SQL text alongside the
+log stream; and `RUST_LOG=debug` widens sqlx from *slow statements* to **every** statement at
+`DEBUG` — see below for why that keeps `debug` out of production.
 
 ## What the architecture provides vs. what a deployment configures
 
@@ -115,10 +196,19 @@ Two defaults are Temper's rather than the SDK's, and both are operator-visible:
   collector, which would make every unconfigured process (your laptop, CI, a self-hosted
   install) export at something that is not there. Temper treats "unset" as "off."
 - **`RUST_LOG` does not control export in either direction.** Both stacks filter per layer: the
-  fmt layer follows `RUST_LOG`, the export layer carries its own fixed filter. `RUST_LOG=debug`
-  is safe on a live deployment — it widens logs, not what is billed. The surprising half:
-  `RUST_LOG=off` still exports spans. The switches that stop export are `OTEL_SDK_DISABLED=true`
-  and unsetting the endpoint.
+  fmt layer follows `RUST_LOG`, the export layer carries its own fixed filter. Widening
+  `RUST_LOG` changes what the log stream carries, never what is exported and billed. The
+  surprising half: `RUST_LOG=off` still exports spans. The switches that stop export are
+  `OTEL_SDK_DISABLED=true` and unsetting the endpoint.
+
+- **`RUST_LOG=debug` does not belong in production.** The billing is unchanged — what widens is
+  the *log stream's* leak surface, and the log stream is a third-party platform's with its own
+  retention and access list. At `debug`, dependency targets log data-bearing detail: sqlx emits
+  the **full SQL text of every statement** (not just the slow ones), HTTP clients log URLs —
+  query strings included — and any `debug!` site's payload (mint outcomes, verification
+  details) becomes log material. Diagnose a live deployment with `debug` only when the
+  alternative is worse, and narrow it again afterward; the default `info` carries the
+  slow-statement and request spans that answer most questions.
 
 ## Reading the exported spans
 

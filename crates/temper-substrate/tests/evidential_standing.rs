@@ -2,8 +2,8 @@
 //! Evidential-standing maturity projection (SQL substrate).
 //!
 //! Exercises the producers/memos in `migrations/20260721000010_evidential_standing_memo.sql` as
-//! amended by `migrations/20260724000120_standing_citation_components.sql` (Set 5, Task 3) against
-//! an ephemeral DB. Standing is NOT truth (spec 019f81e8 preamble): these assert the *shape of the
+//! amended by `migrations/20260724000120_standing_citation_components.sql` (Set 5, Task 3) and
+//! `migrations/20260903000010_standing_aggregates_visibility_posture.sql` against an ephemeral DB. Standing is NOT truth (spec 019f81e8 preamble): these assert the *shape of the
 //! evidence*, never a truth claim. Grounding for the seeding helpers: `content_mutation.rs`
 //! (provenance via `writes`), `write_path_mutations.rs` (edges via `SeedAction::RelationshipAssert`),
 //! `streaming_ingest_test.rs` (a second live block via `writes::append_block`), and
@@ -1250,4 +1250,43 @@ async fn one_source_never_reaches_near_canonical(pool: sqlx::PgPool) {
         s.band, "reinforced",
         "a perfectly-audited lone source is reinforced, never near-canonical"
     );
+}
+
+/// The stored-aggregates exception is stated at the fields it excepts — in the SQL `COMMENT`s a
+/// `\df+` reader with no git access sees, not only in the record
+/// (`internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`). Every function
+/// the shape composes, plus the attribution trail, carries the posture sentence and cites the
+/// record; `migrations/20260903000010_standing_aggregates_visibility_posture.sql` writes them, and
+/// any future COMMENT on these functions must carry the sentence forward or this fails.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn every_standing_comment_states_the_visibility_posture(pool: sqlx::PgPool) {
+    const POSTURE: &str = "Reader-independent by decision";
+    const RECORD: &str =
+        "internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md";
+    const SIGNATURES: &[&str] = &[
+        "resource_standing_shape(uuid, text, uuid)",
+        "resource_live_citations(uuid)",
+        "resource_citation_magnitude(uuid)",
+        "resource_audit_coverage(uuid)",
+        "resource_citation_quality(uuid)",
+        "resource_contradiction_balance(uuid)",
+        "resource_freshness(uuid)",
+        "resource_r_parent(uuid)",
+        "resource_citation_audit_trail(uuid, text, uuid)",
+    ];
+
+    for signature in SIGNATURES {
+        let comment: Option<String> =
+            sqlx::query_scalar("SELECT obj_description($1::regprocedure, 'pg_proc')")
+                .bind(signature)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let comment = comment.unwrap_or_default();
+        assert!(
+            comment.contains(POSTURE) && comment.contains(RECORD),
+            "`{signature}` does not state the stored-aggregates posture: its COMMENT must carry \
+             the posture sentence and cite the record. Current COMMENT:\n{comment}"
+        );
+    }
 }

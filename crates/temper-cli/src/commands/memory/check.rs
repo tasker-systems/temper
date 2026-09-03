@@ -1,7 +1,8 @@
 //! `temper memory check` — the LOCAL drift gate.
 //!
-//! Why local, not CI: the rendered index lives at `~/.claude/projects/<project>/memory/MEMORY.md`
-//! — outside the repo, and per-machine. `.github/scripts/check-skills-drift.sh` (the sibling gate
+//! Why local, not CI: the rendered index lives in the harness's own config space
+//! (`~/.claude/projects/<project>/memory/`, `~/.config/opencode/memory/`, …) — outside any
+//! repo, and per-machine. `.github/scripts/check-skills-drift.sh` (the sibling gate
 //! for the `agent-skills/` projection) works only because that tree is tracked by git, so CI can
 //! diff committed-vs-regenerated. There is nothing here for CI to diff; this is a command a
 //! person or a hook runs, and its exit code is the gate (`main.rs` maps `Drifted` to
@@ -16,7 +17,6 @@
 
 use temper_core::types::config::TemperConfig;
 
-use super::emit::render_current;
 use crate::error::{Result, TemperError};
 
 /// The result of comparing a fresh render against what is on disk.
@@ -50,25 +50,52 @@ pub fn compare_index(rendered: &str, on_disk: Option<&str>) -> DriftVerdict {
     }
 }
 
+/// One gated file: where it lives and what a fresh render made of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexVerdict {
+    pub path: std::path::PathBuf,
+    pub verdict: DriftVerdict,
+}
+
 /// The async I/O shell. Assumes the caller has already checked `[memory]` is configured (the CLI
 /// dispatch does, mirroring `emit`'s `EmitOutcome` gate), but re-checks defensively rather than
 /// trusting the caller silently — same posture as `emit`.
 ///
+/// Gates EVERY file the render produces — the project index always, the shared index when
+/// `shared_index_path` splits it. One file's drift never masks another's: the caller reports all
+/// verdicts before deciding its exit code, the same collect-everything rule `emit` applies to
+/// render defects.
+///
 /// `path_override` mirrors `emit`'s `--path`: a machine mid-adoption that ran
 /// `emit --path <p>` must be able to gate on that same file, not the configured `index_path` —
 /// otherwise the exit code (`main.rs` maps `Drifted` to `process::exit(1)`) is a verdict about a
-/// different file than the one that was written.
-pub async fn check(config: &TemperConfig, path_override: Option<&str>) -> Result<DriftVerdict> {
+/// different file than the one that was written. The override names the PROJECT index; the
+/// shared index has no override and is always gated at its configured path.
+pub async fn check(
+    config: &TemperConfig,
+    path_override: Option<&str>,
+) -> Result<Vec<IndexVerdict>> {
     let mem = config.memory.as_ref().ok_or_else(|| {
         TemperError::Config(
             "no [memory] section in config.toml — the memory projection is off".to_string(),
         )
     })?;
 
-    let (rendered, path) = render_current(mem, path_override).await?;
+    let indexes = super::emit::render_current(mem, path_override).await?;
+    let (rendered, path) = indexes.project;
     let on_disk = std::fs::read_to_string(&path).ok();
-
-    Ok(compare_index(&rendered, on_disk.as_deref()))
+    let mut verdicts = vec![IndexVerdict {
+        path,
+        verdict: compare_index(&rendered, on_disk.as_deref()),
+    }];
+    if let Some((rendered, path)) = indexes.shared {
+        let on_disk = std::fs::read_to_string(&path).ok();
+        verdicts.push(IndexVerdict {
+            path,
+            verdict: compare_index(&rendered, on_disk.as_deref()),
+        });
+    }
+    Ok(verdicts)
 }
 
 #[cfg(test)]
@@ -105,6 +132,7 @@ mod tests {
             shared_contexts: vec![],
             project_contexts: vec!["@me/temper".to_string()],
             index_path: "~/x/MEMORY.md".to_string(),
+            shared_index_path: None,
             stale_after_days: 90,
             reinforced_min: None,
         };

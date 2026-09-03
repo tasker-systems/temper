@@ -24,9 +24,11 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
 	const error = url.searchParams.get('error');
 
 	if (error) {
+		// All three values ride the request URL — caller-chosen content at
+		// caller-chosen length. Bounded before they reach the log stream.
 		console.warn('OIDC callback returned error', {
-			error,
-			description: url.searchParams.get('error_description'),
+			error: error.slice(0, 128),
+			description: url.searchParams.get('error_description')?.slice(0, 512),
 		});
 		clearPkce(cookies);
 		throw redirect(303, '/?error=auth_failed');
@@ -44,8 +46,10 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
 
 	if (pkce.state !== state) {
 		console.warn('OIDC callback state mismatch — possible CSRF', {
-			expected: pkce.state,
-			received: state,
+			// Both are nonce material: bounded, and identified by shape rather than
+			// logged whole.
+			expectedLen: pkce.state.length,
+			received: state.slice(0, 128),
 		});
 		clearPkce(cookies);
 		throw redirect(303, '/?error=auth_state_mismatch');

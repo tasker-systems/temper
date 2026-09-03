@@ -28,13 +28,18 @@ import { env } from '$env/dynamic/private';
 const PROXIED_ROOTS = ['/mcp', '/oauth', '/.well-known', '/api'];
 
 /**
- * Whether an inbound request path should be reverse-proxied to the upstream
- * rather than handled by SvelteKit. Matches each root exactly or as a path
+ * Which proxied root a path belongs to (`/mcp`, `/oauth`, `/.well-known`, `/api`),
+ * or null when the path is not proxied. Matches each root exactly or as a path
  * prefix (`/mcp` and `/mcp/...`), but not paths that merely share a leading
  * substring (`/mcpfoo`).
  */
+export function proxiedRoot(pathname: string): string | null {
+	return PROXIED_ROOTS.find((root) => pathname === root || pathname.startsWith(`${root}/`)) ?? null;
+}
+
+/** Whether an inbound request path should be reverse-proxied to the upstream. */
 export function isProxiedPath(pathname: string): boolean {
-	return PROXIED_ROOTS.some((root) => pathname === root || pathname.startsWith(`${root}/`));
+	return proxiedRoot(pathname) !== null;
 }
 
 /** Join the upstream base (trailing slash tolerated) with the request path + query. */
@@ -256,9 +261,13 @@ export async function forwardRequest(
 			// logs. `x-vercel-id` is the upstream invocation's id; `traceparent` is
 			// the cross-service one. Healthy responses stay unlogged — this is the
 			// per-request hot path.
+			//
+			// The log names the PATH, never the full URL: the query string is
+			// attacker/chosen caller input (OAuth codes, tokens, search terms have
+			// all ridden there) and does not belong in the log stream.
 			if (response.status >= 500) {
 				console.error('proxy: upstream server error', {
-					target,
+					pathname,
 					method: request.method,
 					status: response.status,
 					traceparent,
@@ -277,8 +286,10 @@ export async function forwardRequest(
 	// logs. There is no upstream response to read an `x-vercel-id` from here,
 	// precisely because the fetch never completed.
 	const timedOut = isTimeout(lastErr);
+	// Same rule as the 5xx arm above: the path joins the logs, the query string
+	// never leaves the request.
 	console.error('proxy: upstream unreachable', {
-		target,
+		pathname,
 		method: request.method,
 		traceparent,
 		attempts: retries + 1,
@@ -302,11 +313,15 @@ export async function proxyRequest(event: RequestEvent): Promise<Response> {
 		throw error(500, 'Proxy upstream not configured: set API_BASE_URL');
 	}
 	if (isSelfReferentialUpstream(upstream, event.url.host)) {
-		throw error(
-			500,
-			`Proxy upstream (API_BASE_URL=${upstream}) resolves to this same origin (${event.url.host}); ` +
+		// Static client-facing message. The operator hint — which names the
+		// configured upstream origin — goes to the log, not into the thrown error:
+		// `traceRequest` records thrown errors as OTel exceptions, so an embedded
+		// origin would export to the span backend.
+		console.error(
+			`proxy: API_BASE_URL=${upstream} resolves to this same origin (${event.url.host}); ` +
 				`set API_BASE_URL to the API backend's own origin, not the UI origin.`,
 		);
+		throw error(500, 'Proxy upstream is misconfigured.');
 	}
 	return forwardRequest(upstream, event.url.pathname, event.url.search, event.request);
 }

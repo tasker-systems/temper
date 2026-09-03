@@ -13039,7 +13039,7 @@
               "type": "number",
               "format": "float"
             },
-            "description": "The query vector, when the caller computed one. Mirrors `SearchParams.embedding`: the CLI\nlinks temper-ingest and embeds locally, which is faster than making the server do it; the\nruby gem, the TypeScript package and MCP structurally cannot, so the server embeds on their\nbehalf and its absence is not a refusal.\n\n**It rides beside the text it was computed FROM, and that pairing is the point.** At\ncomposition level a vector and its query could drift apart; here they cannot.\n\nThis never reaches a response: [`super::trace::CompositionTrace`] carries only `stages` and\nechoes no intention. Should a trace ever carry one, that stops being incidental and becomes\na constraint — a 768-float array must not serialize back to the caller.\n\n**Exactly [`MAX_EMBEDDING_DIM`] floats**, refused as\n[`super::disposition::RefusalReason::MalformedEmbedding`]. `[added — 2026-08-28, found in\nreview]` This carried no bound of any kind, which made it the largest unbounded field on the\ncontract: a million floats on one stage is 4 MB that validates cleanly, and there are\n[`MAX_STAGES`] stages. A wrong-sized vector also reached pgvector and came back as an\n**opaque 500** — the caller told nothing, in the door whose promise is a typed refusal.\n\n**Published as a min AND a max, because the check is an equality.** `[corrected —\n2026-08-28, found in review]` Publishing only the maximum stated half the rule: a 384-float\nvector cleared every generated client and was then refused by the server, which is exactly\nthe gap the shape pass exists to close — a client must be able to refuse what the server\nwould refuse. The two bounds are the same number because a vector of any other length is\nnot a large question, it is a vector for a different space.",
+            "description": "The query vector, when the caller computed one. Mirrors `SearchParams.embedding`: the CLI\nlinks temper-ingest and embeds locally, which is faster than making the server do it; the\nruby gem, the TypeScript package and MCP structurally cannot, so the server embeds on their\nbehalf and its absence is not a refusal.\n\n**It rides beside the text it was computed FROM, and that pairing is the point.** At\ncomposition level a vector and its query could drift apart; here they cannot.\n\nThis never reaches a response: [`super::trace::CompositionTrace`] carries only `stages` and\nechoes no intention. Should a trace ever carry one, that stops being incidental and becomes\na constraint — a 768-float array must not serialize back to the caller.\n\n**Exactly [`MAX_EMBEDDING_DIM`] floats, every value finite, norm within\n[`MIN_EMBEDDING_NORM`]..[`MAX_EMBEDDING_NORM`]**, refused as\n[`super::disposition::RefusalReason::MalformedEmbedding`]. `[added — 2026-08-28, found in\nreview]` This carried no bound of any kind, which made it the largest unbounded field on the\ncontract: a million floats on one stage is 4 MB that validates cleanly, and there are\n[`MAX_STAGES`] stages. A wrong-sized vector also reached pgvector and came back as an\n**opaque 500** — the caller told nothing, in the door whose promise is a typed refusal.\n`[widened — 2026-09-02]` Length alone still let impossible values through: a NaN poisons\nevery cosine computed from it, and the all-zero vector's cosine is 0/0 — both surfaced as\ndriver errors behind the same opaque 500. The norm window is wide enough that any\nconsistently scaled direction passes; only values that are not vectors for this space at\nall are refused.\n\n**Published as a min AND a max, because the check is an equality.** `[corrected —\n2026-08-28, found in review]` Publishing only the maximum stated half the rule: a 384-float\nvector cleared every generated client and was then refused by the server, which is exactly\nthe gap the shape pass exists to close — a client must be able to refuse what the server\nwould refuse. The two bounds are the same number because a vector of any other length is\nnot a large question, it is a vector for a different space. The norm window is published in\nthe field's description text rather than as numeric constraints: a client that scales\nlegitimately is not an error the bounds are for.",
             "maxItems": 768,
             "minItems": 768
           },
@@ -17097,7 +17097,7 @@
       },
       "StandingShape": {
         "type": "object",
-        "description": "A finding's evidential-standing shape (SQL `resource_standing_shape`). All fields are\nnon-nullable: the access gate is INSIDE the SQL (a `gated` CTE over `resources_readable_by`),\nso an unreadable finding yields zero rows — never a partial/nullable row — and the caller-side\nread returns `Option<StandingShape>`, `None` for \"not readable.\"",
+        "description": "A finding's evidential-standing shape (SQL `resource_standing_shape`). All fields are\nnon-nullable: the access gate is INSIDE the SQL (a `gated` CTE over `resources_readable_by`),\nso an unreadable finding yields zero rows — never a partial/nullable row — and the caller-side\nread returns `Option<StandingShape>`, `None` for \"not readable.\"\n\nReader-independent by decision: one value for every caller who can read the finding, with\nper-contributor attribution on the citation-audit trail, never on the shape (stored-aggregates\nexception: `internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`).",
         "required": [
           "finding_id",
           "citation_magnitude",
@@ -17112,40 +17112,40 @@
           "audit_coverage": {
             "type": "integer",
             "format": "int32",
-            "description": "How many of those distinct sources carry at least one audit. Monotone under the append-only\naudit trail (spec §4.1) — once a source is audited it stays covered. The *evaluated-ness*\naxis, and the thing that tells \"nobody tried\" apart from \"N sources were evaluated.\""
+            "description": "How many of those distinct sources carry at least one audit. Monotone under the append-only\naudit trail (spec §4.1) — once a source is audited it stays covered. The *evaluated-ness*\naxis, and the thing that tells \"nobody tried\" apart from \"N sources were evaluated.\"\n\nReader-independent by decision: one value for every caller who can read the finding, with\nper-contributor attribution on the citation-audit trail, never on the shape\n(stored-aggregates exception:\n`internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`)."
           },
           "band": {
             "type": "string",
-            "description": "Lossy read-time summary band (`provisional` / `reinforced` / `disputed` / `near-canonical`)\ncomputed over\nthe shape above. Carried WITH the shape, never presented instead of it (spec §1.1)."
+            "description": "Lossy read-time summary band (`provisional` / `reinforced` / `disputed` / `near-canonical`)\ncomputed over the shape above. Carried WITH the shape, never presented instead of it\n(spec §1.1).\n\nReader-independent by decision: one value for every caller who can read the finding, with\nper-contributor attribution on the citation-audit trail, never on the shape\n(stored-aggregates exception:\n`internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`)."
           },
           "citation_magnitude": {
             "type": "integer",
             "format": "int32",
-            "description": "Count of **distinct live** sources the finding cites (Set 5, spec §3.1). Monotone — citing\nmore evidence never lowers it. The *findability* axis: deliberately NOT `r_parent`, which\ncounts provenance rows including duplicates. Ten citations of one source is\n`r_parent = 10, citation_magnitude = 1`, and collapsing the two reintroduces the\nactor-count fallacy."
+            "description": "Count of **distinct live** sources the finding cites (Set 5, spec §3.1). Monotone — citing\nmore evidence never lowers it. The *findability* axis: deliberately NOT `r_parent`, which\ncounts provenance rows including duplicates. Ten citations of one source is\n`r_parent = 10, citation_magnitude = 1`, and collapsing the two reintroduces the\nactor-count fallacy.\n\nReader-independent by decision: one value for every caller who can read the finding, with\nper-contributor attribution on the citation-audit trail, never on the shape\n(stored-aggregates exception:\n`internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`)."
           },
           "citation_quality": {
             "type": "number",
             "format": "double",
-            "description": "Mean, over the **audited subset only**, of each audited source's decay-weighted audit value,\nin `[-1.0, 1.0]`. Reads as a neutral `0.0` when `audit_coverage = 0`: an unaudited finding\nmakes no quality claim, and its low standing comes from the band gate, never from a poisoned\nmean (spec §3.2)."
+            "description": "Mean, over the **audited subset only**, of each audited source's decay-weighted audit value,\nin `[-1.0, 1.0]`. Reads as a neutral `0.0` when `audit_coverage = 0`: an unaudited finding\nmakes no quality claim, and its low standing comes from the band gate, never from a poisoned\nmean (spec §3.2).\n\nReader-independent by decision: one value for every caller who can read the finding, with\nper-contributor attribution on the citation-audit trail, never on the shape\n(stored-aggregates exception:\n`internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`)."
           },
           "contradiction_balance": {
             "type": "number",
             "format": "double",
-            "description": "Supports minus contradicts, as a vector-sum over declared edges (spec §1) — not a headcount."
+            "description": "Supports minus contradicts, as a vector-sum over declared edges (spec §1) — not a headcount.\n\nReader-independent by decision: one value for every caller who can read the finding, with\nper-contributor attribution on the citation-audit trail, never on the shape\n(stored-aggregates exception:\n`internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`)."
           },
           "finding_id": {
             "$ref": "#/components/schemas/ResourceId",
-            "description": "`kb_resources.id` of the finding this shape describes."
+            "description": "`kb_resources.id` of the finding this shape describes. Reader-independent by decision: one\nvalue for every caller who can read the finding, with per-contributor attribution on the\ncitation-audit trail, never on the shape (stored-aggregates exception:\n`internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`)."
           },
           "freshness": {
             "type": "number",
             "format": "double",
-            "description": "Reversible time-decay off the finding's most recent uncorrected reinforcement; computed\nlive at read (never from the memo) because it must reflect the current moment."
+            "description": "Reversible time-decay off the finding's most recent uncorrected reinforcement; computed\nlive at read (never from the memo) because it must reflect the current moment.\n\nReader-independent by decision: one value for every caller who can read the finding, with\nper-contributor attribution on the citation-audit trail, never on the shape\n(stored-aggregates exception:\n`internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`)."
           },
           "r_parent": {
             "type": "number",
             "format": "double",
-            "description": "Reinforcement breadth: count of uncorrected provenance over the finding's live blocks."
+            "description": "Reinforcement breadth: count of uncorrected provenance over the finding's live blocks.\n\nReader-independent by decision: one value for every caller who can read the finding, with\nper-contributor attribution on the citation-audit trail, never on the shape\n(stored-aggregates exception:\n`internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`)."
           }
         }
       },

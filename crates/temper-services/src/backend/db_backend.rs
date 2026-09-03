@@ -2344,6 +2344,24 @@ impl Backend for DbBackend {
         writes::delete_resource_with(&self.pool, ResourceId::from(new_id), emitter, act_ctx)
             .await
             .map_err(api_err)?;
+
+        // Queue the region settle for the anchor the deleted resource was homed in — the same
+        // enqueue posture create and update use, and never failing the write for the same reason.
+        // The tick's gate treats a delete as its own pressure (`resource_deleted_since`): the
+        // centroid the dead member still sits inside is a stored aggregate, wrong the moment the
+        // event lands, so the next drain re-derives it without waiting for the count threshold —
+        // which a quiet anchor would otherwise never reach.
+        match region_clocks::home_of(&self.pool, new_id).await {
+            Ok(Some(anchor)) => self.queue_region_clocks(anchor, emitter).await,
+            // No home row ⇒ no anchor whose regions this write could affect ⇒ no clocks to tick.
+            Ok(None) => {}
+            Err(e) => tracing::warn!(
+                resource_id = %new_id,
+                error = %e,
+                "could not resolve home anchor; region clocks not queued on delete"
+            ),
+        }
+
         Ok(CommandOutput::new(()))
     }
 

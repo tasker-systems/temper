@@ -1467,10 +1467,12 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                             &config,
                             path.as_deref(),
                         ))?;
-                        temper_cli::output::success(format!(
-                            "Memory index written: {}",
-                            written.display()
-                        ));
+                        let paths = written
+                            .iter()
+                            .map(|p| p.display().to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        temper_cli::output::success(format!("Memory index written: {paths}",));
                         Ok(())
                     }
                 }
@@ -1518,29 +1520,46 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         let rt = tokio::runtime::Runtime::new().map_err(|e| {
                             temper_cli::error::TemperError::Api(format!("tokio runtime: {e}"))
                         })?;
-                        match rt.block_on(temper_cli::commands::memory::check(
+                        let verdicts = rt.block_on(temper_cli::commands::memory::check(
                             &config,
                             path.as_deref(),
-                        ))? {
-                            temper_cli::commands::memory::check::DriftVerdict::Match => {
-                                temper_cli::output::success("Memory index is up to date.");
-                                Ok(())
-                            }
-                            temper_cli::commands::memory::check::DriftVerdict::Absent => {
-                                temper_cli::output::warning(
-                                    "No memory index on disk yet — run `temper memory emit`.",
-                                );
-                                Ok(())
-                            }
-                            temper_cli::commands::memory::check::DriftVerdict::Drifted { diff } => {
-                                temper_cli::output::error("Memory index has drifted from Temper:");
-                                temper_cli::output::plain_err(diff);
-                                // Drain here too: `process::exit` runs no destructors, and this
-                                // arm is one of the counted exits, not an uncounted fifth.
-                                temper_telemetry::shutdown_telemetry();
-                                std::process::exit(1);
+                        ))?;
+                        // Every verdict is reported before the exit decision — one file's
+                        // drift must not mask another's.
+                        let mut drifted = false;
+                        for v in &verdicts {
+                            match &v.verdict {
+                                temper_cli::commands::memory::check::DriftVerdict::Match => {
+                                    temper_cli::output::success(format!(
+                                        "Memory index is up to date: {}",
+                                        v.path.display()
+                                    ));
+                                }
+                                temper_cli::commands::memory::check::DriftVerdict::Absent => {
+                                    temper_cli::output::warning(format!(
+                                        "No memory index on disk yet — run `temper memory emit`: {}",
+                                        v.path.display()
+                                    ));
+                                }
+                                temper_cli::commands::memory::check::DriftVerdict::Drifted {
+                                    diff,
+                                } => {
+                                    drifted = true;
+                                    temper_cli::output::error(format!(
+                                        "Memory index has drifted from Temper: {}",
+                                        v.path.display()
+                                    ));
+                                    temper_cli::output::plain_err(diff.clone());
+                                }
                             }
                         }
+                        if drifted {
+                            // Drain here too: `process::exit` runs no destructors, and this
+                            // arm is one of the counted exits, not an uncounted fifth.
+                            temper_telemetry::shutdown_telemetry();
+                            std::process::exit(1);
+                        }
+                        Ok(())
                     }
                 }
             }

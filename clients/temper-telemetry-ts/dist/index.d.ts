@@ -8,6 +8,7 @@
  * - Shipped as compiled `dist/`, consumed via `file:` links, so one package serves
  *   consumers on three workspace-isolated toolchains (bun / npm-TS7 / npm-TS5).
  */
-export { forceFlush, getTracer, initTelemetry, isTelemetryEnabled, type InitTelemetryOptions } from './otel.js';
+export { forceFlush, getTracer, initTelemetry, isSdkDisabled, isTelemetryEnabled, shouldExportSpans, telemetrySampler, type InitTelemetryOptions } from './otel.js';
 export { activeTraceparent, extractContext } from './context.js';
 export { McpNegotiationStatusProcessor, negotiationKey } from './mcp-negotiation.js';
+export { NEVER_RECORD_MODEL_IO } from './model-io.js';

@@ -130,8 +130,7 @@ export async function reconcileMemberships(payload: ReconcileRequest): Promise<v
   // `null` stays null in the log line rather than becoming 0: a login that carried no group signal
   // and one that asserted an empty group set are the two cases this whole path exists to keep
   // apart, and `groups: 0` would have read as the second.
-  logger.info(
-    { idp_key: payload.idp_key, groups: payload.groups?.length ?? null },
-    "saml reconcile ok",
-  );
+  // Beyond that shape the line binds no identifier: the IdP key and the principal identity travel
+  // the signed wire call this line confirms, never the log surface.
+  logger.info({ groups: payload.groups?.length ?? null }, "saml reconcile ok");
 }

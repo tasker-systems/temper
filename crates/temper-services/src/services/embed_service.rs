@@ -367,7 +367,8 @@ async fn run_embed_job(
             // Leave the job in_progress; the reaper's lease-expiry sweep retries it (then dead at
             // max attempts). One bad resource never aborts the pass.
             span.record("outcome", JobOutcome::Failed.as_str());
-            tracing::warn!(error = %e, "embed job failed; leaving for reaper retry");
+            let detail = e.to_string();
+            tracing::warn!(error = %crate::error::bounded(&detail), "embed job failed; leaving for reaper retry");
             Ok(EmbedJobResult::Failed)
         }
     }

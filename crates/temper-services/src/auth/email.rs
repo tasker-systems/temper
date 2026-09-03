@@ -60,7 +60,8 @@ pub(super) async fn resolve_email_from_claims(
                 .get_or_try_init(|| discover_userinfo_endpoint(&state.config.auth.issuer))
                 .await
                 .map_err(|e| {
-                    tracing::warn!("OIDC discovery failed: {e}");
+                    let detail = e.to_string();
+                    tracing::warn!(detail = %crate::error::bounded(&detail), "OIDC discovery failed");
                     ApiError::Unauthorized(
                         "Token missing email claim and userinfo lookup failed".to_string(),
                     )
@@ -68,7 +69,8 @@ pub(super) async fn resolve_email_from_claims(
             fetch_email_from_userinfo(endpoint, token)
                 .await
                 .map_err(|e| {
-                    tracing::warn!("Failed to fetch email from userinfo: {e}");
+                    let detail = e.to_string();
+                    tracing::warn!(detail = %crate::error::bounded(&detail), "Failed to fetch email from userinfo");
                     ApiError::Unauthorized(
                         "Token missing email claim and userinfo lookup failed".to_string(),
                     )

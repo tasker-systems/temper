@@ -657,17 +657,25 @@ fn map_authz_error(e: temper_services::auth::AuthzError) -> rmcp::ErrorData {
         // and temper-api's 403 must name the same command, and it must be one that
         // parses. Both drifted onto `temper team join` — which accepts a team
         // invitation and has no `--message`, so it does not request access at all.
-        AuthzError::SystemAccessDenied { .. } => rmcp::ErrorData::new(
-            rmcp::model::ErrorCode::INVALID_REQUEST,
-            format!(
-                "Access to this temper instance requires approval. \
-                 Visit https://temperkb.io/request-access or run \
-                 `{}` in the CLI to request access. \
-                 This error is terminal and should not be retried.",
-                temper_core::types::access_gate::REQUEST_ACCESS_COMMAND
-            ),
-            None,
-        ),
+        //
+        // The refusal is typed and carried from the gate (one computation, both
+        // surfaces), so an agent here can branch on the same `kind` the API's 403
+        // carries in `details.refusal` — Denied from Requested from Revoked — and
+        // the `reason()` rides the message for a caller that reads only text.
+        AuthzError::SystemAccessDenied { refusal, .. } => {
+            let reason = refusal.reason();
+            rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INVALID_REQUEST,
+                format!(
+                    "Access to this temper instance requires approval — {reason}. \
+                     Visit https://temperkb.io/request-access or run \
+                     `{}` in the CLI to request access. \
+                     This error is terminal and should not be retried.",
+                    temper_core::types::access_gate::REQUEST_ACCESS_COMMAND
+                ),
+                Some(serde_json::json!({ "refusal": refusal })),
+            )
+        }
         // An `Unauthorized` here is a terminal authentication denial, not a transient
         // failure — most often the machine-principal registration gate rejecting an
         // unregistered or revoked `client_id` (G3 Phase A). It must surface as a terminal

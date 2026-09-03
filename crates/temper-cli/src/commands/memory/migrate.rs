@@ -827,6 +827,7 @@ Never ship code with \"for now\".
             shared_contexts: vec!["@me/working-agreements".to_string()],
             project_contexts: vec!["@me/temper".to_string()],
             index_path: "~/.claude/projects/p/memory/MEMORY.md".to_string(),
+            shared_index_path: None,
             stale_after_days: 90,
             reinforced_min: None,
         }

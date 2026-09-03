@@ -147,10 +147,12 @@ pub async fn disconnect_slack_principal(
             match oauth_client::revoke_grant(&req.revoke_url, req.client_id, rt).await {
                 Ok(()) => IdpRevocation::Revoked,
                 Err(e) => {
-                    // Principal + error only. Never the token.
+                    // Principal + error only. Never the token. The error text is
+                    // bounded — it quotes the IdP response, not our config.
+                    let err_text = e.to_string();
                     tracing::warn!(
                         principal = %req.slack_principal_id,
-                        error = %e,
+                        error = %crate::error::bounded(&err_text),
                         "slack disconnect: IdP revocation failed; destroying the local grant \
                          anyway. The grant may remain live at the IdP until it expires — \
                          revoke it out-of-band if that matters."

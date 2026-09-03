@@ -175,6 +175,14 @@ jobs:
       - name: Security tripwire — grant write-sites (capability attenuation review)
         run: bash .github/scripts/audit-grant-sinks.sh
 
+      # Sibling to grant-sinks: grant-sinks freezes the SET of kb_access_grants write-sites; this
+      # pins the one subject×capability shape no production surface may mint — a kb_contexts row
+      # with can_write, the explicit write-grant arm of context_authorable_by_profile. The arm is
+      # a guardrail for a delegation act with no minting design; the first surface that can light
+      # it fails here until that design is written into the guard itself.
+      - name: Security tripwire — context write-grant mints
+        run: bash .github/scripts/audit-context-write-grants.sh
+
       - name: Security tripwire — route auth posture
         run: bash .github/scripts/audit-route-auth.sh
 
@@ -409,6 +417,13 @@ jobs:
 
       - name: Guard test — audit-grant-sinks (SQL half)
         run: bash .github/scripts/test-audit-grant-sinks.sh
+
+      # Nine probes, both directions: the two red cases name the flagged file, the two canaries
+      # prove an empty scan fails loudly rather than passing, and the three green pins hold the
+      # guard to its stated field of view (non-context write bits, read-only context grants,
+      # tests/ fixtures).
+      - name: Guard test — audit-context-write-grants (both directions)
+        run: bash .github/scripts/test-audit-context-write-grants.sh
 
       # Six probes. Two of them assert the guard stays GREEN — a comment rewrite above a gate, and a
       # plain `//` note using elevation vocabulary. A tripwire that reds on prose churn gets

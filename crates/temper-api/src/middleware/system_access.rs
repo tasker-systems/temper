@@ -11,11 +11,9 @@ use axum::http::Request;
 use axum::middleware::Next;
 use axum::response::Response;
 
-use temper_core::types::ids::ProfileId;
 use temper_services::auth::AuthenticatedProfile;
 
 use temper_services::error::ApiError;
-use temper_services::services::standing_service;
 use temper_services::state::AppState;
 
 /// Axum middleware that checks system-level access after authentication.
@@ -37,17 +35,10 @@ pub async fn require_system_access(
 
     match temper_services::auth::require_system_access(&state.pool, authed).await {
         Ok(_authorized) => {}
-        Err(temper_services::auth::AuthzError::SystemAccessDenied { .. }) => {
-            // Surface-side presentation: build the CLI-facing details payload.
-            let profile_id = ProfileId::from(authed.profile().id);
-            // The typed reason comes straight from the standing machine — no `access_mode` read.
-            // `admit` returns `Err(Refusal)` for exactly the state that just failed the gate; the
-            // `Ok` arm is only reachable on a race (approved between the gate check and here), in
-            // which case a generic denial is the safe fallback.
-            let refusal = standing_service::admit(&state.pool, profile_id)
-                .await
-                .err()
-                .unwrap_or(temper_principal::Refusal::NoStanding);
+        Err(temper_services::auth::AuthzError::SystemAccessDenied { refusal, .. }) => {
+            // Surface-side presentation: build the CLI-facing details payload. The typed
+            // refusal was computed once at the gate (`require_system_access`) — this surface
+            // renders it and does not re-derive it, so MCP and the API cannot disagree.
             // SECURITY NOTE: email and display_name are safe to return here because
             // the caller already proved ownership of this identity through OAuth.
             // We are reflecting their own profile data back to them.

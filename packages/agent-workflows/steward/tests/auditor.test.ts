@@ -139,14 +139,11 @@ describe("the persona boundary between the two allow-lists", () => {
 
   // The other direction of the same boundary, and the reason the auditor is a separate agent at all:
   // an auditor that can author findings is a citer, and spec §7's self-audit denial arm should never
-  // be the only thing between the two roles.
+  // be the only thing between the two roles. The authored-4 is four authoring verbs — create, edge
+  // assert, facet, fold — over three tools since the registry consolidated the edge verbs into
+  // `relationship` (`assert`/`fold` via its `action` discriminator).
   it("the auditor holds none of the authored-4", () => {
-    for (const authored of [
-      "create_resource",
-      "assert_relationship",
-      "facet_set",
-      "fold_relationship",
-    ]) {
+    for (const authored of ["create_resource", "relationship", "facet_set"]) {
       expect(AUDITOR_TOOLS).not.toContain(authored);
       expect(STEWARD_TOOLS).toContain(authored);
     }
