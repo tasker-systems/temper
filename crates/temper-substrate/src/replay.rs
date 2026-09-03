@@ -65,7 +65,7 @@ const PROJECTION_DUMPS: &[(&str, &str)] = &[
     // pure function of the hash; the home/owner columns ride the payload — D2 as amended,
     // per-home identity), so there is nothing to mask. The bytes are external and ride
     // no sidecar: replay proves the rows, the provider object's presence is D4's commit gate.
-    // (kb_blob_homes no longer exists: the home folds into this row — 20260901000050.)
+    // (kb_blob_homes no longer exists: the home folds into this row — 20260903000060.)
     (
         "kb_blobs",
         "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.id), '[]'::jsonb) FROM kb_blobs t",

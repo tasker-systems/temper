@@ -22,7 +22,7 @@
 //! OWNED by the ancestor and one SHARED to it: under the flat arms both flip invisible, so
 //! the seeds actually discriminate the arms they claim to cover.
 //!
-//! **The blob arms (2026-09-02, review F2).** `20260901000020`'s header claimed this oracle
+//! **The blob arms (2026-09-02, review F2).** `20260903000030`'s header claimed this oracle
 //! "keeps function == scalar-gates honest for the new arm too" — false at land time: the
 //! test carried ZERO `kb_blobs` seeds, so a revert of `readable_blobs` or the per-endpoint
 //! blob OR arms left every blob-related edge wrongly (in)visible with the oracle green.

@@ -2,7 +2,7 @@
 //! 2026-09-01, D7 — begin/append/finalize over the same content-addressed target, the
 //! segmented-INGEST precedent in blob terms).
 //!
-//! **Pre-ledger, by design** (migration `20260901000030` is the DDL's own contract): the
+//! **Pre-ledger, by design** (migration `20260903000040` is the DDL's own contract): the
 //! staged bytes never ride events — `blob_commit` refuses any bytes argument outright, so
 //! there is no projector, no payload type, and deliberately no replay story for these
 //! tables. The ledger's business begins at finalize, when the assembled whole first has a
@@ -14,7 +14,7 @@
 //! finalized, so every read here takes the owner in its WHERE and returns `None` for a
 //! session that is absent *or not the caller's* — the two are indistinguishable by
 //! design. `blob_readable_by_profile` is the read gate for COMMITTED blobs
-//! (`20260901000020` names it for those surfaces); do not reach for it here.
+//! (`20260903000030` names it for those surfaces); do not reach for it here.
 
 use anyhow::Result;
 use sqlx::PgPool;

@@ -1,6 +1,6 @@
 #![cfg(feature = "artifact-tests")]
-//! Binary blobs — the substrate commit path (`migrations/20260901000010_kb_blobs.sql` +
-//! `20260901000020_blob_endpoint_reads.sql`).
+//! Binary blobs — the substrate commit path (`migrations/20260903000020_kb_blobs.sql` +
+//! `20260903000030_blob_endpoint_reads.sql`).
 //!
 //! Spec: temper-artifacts/specs/2026-09-01-binary-blobs-design.md (D1-D4, D8-D10; vault copy
 //! 01a05d01-648e-74d1-a6b4-345c9bde744b). Read it before changing anything here.

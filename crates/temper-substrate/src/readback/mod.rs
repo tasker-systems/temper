@@ -2575,7 +2575,7 @@ pub async fn shape_by_id(
 }
 
 // Two reads over `kb_blobs` for the blob surfaces (spec: binary blobs, 2026-09-01 — D6). The gate
-// is `blob_readable_by_profile` — the predicate migration `20260901000020` NAMED for exactly this
+// is `blob_readable_by_profile` — the predicate migration `20260903000030` NAMED for exactly this
 // caller ("the blob read surfaces gate on the same question and must not restate it"): a blob is
 // readable iff its OWN home is, and neither relation nor commit response ever widens that
 // (blob-visibility-self-contained). Both fail closed as `Ok(None)`, like [`artifact_by_id`] — an
@@ -2745,7 +2745,7 @@ pub struct BlobRelationRow {
 /// gate), then `edges_visible_to` narrows the edges: an edge is listed only where BOTH the
 /// edge's home and the blob endpoint are readable, the same terms every edge listing reads
 /// under. Walks never come here — an edge listing may render a blob endpoint; a walk never
-/// materializes one (the deliberate D3 exclusion, restated in the 20260901000020
+/// materializes one (the deliberate D3 exclusion, restated in the 20260903000030
 /// migration).
 ///
 /// `Ok(None)` vs `Ok(Some(vec![]))`: an invisible-or-absent blob is `None` (404); a visible

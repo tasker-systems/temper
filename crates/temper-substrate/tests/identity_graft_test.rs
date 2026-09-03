@@ -59,7 +59,7 @@ async fn identity_graft_resolves(pool: sqlx::PgPool) {
         .expect("kb_profiles.email/preferences resolve");
 
     // Each of the grafted infra tables is queryable. kb_blob_files is NOT among them: the blob
-    // substrate migration (20260901000010) REPLACED it — asserted below, not assumed.
+    // substrate migration (20260903000020) REPLACED it — asserted below, not assumed.
     for table in [
         "kb_profile_auth_links",
         "kb_system_settings",
@@ -75,7 +75,7 @@ async fn identity_graft_resolves(pool: sqlx::PgPool) {
     }
 
     // The deprecated table is GONE, not dormant (spec D8): the drop is witnessed. kb_blob_homes
-    // joined it at 20260901000050 — the home folds into the kb_blobs row (D2 as amended,
+    // joined it at 20260903000060 — the home folds into the kb_blobs row (D2 as amended,
     // per-home identity), so the table's continued existence would be a silent second shape.
     for dropped in ["kb_blob_files", "kb_blob_homes"] {
         let gone: bool = sqlx::query_scalar(

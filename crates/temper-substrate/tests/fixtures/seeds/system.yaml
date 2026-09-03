@@ -42,7 +42,7 @@ event_types:
   # committed payload snapshot.
   - principal_standing_changed
   - principal_governance_changed
-  # Binary blobs (spec 2026-09-01, D4), added by migration 20260901000010 — same posture as the
+  # Binary blobs (spec 2026-09-01, D4), added by migration 20260903000020 — same posture as the
   # admission events above: a later migration than the canonical seed, so the drift guard must scan
   # ALL migrations to keep this list honest, and a reset+seed_system system MUST register it or the
   # commit door fails "event_type blob_committed not seeded".

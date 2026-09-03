@@ -19,7 +19,7 @@
 -- scope, get-or-create in the projector becomes per-scope, and the two readability routings
 -- (the scalar predicate and edges_visible_to's readable_blobs set) re-anchor from the homes
 -- join to the row's own columns — branch-for-branch, so the equivalence oracle's mirroring
--- requirement (20260901000020/20260901000040) still holds verbatim.
+-- requirement (20260903000030/20260903000050) still holds verbatim.
 
 ALTER TABLE kb_blobs
     ADD COLUMN home_table            VARCHAR(64),
@@ -120,7 +120,7 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
 $$;
 
 -- edges_visible_to: only the readable_blobs set changes — FROM the row, home columns in place
--- of the homes join. Every other fragment is the 20260901000040 body verbatim (the one-
+-- of the homes join. Every other fragment is the 20260903000050 body verbatim (the one-
 -- definition routings it restored are not touched here).
 CREATE OR REPLACE FUNCTION edges_visible_to(p_profile uuid)
 RETURNS TABLE(edge_id uuid)
@@ -181,7 +181,7 @@ AS $$
 $$;
 
 SELECT declare_migration(
-    20260901000050,
+    20260903000060,
     'additive',
     'kb_blobs identity per home (D2 as amended 2026-09-02): the home folds into the row (home_table/home_id/owner_profile_id/originator_profile_id, backfilled 1:1 from kb_blob_homes before the drop), global content_hash UNIQUE swapped for UNIQUE(home_table, home_id, content_hash), the projector''s get-or-create scoped to the payload''s own home (a cross-scope hash match is the caller''s own fresh row, asserted by the caller''s event — never another principal''s identity), and the two readability routings (blob_readable_by_profile, edges_visible_to''s readable_blobs set) re-anchored from the homes join to the row''s columns branch-for-branch. D1 unchanged: storage dedup stays pathname-level. The original shape''s defect: a second principal committing byte-identical bytes received the first principal''s row id — unreadable to them, uuidv7-dated to their commit. Design: temper-artifacts specs/2026-09-01-binary-blobs-design.md, D2 amendment block.'
 );

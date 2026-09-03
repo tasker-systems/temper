@@ -5,7 +5,7 @@
 -- ── Pre-ledger, by design ──────────────────────────────────────────────────────
 -- These rows are TRANSPORT state: bytes staged across several HTTP requests between
 -- begin and finalize. They never ride events — blob_commit refuses any bytes argument
--- outright (20260901000010: hash-not-bytes enforced absolutely) — so this table pair has
+-- outright (20260903000020: hash-not-bytes enforced absolutely) — so this table pair has
 -- no projector and deliberately NO replay story: the ledger's business begins at
 -- finalize, when the assembled whole first has a hash and kb_blobs gets its row. The
 -- substrate's other tables are event-projected or deterministically materialized; this
@@ -15,7 +15,7 @@
 --
 -- A staged session is not a blob, not a resource, not an edge: nothing in the graph
 -- surfaces can see it, and its only gate is owner-equality on the session row — never
--- blob_readable_by_profile, which is the read gate for COMMITTED blobs (20260901000020
+-- blob_readable_by_profile, which is the read gate for COMMITTED blobs (20260903000030
 -- names that predicate for blob read surfaces; a staged session is caller-private until
 -- finalized, the ingest precedent of list_blocks gating).
 --
@@ -35,7 +35,7 @@ CREATE TABLE kb_blob_uploads (
     -- The home the assembled blob will commit INTO. Standing is checked at begin (fail
     -- fast) AND re-checked at finalize before the provider put — standing can change
     -- mid-upload, and the put is the write that needs it. No FK on the anchor, the same
-    -- shape kb_blob_homes keeps (20260901000010) — the anchor lives in another table.
+    -- shape kb_blob_homes keeps (20260903000020) — the anchor lives in another table.
     home_table       VARCHAR(64) NOT NULL CHECK (home_table IN ('kb_contexts', 'kb_cogmaps')),
     home_id          UUID NOT NULL,
     -- The media type the blob will commit under. The allowlist is NOT checked here:
@@ -56,7 +56,7 @@ CREATE TABLE kb_blob_upload_segments (
 );
 
 SELECT declare_migration(
-    20260901000030,
+    20260903000040,
     'additive',
     'kb_blob_uploads + kb_blob_upload_segments (D7 segmented upload staging): pre-ledger transport state — bytes never ride events, no projector, deliberately outside replay''s diff set; caller-private via owner-equality on the session row until finalized (never blob_readable_by_profile, which gates COMMITTED blobs); segments immutable (idempotent append keyed on upload_id+seq+segment_hash, differing hash is a conflict), the pair dies at finalize and every finalize failure keeps it resumable — TTL reaper declared as a hole. Design: temper-artifacts specs/2026-09-01-binary-blobs-design.md.'
 );

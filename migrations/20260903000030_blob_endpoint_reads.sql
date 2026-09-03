@@ -121,7 +121,7 @@ LANGUAGE sql STABLE AS $$
 $$;
 
 SELECT declare_migration(
-    20260901000020,
+    20260903000030,
     'additive',
     'blob_readable_by_profile (a blob endpoint is readable iff its own home is readable — blob-visibility-self-contained); the endpoint_readable_by_profile kb_blobs arm; and the set-based edges_visible_to extended with a readable_blobs set + per-endpoint OR arms, mirroring the scalar helpers branch-for-branch as its 20260708000009 rewrite requires — without it a kb_blobs endpoint falls out of both OR arms and every blob-related edge is invisible. This is the DELIBERATE D3 admission: edge listings may render a blob-related edge; graph walks stay node-typed (their node universe is resources_visible_to''s resource set) and never return a blob as a node — exclusion is a decision, not an omission. Design: temper-artifacts specs/2026-09-01-binary-blobs-design.md.'
 );

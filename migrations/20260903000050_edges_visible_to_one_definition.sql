@@ -1,6 +1,6 @@
 -- edges_visible_to routes through the one definition — again.
 --
--- 20260901000020 (blob endpoint reads) extended this function with the readable_blobs set and
+-- 20260903000030 (blob endpoint reads) extended this function with the readable_blobs set and
 -- the kb_blobs endpoint arms, and in the same body restated two fragments whose single homes
 -- predate it:
 --
@@ -19,7 +19,7 @@
 --      witness, and it stayed red across S4/S5 because the test-db tier was not run.
 --
 -- This migration restores both routings (20260804000010 for the CTE, 20260712000010 for the
--- context read-set) and keeps every 20260901000020 blob addition — readable_blobs and the
+-- context read-set) and keeps every 20260903000030 blob addition — readable_blobs and the
 -- kb_blobs endpoint arms unchanged, still composed from the same two sets this function
 -- materializes, mirroring blob_readable_by_profile branch-for-branch as that migration
 -- requires.
@@ -87,7 +87,7 @@ AS $$
 $$;
 
 SELECT declare_migration(
-    20260901000040,
+    20260903000050,
     'additive',
-    'edges_visible_to routes the reachable-teams CTE through profile_reachable_teams (20260804000010''s one definition) and the context read-set through contexts_readable_by (20260712000010''s one read-set) again — 20260901000020 had restated both inline and its context copy was the pre-consolidation shape whose owned-by-team arm is flat, so an edge homed in an ancestor-team-OWNED context was invisible to members of teams beneath it (edges_visible_to_reaches_up_the_chain is the witness). Every 20260901000020 blob addition is kept unchanged.'
+    'edges_visible_to routes the reachable-teams CTE through profile_reachable_teams (20260804000010''s one definition) and the context read-set through contexts_readable_by (20260712000010''s one read-set) again — 20260903000030 had restated both inline and its context copy was the pre-consolidation shape whose owned-by-team arm is flat, so an edge homed in an ancestor-team-OWNED context was invisible to members of teams beneath it (edges_visible_to_reaches_up_the_chain is the witness). Every 20260903000030 blob addition is kept unchanged.'
 );

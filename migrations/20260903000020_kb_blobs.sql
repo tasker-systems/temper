@@ -257,7 +257,7 @@ BEGIN
     -- contradiction, so this RAISE could never fire on the home axis and a present-but-wrong
     -- home (identity-as-input: any event writer can send one) fell through to the projector's
     -- DDL CHECK — a scrubbed 5xx instead of this vocabulary refusal. The Rust `parse_home` and
-    -- the kb_blobs CHECK (20260901000050) stay the outer and inner layers; this is the middle
+    -- the kb_blobs CHECK (20260903000060) stay the outer and inner layers; this is the middle
     -- one, and it has to be live for the direct-write path to hear the same voice.
     IF ((v_home IS DISTINCT FROM 'kb_contexts' AND v_home IS DISTINCT FROM 'kb_cogmaps')
         OR (p_payload#>>'{home,id}')::uuid IS NULL OR v_owner IS NULL) THEN
@@ -300,7 +300,7 @@ END;
 $$;
 
 SELECT declare_migration(
-    20260901000010,
+    20260903000020,
     'additive',
     'kb_blobs (hash-UNIQUE, uuidv7 identity-as-input, metadata only — bytes external at the content-addressed pathname) + kb_blob_homes (the kb_resource_homes shape); kb_edges endpoint CHECKs admit kb_blobs (D3 — and ONLY there: properties, membership and region CHECKs stay closed); kb_blob_files DROPPED in the same migration (D8, zero production readers); the typed blob_committed event (domain, schemars payload_schema per the data_artifact_committed precedent) with _project_blob_committed (get-or-create on the hash; the first home stands) and blob_commit (hash-not-bytes enforced absolutely — no bytes argument exists; D9 cap + allowlist refusals name their vocabulary). Provider existence is verified Rust-side before the event is appended (D4). Design: temper-artifacts specs/2026-09-01-binary-blobs-design.md.'
 );

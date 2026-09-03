@@ -132,7 +132,7 @@ pub enum EventKind {
     /// 2026-09-01, D4; identity per home — D2 as amended). Fires `blob_committed`, projected
     /// by `_project_blob_committed` into `kb_blobs` get-or-create on (home, content_hash) —
     /// the home rides the row; there is no homes table. TYPED, with the committed
-    /// schemars fixture stamped by the boot-seed and registered by `20260901000010`. The payload
+    /// schemars fixture stamped by the boot-seed and registered by `20260903000020`. The payload
     /// carries the hash, never the bytes — the bytes live at the content-addressed pathname in
     /// external object storage.
     BlobCommitted,
