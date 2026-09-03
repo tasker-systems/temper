@@ -16020,7 +16020,7 @@
       },
       "StandingShape": {
         "type": "object",
-        "description": "A finding's evidential-standing shape (SQL `resource_standing_shape`). All fields are\nnon-nullable: the access gate is INSIDE the SQL (a `gated` CTE over `resources_readable_by`),\nso an unreadable finding yields zero rows — never a partial/nullable row — and the caller-side\nread returns `Option<StandingShape>`, `None` for \"not readable.\"",
+        "description": "A finding's evidential-standing shape (SQL `resource_standing_shape`). All fields are\nnon-nullable: the access gate is INSIDE the SQL (a `gated` CTE over `resources_readable_by`),\nso an unreadable finding yields zero rows — never a partial/nullable row — and the caller-side\nread returns `Option<StandingShape>`, `None` for \"not readable.\"\n\nReader-independent by decision: one value for every caller who can read the finding, with\nper-contributor attribution on the citation-audit trail, never on the shape (stored-aggregates\nexception: `internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`).",
         "required": [
           "finding_id",
           "citation_magnitude",
@@ -16035,40 +16035,40 @@
           "audit_coverage": {
             "type": "integer",
             "format": "int32",
-            "description": "How many of those distinct sources carry at least one audit. Monotone under the append-only\naudit trail (spec §4.1) — once a source is audited it stays covered. The *evaluated-ness*\naxis, and the thing that tells \"nobody tried\" apart from \"N sources were evaluated.\""
+            "description": "How many of those distinct sources carry at least one audit. Monotone under the append-only\naudit trail (spec §4.1) — once a source is audited it stays covered. The *evaluated-ness*\naxis, and the thing that tells \"nobody tried\" apart from \"N sources were evaluated.\"\n\nReader-independent by decision: one value for every caller who can read the finding, with\nper-contributor attribution on the citation-audit trail, never on the shape\n(stored-aggregates exception:\n`internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`)."
           },
           "band": {
             "type": "string",
-            "description": "Lossy read-time summary band (`provisional` / `reinforced` / `disputed` / `near-canonical`)\ncomputed over\nthe shape above. Carried WITH the shape, never presented instead of it (spec §1.1)."
+            "description": "Lossy read-time summary band (`provisional` / `reinforced` / `disputed` / `near-canonical`)\ncomputed over the shape above. Carried WITH the shape, never presented instead of it\n(spec §1.1).\n\nReader-independent by decision: one value for every caller who can read the finding, with\nper-contributor attribution on the citation-audit trail, never on the shape\n(stored-aggregates exception:\n`internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`)."
           },
           "citation_magnitude": {
             "type": "integer",
             "format": "int32",
-            "description": "Count of **distinct live** sources the finding cites (Set 5, spec §3.1). Monotone — citing\nmore evidence never lowers it. The *findability* axis: deliberately NOT `r_parent`, which\ncounts provenance rows including duplicates. Ten citations of one source is\n`r_parent = 10, citation_magnitude = 1`, and collapsing the two reintroduces the\nactor-count fallacy."
+            "description": "Count of **distinct live** sources the finding cites (Set 5, spec §3.1). Monotone — citing\nmore evidence never lowers it. The *findability* axis: deliberately NOT `r_parent`, which\ncounts provenance rows including duplicates. Ten citations of one source is\n`r_parent = 10, citation_magnitude = 1`, and collapsing the two reintroduces the\nactor-count fallacy.\n\nReader-independent by decision: one value for every caller who can read the finding, with\nper-contributor attribution on the citation-audit trail, never on the shape\n(stored-aggregates exception:\n`internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`)."
           },
           "citation_quality": {
             "type": "number",
             "format": "double",
-            "description": "Mean, over the **audited subset only**, of each audited source's decay-weighted audit value,\nin `[-1.0, 1.0]`. Reads as a neutral `0.0` when `audit_coverage = 0`: an unaudited finding\nmakes no quality claim, and its low standing comes from the band gate, never from a poisoned\nmean (spec §3.2)."
+            "description": "Mean, over the **audited subset only**, of each audited source's decay-weighted audit value,\nin `[-1.0, 1.0]`. Reads as a neutral `0.0` when `audit_coverage = 0`: an unaudited finding\nmakes no quality claim, and its low standing comes from the band gate, never from a poisoned\nmean (spec §3.2).\n\nReader-independent by decision: one value for every caller who can read the finding, with\nper-contributor attribution on the citation-audit trail, never on the shape\n(stored-aggregates exception:\n`internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`)."
           },
           "contradiction_balance": {
             "type": "number",
             "format": "double",
-            "description": "Supports minus contradicts, as a vector-sum over declared edges (spec §1) — not a headcount."
+            "description": "Supports minus contradicts, as a vector-sum over declared edges (spec §1) — not a headcount.\n\nReader-independent by decision: one value for every caller who can read the finding, with\nper-contributor attribution on the citation-audit trail, never on the shape\n(stored-aggregates exception:\n`internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`)."
           },
           "finding_id": {
             "$ref": "#/components/schemas/ResourceId",
-            "description": "`kb_resources.id` of the finding this shape describes."
+            "description": "`kb_resources.id` of the finding this shape describes. Reader-independent by decision: one\nvalue for every caller who can read the finding, with per-contributor attribution on the\ncitation-audit trail, never on the shape (stored-aggregates exception:\n`internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`)."
           },
           "freshness": {
             "type": "number",
             "format": "double",
-            "description": "Reversible time-decay off the finding's most recent uncorrected reinforcement; computed\nlive at read (never from the memo) because it must reflect the current moment."
+            "description": "Reversible time-decay off the finding's most recent uncorrected reinforcement; computed\nlive at read (never from the memo) because it must reflect the current moment.\n\nReader-independent by decision: one value for every caller who can read the finding, with\nper-contributor attribution on the citation-audit trail, never on the shape\n(stored-aggregates exception:\n`internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`)."
           },
           "r_parent": {
             "type": "number",
             "format": "double",
-            "description": "Reinforcement breadth: count of uncorrected provenance over the finding's live blocks."
+            "description": "Reinforcement breadth: count of uncorrected provenance over the finding's live blocks.\n\nReader-independent by decision: one value for every caller who can read the finding, with\nper-contributor attribution on the citation-audit trail, never on the shape\n(stored-aggregates exception:\n`internal/decisions/2026-08-26-stored-region-aggregates-are-region-truth.md`)."
           }
         }
       },
