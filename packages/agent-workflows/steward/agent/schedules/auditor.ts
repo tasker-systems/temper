@@ -111,7 +111,8 @@ import {
  *    work this credential has not already done.
  * 3. **A correlation id minted per tick and threaded across the app boundary** — logged here before
  *    the outbound fetch, sent as `x-auditor-correlation-id`, echoed back by the server, and stamped
- *    onto every claimed job so each session's `invocation_open` inherits it server-side. The prompt
+ *    onto every claimed job so each session's invocation envelope (`invocation_manage`, action
+ *    `open`) inherits it server-side. The prompt
  *    below therefore does NOT mention the correlation: one tick is one dispatch act plus N run-grain
  *    sessions, and an agent that passed the tick id to a write tool would collapse act grain into
  *    run grain.
