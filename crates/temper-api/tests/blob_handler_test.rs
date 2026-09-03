@@ -1501,8 +1501,13 @@ async fn a_provider_bail_is_scrubbed_from_the_wire(pool: PgPool) {
         !wire.contains("SECRET-PROVIDER-TEXT") && !wire.contains("store_maintenance"),
         "the provider's own response text must never reach the wire; body was {wire}"
     );
-    assert!(
-        wire.contains("blob provider put"),
-        "the 5xx still names the DOOR so an operator can route it; body was {wire}"
+    // [widened on main — f3f5a80f] a 5xx body now carries the GENERIC internal message; even
+    // the door context stays server-side (tracing carries it, the wire carries nothing). The
+    // scrub property this witness guards is stronger, not weaker: the provider's text AND the
+    // door context are both absent, and the constant message is what an operator's log search
+    // correlates against.
+    assert_eq!(
+        body["error"]["message"], "An internal error occurred",
+        "a 5xx renders the generic internal message; body was {wire}"
     );
 }
