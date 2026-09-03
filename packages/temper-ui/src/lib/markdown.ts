@@ -14,9 +14,9 @@
 // This module is DOM-FREE, deliberately, so it is servable in both environments. Sanitization
 // is client-only: DOMPurify's server-side story requires a DOM emulation stack (jsdom) whose
 // transitive tree does not load on every serverless runtime, and a security gate must not be
-// runtime-sensitive. `MarkdownRenderer` gates the `{@html}` on the client-loaded sanitizer and
-// never falls back to unsanitized output — which is why `prepareMarkdown` may return parse
-// output that only the sanitizer may render.
+// runtime-sensitive. `MarkdownRenderer` gates the {@html} on the client-loaded sanitizer
+// (`$lib/sanitize` owns the pass and its config) and never falls back to unsanitized output —
+// which is why `prepareMarkdown` may return parse output that only the sanitizer may render.
 import { Marked } from 'marked';
 import { markedHighlight } from 'marked-highlight';
 import { highlightCode } from '$lib/highlight';
@@ -49,15 +49,6 @@ export const MAX_SOURCE_LENGTH = 262_144;
  * sanitizer unchanged.
  */
 export const REFUSAL_HTML = '<p class="md-refusal">This document could not be rendered.</p>';
-
-/**
- * Config for the client-side DOMPurify call in `MarkdownRenderer`. Author styling must not
- * reach the rendered document: the CSP deliberately admits style ATTRIBUTES
- * (`style-src-attr 'unsafe-inline'` in svelte.config.js — d3 and app.html need it), so this
- * config is the gate for them. FORBID_ATTR over allowlist surgery: every other DOMPurify
- * default holds.
- */
-export const SANITIZE_CONFIG = { FORBID_ATTR: ['style'] };
 
 /**
  * Markdown → HTML without the sanitizer, in one synchronous pass for both environments. Total:
