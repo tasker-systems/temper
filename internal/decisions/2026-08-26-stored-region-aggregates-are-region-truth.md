@@ -158,3 +158,34 @@ endpoint the reader cannot see still moves the number. `resource_live_citations`
 
 So it has **no member-equivalent gate and no documented exception anywhere.** If one record covers
 both, it must say that the region metrics carry a bound and a statement that standing does not.
+
+## Amended 2026-09-03 — the exception's scope now names the standing components
+
+Decided in `temper-artifacts:specs/2026-09-03-evidential-standing-phase-c-visibility-posture-design.md`
+(task `01a063ee-a367-7790-b2fa-777e601751e1`). The standing components — `StandingShape`'s six:
+`citation_magnitude`, `audit_coverage`, `citation_quality`, `contradiction_balance`, `freshness`,
+`r_parent` (the Set-5 model; the Set-3 breadth/survival components this record originally named are
+retired) — join the region metrics under this exception.
+
+- **The finding gate plays the member gate's role:** `resource_standing_shape` returns zero rows
+  unless the caller reads the finding — the anchor is fully visible or nothing is returned. That is
+  stronger than the region bound in the anchor's direction, and there is deliberately no
+  contributor-side counterpart: the components are evidential metadata of a claim the caller fully
+  sees (the bibliographic case), so the exception's *about the anchor* test holds for them
+  directly.
+- **Attribution stays behind per-reader checks.** The citation-audit trail is the shipped
+  sibling-read pattern; any future drill-down rides it and never the shape. No per-contributor
+  identity rides the wire without a per-reader gate.
+- **The agent rule covers `StandingShape` from day one** — *partial-visibility agents do not read
+  stored aggregates*, stated in `internal/agents/key-patterns.md` beside the standing bullet and
+  covering the evidence doors (`temper resource evidence`, `GET /api/resources/{id}/evidence`).
+- **The statements land at the fields** — the wire type's docs and the SQL `COMMENT`s state the
+  posture; they ship with the implementing PR, per this record's own requirement that an exception
+  be stated at the field, never inferred from the fact that it ships.
+- **The scope condition above extends to the standing components**, with the standing-specific
+  triggers named in the design doc: small-finding invertibility (±1 balance on a single edge),
+  any ranking consumer of the shape, and any drill-down surface beyond the trail pattern.
+
+The two classes this record covers now stand symmetrically: region metrics bounded by the member
+gate, standing components bounded by the finding gate, both reader-independent by decision and
+stated at their fields, with the scope condition governing both.
