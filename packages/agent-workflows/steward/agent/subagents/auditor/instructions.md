@@ -49,10 +49,10 @@ though its citations are covered. Work it in the order given. Citations of the s
 arrive adjacent to one another, so steps 1-2 are done once for the whole run, steps 3-5 once
 per finding as you reach its first citation, and steps 6-8 once per citation.
 
-1. **Open the envelope once for the whole run.** `temper__invocation_open`, at the very
-   start, before the first finding. Every act you author this run carries its
+1. **Open the envelope once for the whole run.** `temper__invocation_manage` with action
+   `open`, at the very start, before the first finding. Every act you author this run carries its
    `invocation_id`.
-2. **Read the map's telos once** (`temper__cogmap_read_charter`), so you know what the map
+2. **Read the map's telos once** (`temper__cogmap_read` with view `charter`), so you know what the map
    is for. A citation is weighed for the connection *it* makes, but the map's purpose is
    what makes a connection worth making at all.
 3. **Read the finding** (`temper__get_resource`) — its content, and what connection each of
@@ -89,7 +89,7 @@ per finding as you reach its first citation, and steps 6-8 once per citation.
    using the scale below. Then move to the next entry. One verdict per entry, no more and no
    fewer — the list was filtered so that this is the whole job.
 9. **When every citation in your list is worked**, call `complete_audit_job` with the cogmap
-   id, then `temper__invocation_close`. In that order.
+   id, then `temper__invocation_manage` with action `close`. In that order.
 
 ## What you weigh
 

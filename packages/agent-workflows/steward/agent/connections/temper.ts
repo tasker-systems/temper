@@ -22,9 +22,12 @@ import { STEWARD_TOOLS } from "../lib/tool-allowlists.js";
  *   is cached until ~60s before expiry.
  * - **Approval is `never()`** — the MVP steward is fully autonomous + audited (no
  *   HITL): a single team self-cogmap with no cross-map promotion (design D8).
- * - **24-tool allow-list** scoped to the steward persona (`../lib/tool-allowlists`). The 9 excluded
- *   tools (region reads + genesis/admin/access) are role-inappropriate for a steward — and
- *   `record_citation_audit` is excluded for a load-bearing reason: the auditor's fan-out opens a
+ * - **Allow-list** scoped to the steward persona (`../lib/tool-allowlists`), held at the
+ *   registry's consolidation grain and witnessed against the server's live registry —
+ *   `tests/allowlist-registry.test.ts` parses the registered names out of the server source and
+ *   fails on any name it does not carry, so a consolidation cannot strand an entry silently. The
+ *   excluded tools are role-inappropriate for a steward — and `record_citation_audit` is excluded
+ *   for a load-bearing reason: the auditor's fan-out opens a
  *   ROOT steward session before delegating to the subagent (eve offers no way to start a session on
  *   a subagent directly), and this list is what makes that hop capability-bounded rather than
  *   prompt-bounded. Asserted by `tests/auditor.test.ts`, not left to inspection.

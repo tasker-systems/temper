@@ -32,8 +32,9 @@ import { requireEnv, temperFetch } from "../lib/temper-auth.js";
  *
  * The id also reaches the data layer, deterministically and with nothing asked of the model: `/dispatch`
  * stamps it on every job it claims (`kb_workflow_jobs.correlation_id`), and each session's
- * `invocation_open` inherits it server-side from that active job (`kb_invocations.correlation_id`). So a
- * tick's runs are queryable, not just greppable. The fan-out prompt therefore does NOT mention the
+ * invocation envelope (`invocation_manage`, action `open`) inherits it server-side from that
+ * active job (`kb_invocations.correlation_id`). So a tick's runs are queryable, not just
+ * greppable. The fan-out prompt therefore does NOT mention the
  * correlation: one tick is one dispatch act plus N run-grain sessions, and an agent that passed the tick
  * id to a write tool's `correlation_id` would collapse act grain into run grain.
  * Design: temper-artifacts:specs/2026-07-06-steward-dispatch-correlation-id-design.md
