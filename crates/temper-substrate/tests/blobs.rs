@@ -314,6 +314,75 @@ async fn the_ledger_carries_the_hash_never_the_bytes(pool: sqlx::PgPool) {
     assert!(payload.get("bytes").is_none() && payload.get("content").is_none());
 }
 
+/// N4 (2026-09-03 review): the projector's owner/originator mapping follows the
+/// ResourceCreated precedent — owner ← the payload's owner, originator ←
+/// COALESCE(originator, owner). FAILS IF: the columns come back swapped (owner ← COALESCE,
+/// originator ← owner) — the shape was inert while every commit passed `originator: None`
+/// (both mappings degenerate to owner=caller), but it would mint swapped provenance the
+/// moment on-behalf-of is threaded, and the erasure joins key these columns.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_projector_maps_owner_and_originator_like_resource_created(pool: sqlx::PgPool) {
+    let (owner, emitter, home) = blob_world(&pool, "n4-provenance").await;
+    let originator = ProfileId::from(common::insert_profile(&pool, "n4-origin").await);
+
+    let bytes = b"provenance-bytes".to_vec();
+    let (mut p, _hash, pathname) = params(home, owner, &bytes, "image/png", emitter);
+    p.originator = Some(originator);
+    let store = InMemoryBlobStore::default().with_object(pathname);
+    writes::commit_blob(&pool, &store, p).await.unwrap();
+
+    let (row_owner, row_originator): (Uuid, Uuid) =
+        sqlx::query_as("SELECT owner_profile_id, originator_profile_id FROM kb_blobs")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        row_owner,
+        owner.uuid(),
+        "owner is the payload's owner — never the originator"
+    );
+    assert_eq!(
+        row_originator,
+        originator.uuid(),
+        "originator is the payload's originator when present; COALESCE falls to the owner \
+         only when the payload carries none"
+    );
+}
+
+/// N6 (2026-09-03 review): the wrapper's home-vocabulary arm is LIVE — a present-but-wrong
+/// home table (identity-as-input: any event writer can send one) refuses in the wrapper's
+/// own voice. FAILS IF: the RAISE arm is vacuous again (`IS NOT DISTINCT FROM` on both
+/// sides of the pair) and the bad home reaches the projector's DDL CHECK — a scrubbed 5xx
+/// on the service faces instead of the `blob_commit:` vocabulary refusal.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_wrong_vocabulary_home_refuses_in_the_wrappers_own_voice(pool: sqlx::PgPool) {
+    let (owner, emitter, home) = blob_world(&pool, "n6-vocabulary").await;
+    let hash = sha(b"wrong-home-vocabulary");
+    let payload = serde_json::json!({
+        "blob_id": Uuid::now_v7(),
+        // Present, non-null, and simply the WRONG kind of anchor.
+        "home": {"table": "kb_resources", "id": home.uuid()},
+        "owner_profile_id": owner.uuid(),
+        "content_hash": hash,
+        "blob_pathname": blob_pathname(&hash),
+        "content_type": "image/png",
+        "content_bytes": 42i64,
+    });
+
+    let err = sqlx::query("SELECT blob_commit($1, $2, $3, $4)")
+        .bind(payload)
+        .bind(emitter.uuid())
+        .bind(CAP)
+        .bind(&ALLOWLIST[..])
+        .execute(&pool)
+        .await
+        .expect_err("a wrong-vocabulary home must be refused");
+    assert!(
+        err.to_string().contains("a blob needs a home"),
+        "the refusal speaks the wrapper's vocabulary, not a constraint failure: {err}"
+    );
+}
+
 /// `refusal-names-its-vocabulary` (D9): the cap refusal names the cap, the allowlist refusal
 /// lists the allowlist.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]

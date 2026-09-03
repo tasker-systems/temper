@@ -78,9 +78,16 @@ BEGIN
     VALUES (v_id, v_hash, p_payload->>'blob_pathname', p_payload->>'content_type',
             (p_payload->>'content_bytes')::bigint,
             v_home_table, v_home_id,
+            -- owner/originator mapping (N4, 2026-09-03 review): owner ← the payload's owner,
+            -- originator ← COALESCE(originator, owner) — the ResourceCreated precedent
+            -- (20260624000002 _project_resource_created) and this migration's own backfill
+            -- (:32-38) both copy straight across. The swapped shape was inert while every
+            -- commit passed originator: None (both mappings degenerate to owner=caller) and
+            -- replay-stable for the same reason, but would have minted swapped provenance the
+            -- moment on-behalf-of is threaded, and the erasure joins key these columns.
+            (p_payload->>'owner_profile_id')::uuid,
             COALESCE((p_payload->>'originator_profile_id')::uuid,
                      (p_payload->>'owner_profile_id')::uuid),
-            (p_payload->>'owner_profile_id')::uuid,
             p_event, p_event, v_occurred)
     ON CONFLICT (home_table, home_id, content_hash) DO NOTHING
     RETURNING id INTO v_inserted;

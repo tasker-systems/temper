@@ -80,9 +80,13 @@ pub fn single_request_threshold_refusal(
 /// minted, or the EXISTING id on a dedup hit within the caller's own home (get-or-create is
 /// per-home, D2 as amended; a hash known only to other scopes is the caller's fresh row).
 /// `deduped` reports a hit in the caller's home: the provider upload was skipped.
+/// `content_type` is the row's STORED media type — the first committer's on a dedup hit
+/// (N2, 2026-09-03 review: the projector's conflict arm never updates the row, so echoing
+/// the caller's re-commit declaration would report a type that was never stored).
 pub struct BlobCommitOutcome {
     pub blob_id: BlobId,
     pub content_hash: String,
+    pub content_type: String,
     pub deduped: bool,
 }
 
@@ -296,9 +300,27 @@ pub async fn commit_blob(
     .await
     .map_err(map_commit_err)?;
 
+    // N2 (2026-09-03 review): the outcome reports the row's STORED media type, read back
+    // from the committed row. On a fresh commit it is the type just written; on a dedup
+    // hit (the wrapper's get-or-create returned the EXISTING row) it is the FIRST
+    // committer's type — what read-through serves — never the re-commit's declaration.
+    // One PK read covers every path uniformly, including the concurrent-commit race where
+    // the Rust-side pre-check missed and the SQL-level get-or-create deduped.
+    // `content_type!` is sound at HEAD: the wrapper refuses a NULL type before the event,
+    // and nothing nulls the column until the erasure build (its declared arm must widen
+    // this read — N3's non-null-override note).
+    let stored_type: String = sqlx::query_scalar!(
+        r#"SELECT content_type AS "content_type!" FROM kb_blobs WHERE id = $1"#,
+        id.uuid()
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|e| ApiError::internal_scrubbed("blob commit read failed", e))?;
+
     Ok(BlobCommitOutcome {
         blob_id: id,
         content_hash,
+        content_type: stored_type,
         deduped,
     })
 }
@@ -354,9 +376,10 @@ fn map_commit_err(e: anyhow::Error) -> ApiError {
 // commit: the F-2 standing two-step, the readability-gated dedup pre-check, the provider
 // put, and the wrapper's verbatim refusals — same ordering, same authorities.
 
-/// What a finalize reports to its surface: the commit outcome plus the two fields the
-/// wire response needs that live on the session (the media type it declared at begin,
-/// and the assembled whole's byte count).
+/// What a finalize reports to its surface: the commit outcome plus the assembled whole's
+/// byte count. `content_type` is the row's STORED media type (the first committer's on a
+/// dedup hit — the same N2 rule the single-request path answers to), not the session's
+/// begin-time declaration, which the row may not carry.
 pub struct BlobUploadFinalizeOutcome {
     pub blob_id: BlobId,
     pub content_hash: String,
@@ -577,7 +600,7 @@ pub async fn finalize_upload(
             owner: caller,
             originator: None,
             content_hash: content_hash.clone(),
-            content_type: session.content_type.clone(),
+            content_type: session.content_type,
             content_bytes: body.len() as i64,
             max_bytes: config.max_bytes,
             allowlist: &config.allowlist,
@@ -593,11 +616,23 @@ pub async fn finalize_upload(
         .await
         .map_err(|e| ApiError::internal_scrubbed("blob upload cleanup failed", e))?;
 
+    // N2: the stored media type, read back — on a dedup hit the row is the FIRST
+    // committer's, and the response must say what is stored, not what was declared.
+    // `content_type!` is sound at HEAD (wrapper refuses NULL type; erasure is unbuilt —
+    // N3's non-null-override note).
+    let stored_type: String = sqlx::query_scalar!(
+        r#"SELECT content_type AS "content_type!" FROM kb_blobs WHERE id = $1"#,
+        blob_id.uuid()
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|e| ApiError::internal_scrubbed("blob commit read failed", e))?;
+
     Ok(BlobUploadFinalizeOutcome {
         blob_id,
         content_hash,
         deduped,
-        content_type: session.content_type,
+        content_type: stored_type,
         content_bytes: body.len() as i64,
     })
 }

@@ -31,7 +31,7 @@ class BlobCommitResponse(BaseModel):
     blob_id: UUID = Field(description="A `kb_blobs.id` value — one immutable, content-addressed binary blob, homed like a resource and related to resources by edges (spec: binary blobs, 2026-09-01).")
     content_bytes: StrictInt
     content_hash: StrictStr = Field(description="Bare sha256 hex — the dedup key, the erasure join key, and the proof the ledger keeps instead of bytes (`ledger-carries-hash-not-bytes`).")
-    content_type: StrictStr = Field(description="The media type the blob was committed under (allowlist-checked, D9).")
+    content_type: StrictStr = Field(description="The row's STORED media type — allowlist-checked at commit (D9). On a dedup hit this is the FIRST committer's type (what read-through serves), never the re-commit's declaration (N2, 2026-09-03 review).")
     deduped: StrictBool
     __properties: ClassVar[List[str]] = ["blob_id", "content_bytes", "content_hash", "content_type", "deduped"]
 

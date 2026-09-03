@@ -2843,7 +2843,11 @@ export interface components {
              *     instead of bytes (`ledger-carries-hash-not-bytes`).
              */
             content_hash: string;
-            /** @description The media type the blob was committed under (allowlist-checked, D9). */
+            /**
+             * @description The row's STORED media type — allowlist-checked at commit (D9). On a dedup hit this
+             *     is the FIRST committer's type (what read-through serves), never the re-commit's
+             *     declaration (N2, 2026-09-03 review).
+             */
             content_type: string;
             deduped: boolean;
         };

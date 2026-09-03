@@ -144,17 +144,19 @@ pub async fn commit(
             caller,
             home_table,
             home_id,
-            content_type: content_type.clone(),
+            content_type,
             bytes: bytes.into(),
             surface,
         },
     )
     .await?;
 
+    // N2 (2026-09-03 review): the response carries the row's STORED media type — the first
+    // committer's on a dedup hit — never this request's declaration.
     Ok(Json(BlobCommitResponse {
         blob_id: outcome.blob_id,
         content_hash: outcome.content_hash,
-        content_type,
+        content_type: outcome.content_type,
         content_bytes,
         deduped: outcome.deduped,
     }))

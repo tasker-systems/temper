@@ -338,6 +338,46 @@ async fn the_same_bytes_committed_twice_are_one_blob(pool: PgPool) {
     assert_eq!(rows, 1, "one hash, one row");
 }
 
+// ─── Witness 4b: a dedup hit reports the STORED content type (N2) ─────────────
+
+/// A re-commit that DECLARES a different media type gets the row's STORED type back — the
+/// first committer's, which is what read-through serves. FAILS IF: the response echoes the
+/// caller's declaration (content-type drift: the ledger says one type, the bytes serve
+/// another, and the caller's client records a type that was never stored).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_dedup_hit_reports_the_stored_content_type(pool: PgPool) {
+    let cfg = blob_cfg(1 << 20, &["image/png", "text/plain"], 64 * 1024);
+    let app = blob_app(pool, cfg).await;
+    let (_profile, ctx, token) = owner(&app.pool).await;
+
+    let bytes: Vec<u8> = b"content-type-drift-witness".to_vec();
+    let first = commit_multipart(&app, &token, bytes.clone(), "image/png", "kb_contexts", ctx)
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(first.status().as_u16(), 200);
+    let first: serde_json::Value = first.json().await.expect("json");
+    assert_eq!(
+        first["content_type"], "image/png",
+        "a fresh commit stores its declaration"
+    );
+
+    // Same bytes, same home, DIFFERENT declared type: the row keeps the first committer's
+    // type (the projector's conflict arm never updates it), so the response must report
+    // what is STORED, not what this request declared.
+    let second = commit_multipart(&app, &token, bytes, "text/plain", "kb_contexts", ctx)
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(second.status().as_u16(), 200);
+    let second: serde_json::Value = second.json().await.expect("json");
+    assert_eq!(second["deduped"], true, "the re-commit is a dedup hit");
+    assert_eq!(
+        second["content_type"], "image/png",
+        "a dedup hit reports the row's stored media type, never the re-commit's declaration"
+    );
+}
+
 // ─── Witness 5: the cap is the wrapper's, taught from real config ────────────
 
 /// Under the threshold but over the cap: the wrapper refuses, and the refusal names the cap in

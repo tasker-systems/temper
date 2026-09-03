@@ -24,7 +24,7 @@ module Temper::Generated
     # Bare sha256 hex — the dedup key, the erasure join key, and the proof the ledger keeps instead of bytes (`ledger-carries-hash-not-bytes`).
     attr_accessor :content_hash
 
-    # The media type the blob was committed under (allowlist-checked, D9).
+    # The row's STORED media type — allowlist-checked at commit (D9). On a dedup hit this is the FIRST committer's type (what read-through serves), never the re-commit's declaration (N2, 2026-09-03 review).
     attr_accessor :content_type
 
     attr_accessor :deduped

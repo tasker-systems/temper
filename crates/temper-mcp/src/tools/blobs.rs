@@ -191,6 +191,31 @@ fn map_api_error(action: &str, err: ApiError) -> rmcp::ErrorData {
     }
 }
 
+/// The scrub for a MID-STREAM read failure (N1, 2026-09-03 review): the stream error is
+/// third-party content — every provider chunk error embeds the content-addressed pathname,
+/// and reqwest's Display can attach the provider host (`for url (…)`) — and unlike the HTTP
+/// face (headers already sent, the body-stream error aborts server-side), the MCP face
+/// consumes the stream INSIDE the tool, so the raw text would otherwise render in the tool
+/// result and breach D6's "the provider address never appears anywhere in the response".
+///
+/// The F9 posture, spelled for this face: the full error reaches `tracing`, the tool result
+/// names only the DOOR. The error is NOT dropped — it stays a visible internal error, so a
+/// truncated read can never masquerade as a short blob.
+fn scrub_stream_error(action: &str, e: impl std::fmt::Display) -> rmcp::ErrorData {
+    tracing::error!(
+        context = action,
+        error = %e,
+        "blob read stream failed (scrubbed from the tool result)"
+    );
+    rmcp::ErrorData::internal_error(
+        format!(
+            "{action}: the blob's bytes could not be streamed from storage — the failure \
+             detail is in the server log"
+        ),
+        None,
+    )
+}
+
 /// The configured store + config pair every blob action needs, or the shared disabled
 /// refusal (`blob_service::blob_disabled` — spelled once, every surface hears the same
 /// voice). Absent, not broken: the `NullBroker` posture.
@@ -273,7 +298,7 @@ async fn read_blob(
         .next()
         .await
         .transpose()
-        .map_err(|e| rmcp::ErrorData::internal_error(format!("{ACTION}: {e}"), None))?
+        .map_err(|e| scrub_stream_error(ACTION, e))?
     {
         bytes.extend_from_slice(&chunk);
     }
@@ -376,7 +401,7 @@ async fn commit_blob(
             caller,
             home_table: Some(home_table),
             home_id: Some(home_id.to_string()),
-            content_type: content_type.clone(),
+            content_type,
             bytes: bytes.into(),
             surface: Surface::Mcp,
         },
@@ -387,7 +412,8 @@ async fn commit_blob(
     let response = temper_core::types::blob::BlobCommitResponse {
         blob_id: outcome.blob_id,
         content_hash: outcome.content_hash,
-        content_type,
+        // N2: the row's STORED media type — the first committer's on a dedup hit.
+        content_type: outcome.content_type,
         content_bytes,
         deduped: outcome.deduped,
     };
@@ -629,5 +655,51 @@ mod tests {
         );
         assert_inline_string_enum(&props["polarity"], &["forward", "inverse"]);
         assert_inline_string_enum(&props["direction"], &["blob_as_source", "blob_as_target"]);
+    }
+
+    /// N1 (2026-09-03 review): a mid-stream provider failure is scrubbed to a
+    /// door-named static message — the provider's own text (the content-addressed
+    /// pathname, the host) must never reach the tool result — and the failure is NOT
+    /// dropped: it stays an internal error, so a truncated read can never pass as a
+    /// short blob. FAILS IF: the raw error is formatted into the rmcp error again, or
+    /// the scrub swallows the error into a success.
+    #[test]
+    fn a_mid_stream_provider_failure_is_scrubbed_to_a_door_named_error() {
+        const PROVIDER_TEXT: &str = "blob provider read: 503 Service Unavailable: \
+             {\"code\":\"store_maintenance\",\"message\":\"SECRET-PROVIDER-TEXT\"} \
+             for url (https://blob-store.example.com/ab/cdef0123)";
+        let err = scrub_stream_error("blob_read", anyhow_error_for_test(PROVIDER_TEXT));
+
+        let msg = err.message;
+        assert!(
+            !msg.contains("SECRET-PROVIDER-TEXT")
+                && !msg.contains("store_maintenance")
+                && !msg.contains("blob-store.example.com")
+                && !msg.contains("cdef0123"),
+            "the provider's own text must never reach the tool result; message was {msg}"
+        );
+        assert!(
+            msg.contains("blob_read"),
+            "the scrubbed message still names the DOOR so an operator can route it: {msg}"
+        );
+        assert_eq!(
+            err.code,
+            rmcp::model::ErrorCode::INTERNAL_ERROR,
+            "a mid-stream failure stays a visible internal error — never a success"
+        );
+    }
+
+    /// Stand-in for the anyhow error a provider chunk stream actually carries: the
+    /// Display chain is what the scrub sees, and what N1 leaked.
+    fn anyhow_error_for_test(text: &str) -> TestStreamError {
+        TestStreamError(text.to_string())
+    }
+
+    struct TestStreamError(String);
+
+    impl std::fmt::Display for TestStreamError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(&self.0)
+        }
     }
 }

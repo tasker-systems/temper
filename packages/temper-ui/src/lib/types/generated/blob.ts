@@ -21,7 +21,9 @@ export type BlobCommitResponse = { blob_id: BlobId,
  */
 content_hash: string, 
 /**
- * The media type the blob was committed under (allowlist-checked, D9).
+ * The row's STORED media type — allowlist-checked at commit (D9). On a dedup hit this
+ * is the FIRST committer's type (what read-through serves), never the re-commit's
+ * declaration (N2, 2026-09-03 review).
  */
 content_type: string, content_bytes: bigint, deduped: boolean, };
 

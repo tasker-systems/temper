@@ -872,15 +872,42 @@ impl DbBackend {
         .map_err(api_err)?
         .ok_or_else(|| TemperError::NotFound(format!("edge {edge_id} not found")))?;
 
-        // Clause 1 is SOURCE-TYPED, because blob-endpoint edges (D3) have no
+        // Clause 1 is SOURCE-TYPED. Blob-endpoint edges (D3) have no
         // `can_modify_resource` to run — a blob is immutable and homed like a resource, so
         // its floor is: live row (`NOT is_folded`, the tombstone floor restated for the one
         // table that keeps one) AND the caller can read the blob. The authority arm proper
         // stays clause 2 (container-write on the home), exactly as it subsumes clause 1's
-        // authority arms for context-homed resources. `kb_cogmaps` as a SOURCE admits no
-        // authorization decision yet (no surface asserts one), so it denies — a new endpoint
-        // kind must arrive with its own decision, never inherit one by default.
+        // authority arms for context-homed resources.
+        //
+        // N5 (2026-09-03 review): the two SOURCE kinds a blob-endpoint edge can carry —
+        // `kb_resources` targeting a blob (the relate `blob_as_target` act) and
+        // `kb_cogmaps` (the same act with a map peer — the MAP is the edge's source) —
+        // were created through `relate_blob`'s gate train (peer readable + blob-home
+        // authorable), so their fold answers to the SAME authority: clause 1 is the floor
+        // only (live + readable source), never a stricter arm. `can_modify_resource` on the
+        // resource source was stricter than the gate that created the edge, so its creator
+        // could never retract their own creation; the `_ => Forbidden` catch-all made every
+        // cogmap-sourced edge creatable but unmutable forever (the "no surface asserts one"
+        // comment had gone false the day relate shipped the cogmap-peer arm).
         match home.source_table.as_str() {
+            "kb_resources" if home.target_table == "kb_blobs" => {
+                let live_and_readable: Option<bool> = sqlx::query_scalar!(
+                    r#"SELECT endpoint_readable_by_profile($1, 'kb_resources', r.id) AS "ok!"
+                         FROM kb_resources r
+                        WHERE r.id = $2"#,
+                    *self.profile_id,
+                    home.source_id,
+                )
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(api_err)?;
+                if !live_and_readable.unwrap_or(false) {
+                    // The edge's source is gone (tombstoned — the predicate carries the
+                    // is_active floor) or unreadable from under it: refused as absent,
+                    // the same posture the blob arm renders.
+                    return Err(TemperError::NotFound(format!("edge {edge_id} not found")));
+                }
+            }
             "kb_resources" => self.check_can_modify_next(home.source_id).await?,
             "kb_blobs" => {
                 let live_and_readable: Option<bool> = sqlx::query_scalar!(
@@ -896,6 +923,24 @@ impl DbBackend {
                 if !live_and_readable.unwrap_or(false) {
                     // The edge row was visible, but its blob is gone from under it (erasure
                     // pre-pass) or unreadable — an inconsistent probe, refused as absent.
+                    return Err(TemperError::NotFound(format!("edge {edge_id} not found")));
+                }
+            }
+            "kb_cogmaps" => {
+                let live_and_readable: Option<bool> = sqlx::query_scalar!(
+                    r#"SELECT cogmap_readable_by_profile($1, g.id) AS "ok!"
+                         FROM kb_cogmaps g
+                        WHERE g.id = $2"#,
+                    *self.profile_id,
+                    home.source_id,
+                )
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(api_err)?;
+                if !live_and_readable.unwrap_or(false) {
+                    // The map is absent or unreadable from under the edge — refused as
+                    // absent (kb_cogmaps keeps no tombstone column; the empty join IS the
+                    // floor, the same shape the blob arm renders).
                     return Err(TemperError::NotFound(format!("edge {edge_id} not found")));
                 }
             }

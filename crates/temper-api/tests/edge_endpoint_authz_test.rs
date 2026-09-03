@@ -592,3 +592,166 @@ async fn a_folded_edge_is_unmutable(pool: PgPool) {
         "re-folding a folded edge must be NotFound, got {refolded:?}"
     );
 }
+
+// ─── blob-endpoint edges: the fold gate answers to the gate that created them (N5) ─────────
+//
+// `relate_blob` creates blob-endpoint edges under (peer readable + blob-home authorable); its
+// retraction must answer to the SAME authority, with clause 1 as the floor only. Before the N5
+// fix, a resource-sourced blob edge folded only under `can_modify_resource(source)` — stricter
+// than the gate that created it, so its creator could never retract their own creation — and a
+// cogmap-sourced blob edge (the relate `blob_as_target` act with a map peer: the MAP is the
+// edge's SOURCE) hit the `_ => Forbidden` catch-all and was creatable but unmutable forever.
+
+use temper_core::types::blob::BlobRelationDirection;
+use temper_core::types::ids::BlobId;
+use temper_services::services::blob_service;
+use temper_substrate::blob_store::InMemoryBlobStore;
+use temper_substrate::writes;
+
+/// One committed blob homed in the caller's own context, plus the edge-creation helper: a
+/// `relate_blob` call, the only surface that asserts blob-endpoint edges. The hash is a
+/// literal (temper-api's tests carry no sha2): the wrapper enforces hash-not-bytes and
+/// pathname = hash's address, never a re-digest.
+async fn blob_in_context(pool: &sqlx::PgPool, profile: Uuid, context: Uuid) -> BlobId {
+    let bytes: &[u8] = b"n5-fold-gate-bytes";
+    let hash = "9f2b0d4c1a7e5f83b6c9d0e2f4a6b8c0d2e4f6a8b0c2d4e6f8a0b2c4d6e8f0ab".to_string();
+    let pathname = temper_substrate::blob_store::blob_pathname(&hash);
+    let store = InMemoryBlobStore::default().with_object(pathname.clone());
+    let emitter =
+        writes::resolve_emitter(pool, ProfileId::from(profile), Surface::ApiHttp.marker())
+            .await
+            .expect("emitter resolves");
+    writes::commit_blob(
+        pool,
+        &store,
+        writes::CommitBlobParams {
+            id: BlobId::from(uuid::Uuid::now_v7()),
+            home: temper_substrate::payloads::AnchorRef::context(
+                temper_core::types::ids::ContextId::from(context),
+            ),
+            owner: ProfileId::from(profile),
+            originator: None,
+            content_hash: hash,
+            content_type: "image/png".to_string(),
+            content_bytes: bytes.len() as i64,
+            max_bytes: 10 * 1024 * 1024,
+            allowlist: ["image/png".to_string()].as_slice(),
+            emitter,
+        },
+    )
+    .await
+    .expect("blob commits")
+}
+
+async fn relate_blob_edge(
+    pool: &sqlx::PgPool,
+    profile: Uuid,
+    blob: BlobId,
+    peer_table: &str,
+    peer_id: Uuid,
+) -> uuid::Uuid {
+    use temper_core::types::blob::BlobRelationAssertRequest;
+    let ack = blob_service::relate_blob(
+        pool,
+        ProfileId::from(profile),
+        blob,
+        &BlobRelationAssertRequest {
+            direction: BlobRelationDirection::BlobAsTarget,
+            peer_table: peer_table.to_string(),
+            peer_id,
+            edge_kind: graph::EdgeKind::LeadsTo,
+            polarity: graph::Polarity::Forward,
+            label: "derivation_source".to_string(),
+            weight: 1.0,
+            act: Default::default(),
+        },
+        Default::default(),
+        Surface::ApiHttp,
+    )
+    .await
+    .expect("relate creates the blob-endpoint edge");
+    ack.edge_handle
+}
+
+/// N5's missing arm: a cogmap-sourced blob edge (the map IS the source) is foldable by the
+/// edge-home author. FAILS IF: clause 1 denies `kb_cogmaps` sources unconditionally again —
+/// the creator could assert the edge but never retract it, a lifecycle dead end.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_cogmap_sourced_blob_edge_is_foldable_by_the_home_author(pool: PgPool) {
+    let (author, context, telos) = profile_with_resource(&pool, "n5-cogmap-author").await;
+
+    let cogmap: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_cogmaps (name, telos_resource_id) VALUES ($1, $2) RETURNING id",
+    )
+    .bind("n5-map")
+    .bind(telos)
+    .fetch_one(&pool)
+    .await
+    .expect("seed a cogmap");
+    // The relate gate needs the map READABLE (peer clause); the explicit read-grant branch
+    // of `cogmap_readable_by_profile` is the fixture shortcut.
+    common::fixtures::grant_cogmap_write(&pool, cogmap, author).await;
+
+    let blob = blob_in_context(&pool, author, context).await;
+    let edge_handle = relate_blob_edge(&pool, author, blob, "kb_cogmaps", cogmap).await;
+
+    DbBackend::new(pool.clone(), ProfileId::from(author))
+        .fold_relationship(FoldRelationship {
+            edge_handle: EdgeId::from(edge_handle),
+            reason: Some("n5: the creator can retract their own edge".to_string()),
+            act: Default::default(),
+            origin: Surface::ApiHttp,
+        })
+        .await
+        .expect("the cogmap-sourced edge folds under the same authority that created it");
+
+    let folded: bool = sqlx::query_scalar("SELECT is_folded FROM kb_edges WHERE id = $1")
+        .bind(edge_handle)
+        .fetch_one(&pool)
+        .await
+        .expect("edge row");
+    assert!(folded, "the fold landed");
+}
+
+/// N5's asymmetry: a resource-sourced blob edge folds under the gate that CREATED it (peer
+/// readable + blob-home authorable) — not under the stricter `can_modify_resource(peer)`,
+/// which would leave the edge's creator unable to retract their own creation.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_resource_sourced_blob_edge_folds_under_its_create_gate(pool: PgPool) {
+    let (caller, context, _resource) = profile_with_resource(&pool, "n5-res-caller").await;
+    let (peer, _peer_context, peer_resource) = profile_with_resource(&pool, "n5-res-peer").await;
+
+    // The caller can READ the peer resource but cannot MODIFY it — exactly the standing
+    // relate_blob's peer clause admits.
+    sqlx::query(
+        "INSERT INTO kb_access_grants (subject_table, subject_id, principal_table, principal_id, \
+                                       can_read, can_write, granted_by_profile_id) \
+         VALUES ('kb_resources', $1, 'kb_profiles', $2, true, false, $3)",
+    )
+    .bind(peer_resource)
+    .bind(caller)
+    .bind(peer)
+    .execute(&pool)
+    .await
+    .expect("seed a read-only resource grant");
+
+    let blob = blob_in_context(&pool, caller, context).await;
+    let edge_handle = relate_blob_edge(&pool, caller, blob, "kb_resources", peer_resource).await;
+
+    DbBackend::new(pool.clone(), ProfileId::from(caller))
+        .fold_relationship(FoldRelationship {
+            edge_handle: EdgeId::from(edge_handle),
+            reason: Some("n5: fold answers to the create gate, not a stricter one".to_string()),
+            act: Default::default(),
+            origin: Surface::ApiHttp,
+        })
+        .await
+        .expect("the creator folds their own blob-edge");
+
+    let folded: bool = sqlx::query_scalar("SELECT is_folded FROM kb_edges WHERE id = $1")
+        .bind(edge_handle)
+        .fetch_one(&pool)
+        .await
+        .expect("edge row");
+    assert!(folded, "the fold landed");
+}

@@ -252,8 +252,15 @@ BEGIN
 
     -- The commit's vocabulary: home (context or cogmap anchor) + owner. The homes INSERT would
     -- fail on a null with a constraint message that names none of this.
-    IF (v_home IS NOT DISTINCT FROM 'kb_contexts' AND v_home IS NOT DISTINCT FROM 'kb_cogmaps')
-       OR (p_payload#>>'{home,id}')::uuid IS NULL OR v_owner IS NULL THEN
+    -- N1 arm (2026-09-03 review, N6): the home half must be an OR-of-neither — the original
+    -- `IS NOT DISTINCT FROM 'kb_contexts' AND IS NOT DISTINCT FROM 'kb_cogmaps'` is a
+    -- contradiction, so this RAISE could never fire on the home axis and a present-but-wrong
+    -- home (identity-as-input: any event writer can send one) fell through to the projector's
+    -- DDL CHECK — a scrubbed 5xx instead of this vocabulary refusal. The Rust `parse_home` and
+    -- the kb_blobs CHECK (20260901000050) stay the outer and inner layers; this is the middle
+    -- one, and it has to be live for the direct-write path to hear the same voice.
+    IF ((v_home IS DISTINCT FROM 'kb_contexts' AND v_home IS DISTINCT FROM 'kb_cogmaps')
+        OR (p_payload#>>'{home,id}')::uuid IS NULL OR v_owner IS NULL) THEN
         RAISE EXCEPTION 'blob_commit: a blob needs a home (a kb_contexts or kb_cogmaps anchor) '
                         'and an owner_profile_id — got home table %, owner %',
                         COALESCE(v_home, '<null>'), COALESCE(v_owner::text, '<null>');

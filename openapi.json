@@ -10197,7 +10197,7 @@
           },
           "content_type": {
             "type": "string",
-            "description": "The media type the blob was committed under (allowlist-checked, D9)."
+            "description": "The row's STORED media type — allowlist-checked at commit (D9). On a dedup hit this\nis the FIRST committer's type (what read-through serves), never the re-commit's\ndeclaration (N2, 2026-09-03 review)."
           },
           "deduped": {
             "type": "boolean"
