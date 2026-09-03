@@ -18,21 +18,33 @@
 //!      `trigger=` — a misnamed argument)
 //!   2. every REQUIRED property of a tool the doc calls is mentioned  (catches the silent omission
 //!      of `title` / `source` / `resource` / `weight` / `disposition`)
+//!
+//! Consolidation note (the tool-table rewrite that merged the four relationship verbs into
+//! `relationship` and open/close into `invocation_manage`): check 2 now reads the consolidated
+//! inputs, whose schemars `required` is `action` alone — every other field is `#[serde(default)]`,
+//! and the per-action requirements moved into the dispatchers (`relationships.rs`'s action table,
+//! `invocations.rs`'s match arms), enforced per call at tick time. What this guard's check 2
+//! therefore still bites on: a doc call missing `action` (or `view`/`cogmap` on `cogmap_read`,
+//! whose input kept required fields). What it can no longer see, stated rather than left to be
+//! discovered: a doc `assert` omitting `source`, or a `close` omitting `disposition`, passes
+//! here and fails only in the dispatcher — that per-action table lives with the dispatch code
+//! and its tests, and this file deliberately does not restate it (a second copy is one more
+//! thing to drift).
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use temper_core::types::api::SearchParams;
-use temper_core::types::invocation::{InvocationCloseInput, InvocationOpenInput};
 use temper_core::types::steward::{StewardAdvanceWatermarkInput, StewardDeltaInput};
-use temper_mcp::tools::cognitive_maps::CogmapReadCharterInput;
+use temper_mcp::tools::cognitive_maps::CogmapReadInput;
 use temper_mcp::tools::facets::FacetSetInput;
-use temper_mcp::tools::relationships::{AssertRelationshipInput, FoldRelationshipInput};
+use temper_mcp::tools::invocations::InvocationManageInput;
+use temper_mcp::tools::relationships::RelationshipInput;
 use temper_mcp::tools::resources::CreateResourceInput;
 
 /// Pseudocode placeholders the recipe is allowed to write in an argument list. `act` stands for the
 /// authorship envelope (`invocation_id` / `confidence` / `reasoning` / `model`), which the doc
-/// defines once at the top of the loop rather than repeating on all nine calls.
+/// defines once at the top of the loop rather than repeating on every call.
 const PSEUDOCODE_TOKENS: &[&str] = &["act"];
 
 fn skill_doc() -> String {
@@ -81,24 +93,20 @@ fn schemas() -> Vec<ToolSchema> {
             serde_json::to_value(schemars::schema_for!(CreateResourceInput)).unwrap(),
         ),
         tool(
-            "assert_relationship",
-            serde_json::to_value(schemars::schema_for!(AssertRelationshipInput)).unwrap(),
+            "relationship",
+            serde_json::to_value(schemars::schema_for!(RelationshipInput)).unwrap(),
         ),
         tool(
             "facet_set",
             serde_json::to_value(schemars::schema_for!(FacetSetInput)).unwrap(),
         ),
         tool(
-            "fold_relationship",
-            serde_json::to_value(schemars::schema_for!(FoldRelationshipInput)).unwrap(),
+            "invocation_manage",
+            serde_json::to_value(schemars::schema_for!(InvocationManageInput)).unwrap(),
         ),
         tool(
-            "invocation_open",
-            serde_json::to_value(schemars::schema_for!(InvocationOpenInput)).unwrap(),
-        ),
-        tool(
-            "invocation_close",
-            serde_json::to_value(schemars::schema_for!(InvocationCloseInput)).unwrap(),
+            "cogmap_read",
+            serde_json::to_value(schemars::schema_for!(CogmapReadInput)).unwrap(),
         ),
         tool(
             "steward_ingest_delta",
@@ -107,10 +115,6 @@ fn schemas() -> Vec<ToolSchema> {
         tool(
             "steward_advance_watermark",
             serde_json::to_value(schemars::schema_for!(StewardAdvanceWatermarkInput)).unwrap(),
-        ),
-        tool(
-            "cogmap_read_charter",
-            serde_json::to_value(schemars::schema_for!(CogmapReadCharterInput)).unwrap(),
         ),
         tool(
             "search",
@@ -269,11 +273,10 @@ fn parser_finds_the_recipe_calls() {
 
     for expected in [
         "create_resource",
-        "assert_relationship",
+        "relationship",
         "facet_set",
-        "fold_relationship",
-        "invocation_open",
-        "invocation_close",
+        "invocation_manage",
+        "cogmap_read",
         "steward_advance_watermark",
     ] {
         assert!(
