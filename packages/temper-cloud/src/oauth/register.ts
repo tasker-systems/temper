@@ -150,6 +150,15 @@ function mcpCompatResponse(req: RegistrationRequest): RegistrationResponse {
   };
 }
 
+/** The registered grants of a DCR client, or null when no such client exists. */
+export async function dcrClientGrants(db: NeonClient, clientId: string): Promise<string[] | null> {
+  const rows = await db`
+    SELECT grant_types FROM kb_oauth_dcr_clients WHERE client_id = ${clientId}
+  `;
+  const row = rows[0] as { grant_types: string[] } | undefined;
+  return row ? row.grant_types : null;
+}
+
 /** Verifies a Connect-class client's secret at mint time; the DCR arm of `verifyMachineSecret`. */
 export async function verifyDcrClientSecret(
   db: NeonClient,
