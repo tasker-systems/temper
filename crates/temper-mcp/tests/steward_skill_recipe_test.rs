@@ -37,7 +37,7 @@ use std::path::PathBuf;
 use temper_core::types::api::SearchParams;
 use temper_core::types::steward::{StewardAdvanceWatermarkInput, StewardDeltaInput};
 use temper_mcp::tools::cognitive_maps::CogmapReadInput;
-use temper_mcp::tools::facets::FacetSetInput;
+use temper_mcp::tools::facets::{EdgeFacetSetInput, FacetSetInput, FacetSetUnifiedInput};
 use temper_mcp::tools::invocations::InvocationManageInput;
 use temper_mcp::tools::relationships::RelationshipInput;
 use temper_mcp::tools::resources::CreateResourceInput;
@@ -260,6 +260,83 @@ fn skill_recipe_names_every_required_argument() {
         "the steward skill doc shows calls missing a REQUIRED argument — the model follows the \
          recipe and the server rejects the call with `missing field`:\n  {}",
         failures.join("\n  ")
+    );
+}
+
+/// The facet payload's shape is part of the advertised contract, and the boundary enforces it.
+///
+/// In production (steward runs `wrun_01M1MH5F9W3TC086NYQJ0D7HR7`, `wrun_01M1MYW3AMPDFQ4ZKH4AZZQWSY`,
+/// 2026-09-03/04) the model sent `values` as a JSON string and only learned the object constraint
+/// from a Postgres error — eight times across two runs, ~2 minutes of full-context re-read per
+/// retry. An untyped `serde_json::Value` field advertises *any* JSON type, so the model had nothing
+/// to guess from. These tests pin both halves of the fix: the schema says `object`, and a
+/// non-object payload is rejected at deserialization — before any database round trip.
+#[test]
+fn facet_inputs_type_values_as_an_object_and_reject_scalars_at_the_boundary() {
+    for (name, schema) in [
+        (
+            "facet_set (unified)",
+            serde_json::to_value(schemars::schema_for!(FacetSetUnifiedInput)).unwrap(),
+        ),
+        (
+            "facet_set (resource)",
+            serde_json::to_value(schemars::schema_for!(FacetSetInput)).unwrap(),
+        ),
+        (
+            "edge_facet_set",
+            serde_json::to_value(schemars::schema_for!(EdgeFacetSetInput)).unwrap(),
+        ),
+    ] {
+        let values = schema
+            .pointer("/properties/values")
+            .unwrap_or_else(|| panic!("{name}: `values` missing from the advertised schema"));
+        assert_eq!(
+            values.get("type").and_then(|t| t.as_str()),
+            Some("object"),
+            "{name}: `values` must be typed `object` in the advertised schema so a caller can \
+             learn the shape without calling the tool; got {values}"
+        );
+    }
+
+    // The advertised type must also be the accepted type: a scalar payload fails at the
+    // deserialization boundary, never at the database.
+    let scalar_payloads = [
+        serde_json::json!("a string"),
+        serde_json::json!(7),
+        serde_json::json!(true),
+        serde_json::json!([1, 2]),
+    ];
+    for payload in &scalar_payloads {
+        let reject = |name: &str, ok: bool| {
+            assert!(
+                ok,
+                "{name}: a non-object `values` payload ({payload}) must be rejected at the \
+                 deserialization boundary — never forwarded to the database"
+            );
+        };
+        reject(
+            "facet_set (unified)",
+            serde_json::from_value::<FacetSetUnifiedInput>(payload.clone()).is_err(),
+        );
+        reject(
+            "facet_set (resource)",
+            serde_json::from_value::<FacetSetInput>(payload.clone()).is_err(),
+        );
+        reject(
+            "edge_facet_set",
+            serde_json::from_value::<EdgeFacetSetInput>(payload.clone()).is_err(),
+        );
+    }
+
+    // And the positive control: an object payload still parses — the guard has a direction.
+    assert!(
+        serde_json::from_value::<FacetSetUnifiedInput>(serde_json::json!({
+            "target": "resource",
+            "resource": "019f2391-e001-7933-b88a-28fb92e56ac1",
+            "values": {"node_label": "concern", "status": "open"}
+        }))
+        .is_ok(),
+        "an object `values` payload must remain accepted"
     );
 }
 

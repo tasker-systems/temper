@@ -9,6 +9,28 @@ use crate::format::OutputFormat;
 use crate::output;
 use temper_core::types::facet_requests::{FacetAck, FacetSetRequest};
 
+/// Parse a `--values` CLI argument into the facet payload: an **object** of `key` → value marks.
+///
+/// The wire contract has been a typed object everywhere since the 2026-09 steward runs, where a
+/// scalar payload survived every schema and died eight times at the database. The CLI rejects it
+/// here instead, naming what was received so the operator fixes the invocation in one step.
+pub(crate) fn parse_values_object(raw: &str) -> Result<serde_json::Map<String, serde_json::Value>> {
+    let value: serde_json::Value = serde_json::from_str(raw).map_err(|e| {
+        crate::error::TemperError::Config(format!("--values must be valid JSON: {e}"))
+    })?;
+    let kind = match &value {
+        serde_json::Value::Object(_) => return Ok(value.as_object().expect("checked").clone()),
+        serde_json::Value::Null => "null".to_string(),
+        serde_json::Value::Bool(b) => format!("boolean {b}"),
+        serde_json::Value::Number(n) => format!("number {n}"),
+        serde_json::Value::String(s) => format!("string {s:?}"),
+        serde_json::Value::Array(a) => format!("array of {} element(s)", a.len()),
+    };
+    Err(crate::error::TemperError::Config(format!(
+        "--values must be a JSON object of marks ({{\"key\": value, …}}), got {kind}"
+    )))
+}
+
 /// Run `temper resource facet <ref> --values <json> [--weight <f64>]`.
 pub fn run(
     r#ref: String,
@@ -18,8 +40,7 @@ pub fn run(
     fmt: OutputFormat,
 ) -> Result<()> {
     let resource = temper_workflow::operations::parse_ref(&r#ref)?;
-    let values: serde_json::Value = serde_json::from_str(&values)
-        .map_err(|e| crate::error::TemperError::Project(format!("invalid --values JSON: {e}")))?;
+    let values = parse_values_object(&values)?;
     let req = FacetSetRequest {
         resource: resource.0,
         values,

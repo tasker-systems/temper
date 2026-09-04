@@ -102,12 +102,16 @@ async fn a_clause_citation_rides_the_advances_edge_and_dies_with_it(pool: sqlx::
 
     // ── the write: a clause citation on the link ──────────────────────────────────────────────
     let clause = serde_json::json!({ "clause": "decomposition-preserves-rigor" });
+    let clause_map = clause
+        .as_object()
+        .expect("facet payload is an object")
+        .clone();
     app.client
         .facets()
         .set_on_edge(
             edge,
             &EdgeFacetSetRequest {
-                values: clause.clone(),
+                values: clause_map,
                 weight: 1.0,
                 act: Default::default(),
             },
@@ -232,7 +236,10 @@ async fn a_non_owner_cannot_facet_someone_elses_edge(pool: sqlx::PgPool) {
         .post(app.url(&format!("/api/relationships/{edge}/facets")))
         .bearer_auth(&stranger_token)
         .json(&EdgeFacetSetRequest {
-            values: serde_json::json!({ "clause": "not-yours" }),
+            values: serde_json::json!({ "clause": "not-yours" })
+                .as_object()
+                .expect("facet payload is an object")
+                .clone(),
             weight: 1.0,
             act: Default::default(),
         })

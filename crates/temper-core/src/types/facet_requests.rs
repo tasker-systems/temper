@@ -23,8 +23,10 @@ fn default_facet_weight() -> f64 {
 pub struct FacetSetRequest {
     /// The resource whose facet property is being set — a pre-resolved id.
     pub resource: Uuid,
-    /// The facet's typed value payload.
-    pub values: serde_json::Value,
+    /// The facet's typed value payload — an **object** of `key` → value marks; one property row
+    /// per inner key. A map, not a bare `Value`, so the published schema says `object` and a
+    /// scalar payload is refused at this boundary rather than surfacing as a database error.
+    pub values: serde_json::Map<String, serde_json::Value>,
     /// Relative weight of the facet; defaults to `1.0` when omitted, matching the MCP tool and CLI
     /// (both default it) so a raw API caller need not supply it.
     #[serde(default = "default_facet_weight")]
@@ -46,8 +48,9 @@ pub struct FacetSetRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct EdgeFacetSetRequest {
-    /// The facet's typed value payload.
-    pub values: serde_json::Value,
+    /// The facet's typed value payload — an **object** of `key` → value marks; same constraint as
+    /// [`FacetSetRequest::values`].
+    pub values: serde_json::Map<String, serde_json::Value>,
     /// Relative weight of the facet; defaults to `1.0` when omitted, matching [`FacetSetRequest`].
     #[serde(default = "default_facet_weight")]
     pub weight: f64,
@@ -190,11 +193,38 @@ mod tests {
     use super::*;
     use crate::types::authorship::ConfidenceBand;
 
+    fn values_example() -> serde_json::Map<String, serde_json::Value> {
+        serde_json::json!({"summary": "example"})
+            .as_object()
+            .expect("example payload is an object")
+            .clone()
+    }
+
+    /// The typed-object wire contract: a scalar `values` payload must be refused at
+    /// deserialization — never forwarded to the database to learn the shape from an error.
+    #[test]
+    fn facet_set_request_rejects_scalar_values_payloads() {
+        for payload in [
+            serde_json::json!("a string"),
+            serde_json::json!(7),
+            serde_json::json!([1, 2]),
+        ] {
+            let wire = serde_json::json!({
+                "resource": Uuid::nil(),
+                "values": payload,
+            });
+            assert!(
+                serde_json::from_value::<FacetSetRequest>(wire).is_err(),
+                "scalar `values` ({payload}) must not deserialize"
+            );
+        }
+    }
+
     #[test]
     fn facet_set_request_round_trips_without_act() {
         let req = FacetSetRequest {
             resource: Uuid::nil(),
-            values: serde_json::json!({"summary": "example"}),
+            values: values_example(),
             weight: 1.0,
             act: ActInput::default(),
         };
@@ -213,7 +243,7 @@ mod tests {
     fn facet_set_request_round_trips_with_flattened_act() {
         let req = FacetSetRequest {
             resource: Uuid::nil(),
-            values: serde_json::json!({"summary": "example"}),
+            values: values_example(),
             weight: 0.5,
             act: ActInput {
                 invocation_id: None,

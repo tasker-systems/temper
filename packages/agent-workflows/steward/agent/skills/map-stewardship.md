@@ -44,7 +44,8 @@ for src in delta.new_or_changed:
       temper__relationship(action="assert", source=node, target=other, edge_kind=<kind>, polarity=<pol>,
                            label=<label>, weight=<0.0-1.0>, act)
     for f in facets(node):                                # stamp `as_of` on any volatile claim; see "Dated grounding"
-      temper__facet_set(resource=node, values=f, act)
+      temper__facet_set(resource=node, values=<object of marks: {"as_of": "2026-09-04", "status": "open"}>, act)
+      # values is ALWAYS an object of key→value marks — never a bare string or list.
 
 # Before closing, self-check: every act this tick carried invocation_id + confidence.
 # LAST and ONCE. event_id is a real kb_events.id (delta.max_event_id), never a resource_id —
