@@ -7,6 +7,7 @@ import type { NeonClient } from "../../../src/db.js";
 import { handleToken } from "../../../src/oauth/endpoints.js";
 import { getPublicJwks } from "../../../src/oauth/keys.js";
 import { hashToken } from "../../../src/oauth/mint.js";
+import { handleClientRegistration } from "../../../src/oauth/register.js";
 import { makeTestDb } from "../helpers/oauth-db.js";
 
 function tokenRequest(body: Record<string, string>): Request {
@@ -253,5 +254,140 @@ describe("client_credentials grant", () => {
       db,
     );
     expect(res.status).toBe(200);
+  });
+
+  it("ignores a scope param on a temper-issued machine client — the tmpr_ claim shape is a wire contract", async () => {
+    await seedTemperClient(sql, "tmpr_scope", "s3cr3t");
+    const res = await handleToken(
+      tokenRequest({
+        grant_type: "client_credentials",
+        client_id: "tmpr_scope",
+        client_secret: "s3cr3t",
+        scope: "temper:call",
+      }),
+      db,
+    );
+    expect(res.status).toBe(200);
+    const jwks = createLocalJWKSet(await getPublicJwks());
+    const { payload } = await jwtVerify((await res.json()).access_token as string, jwks, {
+      issuer: "https://issuer.test",
+      audience: "https://audience.test",
+    });
+    expect(payload.scope).toBeUndefined();
+  });
+});
+
+describe("client_credentials grant — DCR (Connect) clients", () => {
+  let sql: postgres.Sql;
+  let db: NeonClient;
+
+  beforeAll(async () => {
+    const { privateKey } = await generateKeyPair("Ed25519", { extractable: true });
+    process.env.AS_SIGNING_KEY_PKCS8 = await exportPKCS8(privateKey);
+    process.env.AS_SIGNING_KID = "test-kid-1";
+    process.env.AS_ISSUER = "https://issuer.test";
+    process.env.AS_AUDIENCE = "https://audience.test";
+    process.env.AS_ACCESS_TTL_SECONDS = "900";
+    ({ sql, db } = makeTestDb());
+  });
+
+  afterAll(async () => {
+    await sql.end();
+  });
+
+  beforeEach(async () => {
+    await sql`TRUNCATE kb_machine_clients CASCADE`;
+    await sql`TRUNCATE kb_oauth_dcr_clients`;
+    await sql`DELETE FROM kb_profiles WHERE handle LIKE 'agent-%'`;
+  });
+
+  async function registerConnectClient(): Promise<{ clientId: string; secret: string }> {
+    const res = await handleClientRegistration(
+      new Request("https://as/oauth/clients", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          client_name: "probe connector",
+          redirect_uris: ["https://connect.vercel.com/callback"],
+          grant_types: ["client_credentials"],
+          token_endpoint_auth_method: "client_secret_basic",
+        }),
+      }),
+      db,
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { client_id: string; client_secret: string };
+    return { clientId: body.client_id, secret: body.client_secret };
+  }
+
+  function mintRequest(clientId: string, secret: string, scope?: string): Request {
+    const basic = Buffer.from(`${clientId}:${secret}`).toString("base64");
+    return new Request("https://as/oauth/token", {
+      method: "POST",
+      headers: { authorization: `Basic ${basic}` },
+      body: new URLSearchParams({
+        grant_type: "client_credentials",
+        ...(scope ? { scope } : {}),
+      }),
+    });
+  }
+
+  it("mints with the requested scope carried as the token's scope claim", async () => {
+    const { clientId, secret } = await registerConnectClient();
+
+    const res = await handleToken(mintRequest(clientId, secret, "temper:call"), db);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { access_token: string; expires_in: number };
+    expect(body.expires_in).toBe(900);
+
+    const jwks = createLocalJWKSet(await getPublicJwks());
+    const { payload } = await jwtVerify(body.access_token, jwks, {
+      issuer: "https://issuer.test",
+      audience: "https://audience.test",
+    });
+    expect(payload.azp).toBe(clientId);
+    expect(payload.gty).toBe("client-credentials");
+    expect(payload.sub).toBe(`${clientId}@clients`);
+    // The measurement: what was asked for rides the token verbatim — enscoping is Phase 1.
+    expect(payload.scope).toBe("temper:call");
+  });
+
+  it("mints without a scope claim when none was requested", async () => {
+    const { clientId, secret } = await registerConnectClient();
+
+    const res = await handleToken(mintRequest(clientId, secret), db);
+    expect(res.status).toBe(200);
+    const jwks = createLocalJWKSet(await getPublicJwks());
+    const { payload } = await jwtVerify((await res.json()).access_token as string, jwks, {
+      issuer: "https://issuer.test",
+      audience: "https://audience.test",
+    });
+    expect(payload.scope).toBeUndefined();
+  });
+
+  it("refuses unauthorized_client when the registration lacks the client_credentials grant", async () => {
+    // Registered with a non-minting grant set (what a later connector edit could produce);
+    // registration itself only ever mints rows whose Connect class includes the grant.
+    const clientId = "conn_test-nogrant";
+    await sql`
+      INSERT INTO kb_oauth_dcr_clients
+        (client_id, client_secret_hash, client_name, grant_types, redirect_uris,
+         token_endpoint_auth_method)
+      VALUES (${clientId}, ${hashToken("s3cr3t")}, 'probe connector',
+              ${["authorization_code"]}, ${["https://connect.vercel.com/callback"]},
+              'client_secret_basic')
+    `;
+
+    const res = await handleToken(mintRequest(clientId, "s3cr3t", "temper:call"), db);
+    expect(res.status).toBe(401);
+    expect(((await res.json()) as { error: string }).error).toBe("unauthorized_client");
+  });
+
+  it("rejects a DCR client presenting a wrong secret with invalid_client", async () => {
+    const { clientId } = await registerConnectClient();
+
+    const res = await handleToken(mintRequest(clientId, "wrong"), db);
+    expect(res.status).toBe(401);
+    expect(((await res.json()) as { error: string }).error).toBe("invalid_client");
   });
 });

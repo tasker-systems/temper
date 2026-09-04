@@ -64,8 +64,13 @@ export async function mintAccessToken(
  * Mints an EdDSA access token for a temper-issued machine principal. The claim shape mirrors an
  * Auth0 client_credentials token exactly — `gty:"client-credentials"`, `azp:<client_id>`,
  * `sub:"<client_id>@clients"`, no email — so `normalize_machine` (Rust) detects it unchanged.
+ *
+ * `scope` is for DCR-registered (Connect) clients only: the raw requested scope string rides
+ * the token verbatim, server-styled per RFC 6749 §3.3 — what the probe measures is pass-through,
+ * and enscoping is Phase 1's decision. The `tmpr_` machine path passes nothing and its claim
+ * shape stays exactly as shipped (a wire contract — scope must be ABSENT there, not empty).
  */
-export async function mintMachineAccessToken(clientId: string): Promise<string> {
+export async function mintMachineAccessToken(clientId: string, scope?: string): Promise<string> {
   const { key, kid } = await getSigningKey();
   const issuer = requireEnv("AS_ISSUER");
   const audience = requireEnv("AS_AUDIENCE");
@@ -75,6 +80,7 @@ export async function mintMachineAccessToken(clientId: string): Promise<string> 
   return await new SignJWT({
     azp: clientId,
     gty: "client-credentials",
+    ...(scope ? { scope } : {}),
   })
     .setProtectedHeader({ alg: "EdDSA", kid })
     .setSubject(`${clientId}@clients`)

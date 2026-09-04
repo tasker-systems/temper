@@ -13,6 +13,13 @@ export interface AsMetadata {
   grant_types_supported: string[];
   code_challenge_methods_supported: string[];
   token_endpoint_auth_methods_supported: string[];
+  /**
+   * Declared `false` rather than omitted: Vercel Connect reads this flag to decide whether CIMD
+   * is available, and an absent field is not an honest `no`. Real dynamic registration runs at
+   * `/oauth/clients` (see `registration_endpoint` below); CIMD would additionally require
+   * `private_key_jwt` client auth or public machine clients, neither of which this AS ships.
+   */
+  client_id_metadata_document_supported: boolean;
 }
 
 /** RFC 8414 authorization-server metadata for the legacy Auth0-fronted instance (temperkb.io). */
@@ -31,12 +38,15 @@ export interface Auth0AsMetadata {
 /**
  * Builds RFC 8414 metadata for the Temper AS itself. Trims a trailing slash from `issuer`.
  *
- * `registration_endpoint` advertises the thin DCR proxy (`crates/temper-mcp/src/discovery.rs`,
- * reachable at `/oauth/register` via the `vercel.json` catch-all) so MCP clients that require
- * dynamic client registration — current Claude Code/Desktop ignore a configured static `client_id`
- * and fall back to DCR regardless — can complete the OAuth handshake on SAML instances. The proxy
- * only echoes the pre-registered `MCP_CLIENT_ID`; it never persists client-supplied redirect URIs,
- * so the open-redirect protection at `/oauth/authorize` (`clients.ts`) is unweakened.
+ * `registration_endpoint` advertises the REAL dynamic-client-registration handler
+ * (`api/oauth/clients.ts` → `src/oauth/register.ts`), not the Auth0-echo proxy at
+ * `/oauth/register`: that proxy (`crates/temper-mcp/src/discovery.rs`, reached through the
+ * `vercel.json` `/oauth/(.*)` catch-all) mints no client, so a client that registers through
+ * it can never authenticate at the token endpoint as itself. The `/oauth/clients` handler's
+ * MCP-compat class returns the same pre-registered `MCP_CLIENT_ID` the proxy did, so MCP
+ * clients that only read this document (Claude Code/Desktop ignore a configured static
+ * `client_id` and fall back to DCR regardless) keep working on SAML instances; the proxy is
+ * left untouched for Auth0-fronted instances, whose document still advertises it.
  *
  * `scopes_supported` matches the protected-resource metadata (`discovery.rs`) so a conformant client
  * requesting `offline_access` gets a refresh token rather than re-authing on each access-token expiry.
@@ -48,7 +58,7 @@ export function buildAsMetadata(issuer: string): AsMetadata {
     issuer: iss,
     authorization_endpoint: `${iss}/oauth/authorize`,
     token_endpoint: `${iss}/oauth/token`,
-    registration_endpoint: `${iss}/oauth/register`,
+    registration_endpoint: `${iss}/oauth/clients`,
     jwks_uri: `${iss}/oauth/jwks`,
     scopes_supported: ["openid", "profile", "email", "offline_access"],
     response_types_supported: ["code"],
@@ -59,6 +69,7 @@ export function buildAsMetadata(issuer: string): AsMetadata {
     // `none` for the PKCE public client; the secret-bearing methods are the machine grant's,
     // which `readClientCredentials` accepts in either form (Basic preferred, RFC 6749 §2.3.1).
     token_endpoint_auth_methods_supported: ["none", "client_secret_basic", "client_secret_post"],
+    client_id_metadata_document_supported: false,
   };
 }
 
