@@ -61,6 +61,15 @@ const PROJECTION_DUMPS: &[(&str, &str)] = &[
         "kb_data_artifact_content",
         "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.artifact_id), '[]'::jsonb) FROM kb_data_artifact_content t",
     ),
+    // Blobs diff in FULL — every column is payload-derivable (identity-as-input; pathname is a
+    // pure function of the hash; the home/owner columns ride the payload — D2 as amended,
+    // per-home identity), so there is nothing to mask. The bytes are external and ride
+    // no sidecar: replay proves the rows, the provider object's presence is D4's commit gate.
+    // (kb_blob_homes no longer exists: the home folds into this row — 20260903000060.)
+    (
+        "kb_blobs",
+        "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.id), '[]'::jsonb) FROM kb_blobs t",
+    ),
     (
         "kb_block_revisions",
         // include `created` (the event occurred_at — replay-stable) in the mask order: a block revised
@@ -246,6 +255,11 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             // A shape declaration carries a JSON Schema in the payload, not prose: no blocks, no
             // chunks, no sidecar.
             | EventKind::ShapeDeclared
+            // A blob commit carries the hash, never the bytes (D4): there is no sidecar at all —
+            // not even a content table — because the bytes live in external object storage. The
+            // provider object's presence was verified at commit and is replay's input, not its
+            // output.
+            | EventKind::BlobCommitted
             | EventKind::WebhookReceived => None,
         }
         .context("content-bearing payload missing blocks")?;
@@ -471,6 +485,14 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                 )
                 .fetch_one(pool)
                 .await?;
+            }
+            EventKind::BlobCommitted => {
+                // A blob commit has NO sidecar — the bytes are external (D4), so the projector
+                // reads only the payload. Macro form for the same static-literal reason as the
+                // arms above.
+                sqlx::query!("SELECT _project_blob_committed($1,$2)", id, payload)
+                    .fetch_one(pool)
+                    .await?;
             }
             EventKind::BlockMutated => {
                 let side = snap.sidecars.get(&id).context("missing sidecar")?;

@@ -85,7 +85,7 @@ APP_BUILDERS='create_app create_internal_app'
 # edit merging it into `public` instead would leave this line green and serve the query door
 # unauthenticated. The `require_layer_in` assertion below is what closes that, and it is why this
 # name may sit here at all.
-AUTH_COVERED='auth_only_routes|gated_routes|query_routes'
+AUTH_COVERED='auth_only_routes|gated_routes|query_routes|blob_segment_routes|blob_commit_routes'
 # Groups whose routes are NOT behind require_auth — every entry is a reviewed compensating control.
 REVIEW_GROUPS='public_routes|embed_internal_routes|internal_routes|slack_link_internal_routes|slack_mint_internal_routes|slack_link_public_routes|webhook_intake_routes'
 
@@ -186,6 +186,15 @@ require_layer_in() {
 # `query_routes` carries no auth layer of its own — it exists to scope a body limit — and is
 # auth-covered only for as long as `gated_routes` is where it is merged.
 require_layer_in 'query_routes()'                    gated_routes
+
+# `blob_segment_routes` and `blob_commit_routes` are the same shape: sub-routers whose only
+# reason to exist is scoping a `DefaultBodyLimit` to their door — the segment door by the
+# plan's platform ceiling, the commit door by the config's own D7 threshold (F8). Neither
+# carries an auth layer of its own; both are auth-covered only for as long as they are
+# merged onto the `gated_routes()` chain in `create_app` BEFORE the
+# require_system_access/require_auth layers land on the merged whole.
+require_layer_in 'blob_segment_routes()'             create_app
+require_layer_in 'blob_commit_routes()'              create_app
 
 # User-auth layers: create_app only — create_internal_app deliberately serves no user-auth surface.
 require_layer_in 'auth::require_auth'                create_app

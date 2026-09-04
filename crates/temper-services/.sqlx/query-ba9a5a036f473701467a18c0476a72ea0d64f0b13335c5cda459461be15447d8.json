@@ -1,30 +1,35 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT source_id, target_table, target_id, home_anchor_table, home_anchor_id FROM kb_edges WHERE id = $1 AND source_table = 'kb_resources' AND NOT is_folded",
+  "query": "SELECT source_table, source_id, target_table, target_id, home_anchor_table, home_anchor_id FROM kb_edges WHERE id = $1 AND NOT is_folded",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
+        "name": "source_table",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
         "name": "source_id",
         "type_info": "Uuid"
       },
       {
-        "ordinal": 1,
+        "ordinal": 2,
         "name": "target_table",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 2,
+        "ordinal": 3,
         "name": "target_id",
         "type_info": "Uuid"
       },
       {
-        "ordinal": 3,
+        "ordinal": 4,
         "name": "home_anchor_table",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "home_anchor_id",
         "type_info": "Uuid"
       }
@@ -39,8 +44,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "efedd19f0d0e325b4bc43ac019c34faf227226ba39f758e318f0a3e75824341f"
+  "hash": "ba9a5a036f473701467a18c0476a72ea0d64f0b13335c5cda459461be15447d8"
 }

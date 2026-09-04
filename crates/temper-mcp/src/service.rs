@@ -15,8 +15,9 @@
 use rmcp::{
     handler::server::{common::Extension, wrapper::Parameters},
     model::{
-        CallToolResult, ListResourceTemplatesResult, ListResourcesResult, PaginatedRequestParams,
-        ReadResourceRequestParams, ReadResourceResult, ServerCapabilities, ServerInfo,
+        CallToolResult, ListResourceTemplatesResult, ListResourcesResult, ListToolsResult,
+        PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResult, ServerCapabilities,
+        ServerInfo,
     },
     tool, tool_handler, tool_router,
 };
@@ -270,6 +271,32 @@ impl TemperMcpService {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
         tools::trail::element_trail(self, input).await
+    }
+
+    // ── Blob (read 2→1, manage 2→1) ────────────────────────────────────
+
+    #[tool(
+        description = "Read blob surfaces with an `action` discriminator. Actions: `read` (one blob's bytes back whole, base64, with its stored media type, byte count, and content hash — refused over the read ceiling, which names the streaming API/CLI surfaces), `list` (the blobs you can read, optionally scoped to one home anchor via `home_table`/`home_id` — the response is your readable set, never a discovery oracle). An invisible-or-absent blob renders the same not-found an unknown id gets."
+    )]
+    async fn blob_read(
+        &self,
+        Parameters(input): Parameters<tools::blobs::BlobReadInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::blobs::blob_read(self, input).await
+    }
+
+    #[tool(
+        description = "Manage blobs with an `action` discriminator. Actions: `commit` (commit base64 `content` bytes as a blob homed in `home_table`/`home_id` under `content_type` — get-or-create PER-HOME on the content hash: a re-commit of bytes this home already holds returns the same id, always a row you can read; the same bytes in another principal's scope never surface here; the server allowlist-checks the media type and refuses over its single-request threshold, naming the CLI's segmented path), `relate` (assert one relation between `blob_id` and a `peer_table`/`peer_id` anchor — `direction` picks which end the blob occupies, default `blob_as_source`; retraction rides the incumbent fold endpoint, not this tool). Relations are only assertable to anchors you can already see. Per-act authorship fields accepted on `relate`."
+    )]
+    async fn blob_manage(
+        &self,
+        Parameters(input): Parameters<tools::blobs::BlobManageInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::blobs::blob_manage(self, input).await
     }
 
     // ── Relationship (consolidated 4→1 write) ──────────────────────────
@@ -675,6 +702,27 @@ fn map_authz_error(e: temper_services::auth::AuthzError) -> rmcp::ErrorData {
     }
 }
 
+/// The blob tools, spelled once — the `list_tools` advertisement filter and the router
+/// tests both read this list.
+pub(crate) const BLOB_TOOL_NAMES: [&str; 2] = ["blob_read", "blob_manage"];
+
+/// `list_tools`' advertisement posture: when the blob door is closed (no credential
+/// resolves, or `BLOB_ENABLED=false` closed it deliberately), the blob pair is NOT
+/// advertised — an agent discovering the surface only to learn it refuses is noise.
+/// Existence is untouched: `tools/call` on a closed door still answers the typed
+/// refusal (`blob_parts` hears `AppState::blob_refusal`), so a stale cached tool list
+/// degrades to the same voice it always had, never to silence.
+fn advertise_blob_tools(tools: Vec<rmcp::model::Tool>, blob_ready: bool) -> Vec<rmcp::model::Tool> {
+    if blob_ready {
+        tools
+    } else {
+        tools
+            .into_iter()
+            .filter(|t| !BLOB_TOOL_NAMES.contains(&t.name.as_ref()))
+            .collect()
+    }
+}
+
 #[tool_handler]
 impl rmcp::ServerHandler for TemperMcpService {
     fn get_info(&self) -> ServerInfo {
@@ -692,6 +740,29 @@ impl rmcp::ServerHandler for TemperMcpService {
             "Access and manage your Temper knowledge base. \
                  Search notes, list resources, create new content, and explore contexts.",
         )
+    }
+
+    /// Manual override — `#[tool_handler]` generates `list_tools` only when the impl
+    /// lacks one, so defining it here is how the closed-door filter (see
+    /// `advertise_blob_tools`) reaches the wire. The router itself is the static floor:
+    /// both blob doors are always REGISTERED (witnessed by
+    /// `both_blob_doors_are_advertised_by_the_router`); advertisement is the runtime,
+    /// per-instance decision, and in stateless mode every request builds a fresh
+    /// service, so this reads THIS request's instance state.
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<ListToolsResult, rmcp::ErrorData> {
+        let tools = advertise_blob_tools(
+            Self::tool_router().list_all(),
+            self.api_state.config.blob.is_some(),
+        );
+        Ok(ListToolsResult {
+            tools,
+            meta: None,
+            next_cursor: None,
+        })
     }
 
     async fn initialize(
@@ -772,7 +843,7 @@ impl rmcp::ServerHandler for TemperMcpService {
 
 #[cfg(test)]
 mod tests {
-    use super::TemperMcpService;
+    use super::{advertise_blob_tools, TemperMcpService, BLOB_TOOL_NAMES};
 
     /// A `#[tool]` written into the wrong impl block compiles fine and is simply never advertised.
     /// Assert the router actually carries the consolidated segmented-ingest tool, rather than
@@ -807,6 +878,72 @@ mod tests {
         assert!(
             names.iter().any(|n| n == "context_manage"),
             "context_manage is not advertised; router has {names:?}"
+        );
+    }
+
+    /// Same failure mode as `context_manage`, asserted as a PAIR because the pairing is the
+    /// invariant: the read door and the manage door must both exist, or one anchor of the
+    /// blob surface (bytes vs relations) is unreachable from MCP while the other is.
+    /// This pins the ROUTER — the static floor; the runtime advertisement filter lives in
+    /// `list_tools` (`advertise_blob_tools`) and is witnessed just below.
+    #[test]
+    fn both_blob_doors_are_advertised_by_the_router() {
+        let names: Vec<String> = TemperMcpService::tool_router()
+            .list_all()
+            .into_iter()
+            .map(|t| t.name.to_string())
+            .collect();
+
+        for peer in BLOB_TOOL_NAMES {
+            assert!(
+                names.iter().any(|n| n == peer),
+                "{peer} is not advertised, so half the blob surface is unreachable from MCP; \
+                 router has {names:?}"
+            );
+        }
+    }
+
+    /// The RUNTIME half of the pair above: a closed door (unconfigured, or
+    /// `BLOB_ENABLED=false` closing it deliberately) stops ADVERTISING the blob pair and
+    /// hides nothing else. The assertion is SET-based, not count-based (C-S2,
+    /// 2026-09-04 review): a future blob tool registered but omitted from
+    /// `BLOB_TOOL_NAMES` would keep the count equal while leaving the tool advertised —
+    /// under-hiding goes red here. The one-line call site inside `list_tools` is
+    /// witnessed over the wire by `a_closed_door_hides_the_blob_pair_from_the_wire`
+    /// (tests/e2e/tests/mcp_blob_transport_e2e.rs), which rides the harness this diff
+    /// ships.
+    #[test]
+    fn a_closed_door_stops_advertising_the_blob_pair_and_nothing_else() {
+        let all: Vec<String> = TemperMcpService::tool_router()
+            .list_all()
+            .into_iter()
+            .map(|t| t.name.to_string())
+            .collect();
+
+        let names = |tools: Vec<rmcp::model::Tool>| -> Vec<String> {
+            let mut names: Vec<String> = tools.into_iter().map(|t| t.name.to_string()).collect();
+            names.sort();
+            names
+        };
+        let open = names(advertise_blob_tools(
+            TemperMcpService::tool_router().list_all(),
+            true,
+        ));
+        let closed = names(advertise_blob_tools(
+            TemperMcpService::tool_router().list_all(),
+            false,
+        ));
+        let mut expected_closed = all.clone();
+        for peer in BLOB_TOOL_NAMES {
+            expected_closed.retain(|n| n != peer);
+        }
+        expected_closed.sort();
+
+        assert_eq!(open, all, "an open door advertises the full router");
+        assert_eq!(
+            closed, expected_closed,
+            "a closed door advertises exactly the router minus the blob pair — no more, \
+             no less; got {closed:?}"
         );
     }
 

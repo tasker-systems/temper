@@ -38,7 +38,12 @@ tower-http = { version = "0.6", features = ["cors", "decompression-gzip", "set-h
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 jsonwebtoken = "9"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+# The blob provider client's streaming read (D6) bridges reqwest's byte stream to the
+# substrate seam's `ByteStream`; `bytes` is the chunk type both sides speak. Already in
+# the graph via reqwest.
+bytes = "1"
+futures-util = "0.3"
 # AUTH_AUDIENCE and MCP_AUDIENCE must parse as absolute URIs at boot — the MCP protected-resource
 # metadata advertises them as the RFC 9728 `resource`, which requires one. Already in the graph
 # via reqwest.

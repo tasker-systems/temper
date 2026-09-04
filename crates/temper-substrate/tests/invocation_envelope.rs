@@ -550,8 +550,8 @@ async fn authorship_is_invisible_to_affinity_inputs(pool: sqlx::PgPool) {
     fire_with(
         &mut tx,
         SeedAction::RelationshipAssert {
-            src: res_a,
-            tgt: res_b,
+            src: temper_substrate::payloads::AnchorRef::resource(res_a),
+            tgt: temper_substrate::payloads::AnchorRef::resource(res_b),
             kind: EdgeKind::LeadsTo,
             polarity: EdgePolarity::Forward,
             label: None,

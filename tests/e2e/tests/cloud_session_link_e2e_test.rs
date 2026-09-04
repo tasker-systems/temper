@@ -134,6 +134,7 @@ async fn create_session_with_task_asserts_advances_edge(pool: sqlx::PgPool) {
             temper_cli::commands::resource::create(
                 &cli_config,
                 temper_cli::commands::resource::CreateResourceArgs {
+                    preserve_source: false,
                     open_meta: None,
                     goal: None,
                     doc_type: "session",
@@ -260,6 +261,7 @@ async fn create_session_without_task_has_no_edge(pool: sqlx::PgPool) {
             temper_cli::commands::resource::create(
                 &cli_config,
                 temper_cli::commands::resource::CreateResourceArgs {
+                    preserve_source: false,
                     open_meta: None,
                     goal: None,
                     doc_type: "session",
@@ -332,6 +334,7 @@ async fn create_session_with_unknown_task_succeeds_without_edge(pool: sqlx::PgPo
             temper_cli::commands::resource::create(
                 &cli_config,
                 temper_cli::commands::resource::CreateResourceArgs {
+                    preserve_source: false,
                     open_meta: None,
                     goal: None,
                     doc_type: "session",
@@ -408,6 +411,7 @@ async fn create_non_session_with_task_errors(pool: sqlx::PgPool) {
             temper_cli::commands::resource::create(
                 &cli_config,
                 temper_cli::commands::resource::CreateResourceArgs {
+                    preserve_source: false,
                     open_meta: None,
                     goal: None,
                     doc_type: "research",
@@ -483,6 +487,7 @@ async fn create_session_with_ambiguous_task_succeeds_without_edge(pool: sqlx::Pg
             temper_cli::commands::resource::create(
                 &cli_config,
                 temper_cli::commands::resource::CreateResourceArgs {
+                    preserve_source: false,
                     open_meta: None,
                     goal: None,
                     doc_type: "session",

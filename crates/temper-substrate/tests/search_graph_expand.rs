@@ -166,8 +166,8 @@ async fn edge_full(
     let id = fire(
         &mut tx,
         SeedAction::RelationshipAssert {
-            src,
-            tgt,
+            src: temper_substrate::payloads::AnchorRef::resource(src),
+            tgt: temper_substrate::payloads::AnchorRef::resource(tgt),
             kind,
             polarity,
             label,

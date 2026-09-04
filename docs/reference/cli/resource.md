@@ -100,6 +100,9 @@ Options:
       --no-source
           Suppress the `--from <url>` provenance default. By default a URL `--from` sets the resource's origin and seeds a Remote block-provenance record from it (so `create --from <url>` is citation-grade with no extra flags); `--no-source` opts out, leaving the origin empty and recording no provenance. Mutually exclusive with `--sources`
 
+      --preserve-source
+          Preserve the original as a blob (`derivation-source-preservable`, D3): with a LOCAL file `--from`, the file's raw bytes are committed as a blob homed in the same context/cogmap, and a `derivation_source` edge is asserted from the resource to the blob — the provenance question later is a graph read (`blob relations`/`blob get`). Not atomic: blob + edge assert after the create commits, warnings rather than failures (re-running is safe on the blob; the create is not re-runnable)
+
       --invocation <INVOCATION>
           Correlate this act with an open invocation envelope (its ref/UUID from `invocation open`)
 
@@ -213,20 +216,48 @@ Show a resource's content
 Usage: temper resource show [OPTIONS] <REF>
 
 Arguments:
-  <REF>  Resource ref: a UUID or the decorated `slug-<uuid>` form
+  <REF>
+          Resource ref: a UUID or the decorated `slug-<uuid>` form
 
 Options:
-      --edges              Show graph edges connected to this resource
-      --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
-      --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
-      --lineage            Show the resource's derived_from lineage — what it derives from (ancestors) and what derives from it (descendants), access-gated. Calls GET /lineage
-      --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
-      --provenance         Show itemized per-block provenance — the sources each of the resource's content blocks was distilled from. Calls GET /provenance
-      --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
-      --with <WITH>        Add a section (comma-separated or repeated). `show` already carries `body` and `open-meta`; `--with edges` folds this resource's graph edges into the same document (the long form of `--edges`) [possible values: body, open-meta, edges]
-      --without <WITHOUT>  Drop a section (comma-separated or repeated). `--without body` is the cheap orientation read: everything `show` returns except the reconstructed markdown, and it composes freely with `--with edges`. Naming one section in both `--with` and `--without` is a hard error, not a precedence rule [possible values: body, open-meta, edges]
-      --fields <FIELDS>    Subselect top-level response keys (the anchor key `id` is always preserved). Use jq for nested projection
-  -h, --help               Print help
+      --edges
+          Show graph edges connected to this resource
+
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --lineage
+          Show the resource's derived_from lineage — what it derives from (ancestors) and what derives from it (descendants), access-gated. Calls GET /lineage
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --provenance
+          Show itemized per-block provenance — the sources each of the resource's content blocks was distilled from. Calls GET /provenance
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+      --with <WITH>
+          Add a section (comma-separated or repeated). `show` already carries `body` and `open-meta`; `--with edges` folds this resource's graph edges into the same document (the long form of `--edges`).
+          
+          The edges section is RESOURCE↔RESOURCE by decision (2026-09-02, blob surfaces S6): edges with a blob endpoint — the `derivation_source` edge `--preserve-source` asserts, say — are admitted by the SQL visibility gate but deliberately not rendered here, because the peer row is resource-typed. The derivation answer lives one door over: `temper blob relations <blob-id>` (the blob-side view). Widening this section to polymorphic peers is a named follow-up, not an omission.
+          
+          [possible values: body, open-meta, edges]
+
+      --without <WITHOUT>
+          Drop a section (comma-separated or repeated). `--without body` is the cheap orientation read: everything `show` returns except the reconstructed markdown, and it composes freely with `--with edges`. Naming one section in both `--with` and `--without` is a hard error, not a precedence rule
+          
+          [possible values: body, open-meta, edges]
+
+      --fields <FIELDS>
+          Subselect top-level response keys (the anchor key `id` is always preserved). Use jq for nested projection
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 ### `temper resource evidence`

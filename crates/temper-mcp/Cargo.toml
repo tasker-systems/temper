@@ -11,6 +11,11 @@ temper-substrate = { path = "../temper-substrate" }
 temper-workflow = { path = "../temper-workflow", features = ["web-api", "mcp"] }
 temper-telemetry = { path = "../temper-telemetry" }
 
+# Blob commit/read carry bytes over the JSON-only MCP transport as base64.
+base64 = "0.22"
+# Collecting the read-through `ByteStream` into a whole tool result.
+futures = "0.3"
+
 rmcp = { version = "1.8", features = [
     "server",
     "transport-streamable-http-server",

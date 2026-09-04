@@ -25,6 +25,19 @@ pub(crate) struct CreateActionResult {
     /// `temper edge assert` (idempotent) rather than re-running the create.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub edges_failed: Vec<uuid::Uuid>,
+    /// What `--preserve-source` did: the blob id + the derivation-source edge handle.
+    /// Absent when the flag was not given or the preserve hook warned out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preserved_source: Option<PreservedSourceOutcome>,
+}
+
+/// The blob + edge a successful `--preserve-source` created.
+#[derive(Debug, serde::Serialize)]
+pub(crate) struct PreservedSourceOutcome {
+    pub blob_id: uuid::Uuid,
+    /// The `derivation_source` edge (resource → blob) — fold it with
+    /// `temper edge fold` if the provenance is retracted.
+    pub edge_handle: uuid::Uuid,
 }
 
 /// Flat result emitted by `temper resource update`.
@@ -316,6 +329,11 @@ pub struct CreateResourceArgs<'a> {
     /// URL and the server seeds a Remote block-provenance record from it; this opt-out preserves
     /// the pre-#352 behavior (empty `origin_uri`, no provenance). Clap-exclusive with `sources`.
     pub no_source: bool,
+    /// `--preserve-source` — commit the original LOCAL `--from` file as a blob (homed in
+    /// the create's own home) and assert a `derivation_source` edge resource → blob, the
+    /// `derivation-source-preservable` clause's surface (D3). Gated on `from` by clap.
+    /// Fail-fast on non-local `--from` (a URL has no local original to preserve).
+    pub preserve_source: bool,
     pub format: crate::format::OutputFormat,
     /// Per-act correlation + authorship for the create act (from `--invocation`/`--confidence`/…).
     pub act: temper_core::types::ActInput,
@@ -382,6 +400,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         sources,
         sources_as_edges,
         no_source,
+        preserve_source,
         format,
         act,
     } = args;
@@ -400,6 +419,23 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
             "--task linking is only supported for --type session (got --type {doc_type})"
         )));
     }
+
+    // Fail-fast: --preserve-source preserves a LOCAL file's original bytes. A URL --from
+    // has no local original to commit (and the body is a text extraction of it, not the
+    // bytes), so honoring the flag would silently preserve nothing — refuse up front,
+    // before any create, with the remedy in the message.
+    let preserve_from_path: Option<String> = match (&from, preserve_source) {
+        (Some(src), true) if src.starts_with("http://") || src.starts_with("https://") => {
+            return Err(TemperError::BadRequest(
+                "--preserve-source preserves a local file's original bytes — a URL --from has \
+                 none to commit (the body is its text extraction). Fetch the file locally first, \
+                 or drop the flag."
+                    .to_string(),
+            ));
+        }
+        (Some(src), true) => Some(src.clone()),
+        _ => None,
+    };
 
     // Home resolution — exactly one of --context / --cogmap. The home choice is
     // a `HomeAnchor` enum (never a placeholder id plus a flag): a context home
@@ -479,6 +515,10 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
     // own copy to select edge targets after the create (build_backend/create_resource
     // consume `cmd`, so we can't reach back into it post-create).
     let sources_for_edges = resolved_sources.clone();
+
+    // The preserve hook's act (authorship + correlation) — `act` itself is consumed by the
+    // create cmd below; the blob commit and derivation_source edge ride the same act.
+    let act_for_preserve = act.clone();
 
     // Resolve --goal ref → goal resource id (trailing-UUID-only, like `edge assert`); the server
     // projects the live `advances`→goal edge after create. An unparseable ref is a hard error.
@@ -647,11 +687,80 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         (Vec::new(), Vec::new())
     };
 
+    // `--preserve-source`: commit the original file as a blob + assert the
+    // `derivation_source` edge (resource → blob), the CLI-native-ingest face of
+    // `derivation-source-preservable` (D3). Same not-atomic, warn-not-fatal posture as
+    // `--sources-as-edges`: the create is committed and not re-runnable, the blob commit
+    // is a content-addressed get-or-create (re-running converges on the same blob), and
+    // the edge re-asserts idempotently. The blob homes in the CREATE's own home — the
+    // file's provenance lives where the resource does (blob-visibility-self-contained
+    // then keeps the two readable by the same audience).
+    let preserved_source: Option<PreservedSourceOutcome> = match preserve_from_path {
+        None => None,
+        Some(src_path) => {
+            let attempt: Result<PreservedSourceOutcome> = runtime.block_on(async {
+                // The blob's home is the create's home, resolved the way the blob put
+                // resolves one: a context ref needs the caller's context list (the
+                // create threads the ref server-side, so no UUID is in hand), a cogmap
+                // home is already trailing-UUID.
+                use crate::cli::CliHomeTable;
+                let resolved = match home {
+                    temper_core::types::home::HomeAnchor::Context(_) => {
+                        crate::actions::blob::resolve_home(&client, &ctx, CliHomeTable::Context)
+                            .await?
+                    }
+                    temper_core::types::home::HomeAnchor::Cogmap(_) => {
+                        crate::actions::blob::resolve_home(&client, &ctx, CliHomeTable::Cogmap)
+                            .await?
+                    }
+                };
+                let params = crate::actions::blob::prepare_put(&src_path, None, None)?;
+                let committed =
+                    crate::actions::blob::put(&client, resolved, &params, |_, _, _| {}).await?;
+
+                // The edge: resource → blob, `derivation_source` — "this resource was
+                // derived from that file". Express kind, forward polarity (the
+                // leaf-attribute shape every provenance label rides).
+                let req = temper_core::types::blob::BlobRelationAssertRequest {
+                    direction: temper_core::types::blob::BlobRelationDirection::BlobAsTarget,
+                    peer_table: "kb_resources".to_string(),
+                    peer_id: created_resource.id.0,
+                    edge_kind: temper_core::types::graph::EdgeKind::Express,
+                    polarity: temper_core::types::graph::Polarity::Forward,
+                    label: "derivation_source".to_string(),
+                    weight: 1.0,
+                    act: act_for_preserve.clone(),
+                };
+                let ack = client
+                    .blobs()
+                    .relate(committed.blob_id.0, &req)
+                    .await
+                    .map_err(crate::actions::runtime::client_err_to_temper)?;
+                Ok(PreservedSourceOutcome {
+                    blob_id: committed.blob_id.0,
+                    edge_handle: ack.edge_handle,
+                })
+            });
+            match attempt {
+                Ok(outcome) => Some(outcome),
+                Err(e) => {
+                    output::warning(format!(
+                        "could not preserve the source file as a blob: {e} (resource created; \
+                         re-commit with `temper blob put --home {ctx}` — commit is a \
+                         content-addressed get-or-create, then relate with `temper blob relate`)"
+                    ));
+                    None
+                }
+            }
+        }
+    };
+
     let result = CreateActionResult {
         status: "ok",
         resource: created_resource,
         edges_asserted,
         edges_failed,
+        preserved_source,
     };
     let rendered = render_action_result_with_ref(&result, format)?;
     crate::output::plain(rendered);
@@ -3239,6 +3348,7 @@ mod action_result_tests {
             resource: row,
             edges_asserted: Vec::new(),
             edges_failed: Vec::new(),
+            preserved_source: None,
         };
         let out = render_action_result_with_ref(&result, crate::format::OutputFormat::Json)
             .expect("json render");
@@ -3278,6 +3388,7 @@ mod action_result_tests {
             resource: row,
             edges_asserted: Vec::new(),
             edges_failed: Vec::new(),
+            preserved_source: None,
         };
         let out =
             crate::format::render(&result, crate::format::OutputFormat::Json).expect("json render");
@@ -3324,6 +3435,7 @@ mod action_result_tests {
             resource: row,
             edges_asserted: Vec::new(),
             edges_failed: Vec::new(),
+            preserved_source: None,
         };
         let out =
             crate::format::render(&result, crate::format::OutputFormat::Json).expect("json render");

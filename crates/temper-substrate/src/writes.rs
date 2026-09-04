@@ -17,7 +17,7 @@ use crate::affinity::EdgeKind;
 use crate::content::{prepare_block, prepare_block_from_chunks, IncomingChunk, PreparedBlock};
 use crate::events::{fire, fire_with, EdgeHome, EventContext, SeedAction};
 use crate::ids::{
-    BlockId, CogmapId, ContextId, DataArtifactId, EdgeId, EntityId, EventId, InvocationId,
+    BlobId, BlockId, CogmapId, ContextId, DataArtifactId, EdgeId, EntityId, EventId, InvocationId,
     ProfileId, PropertyId, ResourceId, ShapeId,
 };
 use crate::payloads::{self, AnchorRef, EdgePolarity, Incorporation, ProvenanceSource};
@@ -1109,8 +1109,8 @@ pub async fn assert_kernel_edge_in_tx(
     let edge = fire_with(
         conn,
         SeedAction::RelationshipAssert {
-            src: p.src,
-            tgt: p.tgt,
+            src: payloads::AnchorRef::resource(p.src),
+            tgt: payloads::AnchorRef::resource(p.tgt),
             kind: p.kind,
             polarity: p.polarity,
             label: p.label,
@@ -1155,13 +1155,72 @@ pub async fn assert_relationship_with(
     let edge = fire_with(
         &mut tx,
         SeedAction::RelationshipAssert {
-            src: p.src,
-            tgt: p.tgt,
+            src: payloads::AnchorRef::resource(p.src),
+            tgt: payloads::AnchorRef::resource(p.tgt),
             kind: p.kind,
             polarity: p.polarity,
             label: p.label,
             weight: p.weight,
             home: EdgeHome::Context(p.home),
+            emitter: p.emitter,
+        },
+        ctx,
+    )
+    .await?
+    .relationship()?;
+    tx.commit().await?;
+    Ok(edge)
+}
+
+/// Params for [`assert_anchored_edge_with`] — the polymorphic generalisation of
+/// [`AssertParams`]: the source and target are whatever the payload's
+/// [`payloads::AnchorRef`] admits as an edge endpoint (resources and cogmaps on the
+/// incumbent paths, plus **blobs** since the kb_edges endpoint CHECK admitted `kb_blobs` —
+/// D3: relations are ordinary edges).
+#[derive(Debug)]
+pub struct AssertAnchoredEdgeParams<'a> {
+    pub source: payloads::AnchorRef,
+    pub target: payloads::AnchorRef,
+    pub kind: EdgeKind,
+    pub polarity: EdgePolarity,
+    pub label: Option<&'a str>,
+    pub weight: f64,
+    /// The edge's home anchor, supplied by the caller. As on every edge write, this
+    /// function performs NO authorization — the caller gates first (the incumbent
+    /// contract: the home is authorized as the same value it is written to).
+    pub home: EdgeHome,
+    pub emitter: EntityId,
+}
+
+pub async fn assert_anchored_edge(
+    pool: &PgPool,
+    p: AssertAnchoredEdgeParams<'_>,
+) -> Result<EdgeId> {
+    assert_anchored_edge_with(pool, p, EventContext::default()).await
+}
+
+/// [`assert_anchored_edge`] under an explicit [`EventContext`] — the authored
+/// `relationship_asserted` act carries the caller's authorship + invocation correlator,
+/// exactly as [`assert_relationship_with`] does. One fire path for every endpoint pairing:
+/// the payload's `source`/`target` tables ARE the endpoint tables the projector writes,
+/// so a blob endpoint needs no new event type, no new SQL function, and no replay
+/// divergence (the projector has been polymorphic since the canonical schema).
+pub async fn assert_anchored_edge_with(
+    pool: &PgPool,
+    p: AssertAnchoredEdgeParams<'_>,
+    ctx: EventContext,
+) -> Result<EdgeId> {
+    let mut tx = begin_scoped(pool).await?;
+    let edge = fire_with(
+        &mut tx,
+        SeedAction::RelationshipAssert {
+            src: p.source,
+            tgt: p.target,
+            kind: p.kind,
+            polarity: p.polarity,
+            label: p.label,
+            weight: p.weight,
+            home: p.home,
             emitter: p.emitter,
         },
         ctx,
@@ -1565,6 +1624,85 @@ pub struct DeclareShapeParams<'a> {
     pub schema: &'a serde_json::Value,
     pub enforcement: payloads::EnforcementMode,
     pub emitter: EntityId,
+}
+
+// ── blob writes (spec: binary blobs, 2026-09-01) ─────────────────────────────
+
+/// Parameters for [`commit_blob_with`] — the attributed write that fires a `BlobCommit` seed
+/// action. The bytes are already in object storage at the content-addressed pathname; this
+/// carries the hash, never the bytes.
+#[derive(Debug)]
+pub struct CommitBlobParams<'a> {
+    /// Caller-minted identity (identity-as-input, D2).
+    pub id: BlobId,
+    /// The blob's home — a context or cogmap anchor; anything else is refused.
+    pub home: payloads::AnchorRef,
+    pub owner: ProfileId,
+    /// Absent ⇒ originator≡owner.
+    pub originator: Option<ProfileId>,
+    /// Bare sha256 hex of the bytes already uploaded. The dedup key and the erasure join key.
+    pub content_hash: String,
+    pub content_type: String,
+    pub content_bytes: i64,
+    /// The D9 cap — configuration the caller supplies, passed through so the refusal teaches
+    /// from the same values that enforce.
+    pub max_bytes: i64,
+    /// The D9 allowlist — same passage as `max_bytes`.
+    pub allowlist: &'a [String],
+    pub emitter: EntityId,
+}
+
+/// [`commit_blob_with`] under the default (un-attributed) context. The store is `&dyn` —
+/// the surfaces hold an `Arc<dyn BlobStore>` (AppState), and the `&impl` spelling refused
+/// that coercion, so the fire path takes the trait object its only surface caller has.
+pub async fn commit_blob(
+    pool: &PgPool,
+    store: &dyn crate::blob_store::BlobStore,
+    p: CommitBlobParams<'_>,
+) -> Result<BlobId> {
+    commit_blob_with(pool, store, p, EventContext::default()).await
+}
+
+/// Commit one blob under an explicit [`EventContext`]. Verifies the provider object exists at
+/// the content-addressed pathname FIRST (D4's gate — a commit whose bytes are absent from the
+/// provider is refused before the ledger sees it), then opens one transaction, fires the
+/// `BlobCommit` seed action (which derives the pathname, calls `blob_commit()` SQL, and returns
+/// the row id — the EXISTING id on a dedup hit within the commit's own home, D2 as amended),
+/// and commits.
+pub async fn commit_blob_with(
+    pool: &PgPool,
+    store: &dyn crate::blob_store::BlobStore,
+    p: CommitBlobParams<'_>,
+    ctx: EventContext,
+) -> Result<BlobId> {
+    let pathname = crate::blob_store::blob_pathname(&p.content_hash);
+    anyhow::ensure!(
+        store.exists(&pathname).await?,
+        "blob_commit: the provider holds no object at {pathname} — upload the bytes before \
+         committing the event; the ledger verifies presence, it does not take it on faith"
+    );
+
+    let mut tx = begin_scoped(pool).await?;
+    let id = fire_with(
+        &mut tx,
+        SeedAction::BlobCommit {
+            id: p.id,
+            home: p.home,
+            owner: p.owner,
+            originator: p.originator,
+            content_hash: p.content_hash,
+            content_type: p.content_type,
+            content_bytes: p.content_bytes,
+            max_bytes: p.max_bytes,
+            allowlist: p.allowlist,
+            emitter: p.emitter,
+        },
+        ctx,
+    )
+    .await?
+    .blob()?;
+    tx.commit().await?;
+    Ok(id)
 }
 
 /// [`declare_shape_with`] under the default (un-attributed) context.

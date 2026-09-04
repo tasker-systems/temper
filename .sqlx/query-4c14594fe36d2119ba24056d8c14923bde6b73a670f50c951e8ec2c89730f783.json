@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT seq, segment_hash, octet_length(bytes)::bigint AS \"segment_bytes!\"\n             FROM kb_blob_upload_segments\n            WHERE upload_id = $1\n            ORDER BY seq",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "seq",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "segment_hash",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "segment_bytes!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "4c14594fe36d2119ba24056d8c14923bde6b73a670f50c951e8ec2c89730f783"
+}

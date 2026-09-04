@@ -60,6 +60,7 @@
         "kb_profiles",
         "kb_connections",
         "kb_machine_clients",
+        "kb_blobs",
         "kb_events"
       ]
     },

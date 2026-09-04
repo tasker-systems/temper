@@ -1,3 +1,4 @@
+pub mod blob;
 pub mod body_source;
 pub mod cogmap;
 pub mod config;

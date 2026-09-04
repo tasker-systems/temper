@@ -195,6 +195,218 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/blobs": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the blobs the caller can read (optionally scoped to one home)
+         * @description Visibility is `blob_readable_by_profile` — the same predicate the read-through gates
+         *     on, never restated here — so the response IS the caller's blob set and nothing more.
+         */
+        get: operations["list_blobs"];
+        put?: never;
+        /**
+         * Commit bytes as a blob — one multipart request at or under the D7 threshold
+         * @description Form fields: `file` (the bytes; its content type is the media type committed),
+         *     `home_table` (`kb_contexts` or `kb_cogmaps` — a blob needs a home, D2), `home_id` (the
+         *     anchor's id). The caller acts as themselves: owner is the authenticated profile.
+         *
+         *     The threshold is enforced WHILE the file field streams, so an over-threshold body is
+         *     refused before it is ever fully buffered, and the refusal names the vocabulary — the
+         *     threshold in force and the segmented path beyond it. Cap and allowlist stay the SQL
+         *     wrapper's authority: the substrate write passes this config's numbers through, and a
+         *     refusal from there surfaces verbatim (`blob_service::map_commit_err`).
+         */
+        post: operations["commit_blob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/blobs/uploads": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Begin a segmented upload — declare the home and media type, get the session id
+         * @description A staged session is not a blob: it has no hash yet, it appears in no list, no graph
+         *     walk, no read surface — only its owner can append to it, read its progress, or finalize
+         *     it. Home standing is checked here (fail fast) AND at finalize (authoritative — standing
+         *     can change mid-upload); the allowlist is not consulted at all until the wrapper sees
+         *     the commit. Same disabled refusal as the single-request path: a session begun on a
+         *     disabled instance (no store configured, or `BLOB_ENABLED` closed it) could never finalize.
+         */
+        post: operations["begin_blob_upload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/blobs/uploads/{id}": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a staged upload's progress — the resume read
+         * @description Returns the currently-landed segment set and the running byte total: the values a
+         *     finalize echoes back as its concurrency tokens. The staging is caller-private until
+         *     finalized — another profile's session answers 404, the same absent-not-refused posture
+         *     every visibility gate renders.
+         */
+        get: operations["blob_upload_progress"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/blobs/uploads/{id}/finalize": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Finalize a staged upload — assemble, hash, commit
+         * @description Assembles the staged segments in seq order and runs the exact single-request commit
+         *     path: standing re-run (the gate the put answers to), concurrency tokens checked (409,
+         *     resumable), optional integrity hash checked (422 — the ingest precedent's face), the
+         *     readability-gated dedup pre-check, the provider put unless deduped, then the SQL
+         *     wrapper whose cap/allowlist refusals surface verbatim. Staging dies on success only —
+         *     every failure keeps it, resumable.
+         */
+        post: operations["finalize_blob_upload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/blobs/uploads/{id}/segments": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Append one segment to a staged upload — raw bytes as the request body
+         * @description The segment's identity is the SERVER's own sha256 of the exact bytes received — the
+         *     caller sends no integrity claim, so none can be consumed unverified: re-sending the
+         *     same segment at the same seq is a no-op; a DIFFERENT segment at an occupied seq is a
+         *     409 — occupied seqs are never superseded. The whole assembly's integrity is
+         *     finalize's `expected_content_hash` (422 on a mismatch). The staging ceiling
+         *     (`BlobConfig::max_bytes`, the cumulative bound across appends) is enforced in the
+         *     service; the per-request body bound is the platform's, raised for this door only.
+         */
+        post: operations["append_blob_segment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/blobs/{id}": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a blob's bytes back, whole, streamed (D6)
+         * @description Visibility gates on the blob's own home via
+         *     `blob_readable_by_profile` — not visible renders as 404, the same not-found an unknown id
+         *     gets, so a probe learns nothing either way. The response speaks the STORED media type and
+         *     carries the byte count plus `Cache-Control: private, immutable` — content addressing is what earns
+         *     `immutable` (D1), and `private` because the bytes are per-caller authorized (a shared cache
+         *     is never licensed to store them); and `Content-Disposition: attachment` — a blob read is a
+         *     bytes fetch, never a rendering invitation (the F10 ruling: the posture survives the
+         *     operational changes — cookie auth, CSP relaxation, a commit-time-only allowlist — that
+         *     would otherwise turn stored active content into stored XSS). The provider address never
+         *     appears anywhere in the response (D6: the API is the only reader of the provider).
+         */
+        get: operations["get_blob"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/blobs/{id}/relations": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the edges incident to a blob — "what relates to this blob" (D3)
+         * @description Edges are narrowed by `edges_visible_to` after the blob's own readability gate, so a
+         *     relation across a visibility boundary leaks neither side: the response holds only
+         *     edges whose home AND both readable endpoints the caller already has standing for.
+         */
+        get: operations["blob_relations"];
+        put?: never;
+        /**
+         * Assert one relation between a blob and another anchor
+         * @description The edge homes on the BLOB's home anchor — the blob-scoped surface answers to the
+         *     blob's standing — and the peer must be readable by the caller (`endpoint_readable_
+         *     by_profile`), so a relation can never point at an anchor the caller cannot see. Gate
+         *     train, in order: blob readable → 404; home authorable → 403; peer readable → 404.
+         *     Retraction rides the incumbent fold endpoint; relations come and go individually.
+         */
+        post: operations["relate_blob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cogmaps/{id}/graph/slice": {
         parameters: {
             query?: never;
@@ -2613,6 +2825,203 @@ export interface components {
              * @description The team to bind the cognitive map to.
              */
             team_id: string;
+        };
+        /**
+         * @description The response of `POST /api/blobs` — get-or-create on the content hash, PER-HOME (D2 as
+         *     amended 2026-09-02). `blob_id` is the id the bytes live under: freshly minted for a new
+         *     commit, the SAME id on a re-commit of bytes the caller's own home already holds — always a
+         *     row the caller can read, asserted by their own event (the same bytes in another
+         *     principal's scope are that principal's row and never surface here). `deduped` reports
+         *     that the caller's home already held these bytes, so the provider upload was skipped.
+         */
+        BlobCommitResponse: {
+            blob_id: components["schemas"]["BlobId"];
+            /** Format: int64 */
+            content_bytes: number;
+            /**
+             * @description Bare sha256 hex — the dedup key, the erasure join key, and the proof the ledger keeps
+             *     instead of bytes (`ledger-carries-hash-not-bytes`).
+             */
+            content_hash: string;
+            /**
+             * @description The row's STORED media type — allowlist-checked at commit (D9). On a dedup hit this
+             *     is the FIRST committer's type (what read-through serves), never the re-commit's
+             *     declaration (N2, 2026-09-03 review).
+             */
+            content_type: string;
+            deduped: boolean;
+        };
+        /**
+         * Format: uuid
+         * @description A `kb_blobs.id` value — one immutable, content-addressed binary blob, homed like a
+         *     resource and related to resources by edges (spec: binary blobs, 2026-09-01).
+         */
+        BlobId: string;
+        /**
+         * @description The acknowledgement of `POST /api/blobs/{id}/relations` — the edge handle, feeding the
+         *     incumbent fold endpoint (`POST /api/relationships/{edge_handle}/fold`) for retraction.
+         *     Relations come and go individually (`one-blob-many-relations`); folding rides the
+         *     relationship machinery every edge already answers to.
+         */
+        BlobRelationAck: {
+            /** Format: uuid */
+            edge_handle: string;
+        };
+        /**
+         * @description Assert a relation between a blob and another anchor — `POST /api/blobs/{id}/relations`.
+         *     The edge homes on the BLOB's home anchor (the blob-scoped surface answers to the blob's
+         *     standing), and the peer must be readable by the caller (`endpoint_readable_by_profile`)
+         *     — "relations are to resources the actor can already see", generalized to all three
+         *     endpoint kinds.
+         */
+        BlobRelationAssertRequest: components["schemas"]["ActInput"] & {
+            direction?: components["schemas"]["BlobRelationDirection"];
+            edge_kind: components["schemas"]["EdgeKind"];
+            label: string;
+            /** Format: uuid */
+            peer_id: string;
+            /** @description `kb_resources` | `kb_cogmaps` | `kb_blobs` — the peer endpoint's table. */
+            peer_table: string;
+            polarity: components["schemas"]["Polarity"];
+            /** Format: double */
+            weight: number;
+        };
+        /**
+         * @description Which end of the asserted edge the blob occupies. `blob_as_source` is the natural
+         *     `figure_of`-shaped act (the figure points at what it figures); `blob_as_target` is the
+         *     derivation-source act (resource → blob, the file it was created from). Typed, not a
+         *     free string: the refusal for a malformed value must name the two admissible values.
+         * @enum {string}
+         */
+        BlobRelationDirection: "blob_as_source" | "blob_as_target";
+        /**
+         * @description The direction a listed edge runs relative to the blob — the relations listing's own
+         *     vocabulary (`outgoing` = the blob is the edge's source, `incoming` = the blob is the
+         *     target). Typed, not a free string (the typed-structs rule, C-C3 2026-09-04 review):
+         *     the readback's SQL CASE is the only writer, so a value outside the pair is a DB/code
+         *     disagreement and is refused at the parse boundary, never passed through. Distinct
+         *     from [`BlobRelationDirection`] — that is the ASSERT request's vocabulary (which end
+         *     of a new edge the blob occupies); this is what a LISTED edge already does.
+         * @enum {string}
+         */
+        BlobRelationEdgeDirection: "outgoing" | "incoming";
+        /**
+         * @description One edge incident to a blob, as `GET /api/blobs/{id}/relations` reports it. The peer is
+         *     whatever sits on the other end — a resource (with its title), a cogmap, or another blob
+         *     — so `peer_table` rides along and `peer_title` is null for non-resource peers.
+         *     `direction` is the edge listing's own vocabulary (`outgoing` = the blob is the source).
+         */
+        BlobRelationRow: {
+            /** Format: date-time */
+            created: string;
+            direction: components["schemas"]["BlobRelationEdgeDirection"];
+            /** Format: uuid */
+            edge_id: string;
+            edge_kind: components["schemas"]["EdgeKind"];
+            label?: string | null;
+            /** Format: uuid */
+            peer_id: string;
+            /** @description `kb_resources` | `kb_cogmaps` | `kb_blobs` — spelled exactly as the DDL. */
+            peer_table: string;
+            peer_title?: string | null;
+            polarity: components["schemas"]["Polarity"];
+            /** Format: double */
+            weight: number;
+        };
+        /**
+         * @description One blob as the list surface reports it (`GET /api/blobs`). The list can only ever
+         *     contain blobs the caller can read — the gate lives server-side on the same
+         *     `blob_readable_by_profile` predicate the read-through uses, so this shape is a view of
+         *     the caller's own blob set, never a discovery oracle.
+         */
+        BlobSummary: {
+            blob_id: components["schemas"]["BlobId"];
+            /** Format: int64 */
+            content_bytes: number;
+            /** @description Bare sha256 hex — the dedup key and the erasure join key. */
+            content_hash: string;
+            /**
+             * @description The stored media type; `None` only on a post-erasure row (metadata nulled, bytes
+             *     unreachable — the erased shape renders honestly rather than being hidden).
+             */
+            content_type?: string | null;
+            /** Format: date-time */
+            created: string;
+        };
+        /**
+         * @description Begin a segmented upload — `POST /api/blobs/uploads`. Declares the whole upload up
+         *     front: the home the assembled blob will commit into, and the media type it will
+         *     commit under. Both are re-examined at finalize — standing by the service (it can
+         *     change mid-upload), the allowlist by the SQL wrapper (the sole authority, D9).
+         */
+        BlobUploadBeginRequest: {
+            /** @description The media type the assembled blob will commit under. */
+            content_type: string;
+            /** Format: uuid */
+            home_id: string;
+            /** @description `kb_contexts` or `kb_cogmaps` — a blob needs a home (D2), and so does its upload. */
+            home_table: string;
+        };
+        /**
+         * @description The response of `POST /api/blobs/uploads`. The upload id is server-minted and is the
+         *     only handle the remaining requests carry — a staged session is not a blob (it has no
+         *     hash yet), not a resource, and invisible to every other surface.
+         */
+        BlobUploadBeginResponse: {
+            /** Format: uuid */
+            upload_id: string;
+        };
+        /**
+         * @description Declare a segmented upload complete — `POST /api/blobs/uploads/{id}/finalize`. The
+         *     expected values are CONCURRENCY tokens ("nothing landed since my last append"): both
+         *     are server-handed in [`BlobUploadProgress`], echoed back verbatim, never parsed. A
+         *     mismatch refuses with the staging kept, resumable — the ingest precedent's posture.
+         */
+        BlobUploadFinalizeRequest: {
+            /**
+             * @description Bare sha256 hex of the FULL assembled body — an INTEGRITY check over the actual
+             *     bytes, distinct from the concurrency tokens. The client that holds the whole file
+             *     derives it itself; `None` from a caller that does not (the check is then skipped,
+             *     the ingest precedent's honest exemption). A mismatch refuses with the staging
+             *     kept, resumable — never silently committed.
+             */
+            expected_content_hash?: string | null;
+            /** Format: int32 */
+            expected_segments: number;
+            /** Format: int64 */
+            expected_total_bytes: number;
+        };
+        /**
+         * @description The currently-landed segment set — the response of append and of the progress read
+         *     `GET /api/blobs/uploads/{id}` (the ingest precedent's `BlocksResponse`, in blob terms:
+         *     the caller's resume manifest and the source of the finalize echo).
+         */
+        BlobUploadProgress: {
+            segments: components["schemas"]["BlobUploadSegmentInfo"][];
+            /**
+             * Format: int64
+             * @description Running byte total across landed segments — the server-handed half of the
+             *     finalize echo (`BlobUploadFinalizeRequest::expected_total_bytes`).
+             */
+            total_bytes: number;
+            /** Format: uuid */
+            upload_id: string;
+        };
+        /** @description One landed segment, as the progress read and every append report it. */
+        BlobUploadSegmentInfo: {
+            /** Format: int64 */
+            segment_bytes: number;
+            /**
+             * @description The SERVER's bare sha256 hex of the segment's raw bytes as received — the caller's
+             *     resume check and the idempotent-append identity (the same bytes re-sent at the
+             *     same seq is a no-op; DIFFERENT bytes at an occupied seq is a conflict, the
+             *     assembled whole must stay unambiguous). The server computes it; the caller sends
+             *     no integrity claim, and the whole assembly's check is finalize's
+             *     `expected_content_hash`.
+             */
+            segment_hash: string;
+            /** Format: int32 */
+            seq: number;
         };
         /**
          * Format: uuid
@@ -7898,6 +8307,504 @@ export interface operations {
             };
             /** @description Authentication required, or Slack account linking is not configured on this instance */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    list_blobs: {
+        parameters: {
+            query?: {
+                /** @description `kb_contexts` or `kb_cogmaps` — scope to one home anchor */
+                home_table?: string;
+                /** @description The home anchor's id (with home_table) */
+                home_id?: string;
+            };
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's readable blobs, newest commit first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlobSummary"][];
+                };
+            };
+            /** @description Malformed home scope, or the blob flow is disabled (no store configured, or BLOB_ENABLED closed it) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    commit_blob: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /** @description multipart/form-data: `file` (required — the bytes, with a content type), `home_table` (`kb_contexts` or `kb_cogmaps`), `home_id` (the anchor id) */
+        requestBody?: {
+            content: {
+                "multipart/form-data": unknown;
+            };
+        };
+        responses: {
+            /** @description Committed (or dedup-hit) blob */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlobCommitResponse"];
+                };
+            };
+            /** @description Refused — over threshold, unknown home anchor, or the wrapper's cap/allowlist vocabulary */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    begin_blob_upload: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BlobUploadBeginRequest"];
+            };
+        };
+        responses: {
+            /** @description Upload session created */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlobUploadBeginResponse"];
+                };
+            };
+            /** @description Refused — unknown home anchor table, or the blob flow is disabled (no store configured, or BLOB_ENABLED closed it) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Home readable but not authorable */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Home not found or not readable — indistinguishable by design */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    blob_upload_progress: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Upload session ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The currently-landed segment set */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlobUploadProgress"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Session absent or not the caller's — indistinguishable by design */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    finalize_blob_upload: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Upload session ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BlobUploadFinalizeRequest"];
+            };
+        };
+        responses: {
+            /** @description Committed (or dedup-hit) blob — the same shape the single-request path returns */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlobCommitResponse"];
+                };
+            };
+            /** @description Refused — the wrapper's cap/allowlist vocabulary, verbatim */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Session absent or not the caller's — indistinguishable by design */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Concurrency tokens stale — segments landed since the caller's last append (staging kept, resumable) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Assembled bytes do not hash to the declared expected_content_hash (staging kept) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    append_blob_segment: {
+        parameters: {
+            query: {
+                /** @description Segment ordinal — the seq order is the assembly order at finalize */
+                seq: number;
+            };
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Upload session ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        /** @description The segment's raw bytes */
+        requestBody?: {
+            content: {
+                "application/octet-stream": unknown;
+            };
+        };
+        responses: {
+            /** @description Segment landed (or already landed — idempotent); the currently-landed set returned */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlobUploadProgress"];
+                };
+            };
+            /** @description Refused — staging ceiling */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Session absent or not the caller's — indistinguishable by design */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A different segment occupies this seq */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    get_blob: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Blob ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The blob's bytes, streamed; content type is the stored media type, Cache-Control is private, immutable, Content-Disposition is attachment */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not found or not visible — indistinguishable by design */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    blob_relations: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Blob ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The visible edges incident to the blob, both directions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlobRelationRow"][];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Blob absent or not visible — indistinguishable by design */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    relate_blob: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Blob ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BlobRelationAssertRequest"];
+            };
+        };
+        responses: {
+            /** @description Relation asserted (idempotent — re-asserting the same edge returns its handle) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlobRelationAck"];
+                };
+            };
+            /** @description Refused — malformed peer table or label, or the blob flow is disabled (no store configured, or BLOB_ENABLED closed it) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The blob's home is readable but not authorable */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Blob absent or not visible, or the peer not readable — each indistinguishable from absent by design */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

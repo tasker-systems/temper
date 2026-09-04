@@ -307,6 +307,8 @@ async fn mcp_requests_produce_a_root_span(pool: sqlx::PgPool) {
         slack_link: None,
         slack_mint_secret: None,
         rate_limit: None,
+        blob: None,
+        blob_disabled_by_policy: false,
     };
     let state = AppState::new(pool, jwks_store, api_config);
     let mcp_config = temper_mcp::McpConfig {

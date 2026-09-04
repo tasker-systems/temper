@@ -14,6 +14,7 @@ pub mod audit;
 pub mod auditor;
 pub mod auth;
 pub mod authorship;
+pub mod blob;
 pub mod citation_audit;
 pub mod cognitive_maps;
 pub mod config;
@@ -79,6 +80,7 @@ pub use auth::{
     ResolvePrincipalResponse,
 };
 pub use authorship::{ActContext, ActInput, AgentAuthorship, ConfidenceBand};
+pub use blob::BlobCommitResponse;
 pub use citation_audit::CitationAuditRequest;
 pub use config::{
     expand_tilde, global_config_path, load_config, load_config_from, AuthConfig, CloudConfig,
