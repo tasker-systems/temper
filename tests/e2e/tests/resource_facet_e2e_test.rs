@@ -115,6 +115,10 @@ async fn set_facet(
     values: serde_json::Value,
     weight: f64,
 ) {
+    let values = values
+        .as_object()
+        .expect("facet payload is an object")
+        .clone();
     client
         .facets()
         .set(&FacetSetRequest {

@@ -11902,7 +11902,12 @@
             ],
             "properties": {
               "values": {
-                "description": "The facet's typed value payload."
+                "type": "object",
+                "description": "The facet's typed value payload — an **object** of `key` → value marks; same constraint as\n[`FacetSetRequest::values`].",
+                "additionalProperties": {},
+                "propertyNames": {
+                  "type": "string"
+                }
               },
               "weight": {
                 "type": "number",
@@ -12391,7 +12396,12 @@
                 "description": "The resource whose facet property is being set — a pre-resolved id."
               },
               "values": {
-                "description": "The facet's typed value payload."
+                "type": "object",
+                "description": "The facet's typed value payload — an **object** of `key` → value marks; one property row\nper inner key. A map, not a bare `Value`, so the published schema says `object` and a\nscalar payload is refused at this boundary rather than surfacing as a database error.",
+                "additionalProperties": {},
+                "propertyNames": {
+                  "type": "string"
+                }
               },
               "weight": {
                 "type": "number",

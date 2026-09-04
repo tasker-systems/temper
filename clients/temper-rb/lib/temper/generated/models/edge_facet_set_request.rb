@@ -37,6 +37,7 @@ module Temper::Generated
     # Free-text reasoning for the act. Authorship field — requires `confidence`.
     attr_accessor :reasoning
 
+    # The facet's typed value payload — an **object** of `key` → value marks; same constraint as [`FacetSetRequest::values`].
     attr_accessor :values
 
     # Relative weight of the facet; defaults to `1.0` when omitted, matching [`FacetSetRequest`].
@@ -99,7 +100,7 @@ module Temper::Generated
         :'persona' => :'String',
         :'rationale' => :'String',
         :'reasoning' => :'String',
-        :'values' => :'Object',
+        :'values' => :'Hash<String, Object>',
         :'weight' => :'Float'
       }
     end
@@ -114,7 +115,6 @@ module Temper::Generated
         :'persona',
         :'rationale',
         :'reasoning',
-        :'values',
       ])
     end
 
@@ -163,7 +163,9 @@ module Temper::Generated
       end
 
       if attributes.key?(:'values')
-        self.values = attributes[:'values']
+        if (value = attributes[:'values']).is_a?(Hash)
+          self.values = value
+        end
       else
         self.values = nil
       end
@@ -178,6 +180,10 @@ module Temper::Generated
     def list_invalid_properties
       warn '[DEPRECATED] the `list_invalid_properties` method is obsolete'
       invalid_properties = Array.new
+      if @values.nil?
+        invalid_properties.push('invalid value for "values", values cannot be nil.')
+      end
+
       invalid_properties
     end
 
@@ -185,7 +191,18 @@ module Temper::Generated
     # @return true if the model is valid
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
+      return false if @values.nil?
       true
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] values Value to be assigned
+    def values=(values)
+      if values.nil?
+        fail ArgumentError, 'values cannot be nil'
+      end
+
+      @values = values
     end
 
     # Checks equality by comparing each attribute.

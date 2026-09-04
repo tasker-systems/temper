@@ -4006,8 +4006,13 @@ export interface components {
          *     validated into exactly one.
          */
         EdgeFacetSetRequest: components["schemas"]["ActInput"] & {
-            /** @description The facet's typed value payload. */
-            values: unknown;
+            /**
+             * @description The facet's typed value payload — an **object** of `key` → value marks; same constraint as
+             *     [`FacetSetRequest::values`].
+             */
+            values: {
+                [key: string]: unknown;
+            };
             /**
              * Format: double
              * @description Relative weight of the facet; defaults to `1.0` when omitted, matching [`FacetSetRequest`].
@@ -4374,8 +4379,14 @@ export interface components {
              * @description The resource whose facet property is being set — a pre-resolved id.
              */
             resource: string;
-            /** @description The facet's typed value payload. */
-            values: unknown;
+            /**
+             * @description The facet's typed value payload — an **object** of `key` → value marks; one property row
+             *     per inner key. A map, not a bare `Value`, so the published schema says `object` and a
+             *     scalar payload is refused at this boundary rather than surfacing as a database error.
+             */
+            values: {
+                [key: string]: unknown;
+            };
             /**
              * Format: double
              * @description Relative weight of the facet; defaults to `1.0` when omitted, matching the MCP tool and CLI
