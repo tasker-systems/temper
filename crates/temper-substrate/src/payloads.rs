@@ -15,8 +15,8 @@
 use crate::affinity::EdgeKind;
 use crate::content::PreparedBlock;
 use crate::ids::{
-    BlockId, ChunkId, CogmapId, ContextId, DataArtifactId, EdgeId, EntityId, EventId, InvocationId,
-    LensId, ProfileId, PropertyId, RegionId, ResourceId, ShapeId,
+    BlobId, BlockId, ChunkId, CogmapId, ContextId, DataArtifactId, EdgeId, EntityId, EventId,
+    InvocationId, LensId, ProfileId, PropertyId, RegionId, ResourceId, ShapeId,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -49,6 +49,14 @@ pub enum AnchorTable {
     Connections,
     #[serde(rename = "kb_machine_clients")]
     MachineClients,
+    // A binary blob (D3): an edge ENDPOINT — the kb_edges endpoint CHECK admits 'kb_blobs' —
+    // and, as the relationship payload's source/target, a participant of `relationship_asserted`.
+    // Never an anchor: a blob is not a home for anything (properties, membership and region
+    // CHECKs stay closed), which is why there is no `EdgeHome::Blob` beside `Context`/`Cogmap`.
+    // Plain comment on purpose — a doc comment would split the flat enum into a oneOf branch and
+    // reshape nine published payload schemas (see `Events` below).
+    #[serde(rename = "kb_blobs")]
+    Blobs,
     // An **event**, and the only variant that is never an *anchor*.
     //
     // It exists for one thing: `references`' `derived_from`, which is event-to-event lineage and
@@ -85,6 +93,7 @@ impl AnchorTable {
         match self {
             AnchorTable::Contexts => "kb_contexts",
             AnchorTable::Cogmaps => "kb_cogmaps",
+            AnchorTable::Blobs => "kb_blobs",
             AnchorTable::Resources => "kb_resources",
             AnchorTable::Edges => "kb_edges",
             AnchorTable::ContentBlocks => "kb_content_blocks",
@@ -228,6 +237,16 @@ impl AnchorRef {
     pub fn context(id: ContextId) -> Self {
         AnchorRef {
             table: AnchorTable::Contexts,
+            id: id.uuid(),
+        }
+    }
+    /// A **blob** as an edge endpoint — the `relationship_asserted` payload's source/target for a
+    /// blob-related edge (D3). A blob is never a home and never a property owner: this constructor
+    /// exists for the relation write path alone, which is why `PropertyOwner::from(AnchorRef)` and
+    /// `_property_owner_anchor` have no blob arm to keep honest.
+    pub fn blob(id: BlobId) -> Self {
+        AnchorRef {
+            table: AnchorTable::Blobs,
             id: id.uuid(),
         }
     }
@@ -645,6 +664,47 @@ pub struct DataArtifactCommitted {
     /// #1, and only the writer can. This field is that knowledge, made explicit.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub supersedes: Vec<DataArtifactId>,
+}
+
+/// Commit one blob (spec: binary blobs — external, content-addressed, related by edges,
+/// 2026-09-01; D2/D4).
+///
+/// **The bytes are NOT here and never were** — stricter than `DataArtifactCommitted`, which
+/// carries a JSONB sidecar: a blob's bytes live in external object storage at the
+/// content-addressed pathname, so there is no sidecar at all and the ledger's business is
+/// provenance only (`ledger-carries-hash-not-bytes`).
+///
+/// Deliberately divergent from `DataArtifactCommitted` (spec D10, declared not omitted): no
+/// `intent` — a blob is addressed by id and its bytes are immutable, so there is no selection
+/// question to answer; no `supersedes` — revision is a new blob plus relation re-pointing,
+/// never a fold.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct BlobCommitted {
+    /// Identity-as-input: minted by the caller and carried here so replay reproduces the same
+    /// row id. `kb_blobs.id` deliberately has no DEFAULT for this reason.
+    pub blob_id: BlobId,
+    /// The blob's home — polymorphic over `(kb_contexts, kb_cogmaps)`, carried resolved. A blob
+    /// homed in a context or cogmap is visible to that home's readers
+    /// (`blob-visibility-self-contained`); relations never widen this — the edge's home gates
+    /// the edge, not the blob (spec D3).
+    pub home: AnchorRef,
+    /// The blob's owning profile (the homes row's owner), the `ResourceCreated` shape.
+    pub owner_profile_id: ProfileId,
+    /// The home's originator. Absent ⇒ the projector COALESCEs it to the owner
+    /// (originator≡owner), the `ResourceCreated` pattern.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub originator_profile_id: Option<ProfileId>,
+    /// Bare sha256 hex of the blob's raw bytes — the dedup key (`kb_blobs.content_hash` UNIQUE)
+    /// and the erasure act's join key (its redacted set keys on content hash).
+    pub content_hash: String,
+    /// The content-addressed external path: `{hash[0:2]}/{hash}`. The SQL wrapper refuses a
+    /// payload whose pathname is anything else — addressing is enforced, not assumed (D1).
+    pub blob_pathname: String,
+    /// The stored media type, allowlist-checked at commit; the refusal names the vocabulary (D9).
+    pub content_type: String,
+    /// Surfaced so a reader can decide whether to fetch. Never the bytes themselves.
+    pub content_bytes: i64,
 }
 
 /// The conformance state of a data artifact against any shape declared for its family.
@@ -1400,8 +1460,8 @@ pub struct SubscriptionDeliveryDisposed {
     pub decided_by_invocation_id: Option<Uuid>,
 }
 
-/// The 24 typed event names — the registry-stamping and snapshot surfaces iterate this.
-pub const TYPED_EVENT_NAMES: [&str; 24] = [
+/// The 25 typed event names — the registry-stamping and snapshot surfaces iterate this.
+pub const TYPED_EVENT_NAMES: [&str; 25] = [
     "cogmap_seeded",
     "resource_created",
     "relationship_asserted",
@@ -1426,6 +1486,7 @@ pub const TYPED_EVENT_NAMES: [&str; 24] = [
     "subscription_delivery_disposed",
     "data_artifact_committed",
     "shape_declared",
+    "blob_committed",
 ];
 
 /// FOREIGN event names — registered permissive (NULL `payload_schema`) because their body is a
@@ -1742,6 +1803,7 @@ mod tests {
         for t in [
             AnchorTable::Contexts,
             AnchorTable::Cogmaps,
+            AnchorTable::Blobs,
             AnchorTable::Resources,
             AnchorTable::Edges,
             AnchorTable::ContentBlocks,

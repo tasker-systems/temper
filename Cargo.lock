@@ -420,6 +420,7 @@ dependencies = [
  "matchit",
  "memchr",
  "mime",
+ "multer",
  "percent-encoding",
  "pin-project-lite",
  "serde_core",
@@ -3372,6 +3373,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "multer"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83e87776546dc87511aa5ee218730c92b666d7264ab6ed41f9d215af9cd5224b"
+dependencies = [
+ "bytes",
+ "encoding_rs",
+ "futures-util",
+ "http",
+ "httparse",
+ "memchr",
+ "mime",
+ "spin",
+ "version_check",
+]
+
+[[package]]
 name = "native-tls"
 version = "0.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4667,12 +4685,14 @@ dependencies = [
  "tokio",
  "tokio-native-tls",
  "tokio-rustls",
+ "tokio-util",
  "tower",
  "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-streams 0.4.2",
  "web-sys",
  "webpki-roots 1.0.6",
 ]
@@ -4709,12 +4729,14 @@ dependencies = [
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
+ "tokio-util",
  "tower",
  "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-streams 0.5.0",
  "web-sys",
 ]
 
@@ -4755,6 +4777,7 @@ dependencies = [
  "pastey 0.2.1",
  "pin-project-lite",
  "rand 0.10.0",
+ "reqwest 0.13.2",
  "rmcp-macros",
  "schemars",
  "serde",
@@ -6014,7 +6037,10 @@ dependencies = [
 name = "temper-api"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "async-trait",
  "axum",
+ "bytes",
  "chrono",
  "jsonwebtoken",
  "opentelemetry",
@@ -6187,6 +6213,8 @@ dependencies = [
  "opentelemetry",
  "opentelemetry_sdk",
  "reqwest 0.12.28",
+ "reqwest 0.13.2",
+ "rmcp",
  "rmp-serde",
  "serde",
  "serde_json",
@@ -6248,8 +6276,10 @@ name = "temper-mcp"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64 0.22.1",
  "chrono",
  "flate2",
+ "futures",
  "http",
  "jsonwebtoken",
  "rmcp",
@@ -6298,8 +6328,10 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "bytes",
  "chacha20poly1305",
  "chrono",
+ "futures-util",
  "jsonschema",
  "jsonwebtoken",
  "opentelemetry",
@@ -6338,8 +6370,12 @@ name = "temper-substrate"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
+ "bytes",
  "chrono",
  "clap",
+ "futures-core",
+ "futures-util",
  "jsonschema",
  "schemars",
  "serde",
@@ -7497,6 +7533,32 @@ dependencies = [
  "indexmap",
  "wasm-encoder",
  "wasmparser",
+]
+
+[[package]]
+name = "wasm-streams"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15053d8d85c7eccdbefef60f06769760a563c7f0a9d6902a13d35c7800b0ad65"
+dependencies = [
+ "futures-util",
+ "js-sys",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
+name = "wasm-streams"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d1ec4f6517c9e11ae630e200b2b65d193279042e28edd4a2cda233e46670bbb"
+dependencies = [
+ "futures-util",
+ "js-sys",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]

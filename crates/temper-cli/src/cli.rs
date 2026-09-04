@@ -343,6 +343,12 @@ pub enum Commands {
         action: EdgeAction,
     },
 
+    /// Commit, read, list, and relate binary blobs (writes go through the cloud API)
+    Blob {
+        #[command(subcommand)]
+        action: BlobAction,
+    },
+
     /// Operate on cognitive maps (create, read, reconcile, materialize, bind, grant)
     Cogmap {
         #[command(subcommand)]
@@ -519,6 +525,14 @@ pub enum ResourceAction {
         /// the origin empty and recording no provenance. Mutually exclusive with `--sources`.
         #[arg(long, conflicts_with = "sources")]
         no_source: bool,
+        /// Preserve the original as a blob (`derivation-source-preservable`, D3): with a LOCAL
+        /// file `--from`, the file's raw bytes are committed as a blob homed in the same
+        /// context/cogmap, and a `derivation_source` edge is asserted from the resource to the
+        /// blob — the provenance question later is a graph read (`blob relations`/`blob get`).
+        /// Not atomic: blob + edge assert after the create commits, warnings rather than
+        /// failures (re-running is safe on the blob; the create is not re-runnable).
+        #[arg(long, requires = "from")]
+        preserve_source: bool,
         /// Per-act authorship + invocation-correlation flags.
         #[command(flatten)]
         act: ActArgs,
@@ -631,6 +645,14 @@ pub enum ResourceAction {
         /// Add a section (comma-separated or repeated). `show` already carries `body` and
         /// `open-meta`; `--with edges` folds this resource's graph edges into the same
         /// document (the long form of `--edges`).
+        ///
+        /// The edges section is RESOURCE↔RESOURCE by decision (2026-09-02, blob surfaces
+        /// S6): edges with a blob endpoint — the `derivation_source` edge
+        /// `--preserve-source` asserts, say — are admitted by the SQL visibility gate but
+        /// deliberately not rendered here, because the peer row is resource-typed. The
+        /// derivation answer lives one door over: `temper blob relations <blob-id>` (the
+        /// blob-side view). Widening this section to polymorphic peers is a named
+        /// follow-up, not an omission.
         #[arg(long = "with", value_delimiter = ',',
               value_parser = crate::commands::resource_sections::show_section_parser())]
         with: Vec<String>,
@@ -2204,6 +2226,148 @@ pub enum MemoryAction {
 pub enum ConfigAction {
     /// Open config.toml in $EDITOR with validate-then-save semantics
     Edit,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum BlobAction {
+    /// Commit a file's bytes as a blob, homed in a context or cogmap you can author.
+    ///
+    /// At or under the single-request threshold (BLOB_SINGLE_REQUEST_MAX_BYTES, default
+    /// 4 MB — deliberately under the platform's 4.5 MB request cap) this is ONE multipart
+    /// call. Beyond it the segmented upload takes over automatically: begin/append/finalize
+    /// over chunks of the same size, each segment's identity being the server's own sha256
+    /// of the bytes it receives, the whole file's sha256 echoed into finalize as the
+    /// integrity check.
+    Put {
+        /// Path of the file to commit, or `-` for stdin (stdin commits require --filename).
+        file: String,
+        /// The home anchor: a context ref (`@me/notes`, `+team/shared`), or a bare /
+        /// decorated UUID id. A name-based ref is a CONTEXT home by construction; with a
+        /// UUID id, --home-table picks (default context).
+        #[arg(long)]
+        home: String,
+        /// Which kind of anchor a UUID --home names (ignored for name-based refs).
+        #[arg(long, value_enum, default_value = "context")]
+        home_table: CliHomeTable,
+        /// The media type to commit under. Guessed from the extension for the six
+        /// allowlisted types (png, jpeg, webp, svg, gif, pdf); required when the
+        /// extension is unknown and the commit is not the guessed type — the server's
+        /// allowlist refusal names the vocabulary if the guessed type is refused.
+        #[arg(long)]
+        content_type: Option<String>,
+        /// The filename the multipart part carries (defaults to the file's basename;
+        /// required for stdin).
+        #[arg(long)]
+        filename: Option<String>,
+    },
+    /// Read a blob's bytes back, whole, streamed (to --out, or stdout).
+    Get {
+        /// The blob's id (from `blob list` / a prior put).
+        blob: uuid::Uuid,
+        /// Write the bytes to this path instead of stdout.
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
+    },
+    /// List the blobs you can read (optionally scoped to one home anchor).
+    List {
+        /// Optional home scope: a context ref, or a UUID id (with --home-table).
+        #[arg(long)]
+        home: Option<String>,
+        #[arg(long, value_enum, default_value = "context")]
+        home_table: CliHomeTable,
+    },
+    /// Relate a blob to another anchor (resource by ref, or cogmap/blob id).
+    ///
+    /// The edge homes on the blob's home anchor; retraction rides
+    /// `temper edge fold <handle>`. Re-asserting the same relation updates its weight
+    /// and returns the same handle — a relation neither creates nor removes any other.
+    Relate {
+        /// The blob's id.
+        blob: uuid::Uuid,
+        /// The peer: a resource ref (UUID or `slug-<uuid>` — the common case), or a
+        /// cogmap/blob id with --peer-table.
+        #[arg(long)]
+        to: String,
+        /// The peer's table when --to is a bare cogmap or blob id.
+        #[arg(long, value_enum, default_value = "resource")]
+        peer_table: CliPeerTable,
+        /// Which end the blob occupies. blob-as-source is the `figure_of`-shaped act
+        /// (the figure points at what it figures); blob-as-target is the
+        /// derivation-source act (resource → blob, the file it was created from).
+        #[arg(long, value_enum, default_value = "blob-as-source")]
+        direction: CliBlobRelationDirection,
+        /// Edge kind (express, contains, leads-to, near)
+        #[arg(long, value_enum, default_value = "express")]
+        kind: CliEdgeKind,
+        /// Edge polarity (forward, inverse)
+        #[arg(long, value_enum, default_value = "forward")]
+        polarity: CliPolarity,
+        /// Human-readable label (e.g. "figure_of", "derivation_source")
+        #[arg(long)]
+        label: String,
+        /// Edge weight
+        #[arg(long, default_value = "1.0")]
+        weight: f64,
+        /// Per-act authorship + invocation-correlation flags.
+        #[command(flatten)]
+        act: ActArgs,
+    },
+}
+
+/// Which kind of anchor a `--home` UUID names.
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq)]
+pub enum CliHomeTable {
+    Context,
+    Cogmap,
+}
+
+impl CliHomeTable {
+    /// The wire vocabulary, spelled exactly as the DDL.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CliHomeTable::Context => "kb_contexts",
+            CliHomeTable::Cogmap => "kb_cogmaps",
+        }
+    }
+}
+
+/// The peer endpoint's table for `blob relate`, when `--to` is a bare id.
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq)]
+pub enum CliPeerTable {
+    Resource,
+    Cogmap,
+    Blob,
+}
+
+impl CliPeerTable {
+    /// The wire vocabulary, spelled exactly as the DDL.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CliPeerTable::Resource => "kb_resources",
+            CliPeerTable::Cogmap => "kb_cogmaps",
+            CliPeerTable::Blob => "kb_blobs",
+        }
+    }
+}
+
+/// Which end of the asserted edge the blob occupies.
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq)]
+pub enum CliBlobRelationDirection {
+    BlobAsSource,
+    BlobAsTarget,
+}
+
+impl From<CliBlobRelationDirection> for temper_core::types::blob::BlobRelationDirection {
+    fn from(d: CliBlobRelationDirection) -> Self {
+        match d {
+            CliBlobRelationDirection::BlobAsSource => {
+                temper_core::types::blob::BlobRelationDirection::BlobAsSource
+            }
+            CliBlobRelationDirection::BlobAsTarget => {
+                temper_core::types::blob::BlobRelationDirection::BlobAsTarget
+            }
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]

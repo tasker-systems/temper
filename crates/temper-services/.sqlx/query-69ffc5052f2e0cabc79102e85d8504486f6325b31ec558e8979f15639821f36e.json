@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT b.id AS \"blob_id!\"\n             FROM kb_blobs b\n            WHERE b.content_hash = $1\n              AND b.home_table = $2\n              AND b.home_id = $3\n            LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "blob_id!",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "69ffc5052f2e0cabc79102e85d8504486f6325b31ec558e8979f15639821f36e"
+}

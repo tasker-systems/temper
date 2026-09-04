@@ -4,7 +4,7 @@
 //!
 //! Under goal *"A person can be erased without the ledger losing what happened"*. An erasure path
 //! that enumerates its targets from a hand-written list is an erasure path that misses the column
-//! somebody added last week and reports success anyway — so the list is not hand-written. Six
+//! somebody added last week and reports success anyway — so the list is not hand-written. Seven
 //! derivations nominate candidates from `pg_catalog` / `information_schema`; the manifest carries
 //! the judgement each candidate needs and no query can supply.
 //!
@@ -19,6 +19,12 @@
 //! Structure finds none of them. The heuristic nominates; the manifest adjudicates, and does mark
 //! one of the four as `none` — which is the split working, not the split failing.
 //!
+//! **Why `bytes` exists.** Every other derivation keys on column TYPE or constraint shape, and
+//! none of them sees BYTEA: a raw-binary column is invisible to fk/poly/prin/vec/json/named alike.
+//! `kb_blob_upload_segments.bytes` (review F3) staged raw user bytes undeclared precisely because
+//! the test structurally could not fail on it. Binary content is personal content the moment a
+//! person uploads it, so every bytea column nominates.
+//!
 //! This test does NOT claim the surface is complete. 150 `text` columns are nominated by nothing
 //! here, and the manifest says so in its own header. Coverage is never inferred from absence.
 
@@ -29,7 +35,7 @@ use sqlx::PgPool;
 /// The declaration half. Read from the shipped file so the manifest and this test cannot drift.
 const MANIFEST: &str = include_str!("../../../scripts/personal-data-surface.txt");
 
-/// The derivation half — six sources, unioned and de-duplicated.
+/// The derivation half — seven sources, unioned and de-duplicated.
 ///
 /// Held here rather than in a `.sql` file because it is this test's question, not a migration: it
 /// is never applied, and a reader debugging a failure wants it beside the assertion.
@@ -64,6 +70,11 @@ js AS (
    AND t.table_schema='public' AND t.table_type='BASE TABLE'
   WHERE c.table_schema='public' AND c.data_type='jsonb'),
 denorm AS (VALUES ('kb_teams','slug'),('kb_teams','name')),
+bytes AS (
+  SELECT c.table_name tbl, c.column_name col FROM information_schema.columns c
+  JOIN information_schema.tables t ON t.table_name=c.table_name
+   AND t.table_schema='public' AND t.table_type='BASE TABLE'
+  WHERE c.table_schema='public' AND c.data_type='bytea'),
 named AS (
   SELECT c.table_name tbl, c.column_name col FROM information_schema.columns c
   JOIN information_schema.tables t ON t.table_name=c.table_name
@@ -73,7 +84,7 @@ named AS (
 SELECT DISTINCT tbl||'.'||col FROM (
   SELECT * FROM fk        UNION ALL SELECT * FROM poly_pair UNION ALL SELECT * FROM prin
   UNION ALL SELECT * FROM vecs UNION ALL SELECT * FROM js   UNION ALL SELECT * FROM denorm
-  UNION ALL SELECT * FROM named
+  UNION ALL SELECT * FROM bytes UNION ALL SELECT * FROM named
 ) u ORDER BY 1
 "#;
 

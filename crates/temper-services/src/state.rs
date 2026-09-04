@@ -529,17 +529,39 @@ pub struct AppState {
     /// `NullBroker` that fails mints clearly. Surfaces dispatch through it (the
     /// connection attach path mints once to verify).
     pub broker: Arc<dyn crate::broker::CredentialBroker>,
+    /// The blob provider store — `Some` only when blob credentials are configured
+    /// (spec: binary blobs, D6/D7). `None` disables the blob endpoints entirely,
+    /// mirroring how `broker`'s `NullBroker` disables mints: absent, not broken.
+    pub blob_store: Option<Arc<dyn temper_substrate::blob_store::BlobStore>>,
 }
 
 impl AppState {
     pub fn new(pool: PgPool, jwks_store: JwksKeyStore, config: ApiConfig) -> Self {
         let broker = crate::broker::resolve_broker(config.vercel_connect.clone());
+        let blob_store: Option<Arc<dyn temper_substrate::blob_store::BlobStore>> = config
+            .blob
+            .clone()
+            .map(|c| -> Arc<dyn temper_substrate::blob_store::BlobStore> {
+                Arc::new(crate::services::blob_provider::VercelBlobStore::new(c))
+            });
         Self {
             pool,
             jwks_store: Arc::new(jwks_store),
             config: Arc::new(config),
             userinfo_endpoint: Arc::new(tokio::sync::OnceCell::new()),
             broker,
+            blob_store,
+        }
+    }
+
+    /// The blob door's refusal for THIS instance: the unconfigured vocabulary when no
+    /// credential resolves, the policy vocabulary when `BLOB_ENABLED` closed the door
+    /// deliberately. Spelled once — every surface hears the same voice.
+    pub fn blob_refusal(&self) -> crate::error::ApiError {
+        if self.config.blob_disabled_by_policy {
+            crate::services::blob_service::blob_disabled_by_policy()
+        } else {
+            crate::services::blob_service::blob_disabled()
         }
     }
 }

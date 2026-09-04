@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT anchor_readable_by_profile($1, $2, $3) AS \"readable!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "readable!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "78cb9960988c8180ce8e0c7af4d9b060eb823079df1c6465f3b21cc0f84699ab"
+}

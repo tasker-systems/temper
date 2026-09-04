@@ -70,8 +70,8 @@ use temper_core::types::home::HomeAnchor;
 use uuid::Uuid;
 
 use crate::ids::{
-    BlockId, CogmapId, ContextId, DataArtifactId, EdgeId, EntityId, LensId, ProfileId, RegionId,
-    ResourceId, ShapeId,
+    BlobId, BlockId, CogmapId, ContextId, DataArtifactId, EdgeId, EntityId, LensId, ProfileId,
+    RegionId, ResourceId, ShapeId,
 };
 use crate::keys::{is_managed_property_key, MANAGED_PROPERTY_KEYS};
 use temper_core::types::managed_meta::ManagedMeta;
@@ -2572,4 +2572,245 @@ pub async fn shape_by_id(
         })
     })
     .transpose()
+}
+
+// Two reads over `kb_blobs` for the blob surfaces (spec: binary blobs, 2026-09-01 — D6). The gate
+// is `blob_readable_by_profile` — the predicate migration `20260903000030` NAMED for exactly this
+// caller ("the blob read surfaces gate on the same question and must not restate it"): a blob is
+// readable iff its OWN home is, and neither relation nor commit response ever widens that
+// (blob-visibility-self-contained). Both fail closed as `Ok(None)`, like [`artifact_by_id`] — an
+// invisible blob is absent, never an error that would confirm it exists.
+
+/// One committed blob's metadata row, as the read-through needs it: the stored media type the
+/// response must speak, the byte count for `Content-Length`, and the content-addressed pathname
+/// the provider is asked for. No bytes and no URL — the API streams and never leaks the provider
+/// address (D6: the API is the only reader of the provider).
+#[derive(Debug, Clone)]
+pub struct RetrievedBlob {
+    pub blob_id: BlobId,
+    pub content_hash: String,
+    pub blob_pathname: String,
+    /// The allowlist-checked media type the blob was committed under. `NOT NULL` on live rows —
+    /// `blob_commit` refuses a null/absent type by allowlist vocabulary — so this is a `!`
+    /// override on the macro read; the erasure pre-pass (D5.2, another task) is what nulls it.
+    pub content_type: String,
+    pub content_bytes: i64,
+    pub created: DateTime<Utc>,
+}
+
+/// One blob by id, visible only through the blob's own home. Not visible ⇒ `Ok(None)` —
+/// the read surface renders that as 404 so a probe cannot become an existence oracle.
+pub async fn blob_by_id(
+    pool: &PgPool,
+    principal: ProfileId,
+    blob: BlobId,
+) -> Result<Option<RetrievedBlob>> {
+    let row = sqlx::query!(
+        r#"SELECT b.id            AS "blob_id!",
+                  b.content_hash  AS "content_hash!",
+                  b.blob_pathname AS "blob_pathname!",
+                  b.content_type  AS "content_type!",
+                  b.content_bytes AS "content_bytes!",
+                  b.created       AS "created!"
+             FROM kb_blobs b
+            WHERE b.id = $2
+              AND blob_readable_by_profile($1, b.id)"#,
+        principal.uuid(),
+        blob.uuid(),
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| RetrievedBlob {
+        blob_id: BlobId::from(r.blob_id),
+        content_hash: r.content_hash,
+        blob_pathname: r.blob_pathname,
+        content_type: r.content_type,
+        content_bytes: r.content_bytes,
+        created: r.created,
+    }))
+}
+
+/// Does the caller's OWN home already hold this content hash? The commit path's dedup
+/// pre-check, per-home (D2 as amended 2026-09-02): a hit means the bytes are provably already
+/// at their content-addressed pathname (the first commit verified provider presence), so the
+/// provider upload is skipped — D1's "dedup for free", scoped. A hash homed in a scope the
+/// caller cannot see never answers here — and under per-home identity it never answers
+/// ANYWHERE for them: their commit is a fresh row of their own, asserted by their own event,
+/// carrying their own identity. Storage dedup is pathname-level and unaffected.
+pub async fn home_blob_id_by_hash(
+    pool: &PgPool,
+    home: &crate::payloads::AnchorRef,
+    content_hash: &str,
+) -> Result<Option<BlobId>> {
+    let row = sqlx::query!(
+        r#"SELECT b.id AS "blob_id!"
+             FROM kb_blobs b
+            WHERE b.content_hash = $1
+              AND b.home_table = $2
+              AND b.home_id = $3
+            LIMIT 1"#,
+        content_hash,
+        home.table.as_str(),
+        home.id,
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| BlobId::from(r.blob_id)))
+}
+
+// ── Blob list + relations (spec: binary blobs, 2026-09-01 — S4; the read surfaces the
+// relate surface answers to) ──────────────────────────────────────────────────────────
+
+/// One blob as the list surface reports it: the commit's own metadata. No pathname — the
+/// provider address is the API's private knowledge (D6), and a list is where a leak would
+/// be wholesale, so the row type simply cannot carry it. `content_type` is `Option` (the
+/// DDL is nullable for the erasure pre-pass, unlike the read-through's `!` override — a
+/// list must be able to RENDER a post-erasure row honestly, not crash on it).
+#[derive(Debug, Clone)]
+pub struct BlobListRow {
+    pub blob_id: BlobId,
+    pub content_hash: String,
+    pub content_type: Option<String>,
+    pub content_bytes: i64,
+    pub created: DateTime<Utc>,
+}
+
+/// Every blob the principal can read, newest commit first, optionally scoped to one home
+/// anchor (`Some(AnchorRef)` with table kb_contexts | kb_cogmaps). The gate is the NAMED
+/// predicate `blob_readable_by_profile` — set-form here, scalar form at the read-through —
+/// never a restatement of "home readable" Rust-side or SQL-side: the two doors onto one
+/// anchor must not disagree about which blobs exist (blob-visibility-self-contained). No
+/// `is_folded` filter, matching `blob_by_id`: nothing folds a blob in v1.
+pub async fn blobs_readable_by_profile(
+    pool: &PgPool,
+    principal: ProfileId,
+    home: Option<&crate::payloads::AnchorRef>,
+) -> Result<Vec<BlobListRow>> {
+    let (home_table, home_id) = match home {
+        None => (None, None),
+        Some(h) => (Some(h.table.as_str()), Some(h.id)),
+    };
+    let rows = sqlx::query!(
+        r#"SELECT b.id            AS "blob_id!",
+                  b.content_hash  AS "content_hash!",
+                  b.content_type,
+                  b.content_bytes AS "content_bytes!",
+                  b.created       AS "created!"
+             FROM kb_blobs b
+            WHERE blob_readable_by_profile($1, b.id)
+              AND ($2::text IS NULL
+                     OR (b.home_table = $2::text AND b.home_id = $3))"#,
+        principal.uuid(),
+        home_table,
+        home_id,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| BlobListRow {
+            blob_id: BlobId::from(r.blob_id),
+            content_hash: r.content_hash,
+            content_type: r.content_type,
+            content_bytes: r.content_bytes,
+            created: r.created,
+        })
+        .collect())
+}
+
+/// One edge incident to a blob, as the blob's relations read reports it. The peer is
+/// whatever sits on the other end — a resource (with its title), a cogmap, or another blob
+/// — so `peer_table` rides along and `peer_title` is `None` for every non-resource peer.
+#[derive(Debug, Clone)]
+pub struct BlobRelationRow {
+    pub edge_id: EdgeId,
+    pub peer_table: String,
+    pub peer_id: Uuid,
+    pub peer_title: Option<String>,
+    pub edge_kind: String,
+    pub polarity: String,
+    pub label: Option<String>,
+    pub direction: String,
+    pub weight: f64,
+    pub created: DateTime<Utc>,
+}
+
+/// The edges incident to one blob, live and visible to the principal — the dedicated blob
+/// read surface that answers "what relates to this blob" (D3). The gate is
+/// `blob_readable_by_profile` (existence first, its own query: a non-owner gets `None`,
+/// which the surface renders 404 — the S3 lesson that a filter that empties a set is not a
+/// gate), then `edges_visible_to` narrows the edges: an edge is listed only where BOTH the
+/// edge's home and the blob endpoint are readable, the same terms every edge listing reads
+/// under. Walks never come here — an edge listing may render a blob endpoint; a walk never
+/// materializes one (the deliberate D3 exclusion, restated in the 20260903000030
+/// migration).
+///
+/// `Ok(None)` vs `Ok(Some(vec![]))`: an invisible-or-absent blob is `None` (404); a visible
+/// blob with no relations is `Some(empty)` — the 404-parity shape `list_resource_edges`
+/// renders, kept honest by asking the two questions separately.
+pub async fn blob_relations(
+    pool: &PgPool,
+    principal: ProfileId,
+    blob: BlobId,
+) -> Result<Option<Vec<BlobRelationRow>>> {
+    let readable: bool = sqlx::query_scalar!(
+        r#"SELECT blob_readable_by_profile($1, $2) AS "readable!""#,
+        principal.uuid(),
+        blob.uuid(),
+    )
+    .fetch_one(pool)
+    .await?;
+    if !readable {
+        return Ok(None);
+    }
+
+    let rows = sqlx::query!(
+        r#"SELECT e.id              AS "edge_id!",
+                  (CASE WHEN e.source_id = $2 THEN e.target_table ELSE e.source_table END)
+                      AS "peer_table!",
+                  (CASE WHEN e.source_id = $2 THEN e.target_id ELSE e.source_id END)
+                      AS "peer_id!",
+                  r.title          AS "peer_title?",
+                  e.edge_kind::text AS "edge_kind!",
+                  e.polarity::text AS "polarity!",
+                  e.label,
+                  (CASE WHEN e.source_id = $2 THEN 'outgoing' ELSE 'incoming' END)
+                      AS "direction!",
+                  e.weight         AS "weight!",
+                  e.created        AS "created!"
+             FROM kb_edges e
+             JOIN edges_visible_to($1) v ON v.edge_id = e.id
+             LEFT JOIN kb_resources r
+               ON (CASE WHEN e.source_id = $2 THEN e.target_table ELSE e.source_table END)
+                   = 'kb_resources'
+                  AND r.id = (CASE WHEN e.source_id = $2
+                                   THEN e.target_id ELSE e.source_id END)
+            WHERE NOT e.is_folded
+              AND ((e.source_table = 'kb_blobs' AND e.source_id = $2)
+                OR (e.target_table = 'kb_blobs' AND e.target_id = $2))"#,
+        principal.uuid(),
+        blob.uuid(),
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(Some(
+        rows.into_iter()
+            .map(|r| BlobRelationRow {
+                edge_id: EdgeId::from(r.edge_id),
+                peer_table: r.peer_table,
+                peer_id: r.peer_id,
+                peer_title: r.peer_title,
+                edge_kind: r.edge_kind,
+                polarity: r.polarity,
+                label: r.label,
+                direction: r.direction,
+                weight: r.weight,
+                created: r.created,
+            })
+            .collect(),
+    ))
 }

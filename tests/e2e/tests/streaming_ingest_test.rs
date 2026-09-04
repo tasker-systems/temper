@@ -210,6 +210,7 @@ async fn segmented_create_roundtrips_large_body(pool: PgPool) {
             temper_cli::commands::resource::create(
                 &cli_config,
                 temper_cli::commands::resource::CreateResourceArgs {
+                    preserve_source: false,
                     open_meta: None,
                     goal: None,
                     doc_type: "research",
@@ -1071,6 +1072,7 @@ async fn cli_discards_a_corrupt_upload_on_integrity_failure(pool: PgPool) {
             temper_cli::commands::resource::create(
                 &cli_config,
                 temper_cli::commands::resource::CreateResourceArgs {
+                    preserve_source: false,
                     open_meta: None,
                     goal: None,
                     doc_type: "research",

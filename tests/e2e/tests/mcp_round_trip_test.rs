@@ -896,6 +896,8 @@ async fn mcp_get_resource_routes_through_selector_legacy(pool: sqlx::PgPool) {
         slack_link: None,
         slack_mint_secret: None,
         rate_limit: None,
+        blob: None,
+        blob_disabled_by_policy: false,
     };
     let state = AppState::new(pool.clone(), jwks_store, api_config);
     let svc = temper_mcp::service::TemperMcpService::new(state);
@@ -1070,6 +1072,8 @@ async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
         slack_link: None,
         slack_mint_secret: None,
         rate_limit: None,
+        blob: None,
+        blob_disabled_by_policy: false,
     };
     let state = AppState::new(pool.clone(), jwks_store, api_config);
     let svc = temper_mcp::service::TemperMcpService::new(state);

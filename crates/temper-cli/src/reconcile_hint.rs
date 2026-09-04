@@ -93,6 +93,7 @@ mod tests {
             sources: vec![],
             sources_as_edges: false,
             no_source: false,
+            preserve_source: false,
             act: crate::cli::ActArgs::default(),
         }
     }

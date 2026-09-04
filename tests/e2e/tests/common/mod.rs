@@ -683,6 +683,44 @@ async fn record_request_path(
 }
 
 async fn setup_with_recorder(pool: PgPool, recorder: Option<RequestLog>) -> E2eTestApp {
+    setup_with_recorder_and_blob(pool, recorder, None).await
+}
+
+/// [`setup`], with the blob flow LIVE: a `BlobConfig` on the API config (the D9
+/// policy vocabularies at their defaults) and an [`InMemoryBlobStore`] standing in for
+/// the Vercel Blob provider. `AppState::new` hardwires the real provider client from the
+/// config, so the store is swapped in afterwards — the pub field exists for exactly this
+/// seam. Every byte the tests commit lands in the in-process map; nothing leaves the box.
+pub async fn setup_with_blob_store(pool: PgPool) -> E2eTestApp {
+    let blob_config = temper_services::config::BlobConfig {
+        store_id: "test-blob-store".to_string(),
+        read_write_token: None,
+        credential_mode: temper_services::config::BlobCredentialMode::Token,
+        oidc_token_source: std::sync::Arc::new(|| None),
+        max_bytes: 100 * 1024 * 1024,
+        allowlist: vec![
+            "image/png".into(),
+            "image/jpeg".into(),
+            "image/webp".into(),
+            "image/svg+xml".into(),
+            "image/gif".into(),
+            "application/pdf".into(),
+        ],
+        single_request_max_bytes: 4 * 1024 * 1024,
+    };
+    let store: std::sync::Arc<dyn temper_substrate::blob_store::BlobStore> =
+        std::sync::Arc::new(temper_substrate::blob_store::InMemoryBlobStore::default());
+    setup_with_recorder_and_blob(pool, None, Some((blob_config, store))).await
+}
+
+async fn setup_with_recorder_and_blob(
+    pool: PgPool,
+    recorder: Option<RequestLog>,
+    blob: Option<(
+        temper_services::config::BlobConfig,
+        std::sync::Arc<dyn temper_substrate::blob_store::BlobStore>,
+    )>,
+) -> E2eTestApp {
     clean_and_seed(&pool).await;
 
     // --- Server setup ---
@@ -710,9 +748,16 @@ async fn setup_with_recorder(pool: PgPool, recorder: Option<RequestLog>) -> E2eT
         slack_link: None,
         slack_mint_secret: None,
         rate_limit: None,
+        blob: blob.as_ref().map(|(c, _)| c.clone()),
+        blob_disabled_by_policy: false,
     };
 
-    let state = AppState::new(pool.clone(), jwks_store, api_config);
+    let mut state = AppState::new(pool.clone(), jwks_store, api_config);
+    // `AppState::new` builds the real provider client from the config; the e2e seam is the
+    // swap to the caller's store (the in-memory fake when `blob` is Some).
+    if let Some((_, store)) = blob {
+        state.blob_store = Some(store);
+    }
     let app = create_app(state);
     let app = match recorder {
         Some(log) => app.layer(axum::middleware::from_fn_with_state(
@@ -828,6 +873,8 @@ pub async fn setup_eddsa_with_provider(pool: PgPool, provider: &str) -> E2eTestA
         slack_link: None,
         slack_mint_secret: None,
         rate_limit: None,
+        blob: None,
+        blob_disabled_by_policy: false,
     };
 
     let state = AppState::new(pool.clone(), jwks_store, api_config);

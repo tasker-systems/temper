@@ -7,6 +7,7 @@
 pub mod access;
 pub mod admin;
 pub mod auth;
+pub mod blobs;
 pub mod cognitive_maps;
 pub mod config;
 pub mod connection;
@@ -214,6 +215,11 @@ impl TemperClient {
     /// Upload sub-client.
     pub fn upload(&self) -> upload::UploadClient<'_> {
         upload::UploadClient::new(&self.http)
+    }
+
+    /// Blob sub-client (commit / read / list / relate / segmented upload).
+    pub fn blobs(&self) -> blobs::BlobClient<'_> {
+        blobs::BlobClient::new(&self.http)
     }
 
     /// Ingest sub-client.
