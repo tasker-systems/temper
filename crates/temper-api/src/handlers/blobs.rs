@@ -30,7 +30,6 @@ use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
 use crate::middleware::surface::RequestSurface;
-use temper_services::services::blob_service::blob_disabled;
 
 /// Commit bytes as a blob — one multipart request at or under the D7 threshold
 ///
@@ -66,8 +65,15 @@ pub async fn commit(
     RequestSurface(surface): RequestSurface,
     mut multipart: Multipart,
 ) -> ApiResult<Json<BlobCommitResponse>> {
-    let store = state.blob_store.as_deref().ok_or_else(blob_disabled)?;
-    let config = state.config.blob.clone().ok_or_else(blob_disabled)?;
+    let store = state
+        .blob_store
+        .as_deref()
+        .ok_or_else(|| state.blob_refusal())?;
+    let config = state
+        .config
+        .blob
+        .clone()
+        .ok_or_else(|| state.blob_refusal())?;
     let caller = ProfileId::from(auth.0.profile().id);
 
     let mut home_table: Option<String> = None;
@@ -194,7 +200,10 @@ pub async fn get(
     auth: AuthUser,
     Path(blob_id): Path<Uuid>,
 ) -> ApiResult<Response> {
-    let store = state.blob_store.as_deref().ok_or_else(blob_disabled)?;
+    let store = state
+        .blob_store
+        .as_deref()
+        .ok_or_else(|| state.blob_refusal())?;
     let caller = ProfileId::from(auth.0.profile().id);
 
     let (blob, stream) = temper_services::services::blob_service::read_through(
@@ -276,7 +285,7 @@ pub async fn begin_upload(
     Json(payload): Json<BlobUploadBeginRequest>,
 ) -> ApiResult<Json<BlobUploadBeginResponse>> {
     if state.blob_store.is_none() || state.config.blob.is_none() {
-        return Err(blob_disabled());
+        return Err(state.blob_refusal());
     }
     let caller = ProfileId::from(auth.0.profile().id);
     let home = AnchorRef {
@@ -333,7 +342,11 @@ pub async fn append_segment(
     Query(q): Query<SegmentQuery>,
     body: Bytes,
 ) -> ApiResult<Json<BlobUploadProgress>> {
-    let config = state.config.blob.clone().ok_or_else(blob_disabled)?;
+    let config = state
+        .config
+        .blob
+        .clone()
+        .ok_or_else(|| state.blob_refusal())?;
     let caller = ProfileId::from(auth.0.profile().id);
     let progress = temper_services::services::blob_service::append_to_upload(
         &state.pool,
@@ -412,8 +425,15 @@ pub async fn finalize_upload(
     Path(upload_id): Path<Uuid>,
     Json(payload): Json<BlobUploadFinalizeRequest>,
 ) -> ApiResult<Json<BlobCommitResponse>> {
-    let store = state.blob_store.as_deref().ok_or_else(blob_disabled)?;
-    let config = state.config.blob.clone().ok_or_else(blob_disabled)?;
+    let store = state
+        .blob_store
+        .as_deref()
+        .ok_or_else(|| state.blob_refusal())?;
+    let config = state
+        .config
+        .blob
+        .clone()
+        .ok_or_else(|| state.blob_refusal())?;
     let caller = ProfileId::from(auth.0.profile().id);
     let outcome = temper_services::services::blob_service::finalize_upload(
         &state.pool,
@@ -474,7 +494,7 @@ pub async fn list(
     Query(q): Query<BlobListQuery>,
 ) -> ApiResult<Json<Vec<BlobSummary>>> {
     if state.blob_store.is_none() {
-        return Err(blob_disabled());
+        return Err(state.blob_refusal());
     }
     let caller = ProfileId::from(auth.0.profile().id);
     // The home-scope strings pass through verbatim — the parse lives in the service
@@ -520,7 +540,7 @@ pub async fn relate(
     Json(req): Json<BlobRelationAssertRequest>,
 ) -> ApiResult<Json<BlobRelationAck>> {
     if state.blob_store.is_none() {
-        return Err(blob_disabled());
+        return Err(state.blob_refusal());
     }
     let caller = ProfileId::from(auth.0.profile().id);
     let act = req.act.clone().into_act_context().map_err(ApiError::from)?;
@@ -563,7 +583,7 @@ pub async fn relations(
     // has no blobs, and the operator should hear WHY, not just silence. (Only the
     // owner-private staging reads skip the gate — no session can exist for one to find.)
     if state.blob_store.is_none() {
-        return Err(blob_disabled());
+        return Err(state.blob_refusal());
     }
     let caller = ProfileId::from(auth.0.profile().id);
     let rows = temper_services::services::blob_service::blob_relations(

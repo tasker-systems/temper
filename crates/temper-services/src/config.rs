@@ -70,6 +70,12 @@ pub struct ApiConfig {
     /// `None` when no credential is configured: the blob endpoints are then disabled
     /// rather than half-configured (the `parse_vercel_connect` precedent).
     pub blob: Option<BlobConfig>,
+    /// The explicit opt-OUT posture: `true` only when `BLOB_ENABLED` actively closed the
+    /// flow (`false`/`0`, or an unrecognized value — fail closed, loudly). A deployment
+    /// with credentials in the environment can then own "unavailable" as a decision
+    /// rather than an omission; the doors' refusal names `BLOB_ENABLED` in this posture
+    /// and the credential vocabulary in the plain-unconfigured one.
+    pub blob_disabled_by_policy: bool,
 }
 
 /// Blob provider credentials + the D9 policy vocabularies the SQL wrapper's refusals
@@ -207,6 +213,7 @@ impl std::fmt::Debug for ApiConfig {
             )
             .field("rate_limit", &self.rate_limit)
             .field("blob", &self.blob)
+            .field("blob_disabled_by_policy", &self.blob_disabled_by_policy)
             .finish()
     }
 }
@@ -265,6 +272,8 @@ impl ApiConfig {
             tracing::info!("Swagger UI enabled at /api-docs/ui");
         }
 
+        let (blob, blob_disabled_by_policy) = parse_blob(&lookup);
+
         Ok(Self {
             database_url: lookup("DATABASE_URL").ok_or(ConfigError::Missing("DATABASE_URL"))?,
             auth,
@@ -279,7 +288,8 @@ impl ApiConfig {
             slack_link: parse_slack_link(&lookup),
             slack_mint_secret: lookup("SLACK_MINT_SECRET").filter(|s| !s.is_empty()),
             rate_limit: crate::rate_limit::parse_rate_limit(&lookup)?,
-            blob: parse_blob(&lookup),
+            blob,
+            blob_disabled_by_policy,
         })
     }
 }
@@ -296,8 +306,38 @@ impl ApiConfig {
 ///
 /// A malformed numeric cap or an unparseable token DISABLES the flow with a loud error
 /// (the `parse_slack_link` precedent): the D9 vocabulary must never half-exist.
-fn parse_blob(lookup: impl Fn(&str) -> Option<String>) -> Option<BlobConfig> {
+///
+/// Returns `(config, disabled_by_policy)`. The flag is `true` only when `BLOB_ENABLED`
+/// actively closed the flow — the explicit opt-out (2026-09-03 posture ruling): an
+/// operator with credentials in the environment can own "unavailable" as a decision,
+/// not an omission. Unset or `true` falls through to credential resolution; `false`/`0`
+/// closes the doors; an unrecognized value closes them too, loudly (fail closed).
+/// Misconfigured CREDENTIALS (unparseable token, bad caps) are never "policy" — those
+/// keep the plain-unconfigured vocabulary.
+fn parse_blob(lookup: impl Fn(&str) -> Option<String>) -> (Option<BlobConfig>, bool) {
     let get = |k| lookup(k).filter(|s: &String| !s.is_empty());
+
+    if let Some(raw) = get("BLOB_ENABLED") {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" => {}
+            "false" | "0" => {
+                tracing::error!(
+                    "BLOB_ENABLED={} — the blob flow is disabled by configuration; remove the \
+                     setting or set BLOB_ENABLED=true to enable it",
+                    raw
+                );
+                return (None, true);
+            }
+            other => {
+                tracing::error!(
+                    "BLOB_ENABLED is set to an unrecognized value ({other}; expected \
+                     true/false/1/0) — the blob flow is disabled by configuration (fail \
+                     closed); set BLOB_ENABLED=true to enable it"
+                );
+                return (None, true);
+            }
+        }
+    }
 
     let store_id: String;
     let credential_mode;
@@ -307,7 +347,9 @@ fn parse_blob(lookup: impl Fn(&str) -> Option<String>) -> Option<BlobConfig> {
         credential_mode = BlobCredentialMode::Oidc;
         read_write_token = None;
     } else {
-        let token = get("BLOB_READ_WRITE_TOKEN")?;
+        let Some(token) = get("BLOB_READ_WRITE_TOKEN") else {
+            return (None, false);
+        };
         // The token embeds the store id as its 4th `_`-delimited segment (the SDK's
         // `parseStoreIdFromReadWriteToken`). Unparseable ⇒ disabled, loudly.
         let Some(parsed) = token.split('_').nth(3).filter(|s| !s.is_empty()) else {
@@ -315,7 +357,7 @@ fn parse_blob(lookup: impl Fn(&str) -> Option<String>) -> Option<BlobConfig> {
                 "BLOB_READ_WRITE_TOKEN is set but its store id is unreadable; the blob flow is disabled. \
                  Expected the provider's vercel_blob_rw_…_<store-id>_… shape, or set BLOB_STORE_ID."
             );
-            return None;
+            return (None, false);
         };
         store_id = parsed.to_string();
         credential_mode = BlobCredentialMode::Token;
@@ -330,7 +372,7 @@ fn parse_blob(lookup: impl Fn(&str) -> Option<String>) -> Option<BlobConfig> {
                 tracing::error!(
                     "BLOB_MAX_BYTES is set but unparseable ({raw}); the blob flow is disabled."
                 );
-                return None;
+                return (None, false);
             }
         },
     };
@@ -354,7 +396,7 @@ fn parse_blob(lookup: impl Fn(&str) -> Option<String>) -> Option<BlobConfig> {
         });
     if allowlist.is_empty() {
         tracing::error!("BLOB_CONTENT_TYPE_ALLOWLIST is set but empty; the blob flow is disabled.");
-        return None;
+        return (None, false);
     }
 
     let single_request_max_bytes = match lookup("BLOB_SINGLE_REQUEST_MAX_BYTES") {
@@ -365,20 +407,23 @@ fn parse_blob(lookup: impl Fn(&str) -> Option<String>) -> Option<BlobConfig> {
                 tracing::error!(
                     "BLOB_SINGLE_REQUEST_MAX_BYTES is set but unparseable ({raw}); the blob flow is disabled."
                 );
-                return None;
+                return (None, false);
             }
         },
     };
 
-    Some(BlobConfig {
-        store_id,
-        read_write_token,
-        credential_mode,
-        oidc_token_source: std::sync::Arc::new(|| env::var("VERCEL_OIDC_TOKEN").ok()),
-        max_bytes,
-        allowlist,
-        single_request_max_bytes,
-    })
+    (
+        Some(BlobConfig {
+            store_id,
+            read_write_token,
+            credential_mode,
+            oidc_token_source: std::sync::Arc::new(|| env::var("VERCEL_OIDC_TOKEN").ok()),
+            max_bytes,
+            allowlist,
+            single_request_max_bytes,
+        }),
+        false,
+    )
 }
 
 /// Build the Vercel Connect config from env — `Some` only when all four values are
@@ -747,6 +792,59 @@ mod tests {
         )])))
         .unwrap();
         assert!(cfg.blob.is_none());
+    }
+
+    // FAILS IF: the explicit opt-out does not close the flow — credentials in the
+    // environment are not a veto over an operator's decision to keep the doors shut
+    // (2026-09-03 posture ruling). The closed state must carry the policy flag so the
+    // refusal names BLOB_ENABLED, never the credential vocabulary.
+    #[test]
+    fn blob_enabled_false_closes_the_flow_despite_credentials() {
+        let cfg = ApiConfig::from_lookup(lookup_of(&blob_pairs(&[
+            ("BLOB_STORE_ID", "store_abc123"),
+            ("BLOB_ENABLED", "false"),
+        ])))
+        .unwrap();
+        assert!(cfg.blob.is_none());
+        assert!(cfg.blob_disabled_by_policy);
+    }
+
+    // FAILS IF: an unrecognized BLOB_ENABLED value half-exists — fail closed, loudly,
+    // and still as policy: the knob is what stands in the door.
+    #[test]
+    fn blob_enabled_unrecognized_value_fails_closed_as_policy() {
+        let cfg = ApiConfig::from_lookup(lookup_of(&blob_pairs(&[
+            ("BLOB_STORE_ID", "store_abc123"),
+            ("BLOB_ENABLED", "maybe"),
+        ])))
+        .unwrap();
+        assert!(cfg.blob.is_none());
+        assert!(cfg.blob_disabled_by_policy);
+    }
+
+    // FAILS IF: the policy flag leaks beyond the knob — absent credentials are
+    // unconfigured, not policy; misconfigured credentials (the unparseable token) are
+    // likewise never policy; an explicit true is consent, not a posture of its own.
+    #[test]
+    fn blob_policy_flag_is_off_unless_the_knob_closed_it() {
+        let absent = ApiConfig::from_lookup(lookup_of(&blob_pairs(&[]))).unwrap();
+        assert!(absent.blob.is_none());
+        assert!(!absent.blob_disabled_by_policy);
+
+        let misconfigured = ApiConfig::from_lookup(lookup_of(&blob_pairs(&[(
+            "BLOB_READ_WRITE_TOKEN",
+            "no-store-id-inside",
+        )])))
+        .unwrap();
+        assert!(!misconfigured.blob_disabled_by_policy);
+
+        let explicit_on = ApiConfig::from_lookup(lookup_of(&blob_pairs(&[
+            ("BLOB_STORE_ID", "store_abc123"),
+            ("BLOB_ENABLED", "true"),
+        ])))
+        .unwrap();
+        assert!(explicit_on.blob.is_some());
+        assert!(!explicit_on.blob_disabled_by_policy);
     }
 
     // FAILS IF: the D9 vocabulary drifts from the plan-pulled values — cap 100 MB

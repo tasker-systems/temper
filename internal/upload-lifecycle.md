@@ -1,5 +1,16 @@
 # Upload Lifecycle
 
+> **Status (2026-09-03): historical.** The TypeScript blob upload/extract pipeline this
+> document describes has been removed from the codebase — its `kb_blob_files` table is
+> dropped by migration `20260903000020_kb_blobs.sql` (it had zero production readers).
+> The blob flow now lives in the `kb_blobs` substrate (`kb_blobs` + `kb_blob_homes`,
+> hash-unique, bytes external at the content-addressed pathname), surfaced through
+> `/api/blobs`, `temper blob …`, and the MCP `blob_read`/`blob_manage` tools — see
+> `specs/2026-09-01-binary-blobs-design.md` in temper-artifacts and the
+> `BLOB_*` vocabulary in `docs/playbooks/self-host-temper.md`. The Vercel project
+> topology below is still accurate; the `blob_files` schema, statuses, and TS endpoints
+> are not.
+
 The upload lifecycle describes how files flow from an authenticated client through the temper-cloud API into searchable, version-tracked knowledge base chunks with vector embeddings.
 
 ## Architecture Overview

@@ -15,8 +15,9 @@
 use rmcp::{
     handler::server::{common::Extension, wrapper::Parameters},
     model::{
-        CallToolResult, ListResourceTemplatesResult, ListResourcesResult, PaginatedRequestParams,
-        ReadResourceRequestParams, ReadResourceResult, ServerCapabilities, ServerInfo,
+        CallToolResult, ListResourceTemplatesResult, ListResourcesResult, ListToolsResult,
+        PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResult, ServerCapabilities,
+        ServerInfo,
     },
     tool, tool_handler, tool_router,
 };
@@ -701,6 +702,27 @@ fn map_authz_error(e: temper_services::auth::AuthzError) -> rmcp::ErrorData {
     }
 }
 
+/// The blob tools, spelled once — the `list_tools` advertisement filter and the router
+/// tests both read this list.
+pub(crate) const BLOB_TOOL_NAMES: [&str; 2] = ["blob_read", "blob_manage"];
+
+/// `list_tools`' advertisement posture: when the blob door is closed (no credential
+/// resolves, or `BLOB_ENABLED=false` closed it deliberately), the blob pair is NOT
+/// advertised — an agent discovering the surface only to learn it refuses is noise.
+/// Existence is untouched: `tools/call` on a closed door still answers the typed
+/// refusal (`blob_parts` hears `AppState::blob_refusal`), so a stale cached tool list
+/// degrades to the same voice it always had, never to silence.
+fn advertise_blob_tools(tools: Vec<rmcp::model::Tool>, blob_ready: bool) -> Vec<rmcp::model::Tool> {
+    if blob_ready {
+        tools
+    } else {
+        tools
+            .into_iter()
+            .filter(|t| !BLOB_TOOL_NAMES.contains(&t.name.as_ref()))
+            .collect()
+    }
+}
+
 #[tool_handler]
 impl rmcp::ServerHandler for TemperMcpService {
     fn get_info(&self) -> ServerInfo {
@@ -718,6 +740,29 @@ impl rmcp::ServerHandler for TemperMcpService {
             "Access and manage your Temper knowledge base. \
                  Search notes, list resources, create new content, and explore contexts.",
         )
+    }
+
+    /// Manual override — `#[tool_handler]` generates `list_tools` only when the impl
+    /// lacks one, so defining it here is how the closed-door filter (see
+    /// `advertise_blob_tools`) reaches the wire. The router itself is the static floor:
+    /// both blob doors are always REGISTERED (witnessed by
+    /// `both_blob_doors_are_advertised_by_the_router`); advertisement is the runtime,
+    /// per-instance decision, and in stateless mode every request builds a fresh
+    /// service, so this reads THIS request's instance state.
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<ListToolsResult, rmcp::ErrorData> {
+        let tools = advertise_blob_tools(
+            Self::tool_router().list_all(),
+            self.api_state.config.blob.is_some(),
+        );
+        Ok(ListToolsResult {
+            tools,
+            meta: None,
+            next_cursor: None,
+        })
     }
 
     async fn initialize(
@@ -798,7 +843,7 @@ impl rmcp::ServerHandler for TemperMcpService {
 
 #[cfg(test)]
 mod tests {
-    use super::TemperMcpService;
+    use super::{advertise_blob_tools, TemperMcpService, BLOB_TOOL_NAMES};
 
     /// A `#[tool]` written into the wrong impl block compiles fine and is simply never advertised.
     /// Assert the router actually carries the consolidated segmented-ingest tool, rather than
@@ -839,6 +884,8 @@ mod tests {
     /// Same failure mode as `context_manage`, asserted as a PAIR because the pairing is the
     /// invariant: the read door and the manage door must both exist, or one anchor of the
     /// blob surface (bytes vs relations) is unreachable from MCP while the other is.
+    /// This pins the ROUTER — the static floor; the runtime advertisement filter lives in
+    /// `list_tools` (`advertise_blob_tools`) and is witnessed just below.
     #[test]
     fn both_blob_doors_are_advertised_by_the_router() {
         let names: Vec<String> = TemperMcpService::tool_router()
@@ -847,13 +894,52 @@ mod tests {
             .map(|t| t.name.to_string())
             .collect();
 
-        for peer in ["blob_read", "blob_manage"] {
+        for peer in BLOB_TOOL_NAMES {
             assert!(
                 names.iter().any(|n| n == peer),
                 "{peer} is not advertised, so half the blob surface is unreachable from MCP; \
                  router has {names:?}"
             );
         }
+    }
+
+    /// The RUNTIME half of the pair above: a closed door (unconfigured, or
+    /// `BLOB_ENABLED=false` closing it deliberately) stops ADVERTISING the blob pair and
+    /// hides nothing else. Witnessed at the filter — temper-mcp has no authenticated
+    /// tool-call harness, so the one-line call site inside `list_tools` is declared, not
+    /// exercised (the N1-scrub posture: pinned at the helper, the call site is trivial).
+    #[test]
+    fn a_closed_door_stops_advertising_the_blob_pair_and_nothing_else() {
+        let all: Vec<String> = TemperMcpService::tool_router()
+            .list_all()
+            .into_iter()
+            .map(|t| t.name.to_string())
+            .collect();
+
+        let names = |tools: Vec<rmcp::model::Tool>| -> Vec<String> {
+            tools.into_iter().map(|t| t.name.to_string()).collect()
+        };
+        let open = names(advertise_blob_tools(
+            TemperMcpService::tool_router().list_all(),
+            true,
+        ));
+        let closed = names(advertise_blob_tools(
+            TemperMcpService::tool_router().list_all(),
+            false,
+        ));
+
+        assert_eq!(open, all, "an open door advertises the full router");
+        for peer in BLOB_TOOL_NAMES {
+            assert!(
+                !closed.iter().any(|n| n == peer),
+                "{peer} must not be advertised on a closed door; got {closed:?}"
+            );
+        }
+        assert_eq!(
+            closed.len(),
+            all.len() - BLOB_TOOL_NAMES.len(),
+            "the filter must hide ONLY the blob pair; got {closed:?}"
+        );
     }
 
     /// **The two anchor kinds materialize through PEER tools, and both must be advertised.**

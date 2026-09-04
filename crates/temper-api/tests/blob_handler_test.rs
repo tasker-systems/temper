@@ -297,6 +297,38 @@ async fn refusals_name_their_vocabulary(pool: PgPool) {
         text.contains("disabled") && text.contains("BLOB_STORE_ID"),
         "the disabled refusal must name its config vocabulary: {text}"
     );
+
+    // Deliberately closed — `BLOB_ENABLED=false` is a DECISION, and the refusal must
+    // name the knob, never the credential vocabulary (the unconfigured sentence above
+    // would invite an operator to set what they deliberately withheld).
+    let policy = setup_test_app_with_state(pool.clone(), |state| {
+        let mut config = (*state.config).clone();
+        config.blob_disabled_by_policy = true;
+        state.config = Arc::new(config);
+    })
+    .await;
+    let (_p3, ctx3, token3) = owner(&policy.pool).await;
+    let resp = commit_multipart(
+        &policy,
+        &token3,
+        b"x".to_vec(),
+        "image/png",
+        "kb_contexts",
+        ctx3,
+    )
+    .send()
+    .await
+    .expect("request failed");
+    assert_eq!(resp.status().as_u16(), 400);
+    let text = resp.text().await.unwrap_or_default();
+    assert!(
+        text.contains("disabled by configuration") && text.contains("BLOB_ENABLED"),
+        "the policy refusal must name the opt-out knob: {text}"
+    );
+    assert!(
+        !text.contains("no blob store configured"),
+        "the policy refusal must not borrow the unconfigured vocabulary: {text}"
+    );
 }
 
 // ─── Witness 4: dedup for free, per-home get-or-create (D1/D2 as amended) ─────

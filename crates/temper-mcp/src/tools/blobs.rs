@@ -229,18 +229,17 @@ fn blob_parts(
     ),
     rmcp::ErrorData,
 > {
-    let store = svc.api_state.blob_store.clone().ok_or_else(|| {
-        map_api_error(
-            action,
-            temper_services::services::blob_service::blob_disabled(),
-        )
-    })?;
-    let config = svc.api_state.config.blob.clone().ok_or_else(|| {
-        map_api_error(
-            action,
-            temper_services::services::blob_service::blob_disabled(),
-        )
-    })?;
+    let store = svc
+        .api_state
+        .blob_store
+        .clone()
+        .ok_or_else(|| map_api_error(action, svc.api_state.blob_refusal()))?;
+    let config = svc
+        .api_state
+        .config
+        .blob
+        .clone()
+        .ok_or_else(|| map_api_error(action, svc.api_state.blob_refusal()))?;
     Ok((store, config))
 }
 
@@ -323,10 +322,7 @@ async fn list_blobs(
     let profile = svc.require_profile().await?;
     let caller = ProfileId::from(profile.id);
     if svc.api_state.blob_store.is_none() {
-        return Err(map_api_error(
-            ACTION,
-            temper_services::services::blob_service::blob_disabled(),
-        ));
+        return Err(map_api_error(ACTION, svc.api_state.blob_refusal()));
     }
 
     // The home-scope strings pass through verbatim — the pair constraint and the
@@ -451,10 +447,7 @@ async fn relate_blob(
         rmcp::ErrorData::invalid_params("relate requires `weight`".to_string(), None)
     })?;
     if svc.api_state.blob_store.is_none() {
-        return Err(map_api_error(
-            ACTION,
-            temper_services::services::blob_service::blob_disabled(),
-        ));
+        return Err(map_api_error(ACTION, svc.api_state.blob_refusal()));
     }
 
     let act = input

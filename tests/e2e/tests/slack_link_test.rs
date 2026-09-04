@@ -188,6 +188,7 @@ async fn setup_slack_app_with_mint_secret(
         slack_mint_secret: mint_secret.map(str::to_owned),
         rate_limit: None,
         blob: None,
+        blob_disabled_by_policy: false,
     };
 
     let state = AppState::new(pool.clone(), jwks_store, api_config);

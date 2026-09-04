@@ -62,6 +62,7 @@ async fn mcp_service(pool: &sqlx::PgPool) -> TemperMcpService {
         slack_mint_secret: None,
         rate_limit: None,
         blob: None,
+        blob_disabled_by_policy: false,
     };
     let svc = TemperMcpService::new(AppState::new(pool.clone(), jwks_store, api_config));
 

@@ -553,6 +553,17 @@ impl AppState {
             blob_store,
         }
     }
+
+    /// The blob door's refusal for THIS instance: the unconfigured vocabulary when no
+    /// credential resolves, the policy vocabulary when `BLOB_ENABLED` closed the door
+    /// deliberately. Spelled once — every surface hears the same voice.
+    pub fn blob_refusal(&self) -> crate::error::ApiError {
+        if self.config.blob_disabled_by_policy {
+            crate::services::blob_service::blob_disabled_by_policy()
+        } else {
+            crate::services::blob_service::blob_disabled()
+        }
+    }
 }
 
 #[cfg(test)]

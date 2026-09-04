@@ -152,6 +152,19 @@ pub fn blob_disabled() -> ApiError {
     )
 }
 
+/// The refusal for a DELIBERATELY closed instance — `BLOB_ENABLED=false`, or an
+/// unrecognized value for it (fail closed, loudly). Distinct vocabulary from
+/// [`blob_disabled`]: that sentence invites enabling by naming credentials; this one
+/// names the knob, because the credentials are not the thing standing in the door.
+/// Chosen per instance by `AppState::blob_refusal`, never picked by hand at a door.
+pub fn blob_disabled_by_policy() -> ApiError {
+    ApiError::BadRequest(
+        "blob endpoints are disabled by configuration — BLOB_ENABLED is set to false; \
+         remove the setting or set BLOB_ENABLED=true to enable them"
+            .to_string(),
+    )
+}
+
 /// Auth before writes — the placement gate, mirroring the incumbent two-step exactly:
 ///
 /// 1. **Read gate first** (`anchor_readable_by_profile`): a home the caller cannot read is

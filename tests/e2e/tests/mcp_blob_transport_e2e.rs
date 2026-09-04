@@ -64,6 +64,7 @@ async fn spawn_mcp_server(
         slack_mint_secret: None,
         rate_limit: None,
         blob: Some(blob_config),
+        blob_disabled_by_policy: false,
     };
 
     let mut api_state = AppState::new(pool, jwks_store, api_config);

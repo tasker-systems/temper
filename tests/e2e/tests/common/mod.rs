@@ -749,6 +749,7 @@ async fn setup_with_recorder_and_blob(
         slack_mint_secret: None,
         rate_limit: None,
         blob: blob.as_ref().map(|(c, _)| c.clone()),
+        blob_disabled_by_policy: false,
     };
 
     let mut state = AppState::new(pool.clone(), jwks_store, api_config);
@@ -873,6 +874,7 @@ pub async fn setup_eddsa_with_provider(pool: PgPool, provider: &str) -> E2eTestA
         slack_mint_secret: None,
         rate_limit: None,
         blob: None,
+        blob_disabled_by_policy: false,
     };
 
     let state = AppState::new(pool.clone(), jwks_store, api_config);

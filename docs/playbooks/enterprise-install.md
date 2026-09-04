@@ -105,7 +105,7 @@ Sources: [Self-hosting Temper](./self-host-temper.md),
 | `PUBLIC_BASE_URL` | Yes (Slack path) | — | — | `https://<instance>` — the origin the link `redirect_uri` is built from³. All four unset together is the supported "no Slack" state |
 | `SLACK_VAULT_ENC_KEY` | Yes (Slack path) | — | — | 32-byte base64 AEAD key (`openssl rand -base64 32`) encrypting each stored per-user refresh token. Malformed ⇒ the whole Slack flow disables. Rotation is flag-day today (users re-link) |
 | **Storage / build** | | | | |
-| `BLOB_READ_WRITE_TOKEN` | Yes | — | — | Vercel Blob token for the binary-blob flow (`temper blob …`, `/api/blobs`, the MCP blob tools) and the upload/extract/embed pipeline. Unset, the blob endpoints answer a disabled refusal; `BLOB_STORE_ID` (OIDC) is the alternative credential |
+| `BLOB_READ_WRITE_TOKEN` | Yes | — | — | Vercel Blob token for the binary-blob flow (`temper blob …`, `/api/blobs`, the MCP blob tools) and the upload/extract/embed pipeline. Unset, the blob endpoints answer a disabled refusal; `BLOB_STORE_ID` (OIDC) is the alternative credential. A deployment that does not want the flow at all sets `BLOB_ENABLED=false` — an explicit opt-out winning even with credentials present: the endpoints refuse naming the knob and the MCP tools are not advertised |
 | `SQLX_OFFLINE` | Yes (build) | — | — | Must be `true` |
 | **Optional / situational (api+mcp)** | | | | |
 | `ENABLE_SWAGGER` | Optional | — | — | Exposes `/swagger-ui` in non-production |

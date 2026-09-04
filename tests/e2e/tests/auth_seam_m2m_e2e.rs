@@ -36,6 +36,7 @@ async fn build_mcp_service(pool: &sqlx::PgPool) -> temper_mcp::service::TemperMc
         slack_mint_secret: None,
         rate_limit: None,
         blob: None,
+        blob_disabled_by_policy: false,
     };
     let state = AppState::new(pool.clone(), jwks_store, api_config);
     temper_mcp::service::TemperMcpService::new(state)
