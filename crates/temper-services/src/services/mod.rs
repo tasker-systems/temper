@@ -2,6 +2,8 @@ pub mod access_service;
 pub mod admin_ledger_service;
 pub mod as_reap_service;
 pub mod auditor_service;
+pub mod blob_provider;
+pub mod blob_service;
 pub mod citation_audit_service;
 pub mod cogmap_service;
 pub mod connection_service;

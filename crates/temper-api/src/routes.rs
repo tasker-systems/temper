@@ -56,6 +56,20 @@ fn gated_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::data_artifacts::list))
         .routes(routes!(handlers::data_artifacts::get))
         .routes(routes!(handlers::data_artifacts::commit))
+        // `blobs::commit` and `blobs::append_segment` are NOT mounted here: they are the
+        // two doors whose legal body sizes exceed axum's inherited default, so they merge
+        // through [`blob_commit_routes`] / [`blob_segment_routes`] with limits sized from
+        // the config and the plan numbers (see those functions, merged in [`create_app`]).
+        .routes(routes!(handlers::blobs::get))
+        // One `.routes()` per handler: the multi-handler form is for same-path method
+        // grouping (the ingest blocks GET+POST shape); distinct paths in one call mangle
+        // the mounted patterns into overlaps.
+        .routes(routes!(handlers::blobs::begin_upload))
+        .routes(routes!(handlers::blobs::upload_progress))
+        .routes(routes!(handlers::blobs::finalize_upload))
+        .routes(routes!(handlers::blobs::list))
+        .routes(routes!(handlers::blobs::relate))
+        .routes(routes!(handlers::blobs::relations))
         .routes(routes!(handlers::data_artifact_shapes::list_shapes))
         .routes(routes!(handlers::data_artifact_shapes::get_shape))
         .routes(routes!(handlers::data_artifact_shapes::declare_shape))
@@ -539,6 +553,56 @@ fn query_routes() -> OpenApiRouter<AppState> {
         .layer(DefaultBodyLimit::max(QUERY_MAX_BODY_BYTES))
 }
 
+/// `/api/blobs/uploads/{id}/segments` and `POST /api/blobs` — the two blob doors whose
+/// legal request bodies exceed axum's inherited 2 MB default. The staging ceiling (the
+/// cumulative bound across appends) is `BlobConfig::max_bytes`, enforced with its own
+/// vocabulary in the service; the single-request commit's bound is the D7 threshold,
+/// enforced with ITS vocabulary by the handler while the file field streams. The body
+/// limits are transport plumbing sized FROM those vocabularies (the segment door by the
+/// platform ceiling the plan numbers pin, the commit door by the configured threshold
+/// itself — see [`blob_commit_routes`]), applied as `DefaultBodyLimit` layers at the
+/// create_app mount: a `DefaultBodyLimit` applies to every route in the router it is
+/// attached to, and the blob doors that accept bodies are exactly these two (every other
+/// blob route is JSON of trivial size or body-free). They stay inside `gated_routes`'
+/// auth layers, applied to the merged whole in [`create_app`].
+const BLOB_SEGMENT_MAX_BODY_BYTES: usize = 4_500_000;
+
+fn blob_segment_routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new().routes(routes!(handlers::blobs::append_segment))
+}
+
+/// Multipart framing overhead above the file field's own bytes: the boundary, the two
+/// text fields, and per-part headers. 64 KiB is orders of magnitude beyond any real
+/// multipart envelope for this two-field form.
+const BLOB_COMMIT_MULTIPART_OVERHEAD_BYTES: usize = 64 * 1024;
+
+/// `POST /api/blobs` — the single-request commit door. F8: mounted plain, the door
+/// inherited the app-wide 2 MB default while its vocabulary allows bodies to the D7
+/// threshold — a legal 2–4 MB upload died at the transport as a misleading
+/// `malformed multipart body` instead of the threshold refusal. The transport bound is
+/// [`blob_commit_body_limit`], applied as a layer at the create_app mount: the threshold
+/// itself plus multipart overhead, so the transport never fires first — any body over
+/// the threshold is refused by the handler's mid-stream check (which names the threshold
+/// and the segmented path) before the body reaches the transport's number. Derived from
+/// the config per app-build, so an operator who raises the threshold raises the
+/// transport bound with it — one number, never two to drift.
+fn blob_commit_routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new().routes(routes!(handlers::blobs::commit))
+}
+
+/// The commit door's transport bound: the config's D7 threshold plus the multipart
+/// envelope, floored for the unconfigured case (the door refuses on its own vocabulary
+/// there; the transport number is then irrelevant, and the plan default keeps the shape
+/// honest).
+fn blob_commit_body_limit(state: &AppState) -> usize {
+    state
+        .config
+        .blob
+        .as_ref()
+        .map(|b| b.single_request_max_bytes + BLOB_COMMIT_MULTIPART_OVERHEAD_BYTES)
+        .unwrap_or(BLOB_SEGMENT_MAX_BODY_BYTES + BLOB_COMMIT_MULTIPART_OVERHEAD_BYTES)
+}
+
 /// The largest composition `/api/query` will read.
 ///
 /// # Declared because the inherited number is wrong, not merely because inheriting is untidy
@@ -595,6 +659,19 @@ pub fn create_app(state: AppState) -> Router {
         auth::require_auth,
     ));
     let gated = gated_routes()
+        // The two body-limit doors merge onto the gated chain BEFORE the layers land, so
+        // require_system_access + require_auth still wrap them; each carries its own
+        // DefaultBodyLimit scoped to its sub-router alone (see the BLOB_SEGMENT doc above).
+        .merge(
+            blob_commit_routes().layer(axum::extract::DefaultBodyLimit::max(
+                blob_commit_body_limit(&state),
+            )),
+        )
+        .merge(
+            blob_segment_routes().layer(axum::extract::DefaultBodyLimit::max(
+                BLOB_SEGMENT_MAX_BODY_BYTES,
+            )),
+        )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::middleware::system_access::require_system_access,
@@ -764,6 +841,12 @@ pub fn openapi_spec() -> utoipa::openapi::OpenApi {
         .merge(public_routes())
         .merge(auth_only_routes())
         .merge(gated_routes())
+        // The two body-limit doors merge here too: `openapi_spec` reconstructs the
+        // contract from the router graph, so a door mounted only in `create_app` would
+        // vanish from the published spec. Their `DefaultBodyLimit` layers live only at
+        // the create_app mount — transport posture, not contract.
+        .merge(blob_commit_routes())
+        .merge(blob_segment_routes())
         .split_for_parts()
         .1;
 

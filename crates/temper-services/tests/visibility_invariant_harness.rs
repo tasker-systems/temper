@@ -779,6 +779,35 @@ fn check_duality(
 async fn i1_read_duality(pool: &PgPool, w: &World) -> sqlx::Result<Vec<Violation>> {
     let mut violations = Vec::new();
 
+    // Fixture blobs: one per generated anchor, both kinds, minted once. The blob invariant
+    // below claims the blob contributes NO visibility of its own — `blob_readable_by_profile`
+    // is exactly its home anchor's answer (the row IS its home, D2 as amended) — so the
+    // fixture needs no blob-specific world content, only rows that exist. The event-id FKs
+    // are satisfied by the world's own events; the per-home unique key makes re-minting a
+    // no-op.
+    let fixture_owner = w.profiles[0];
+    let fixture_event: Uuid =
+        sqlx::query_scalar("SELECT id FROM kb_events ORDER BY occurred_at, id LIMIT 1")
+            .fetch_one(pool)
+            .await?;
+    for (table, anchors) in [("kb_contexts", &w.contexts), ("kb_cogmaps", &w.cogmaps)] {
+        sqlx::query(
+            "INSERT INTO kb_blobs (id, content_hash, blob_pathname, content_type, content_bytes, \
+                                  home_table, home_id, owner_profile_id, originator_profile_id, \
+                                  asserted_by_event_id, last_event_id) \
+             SELECT gen_random_uuid(), 'harness-' || a.id, 'ha/' || a.id, \
+                    'application/octet-stream', 0, $2, a.id, $1, $1, $3, $3 \
+               FROM unnest($4::uuid[]) AS a(id) \
+             ON CONFLICT (home_table, home_id, content_hash) DO NOTHING",
+        )
+        .bind(fixture_owner)
+        .bind(table)
+        .bind(fixture_event)
+        .bind(anchors)
+        .execute(pool)
+        .await?;
+    }
+
     for (p_idx, &profile) in w.profiles.iter().enumerate() {
         let who = PROFILE_HANDLES[p_idx];
 
@@ -962,6 +991,43 @@ async fn i1_read_duality(pool: &PgPool, w: &World) -> sqlx::Result<Vec<Violation
                 *id,
                 *by_profile,
                 *endpoint_answer,
+            );
+        }
+
+        // blobs: the blob answer IS the home anchor's answer — `blob_readable_by_profile`
+        // routes through `anchor_readable_by_profile` on the row's own home columns (D2 as
+        // amended), so any divergence means the blob gate grew a rule the anchor gate does
+        // not have, or lost one it must inherit.
+        let blob_rows: Vec<(Uuid, String, Uuid)> =
+            sqlx::query_as("SELECT id, home_table, home_id FROM kb_blobs ORDER BY id")
+                .fetch_all(pool)
+                .await?;
+        let blob_ids: Vec<Uuid> = blob_rows.iter().map(|(id, _, _)| *id).collect();
+        let blob_answers = point_answers(
+            pool,
+            "blob_readable_by_profile($1::uuid, c.id)",
+            profile,
+            &blob_ids,
+        )
+        .await?;
+        for ((blob_id, blob_answer), (_, home_table, home_id)) in
+            blob_answers.iter().zip(&blob_rows)
+        {
+            let anchor_answer: bool =
+                sqlx::query_scalar("SELECT anchor_readable_by_profile($1, $2, $3)")
+                    .bind(profile)
+                    .bind(home_table)
+                    .bind(home_id)
+                    .fetch_one(pool)
+                    .await?;
+            check_duality(
+                &mut violations,
+                "I1.blobs",
+                &format!("blob_readable_by_profile vs anchor_readable(home)[{who}]"),
+                "blob",
+                *blob_id,
+                anchor_answer,
+                *blob_answer,
             );
         }
 
@@ -1680,6 +1746,7 @@ const ENROLLED: &[&str] = &[
     "context_authorable_by_profile",
     "anchor_readable_by_profile",
     "endpoint_readable_by_profile",
+    "blob_readable_by_profile",
     "profile_explicit_grant",
     "derived_access_profile",
     // restatement sites
@@ -2024,6 +2091,63 @@ async fn the_harness_bites_a_search_cte_restatement(pool: PgPool) -> sqlx::Resul
     assert!(
         restored.is_empty(),
         "after restore the search invariant did not come back green: {restored:?}"
+    );
+
+    Ok(())
+}
+
+/// The blob gate's bite. `blob_readable_by_profile` is enrolled on a DUALITY (it must equal the
+/// anchor gate's answer on the blob's home — I1.blobs), and a duality whose two sides are driven
+/// over fixture rows the world cannot make unreadable would be vacuous. This bite restates the
+/// gate as constant-TRUE and requires the blob invariant to go red on exactly that label — the
+/// same inside-the-test mutation discipline as [`the_harness_bites_a_search_cte_restatement`],
+/// aimed at the one predicate the blob surfaces added to the substrate.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_harness_bites_a_blob_gate_restatement(pool: PgPool) -> sqlx::Result<()> {
+    let plan = Plan::generate(harness_seed());
+    let w = insert_world(&pool, &plan).await?;
+
+    let pre = i1_read_duality(&pool, &w).await?;
+    assert!(
+        pre.is_empty(),
+        "precondition failed: the read duality must hold before the mutation, or the bite \
+         proves nothing: {pre:?}"
+    );
+
+    let original: String = sqlx::query_scalar(
+        "SELECT pg_get_functiondef(p.oid) FROM pg_proc p \
+           JOIN pg_namespace n ON n.oid = p.pronamespace \
+          WHERE n.nspname = 'public' AND p.prokind = 'f' AND p.proname = 'blob_readable_by_profile'",
+    )
+    .fetch_one(&pool)
+    .await?;
+
+    // THE RESTATEMENT: the gate answers true unconditionally — the drift that would make every
+    // blob readable to everyone while the anchor gate still says otherwise.
+    const TRUTHY: &str = "SELECT true";
+    let mutated = format!(
+        "CREATE OR REPLACE FUNCTION blob_readable_by_profile(p_profile uuid, p_blob uuid) \
+         RETURNS boolean LANGUAGE sql STABLE AS $body$ {TRUTHY} $body$;"
+    );
+
+    sqlx::query(&mutated).execute(&pool).await?;
+    let bitten = i1_read_duality(&pool, &w).await?;
+    sqlx::query(&original).execute(&pool).await?; // restore before asserting
+
+    assert!(
+        !bitten.is_empty(),
+        "restating blob_readable_by_profile as constant-true did NOT turn the read duality red \
+         — the enrollment is vacuous"
+    );
+    assert!(
+        bitten.iter().any(|v| v.contains("I1.blobs")),
+        "the mutation was caught, but not by the blob invariant: {bitten:?}"
+    );
+
+    let restored = i1_read_duality(&pool, &w).await?;
+    assert!(
+        restored.is_empty(),
+        "after restore the blob invariant did not come back green: {restored:?}"
     );
 
     Ok(())

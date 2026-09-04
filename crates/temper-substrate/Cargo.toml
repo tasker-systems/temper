@@ -40,6 +40,15 @@ serde_yaml = "0.9"
 schemars = { version = "1", features = ["uuid1"], optional = true }
 anyhow = "1"
 sha2 = "0.10"
+# Object-safe async for the BlobStore seam (the CredentialBroker shape): the surfaces
+# task's consumers hold `Arc<dyn BlobStore>` (AppState, handler injection).
+async-trait = "0.1"
+# The BlobStore seam's streaming read shape (D6): the native type of both the provider
+# client's response body and the Axum response body, so bytes cross the read path
+# unbuffered. Pure, zero-subdependency crates.
+bytes = "1"
+futures-core = "0.3"
+futures-util = "0.3"
 # Used in Task 3 (Beat B) for commit-time JSON Schema validation. Added here per the plan so the
 # dependency is in place before the validation code lands.
 jsonschema = "0.45"

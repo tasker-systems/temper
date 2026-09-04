@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BlobCommitted",
+  "description": "Commit one blob (spec: binary blobs — external, content-addressed, related by edges,\n2026-09-01; D2/D4).\n\n**The bytes are NOT here and never were** — stricter than `DataArtifactCommitted`, which\ncarries a JSONB sidecar: a blob's bytes live in external object storage at the\ncontent-addressed pathname, so there is no sidecar at all and the ledger's business is\nprovenance only (`ledger-carries-hash-not-bytes`).\n\nDeliberately divergent from `DataArtifactCommitted` (spec D10, declared not omitted): no\n`intent` — a blob is addressed by id and its bytes are immutable, so there is no selection\nquestion to answer; no `supersedes` — revision is a new blob plus relation re-pointing,\nnever a fold.",
+  "type": "object",
+  "properties": {
+    "blob_id": {
+      "description": "Identity-as-input: minted by the caller and carried here so replay reproduces the same\nrow id. `kb_blobs.id` deliberately has no DEFAULT for this reason.",
+      "$ref": "#/$defs/BlobId"
+    },
+    "blob_pathname": {
+      "description": "The content-addressed external path: `{hash[0:2]}/{hash}`. The SQL wrapper refuses a\npayload whose pathname is anything else — addressing is enforced, not assumed (D1).",
+      "type": "string"
+    },
+    "content_bytes": {
+      "description": "Surfaced so a reader can decide whether to fetch. Never the bytes themselves.",
+      "type": "integer",
+      "format": "int64"
+    },
+    "content_hash": {
+      "description": "Bare sha256 hex of the blob's raw bytes — the dedup key (`kb_blobs.content_hash` UNIQUE)\nand the erasure act's join key (its redacted set keys on content hash).",
+      "type": "string"
+    },
+    "content_type": {
+      "description": "The stored media type, allowlist-checked at commit; the refusal names the vocabulary (D9).",
+      "type": "string"
+    },
+    "home": {
+      "description": "The blob's home — polymorphic over `(kb_contexts, kb_cogmaps)`, carried resolved. A blob\nhomed in a context or cogmap is visible to that home's readers\n(`blob-visibility-self-contained`); relations never widen this — the edge's home gates\nthe edge, not the blob (spec D3).",
+      "$ref": "#/$defs/AnchorRef"
+    },
+    "originator_profile_id": {
+      "description": "The home's originator. Absent ⇒ the projector COALESCEs it to the owner\n(originator≡owner), the `ResourceCreated` pattern.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProfileId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "owner_profile_id": {
+      "description": "The blob's owning profile (the homes row's owner), the `ResourceCreated` shape.",
+      "$ref": "#/$defs/ProfileId"
+    }
+  },
+  "required": [
+    "blob_id",
+    "home",
+    "owner_profile_id",
+    "content_hash",
+    "blob_pathname",
+    "content_type",
+    "content_bytes"
+  ],
+  "$defs": {
+    "AnchorRef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "table": {
+          "$ref": "#/$defs/AnchorTable"
+        }
+      },
+      "required": [
+        "table",
+        "id"
+      ]
+    },
+    "AnchorTable": {
+      "description": "A polymorphic anchor/endpoint reference. Serializes table names exactly as the DDL spells them.",
+      "type": "string",
+      "enum": [
+        "kb_contexts",
+        "kb_cogmaps",
+        "kb_resources",
+        "kb_edges",
+        "kb_content_blocks",
+        "kb_teams",
+        "kb_profiles",
+        "kb_connections",
+        "kb_machine_clients",
+        "kb_blobs",
+        "kb_events"
+      ]
+    },
+    "BlobId": {
+      "description": "A `kb_blobs.id` value — one immutable, content-addressed binary blob, homed like a\nresource and related to resources by edges (spec: binary blobs, 2026-09-01).",
+      "type": "string",
+      "format": "uuid"
+    },
+    "ProfileId": {
+      "description": "A `kb_profiles.id` value.",
+      "type": "string",
+      "format": "uuid"
+    }
+  }
+}

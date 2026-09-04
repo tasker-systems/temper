@@ -21,7 +21,7 @@
 use crate::affinity::EdgeKind;
 use crate::content::{PreparedBlock, PreparedChunk};
 use crate::ids::{
-    BlockId, CogmapId, ContextId, CorrelationId, DataArtifactId, EdgeId, EntityId, EventId,
+    BlobId, BlockId, CogmapId, ContextId, CorrelationId, DataArtifactId, EdgeId, EntityId, EventId,
     InvocationId, LensId, ProfileId, PropertyId, RegionId, ResourceId, ShapeId,
 };
 use crate::payloads;
@@ -128,6 +128,14 @@ pub enum EventKind {
     /// `kb_citation_audits` with no supersession. Registered permissive (NULL `payload_schema`),
     /// like `BlockProvenanceAnnotated`, by the post-canonical-seed migration `20260724000110`.
     CitationAudited,
+    /// Commit one blob (spec: binary blobs — external, content-addressed, related by edges,
+    /// 2026-09-01, D4; identity per home — D2 as amended). Fires `blob_committed`, projected
+    /// by `_project_blob_committed` into `kb_blobs` get-or-create on (home, content_hash) —
+    /// the home rides the row; there is no homes table. TYPED, with the committed
+    /// schemars fixture stamped by the boot-seed and registered by `20260903000020`. The payload
+    /// carries the hash, never the bytes — the bytes live at the content-addressed pathname in
+    /// external object storage.
+    BlobCommitted,
 }
 
 impl EventKind {
@@ -171,6 +179,7 @@ impl EventKind {
             EventKind::PrincipalStandingChanged => "principal_standing_changed",
             EventKind::PrincipalGovernanceChanged => "principal_governance_changed",
             EventKind::CitationAudited => "citation_audited",
+            EventKind::BlobCommitted => "blob_committed",
         }
     }
 
@@ -219,6 +228,7 @@ impl EventKind {
             "principal_standing_changed" => EventKind::PrincipalStandingChanged,
             "principal_governance_changed" => EventKind::PrincipalGovernanceChanged,
             "citation_audited" => EventKind::CitationAudited,
+            "blob_committed" => EventKind::BlobCommitted,
             _ => return None,
         })
     }
@@ -286,8 +296,14 @@ pub enum SeedAction<'a> {
         segmented: bool,
     },
     RelationshipAssert {
-        src: ResourceId,
-        tgt: ResourceId,
+        /// The edge's source — polymorphic per [`payloads::AnchorRef`]: a resource on every
+        /// incumbent path, and a **blob** on the blob-relation write path (D3: relations are
+        /// ordinary edges; the kb_edges endpoint CHECK admits `kb_blobs`). The projector reads
+        /// the table straight from the payload, so no SQL changed when this widened.
+        src: payloads::AnchorRef,
+        /// The edge's target — same polymorphism as `src`. A blob target on the
+        /// derivation-source write path (resource → blob, `derivation_source`).
+        tgt: payloads::AnchorRef,
         kind: EdgeKind,
         /// The edge's polarity, carried verbatim (§4). The scenario paths pass
         /// `payloads::EdgePolarity::Forward`; synthesis carries the production value.
@@ -360,6 +376,26 @@ pub enum SeedAction<'a> {
         kind_owner: Option<payloads::KindOwner>,
         schema: &'a serde_json::Value,
         enforcement: payloads::EnforcementMode,
+        emitter: EntityId,
+    },
+    /// Commit one blob (spec: binary blobs, 2026-09-01, D2/D4/D9). The bytes are already in
+    /// object storage at the content-addressed pathname — this action carries the hash, never
+    /// the bytes, and the caller's id mints the row (identity-as-input).
+    ///
+    /// `max_bytes`/`allowlist` are the D9 policy, passed through to the SQL wrapper so the
+    /// refusal names the vocabulary from the same values that enforce it. They are
+    /// configuration, not code — the caller reads them from config and passes them here.
+    BlobCommit {
+        id: BlobId,
+        home: payloads::AnchorRef,
+        owner: ProfileId,
+        /// Absent ⇒ originator≡owner (the ResourceCreated COALESCE).
+        originator: Option<ProfileId>,
+        content_hash: String,
+        content_type: String,
+        content_bytes: i64,
+        max_bytes: i64,
+        allowlist: &'a [String],
         emitter: EntityId,
     },
     LensCreate {
@@ -542,6 +578,7 @@ impl SeedAction<'_> {
             SeedAction::PropertySet { .. } => EventKind::PropertySet,
             SeedAction::DataArtifactCommit { .. } => EventKind::DataArtifactCommitted,
             SeedAction::ShapeDeclare { .. } => EventKind::ShapeDeclared,
+            SeedAction::BlobCommit { .. } => EventKind::BlobCommitted,
             SeedAction::LensCreate { .. } => EventKind::LensCreated,
             SeedAction::Materialize { .. } => EventKind::RegionMaterialized,
             SeedAction::SalienceRefresh { .. } => EventKind::SalienceRefreshed,
@@ -604,6 +641,10 @@ pub enum Fired {
     /// The shape row a `ShapeDeclare` fire produced. Singular — one declaration, one shape row
     /// (assert/fold: a prior row is folded, not superseded in place).
     Shape(ShapeId),
+    /// The blob row a `BlobCommit` fire produced — the EXISTING id on a dedup hit within the
+    /// payload's own home (D2 get-or-create, per-home as amended: same bytes in one scope is
+    /// one row; the returned id is always the caller's own handle).
+    Blob(BlobId),
 }
 
 impl Fired {
@@ -631,6 +672,14 @@ impl Fired {
         match self {
             Fired::Shape(id) => Ok(id),
             other => anyhow::bail!("expected Fired::Shape, got {other:?}"),
+        }
+    }
+
+    /// Extract the blob id a `BlobCommit` fire produced (the pre-existing id on a dedup hit).
+    pub fn blob(self) -> Result<BlobId> {
+        match self {
+            Fired::Blob(id) => Ok(id),
+            other => anyhow::bail!("expected Fired::Blob, got {other:?}"),
         }
     }
 
@@ -857,8 +906,8 @@ pub async fn fire_with(
         } => {
             let payload = payloads::RelationshipAsserted {
                 edge_id: EdgeId::from(Uuid::now_v7()),
-                source: payloads::AnchorRef::resource(src),
-                target: payloads::AnchorRef::resource(tgt),
+                source: src,
+                target: tgt,
                 edge_kind: kind,
                 polarity,
                 label: label.map(str::to_owned),
@@ -1082,7 +1131,6 @@ pub async fn fire_with(
                 content_bytes: raw.len() as i64,
                 supersedes: supersedes.to_vec(),
             };
-            let artifact_id = payload.artifact_id;
 
             let mut wire = serde_json::to_value(&payload)?;
             if kind_owner.is_none() {
@@ -1112,8 +1160,9 @@ pub async fn fire_with(
             .fetch_one(&mut *conn)
             .await?
             .context("data_artifact_commit returned null")?;
-            debug_assert_eq!(ids.len(), 1, "one commit mints exactly one artifact");
-            let artifact_uuid = ids.first().copied().unwrap_or(artifact_id.uuid());
+            let artifact_uuid = ids.first().copied().ok_or_else(|| {
+                anyhow::anyhow!("data_artifact_commit returned an empty id array")
+            })?;
 
             // Persist the verdict so the read path can match it against the staleness triple
             // (spec §7.5). Only when a shape is in force — NeverDeclared means no shape governs
@@ -1184,7 +1233,6 @@ pub async fn fire_with(
                 // the stored payload always carries the resolved version.
                 shape_version: 0,
             };
-            let shape_id = payload.shape_id;
 
             let mut wire = serde_json::to_value(&payload)?;
             // Flatten `home_anchor` into top-level `home_anchor_table`/`home_anchor_id` so the SQL
@@ -1232,9 +1280,69 @@ pub async fn fire_with(
             .fetch_one(&mut *conn)
             .await?
             .context("data_artifact_shape_declare returned null")?;
-            debug_assert_eq!(ids.len(), 1, "one declaration mints exactly one shape row");
             Ok(Fired::Shape(
-                ids.first().copied().map(ShapeId::from).unwrap_or(shape_id),
+                ids.first().copied().map(ShapeId::from).ok_or_else(|| {
+                    anyhow::anyhow!("data_artifact_shape_declare returned an empty id array")
+                })?,
+            ))
+        }
+
+        SeedAction::BlobCommit {
+            id,
+            home,
+            owner,
+            originator,
+            content_hash,
+            content_type,
+            content_bytes,
+            max_bytes,
+            allowlist,
+            emitter,
+        } => {
+            // Home must be a context or cogmap anchor — a blob is homed in resource-terms, never
+            // in a resource or edge (D2). Refuse here rather than let the wrapper's refusal carry
+            // a vocabulary question the caller already answered wrong.
+            anyhow::ensure!(
+                matches!(
+                    home.table,
+                    payloads::AnchorTable::Contexts | payloads::AnchorTable::Cogmaps
+                ),
+                "blob home must be a context or cogmap anchor"
+            );
+
+            // The content-addressed pathname is DERIVED here and verified again in SQL (D1:
+            // addressing is enforced, not assumed — defense in depth across the boundary).
+            let blob_pathname = crate::blob_store::blob_pathname(&content_hash);
+
+            let payload = payloads::BlobCommitted {
+                blob_id: id,
+                home,
+                owner_profile_id: owner,
+                originator_profile_id: originator,
+                content_hash: content_hash.clone(),
+                blob_pathname,
+                content_type,
+                content_bytes,
+            };
+
+            let ids = sqlx::query_scalar!(
+                "SELECT blob_commit($1,$2,$3,$4,$5,$6,$7)",
+                serde_json::to_value(&payload)?,
+                emitter.uuid(),
+                max_bytes,
+                allowlist as &[String],
+                ctx_meta,
+                ctx_inv,
+                ctx_corr,
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .context("blob_commit returned null")?;
+            Ok(Fired::Blob(
+                ids.first()
+                    .copied()
+                    .map(BlobId::from)
+                    .ok_or_else(|| anyhow::anyhow!("blob_commit returned an empty id array"))?,
             ))
         }
 

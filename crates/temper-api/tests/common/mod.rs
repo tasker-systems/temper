@@ -326,6 +326,8 @@ pub async fn setup_test_app(pool: PgPool) -> TestApp {
         slack_link: None,
         slack_mint_secret: None,
         rate_limit: None,
+        blob: None,
+        blob_disabled_by_policy: false,
     };
 
     let state = AppState::new(pool.clone(), jwks_store, config);
@@ -385,6 +387,8 @@ pub async fn setup_test_app_with_state(
         slack_link: None,
         slack_mint_secret: None,
         rate_limit: None,
+        blob: None,
+        blob_disabled_by_policy: false,
     };
 
     let mut state = AppState::new(pool.clone(), jwks_store, config);
@@ -439,6 +443,8 @@ pub async fn setup_test_app_with_config(
         slack_link: None,
         slack_mint_secret: None,
         rate_limit: None,
+        blob: None,
+        blob_disabled_by_policy: false,
     };
     configure(&mut config);
 

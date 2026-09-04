@@ -31,6 +31,7 @@ Commands:
   query          Run a composed query — declared acts, piped, answered in one round trip
   search         Search the knowledge base
   edge           Assert or mutate a relationship between resources (writes go through the cloud API)
+  blob           Commit, read, list, and relate binary blobs (writes go through the cloud API)
   cogmap         Operate on cognitive maps (create, read, reconcile, materialize, bind, grant)
   invocation     Operate on agent-invocation envelopes (open / close / show / list)
   steward        Team-self-cognition steward ingest trigger (delta / advance-watermark)
@@ -72,6 +73,7 @@ Options:
 | [`temper query`](./query.md) | Run a composed query — declared acts, piped, answered in one round trip |
 | [`temper search`](./search.md) | Search the knowledge base |
 | [`temper edge`](./edge.md) | Assert or mutate a relationship between resources (writes go through the cloud API) |
+| [`temper blob`](./blob.md) | Commit, read, list, and relate binary blobs (writes go through the cloud API) |
 | [`temper cogmap`](./cogmap.md) | Operate on cognitive maps (create, read, reconcile, materialize, bind, grant) |
 | [`temper invocation`](./invocation.md) | Operate on agent-invocation envelopes (open / close / show / list) |
 | [`temper steward`](./steward.md) | Team-self-cognition steward ingest trigger (delta / advance-watermark) |

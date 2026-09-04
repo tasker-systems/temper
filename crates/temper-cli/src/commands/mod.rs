@@ -5,6 +5,7 @@ pub mod admin_saml;
 pub mod admin_slack;
 pub mod admin_subscription;
 pub mod auth;
+pub mod blob;
 pub mod check;
 pub mod cogmap;
 pub mod config;

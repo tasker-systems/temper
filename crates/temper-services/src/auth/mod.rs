@@ -438,6 +438,8 @@ mod tests {
             slack_link: None,
             slack_mint_secret: None,
             rate_limit: None,
+            blob: None,
+            blob_disabled_by_policy: false,
         };
         AppState::new(
             pool,

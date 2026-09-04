@@ -222,14 +222,18 @@ async fn load_edges(
     keys: &HashMap<String, Uuid>,
 ) -> Result<()> {
     for e in &s.edges {
-        let src = (*keys
-            .get(&e.from)
-            .with_context(|| format!("edge from unknown key {}", e.from))?)
-        .into();
-        let tgt = (*keys
-            .get(&e.to)
-            .with_context(|| format!("edge to unknown key {}", e.to))?)
-        .into();
+        let src = crate::payloads::AnchorRef::resource(
+            (*keys
+                .get(&e.from)
+                .with_context(|| format!("edge from unknown key {}", e.from))?)
+            .into(),
+        );
+        let tgt = crate::payloads::AnchorRef::resource(
+            (*keys
+                .get(&e.to)
+                .with_context(|| format!("edge to unknown key {}", e.to))?)
+            .into(),
+        );
         fire(
             &mut *tx,
             SeedAction::RelationshipAssert {

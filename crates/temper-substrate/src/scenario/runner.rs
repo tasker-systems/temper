@@ -231,8 +231,14 @@ async fn apply_mutation(pool: &PgPool, loaded: &mut Loaded, step: &Step) -> Resu
             fire(
                 &mut tx,
                 SeedAction::RelationshipAssert {
-                    src: ResourceId::from(lookup(&loaded.keys, from)?),
-                    tgt: ResourceId::from(lookup(&loaded.keys, to)?),
+                    src: crate::payloads::AnchorRef::resource(ResourceId::from(lookup(
+                        &loaded.keys,
+                        from,
+                    )?)),
+                    tgt: crate::payloads::AnchorRef::resource(ResourceId::from(lookup(
+                        &loaded.keys,
+                        to,
+                    )?)),
                     kind: *kind,
                     polarity: crate::payloads::EdgePolarity::Forward,
                     label: label.as_deref(),

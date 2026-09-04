@@ -190,6 +190,12 @@ define_id!(
 );
 
 define_id!(
+    /// A `kb_blobs.id` value — one immutable, content-addressed binary blob, homed like a
+    /// resource and related to resources by edges (spec: binary blobs, 2026-09-01).
+    BlobId
+);
+
+define_id!(
     /// A `kb_properties.id` value — a facet/doc_type/block_role assertion.
     PropertyId
 );

@@ -202,6 +202,12 @@ pub enum LedgerRefKind {
     Contexts,
     #[serde(rename = "kb_cogmaps")]
     Cogmaps,
+    /// A binary blob — an edge ENDPOINT (D3): a `relationship_asserted` event whose
+    /// source/target is a blob points here, and the mirror-mapping test makes the two
+    /// vocabularies grow together (a value one side can decode and the other cannot fails
+    /// the whole page at compile time instead).
+    #[serde(rename = "kb_blobs")]
+    Blobs,
     #[serde(rename = "kb_resources")]
     Resources,
     #[serde(rename = "kb_edges")]

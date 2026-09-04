@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT blob_commit($1,$2,$3,$4,$5,$6,$7)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "blob_commit",
+        "type_info": "UuidArray"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Jsonb",
+        "Uuid",
+        "Int8",
+        "TextArray",
+        "Jsonb",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "eb9a550b04ccbddfef3b47b78650f1ff65101269652e8ff4b2426f5038cb9eaf"
+}
