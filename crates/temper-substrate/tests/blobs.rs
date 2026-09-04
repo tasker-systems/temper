@@ -697,8 +697,8 @@ async fn replay_reproduces_blob_projections(pool: sqlx::PgPool) {
     replay::replay(&pool, &snap).await.unwrap();
 
     let after = replay::dump_projections(&pool).await.unwrap();
-    // Every projection table must agree — kb_blobs/kb_blob_homes in FULL (nothing to mask:
-    // identity-as-input), and no sibling desynced by the blob commits.
+    // Every projection table must agree — kb_blobs in FULL (nothing to mask: identity-as-input),
+    // and no sibling desynced by the blob commits.
     // PROJECTION_DUMPS is one constant list, so the zip pairs identical tables by construction;
     // the assertion is over the VALUES — replay must reproduce every row set exactly.
     for ((table_a, a), (_table_b, b)) in before.iter().zip(after.iter()) {
@@ -861,6 +861,38 @@ async fn staging_rides_no_events_and_dies_on_delete(pool: sqlx::PgPool) {
         .unwrap();
     assert_eq!(uploads_left, 0, "delete removes the session");
     assert_eq!(segments_left, 0, "the segments row cascades");
+}
+
+/// FAILS IF: the ceiling is consulted before the occupied-seq resolution (review A-C2) —
+/// at a full session (staged == ceiling), the lost-response retry of the final segment
+/// would return `OverCeiling` (its would-be total counts bytes it would NOT add) instead
+/// of the idempotent `AlreadyLanded` no-op the `AppendOutcome` contract promises.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_ceiling_never_refuses_the_idempotent_retry_of_the_final_segment(pool: sqlx::PgPool) {
+    let (owner, _emitter, home) = blob_world(&pool, "staged-retry-at-ceiling").await;
+    let id = staged_session(&pool, owner, home, "image/png").await;
+
+    let ceiling: i64 = 1024;
+    let segment: Vec<u8> = vec![7u8; 1024];
+    let hash = sha(&segment);
+
+    let first = uploads::append_segment(&pool, owner, id, 0, &segment, &hash, ceiling)
+        .await
+        .unwrap();
+    assert_eq!(
+        first,
+        Some(AppendOutcome::Landed),
+        "the segment lands exactly to the ceiling"
+    );
+
+    let retry = uploads::append_segment(&pool, owner, id, 0, &segment, &hash, ceiling)
+        .await
+        .unwrap();
+    assert_eq!(
+        retry,
+        Some(AppendOutcome::AlreadyLanded { segment_hash: hash }),
+        "the at-ceiling retry of the landed segment is the idempotent no-op, not a ceiling refusal"
+    );
 }
 
 /// FAILS IF: the staging ceiling is a read-then-insert check (the review's F4 TOCTOU) —

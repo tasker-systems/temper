@@ -16,7 +16,7 @@
 --      The functional face: an edge homed in a context OWNED by an ancestor team became
 --      invisible to members of teams beneath it —
 --      reachable_teams_one_definition_test::edges_visible_to_reaches_up_the_chain is the
---      witness, and it stayed red across S4/S5 because the test-db tier was not run.
+--      witness.
 --
 -- This migration restores both routings (20260804000010 for the CTE, 20260712000010 for the
 -- context read-set) and keeps every 20260903000030 blob addition — readable_blobs and the

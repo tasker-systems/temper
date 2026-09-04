@@ -30,6 +30,11 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
     END;
 $$;
 
+COMMENT ON FUNCTION endpoint_readable_by_profile(uuid, text, uuid) IS
+'scalar edge-endpoint gate: a kb_blobs endpoint is readable through the blob''s OWN home
+(blob_readable_by_profile) — the deliberate 20260903000030 admission, not a CHECK accident.
+Edge listings may render the edge; walk surfaces stay node-typed and never materialize a blob.';
+
 -- The LIVE edges_visible_to is the set-based rewrite (20260708000009), whose body mirrors the
 -- scalar helpers "branch-for-branch" and whose endpoint gates enumerate kb_resources/kb_cogmaps
 -- explicitly — so a kb_blobs endpoint falls out of both OR arms and the edge would be invisible

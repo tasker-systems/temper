@@ -1131,7 +1131,6 @@ pub async fn fire_with(
                 content_bytes: raw.len() as i64,
                 supersedes: supersedes.to_vec(),
             };
-            let artifact_id = payload.artifact_id;
 
             let mut wire = serde_json::to_value(&payload)?;
             if kind_owner.is_none() {
@@ -1161,8 +1160,9 @@ pub async fn fire_with(
             .fetch_one(&mut *conn)
             .await?
             .context("data_artifact_commit returned null")?;
-            debug_assert_eq!(ids.len(), 1, "one commit mints exactly one artifact");
-            let artifact_uuid = ids.first().copied().unwrap_or(artifact_id.uuid());
+            let artifact_uuid = ids.first().copied().ok_or_else(|| {
+                anyhow::anyhow!("data_artifact_commit returned an empty id array")
+            })?;
 
             // Persist the verdict so the read path can match it against the staleness triple
             // (spec §7.5). Only when a shape is in force — NeverDeclared means no shape governs
@@ -1233,7 +1233,6 @@ pub async fn fire_with(
                 // the stored payload always carries the resolved version.
                 shape_version: 0,
             };
-            let shape_id = payload.shape_id;
 
             let mut wire = serde_json::to_value(&payload)?;
             // Flatten `home_anchor` into top-level `home_anchor_table`/`home_anchor_id` so the SQL
@@ -1281,9 +1280,10 @@ pub async fn fire_with(
             .fetch_one(&mut *conn)
             .await?
             .context("data_artifact_shape_declare returned null")?;
-            debug_assert_eq!(ids.len(), 1, "one declaration mints exactly one shape row");
             Ok(Fired::Shape(
-                ids.first().copied().map(ShapeId::from).unwrap_or(shape_id),
+                ids.first().copied().map(ShapeId::from).ok_or_else(|| {
+                    anyhow::anyhow!("data_artifact_shape_declare returned an empty id array")
+                })?,
             ))
         }
 
@@ -1338,9 +1338,11 @@ pub async fn fire_with(
             .fetch_one(&mut *conn)
             .await?
             .context("blob_commit returned null")?;
-            debug_assert_eq!(ids.len(), 1, "one commit resolves exactly one blob row");
             Ok(Fired::Blob(
-                ids.first().copied().map(BlobId::from).unwrap_or(id),
+                ids.first()
+                    .copied()
+                    .map(BlobId::from)
+                    .ok_or_else(|| anyhow::anyhow!("blob_commit returned an empty id array"))?,
             ))
         }
 

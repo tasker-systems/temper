@@ -106,6 +106,13 @@ BEGIN
 END;
 $$;
 
+COMMENT ON FUNCTION _project_blob_committed(uuid, jsonb) IS
+'blob_committed projector (final definition — 20260903000020 minted the global-hash shape,
+this migration scopes it): get-or-create scoped to the payload''s OWN home — UNIQUE(home_table,
+home_id, content_hash); a hash conflict within the caller''s scope returns the existing row,
+a hash known only to other scopes inserts the caller''s fresh row. Replay reproduces N rows
+for N home-scoped commits of identical bytes, in event order.';
+
 -- The scalar read gate re-anchored: the row IS its home now. anchor_readable_by_profile stays
 -- the one readability helper (the same post-consolidation routing the S6 verification pinned);
 -- only the FROM/WHERE moves off the dropped table.
@@ -118,6 +125,13 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
           AND anchor_readable_by_profile(p_profile, b.home_table, b.home_id)
     );
 $$;
+
+COMMENT ON FUNCTION blob_readable_by_profile(uuid, uuid) IS
+'authorization predicate: a blob is readable iff its OWN home is — pure anchor equality
+(anchor_readable_by_profile on the row''s home_table/home_id), never a currency predicate
+(no is_folded/ingest_state here). Harness-enrolled as a DUALITY witness against the anchor
+predicate: any edit must keep the anchor-equality answer. The erasure build (unbuilt) must
+widen this and its dedup/read siblings (N3) — kb_blobs.content_type is nullable by design.';
 
 -- edges_visible_to: only the readable_blobs set changes — FROM the row, home columns in place
 -- of the homes join. Every other fragment is the 20260903000050 body verbatim (the one-
@@ -179,6 +193,14 @@ AS $$
          OR (e.target_table = 'kb_blobs'
                AND e.target_id IN (SELECT id FROM readable_blobs)) );
 $$;
+
+COMMENT ON FUNCTION edges_visible_to(uuid) IS
+'the ONE set-based edge-visibility function (routings restored by 20260804000010 +
+20260712000010; 20260903000050 added the blob arms; this migration re-anchors readable_blobs
+from the dropped homes join to the row''s home columns, branch-for-branch with
+blob_readable_by_profile): an edge is visible iff it is live, its home anchor is readable,
+and BOTH endpoints are readable — blob endpoints through the blob''s own home. Supersedes the
+intermediate definitions in 20260903000030/20260903000050.';
 
 SELECT declare_migration(
     20260903000060,

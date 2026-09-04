@@ -160,13 +160,20 @@ pub async fn landed_segments(
 }
 
 /// Append one segment under the staging ceiling, ATOMICALLY. The whole decision — owner
-/// gate, staged-total read, ceiling check, insert — runs in one transaction under the
+/// gate, insert, staged-total re-read, ceiling decision — runs in one transaction under the
 /// session row's `FOR UPDATE` lock, so N concurrent appends from the owning principal
 /// serialize instead of each reading the same staged total and all landing (the TOCTOU
 /// the security review's F4 found: the over-cap whole was assembled in RAM and put to
 /// the provider before the commit-time cap refused). The ceiling is the staging bound —
 /// how many bytes one session may hold between begin and finalize — passed in by the
 /// service from the same operator config the commit-time cap reads.
+///
+/// The ceiling is decided AFTER the insert, not before: the insert is the only step that
+/// adds bytes, so the idempotent retry of an already-landed segment (which adds none)
+/// never consults the ceiling — at a full session, the final segment's lost-response retry
+/// stays the `AlreadyLanded` no-op instead of a refusal (review A-C2). A genuinely
+/// over-ceiling append rolls its own insert back when the early return drops the
+/// transaction, so the staged total can still never exceed the ceiling.
 ///
 /// Race-free by the primary key: the INSERT either lands (new seq), or `ON CONFLICT DO
 /// NOTHING` falls through to a re-read that distinguishes the idempotent no-op (same
@@ -199,23 +206,6 @@ pub async fn append_segment(
         return Ok(None);
     }
 
-    let staged: i64 = sqlx::query!(
-        r#"SELECT COALESCE(SUM(octet_length(bytes)), 0)::bigint AS "sum!"
-             FROM kb_blob_upload_segments
-            WHERE upload_id = $1"#,
-        upload_id,
-    )
-    .fetch_one(&mut *txn)
-    .await?
-    .sum;
-    let would_total = staged + bytes.len() as i64;
-    if would_total > staging_ceiling {
-        return Ok(Some(AppendOutcome::OverCeiling {
-            staged: would_total,
-            ceiling: staging_ceiling,
-        }));
-    }
-
     let landed = sqlx::query!(
         r#"INSERT INTO kb_blob_upload_segments (upload_id, seq, bytes, segment_hash)
            VALUES ($1, $2, $3, $4)
@@ -230,6 +220,24 @@ pub async fn append_segment(
     .await?;
 
     if landed.is_some() {
+        // Only a landed insert added bytes, so only it can breach the ceiling — and the
+        // early return drops `txn`, rolling the insert back with it.
+        let staged: i64 = sqlx::query!(
+            r#"SELECT COALESCE(SUM(octet_length(bytes)), 0)::bigint AS "sum!"
+                 FROM kb_blob_upload_segments
+                WHERE upload_id = $1"#,
+            upload_id,
+        )
+        .fetch_one(&mut *txn)
+        .await?
+        .sum;
+        if staged > staging_ceiling {
+            return Ok(Some(AppendOutcome::OverCeiling {
+                staged,
+                ceiling: staging_ceiling,
+            }));
+        }
+
         sqlx::query!(
             "UPDATE kb_blob_uploads SET updated = now() WHERE id = $1",
             upload_id

@@ -7,9 +7,12 @@
 -- describing the deprecated extract-to-resource flow, gen_random_uuid() and a single-resource FK
 -- both wrong for the new model. It does not survive alongside its successor.
 
--- Bytes live EXTERNALLY (Vercel Blob, D1); this row is metadata only — no content column exists
--- anywhere in Postgres. Every column is derivable from the event payload, so the table byte-diffs
--- under replay (replay.rs diffs it in FULL).
+-- Bytes live EXTERNALLY (Vercel Blob, D1); this row is metadata only — no content column ON
+-- kb_blobs. (Staged upload bytes DO sit in Postgres, in kb_blob_upload_segments.bytes —
+-- 20260903000040, pre-ledger by design and declared in the personal-data surface manifest;
+-- an erasure enumeration driven by this header must not stop at the blob row.) Every column
+-- here is derivable from the event payload, so the table byte-diffs under replay (replay.rs
+-- diffs it in FULL).
 CREATE TABLE kb_blobs (
     -- No DEFAULT, deliberately: the id is minted by the caller and carried in the payload
     -- (identity-as-input, D2), so a server-side default would mint a different id on replay.
@@ -162,6 +165,7 @@ INSERT INTO kb_event_types (name, payload_schema, schema_version, category) VALU
         "kb_profiles",
         "kb_connections",
         "kb_machine_clients",
+        "kb_blobs",
         "kb_events"
       ]
     },
@@ -298,6 +302,15 @@ BEGIN
     RETURN _project_blob_committed(v_ev, p_payload);
 END;
 $$;
+
+COMMENT ON FUNCTION blob_commit(jsonb, uuid, bigint, text[], jsonb, uuid, uuid) IS
+'commit-wrapper for blobs: enforces hash-not-bytes (no bytes argument exists — a payload that
+smuggled them would ride the ledger verbatim), D1 content addressing (blob_pathname IS
+<hash[0:2]>/<hash>), and the D9 cap + content-type allowlist — p_max_bytes and p_allowlist are
+CALLER-PASSED CONFIGURATION, the same operator values the service enforces Rust-side, not
+constants. The home gate is a live OR-of-neither (20260903000020 header, N6 note). Provider
+existence is verified Rust-side BEFORE this appends; this function appends the typed
+blob_committed event and projects it.';
 
 SELECT declare_migration(
     20260903000020,
