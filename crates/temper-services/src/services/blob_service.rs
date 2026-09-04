@@ -159,8 +159,8 @@ pub fn blob_disabled() -> ApiError {
 /// Chosen per instance by `AppState::blob_refusal`, never picked by hand at a door.
 pub fn blob_disabled_by_policy() -> ApiError {
     ApiError::BadRequest(
-        "blob endpoints are disabled by configuration — BLOB_ENABLED is set to false; \
-         remove the setting or set BLOB_ENABLED=true to enable them"
+        "blob endpoints are disabled by configuration — BLOB_ENABLED is set to a value \
+         that disables the flow; remove the setting or set BLOB_ENABLED=true to enable them"
             .to_string(),
     )
 }
@@ -233,6 +233,22 @@ pub struct BlobCommitCommand {
     pub content_type: String,
     pub bytes: Bytes,
     pub surface: Surface,
+}
+
+/// The row's STORED media type, read back from the committed row — the N2 rule in one
+/// place: on a dedup hit the row is the FIRST committer's, and a committing surface must
+/// report what is stored, never what was just declared. **This is the single query site
+/// the erasure build's N3 arm must widen**: the `content_type!` override is sound at HEAD
+/// (the wrapper refuses a NULL type before the event) and nothing nulls the column until
+/// erasure — when it does, THIS read changes shape, and because it is the only one, the
+/// widening cannot be forgotten at a duplicate.
+async fn stored_content_type(pool: &PgPool, id: uuid::Uuid) -> Result<String, sqlx::Error> {
+    sqlx::query_scalar!(
+        r#"SELECT content_type AS "content_type!" FROM kb_blobs WHERE id = $1"#,
+        id
+    )
+    .fetch_one(pool)
+    .await
 }
 
 /// Commit bytes as a blob: dedup pre-check, provider put at the content-addressed pathname,
@@ -313,22 +329,12 @@ pub async fn commit_blob(
     .await
     .map_err(map_commit_err)?;
 
-    // N2 (2026-09-03 review): the outcome reports the row's STORED media type, read back
-    // from the committed row. On a fresh commit it is the type just written; on a dedup
-    // hit (the wrapper's get-or-create returned the EXISTING row) it is the FIRST
-    // committer's type — what read-through serves — never the re-commit's declaration.
-    // One PK read covers every path uniformly, including the concurrent-commit race where
-    // the Rust-side pre-check missed and the SQL-level get-or-create deduped.
-    // `content_type!` is sound at HEAD: the wrapper refuses a NULL type before the event,
-    // and nothing nulls the column until the erasure build (its declared arm must widen
-    // this read — N3's non-null-override note).
-    let stored_type: String = sqlx::query_scalar!(
-        r#"SELECT content_type AS "content_type!" FROM kb_blobs WHERE id = $1"#,
-        id.uuid()
-    )
-    .fetch_one(pool)
-    .await
-    .map_err(|e| ApiError::internal_scrubbed("blob commit read failed", e))?;
+    // N2 (2026-09-03 review): the outcome reports the row's STORED media type, read
+    // back from the committed row — see `stored_content_type`, the single site both
+    // committing doors share.
+    let stored_type = stored_content_type(pool, id.uuid())
+        .await
+        .map_err(|e| ApiError::internal_scrubbed("blob commit read failed", e))?;
 
     Ok(BlobCommitOutcome {
         blob_id: id,
@@ -630,16 +636,11 @@ pub async fn finalize_upload(
         .map_err(|e| ApiError::internal_scrubbed("blob upload cleanup failed", e))?;
 
     // N2: the stored media type, read back — on a dedup hit the row is the FIRST
-    // committer's, and the response must say what is stored, not what was declared.
-    // `content_type!` is sound at HEAD (wrapper refuses NULL type; erasure is unbuilt —
-    // N3's non-null-override note).
-    let stored_type: String = sqlx::query_scalar!(
-        r#"SELECT content_type AS "content_type!" FROM kb_blobs WHERE id = $1"#,
-        blob_id.uuid()
-    )
-    .fetch_one(pool)
-    .await
-    .map_err(|e| ApiError::internal_scrubbed("blob commit read failed", e))?;
+    // committer's, and the response must say what is stored, not what was declared
+    // (`stored_content_type`, the single site both committing doors share).
+    let stored_type = stored_content_type(pool, blob_id.uuid())
+        .await
+        .map_err(|e| ApiError::internal_scrubbed("blob commit read failed", e))?;
 
     Ok(BlobUploadFinalizeOutcome {
         blob_id,
@@ -925,16 +926,19 @@ pub async fn blob_relations(
 }
 
 /// The SQL enum's value set is fixed by DDL; a miss means the DB and the code disagree,
-/// which is a 500, never a caller-facing refusal.
+/// which is a 500, never a caller-facing refusal. Routed through `internal_scrubbed`
+/// (the F9 choke point, like every other internal bail here): the raw DB value is
+/// log-only — the wire carries the same generic internal message either way.
 fn parse_wire_edge_kind(s: &str) -> ApiResult<WireEdgeKind> {
     match s {
         "express" => Ok(WireEdgeKind::Express),
         "contains" => Ok(WireEdgeKind::Contains),
         "leads_to" => Ok(WireEdgeKind::LeadsTo),
         "near" => Ok(WireEdgeKind::Near),
-        other => Err(ApiError::Internal(format!(
-            "unknown edge_kind value in kb_edges: {other}"
-        ))),
+        other => Err(ApiError::internal_scrubbed(
+            "unknown edge_kind value in kb_edges",
+            other,
+        )),
     }
 }
 
@@ -942,9 +946,10 @@ fn parse_wire_polarity(s: &str) -> ApiResult<WirePolarity> {
     match s {
         "forward" => Ok(WirePolarity::Forward),
         "inverse" => Ok(WirePolarity::Inverse),
-        other => Err(ApiError::Internal(format!(
-            "unknown edge_polarity value in kb_edges: {other}"
-        ))),
+        other => Err(ApiError::internal_scrubbed(
+            "unknown edge_polarity value in kb_edges",
+            other,
+        )),
     }
 }
 

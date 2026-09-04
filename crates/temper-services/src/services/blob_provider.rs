@@ -15,6 +15,7 @@
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
+use std::time::Duration;
 use temper_substrate::blob_store::{BlobHead, BlobStore, PutReceipt};
 
 use crate::config::BlobConfig;
@@ -22,6 +23,27 @@ use crate::config::BlobConfig;
 /// The provider API version the wire shapes above are grounded against.
 const BLOB_API_VERSION: &str = "12";
 const DEFAULT_API_BASE: &str = "https://vercel.com/api/blob";
+
+/// The provider HTTP posture is bounded: `connect_timeout` covers dialing, and
+/// `read_timeout` is an idle-read bound — it resets on every chunk received, so the
+/// streamed read (D6) survives a slow-but-flowing provider while a truly stalled
+/// connection fails inside the window instead of hanging a blob door forever. There
+/// is deliberately NO total timeout: the streamed get is unbounded by design, and a
+/// stalled request WRITE (the mirror case) stays unbounded with it — the declared
+/// tradeoff. Redirects are pinned to a small explicit bound; reqwest's implicit
+/// follow-up-to-10 is nobody's decision.
+const PROVIDER_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const PROVIDER_READ_TIMEOUT: Duration = Duration::from_secs(30);
+const PROVIDER_REDIRECT_LIMIT: usize = 3;
+
+fn http_client(connect_timeout: Duration, read_timeout: Duration) -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(connect_timeout)
+        .read_timeout(read_timeout)
+        .redirect(reqwest::redirect::Policy::limited(PROVIDER_REDIRECT_LIMIT))
+        .build()
+        .expect("provider client configuration is static and valid")
+}
 
 pub struct VercelBlobStore {
     http: reqwest::Client,
@@ -42,7 +64,7 @@ impl std::fmt::Debug for VercelBlobStore {
 impl VercelBlobStore {
     pub fn new(config: BlobConfig) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: http_client(PROVIDER_CONNECT_TIMEOUT, PROVIDER_READ_TIMEOUT),
             config,
             api_base: std::env::var("VERCEL_BLOB_API_URL")
                 .ok()
@@ -58,6 +80,15 @@ impl VercelBlobStore {
     pub fn with_test_endpoints(mut self, base_url: &str) -> Self {
         self.api_base = format!("{base_url}/api/blob");
         self.read_host_base = base_url.to_string();
+        self
+    }
+
+    /// Swap in a client with short timeouts, so a witness can hold a stalled provider
+    /// and assert the door fails bounded instead of hanging. Test machinery, the same
+    /// tier as `with_test_endpoints`.
+    #[doc(hidden)]
+    pub fn with_test_timeouts(mut self, connect: Duration, read: Duration) -> Self {
+        self.http = http_client(connect, read);
         self
     }
 
@@ -201,9 +232,15 @@ impl BlobStore for VercelBlobStore {
                     .json()
                     .await
                     .context("blob provider head: unreadable response")?;
+                // A provider 200 without `size` is contract drift, not a zero-byte
+                // blob: a success-shaped `BlobHead { content_bytes: 0 }` would feed the
+                // D4 commit gate a lie. Fail loudly instead.
+                let size = parsed
+                    .size
+                    .context("blob provider head: response missing size")?;
                 Ok(Some(BlobHead {
                     content_type: parsed.content_type,
-                    content_bytes: parsed.size.unwrap_or(0),
+                    content_bytes: size,
                 }))
             }
             status => {
@@ -400,5 +437,53 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("503"), "{err}");
+    }
+
+    // FAILS IF: a 200 that omits `size` is swallowed into a success-shaped
+    // `content_bytes: 0` — provider contract drift must reach the commit gate as a
+    // failure, never as a made-up zero (B-S2, final-pass review).
+    #[tokio::test]
+    async fn head_refuses_a_success_response_without_a_size() {
+        let server = MockServer::start().await;
+        let store = store_with("tok-1").with_test_endpoints(&server.uri());
+        Mock::given(method("GET"))
+            .and(path("/api/blob/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "pathname": "ab/abcd",
+                "contentType": "image/png",
+            })))
+            .mount(&server)
+            .await;
+
+        let err = store.head("ab/abcd").await.unwrap_err().to_string();
+        assert!(err.contains("missing size"), "{err}");
+    }
+
+    // FAILS IF: the provider client loses its read bound — a stalled provider used to
+    // hang every blob door indefinitely (B-S1, final-pass review). The mock holds the
+    // response far longer than the witness client's read window; the put must give up
+    // inside it instead of waiting out the stall.
+    #[tokio::test]
+    async fn stalled_provider_put_fails_within_the_read_window() {
+        let server = MockServer::start().await;
+        let store = store_with("tok-1")
+            .with_test_endpoints(&server.uri())
+            .with_test_timeouts(Duration::from_millis(100), Duration::from_millis(300));
+        Mock::given(method("PUT"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(30)))
+            .mount(&server)
+            .await;
+
+        let started = std::time::Instant::now();
+        let result = store
+            .put("ab/abcd", "image/png", Bytes::from_static(b"body"), 100)
+            .await;
+        let elapsed = started.elapsed();
+        assert!(
+            result.is_err(),
+            "the stalled put must fail, not wait out the mock"
+        );
+        // Bounded: the read window tripped well inside the mock's 30s hold.
+        assert!(elapsed < Duration::from_secs(5), "put took {elapsed:?}");
     }
 }

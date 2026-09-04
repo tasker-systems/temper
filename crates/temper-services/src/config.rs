@@ -297,7 +297,10 @@ impl ApiConfig {
 /// Build the blob config from env — `Some` only when a credential is resolvable (spec:
 /// binary blobs, D7/D9; the values were pulled from the Vercel plan numbers, not assumed:
 /// the single-request threshold sits under the platform's hard 4.5 MB request-body cap,
-/// and the default per-blob cap is Vercel's own multipart-guidance boundary).
+/// and the default per-blob cap is Vercel's own multipart-guidance boundary). A threshold
+/// set ABOVE that cap is honored, not refused — self-hosted proxies may admit more — but
+/// parse_blob warns, naming the cliff, so the platform cap is never what an operator
+/// discovers in production.
 ///
 /// Credential resolution is OIDC-first with token fallback, mirroring the provider SDK's
 /// documented order: `BLOB_STORE_ID` set ⇒ OIDC (the token is re-read per request — it
@@ -314,6 +317,11 @@ impl ApiConfig {
 /// closes the doors; an unrecognized value closes them too, loudly (fail closed).
 /// Misconfigured CREDENTIALS (unparseable token, bad caps) are never "policy" — those
 /// keep the plain-unconfigured vocabulary.
+/// The platform's hard request-body cap: the cliff `BLOB_SINGLE_REQUEST_MAX_BYTES` is
+/// warned against when it exceeds this (WARN, not refuse — self-hosted proxies may
+/// admit more; B-C5, final-pass review).
+const VERCEL_REQUEST_BODY_CAP_BYTES: usize = 4_500_000;
+
 fn parse_blob(lookup: impl Fn(&str) -> Option<String>) -> (Option<BlobConfig>, bool) {
     let get = |k| lookup(k).filter(|s: &String| !s.is_empty());
 
@@ -364,6 +372,23 @@ fn parse_blob(lookup: impl Fn(&str) -> Option<String>) -> (Option<BlobConfig>, b
         read_write_token = Some(token);
     }
 
+    // The store id is interpolated into the read hostname (`blob_provider::read_url`)
+    // and parsed into a request header. A stray `/` or `.` in a hand-pasted id is not
+    // an injection — the pathname is content-hash-derived and header parsing rejects
+    // control characters — but it silently redirects reads to a host that was never
+    // the operator's store. Validated at parse time, fail-closed per the misconfig
+    // precedent (disabled + loud, and never policy: the knob did not close it).
+    if !store_id
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    {
+        tracing::error!(
+            "BLOB_STORE_ID (or the id embedded in BLOB_READ_WRITE_TOKEN) is set to \
+             {store_id:?}; a store id is [A-Za-z0-9-] only. The blob flow is disabled."
+        );
+        return (None, false);
+    }
+
     let max_bytes = match lookup("BLOB_MAX_BYTES") {
         None => 100 * 1024 * 1024,
         Some(raw) => match raw.trim().parse::<i64>() {
@@ -411,6 +436,16 @@ fn parse_blob(lookup: impl Fn(&str) -> Option<String>) -> (Option<BlobConfig>, b
             }
         },
     };
+    // Surface the platform cliff without owning it (B-C5, dispositioned WARN): a larger
+    // threshold is legitimate where a proxy admits it; the operator just hears about
+    // the cap before a request finds it the hard way.
+    if single_request_max_bytes > VERCEL_REQUEST_BODY_CAP_BYTES {
+        tracing::warn!(
+            "BLOB_SINGLE_REQUEST_MAX_BYTES={single_request_max_bytes} exceeds the platform's \
+             ~4.5 MB request-body cap ({VERCEL_REQUEST_BODY_CAP_BYTES}); single-request \
+             requests above the cap will be refused by the platform, not by this service"
+        );
+    }
 
     (
         Some(BlobConfig {
@@ -468,7 +503,7 @@ fn parse_slack_link(lookup: impl Fn(&str) -> Option<String>) -> Option<SlackLink
 }
 
 /// Every variable whose plaintext value is a standalone credential: hold the string, exercise the
-/// capability. Four gate an internal surface; the fifth decrypts what one of them protects.
+/// capability. Five gate a surface; the sixth decrypts what one of them protects.
 ///
 /// | Variable                    | Capability it confers                                          |
 /// | --------------------------- | -------------------------------------------------------------- |
@@ -476,6 +511,7 @@ fn parse_slack_link(lookup: impl Fn(&str) -> Option<String>) -> Option<SlackLink
 /// | `EMBED_DISPATCH_SECRET`     | call the embed drain crons                                       |
 /// | `SLACK_LINK_SECRET`         | ask `/internal/slack/link-state` *"is this principal linked?"*    |
 /// | `SLACK_MINT_SECRET`         | mint a token acting as **any linked human, with their full reach**|
+/// | `BLOB_READ_WRITE_TOKEN`     | write to the provider blob store                                  |
 /// | `SLACK_VAULT_ENC_KEY`       | decrypt **every** vaulted refresh token                           |
 ///
 /// The order is load-bearing only in that it fixes which pair a multi-way collision reports, so the
@@ -488,11 +524,12 @@ fn parse_slack_link(lookup: impl Fn(&str) -> Option<String>) -> Option<SlackLink
 /// stored grant. And `openssl rand -base64 32` is the documented generator for the vault key
 /// (`parse_slack_link` above says so), which makes "generate once, paste everywhere" the exact
 /// operator error this guards.
-const SHARED_SECRET_VARS: [&str; 5] = [
+const SHARED_SECRET_VARS: [&str; 6] = [
     "INTERNAL_RECONCILE_SECRET",
     "EMBED_DISPATCH_SECRET",
     "SLACK_LINK_SECRET",
     "SLACK_MINT_SECRET",
+    "BLOB_READ_WRITE_TOKEN",
     "SLACK_VAULT_ENC_KEY",
 ];
 
@@ -792,6 +829,31 @@ mod tests {
         )])))
         .unwrap();
         assert!(cfg.blob.is_none());
+    }
+
+    // FAILS IF: a store id with characters the read hostname cannot mean
+    // half-configures the flow — the id interpolates into the read host, so a stray
+    // character silently redirects reads to a host that was never the operator's
+    // store (B-S3, final-pass review). Fail closed, loudly — and never as policy:
+    // the knob did not close this door.
+    #[test]
+    fn blob_store_id_with_bad_characters_disables_the_flow() {
+        let by_store_id = ApiConfig::from_lookup(lookup_of(&blob_pairs(&[(
+            "BLOB_STORE_ID",
+            "store_abc.123/x",
+        )])))
+        .unwrap();
+        assert!(by_store_id.blob.is_none());
+        assert!(!by_store_id.blob_disabled_by_policy);
+
+        // The same bad id arriving embedded in the token is refused the same way.
+        let by_token = ApiConfig::from_lookup(lookup_of(&blob_pairs(&[(
+            "BLOB_READ_WRITE_TOKEN",
+            "vercel_blob_rw_bad~id_nestedtail",
+        )])))
+        .unwrap();
+        assert!(by_token.blob.is_none());
+        assert!(!by_token.blob_disabled_by_policy);
     }
 
     // FAILS IF: the explicit opt-out does not close the flow — credentials in the
