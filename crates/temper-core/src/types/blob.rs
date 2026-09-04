@@ -162,9 +162,27 @@ pub struct BlobRelationRow {
     pub edge_kind: EdgeKind,
     pub polarity: Polarity,
     pub label: Option<String>,
-    pub direction: String,
+    pub direction: BlobRelationEdgeDirection,
     pub weight: f64,
     pub created: chrono::DateTime<chrono::Utc>,
+}
+
+/// The direction a listed edge runs relative to the blob — the relations listing's own
+/// vocabulary (`outgoing` = the blob is the edge's source, `incoming` = the blob is the
+/// target). Typed, not a free string (the typed-structs rule, C-C3 2026-09-04 review):
+/// the readback's SQL CASE is the only writer, so a value outside the pair is a DB/code
+/// disagreement and is refused at the parse boundary, never passed through. Distinct
+/// from [`BlobRelationDirection`] — that is the ASSERT request's vocabulary (which end
+/// of a new edge the blob occupies); this is what a LISTED edge already does.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "blob.ts"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum BlobRelationEdgeDirection {
+    Outgoing,
+    Incoming,
 }
 
 /// Which end of the asserted edge the blob occupies. `blob_as_source` is the natural

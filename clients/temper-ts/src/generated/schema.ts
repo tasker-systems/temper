@@ -249,8 +249,8 @@ export interface paths {
          *     walk, no read surface — only its owner can append to it, read its progress, or finalize
          *     it. Home standing is checked here (fail fast) AND at finalize (authoritative — standing
          *     can change mid-upload); the allowlist is not consulted at all until the wrapper sees
-         *     the commit. Same disabled refusal as the single-request path: a session begun on an
-         *     unconfigured instance could never finalize.
+         *     the commit. Same disabled refusal as the single-request path: a session begun on a
+         *     disabled instance (no store configured, or `BLOB_ENABLED` closed it) could never finalize.
          */
         post: operations["begin_blob_upload"];
         delete?: never;
@@ -2895,6 +2895,17 @@ export interface components {
          */
         BlobRelationDirection: "blob_as_source" | "blob_as_target";
         /**
+         * @description The direction a listed edge runs relative to the blob — the relations listing's own
+         *     vocabulary (`outgoing` = the blob is the edge's source, `incoming` = the blob is the
+         *     target). Typed, not a free string (the typed-structs rule, C-C3 2026-09-04 review):
+         *     the readback's SQL CASE is the only writer, so a value outside the pair is a DB/code
+         *     disagreement and is refused at the parse boundary, never passed through. Distinct
+         *     from [`BlobRelationDirection`] — that is the ASSERT request's vocabulary (which end
+         *     of a new edge the blob occupies); this is what a LISTED edge already does.
+         * @enum {string}
+         */
+        BlobRelationEdgeDirection: "outgoing" | "incoming";
+        /**
          * @description One edge incident to a blob, as `GET /api/blobs/{id}/relations` reports it. The peer is
          *     whatever sits on the other end — a resource (with its title), a cogmap, or another blob
          *     — so `peer_table` rides along and `peer_title` is null for non-resource peers.
@@ -2903,7 +2914,7 @@ export interface components {
         BlobRelationRow: {
             /** Format: date-time */
             created: string;
-            direction: string;
+            direction: components["schemas"]["BlobRelationEdgeDirection"];
             /** Format: uuid */
             edge_id: string;
             edge_kind: components["schemas"]["EdgeKind"];
@@ -8320,7 +8331,7 @@ export interface operations {
                     "application/json": components["schemas"]["BlobSummary"][];
                 };
             };
-            /** @description Malformed home scope, or the instance has no blob store configured */
+            /** @description Malformed home scope, or the blob flow is disabled (no store configured, or BLOB_ENABLED closed it) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -8411,7 +8422,7 @@ export interface operations {
                     "application/json": components["schemas"]["BlobUploadBeginResponse"];
                 };
             };
-            /** @description Refused — unknown home anchor table, or the instance has no blob store configured */
+            /** @description Refused — unknown home anchor table, or the blob flow is disabled (no store configured, or BLOB_ENABLED closed it) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -8754,7 +8765,7 @@ export interface operations {
                     "application/json": components["schemas"]["BlobRelationAck"];
                 };
             };
-            /** @description Refused — malformed peer table or label, or the instance has no blob store configured */
+            /** @description Refused — malformed peer table or label, or the blob flow is disabled (no store configured, or BLOB_ENABLED closed it) */
             400: {
                 headers: {
                     [name: string]: unknown;

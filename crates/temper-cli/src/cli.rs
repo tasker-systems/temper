@@ -2239,8 +2239,7 @@ pub enum BlobAction {
     /// of the bytes it receives, the whole file's sha256 echoed into finalize as the
     /// integrity check.
     Put {
-        /// Path of the file to commit, or `-` for stdin (stdin commits have no filename,
-        /// so pass --filename or --content-type).
+        /// Path of the file to commit, or `-` for stdin (stdin commits require --filename).
         file: String,
         /// The home anchor: a context ref (`@me/notes`, `+team/shared`), or a bare /
         /// decorated UUID id. A name-based ref is a CONTEXT home by construction; with a
@@ -2257,7 +2256,7 @@ pub enum BlobAction {
         #[arg(long)]
         content_type: Option<String>,
         /// The filename the multipart part carries (defaults to the file's basename;
-        /// required for stdin unless --content-type is given).
+        /// required for stdin).
         #[arg(long)]
         filename: Option<String>,
     },

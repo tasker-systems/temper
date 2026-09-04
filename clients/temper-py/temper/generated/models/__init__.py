@@ -46,6 +46,7 @@ from temper.generated.models.blob_commit_response import BlobCommitResponse
 from temper.generated.models.blob_relation_ack import BlobRelationAck
 from temper.generated.models.blob_relation_assert_request import BlobRelationAssertRequest
 from temper.generated.models.blob_relation_direction import BlobRelationDirection
+from temper.generated.models.blob_relation_edge_direction import BlobRelationEdgeDirection
 from temper.generated.models.blob_relation_row import BlobRelationRow
 from temper.generated.models.blob_summary import BlobSummary
 from temper.generated.models.blob_upload_begin_request import BlobUploadBeginRequest

@@ -87,6 +87,17 @@ model: string | null, };
 export type BlobRelationDirection = "blob_as_source" | "blob_as_target";
 
 /**
+ * The direction a listed edge runs relative to the blob — the relations listing's own
+ * vocabulary (`outgoing` = the blob is the edge's source, `incoming` = the blob is the
+ * target). Typed, not a free string (the typed-structs rule, C-C3 2026-09-04 review):
+ * the readback's SQL CASE is the only writer, so a value outside the pair is a DB/code
+ * disagreement and is refused at the parse boundary, never passed through. Distinct
+ * from [`BlobRelationDirection`] — that is the ASSERT request's vocabulary (which end
+ * of a new edge the blob occupies); this is what a LISTED edge already does.
+ */
+export type BlobRelationEdgeDirection = "outgoing" | "incoming";
+
+/**
  * One edge incident to a blob, as `GET /api/blobs/{id}/relations` reports it. The peer is
  * whatever sits on the other end — a resource (with its title), a cogmap, or another blob
  * — so `peer_table` rides along and `peer_title` is null for non-resource peers.
@@ -96,7 +107,7 @@ export type BlobRelationRow = { edge_id: string,
 /**
  * `kb_resources` | `kb_cogmaps` | `kb_blobs` — spelled exactly as the DDL.
  */
-peer_table: string, peer_id: string, peer_title: string | null, edge_kind: EdgeKind, polarity: Polarity, label: string | null, direction: string, weight: number, created: string, };
+peer_table: string, peer_id: string, peer_title: string | null, edge_kind: EdgeKind, polarity: Polarity, label: string | null, direction: BlobRelationEdgeDirection, weight: number, created: string, };
 
 /**
  * One blob as the list surface reports it (`GET /api/blobs`). The list can only ever

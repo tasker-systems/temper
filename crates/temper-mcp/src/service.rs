@@ -905,9 +905,13 @@ mod tests {
 
     /// The RUNTIME half of the pair above: a closed door (unconfigured, or
     /// `BLOB_ENABLED=false` closing it deliberately) stops ADVERTISING the blob pair and
-    /// hides nothing else. Witnessed at the filter — temper-mcp has no authenticated
-    /// tool-call harness, so the one-line call site inside `list_tools` is declared, not
-    /// exercised (the N1-scrub posture: pinned at the helper, the call site is trivial).
+    /// hides nothing else. The assertion is SET-based, not count-based (C-S2,
+    /// 2026-09-04 review): a future blob tool registered but omitted from
+    /// `BLOB_TOOL_NAMES` would keep the count equal while leaving the tool advertised —
+    /// under-hiding goes red here. The one-line call site inside `list_tools` is
+    /// witnessed over the wire by `a_closed_door_hides_the_blob_pair_from_the_wire`
+    /// (tests/e2e/tests/mcp_blob_transport_e2e.rs), which rides the harness this diff
+    /// ships.
     #[test]
     fn a_closed_door_stops_advertising_the_blob_pair_and_nothing_else() {
         let all: Vec<String> = TemperMcpService::tool_router()
@@ -917,7 +921,9 @@ mod tests {
             .collect();
 
         let names = |tools: Vec<rmcp::model::Tool>| -> Vec<String> {
-            tools.into_iter().map(|t| t.name.to_string()).collect()
+            let mut names: Vec<String> = tools.into_iter().map(|t| t.name.to_string()).collect();
+            names.sort();
+            names
         };
         let open = names(advertise_blob_tools(
             TemperMcpService::tool_router().list_all(),
@@ -927,18 +933,17 @@ mod tests {
             TemperMcpService::tool_router().list_all(),
             false,
         ));
+        let mut expected_closed = all.clone();
+        for peer in BLOB_TOOL_NAMES {
+            expected_closed.retain(|n| n != peer);
+        }
+        expected_closed.sort();
 
         assert_eq!(open, all, "an open door advertises the full router");
-        for peer in BLOB_TOOL_NAMES {
-            assert!(
-                !closed.iter().any(|n| n == peer),
-                "{peer} must not be advertised on a closed door; got {closed:?}"
-            );
-        }
         assert_eq!(
-            closed.len(),
-            all.len() - BLOB_TOOL_NAMES.len(),
-            "the filter must hide ONLY the blob pair; got {closed:?}"
+            closed, expected_closed,
+            "a closed door advertises exactly the router minus the blob pair — no more, \
+             no less; got {closed:?}"
         );
     }
 

@@ -84,6 +84,7 @@ __all__ = [
     "BlobRelationAck",
     "BlobRelationAssertRequest",
     "BlobRelationDirection",
+    "BlobRelationEdgeDirection",
     "BlobRelationRow",
     "BlobSummary",
     "BlobUploadBeginRequest",
@@ -426,6 +427,7 @@ from temper.generated.models.blob_commit_response import BlobCommitResponse as B
 from temper.generated.models.blob_relation_ack import BlobRelationAck as BlobRelationAck
 from temper.generated.models.blob_relation_assert_request import BlobRelationAssertRequest as BlobRelationAssertRequest
 from temper.generated.models.blob_relation_direction import BlobRelationDirection as BlobRelationDirection
+from temper.generated.models.blob_relation_edge_direction import BlobRelationEdgeDirection as BlobRelationEdgeDirection
 from temper.generated.models.blob_relation_row import BlobRelationRow as BlobRelationRow
 from temper.generated.models.blob_summary import BlobSummary as BlobSummary
 from temper.generated.models.blob_upload_begin_request import BlobUploadBeginRequest as BlobUploadBeginRequest

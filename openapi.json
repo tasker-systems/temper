@@ -686,7 +686,7 @@
             }
           },
           "400": {
-            "description": "Malformed home scope, or the instance has no blob store configured",
+            "description": "Malformed home scope, or the blob flow is disabled (no store configured, or BLOB_ENABLED closed it)",
             "content": {
               "application/json": {
                 "schema": {
@@ -787,7 +787,7 @@
           "Blobs"
         ],
         "summary": "Begin a segmented upload — declare the home and media type, get the session id",
-        "description": "A staged session is not a blob: it has no hash yet, it appears in no list, no graph\nwalk, no read surface — only its owner can append to it, read its progress, or finalize\nit. Home standing is checked here (fail fast) AND at finalize (authoritative — standing\ncan change mid-upload); the allowlist is not consulted at all until the wrapper sees\nthe commit. Same disabled refusal as the single-request path: a session begun on an\nunconfigured instance could never finalize.",
+        "description": "A staged session is not a blob: it has no hash yet, it appears in no list, no graph\nwalk, no read surface — only its owner can append to it, read its progress, or finalize\nit. Home standing is checked here (fail fast) AND at finalize (authoritative — standing\ncan change mid-upload); the allowlist is not consulted at all until the wrapper sees\nthe commit. Same disabled refusal as the single-request path: a session begun on a\ndisabled instance (no store configured, or `BLOB_ENABLED` closed it) could never finalize.",
         "operationId": "begin_blob_upload",
         "requestBody": {
           "content": {
@@ -811,7 +811,7 @@
             }
           },
           "400": {
-            "description": "Refused — unknown home anchor table, or the instance has no blob store configured",
+            "description": "Refused — unknown home anchor table, or the blob flow is disabled (no store configured, or BLOB_ENABLED closed it)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1350,7 +1350,7 @@
             }
           },
           "400": {
-            "description": "Refused — malformed peer table or label, or the instance has no blob store configured",
+            "description": "Refused — malformed peer table or label, or the blob flow is disabled (no store configured, or BLOB_ENABLED closed it)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10276,6 +10276,14 @@
           "blob_as_target"
         ]
       },
+      "BlobRelationEdgeDirection": {
+        "type": "string",
+        "description": "The direction a listed edge runs relative to the blob — the relations listing's own\nvocabulary (`outgoing` = the blob is the edge's source, `incoming` = the blob is the\ntarget). Typed, not a free string (the typed-structs rule, C-C3 2026-09-04 review):\nthe readback's SQL CASE is the only writer, so a value outside the pair is a DB/code\ndisagreement and is refused at the parse boundary, never passed through. Distinct\nfrom [`BlobRelationDirection`] — that is the ASSERT request's vocabulary (which end\nof a new edge the blob occupies); this is what a LISTED edge already does.",
+        "enum": [
+          "outgoing",
+          "incoming"
+        ]
+      },
       "BlobRelationRow": {
         "type": "object",
         "description": "One edge incident to a blob, as `GET /api/blobs/{id}/relations` reports it. The peer is\nwhatever sits on the other end — a resource (with its title), a cogmap, or another blob\n— so `peer_table` rides along and `peer_title` is null for non-resource peers.\n`direction` is the edge listing's own vocabulary (`outgoing` = the blob is the source).",
@@ -10295,7 +10303,7 @@
             "format": "date-time"
           },
           "direction": {
-            "type": "string"
+            "$ref": "#/components/schemas/BlobRelationEdgeDirection"
           },
           "edge_id": {
             "type": "string",

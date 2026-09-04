@@ -662,7 +662,8 @@ pub async fn finalize_upload(
 
 use temper_core::types::blob::{
     BlobRelationAck as WireRelationAck, BlobRelationAssertRequest, BlobRelationDirection,
-    BlobRelationRow as WireRelationRow, BlobSummary as WireBlobSummary,
+    BlobRelationEdgeDirection as WireRelationDirection, BlobRelationRow as WireRelationRow,
+    BlobSummary as WireBlobSummary,
 };
 use temper_core::types::graph::{EdgeKind as WireEdgeKind, Polarity as WirePolarity};
 
@@ -917,7 +918,7 @@ pub async fn blob_relations(
                 edge_kind: parse_wire_edge_kind(&r.edge_kind)?,
                 polarity: parse_wire_polarity(&r.polarity)?,
                 label: r.label,
-                direction: r.direction,
+                direction: parse_wire_relation_direction(&r.direction)?,
                 weight: r.weight,
                 created: r.created,
             })
@@ -948,6 +949,22 @@ fn parse_wire_polarity(s: &str) -> ApiResult<WirePolarity> {
         "inverse" => Ok(WirePolarity::Inverse),
         other => Err(ApiError::internal_scrubbed(
             "unknown edge_polarity value in kb_edges",
+            other,
+        )),
+    }
+}
+
+/// The relations listing's direction is not a DDL enum — it is the readback's own SQL
+/// CASE literal (`outgoing`/`incoming`) — but the treatment is the same (C-C3,
+/// 2026-09-04 review): the pair is typed on the wire ([`WireRelationDirection`], the
+/// typed-structs rule), and a miss here is a readback/code disagreement, scrubbed at the
+/// F9 choke point like its siblings.
+fn parse_wire_relation_direction(s: &str) -> ApiResult<WireRelationDirection> {
+    match s {
+        "outgoing" => Ok(WireRelationDirection::Outgoing),
+        "incoming" => Ok(WireRelationDirection::Incoming),
+        other => Err(ApiError::internal_scrubbed(
+            "unknown direction value in blob relation readback",
             other,
         )),
     }

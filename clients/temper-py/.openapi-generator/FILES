@@ -62,6 +62,7 @@ temper/generated/models/blob_commit_response.py
 temper/generated/models/blob_relation_ack.py
 temper/generated/models/blob_relation_assert_request.py
 temper/generated/models/blob_relation_direction.py
+temper/generated/models/blob_relation_edge_direction.py
 temper/generated/models/blob_relation_row.py
 temper/generated/models/blob_summary.py
 temper/generated/models/blob_upload_begin_request.py

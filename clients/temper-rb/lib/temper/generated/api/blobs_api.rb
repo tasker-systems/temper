@@ -106,7 +106,7 @@ module Temper::Generated
     end
 
     # Begin a segmented upload — declare the home and media type, get the session id
-    # A staged session is not a blob: it has no hash yet, it appears in no list, no graph walk, no read surface — only its owner can append to it, read its progress, or finalize it. Home standing is checked here (fail fast) AND at finalize (authoritative — standing can change mid-upload); the allowlist is not consulted at all until the wrapper sees the commit. Same disabled refusal as the single-request path: a session begun on an unconfigured instance could never finalize.
+    # A staged session is not a blob: it has no hash yet, it appears in no list, no graph walk, no read surface — only its owner can append to it, read its progress, or finalize it. Home standing is checked here (fail fast) AND at finalize (authoritative — standing can change mid-upload); the allowlist is not consulted at all until the wrapper sees the commit. Same disabled refusal as the single-request path: a session begun on a disabled instance (no store configured, or `BLOB_ENABLED` closed it) could never finalize.
     # @param blob_upload_begin_request [BlobUploadBeginRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -117,7 +117,7 @@ module Temper::Generated
     end
 
     # Begin a segmented upload — declare the home and media type, get the session id
-    # A staged session is not a blob: it has no hash yet, it appears in no list, no graph walk, no read surface — only its owner can append to it, read its progress, or finalize it. Home standing is checked here (fail fast) AND at finalize (authoritative — standing can change mid-upload); the allowlist is not consulted at all until the wrapper sees the commit. Same disabled refusal as the single-request path: a session begun on an unconfigured instance could never finalize.
+    # A staged session is not a blob: it has no hash yet, it appears in no list, no graph walk, no read surface — only its owner can append to it, read its progress, or finalize it. Home standing is checked here (fail fast) AND at finalize (authoritative — standing can change mid-upload); the allowlist is not consulted at all until the wrapper sees the commit. Same disabled refusal as the single-request path: a session begun on a disabled instance (no store configured, or &#x60;BLOB_ENABLED&#x60; closed it) could never finalize.
     # @param blob_upload_begin_request [BlobUploadBeginRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.

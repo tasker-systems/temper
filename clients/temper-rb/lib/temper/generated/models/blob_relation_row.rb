@@ -89,7 +89,7 @@ module Temper::Generated
     def self.openapi_types
       {
         :'created' => :'Time',
-        :'direction' => :'String',
+        :'direction' => :'BlobRelationEdgeDirection',
         :'edge_id' => :'String',
         :'edge_kind' => :'EdgeKind',
         :'label' => :'String',

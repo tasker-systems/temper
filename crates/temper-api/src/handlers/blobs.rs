@@ -8,8 +8,10 @@
 //! them). The segmented path
 //! (`/api/blobs/uploads/*`) stages bytes in Postgres between begin and finalize — pre-ledger
 //! transport state, caller-private until finalized, never a blob until the hash exists. Both
-//! paths refuse with a disabled refusal when the instance has no blob store configured —
-//! absent, not broken, the `NullBroker` posture — and the read renders an invisible blob as
+//! paths refuse with the posture-chosen disabled refusal (`AppState::blob_refusal`): the
+//! credential vocabulary when the instance has no blob store configured, the `BLOB_ENABLED`
+//! vocabulary when policy closed the flow deliberately — absent, not broken, the
+//! `NullBroker` posture — and the read renders an invisible blob as
 //! 404 so a probe cannot become an existence oracle.
 
 use axum::body::{Body, Bytes};
@@ -262,8 +264,8 @@ fn parse_home_table(table: &str) -> ApiResult<AnchorTable> {
 /// walk, no read surface — only its owner can append to it, read its progress, or finalize
 /// it. Home standing is checked here (fail fast) AND at finalize (authoritative — standing
 /// can change mid-upload); the allowlist is not consulted at all until the wrapper sees
-/// the commit. Same disabled refusal as the single-request path: a session begun on an
-/// unconfigured instance could never finalize.
+/// the commit. Same disabled refusal as the single-request path: a session begun on a
+/// disabled instance (no store configured, or `BLOB_ENABLED` closed it) could never finalize.
 #[utoipa::path(
     post,
     operation_id = "begin_blob_upload",
@@ -273,7 +275,7 @@ fn parse_home_table(table: &str) -> ApiResult<AnchorTable> {
     request_body = BlobUploadBeginRequest,
     responses(
         (status = 200, description = "Upload session created", body = BlobUploadBeginResponse),
-        (status = 400, description = "Refused — unknown home anchor table, or the instance has no blob store configured", body = ErrorBody),
+        (status = 400, description = "Refused — unknown home anchor table, or the blob flow is disabled (no store configured, or BLOB_ENABLED closed it)", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 404, description = "Home not found or not readable — indistinguishable by design", body = ErrorBody),
         (status = 403, description = "Home readable but not authorable", body = ErrorBody),
@@ -484,7 +486,7 @@ pub struct BlobListQuery {
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "The caller's readable blobs, newest commit first", body = [BlobSummary]),
-        (status = 400, description = "Malformed home scope, or the instance has no blob store configured", body = ErrorBody),
+        (status = 400, description = "Malformed home scope, or the blob flow is disabled (no store configured, or BLOB_ENABLED closed it)", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
     )
 )]
@@ -526,7 +528,7 @@ pub async fn list(
     request_body = BlobRelationAssertRequest,
     responses(
         (status = 200, description = "Relation asserted (idempotent — re-asserting the same edge returns its handle)", body = BlobRelationAck),
-        (status = 400, description = "Refused — malformed peer table or label, or the instance has no blob store configured", body = ErrorBody),
+        (status = 400, description = "Refused — malformed peer table or label, or the blob flow is disabled (no store configured, or BLOB_ENABLED closed it)", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "The blob's home is readable but not authorable", body = ErrorBody),
         (status = 404, description = "Blob absent or not visible, or the peer not readable — each indistinguishable from absent by design", body = ErrorBody),

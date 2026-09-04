@@ -216,6 +216,29 @@ fn scrub_stream_error(action: &str, e: impl std::fmt::Display) -> rmcp::ErrorDat
     )
 }
 
+/// The refusal for a CLEAN-BUT-SHORT read (C-S3, 2026-09-04 review): the stream ended
+/// without an error yet delivered fewer bytes than the row declares. Same face as
+/// [`scrub_stream_error`] — the counts and any provider signal are log-only, the tool
+/// result names only the door — because the alternative is a success-shaped result that
+/// renders the row's declared length beside a truncated `content_base64` (N7's
+/// in-repo-checkable arm). A short read is a storage integrity failure, not caller
+/// input, so it stays an internal error.
+fn refuse_short_stream(action: &str, collected: usize, declared: i64) -> rmcp::ErrorData {
+    tracing::error!(
+        context = action,
+        collected,
+        declared,
+        "blob read stream ended short of the declared length (scrubbed from the tool result)"
+    );
+    rmcp::ErrorData::internal_error(
+        format!(
+            "{action}: the blob's bytes came back short of their declared length from \
+             storage — the failure detail is in the server log"
+        ),
+        None,
+    )
+}
+
 /// The configured store + config pair every blob action needs, or the shared disabled
 /// refusal (`blob_service::blob_disabled` — spelled once, every surface hears the same
 /// voice). Absent, not broken: the `NullBroker` posture.
@@ -300,6 +323,9 @@ async fn read_blob(
         .map_err(|e| scrub_stream_error(ACTION, e))?
     {
         bytes.extend_from_slice(&chunk);
+    }
+    if bytes.len() != blob.content_bytes as usize {
+        return Err(refuse_short_stream(ACTION, bytes.len(), blob.content_bytes));
     }
 
     let result = BlobReadResult {
@@ -679,6 +705,31 @@ mod tests {
             err.code,
             rmcp::model::ErrorCode::INTERNAL_ERROR,
             "a mid-stream failure stays a visible internal error — never a success"
+        );
+    }
+
+    /// C-S3 (2026-09-04 review): a clean-but-short provider stream must never yield a
+    /// declared length beside a truncated base64 body — the length mismatch refusals,
+    /// scrubbed to the door, the counts log-only. FAILS IF: the mismatch renders as a
+    /// success (the result carrying `content_bytes` and a short `content_base64`), or
+    /// the scrub leaks more than the door's static sentence.
+    #[test]
+    fn a_clean_but_short_stream_refuses_instead_of_returning_the_declared_length() {
+        let err = refuse_short_stream("blob_read", 3, 10);
+
+        let msg = err.message;
+        assert!(
+            !msg.contains("3") && !msg.contains("10"),
+            "the counts are log-only, the tool result names only the door: {msg}"
+        );
+        assert!(
+            msg.contains("blob_read") && msg.contains("short of their declared length"),
+            "the refusal names the door and the failure class: {msg}"
+        );
+        assert_eq!(
+            err.code,
+            rmcp::model::ErrorCode::INTERNAL_ERROR,
+            "a short read stays a visible internal error — never a success"
         );
     }
 

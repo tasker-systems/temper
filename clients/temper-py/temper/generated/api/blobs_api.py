@@ -385,7 +385,7 @@ class BlobsApi:
     ) -> BlobUploadBeginResponse:
         """Begin a segmented upload — declare the home and media type, get the session id
 
-        A staged session is not a blob: it has no hash yet, it appears in no list, no graph walk, no read surface — only its owner can append to it, read its progress, or finalize it. Home standing is checked here (fail fast) AND at finalize (authoritative — standing can change mid-upload); the allowlist is not consulted at all until the wrapper sees the commit. Same disabled refusal as the single-request path: a session begun on an unconfigured instance could never finalize.
+        A staged session is not a blob: it has no hash yet, it appears in no list, no graph walk, no read surface — only its owner can append to it, read its progress, or finalize it. Home standing is checked here (fail fast) AND at finalize (authoritative — standing can change mid-upload); the allowlist is not consulted at all until the wrapper sees the commit. Same disabled refusal as the single-request path: a session begun on a disabled instance (no store configured, or `BLOB_ENABLED` closed it) could never finalize.
 
         :param blob_upload_begin_request: (required)
         :type blob_upload_begin_request: BlobUploadBeginRequest
@@ -460,7 +460,7 @@ class BlobsApi:
     ) -> ApiResponse[BlobUploadBeginResponse]:
         """Begin a segmented upload — declare the home and media type, get the session id
 
-        A staged session is not a blob: it has no hash yet, it appears in no list, no graph walk, no read surface — only its owner can append to it, read its progress, or finalize it. Home standing is checked here (fail fast) AND at finalize (authoritative — standing can change mid-upload); the allowlist is not consulted at all until the wrapper sees the commit. Same disabled refusal as the single-request path: a session begun on an unconfigured instance could never finalize.
+        A staged session is not a blob: it has no hash yet, it appears in no list, no graph walk, no read surface — only its owner can append to it, read its progress, or finalize it. Home standing is checked here (fail fast) AND at finalize (authoritative — standing can change mid-upload); the allowlist is not consulted at all until the wrapper sees the commit. Same disabled refusal as the single-request path: a session begun on a disabled instance (no store configured, or `BLOB_ENABLED` closed it) could never finalize.
 
         :param blob_upload_begin_request: (required)
         :type blob_upload_begin_request: BlobUploadBeginRequest
@@ -535,7 +535,7 @@ class BlobsApi:
     ) -> RESTResponseType:
         """Begin a segmented upload — declare the home and media type, get the session id
 
-        A staged session is not a blob: it has no hash yet, it appears in no list, no graph walk, no read surface — only its owner can append to it, read its progress, or finalize it. Home standing is checked here (fail fast) AND at finalize (authoritative — standing can change mid-upload); the allowlist is not consulted at all until the wrapper sees the commit. Same disabled refusal as the single-request path: a session begun on an unconfigured instance could never finalize.
+        A staged session is not a blob: it has no hash yet, it appears in no list, no graph walk, no read surface — only its owner can append to it, read its progress, or finalize it. Home standing is checked here (fail fast) AND at finalize (authoritative — standing can change mid-upload); the allowlist is not consulted at all until the wrapper sees the commit. Same disabled refusal as the single-request path: a session begun on a disabled instance (no store configured, or `BLOB_ENABLED` closed it) could never finalize.
 
         :param blob_upload_begin_request: (required)
         :type blob_upload_begin_request: BlobUploadBeginRequest

@@ -33,11 +33,15 @@ use temper_services::auth_config::{AuthConfig, AuthMode};
 use temper_services::config::ApiConfig;
 use temper_services::state::{AppState, JwksKeyStore};
 
-/// Spawn the MCP router as its own server, sharing the harness pool + auth config, with the
-/// blob flow live (in-memory store — the same seam `common::setup_with_blob_store` uses).
+/// Spawn the MCP router as its own server, sharing the harness pool + auth config. With a
+/// config, the blob flow is live (in-memory store — the same seam
+/// `common::setup_with_blob_store` uses); with `None`, the door is CLOSED at the same
+/// wiring the deployment uses (`blob: None`, `blob_disabled_by_policy: false` — the
+/// unconfigured posture, whose refusal voice is `AppState::blob_refusal`'s credential
+/// vocabulary).
 async fn spawn_mcp_server(
     pool: sqlx::PgPool,
-    blob_config: temper_services::config::BlobConfig,
+    blob_config: Option<temper_services::config::BlobConfig>,
 ) -> std::net::SocketAddr {
     let decoding_key =
         jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("fixtures/test_rsa.pub"))
@@ -63,14 +67,16 @@ async fn spawn_mcp_server(
         slack_link: None,
         slack_mint_secret: None,
         rate_limit: None,
-        blob: Some(blob_config),
+        blob: blob_config,
         blob_disabled_by_policy: false,
     };
 
     let mut api_state = AppState::new(pool, jwks_store, api_config);
-    api_state.blob_store = Some(std::sync::Arc::new(
-        temper_substrate::blob_store::InMemoryBlobStore::default(),
-    ));
+    if api_state.config.blob.is_some() {
+        api_state.blob_store = Some(std::sync::Arc::new(
+            temper_substrate::blob_store::InMemoryBlobStore::default(),
+        ));
+    }
 
     let mcp_config = McpConfig {
         mcp_base_url: "http://mcp.test".to_string(),
@@ -168,7 +174,7 @@ async fn blob_tools_survive_the_real_transport_byte_for_byte(pool: sqlx::PgPool)
 
     // The MCP router as its own deployment, blob flow live.
     let blob_config = app_blob_config();
-    let mcp_addr = spawn_mcp_server(app.pool.clone(), blob_config).await;
+    let mcp_addr = spawn_mcp_server(app.pool.clone(), Some(blob_config)).await;
 
     // A conformant client, over real HTTP, with the harness token as the bearer. The client
     // is rmcp's OWN reqwest (aliased `reqwest13` — the version its `StreamableHttpClient`
@@ -356,7 +362,7 @@ async fn the_mcp_commit_door_refuses_over_threshold_bytes(pool: sqlx::PgPool) {
     // One MCP server with a deliberately tiny threshold — the refusal must name it.
     let mut blob_config = app_blob_config();
     blob_config.single_request_max_bytes = 1024;
-    let mcp_addr = spawn_mcp_server(app.pool.clone(), blob_config).await;
+    let mcp_addr = spawn_mcp_server(app.pool.clone(), Some(blob_config)).await;
     let (service, peer) = connect_client(mcp_addr, &app.token).await;
 
     let over_threshold = vec![9u8; 4096]; // 4× the threshold
@@ -384,6 +390,83 @@ async fn the_mcp_commit_door_refuses_over_threshold_bytes(pool: sqlx::PgPool) {
     );
 
     service.cancel().await.ok();
+}
+
+/// C-S1 (2026-09-04 review): the closed-door wiring — `advertise_blob_tools(…,
+/// config.blob.is_some())` inside `list_tools` — was unwitnessed at its only live call
+/// site: the byte-for-byte witness above runs an OPEN server, so the wiring line could
+/// drift green. This rides the REAL transport with `blob: None` (+ `blob_disabled_by_policy:
+/// false`, so the posture is the unconfigured one and the refusal voice is
+/// `AppState::blob_refusal`'s credential vocabulary): tools/list OMITS the blob pair and
+/// hides nothing else — set-compared against an open server on the same static router, the
+/// wire face of the unit witness — and tools/call on the hidden door still answers, with
+/// the typed refusal. FAILS IF: the closed server advertises a blob tool, hides anything
+/// beyond the pair, or answers a blob call with anything but the refusal.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_closed_door_hides_the_blob_pair_from_the_wire(pool: sqlx::PgPool) {
+    let app = common::setup_with_blob_store(pool).await;
+
+    // Same router, two postures: the open server supplies the advertisement baseline, so
+    // the closed server's list is compared against the LIVE tool set, not a hand-copied
+    // one (under-hiding — a new blob tool omitted from the hide list — goes red here too).
+    let open_addr = spawn_mcp_server(app.pool.clone(), Some(app_blob_config())).await;
+    let closed_addr = spawn_mcp_server(app.pool.clone(), None).await;
+    let (open_service, open_peer) = connect_client(open_addr, &app.token).await;
+    let (closed_service, closed_peer) = connect_client(closed_addr, &app.token).await;
+
+    let listed_names = |peer: &ServerSink| {
+        let peer = peer.clone();
+        async move {
+            let tools = peer
+                .list_tools(Some(PaginatedRequestParams::default()))
+                .await
+                .expect("tools/list over the deployed transport");
+            let mut names: Vec<String> = tools.tools.iter().map(|t| t.name.to_string()).collect();
+            names.sort();
+            names
+        }
+    };
+    let open_names = listed_names(&open_peer).await;
+    let closed_names = listed_names(&closed_peer).await;
+
+    let mut expected_closed = open_names.clone();
+    for hidden in ["blob_read", "blob_manage"] {
+        let before = expected_closed.len();
+        expected_closed.retain(|n| n != hidden);
+        assert!(
+            expected_closed.len() < before,
+            "{hidden} must be advertised on the open door for this baseline to mean anything: \
+             {open_names:?}"
+        );
+    }
+    assert_eq!(
+        closed_names, expected_closed,
+        "a closed door advertises exactly the router minus the blob pair — no more, no less; \
+         got {closed_names:?}"
+    );
+
+    // Existence is untouched: tools/call on the hidden door still answers — with the typed
+    // refusal, in the posture's own vocabulary (credentials, not the BLOB_ENABLED knob —
+    // that sentence belongs to the policy-closed posture).
+    let err = call_tool_err(
+        &closed_peer,
+        "blob_read",
+        serde_json::json!({ "action": "list" }),
+    )
+    .await;
+    assert!(
+        err.message.contains("no blob store configured"),
+        "the refusal speaks the unconfigured vocabulary: {}",
+        err.message
+    );
+    assert!(
+        !err.message.contains("BLOB_ENABLED"),
+        "the unconfigured posture must not borrow the policy posture's sentence: {}",
+        err.message
+    );
+
+    open_service.cancel().await.ok();
+    closed_service.cancel().await.ok();
 }
 
 /// The same D9 config the API-side harness uses, so both servers speak one policy.

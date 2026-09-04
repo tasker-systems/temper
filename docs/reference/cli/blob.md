@@ -35,7 +35,7 @@ Usage: temper blob put [OPTIONS] --home <HOME> <FILE>
 
 Arguments:
   <FILE>
-          Path of the file to commit, or `-` for stdin (stdin commits have no filename, so pass --filename or --content-type)
+          Path of the file to commit, or `-` for stdin (stdin commits require --filename)
 
 Options:
       --home <HOME>
@@ -63,7 +63,7 @@ Options:
           Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
 
       --filename <FILENAME>
-          The filename the multipart part carries (defaults to the file's basename; required for stdin unless --content-type is given)
+          The filename the multipart part carries (defaults to the file's basename; required for stdin)
 
   -h, --help
           Print help (see a summary with '-h')

@@ -21,6 +21,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, StrictStr
 from typing import Any, ClassVar, Dict, List, Optional, Union
 from uuid import UUID
+from temper.generated.models.blob_relation_edge_direction import BlobRelationEdgeDirection
 from temper.generated.models.edge_kind import EdgeKind
 from temper.generated.models.polarity import Polarity
 from typing import Optional, Set
@@ -32,7 +33,7 @@ class BlobRelationRow(BaseModel):
     One edge incident to a blob, as `GET /api/blobs/{id}/relations` reports it. The peer is whatever sits on the other end — a resource (with its title), a cogmap, or another blob — so `peer_table` rides along and `peer_title` is null for non-resource peers. `direction` is the edge listing's own vocabulary (`outgoing` = the blob is the source).
     """ # noqa: E501
     created: datetime
-    direction: StrictStr
+    direction: BlobRelationEdgeDirection
     edge_id: UUID
     edge_kind: EdgeKind
     label: Optional[StrictStr] = None
