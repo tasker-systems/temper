@@ -9,13 +9,14 @@ describe("buildAsMetadata", () => {
       issuer: "https://saml.example.com",
       authorization_endpoint: "https://saml.example.com/oauth/authorize",
       token_endpoint: "https://saml.example.com/oauth/token",
-      registration_endpoint: "https://saml.example.com/oauth/register",
+      registration_endpoint: "https://saml.example.com/oauth/clients",
       jwks_uri: "https://saml.example.com/oauth/jwks",
       scopes_supported: ["openid", "profile", "email", "offline_access"],
       response_types_supported: ["code"],
       grant_types_supported: ["authorization_code", "refresh_token", "client_credentials"],
       code_challenge_methods_supported: ["S256"],
       token_endpoint_auth_methods_supported: ["none", "client_secret_basic", "client_secret_post"],
+      client_id_metadata_document_supported: false,
     });
   });
 
@@ -37,11 +38,18 @@ describe("buildAsMetadata", () => {
     expect(meta.authorization_endpoint).toBe("https://saml.example.com/oauth/authorize");
   });
 
-  it("advertises the DCR registration endpoint so MCP clients can complete the handshake", () => {
-    // MCP clients (Claude Code/Desktop) require dynamic client registration and abort the OAuth
-    // walk if the AS metadata omits registration_endpoint — the bug this field fixes (issue #293).
+  it("points registration_endpoint at the real DCR handler, not the MCP thin proxy", () => {
+    // `/oauth/register` routes to the MCP service's thin Auth0-echo proxy (vercel.json
+    // catch-all), which mints no client — a Connect DCR against it cannot persist one. AS mode
+    // advertises its own registration door at `/oauth/clients` (api/oauth/clients.ts), while
+    // the Auth0-fronted instances keep `/oauth/register` (asserted below). MCP clients on SAML
+    // instances DCR through the new door too — its MCP-compat class returns the same
+    // pre-registered client_id the proxy did (tests/oauth/register.test.ts).
     const meta = buildAsMetadata("https://saml.example.com/");
-    expect(meta.registration_endpoint).toBe("https://saml.example.com/oauth/register");
+    expect(meta.registration_endpoint).toBe("https://saml.example.com/oauth/clients");
+    // Vercel Connect reads this flag to decide whether CIMD is available; an absent field is
+    // not an honest `no`, so AS mode declares it false while CIMD is unsupported.
+    expect(meta.client_id_metadata_document_supported).toBe(false);
   });
 
   it("advertises offline_access so conformant clients get a refresh token", () => {
