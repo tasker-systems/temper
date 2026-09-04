@@ -40,6 +40,7 @@ module Temper::Generated
     # The resource whose facet property is being set — a pre-resolved id.
     attr_accessor :resource
 
+    # The facet's typed value payload — an **object** of `key` → value marks; one property row per inner key. A map, not a bare `Value`, so the published schema says `object` and a scalar payload is refused at this boundary rather than surfacing as a database error.
     attr_accessor :values
 
     # Relative weight of the facet; defaults to `1.0` when omitted, matching the MCP tool and CLI (both default it) so a raw API caller need not supply it.
@@ -104,7 +105,7 @@ module Temper::Generated
         :'rationale' => :'String',
         :'reasoning' => :'String',
         :'resource' => :'String',
-        :'values' => :'Object',
+        :'values' => :'Hash<String, Object>',
         :'weight' => :'Float'
       }
     end
@@ -119,7 +120,6 @@ module Temper::Generated
         :'persona',
         :'rationale',
         :'reasoning',
-        :'values',
       ])
     end
 
@@ -174,7 +174,9 @@ module Temper::Generated
       end
 
       if attributes.key?(:'values')
-        self.values = attributes[:'values']
+        if (value = attributes[:'values']).is_a?(Hash)
+          self.values = value
+        end
       else
         self.values = nil
       end
@@ -193,6 +195,10 @@ module Temper::Generated
         invalid_properties.push('invalid value for "resource", resource cannot be nil.')
       end
 
+      if @values.nil?
+        invalid_properties.push('invalid value for "values", values cannot be nil.')
+      end
+
       invalid_properties
     end
 
@@ -201,6 +207,7 @@ module Temper::Generated
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
       return false if @resource.nil?
+      return false if @values.nil?
       true
     end
 
@@ -212,6 +219,16 @@ module Temper::Generated
       end
 
       @resource = resource
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] values Value to be assigned
+    def values=(values)
+      if values.nil?
+        fail ArgumentError, 'values cannot be nil'
+      end
+
+      @values = values
     end
 
     # Checks equality by comparing each attribute.

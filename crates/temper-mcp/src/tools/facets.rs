@@ -27,8 +27,11 @@ use crate::service::TemperMcpService;
 pub struct FacetSetInput {
     /// Resource ref: a UUID or the decorated `slug-<uuid>` form.
     pub resource: String,
-    /// The facet's typed value payload.
-    pub values: serde_json::Value,
+    /// The facet's typed value payload — an **object** of `key` → value marks; one property row
+    /// per inner key. A map, not a bare `Value`, so the advertised schema says `object` and a
+    /// scalar payload is rejected here rather than discovered as a database error (the steward
+    /// runs of 2026-09 sent a string eight times across two ticks, each retry a full re-read).
+    pub values: serde_json::Map<String, serde_json::Value>,
     /// Facet salience/confidence weight (0.0-1.0 by convention). Defaults to 1.0.
     pub weight: Option<f64>,
     /// Per-act correlation (`invocation_id`) + discrete agent authorship. Flattened top-level
@@ -88,7 +91,7 @@ pub async fn facet_set(
 
     let cmd = SetFacet {
         owner: PropertyOwner::resource(resource),
-        values: input.values,
+        values: serde_json::Value::Object(input.values),
         weight: input.weight.unwrap_or(1.0),
         act,
         origin: Surface::Mcp,
@@ -113,8 +116,9 @@ pub async fn facet_set(
 pub struct EdgeFacetSetInput {
     /// The relationship's edge handle (the UUID `edge_assert` returned).
     pub edge_handle: Uuid,
-    /// The facet's typed value payload.
-    pub values: serde_json::Value,
+    /// The facet's typed value payload — an **object** of `key` → value marks; same constraint as
+    /// [`FacetSetInput::values`].
+    pub values: serde_json::Map<String, serde_json::Value>,
     /// Facet salience/confidence weight (0.0-1.0 by convention). Defaults to 1.0.
     pub weight: Option<f64>,
     /// Per-act correlation (`invocation_id`) + discrete agent authorship. Flattened top-level
@@ -159,7 +163,7 @@ pub async fn edge_facet_set(
 
     let cmd = SetFacet {
         owner: PropertyOwner::edge(EdgeId::from(input.edge_handle)),
-        values: input.values,
+        values: serde_json::Value::Object(input.values),
         weight: input.weight.unwrap_or(1.0),
         act,
         origin: Surface::Mcp,
@@ -260,8 +264,9 @@ pub struct FacetSetUnifiedInput {
     /// The relationship's edge handle (UUID from `assert_relationship`). Required when `target` is `edge`; ignored otherwise.
     #[serde(default)]
     pub edge_handle: Option<Uuid>,
-    /// The facet's typed value payload.
-    pub values: serde_json::Value,
+    /// The facet's typed value payload — an **object** of `key` → value marks; same constraint as
+    /// [`FacetSetInput::values`].
+    pub values: serde_json::Map<String, serde_json::Value>,
     /// Facet salience/confidence weight (0.0-1.0 by convention). Defaults to 1.0.
     #[serde(default)]
     pub weight: Option<f64>,
@@ -385,7 +390,10 @@ mod tests {
         });
         let input: FacetSetInput = serde_json::from_value(json).unwrap();
         assert_eq!(input.resource, "019e84ab-26ba-7560-9d34-c60d74a9fbe2");
-        assert_eq!(input.values, serde_json::json!({"summary": "example"}));
+        assert_eq!(
+            serde_json::Value::Object(input.values),
+            serde_json::json!({"summary": "example"})
+        );
         assert_eq!(input.weight, Some(0.5));
         assert!(input.act.into_act_context().expect("assembles").is_empty());
     }

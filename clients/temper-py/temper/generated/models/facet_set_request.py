@@ -37,7 +37,7 @@ class FacetSetRequest(BaseModel):
     rationale: Optional[StrictStr] = Field(default=None, description="Structured rationale for the act. Authorship field — requires `confidence`.")
     reasoning: Optional[StrictStr] = Field(default=None, description="Free-text reasoning for the act. Authorship field — requires `confidence`.")
     resource: UUID = Field(description="The resource whose facet property is being set — a pre-resolved id.")
-    values: Optional[Any]
+    values: Dict[str, Any] = Field(description="The facet's typed value payload — an **object** of `key` → value marks; one property row per inner key. A map, not a bare `Value`, so the published schema says `object` and a scalar payload is refused at this boundary rather than surfacing as a database error.")
     weight: Optional[Union[StrictFloat, StrictInt]] = Field(default=None, description="Relative weight of the facet; defaults to `1.0` when omitted, matching the MCP tool and CLI (both default it) so a raw API caller need not supply it.")
     __properties: ClassVar[List[str]] = ["confidence", "correlation_id", "invocation_id", "model", "persona", "rationale", "reasoning", "resource", "values", "weight"]
 
@@ -114,11 +114,6 @@ class FacetSetRequest(BaseModel):
         # and model_fields_set contains the field
         if self.reasoning is None and "reasoning" in self.model_fields_set:
             _dict['reasoning'] = None
-
-        # set to None if values (nullable) is None
-        # and model_fields_set contains the field
-        if self.values is None and "values" in self.model_fields_set:
-            _dict['values'] = None
 
         return _dict
 

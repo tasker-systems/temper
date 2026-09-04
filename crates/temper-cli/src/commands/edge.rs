@@ -7,7 +7,6 @@ use crate::cli::{CliEdgeKind, CliPolarity, EdgeAction};
 use crate::error::Result;
 use crate::format::OutputFormat;
 use crate::output;
-use temper_core::error::TemperError;
 use temper_core::types::facet_requests::EdgeFacetSetRequest;
 use temper_core::types::graph::{EdgeKind, Polarity};
 use temper_core::types::relationship_requests::{
@@ -142,8 +141,7 @@ pub fn run(action: EdgeAction, fmt: OutputFormat) -> Result<()> {
         } => {
             // The values payload is caller-supplied JSON; parse it here so a malformed body is a
             // local error with the offending text, not a 400 from the server.
-            let values: serde_json::Value = serde_json::from_str(&values)
-                .map_err(|e| TemperError::Config(format!("--values must be valid JSON: {e}")))?;
+            let values = crate::commands::facet::parse_values_object(&values)?;
             let req = EdgeFacetSetRequest {
                 values,
                 weight,
