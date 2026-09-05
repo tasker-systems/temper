@@ -177,6 +177,7 @@ async fn goal_reassignment_leaves_session_advances_edge_untouched(pool: PgPool) 
         .assert_relationship(temper_workflow::operations::AssertRelationship {
             source: session,
             target: task,
+            target_table: Default::default(),
             edge_kind: temper_core::types::graph::EdgeKind::LeadsTo,
             polarity: temper_core::types::graph::Polarity::Forward,
             label: "advances".to_string(),

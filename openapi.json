@@ -9835,7 +9835,11 @@
               },
               "target": {
                 "$ref": "#/components/schemas/ResourceId",
-                "description": "Target resource — a pre-resolved id (both endpoints are resolved now)."
+                "description": "The target's id: a `kb_resources.id` when `target_table` is `resource`\n(the default), a `kb_blobs.id` when it is `blob`."
+              },
+              "target_table": {
+                "$ref": "#/components/schemas/RelationshipTarget",
+                "description": "Which table `target` addresses. Defaults to `resource`; `blob` points\nthe edge at a binary blob the caller can read (task 01a06ee1)."
               },
               "weight": {
                 "type": "number",
@@ -10278,7 +10282,7 @@
       },
       "BlobRelationEdgeDirection": {
         "type": "string",
-        "description": "The direction a listed edge runs relative to the blob — the relations listing's own\nvocabulary (`outgoing` = the blob is the edge's source, `incoming` = the blob is the\ntarget). Typed, not a free string (the typed-structs rule, C-C3 2026-09-04 review):\nthe readback's SQL CASE is the only writer, so a value outside the pair is a DB/code\ndisagreement and is refused at the parse boundary, never passed through. Distinct\nfrom [`BlobRelationDirection`] — that is the ASSERT request's vocabulary (which end\nof a new edge the blob occupies); this is what a LISTED edge already does.",
+        "description": "The direction a listed edge runs relative to the blob — the relations listing's own\nvocabulary (`outgoing` = the blob is the edge's source, `incoming` = the blob is the\ntarget). Typed, not a free string (the typed-structs rule, C-C3 2026-09-04 review):\nthe readback's SQL CASE is the only writer, so a value outside the pair is a DB/code\ndisagreement and is refused at the parse boundary, never passed through. Distinct\nfrom [`BlobRelationDirection`] — that is the ASSERT request's vocabulary (which end\nof a new edge the blob occupies); this is what a LISTED edge already does.\n\nIts ts-rs export owns a PER-TYPE file, deliberately: this is the one core blob type a\ntemper-workflow wire type's transitive closure reaches (through `GraphEdgeRow`), and a\nts-rs pass truncates every file its closure touches. Exporting into `blob.ts` let the\nworkflow pass truncate the file to this one type, silently dropping the other eleven\n(found by review 2026-09-05). A per-type file is single-owner, so the truncation is a\nno-op — the `EdgeId.ts` precedent.",
         "enum": [
           "outgoing",
           "incoming"
@@ -12474,12 +12478,11 @@
       },
       "GraphEdgeRow": {
         "type": "object",
-        "description": "Edge listing row — mirrors the `graph_resource_edges()` SQL function.",
+        "description": "Edge listing row — the `/edges` handler's response body. The peer is\npolymorphic (the 2026-09-02 S6 deferral, landed): a resource (title + slug\npresent) or a blob (addressed by bare id alone — a blob has no title, and\nno slug, so no decorated form). This is the edge LISTING's face only; the\nwalk surfaces stay node-typed and never materialize a blob.",
         "required": [
           "edge_id",
-          "peer_resource_id",
-          "peer_title",
-          "peer_slug",
+          "peer_table",
+          "peer_id",
           "edge_kind",
           "polarity",
           "label",
@@ -12493,7 +12496,8 @@
             "format": "date-time"
           },
           "direction": {
-            "type": "string"
+            "$ref": "#/components/schemas/BlobRelationEdgeDirection",
+            "description": "The edge listing's own vocabulary (`outgoing` = the queried resource is\nthe source), typed — never a bare string (C-C3, 2026-09-04 review)."
           },
           "edge_id": {
             "$ref": "#/components/schemas/EdgeId"
@@ -12504,14 +12508,28 @@
           "label": {
             "type": "string"
           },
-          "peer_resource_id": {
-            "$ref": "#/components/schemas/ResourceId"
+          "peer_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The peer's id — a `kb_resources.id` or a `kb_blobs.id` per `peer_table`."
           },
           "peer_slug": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Slug derived from the peer title; `None` for a blob peer."
+          },
+          "peer_table": {
+            "type": "string",
+            "description": "`kb_resources` | `kb_blobs` — spelled exactly as the DDL.\nCogmap-ended edges are not rendered by this view (declared scope)."
           },
           "peer_title": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The peer resource's title; `None` for a blob peer."
           },
           "polarity": {
             "$ref": "#/components/schemas/Polarity"
@@ -15189,6 +15207,14 @@
             "format": "uuid"
           }
         }
+      },
+      "RelationshipTarget": {
+        "type": "string",
+        "description": "Which table the asserted edge's TARGET endpoint lives in. `resource` is the\nincumbent and the serde default, so every existing payload is unchanged;\n`blob` is the D3 pointing act — a resource names a blob it can READ as its\nsource doc / evidence / figure, with the edge homed in the SOURCE's home\n(the same mechanism resource→resource asserts use: point at what you can\nsee). The SOURCE is always a resource — blobs assert through `blob relate`,\nwhose home story is the blob's own. Typed, never a free string: a malformed\nvalue must refuse naming the two admissible values (the\n`BlobRelationDirection` rule).",
+        "enum": [
+          "resource",
+          "blob"
+        ]
       },
       "RemoveMemberOutcome": {
         "type": "object",

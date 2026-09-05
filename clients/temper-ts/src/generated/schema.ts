@@ -2612,8 +2612,16 @@ export interface components {
             polarity: components["schemas"]["Polarity"];
             /** @description Source resource — a pre-resolved id (both endpoints are resolved now). */
             source: components["schemas"]["ResourceId"];
-            /** @description Target resource — a pre-resolved id (both endpoints are resolved now). */
+            /**
+             * @description The target's id: a `kb_resources.id` when `target_table` is `resource`
+             *     (the default), a `kb_blobs.id` when it is `blob`.
+             */
             target: components["schemas"]["ResourceId"];
+            /**
+             * @description Which table `target` addresses. Defaults to `resource`; `blob` points
+             *     the edge at a binary blob the caller can read (task 01a06ee1).
+             */
+            target_table?: components["schemas"]["RelationshipTarget"];
             /** Format: double */
             weight: number;
         };
@@ -2902,6 +2910,13 @@ export interface components {
          *     disagreement and is refused at the parse boundary, never passed through. Distinct
          *     from [`BlobRelationDirection`] — that is the ASSERT request's vocabulary (which end
          *     of a new edge the blob occupies); this is what a LISTED edge already does.
+         *
+         *     Its ts-rs export owns a PER-TYPE file, deliberately: this is the one core blob type a
+         *     temper-workflow wire type's transitive closure reaches (through `GraphEdgeRow`), and a
+         *     ts-rs pass truncates every file its closure touches. Exporting into `blob.ts` let the
+         *     workflow pass truncate the file to this one type, silently dropping the other eleven
+         *     (found by review 2026-09-05). A per-type file is single-owner, so the truncation is a
+         *     no-op — the `EdgeId.ts` precedent.
          * @enum {string}
          */
         BlobRelationEdgeDirection: "outgoing" | "incoming";
@@ -4429,17 +4444,38 @@ export interface components {
             /** @description `true` when this call inserted a fresh grant; `false` when it updated an existing one. */
             granted: boolean;
         };
-        /** @description Edge listing row — mirrors the `graph_resource_edges()` SQL function. */
+        /**
+         * @description Edge listing row — the `/edges` handler's response body. The peer is
+         *     polymorphic (the 2026-09-02 S6 deferral, landed): a resource (title + slug
+         *     present) or a blob (addressed by bare id alone — a blob has no title, and
+         *     no slug, so no decorated form). This is the edge LISTING's face only; the
+         *     walk surfaces stay node-typed and never materialize a blob.
+         */
         GraphEdgeRow: {
             /** Format: date-time */
             created: string;
-            direction: string;
+            /**
+             * @description The edge listing's own vocabulary (`outgoing` = the queried resource is
+             *     the source), typed — never a bare string (C-C3, 2026-09-04 review).
+             */
+            direction: components["schemas"]["BlobRelationEdgeDirection"];
             edge_id: components["schemas"]["EdgeId"];
             edge_kind: components["schemas"]["EdgeKind"];
             label: string;
-            peer_resource_id: components["schemas"]["ResourceId"];
-            peer_slug: string;
-            peer_title: string;
+            /**
+             * Format: uuid
+             * @description The peer's id — a `kb_resources.id` or a `kb_blobs.id` per `peer_table`.
+             */
+            peer_id: string;
+            /** @description Slug derived from the peer title; `None` for a blob peer. */
+            peer_slug?: string | null;
+            /**
+             * @description `kb_resources` | `kb_blobs` — spelled exactly as the DDL.
+             *     Cogmap-ended edges are not rendered by this view (declared scope).
+             */
+            peer_table: string;
+            /** @description The peer resource's title; `None` for a blob peer. */
+            peer_title?: string | null;
             polarity: components["schemas"]["Polarity"];
             /** Format: double */
             weight: number;
@@ -5944,6 +5980,19 @@ export interface components {
             /** Format: uuid */
             edge_handle: string;
         };
+        /**
+         * @description Which table the asserted edge's TARGET endpoint lives in. `resource` is the
+         *     incumbent and the serde default, so every existing payload is unchanged;
+         *     `blob` is the D3 pointing act — a resource names a blob it can READ as its
+         *     source doc / evidence / figure, with the edge homed in the SOURCE's home
+         *     (the same mechanism resource→resource asserts use: point at what you can
+         *     see). The SOURCE is always a resource — blobs assert through `blob relate`,
+         *     whose home story is the blob's own. Typed, never a free string: a malformed
+         *     value must refuse naming the two admissible values (the
+         *     `BlobRelationDirection` rule).
+         * @enum {string}
+         */
+        RelationshipTarget: "resource" | "blob";
         /**
          * @description Response to a member removal (or self-leave): the removal happened; this
          *     reports the residual owned-resource reach so the caller can hand it off.

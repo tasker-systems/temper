@@ -195,6 +195,7 @@ async fn retype_and_reweight_under_invocation_stamp_the_edge_acts(pool: PgPool) 
         .assert_relationship(AssertRelationship {
             source: src,
             target: tgt,
+            target_table: Default::default(),
             edge_kind: EdgeKind::Near,
             polarity: Polarity::Forward,
             label: "relates".to_string(),

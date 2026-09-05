@@ -149,6 +149,7 @@ async fn authored_assert_under_invocation_stamps_the_edge_act(pool: PgPool) {
         .assert_relationship(AssertRelationship {
             source: src,
             target: tgt,
+            target_table: Default::default(),
             edge_kind: temper_core::types::graph::EdgeKind::Near,
             polarity: temper_core::types::graph::Polarity::Forward,
             label: "relates".to_string(),

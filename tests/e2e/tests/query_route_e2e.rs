@@ -346,6 +346,7 @@ async fn a_walk_seeded_by_a_find_returns_its_provenance_through_the_route(pool: 
         .assert(&AssertRelationshipRequest {
             source: primer.into(),
             target: sourdough.into(),
+            target_table: Default::default(),
             edge_kind: EdgeKind::Contains,
             polarity: Polarity::Inverse,
             label: "digresses-to".to_string(),

@@ -14,10 +14,11 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # Edge listing row — mirrors the `graph_resource_edges()` SQL function.
+  # Edge listing row — the `/edges` handler's response body. The peer is polymorphic (the 2026-09-02 S6 deferral, landed): a resource (title + slug present) or a blob (addressed by bare id alone — a blob has no title, and no slug, so no decorated form). This is the edge LISTING's face only; the walk surfaces stay node-typed and never materialize a blob.
   class GraphEdgeRow < ApiModelBase
     attr_accessor :created
 
+    # The edge listing's own vocabulary (`outgoing` = the queried resource is the source), typed — never a bare string (C-C3, 2026-09-04 review).
     attr_accessor :direction
 
     # A `kb_edges.id` value — a declared relationship assertion.  Returned by `Backend::assert_relationship` and fed back into retype/reweight/fold. Post-WS6-flip there is a single substrate-backed backend, so this is always a real `kb_edges` row id (not a backend-opaque correlation handle).
@@ -27,11 +28,16 @@ module Temper::Generated
 
     attr_accessor :label
 
-    # A `kb_resources.id` value.
-    attr_accessor :peer_resource_id
+    # The peer's id — a `kb_resources.id` or a `kb_blobs.id` per `peer_table`.
+    attr_accessor :peer_id
 
+    # Slug derived from the peer title; `None` for a blob peer.
     attr_accessor :peer_slug
 
+    # `kb_resources` | `kb_blobs` — spelled exactly as the DDL. Cogmap-ended edges are not rendered by this view (declared scope).
+    attr_accessor :peer_table
+
+    # The peer resource's title; `None` for a blob peer.
     attr_accessor :peer_title
 
     attr_accessor :polarity
@@ -68,8 +74,9 @@ module Temper::Generated
         :'edge_id' => :'edge_id',
         :'edge_kind' => :'edge_kind',
         :'label' => :'label',
-        :'peer_resource_id' => :'peer_resource_id',
+        :'peer_id' => :'peer_id',
         :'peer_slug' => :'peer_slug',
+        :'peer_table' => :'peer_table',
         :'peer_title' => :'peer_title',
         :'polarity' => :'polarity',
         :'weight' => :'weight'
@@ -90,12 +97,13 @@ module Temper::Generated
     def self.openapi_types
       {
         :'created' => :'Time',
-        :'direction' => :'String',
+        :'direction' => :'BlobRelationEdgeDirection',
         :'edge_id' => :'String',
         :'edge_kind' => :'EdgeKind',
         :'label' => :'String',
-        :'peer_resource_id' => :'String',
+        :'peer_id' => :'String',
         :'peer_slug' => :'String',
+        :'peer_table' => :'String',
         :'peer_title' => :'String',
         :'polarity' => :'Polarity',
         :'weight' => :'Float'
@@ -105,6 +113,8 @@ module Temper::Generated
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
+        :'peer_slug',
+        :'peer_title',
       ])
     end
 
@@ -154,22 +164,24 @@ module Temper::Generated
         self.label = nil
       end
 
-      if attributes.key?(:'peer_resource_id')
-        self.peer_resource_id = attributes[:'peer_resource_id']
+      if attributes.key?(:'peer_id')
+        self.peer_id = attributes[:'peer_id']
       else
-        self.peer_resource_id = nil
+        self.peer_id = nil
       end
 
       if attributes.key?(:'peer_slug')
         self.peer_slug = attributes[:'peer_slug']
+      end
+
+      if attributes.key?(:'peer_table')
+        self.peer_table = attributes[:'peer_table']
       else
-        self.peer_slug = nil
+        self.peer_table = nil
       end
 
       if attributes.key?(:'peer_title')
         self.peer_title = attributes[:'peer_title']
-      else
-        self.peer_title = nil
       end
 
       if attributes.key?(:'polarity')
@@ -210,16 +222,12 @@ module Temper::Generated
         invalid_properties.push('invalid value for "label", label cannot be nil.')
       end
 
-      if @peer_resource_id.nil?
-        invalid_properties.push('invalid value for "peer_resource_id", peer_resource_id cannot be nil.')
+      if @peer_id.nil?
+        invalid_properties.push('invalid value for "peer_id", peer_id cannot be nil.')
       end
 
-      if @peer_slug.nil?
-        invalid_properties.push('invalid value for "peer_slug", peer_slug cannot be nil.')
-      end
-
-      if @peer_title.nil?
-        invalid_properties.push('invalid value for "peer_title", peer_title cannot be nil.')
+      if @peer_table.nil?
+        invalid_properties.push('invalid value for "peer_table", peer_table cannot be nil.')
       end
 
       if @polarity.nil?
@@ -242,9 +250,8 @@ module Temper::Generated
       return false if @edge_id.nil?
       return false if @edge_kind.nil?
       return false if @label.nil?
-      return false if @peer_resource_id.nil?
-      return false if @peer_slug.nil?
-      return false if @peer_title.nil?
+      return false if @peer_id.nil?
+      return false if @peer_table.nil?
       return false if @polarity.nil?
       return false if @weight.nil?
       true
@@ -301,33 +308,23 @@ module Temper::Generated
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] peer_resource_id Value to be assigned
-    def peer_resource_id=(peer_resource_id)
-      if peer_resource_id.nil?
-        fail ArgumentError, 'peer_resource_id cannot be nil'
+    # @param [Object] peer_id Value to be assigned
+    def peer_id=(peer_id)
+      if peer_id.nil?
+        fail ArgumentError, 'peer_id cannot be nil'
       end
 
-      @peer_resource_id = peer_resource_id
+      @peer_id = peer_id
     end
 
     # Custom attribute writer method with validation
-    # @param [Object] peer_slug Value to be assigned
-    def peer_slug=(peer_slug)
-      if peer_slug.nil?
-        fail ArgumentError, 'peer_slug cannot be nil'
+    # @param [Object] peer_table Value to be assigned
+    def peer_table=(peer_table)
+      if peer_table.nil?
+        fail ArgumentError, 'peer_table cannot be nil'
       end
 
-      @peer_slug = peer_slug
-    end
-
-    # Custom attribute writer method with validation
-    # @param [Object] peer_title Value to be assigned
-    def peer_title=(peer_title)
-      if peer_title.nil?
-        fail ArgumentError, 'peer_title cannot be nil'
-      end
-
-      @peer_title = peer_title
+      @peer_table = peer_table
     end
 
     # Custom attribute writer method with validation
@@ -360,8 +357,9 @@ module Temper::Generated
           edge_id == o.edge_id &&
           edge_kind == o.edge_kind &&
           label == o.label &&
-          peer_resource_id == o.peer_resource_id &&
+          peer_id == o.peer_id &&
           peer_slug == o.peer_slug &&
+          peer_table == o.peer_table &&
           peer_title == o.peer_title &&
           polarity == o.polarity &&
           weight == o.weight
@@ -376,7 +374,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [created, direction, edge_id, edge_kind, label, peer_resource_id, peer_slug, peer_title, polarity, weight].hash
+      [created, direction, edge_id, edge_kind, label, peer_id, peer_slug, peer_table, peer_title, polarity, weight].hash
     end
 
     # Builds the object from hash

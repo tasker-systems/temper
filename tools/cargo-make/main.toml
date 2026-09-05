@@ -481,6 +481,20 @@ args = ["run", "test:integration"]
 
 [tasks.generate-ts-types]
 description = "Generate TypeScript types from temper-core Rust structs via ts-rs"
+# TRUNCATION SEMANTICS (found by review 2026-09-05): ts-rs's export_and_merge merges
+# same-file writes only WITHIN one process; each `cargo test -p <crate>` below is a
+# separate process, so a later pass TRUNCATES every file its transitive closure touches.
+# Two rules keep the tree honest:
+#   1. A cross-crate dependency is safe only if the dependency type exports to its OWN
+#      per-type file (the EdgeId.ts precedent) — a partial-closure rewrite of a
+#      single-type file is a no-op. BlobRelationEdgeDirection.ts exists for exactly
+#      this: GraphEdgeRow (temper-workflow) depends on it, and exporting it into
+#      blob.ts let the workflow pass truncate twelve types down to one, undetectably
+#      (the drift gate deterministically reproduces the shrunk file).
+#   2. A shared file (graph.ts: core's EdgeKind/Polarity + workflow's rows) survives
+#      only because the LAST pass's closure covers every member. Do not reorder these
+#      passes without checking both directions.
+# If a regen silently shrinks a generated file, look here first.
 script = [
   "mkdir -p ${CARGO_MAKE_WORKING_DIRECTORY}/packages/temper-ui/src/lib/types/generated",
   "TS_RS_EXPORT_DIR=${CARGO_MAKE_WORKING_DIRECTORY}/packages/temper-ui/src/lib/types/generated cargo test -p temper-core --features typescript",

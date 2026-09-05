@@ -132,6 +132,7 @@ async fn api_create_and_assert_under_invocation_stamp_authorship(pool: sqlx::PgP
         .assert(&AssertRelationshipRequest {
             source: src.id,
             target: tgt.id,
+            target_table: Default::default(),
             edge_kind: EdgeKind::LeadsTo,
             polarity: Polarity::Forward,
             label: "depends_on".to_string(),

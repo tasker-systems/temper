@@ -171,7 +171,10 @@ async fn create_session_with_task_asserts_advances_edge(pool: sqlx::PgPool) {
         .expect("fetch session edges");
 
     // Filter to outgoing edges (session is the source).
-    let outgoing: Vec<_> = edges.iter().filter(|e| e.direction == "outgoing").collect();
+    let outgoing: Vec<_> = edges
+        .iter()
+        .filter(|e| e.direction == temper_core::types::blob::BlobRelationEdgeDirection::Outgoing)
+        .collect();
     assert_eq!(
         outgoing.len(),
         1,
@@ -192,7 +195,8 @@ async fn create_session_with_task_asserts_advances_edge(pool: sqlx::PgPool) {
     );
     // The peer (target) of the outgoing edge is the task.
     assert_eq!(
-        edge.peer_slug, "implement-widget",
+        edge.peer_slug.as_deref(),
+        Some("implement-widget"),
         "edge target must be the task slug"
     );
 
@@ -200,7 +204,7 @@ async fn create_session_with_task_asserts_advances_edge(pool: sqlx::PgPool) {
     let task_row = resolve_by_title(&app.client, "myapp", "task", "Implement Widget").await;
     // The id-based link must target the seeded task's resource id directly.
     assert_eq!(
-        uuid::Uuid::from(outgoing[0].peer_resource_id),
+        outgoing[0].peer_id,
         *task_row.id.as_uuid(),
         "outgoing advances edge must target the seeded task's resource id"
     );
@@ -213,7 +217,7 @@ async fn create_session_with_task_asserts_advances_edge(pool: sqlx::PgPool) {
         .expect("fetch task edges");
     let incoming: Vec<_> = task_edges
         .iter()
-        .filter(|e| e.direction == "incoming")
+        .filter(|e| e.direction == temper_core::types::blob::BlobRelationEdgeDirection::Incoming)
         .collect();
     assert_eq!(
         incoming.len(),
@@ -221,8 +225,7 @@ async fn create_session_with_task_asserts_advances_edge(pool: sqlx::PgPool) {
         "task must have exactly one incoming session→task edge; got {task_edges:?}"
     );
     assert_eq!(
-        uuid::Uuid::from(incoming[0].peer_resource_id),
-        session_id,
+        incoming[0].peer_id, session_id,
         "incoming edge source must be the session"
     );
     assert_eq!(incoming[0].label, "advances");

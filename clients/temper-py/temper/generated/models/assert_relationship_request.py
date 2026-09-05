@@ -23,6 +23,7 @@ from uuid import UUID
 from temper.generated.models.confidence_band import ConfidenceBand
 from temper.generated.models.edge_kind import EdgeKind
 from temper.generated.models.polarity import Polarity
+from temper.generated.models.relationship_target import RelationshipTarget
 from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
@@ -42,9 +43,10 @@ class AssertRelationshipRequest(BaseModel):
     label: StrictStr
     polarity: Polarity
     source: UUID = Field(description="Source resource — a pre-resolved id (both endpoints are resolved now).")
-    target: UUID = Field(description="Target resource — a pre-resolved id (both endpoints are resolved now).")
+    target: UUID = Field(description="The target's id: a `kb_resources.id` when `target_table` is `resource` (the default), a `kb_blobs.id` when it is `blob`.")
+    target_table: Optional[RelationshipTarget] = Field(default=None, description="Which table `target` addresses. Defaults to `resource`; `blob` points the edge at a binary blob the caller can read (task 01a06ee1).")
     weight: Union[StrictFloat, StrictInt]
-    __properties: ClassVar[List[str]] = ["confidence", "correlation_id", "invocation_id", "model", "persona", "rationale", "reasoning", "edge_kind", "label", "polarity", "source", "target", "weight"]
+    __properties: ClassVar[List[str]] = ["confidence", "correlation_id", "invocation_id", "model", "persona", "rationale", "reasoning", "edge_kind", "label", "polarity", "source", "target", "target_table", "weight"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -144,6 +146,7 @@ class AssertRelationshipRequest(BaseModel):
             "polarity": obj.get("polarity"),
             "source": obj.get("source"),
             "target": obj.get("target"),
+            "target_table": obj.get("target_table"),
             "weight": obj.get("weight")
         })
         return _obj
