@@ -223,77 +223,59 @@ async fn an_absent_source_and_an_unauthorized_source_refuse_alike(pool: PgPool) 
         common::fixtures::create_test_profile_with_context(&pool, &email_p).await;
     let resource_p = insert_resource(&pool, profile_p, context_p, "P's Doc", "rh-absent-doc").await;
 
-    // Q probes both legs: a source P owns, and a source that never existed. The target
-    // leg is the same unknown id in both payloads, so any parity break is the source's.
+    // Q probes both legs across every face the source clause answers, collecting status
+    // and body before asserting — one pass, byte parity read off the pairs.
     let email_q = format!("rh-absent-q-{}@example.com", Uuid::new_v4());
     let (profile_q, _) = common::fixtures::create_test_profile_with_context(&pool, &email_q).await;
     let token_q = common::generate_test_jwt(&format!("test|{profile_q}"), &email_q);
 
-    for (label, source) in [
-        ("unauthorized source", resource_p),
-        ("absent source", Uuid::now_v7()),
-    ] {
-        let resp = app
-            .client
-            .post(app.url("/api/relationships"))
-            .header("Authorization", format!("Bearer {token_q}"))
-            .json(&json!({
-                "source": source.to_string(),
-                "target": Uuid::new_v4().to_string(),
-                "edge_kind": "near",
-                "polarity": "forward",
-                "label": "relates_to",
-                "weight": 1.0
-            }))
-            .send()
-            .await
-            .expect("request failed");
-        assert_eq!(
-            resp.status().as_u16(),
-            403,
-            "{label} must render as the source-modify clause's refusal; body: {}",
-            resp.text().await.unwrap_or_default()
-        );
-    }
+    let probe = |source: Uuid| {
+        let app = &app;
+        let token_q = token_q.clone();
+        async move {
+            app.client
+                .post(app.url("/api/relationships"))
+                .header("Authorization", format!("Bearer {token_q}"))
+                .json(&json!({
+                    "source": source.to_string(),
+                    "target": Uuid::new_v4().to_string(),
+                    "edge_kind": "near",
+                    "polarity": "forward",
+                    "label": "relates_to",
+                    "weight": 1.0
+                }))
+                .send()
+                .await
+                .expect("request failed")
+        }
+    };
 
-    // Byte parity across the two legs — the witness, not the individual statuses.
-    let unauthorized = app
-        .client
-        .post(app.url("/api/relationships"))
-        .header("Authorization", format!("Bearer {token_q}"))
-        .json(&json!({
-            "source": resource_p.to_string(),
-            "target": Uuid::new_v4().to_string(),
-            "edge_kind": "near",
-            "polarity": "forward",
-            "label": "relates_to",
-            "weight": 1.0
-        }))
-        .send()
-        .await
-        .expect("request failed");
-    let absent = app
-        .client
-        .post(app.url("/api/relationships"))
-        .header("Authorization", format!("Bearer {token_q}"))
-        .json(&json!({
-            "source": Uuid::now_v7().to_string(),
-            "target": Uuid::new_v4().to_string(),
-            "edge_kind": "near",
-            "polarity": "forward",
-            "label": "relates_to",
-            "weight": 1.0
-        }))
-        .send()
-        .await
-        .expect("request failed");
+    // The target leg is a fresh unknown id in every payload, so any parity break is the
+    // source's.
+    let (unauthorized_status, unauthorized_text) = {
+        let resp = probe(resource_p).await;
+        (
+            resp.status().as_u16(),
+            resp.text().await.unwrap_or_default(),
+        )
+    };
+    let (absent_status, absent_text) = {
+        let resp = probe(Uuid::now_v7()).await;
+        (
+            resp.status().as_u16(),
+            resp.text().await.unwrap_or_default(),
+        )
+    };
+
     assert_eq!(
-        unauthorized.status().as_u16(),
-        absent.status().as_u16(),
-        "the two legs must share a status code"
+        unauthorized_status, 403,
+        "the unauthorized source must render the source-modify clause's refusal; body: \
+         {unauthorized_text}"
     );
-    let unauthorized_text = unauthorized.text().await.unwrap_or_default();
-    let absent_text = absent.text().await.unwrap_or_default();
+    assert_eq!(
+        unauthorized_status, absent_status,
+        "an absent source and an unauthorized one must share a status code"
+    );
     assert_eq!(
         unauthorized_text, absent_text,
         "an absent source and an unauthorized one must render the SAME refusal body"
