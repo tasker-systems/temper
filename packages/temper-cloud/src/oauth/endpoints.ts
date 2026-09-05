@@ -40,6 +40,7 @@ import {
   recordChannelFailure,
   recordChannelSuccess,
 } from "./reconcile-health.js";
+import { dcrClientGrants, verifyDcrClientSecret } from "./register.js";
 import { resolvePrincipal } from "./resolve.js";
 
 /** How long a pending flow (awaiting the IdP round-trip) stays valid. */
@@ -787,15 +788,31 @@ export async function handleToken(req: Request, db: NeonClient): Promise<Respons
     if (!creds) {
       return oauthError("invalid_request");
     }
-    if (!(await verifyMachineSecret(db, creds.clientId, creds.clientSecret))) {
-      return oauthError("invalid_client", 401);
+    if (await verifyMachineSecret(db, creds.clientId, creds.clientSecret)) {
+      await touchMachineLastSeen(db, creds.clientId);
+      const accessToken = await mintMachineAccessToken(creds.clientId);
+      return oauthJson(
+        { access_token: accessToken, token_type: "Bearer", expires_in: accessTtlSeconds() },
+        200,
+      );
     }
-    await touchMachineLastSeen(db, creds.clientId);
-    const accessToken = await mintMachineAccessToken(creds.clientId);
-    return oauthJson(
-      { access_token: accessToken, token_type: "Bearer", expires_in: accessTtlSeconds() },
-      200,
-    );
+    // Not a machine principal. A DCR-registered (Connect) client mints the same claim shape
+    // plus the scope it asked for — the through-path probe's measurement. Its registered
+    // grants gate the mint (the store's own record, not an env allowlist), and the requested
+    // scope rides the token verbatim: enscoping is Phase 1's decision, measured here.
+    if (await verifyDcrClientSecret(db, creds.clientId, creds.clientSecret)) {
+      const grants = await dcrClientGrants(db, creds.clientId);
+      if (!grants?.includes("client_credentials")) {
+        return oauthError("unauthorized_client", 401);
+      }
+      const scope = String(form.get("scope") ?? "").trim();
+      const accessToken = await mintMachineAccessToken(creds.clientId, scope || undefined);
+      return oauthJson(
+        { access_token: accessToken, token_type: "Bearer", expires_in: accessTtlSeconds() },
+        200,
+      );
+    }
+    return oauthError("invalid_client", 401);
   }
 
   return oauthError("unsupported_grant_type");

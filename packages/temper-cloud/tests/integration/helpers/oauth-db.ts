@@ -28,5 +28,5 @@ export function makeTestDb(): { sql: postgres.Sql; db: NeonClient } {
  * read whatever the preceding tests happened to leave when the file runs in order.
  */
 export async function truncateOauthTables(sql: postgres.Sql): Promise<void> {
-  await sql`TRUNCATE kb_oauth_flow, kb_oauth_refresh_tokens, kb_oauth_refresh_replays, kb_saml_replay, kb_saml_idp, kb_internal_call_health RESTART IDENTITY CASCADE`;
+  await sql`TRUNCATE kb_oauth_flow, kb_oauth_refresh_tokens, kb_oauth_refresh_replays, kb_saml_replay, kb_saml_idp, kb_internal_call_health, kb_oauth_dcr_clients RESTART IDENTITY CASCADE`;
 }
