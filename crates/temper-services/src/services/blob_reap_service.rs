@@ -13,8 +13,8 @@
 //!
 //! **No events, deliberately.** Staged sessions ride no events by design (witnessed in the
 //! blobs register, S5) — pre-ledger transport state whose bytes never ride the trail — so
-//! reaping is event-less row deletion, and observability is the cron summary, not the
-//! ledger. Nothing in the graph surfaces can see a staged session (the DDL's own contract:
+//! reaping is event-less row deletion, and observability is the sweep's own log line and
+//! the cron summary, never the ledger. Nothing in the graph surfaces can see a staged session (the DDL's own contract:
 //! not a blob, not a resource, not an edge), so deletion cannot orphan anything readable;
 //! its only gate is owner-equality on the session row, which deletion simply ends.
 //!
@@ -65,9 +65,12 @@ pub struct BlobReapSummary {
     /// Staged bytes freed, summed over the segments the reaped sessions cascaded away —
     /// in-DB `bytea`, so this is the storage the sweep actually returned.
     pub bytes_freed: i64,
-    /// True when the run stopped at its per-run cap rather than because it ran out of
-    /// abandoned sessions — more are waiting, and the next scheduled pass takes them.
-    /// Carried out of the sweep's own exit, per the incumbent's `more_pending` note.
+    /// True when the run stopped because it hit its per-run cap rather than because it ran
+    /// out of abandoned sessions — there is more to delete and the next scheduled pass will
+    /// take it. Carried out of the sweep's own exit, never inferred by comparing the count
+    /// to the cap; reachable at exactly one corner, where it errs toward announcing a
+    /// follow-up pass that finds nothing: a table holding precisely `MAX_ROWS_PER_RUN`
+    /// eligible rows drains on its last batch and still reports the cap.
     pub more_pending: bool,
 }
 
@@ -112,13 +115,17 @@ fn staging_ttl_seconds(raw: Option<String>) -> ApiResult<f64> {
 /// direction for a reaper.
 ///
 /// The segments ride `ON DELETE CASCADE` (20260903000040) — deleting the session row is the
-/// whole act, which is why the freed bytes are summed from the victims' segments *inside
-/// the same statement*, before the cascade removes them.
+/// whole act. The freed bytes are summed from the deleted sessions' segments *inside the
+/// same statement*: every sub-statement of a data-modifying CTE reads the statement's own
+/// snapshot, so `freed`, placed after `gone`, still sees the segments the cascade is
+/// removing — and joining on `gone` (not the victim set) keeps the count exact when the
+/// DELETE's lock-wait re-check skips a session a concurrent append refreshed.
 pub async fn reap_abandoned_blob_uploads(pool: &PgPool) -> ApiResult<BlobReapSummary> {
     let ttl = staging_ttl_seconds(std::env::var(STAGING_TTL_ENV).ok())?;
 
     let mut total_rows = 0i64;
     let mut total_bytes = 0i64;
+    let mut more_pending = false;
     loop {
         // Two different reasons to stop, and the caller needs to tell them apart: a short
         // batch means the table is drained, the cap means there is more waiting for
@@ -130,14 +137,14 @@ pub async fn reap_abandoned_blob_uploads(pool: &PgPool) -> ApiResult<BlobReapSum
                    FROM kb_blob_uploads
                   WHERE updated < now() - make_interval(secs => $1::double precision)
                   LIMIT $2
-            ), freed AS (
-                 SELECT COALESCE(SUM(octet_length(s.bytes)), 0)::bigint AS "bytes"
-                   FROM kb_blob_upload_segments s
-                   JOIN victims v ON s.upload_id = v.id
             ), gone AS (
                  DELETE FROM kb_blob_uploads
                   WHERE ctid IN (SELECT ctid FROM victims)
                   RETURNING id
+            ), freed AS (
+                 SELECT COALESCE(SUM(octet_length(s.bytes)), 0)::bigint AS "bytes"
+                   FROM kb_blob_upload_segments s
+                   JOIN gone g ON s.upload_id = g.id
             )
             SELECT (SELECT count(*) FROM gone)::bigint AS "uploads!",
                    (SELECT bytes FROM freed)           AS "bytes!"
@@ -151,20 +158,31 @@ pub async fn reap_abandoned_blob_uploads(pool: &PgPool) -> ApiResult<BlobReapSum
         total_rows += swept.uploads;
         total_bytes += swept.bytes;
         if swept.uploads < BATCH_ROWS {
-            return Ok(BlobReapSummary {
-                uploads_reaped: total_rows,
-                bytes_freed: total_bytes,
-                more_pending: false,
-            });
+            break;
         }
         if total_rows >= MAX_ROWS_PER_RUN {
-            return Ok(BlobReapSummary {
-                uploads_reaped: total_rows,
-                bytes_freed: total_bytes,
-                more_pending: true,
-            });
+            more_pending = true;
+            break;
         }
     }
+    let summary = BlobReapSummary {
+        uploads_reaped: total_rows,
+        bytes_freed: total_bytes,
+        more_pending,
+    };
+
+    // Emitted every run, including the all-zero one — the incumbent's invariant verbatim:
+    // a reaper that logs only when it deletes is indistinguishable from a reaper that is
+    // not running, and Vercel Cron discards this endpoint's response body, so this line is
+    // the sweep's only observable trail.
+    tracing::info!(
+        uploads_reaped = summary.uploads_reaped,
+        bytes_freed = summary.bytes_freed,
+        more_pending = summary.more_pending,
+        staging_ttl_seconds = ttl,
+        "blob staging retention sweep complete"
+    );
+    Ok(summary)
 }
 
 #[cfg(test)]
@@ -217,11 +235,13 @@ mod tests {
     // Survivor-style assertions throughout, per the AS reaper suite's own note: they name
     // the rows they mean and cannot be moved by a row the test did not create.
 
-    /// A staged session, `age_seconds` old by `updated` (and `created` older still by
-    /// `extra_created_age`), with `segment_count` segments of ~`segment_bytes` bytes each.
-    /// Stamped the way the real path stamps: `created` at begin, `updated` advancing on
-    /// every landed append — here expressed directly, since the witnesses are about what
-    /// the sweep reads, not about the append path's own UPDATE (witnessed in substrate).
+    /// A staged session `updated_age_seconds` old by `updated` and
+    /// `created_age_seconds` old by `created` (the two are independent — the
+    /// fresh-but-old witness passes them unequal on purpose), with `segment_count`
+    /// segments of `segment_bytes` bytes each. Stamped the way the real path stamps:
+    /// `created` at begin, `updated` advancing on every landed append — here expressed
+    /// directly, since the witnesses are about what the sweep reads, not about the append
+    /// path's own UPDATE (witnessed in substrate).
     async fn seed_session(
         pool: &PgPool,
         id: &Uuid,
@@ -391,7 +411,8 @@ mod tests {
     }
 
     // The per-run cap (`more_pending`) is the incumbent's measured posture carried over
-    // wholesale; driving 5_001 sessions through seeding to bite it would be ceremony — the
-    // batch loop is the AS reaper's own, whose cap exit is witnessed there. Declared, not
-    // silently absent.
+    // wholesale; driving 5_001 sessions through seeding to bite it would be ceremony.
+    // Unwitnessed HERE, and — checked before writing this note — unwitnessed in the
+    // incumbent's suite too: no test anywhere drives the cap exit. The loop is carried by
+    // inspection, line for line. Declared, not silently absent.
 }

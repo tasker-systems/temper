@@ -40,8 +40,12 @@ pub struct RetentionSweepSummary {
 /// deploy dark — see that function's doc comment. Reusing it also means this endpoint inherits the
 /// right posture for free, since an unconfigured deploy refuses rather than exposing the sweep.
 ///
-/// The two sweeps are sequential and independent; an error from either fails the run and leaves
-/// the other's rows on — not reaping is the fail-safe direction for each (see the services).
+/// The two sweeps are sequential and independent; an error from either fails the run, and
+/// the unswept rows simply stay on for the next tick — not reaping is the fail-safe
+/// direction for each (see the services). One asymmetry, named for honesty: if the blob
+/// sweep errors after the AS sweep ran, the AS sweep's rows are already gone and its
+/// summary is lost to the failed response — the harmless direction (those rows wanted
+/// sweeping anyway), and the AS sweep's own log line still recorded it.
 pub async fn reap_as_tables(
     State(state): State<AppState>,
     headers: HeaderMap,
