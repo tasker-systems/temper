@@ -10,8 +10,10 @@
 -- block at a seq a live block still holds, and forbids two live blocks sharing a seq — which a
 -- naive kept-block seq move also violates MID-TRANSACTION (a kept block moving into a seq
 -- another kept block is vacating). Kept moves are therefore two-phase: park every kept block
--- at a distinct negative seq (`-(seq+1)`, injective, cannot collide with any live or created
--- seq), then apply the payload finals. The negatives never survive the transaction.
+-- at a distinct negative seq (`-(seq+1)`, injective, disjoint from every non-negative live or
+-- created seq), then apply the payload finals. The negatives never survive the transaction.
+-- A PRE-EXISTING negative seq would park into the occupied positive band — the projector
+-- refuses that state rather than assume its absence (no shipped path writes one).
 --
 -- The mapping (kept ids, created ids + chunk assignments, seqs, attribution delta) rides in
 -- the event payload — replay re-derives nothing. Created blocks' `block_body_hash` derives
@@ -236,7 +238,7 @@ INSERT INTO kb_event_types (name, payload_schema, schema_version, category) VALU
           }
         },
         "block_id": {
-          "description": "Identity-as-input: minted by the operation and carried here so replay reproduces the\nsame row id. `kb_content_blocks.id` has no DEFAULT for this reason.",
+          "description": "Identity-as-input: minted by the operation and carried here so replay reproduces the\nsame row id (`kb_content_blocks.id` carries a column DEFAULT, but a re-partition's block\nidentity is chosen by the op, never minted by the projector — the create-path\nidentity-as-input rule applied to an existing table).",
           "$ref": "#/$defs/BlockId"
         },
         "chunks": {
@@ -306,6 +308,7 @@ DECLARE
     v_chunk_hashes text; v_chunk_count int;
     v_blocks jsonb;
     v_live_count bigint; v_payload_count bigint;
+    v_assigned_ids text[];
     v_folded uuid[];
     v_kept uuid[];
 BEGIN
@@ -327,7 +330,9 @@ BEGIN
     END IF;
 
     -- Guard: the created blocks' assignments cover exactly the chunk set the folded blocks lose.
-    -- Count first...
+    -- Count first... (v_payload_count counts OCCURRENCES; the distinct check below closes the
+    -- double-assignment hole — a payload naming chunk X twice while omitting chunk Y would
+    -- otherwise reparent X twice and silently strand Y on its folded row.)
     SELECT count(*) INTO v_live_count
         FROM kb_chunks c
         JOIN kb_content_blocks b ON b.id = c.block_id
@@ -341,12 +346,20 @@ BEGIN
         END IF;
         v_payload_count := v_payload_count + jsonb_array_length(v_block_json->'chunks');
     END LOOP;
+    SELECT coalesce(array_agg(x->>'chunk_id'), '{}') INTO v_assigned_ids
+        FROM (SELECT jsonb_array_elements(blk->'chunks') AS x
+                FROM jsonb_array_elements(coalesce(p_payload->'created', '[]'::jsonb)) AS blk) AS t;
+    IF cardinality(v_assigned_ids) <> (SELECT count(DISTINCT u) FROM unnest(v_assigned_ids) u) THEN
+        RAISE EXCEPTION '_project_resource_reblocked: payload assigns a chunk more than once (resource %)', v_resource;
+    END IF;
     IF v_payload_count <> v_live_count THEN
         RAISE EXCEPTION '_project_resource_reblocked: payload assigns % chunk(s) but the folded blocks of resource % hold % live',
             v_payload_count, v_resource, v_live_count;
     END IF;
     -- ...then membership: every assigned chunk must be a live chunk of a FOLDED block (of THIS
-    -- resource) — never one riding a kept row.
+    -- resource), with the payload's content_hash equal to the live row's — the projector derives
+    -- block_body_hash from the payload hashes, so an unverified hash would let a hand-built
+    -- payload forge an incumbent-impersonating merkle for a later re-block.
     FOR v_block_json IN SELECT jsonb_array_elements(p_payload->'created') LOOP
         FOR v_chunk_json IN SELECT jsonb_array_elements(v_block_json->'chunks') LOOP
             v_chunk := (v_chunk_json->>'chunk_id')::uuid;
@@ -355,8 +368,9 @@ BEGIN
                 JOIN kb_content_blocks b ON b.id = c.block_id
                 WHERE c.id = v_chunk AND b.resource_id = v_resource
                   AND NOT b.is_folded AND c.is_current AND b.id = ANY(v_folded)
+                  AND c.content_hash = (v_chunk_json->>'content_hash')
             ) THEN
-                RAISE EXCEPTION '_project_resource_reblocked: chunk % is not a live chunk of a folded block of resource %',
+                RAISE EXCEPTION '_project_resource_reblocked: chunk % is not a live chunk of a folded block of resource % (or its content_hash disagrees)',
                     v_chunk, v_resource;
             END IF;
         END LOOP;
@@ -365,6 +379,16 @@ BEGIN
     -- 1. fold the superseded blocks (the `_project_charter_set` arm).
     UPDATE kb_content_blocks SET is_folded = true, last_event_id = p_event
      WHERE id = ANY(v_folded) AND NOT is_folded;
+
+    -- Guard: the parking phase maps each kept block to the distinct negative seq -(seq+1).
+    -- That is injective and disjoint from every non-negative live or created seq, but a block
+    -- ALREADY at a negative seq would park into the occupied positive band (kept -5 parks to 4,
+    -- which kept 4 may hold). No shipped path writes a negative seq; refuse the state rather
+    -- than assume its absence.
+    IF EXISTS (SELECT 1 FROM kb_content_blocks
+                WHERE resource_id = v_resource AND NOT is_folded AND seq < 0) THEN
+        RAISE EXCEPTION '_project_resource_reblocked: resource % has a live block at a negative seq (parking-phase precondition)', v_resource;
+    END IF;
 
     -- 2. park kept blocks at distinct negative seqs so their finals can never collide
     --    mid-transaction with each other or with the created blocks' seqs.

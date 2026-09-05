@@ -729,9 +729,17 @@ fn compute_reblock_partition(
                 .map(|c| c.content_hash.clone())
                 .collect::<Vec<_>>(),
         );
-        let incumbent = live_blocks
-            .iter()
-            .find(|b| b.body_hash.as_deref() == Some(merkle.as_str()) && !claimed.contains(&b.id));
+        // Kept requires BOTH the derived-hash match AND byte equality with the slice: chunk
+        // content_hash is over TRIMMED text, so a boundary straddling edge whitespace can
+        // produce equal hashes over different bytes — keeping such a row would re-compose the
+        // body from the incumbent's old bytes and silently drop the separator the folded
+        // neighbor carried. Byte-different incumbents fold, and the section creates over the
+        // slice's verbatim bytes.
+        let incumbent = live_blocks.iter().find(|b| {
+            b.body_hash.as_deref() == Some(merkle.as_str())
+                && !claimed.contains(&b.id)
+                && b.bytes.as_deref() == Some(s.text.as_str())
+        });
         match incumbent {
             Some(b) => {
                 claimed.insert(b.id);

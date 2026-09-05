@@ -153,7 +153,7 @@
           }
         },
         "block_id": {
-          "description": "Identity-as-input: minted by the operation and carried here so replay reproduces the\nsame row id. `kb_content_blocks.id` has no DEFAULT for this reason.",
+          "description": "Identity-as-input: minted by the operation and carried here so replay reproduces the\nsame row id (`kb_content_blocks.id` carries a column DEFAULT, but a re-partition's block\nidentity is chosen by the op, never minted by the projector — the create-path\nidentity-as-input rule applied to an existing table).",
           "$ref": "#/$defs/BlockId"
         },
         "chunks": {

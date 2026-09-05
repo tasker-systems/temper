@@ -1482,7 +1482,9 @@ pub struct ReblockAttribution {
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct ReblockCreatedBlock {
     /// Identity-as-input: minted by the operation and carried here so replay reproduces the
-    /// same row id. `kb_content_blocks.id` has no DEFAULT for this reason.
+    /// same row id (`kb_content_blocks.id` carries a column DEFAULT, but a re-partition's block
+    /// identity is chosen by the op, never minted by the projector — the create-path
+    /// identity-as-input rule applied to an existing table).
     pub block_id: BlockId,
     /// The block's position in the NEW partition.
     pub seq: i32,

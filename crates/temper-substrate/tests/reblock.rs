@@ -336,12 +336,9 @@ async fn the_projector_applies_the_manifest_transactionally(pool: sqlx::PgPool) 
     );
 }
 
-/// 2. Byte-exactness: the body hash AND the verbatim concat are identical before/after, and the
-/// chunk multiset (hash, embedding bytes, header metadata, currency) is unchanged — asserted by
 /// 2. Byte-exactness: the VERBATIM BODY (concat of live blocks in seq order) composes
 /// identically before/after, and the chunk multiset (hash, embedding bytes, header metadata,
-/// currency) is unchanged — asserted by
-/// hash and count, never by absence of error.
+/// currency) is unchanged — asserted by hash and count, never by absence of error.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn reblocking_is_byte_exact_over_body_and_chunk_multiset(pool: sqlx::PgPool) {
     bootseed::seed_system(&pool).await.unwrap();
@@ -397,6 +394,65 @@ async fn reblocking_is_byte_exact_over_body_and_chunk_multiset(pool: sqlx::PgPoo
     .unwrap();
     let expected_hash = temper_ingest::merkle::resource_body_hash(&merkles);
     assert_eq!(body_hash.unwrap(), expected_hash);
+}
+
+/// 2b. Byte-exactness under a whitespace-straddling kept match: chunk content_hash is over
+/// TRIMMED text, so a section's derived merkle can match an incumbent whose stored BYTES
+/// differ from the section's slice (a block boundary that straddles edge whitespace). Keeping
+/// that row would re-compose the body from the incumbent's old bytes and silently DROP the
+/// separator the folded neighbor carried — so a kept match additionally requires the stored
+/// bytes to equal the slice; otherwise the section creates and the incumbent folds.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_whitespace_straddling_kept_match_creates_rather_than_dropping_bytes(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let actor = system_actor(&pool).await;
+    let home = make_home(&pool, actor.0, "reblock-wskeep").await;
+    // Block 0's bytes end early; the leading "\n" of block 1 is the separator between them.
+    // The composed body carries "Alpha.\n\n" — which belongs to NO incumbent's bytes whole.
+    let first = "Alpha.\n";
+    let rest = "\n# H\nB\n\n# I\nC\n";
+    let resource = create_segmented_two_block(
+        &pool,
+        actor.0,
+        emitter_of(&actor),
+        &home,
+        first,
+        rest,
+        vec![],
+    )
+    .await;
+    let (body_hash_before, body_before) = body_state(&pool, resource).await;
+
+    writes::reblock_resource(
+        &pool,
+        ReblockParams {
+            resource,
+            emitter: emitter_of(&actor),
+        },
+    )
+    .await
+    .unwrap();
+
+    let (body_hash_after, body_after) = body_state(&pool, resource).await;
+    assert_eq!(
+        body_before, body_after,
+        "the composed body is byte-identical — no separator dropped"
+    );
+    // And the derived state recomputes over whatever partition resulted.
+    let merkles: Vec<String> = sqlx::query_scalar(
+        "SELECT r.block_body_hash FROM kb_block_revisions r \
+           JOIN kb_content_blocks b ON b.current_revision_id=r.id \
+          WHERE b.resource_id=$1 AND NOT b.is_folded ORDER BY b.seq",
+    )
+    .bind(resource.uuid())
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        body_hash_after.unwrap(),
+        temper_ingest::merkle::resource_body_hash(&merkles)
+    );
+    let _ = body_hash_before;
 }
 
 /// 3. Identity preservation: a section whose run hashes identically to an incumbent block KEEPS
