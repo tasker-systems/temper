@@ -136,6 +136,16 @@ pub enum EventKind {
     /// carries the hash, never the bytes — the bytes live at the content-addressed pathname in
     /// external object storage.
     BlobCommitted,
+    /// Re-cut one resource's blocks along section boundaries (the re-block substrate,
+    /// 2026-09-04). Fires `resource_reblocked`, projected by `_project_resource_reblocked`:
+    /// fold the superseded blocks, insert the created ones (reparenting EXISTING chunk rows),
+    /// apply kept blocks' seq moves — one transaction, because the partial
+    /// `UNIQUE (resource_id, seq) WHERE NOT is_folded` rejects every intermediate state. The
+    /// payload carries the whole re-partition manifest, so replay re-derives nothing.
+    /// TYPED, registered by `20260905000010`. Deliberately NOT a `CONTENT_EVENTS` member —
+    /// region formation reads membership/edges/facets and chunk content, none of which a
+    /// re-partition changes.
+    ResourceReblocked,
 }
 
 impl EventKind {
@@ -180,6 +190,7 @@ impl EventKind {
             EventKind::PrincipalGovernanceChanged => "principal_governance_changed",
             EventKind::CitationAudited => "citation_audited",
             EventKind::BlobCommitted => "blob_committed",
+            EventKind::ResourceReblocked => "resource_reblocked",
         }
     }
 
@@ -229,6 +240,7 @@ impl EventKind {
             "principal_governance_changed" => EventKind::PrincipalGovernanceChanged,
             "citation_audited" => EventKind::CitationAudited,
             "blob_committed" => EventKind::BlobCommitted,
+            "resource_reblocked" => EventKind::ResourceReblocked,
             _ => return None,
         })
     }
@@ -459,6 +471,17 @@ pub enum SeedAction<'a> {
         incorporated: &'a [payloads::Incorporation],
         emitter: EntityId,
     },
+    /// Re-cut one resource's blocks along section boundaries (the re-block substrate). The
+    /// manifest is computed by the Rust op — `temper_ingest`'s section slicing plus the
+    /// chunk-hash diff against the live blocks — and rides the payload whole. `slices` carries
+    /// each CREATED block's verbatim source bytes for the `__blocks` sidecar (keyed by block
+    /// id, the mutate-path keying); no chunk content rides the sidecar, because every chunk id
+    /// references an existing CAS row the projector reparents in place.
+    ResourceReblock {
+        manifest: payloads::ResourceReblocked,
+        slices: &'a [(BlockId, String)],
+        emitter: EntityId,
+    },
     /// Record an auditor's signed verdict on one `(block, source)` citation (Set 5, spec
     /// §4.1-4.2). Append-only — fires `citation_audited`, projected into `kb_citation_audits`
     /// with no supersession (a later verdict never overwrites an earlier one).
@@ -585,6 +608,7 @@ impl SeedAction<'_> {
             SeedAction::RelationshipFold { .. } => EventKind::RelationshipFolded,
             SeedAction::BlockMutate { .. } => EventKind::BlockMutated,
             SeedAction::BlockAnnotate { .. } => EventKind::BlockProvenanceAnnotated,
+            SeedAction::ResourceReblock { .. } => EventKind::ResourceReblocked,
             SeedAction::CitationAudit { .. } => EventKind::CitationAudited,
             SeedAction::BlockAppend { .. } => EventKind::BlockCreated,
             SeedAction::CharterSet { .. } => EventKind::CharterSet,
@@ -645,6 +669,10 @@ pub enum Fired {
     /// payload's own home (D2 get-or-create, per-home as amended: same bytes in one scope is
     /// one row; the returned id is always the caller's own handle).
     Blob(BlobId),
+    /// The event id a `ResourceReblock` fire appended (the manifest rode the payload, so the
+    /// event id is the only new identity — the created block ids were minted by the op and
+    /// carried in).
+    ResourceReblock(EventId),
 }
 
 impl Fired {
@@ -680,6 +708,14 @@ impl Fired {
         match self {
             Fired::Blob(id) => Ok(id),
             other => anyhow::bail!("expected Fired::Blob, got {other:?}"),
+        }
+    }
+
+    /// Extract the event id a `ResourceReblock` fire produced.
+    pub fn reblocked_event(self) -> Result<EventId> {
+        match self {
+            Fired::ResourceReblock(id) => Ok(id),
+            other => anyhow::bail!("expected Fired::ResourceReblock, got {other:?}"),
         }
     }
 
@@ -1532,6 +1568,39 @@ pub async fn fire_with(
             .await?
             .context("block_annotate returned null")?;
             Ok(Fired::Block(BlockId::from(id)))
+        }
+
+        SeedAction::ResourceReblock {
+            manifest,
+            slices,
+            emitter,
+        } => {
+            // The re-block sidecar carries NO chunk content — every chunk id references an
+            // existing CAS row the projector reparents in place. Only `__blocks` rides: each
+            // CREATED block's verbatim slice bytes, keyed by block id (the mutate-path keying —
+            // a re-block addresses blocks by id, never by seq).
+            let sidecar = payloads::ContentSidecar {
+                chunks: std::collections::HashMap::new(),
+                blocks: (!slices.is_empty()).then(|| {
+                    slices
+                        .iter()
+                        .map(|(id, text)| (id.to_string(), payloads::BlockContent::of(text)))
+                        .collect::<std::collections::HashMap<_, _>>()
+                }),
+            };
+            let id = sqlx::query_scalar!(
+                "SELECT resource_reblock($1,$2,$3,$4,$5,$6)",
+                serde_json::to_value(&manifest)?,
+                serde_json::to_value(&sidecar)?,
+                emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
+                ctx_corr,
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .context("resource_reblock returned null")?;
+            Ok(Fired::ResourceReblock(EventId::from(id)))
         }
 
         SeedAction::CitationAudit {
