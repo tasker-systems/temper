@@ -9837,6 +9837,10 @@
                 "$ref": "#/components/schemas/ResourceId",
                 "description": "Target resource — a pre-resolved id (both endpoints are resolved now)."
               },
+              "target_table": {
+                "$ref": "#/components/schemas/RelationshipTarget",
+                "description": "Which table `target` addresses. Defaults to `resource`; `blob` points\nthe edge at a binary blob the caller can read (task 01a06ee1)."
+              },
               "weight": {
                 "type": "number",
                 "format": "double"
@@ -15203,6 +15207,14 @@
             "format": "uuid"
           }
         }
+      },
+      "RelationshipTarget": {
+        "type": "string",
+        "description": "Which table the asserted edge's TARGET endpoint lives in. `resource` is the\nincumbent and the serde default, so every existing payload is unchanged;\n`blob` is the D3 pointing act — a resource names a blob it can READ as its\nsource doc / evidence / figure, with the edge homed in the SOURCE's home\n(the same mechanism resource→resource asserts use: point at what you can\nsee). The SOURCE is always a resource — blobs assert through `blob relate`,\nwhose home story is the blob's own. Typed, never a free string: a malformed\nvalue must refuse naming the two admissible values (the\n`BlobRelationDirection` rule).",
+        "enum": [
+          "resource",
+          "blob"
+        ]
       },
       "RemoveMemberOutcome": {
         "type": "object",

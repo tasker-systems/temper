@@ -664,6 +664,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
             let req = AssertRelationshipRequest {
                 source: created_resource.id,
                 target: temper_core::types::ids::ResourceId::from(target),
+                target_table: Default::default(),
                 edge_kind,
                 polarity,
                 label: label.to_string(),
@@ -850,6 +851,7 @@ fn link_session_to_task(
                 let req = AssertRelationshipRequest {
                     source: session_id,
                     target: task_info.id,
+                    target_table: Default::default(),
                     edge_kind: EdgeKind::LeadsTo,
                     polarity: Polarity::Forward,
                     label: "advances".to_string(),

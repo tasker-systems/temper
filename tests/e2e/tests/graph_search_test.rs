@@ -70,6 +70,7 @@ async fn assert_edge(
         .assert(&AssertRelationshipRequest {
             source,
             target,
+            target_table: Default::default(),
             edge_kind: EdgeKind::LeadsTo,
             polarity: Polarity::Forward,
             label: label.to_string(),

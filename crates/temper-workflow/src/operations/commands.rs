@@ -282,6 +282,8 @@ pub struct SearchResources {
 pub struct AssertRelationship {
     pub source: ResourceId,
     pub target: ResourceId,
+    /// Which table `target` addresses (resource — the incumbent — or blob).
+    pub target_table: temper_core::types::relationship_requests::RelationshipTarget,
     pub edge_kind: temper_core::types::graph::EdgeKind,
     pub polarity: temper_core::types::graph::Polarity,
     pub label: String,
@@ -578,6 +580,7 @@ mod tests {
         let cmd = AssertRelationship {
             source: ResourceId(uuid::Uuid::now_v7()),
             target: ResourceId(uuid::Uuid::now_v7()),
+            target_table: Default::default(),
             edge_kind: temper_core::types::graph::EdgeKind::LeadsTo,
             polarity: temper_core::types::graph::Polarity::Inverse,
             label: "depends_on".to_string(),
@@ -611,6 +614,7 @@ mod tests {
         let cmd = AssertRelationship {
             source: ResourceId(uuid::Uuid::nil()),
             target: ResourceId(uuid::Uuid::now_v7()),
+            target_table: Default::default(),
             edge_kind: temper_core::types::graph::EdgeKind::Near,
             polarity: temper_core::types::graph::Polarity::Forward,
             label: "rel".into(),

@@ -2379,7 +2379,9 @@ pub enum EdgeAction {
     Assert {
         /// Source resource ref: a UUID or the decorated `slug-<uuid>` form
         source: String,
-        /// Target resource ref: a UUID or the decorated `slug-<uuid>` form
+        /// Target ref: a resource (UUID or decorated `slug-<uuid>`), or a blob
+        /// as `blob:<uuid>` — pointing at a blob you can READ homed the edge in
+        /// the source resource's home (the derivation/evidence pointing act).
         target: String,
         /// Edge kind (express, contains, leads-to, near)
         #[arg(long, value_enum)]

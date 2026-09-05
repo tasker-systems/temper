@@ -229,6 +229,7 @@ from temper.generated.models.refusal_reason import RefusalReason
 from temper.generated.models.region_disclosure import RegionDisclosure
 from temper.generated.models.region_hit import RegionHit
 from temper.generated.models.relationship_ack import RelationshipAck
+from temper.generated.models.relationship_target import RelationshipTarget
 from temper.generated.models.remove_member_outcome import RemoveMemberOutcome
 from temper.generated.models.rename_context_outcome import RenameContextOutcome
 from temper.generated.models.rename_context_request import RenameContextRequest

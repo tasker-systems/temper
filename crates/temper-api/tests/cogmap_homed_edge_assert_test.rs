@@ -117,6 +117,7 @@ async fn assert_relationship_homes_edge_to_cogmap_for_cogmap_homed_source(pool: 
         .assert_relationship(AssertRelationship {
             source: ResourceId::from(src),
             target: ResourceId::from(tgt),
+            target_table: Default::default(),
             edge_kind: EdgeKind::Near,
             polarity: Polarity::Forward,
             label: "relates_to".to_string(),
@@ -137,4 +138,43 @@ async fn assert_relationship_homes_edge_to_cogmap_for_cogmap_homed_source(pool: 
             .expect("the asserted edge must exist");
     assert_eq!(home_table, "kb_cogmaps", "edge must home to the cogmap");
     assert_eq!(home_id, cogmap, "edge must home to the SOURCE's cogmap");
+}
+
+/// The 2026-09-04 ruling (task 01a06ee1): a blob target from a kernel (cogmap-homed)
+/// source is refused — kernel edges run resource→resource. The refusal names the
+/// constraint, so it is a declared boundary, not a silent hole. And it fires BEFORE the
+/// endpoint gate, so the caller learns nothing about whether the blob id exists.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_blob_target_from_a_kernel_homed_source_is_refused_by_ruling(pool: PgPool) {
+    let (profile, _ctx) =
+        common::fixtures::create_test_profile_with_context(&pool, "steward@example.com").await;
+    let owner = ProfileId::from(profile);
+    let emitter = temper_substrate::writes::resolve_emitter(&pool, owner, "mcp")
+        .await
+        .expect("mcp emitter for the test profile");
+
+    let cogmap = birth_cogmap(&pool, profile, "steward-map").await;
+    common::fixtures::grant_cogmap_write(&pool, cogmap, profile).await;
+    let src = cogmap_homed_node(&pool, cogmap, owner, emitter, "temper://node/a", "Node A").await;
+
+    let be = DbBackend::new(pool.clone(), owner);
+    let err = be
+        .assert_relationship(AssertRelationship {
+            source: ResourceId::from(src),
+            target: ResourceId::from(Uuid::now_v7()),
+            target_table: temper_core::types::relationship_requests::RelationshipTarget::Blob,
+            edge_kind: EdgeKind::Near,
+            polarity: Polarity::Forward,
+            label: "relates_to".to_string(),
+            weight: 1.0,
+            act: Default::default(),
+            origin: Surface::Mcp,
+        })
+        .await
+        .expect_err("a kernel-homed source must refuse a blob target");
+    assert!(
+        matches!(err, temper_core::error::TemperError::BadRequest(ref m)
+            if m.contains("kernel") && m.contains("resource to resource")),
+        "the refusal must name the kernel constraint: {err:?}"
+    );
 }

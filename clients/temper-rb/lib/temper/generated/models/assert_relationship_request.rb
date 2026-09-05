@@ -49,6 +49,9 @@ module Temper::Generated
     # Target resource — a pre-resolved id (both endpoints are resolved now).
     attr_accessor :target
 
+    # Which table `target` addresses. Defaults to `resource`; `blob` points the edge at a binary blob the caller can read (task 01a06ee1).
+    attr_accessor :target_table
+
     attr_accessor :weight
 
     class EnumAttributeValidator
@@ -88,6 +91,7 @@ module Temper::Generated
         :'polarity' => :'polarity',
         :'source' => :'source',
         :'target' => :'target',
+        :'target_table' => :'target_table',
         :'weight' => :'weight'
       }
     end
@@ -117,6 +121,7 @@ module Temper::Generated
         :'polarity' => :'Polarity',
         :'source' => :'String',
         :'target' => :'String',
+        :'target_table' => :'RelationshipTarget',
         :'weight' => :'Float'
       }
     end
@@ -206,6 +211,10 @@ module Temper::Generated
         self.target = attributes[:'target']
       else
         self.target = nil
+      end
+
+      if attributes.key?(:'target_table')
+        self.target_table = attributes[:'target_table']
       end
 
       if attributes.key?(:'weight')
@@ -337,6 +346,7 @@ module Temper::Generated
           polarity == o.polarity &&
           source == o.source &&
           target == o.target &&
+          target_table == o.target_table &&
           weight == o.weight
     end
 
@@ -349,7 +359,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [confidence, correlation_id, invocation_id, model, persona, rationale, reasoning, edge_kind, label, polarity, source, target, weight].hash
+      [confidence, correlation_id, invocation_id, model, persona, rationale, reasoning, edge_kind, label, polarity, source, target, target_table, weight].hash
     end
 
     # Builds the object from hash

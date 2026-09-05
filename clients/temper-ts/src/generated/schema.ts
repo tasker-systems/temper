@@ -2614,6 +2614,11 @@ export interface components {
             source: components["schemas"]["ResourceId"];
             /** @description Target resource — a pre-resolved id (both endpoints are resolved now). */
             target: components["schemas"]["ResourceId"];
+            /**
+             * @description Which table `target` addresses. Defaults to `resource`; `blob` points
+             *     the edge at a binary blob the caller can read (task 01a06ee1).
+             */
+            target_table?: components["schemas"]["RelationshipTarget"];
             /** Format: double */
             weight: number;
         };
@@ -5965,6 +5970,19 @@ export interface components {
             /** Format: uuid */
             edge_handle: string;
         };
+        /**
+         * @description Which table the asserted edge's TARGET endpoint lives in. `resource` is the
+         *     incumbent and the serde default, so every existing payload is unchanged;
+         *     `blob` is the D3 pointing act — a resource names a blob it can READ as its
+         *     source doc / evidence / figure, with the edge homed in the SOURCE's home
+         *     (the same mechanism resource→resource asserts use: point at what you can
+         *     see). The SOURCE is always a resource — blobs assert through `blob relate`,
+         *     whose home story is the blob's own. Typed, never a free string: a malformed
+         *     value must refuse naming the two admissible values (the
+         *     `BlobRelationDirection` rule).
+         * @enum {string}
+         */
+        RelationshipTarget: "resource" | "blob";
         /**
          * @description Response to a member removal (or self-leave): the removal happened; this
          *     reports the residual owned-resource reach so the caller can hand it off.

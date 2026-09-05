@@ -13,6 +13,26 @@ use crate::types::authorship::ActInput;
 use crate::types::graph::{EdgeKind, Polarity};
 use crate::types::ids::ResourceId;
 
+/// Which table the asserted edge's TARGET endpoint lives in. `resource` is the
+/// incumbent and the serde default, so every existing payload is unchanged;
+/// `blob` is the D3 pointing act — a resource names a blob it can READ as its
+/// source doc / evidence / figure, with the edge homed in the SOURCE's home
+/// (the same mechanism resource→resource asserts use: point at what you can
+/// see). The SOURCE is always a resource — blobs assert through `blob relate`,
+/// whose home story is the blob's own. Typed, never a free string: a malformed
+/// value must refuse naming the two admissible values (the
+/// `BlobRelationDirection` rule).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp", schemars(inline))]
+#[serde(rename_all = "snake_case")]
+pub enum RelationshipTarget {
+    #[default]
+    Resource,
+    Blob,
+}
+
 /// Request body for `POST /api/relationships`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
@@ -21,6 +41,10 @@ pub struct AssertRelationshipRequest {
     pub source: ResourceId,
     /// Target resource — a pre-resolved id (both endpoints are resolved now).
     pub target: ResourceId,
+    /// Which table `target` addresses. Defaults to `resource`; `blob` points
+    /// the edge at a binary blob the caller can read (task 01a06ee1).
+    #[serde(default)]
+    pub target_table: RelationshipTarget,
     pub edge_kind: EdgeKind,
     pub polarity: Polarity,
     pub label: String,

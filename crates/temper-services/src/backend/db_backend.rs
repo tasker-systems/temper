@@ -23,7 +23,7 @@ use temper_core::types::data_artifact::{ArtifactView, KindOwnerInput};
 use temper_core::types::graph;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{
-    CogmapId, ContextId, EdgeId, EntityId, InvocationId, ProfileId, PropertyId, ResourceId,
+    BlobId, CogmapId, ContextId, EdgeId, EntityId, InvocationId, ProfileId, PropertyId, ResourceId,
 };
 use temper_core::types::ingest::{
     AppendBlockPayload, BlocksResponse, FinalizePayload, SegmentInfo, SegmentedBegin,
@@ -37,6 +37,7 @@ use temper_core::types::reconcile::{
     CharterDisposition, CreateCogmapOutcome, ReconcileCogmapRequest, ReconcileOutcome,
     ReconcileTelos,
 };
+use temper_core::types::relationship_requests::RelationshipTarget;
 use temper_core::types::resource_view::{ResourceSection, ResourceView, SectionSet};
 use temper_core::types::steward::AdvanceWatermarkAck;
 use temper_core::types::workflow_job::{AnchorJobPayload, DispatchType, Persona};
@@ -126,6 +127,8 @@ pub(crate) const GOAL_EDGE_LABEL: &str = "advances";
 struct SourceHomedEdge<'a> {
     src: uuid::Uuid,
     tgt: uuid::Uuid,
+    /// Which table `tgt` addresses — resource (incumbent) or blob (01a06ee1).
+    tgt_table: RelationshipTarget,
     edge_kind: graph::EdgeKind,
     polarity: graph::Polarity,
     label: &'a str,
@@ -1052,11 +1055,21 @@ impl DbBackend {
     ///    `can_modify_resource`'s arm 4), so the effective source authority is container authority.
     /// 3. **`endpoint_readable_by_profile(tgt)`** — you may point at what you can see. Closes F-1's
     ///    "a caller who can modify A can attach A→B to any B by id, including resources they cannot
-    ///    read".
+    ///    read". The endpoint table is threaded (`SourceHomedEdge.tgt_table`): a resource target is
+    ///    the incumbent; a blob target (task 01a06ee1, ruled 2026-09-04) is the same clause through
+    ///    `endpoint_readable_by_profile`'s `kb_blobs` arm (= `blob_readable_by_profile`) — read
+    ///    standing suffices, and an unreadable-or-absent blob renders the same NotFound an unknown
+    ///    id gets, so the write never becomes a blob existence oracle.
     ///
     /// Gating **here** rather than at the three call sites is deliberate: the home is authorized as
     /// the same value it is then written to (no gap between the check and the write it protects),
     /// and the two goal-edge projections inherit the target clause instead of each needing their own.
+    ///
+    /// **A blob target is refused on the kernel arm (2026-09-04 ruling): kernel edges run
+    /// resource→resource.** A cogmap-homed source's edges are part of the map's own universe, and
+    /// widening that to blob endpoints would drag the kb_cogmaps-homed fold/mutability corners
+    /// into scope for no current need. The refusal names the constraint, so it is a declared
+    /// boundary, not a silent hole.
     async fn assert_edge_from_source_home(
         &self,
         edge: SourceHomedEdge<'_>,
@@ -1078,11 +1091,23 @@ impl DbBackend {
         self.check_can_modify_next(edge.src).await?;
         self.check_container_authorable(&home_table, home_id)
             .await?;
-        // Edge targets are resources on every production path (the cogmap-as-endpoint form is not
-        // reachable from this helper, whose source is always a resource), so the endpoint table is
-        // fixed here rather than threaded through `SourceHomedEdge`.
-        self.check_endpoint_readable("kb_resources", edge.tgt)
-            .await?;
+        // The endpoint table follows the target (resources on the incumbent paths — the
+        // cogmap-as-endpoint form is not reachable from this helper, whose source is always a
+        // resource). A blob target from a kernel (cogmap-homed) source is refused by ruling.
+        let tgt_table = match edge.tgt_table {
+            RelationshipTarget::Resource => "kb_resources",
+            RelationshipTarget::Blob => {
+                if home_table == "kb_cogmaps" {
+                    return Err(TemperError::BadRequest(
+                        "target_table=blob requires the source resource homed in a context — \
+                         kernel (cogmap-homed) edges run resource to resource"
+                            .to_string(),
+                    ));
+                }
+                "kb_blobs"
+            }
+        };
+        self.check_endpoint_readable(tgt_table, edge.tgt).await?;
 
         let label = (!edge.label.is_empty()).then_some(edge.label);
         let src = ResourceId::from(edge.src);
@@ -1091,8 +1116,9 @@ impl DbBackend {
         let polarity = map_polarity(edge.polarity);
         let weight = edge.weight;
         let emitter = edge.emitter;
-        let edge = if home_table == "kb_cogmaps" {
-            writes::assert_kernel_edge_with(
+        let edge = match (home_table == "kb_cogmaps", edge.tgt_table) {
+            // Kernel arm: cogmap-homed sources, resource targets only (refused above).
+            (true, _) => writes::assert_kernel_edge_with(
                 &self.pool,
                 writes::KernelEdgeParams {
                     cogmap: CogmapId::from(home_id),
@@ -1107,9 +1133,9 @@ impl DbBackend {
                 act_ctx,
             )
             .await
-            .map_err(api_err)?
-        } else {
-            writes::assert_relationship_with(
+            .map_err(api_err)?,
+            // Context-homed, resource target: the incumbent fire call, unchanged.
+            (false, RelationshipTarget::Resource) => writes::assert_relationship_with(
                 &self.pool,
                 writes::AssertParams {
                     src,
@@ -1124,7 +1150,25 @@ impl DbBackend {
                 act_ctx,
             )
             .await
-            .map_err(api_err)?
+            .map_err(api_err)?,
+            // Context-homed, blob target: the same anchored fire path `blob relate` uses
+            // (one fire path for every endpoint pairing), homed on the SOURCE's home.
+            (false, RelationshipTarget::Blob) => writes::assert_anchored_edge_with(
+                &self.pool,
+                writes::AssertAnchoredEdgeParams {
+                    source: AnchorRef::resource(src),
+                    target: AnchorRef::blob(BlobId::from(uuid::Uuid::from(tgt))),
+                    kind,
+                    polarity,
+                    label,
+                    weight,
+                    home: temper_substrate::events::EdgeHome::Context(ContextId::from(home_id)),
+                    emitter,
+                },
+                act_ctx,
+            )
+            .await
+            .map_err(api_err)?,
         };
         Ok(EdgeId::from(edge.uuid()))
     }
@@ -1963,6 +2007,7 @@ impl DbBackend {
                 SourceHomedEdge {
                     src: new_id.uuid(),
                     tgt: goal.into(),
+                    tgt_table: RelationshipTarget::Resource,
                     edge_kind: graph::EdgeKind::LeadsTo,
                     polarity: graph::Polarity::Forward,
                     label: GOAL_EDGE_LABEL,
@@ -2255,6 +2300,7 @@ impl Backend for DbBackend {
                     SourceHomedEdge {
                         src: new_id,
                         tgt: goal.into(),
+                        tgt_table: RelationshipTarget::Resource,
                         edge_kind: graph::EdgeKind::LeadsTo,
                         polarity: graph::Polarity::Forward,
                         label: GOAL_EDGE_LABEL,
@@ -2509,6 +2555,7 @@ impl Backend for DbBackend {
                 SourceHomedEdge {
                     src: src_next,
                     tgt: tgt_next,
+                    tgt_table: cmd.target_table,
                     edge_kind: cmd.edge_kind,
                     polarity: cmd.polarity,
                     label: &cmd.label,
