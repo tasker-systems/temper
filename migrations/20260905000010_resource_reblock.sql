@@ -45,7 +45,13 @@ ALTER TABLE kb_block_provenance ADD COLUMN is_carried BOOLEAN NOT NULL DEFAULT f
 -- taken from the entry's own `carried` key when present, else from the new defaulted
 -- `p_carried` parameter. Existing callers pass no flag and their entries carry no key — their
 -- rows read carried = false exactly as before (additive signature).
-CREATE OR REPLACE FUNCTION _insert_block_provenance(p_block uuid, p_event uuid, p_incorporated jsonb, p_carried boolean DEFAULT false)
+-- DROP + CREATE, NOT CREATE OR REPLACE: the signature GAINS a parameter, and CREATE OR REPLACE
+-- with a new signature leaves the old 3-arg overload standing — every existing 3-arg call site
+-- (the canonical projectors) then resolves against two candidates and fails "function is not
+-- unique". Dropping first makes the defaulted 4-arg form the ONE resolution (the 20260704000007
+-- precedent for a signature change).
+DROP FUNCTION IF EXISTS _insert_block_provenance(uuid, uuid, jsonb);
+CREATE FUNCTION _insert_block_provenance(p_block uuid, p_event uuid, p_incorporated jsonb, p_carried boolean DEFAULT false)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE v_inc jsonb; v_kind text; v_val text; v_source_id uuid;
 BEGIN
@@ -284,10 +290,12 @@ ON CONFLICT (name) DO UPDATE
 
 -- ── the projector half (replay-stable; arity of `_project_block_mutated`) ─────────────────
 -- Guards raise in block_mutate's voice: the payload's chunk assignments must cover EXACTLY the
--- live is_current chunks of the resource's non-folded blocks (count + membership), every folded
--- and kept id must name a live non-folded block of THIS resource, and every created block must
--- carry >= 1 chunk. There is deliberately NO no-op re-check here — the partition is computed in
--- Rust (the chunker); a duplicate SQL opinion would be a second decision point, not a guard.
+-- live is_current chunks attached to the payload's FOLDED blocks (count + membership) — a KEPT
+-- block's chunks ride along on their untouched row and are deliberately not re-listed, so the
+-- universe is the folded set, not all live chunks. Every folded and kept id must name a live
+-- non-folded block of THIS resource, and every created block must carry >= 1 chunk. There is
+-- deliberately NO no-op re-check here — the partition is computed in Rust (the chunker); a
+-- duplicate SQL opinion would be a second decision point, not a guard.
 CREATE FUNCTION _project_resource_reblocked(p_event uuid, p_payload jsonb, p_content jsonb)
 RETURNS uuid LANGUAGE plpgsql AS $$
 DECLARE
@@ -305,39 +313,6 @@ BEGIN
         RAISE EXCEPTION '_project_resource_reblocked: resource % not found', v_resource;
     END IF;
 
-    -- Guard: chunk assignments cover exactly the incumbent live chunk set. Count first...
-    SELECT count(*) INTO v_live_count
-        FROM kb_chunks c
-        JOIN kb_content_blocks b ON b.id = c.block_id
-       WHERE b.resource_id = v_resource AND NOT b.is_folded AND c.is_current;
-    v_payload_count := 0;
-    FOR v_block_json IN SELECT jsonb_array_elements(coalesce(p_payload->'created', '[]'::jsonb)) LOOP
-        IF jsonb_array_length(v_block_json->'chunks') = 0 THEN
-            RAISE EXCEPTION '_project_resource_reblocked: created block % has no chunks',
-                v_block_json->>'block_id';
-        END IF;
-        v_payload_count := v_payload_count + jsonb_array_length(v_block_json->'chunks');
-    END LOOP;
-    IF v_payload_count <> v_live_count THEN
-        RAISE EXCEPTION '_project_resource_reblocked: payload assigns % chunk(s) but resource % has % live',
-            v_payload_count, v_resource, v_live_count;
-    END IF;
-    -- ...then membership: every assigned chunk must be one of those live chunks (of THIS resource).
-    FOR v_block_json IN SELECT jsonb_array_elements(p_payload->'created') LOOP
-        FOR v_chunk_json IN SELECT jsonb_array_elements(v_block_json->'chunks') LOOP
-            v_chunk := (v_chunk_json->>'chunk_id')::uuid;
-            IF NOT EXISTS (
-                SELECT 1 FROM kb_chunks c
-                JOIN kb_content_blocks b ON b.id = c.block_id
-                WHERE c.id = v_chunk AND b.resource_id = v_resource
-                  AND NOT b.is_folded AND c.is_current
-            ) THEN
-                RAISE EXCEPTION '_project_resource_reblocked: chunk % is not a live chunk of resource %',
-                    v_chunk, v_resource;
-            END IF;
-        END LOOP;
-    END LOOP;
-
     -- Guard: folded and kept ids must name live non-folded blocks of THIS resource.
     v_folded := coalesce((SELECT array_agg((x->>0)::uuid) FROM jsonb_array_elements(coalesce(p_payload->'folded', '[]'::jsonb)) x), '{}');
     v_kept := coalesce((SELECT array_agg((x->>'block_id')::uuid) FROM jsonb_array_elements(coalesce(p_payload->'kept', '[]'::jsonb)) x), '{}');
@@ -350,6 +325,42 @@ BEGIN
     ) THEN
         RAISE EXCEPTION '_project_resource_reblocked: folded/kept id is not a live block of resource %', v_resource;
     END IF;
+
+    -- Guard: the created blocks' assignments cover exactly the chunk set the folded blocks lose.
+    -- Count first...
+    SELECT count(*) INTO v_live_count
+        FROM kb_chunks c
+        JOIN kb_content_blocks b ON b.id = c.block_id
+       WHERE b.resource_id = v_resource AND NOT b.is_folded AND c.is_current
+         AND b.id = ANY(v_folded);
+    v_payload_count := 0;
+    FOR v_block_json IN SELECT jsonb_array_elements(coalesce(p_payload->'created', '[]'::jsonb)) LOOP
+        IF jsonb_array_length(v_block_json->'chunks') = 0 THEN
+            RAISE EXCEPTION '_project_resource_reblocked: created block % has no chunks',
+                v_block_json->>'block_id';
+        END IF;
+        v_payload_count := v_payload_count + jsonb_array_length(v_block_json->'chunks');
+    END LOOP;
+    IF v_payload_count <> v_live_count THEN
+        RAISE EXCEPTION '_project_resource_reblocked: payload assigns % chunk(s) but the folded blocks of resource % hold % live',
+            v_payload_count, v_resource, v_live_count;
+    END IF;
+    -- ...then membership: every assigned chunk must be a live chunk of a FOLDED block (of THIS
+    -- resource) — never one riding a kept row.
+    FOR v_block_json IN SELECT jsonb_array_elements(p_payload->'created') LOOP
+        FOR v_chunk_json IN SELECT jsonb_array_elements(v_block_json->'chunks') LOOP
+            v_chunk := (v_chunk_json->>'chunk_id')::uuid;
+            IF NOT EXISTS (
+                SELECT 1 FROM kb_chunks c
+                JOIN kb_content_blocks b ON b.id = c.block_id
+                WHERE c.id = v_chunk AND b.resource_id = v_resource
+                  AND NOT b.is_folded AND c.is_current AND b.id = ANY(v_folded)
+            ) THEN
+                RAISE EXCEPTION '_project_resource_reblocked: chunk % is not a live chunk of a folded block of resource %',
+                    v_chunk, v_resource;
+            END IF;
+        END LOOP;
+    END LOOP;
 
     -- 1. fold the superseded blocks (the `_project_charter_set` arm).
     UPDATE kb_content_blocks SET is_folded = true, last_event_id = p_event
@@ -454,7 +465,8 @@ from the payload''s ordered chunk hashes; the derived-hash equality with an incu
 is what makes a section KEEP that block row. is_carried marks split copies of attribution,
 never a merge union. The full no-op dedup (identical partition ⇒ no event) is the Rust op''s
 decision, not a SQL one; this wrapper only refuses a manifest that names no structural
-change. Chunk assignments must cover exactly the resource''s live chunks — a payload that
+change. Created blocks'' chunk assignments must cover exactly the chunks the FOLDED
+blocks lose (kept blocks'' chunks ride along untouched) — a payload that
 over- or under-covers raises and nothing is written.';
 
 SELECT declare_migration(

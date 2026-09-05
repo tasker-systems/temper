@@ -275,7 +275,7 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
                     .context("chunk_id missing")?
                     .parse()?;
                 let row = sqlx::query(
-                    "SELECT cc.content, c.embedding::text, c.embedded_with \
+                    "SELECT cc.content, c.embedding::text, c.embedded_with, c.header_path, c.heading_depth \
                        FROM kb_chunk_content cc JOIN kb_chunks c ON c.id = cc.chunk_id \
                       WHERE cc.chunk_id = $1",
                 )
@@ -290,16 +290,25 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
                 // `embedded_with` is sidecar-only (it is NOT on the ledger payload), so replay can
                 // only recover it from the projected row — exactly as it already does for the vector
                 // itself. Omitting it would make every replayed chunk land NULL: the projection stops
-                // being byte-identical (which is what the replay-roundtrip tests assert), and a real
+                // being byte-identical (which is the replay-roundtrip tests assert), and a real
                 // rebuild-from-ledger would silently discard all provenance and re-stale the whole
                 // index.
                 let embedded_with: Option<String> = row.get(2);
+                // Header metadata rides the same projected row for the same reason: a
+                // heading-sectioned body's chunks carry `header_path`/`heading_depth`, and a
+                // sidecar without them would reproject every chunk with NULLs — invisible to
+                // bodies with no headings, which is exactly why it stayed a hole until a
+                // heading-sectioned resource entered the replay diff.
+                let header_path: Option<String> = row.get(3);
+                let heading_depth: Option<i16> = row.get(4);
                 side.insert(
                     chunk_id.to_string(),
                     serde_json::json!({
                         "content": content,
                         "embedding": embedding,
                         "embedded_with": embedded_with,
+                        "header_path": header_path,
+                        "heading_depth": heading_depth,
                     }),
                 );
             }
@@ -756,11 +765,11 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // materialization threshold, the `SalienceRefreshed` posture (events.rs).
             EventKind::ResourceReblocked => {
                 let side = snap.sidecars.get(&id).context("missing sidecar")?;
-                sqlx::query("SELECT _project_resource_reblocked($1,$2,$3)")
-                    .bind(id)
-                    .bind(&payload)
-                    .bind(side)
-                    .execute(pool)
+                // A compile-checked macro, like the ContextRetired/ContextRestored arms: this is
+                // a fixed projector call with bound parameters, and the audit's dynamic-table
+                // reason does not cover those — it converts, and gains a .sqlx entry.
+                sqlx::query_scalar!("SELECT _project_resource_reblocked($1,$2,$3)", id, payload, side)
+                    .fetch_one(pool)
                     .await?;
             }
         }
