@@ -175,7 +175,7 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
     let rows = sqlx::query(
         "SELECT e.id, et.name, e.payload \
            FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
-          WHERE et.name IN ('cogmap_seeded','resource_created','block_created','block_mutated','charter_set') ORDER BY e.id",
+          WHERE et.name IN ('cogmap_seeded','resource_created','block_created','block_mutated','charter_set','resource_reblocked') ORDER BY e.id",
     )
     .fetch_all(pool)
     .await?;
@@ -202,6 +202,10 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
                 .get("chunks")
                 .cloned()
                 .map(|chunks| serde_json::json!([{ "chunks": chunks }])),
+            // A re-block reparents EXISTING chunk rows and inserts none — the chunk walk below
+            // must do nothing, so an EMPTY manifest (every chunk id already has its CAS row,
+            // which the walk would only re-read). Only the `__blocks` re-supply matters here.
+            EventKind::ResourceReblocked => Some(serde_json::json!([])),
             // The SQL query above restricts to the three content-bearing types, so the
             // remaining variants are unreachable here — they carry no chunk manifests.
             EventKind::ResourceUpdated
@@ -260,11 +264,6 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             // provider object's presence was verified at commit and is replay's input, not its
             // output.
             | EventKind::BlobCommitted
-            // A re-block carries no CHUNK content — its chunk ids reference existing CAS rows.
-            // Its created blocks' verbatim bytes DO need a `__blocks` re-supply in the sidecar;
-            // that pass is wired alongside the write path that fires the event. Not selected by
-            // this query's type list until then.
-            | EventKind::ResourceReblocked
             | EventKind::WebhookReceived => None,
         }
         .context("content-bearing payload missing blocks")?;
@@ -319,6 +318,20 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
                     .parse()?;
                 vec![(bid.to_string(), bid)]
             }
+            // A re-block keys by BLOCK ID (the mutate-path keying — its fire arm builds `__blocks`
+            // keyed by created block id), and only for the CREATED blocks: kept blocks' bytes ride
+            // their untouched revisions, folded blocks' revisions are history. Each created block
+            // mints exactly one revision per event, so the (block_id, occurred_at) lookup below
+            // stays 1:1.
+            EventKind::ResourceReblocked => payload["created"]
+                .as_array()
+                .context("resource_reblocked payload missing created")?
+                .iter()
+                .filter_map(|b| {
+                    let bid: Uuid = b["block_id"].as_str()?.parse().ok()?;
+                    Some((bid.to_string(), bid))
+                })
+                .collect(),
             // create/append/charter: key by seq, look up by block id — both live on the manifest.
             _ => manifests
                 .as_array()
@@ -736,13 +749,19 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // kb_subscriptions, which is mutable infra and not itself replayable, so a rebuild
             // would silently reproject today's declarations onto yesterday's events.
             | EventKind::SubscriptionDeliveryDisposed => {}
-            // The re-block substrate: the projector (`_project_resource_reblocked`) arrives with
-            // the write path that fires the event, later on this same branch. Until then a
-            // replayed resource_reblocked event must LOUDLY fail — silently skipping a
-            // structure-rewriting event would report a rebuilt ledger quiescent while every
-            // created block is missing. Unreachable on any baseline that never fired one.
+            // The re-block substrate: pure projector half, the `_project_block_mutated` arity
+            // (payload + sidecar). Deliberately NOT a `CONTENT_EVENTS` member — a re-block
+            // changes no region-formation input (chunks are reparented, never rewritten; the
+            // chunk-equality witnesses pin that premise), so it must never advance a
+            // materialization threshold, the `SalienceRefreshed` posture (events.rs).
             EventKind::ResourceReblocked => {
-                anyhow::bail!("no projector for resource_reblocked — arrives with the re-block write path")
+                let side = snap.sidecars.get(&id).context("missing sidecar")?;
+                sqlx::query("SELECT _project_resource_reblocked($1,$2,$3)")
+                    .bind(id)
+                    .bind(&payload)
+                    .bind(side)
+                    .execute(pool)
+                    .await?;
             }
         }
     }

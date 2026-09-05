@@ -23,6 +23,7 @@ use crate::ids::{
 use crate::payloads::{self, AnchorRef, EdgePolarity, Incorporation, ProvenanceSource};
 use crate::text::slugify;
 use temper_core::types::property_owner::PropertyOwner;
+use temper_ingest::section::slice_sections;
 
 // ── identity resolution (natural-key) ───────────────────────────────────────────
 
@@ -586,6 +587,434 @@ pub async fn annotate_block_sources_in_tx(
     )
     .await?
     .block()
+}
+
+// ── the re-block substrate (2026-09-04) ──────────────────────────────────────
+
+/// Re-block one resource's blocks. No options: the partition is a function of the body (heading
+/// sections via `temper_ingest::section`), the kept/created/folded mapping is a function of the
+/// live blocks' derived hashes, and the refusals are the design's refusal face (a derived-shape
+/// resource, a still-arriving `in_progress` resource, an unreproducible chunking — decline rather
+/// than guess).
+#[derive(Debug)]
+pub struct ReblockParams {
+    pub resource: ResourceId,
+    pub emitter: EntityId,
+}
+
+/// What a re-block did. [`ReblockOutcome::NoOp`] means the ledger is indistinguishable from the
+/// operation never having run — no event, no write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReblockOutcome {
+    NoOp,
+    Reblocked { event: EventId },
+}
+
+/// One live block as the partition sees it.
+#[derive(Debug, Clone)]
+struct LiveBlock {
+    id: Uuid,
+    seq: i32,
+    /// The block's DERIVED `block_body_hash` — the kept-identity key, never bytes-to-hash
+    /// (chunk `content_hash` is over trimmed text; bytes are stored verbatim).
+    body_hash: Option<String>,
+    /// The block's verbatim bytes (from `kb_block_content` via `current_revision_id`). `None`
+    /// = a derived block, which the op refuses outright.
+    bytes: Option<String>,
+}
+
+/// One live current chunk, in the canonical ingest order (block seq, then chunk index).
+#[derive(Debug, Clone)]
+struct LiveChunk {
+    id: Uuid,
+    block_id: Uuid,
+    content_hash: String,
+}
+
+/// One asserted attribution row on a live block (`is_corrected = false`).
+#[derive(Debug, Clone)]
+struct AttributionRow {
+    block_id: Uuid,
+    source: ProvenanceSource,
+    accretion_seq: i32,
+}
+
+/// The computed re-partition: the payload to fire plus each created block's verbatim slice
+/// bytes (the `__blocks` sidecar).
+#[derive(Debug)]
+struct ReblockPlan {
+    manifest: payloads::ResourceReblocked,
+    slices: Vec<(BlockId, String)>,
+}
+
+/// Compute the re-partition of `body` over the live blocks/chunks. `Ok(None)` = no-op: the
+/// partition is already the live one, so firing anything would violate the dedup contract.
+///
+/// Identity preservation is DERIVED-HASH identity: a section whose ordered chunk hashes merkle
+/// to an incumbent block's current `block_body_hash` KEEPS that block row. Attribution rides
+/// the chunk-run geometry — a folded block whose chunk run lies inside a created section is
+/// absorbed (union, `carried = false`); one spanning the section boundary is split (copies,
+/// `carried = true`); a kept block's rows ride along untouched and are never re-listed.
+fn compute_reblock_partition(
+    resource: ResourceId,
+    body: &str,
+    live_blocks: &[LiveBlock],
+    live_chunks: &[LiveChunk],
+    attributions: &[AttributionRow],
+) -> Result<Option<ReblockPlan>> {
+    // The slices ARE the new partition; their concatenation must BE the body (asserted, not
+    // assumed — this is the byte-exactness contract's compute-side half).
+    let slices = slice_sections(body);
+    let mut composed = String::new();
+    for s in &slices {
+        composed.push_str(&s.text);
+    }
+    assert_eq!(
+        composed, body,
+        "slice_sections must rejoin the body byte-for-byte"
+    );
+
+    // Fresh chunking of each section (with its ancestor breadcrumb) gives the EXPECTED
+    // chunk-hash sequence. The live chunk sequence must reproduce it exactly: the chunk-hash
+    // sequence is a function of the body alone, so a mismatch means the stored chunking is not
+    // reproducible (an older chunker, a foreign write) and any re-partition would be a guess.
+    let mut section_counts: Vec<usize> = Vec::with_capacity(slices.len());
+    let mut expected: Vec<temper_ingest::chunk::ChunkData> = Vec::new();
+    for s in &slices {
+        let chunks =
+            temper_ingest::chunk::chunk_markdown_with_prefix(&s.text, &s.initial_breadcrumb);
+        section_counts.push(chunks.len());
+        expected.extend(chunks);
+    }
+    if expected.len() != live_chunks.len() {
+        anyhow::bail!(
+            "reblock_resource: resource {resource} has {live} live chunk(s) but its body now chunks to {fresh} — \
+             the stored chunking does not reproduce, refusing rather than guessing",
+            live = live_chunks.len(),
+            fresh = expected.len(),
+        );
+    }
+    for (i, (e, l)) in expected.iter().zip(live_chunks).enumerate() {
+        if e.content_hash != l.content_hash {
+            anyhow::bail!(
+                "reblock_resource: resource {resource} live chunk #{i} does not match a fresh chunking of its body \
+                 (hash {live_hash} vs expected {fresh_hash}) — refusing rather than guessing",
+                live_hash = l.content_hash,
+                fresh_hash = e.content_hash,
+            );
+        }
+    }
+
+    // Section k owns live chunk positions [start, end): sections partition the expected
+    // sequence in order, and expected ≡ live positionally (just proven hash-by-hash).
+    let mut section_ranges: Vec<(usize, usize)> = Vec::with_capacity(slices.len());
+    let mut offset = 0usize;
+    for count in &section_counts {
+        section_ranges.push((offset, offset + count));
+        offset += count;
+    }
+
+    // Kept detection: derived-merkle equality against an unclaimed incumbent.
+    let mut kept: Vec<payloads::ReblockKeptBlock> = Vec::new();
+    let mut created: Vec<payloads::ReblockCreatedBlock> = Vec::new();
+    let mut slices_out: Vec<(BlockId, String)> = Vec::new();
+    let mut claimed: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
+
+    for (k, s) in slices.iter().enumerate() {
+        let (start, end) = section_ranges[k];
+        let run = &live_chunks[start..end];
+
+        let merkle = temper_ingest::merkle::block_merkle(
+            &run.iter()
+                .map(|c| c.content_hash.clone())
+                .collect::<Vec<_>>(),
+        );
+        let incumbent = live_blocks
+            .iter()
+            .find(|b| b.body_hash.as_deref() == Some(merkle.as_str()) && !claimed.contains(&b.id));
+        match incumbent {
+            Some(b) => {
+                claimed.insert(b.id);
+                kept.push(payloads::ReblockKeptBlock {
+                    block_id: BlockId::from(b.id),
+                    seq: k as i32,
+                });
+            }
+            None => {
+                let new_id = BlockId::from(Uuid::now_v7());
+                created.push(payloads::ReblockCreatedBlock {
+                    block_id: new_id,
+                    seq: k as i32,
+                    chunks: run
+                        .iter()
+                        .enumerate()
+                        .map(|(i, c)| payloads::ChunkManifest {
+                            chunk_id: c.id.into(),
+                            chunk_index: i as i32,
+                            content_hash: c.content_hash.clone(),
+                        })
+                        .collect(),
+                    attribution: Vec::new(), // filled below
+                });
+                slices_out.push((new_id, s.text.clone()));
+            }
+        }
+    }
+
+    // Attribution delta. A folded block whose chunk run lies fully inside one created section
+    // is ABSORBED: its asserted rows join that section's union, carried = false (the content IS
+    // in the block). A folded or kept block whose run SPANS a created section's boundary is
+    // SPLIT: the section gets a copy, carried = true. (Both arms stay within one resource's ACL
+    // — the blessed split stance — so the copy needs no extra qualification here.) Kept blocks'
+    // own rows are deliberately not re-listed: the survivor's provenance rides along untouched.
+    let block_range: std::collections::HashMap<Uuid, (usize, usize)> = live_blocks
+        .iter()
+        .filter_map(|b| {
+            let positions: Vec<usize> = live_chunks
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| c.block_id == b.id)
+                .map(|(i, _)| i)
+                .collect();
+            let first = *positions.first()?;
+            let last = *positions.last()?;
+            Some((b.id, (first, last + 1)))
+        })
+        .collect();
+
+    let mut delta: std::collections::HashMap<usize, Vec<(ProvenanceSource, i32, bool)>> =
+        std::collections::HashMap::new();
+    for a in attributions {
+        let Some(&(start, end)) = block_range.get(&a.block_id) else {
+            continue;
+        };
+        for (k, &(s_start, s_end)) in section_ranges.iter().enumerate() {
+            let absorbed = start >= s_start && end <= s_end;
+            let spans = start < s_end && end > s_start && !absorbed;
+            let is_created_section = created.iter().any(|c| c.seq == k as i32);
+            if absorbed {
+                delta
+                    .entry(k)
+                    .or_default()
+                    .push((a.source.clone(), a.accretion_seq, false));
+            } else if spans && is_created_section {
+                delta
+                    .entry(k)
+                    .or_default()
+                    .push((a.source.clone(), a.accretion_seq, true));
+            }
+        }
+    }
+    // Dedup per section: one source asserted on two incumbents (one absorbed, one split) must
+    // resolve deterministically — the direct (absorbed) union wins over a carried copy, then
+    // lower accretion_seq.
+    for c in &mut created {
+        let k = c.seq as usize;
+        if let Some(mut entries) = delta.remove(&k) {
+            entries.sort_by_key(|(_, seq, carried)| (*carried, *seq));
+            // ProvenanceSource is Eq, not Hash — a Vec scan is fine at attribution grain.
+            let mut seen: Vec<ProvenanceSource> = Vec::new();
+            entries.retain(|(source, _, _)| {
+                if seen.contains(source) {
+                    false
+                } else {
+                    seen.push(source.clone());
+                    true
+                }
+            });
+            c.attribution = entries
+                .into_iter()
+                .map(|(source, seq, carried)| payloads::ReblockAttribution {
+                    source,
+                    seq,
+                    carried,
+                })
+                .collect();
+        }
+    }
+
+    let folded: Vec<BlockId> = live_blocks
+        .iter()
+        .filter(|b| !claimed.contains(&b.id))
+        .map(|b| BlockId::from(b.id))
+        .collect();
+
+    // No-op dedup: the partition is identical — everything kept in place, nothing folded,
+    // nothing created (so no attribution delta exists to write). Firing would put an event on
+    // the ledger for a change that never happened.
+    let seqs_moved = kept.iter().any(|k| {
+        live_blocks
+            .iter()
+            .any(|b| b.id == k.block_id.uuid() && b.seq != k.seq)
+    });
+    if created.is_empty() && folded.is_empty() && !seqs_moved {
+        return Ok(None);
+    }
+
+    Ok(Some(ReblockPlan {
+        manifest: payloads::ResourceReblocked {
+            resource_id: resource,
+            created,
+            kept,
+            folded,
+        },
+        slices: slices_out,
+    }))
+}
+
+/// [`reblock_resource_with`] under the default (un-attributed) context.
+pub async fn reblock_resource(pool: &PgPool, p: ReblockParams) -> Result<ReblockOutcome> {
+    reblock_resource_with(pool, p, EventContext::default()).await
+}
+
+/// Re-block a resource under an explicit [`EventContext`]. Computes the partition, refuses the
+/// guessable, fires `resource_reblocked` when there is something to change.
+pub async fn reblock_resource_with(
+    pool: &PgPool,
+    p: ReblockParams,
+    ctx: EventContext,
+) -> Result<ReblockOutcome> {
+    let mut tx = begin_scoped(pool).await?;
+    let outcome = reblock_resource_in_tx(&mut tx, p, ctx).await?;
+    tx.commit().await?;
+    Ok(outcome)
+}
+
+/// In-transaction variant of [`reblock_resource`] — reads the live projection and fires on a
+/// caller-supplied connection.
+pub async fn reblock_resource_in_tx(
+    conn: &mut sqlx::PgConnection,
+    p: ReblockParams,
+    ctx: EventContext,
+) -> Result<ReblockOutcome> {
+    // A partition decision over a still-arriving body is a guess.
+    let ingest_state: String = sqlx::query_scalar!(
+        "SELECT ingest_state FROM kb_resources WHERE id = $1",
+        p.resource.uuid()
+    )
+    .fetch_one(&mut *conn)
+    .await
+    .with_context(|| format!("reblock_resource: resource {} not found", p.resource))?;
+    if ingest_state == "in_progress" {
+        anyhow::bail!(
+            "reblock_resource: resource {} is mid-ingest (in_progress) — a partition decision over a \
+             still-arriving body would be a guess",
+            p.resource
+        );
+    }
+
+    let live_blocks: Vec<LiveBlock> = sqlx::query!(
+        r#"SELECT b.id, b.seq,
+                  rev.block_body_hash AS "block_body_hash: Option<String>",
+                  bc.content AS "content: Option<String>"
+             FROM kb_content_blocks b
+             LEFT JOIN kb_block_revisions rev ON rev.id = b.current_revision_id
+             LEFT JOIN kb_block_content bc ON bc.block_revision_id = b.current_revision_id
+            WHERE b.resource_id = $1 AND NOT b.is_folded
+            ORDER BY b.seq"#,
+        p.resource.uuid()
+    )
+    .fetch_all(&mut *conn)
+    .await?
+    .into_iter()
+    .map(|r| LiveBlock {
+        id: r.id,
+        seq: r.seq,
+        body_hash: r.block_body_hash,
+        bytes: r.content,
+    })
+    .collect();
+    if live_blocks.is_empty() {
+        anyhow::bail!(
+            "reblock_resource: resource {} has no live blocks to partition",
+            p.resource
+        );
+    }
+    // The design slices STORED block content and never mutates text — a block whose bytes were
+    // never stored (a derived charter/scenario shape) would force the body to be re-derived
+    // from chunks, fabricating bytes the ledger never carried.
+    if let Some(missing) = live_blocks.iter().find(|b| b.bytes.is_none()) {
+        anyhow::bail!(
+            "reblock_resource: block {} (seq {}) of resource {} stores no verbatim bytes (a derived shape) — \
+             re-blocking composes the body from stored bytes only, refusing",
+            missing.id,
+            missing.seq,
+            p.resource
+        );
+    }
+
+    let live_chunks: Vec<LiveChunk> = sqlx::query!(
+        r#"SELECT c.id, c.block_id, c.content_hash
+             FROM kb_chunks c
+             JOIN kb_content_blocks b ON b.id = c.block_id
+            WHERE b.resource_id = $1 AND c.is_current AND NOT b.is_folded
+            ORDER BY b.seq, c.chunk_index"#,
+        p.resource.uuid()
+    )
+    .fetch_all(&mut *conn)
+    .await?
+    .into_iter()
+    .map(|r| LiveChunk {
+        id: r.id,
+        block_id: r.block_id,
+        content_hash: r.content_hash,
+    })
+    .collect();
+
+    let attributions: Vec<AttributionRow> = sqlx::query!(
+        r#"SELECT p.block_id, p.source_kind::text AS "source_kind!",
+                  p.source_id, p.accretion_seq, r.uri AS "uri: Option<String>"
+             FROM kb_block_provenance p
+             JOIN kb_content_blocks b ON b.id = p.block_id
+             LEFT JOIN kb_remote_sources r ON p.source_kind = 'remote' AND r.id = p.source_id
+            WHERE b.resource_id = $1 AND NOT b.is_folded AND NOT p.is_corrected"#,
+        p.resource.uuid()
+    )
+    .fetch_all(&mut *conn)
+    .await?
+    .into_iter()
+    .map(|r| {
+        let source = match r.source_kind.as_str() {
+            "remote" => ProvenanceSource::Remote(
+                r.uri
+                    .context("remote provenance row with no kb_remote_sources uri")?,
+            ),
+            "resource" => ProvenanceSource::Resource(r.source_id),
+            "event" => ProvenanceSource::Event(r.source_id),
+            other => anyhow::bail!("unknown provenance_source_kind {other:?}"),
+        };
+        Ok(AttributionRow {
+            block_id: r.block_id,
+            source,
+            accretion_seq: r.accretion_seq,
+        })
+    })
+    .collect::<Result<_>>()?;
+
+    // The body composes from verbatim block bytes only — never from chunk reconstruction.
+    let mut body = String::new();
+    for b in &live_blocks {
+        body.push_str(b.bytes.as_deref().expect("refused above"));
+    }
+
+    let Some(plan) =
+        compute_reblock_partition(p.resource, &body, &live_blocks, &live_chunks, &attributions)?
+    else {
+        return Ok(ReblockOutcome::NoOp);
+    };
+
+    let event = fire_with(
+        &mut *conn,
+        SeedAction::ResourceReblock {
+            manifest: plan.manifest,
+            slices: &plan.slices,
+            emitter: p.emitter,
+        },
+        ctx,
+    )
+    .await?
+    .reblocked_event()?;
+    Ok(ReblockOutcome::Reblocked { event })
 }
 
 /// Record an auditor's signed verdict on one `(block, source)` citation (Set 5, spec §4.1-4.2).
@@ -1736,4 +2165,272 @@ pub async fn declare_shape_with(
     .shape()?;
     tx.commit().await?;
     Ok(id)
+}
+
+#[cfg(test)]
+mod reblock_tests {
+    use super::*;
+    use temper_ingest::chunk::chunk_markdown;
+
+    fn sha(hashes: &[&str]) -> String {
+        temper_ingest::merkle::block_merkle(
+            &hashes.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        )
+    }
+
+    /// Build a live projection from per-block parts: each part is (verbatim bytes, how many of
+    /// the whole-body chunk run it holds). Block bodies concat to `body`, chunks are assigned in
+    /// canonical (seq, index) order, and each block's derived hash is merkle over its own run —
+    /// exactly the state the op's SQL reads produce.
+    fn build_fixture(parts: &[(&str, usize)]) -> (String, Vec<LiveBlock>, Vec<LiveChunk>) {
+        let body: String = parts.iter().map(|(bytes, _)| bytes.to_string()).collect();
+        let chunks = chunk_markdown(&body);
+        let mut blocks = Vec::new();
+        let mut live = Vec::new();
+        let mut pos = 0;
+        for (seq, (bytes, count)) in parts.iter().enumerate() {
+            let id = Uuid::now_v7();
+            let run = &chunks[pos..pos + count];
+            pos += count;
+            for c in run {
+                live.push(LiveChunk {
+                    id: Uuid::now_v7(),
+                    block_id: id,
+                    content_hash: c.content_hash.clone(),
+                });
+            }
+            blocks.push(LiveBlock {
+                id,
+                seq: seq as i32,
+                body_hash: Some(sha(&run
+                    .iter()
+                    .map(|c| c.content_hash.as_str())
+                    .collect::<Vec<_>>())),
+                bytes: Some(bytes.to_string()),
+            });
+        }
+        (body, blocks, live)
+    }
+
+    const SECTION_A: &str = "# Alpha\n\nalpha body\n";
+    const SECTION_B: &str = "## Beta\n\nbeta body\n";
+
+    #[test]
+    fn a_single_unsectioned_block_is_a_no_op() {
+        let body = "Just some plain text.\nNo headings here.\n";
+        let (body, blocks, chunks) = build_fixture(&[(body, 1)]);
+        let plan = compute_reblock_partition(
+            ResourceId::from(Uuid::now_v7()),
+            &body,
+            &blocks,
+            &chunks,
+            &[],
+        )
+        .unwrap();
+        assert!(
+            plan.is_none(),
+            "one body, one identical block: nothing to do"
+        );
+    }
+
+    #[test]
+    fn already_section_aligned_blocks_are_a_no_op_in_place() {
+        let (body, blocks, chunks) = build_fixture(&[(SECTION_A, 1), (SECTION_B, 1)]);
+        let plan = compute_reblock_partition(
+            ResourceId::from(Uuid::now_v7()),
+            &body,
+            &blocks,
+            &chunks,
+            &[],
+        )
+        .unwrap();
+        assert!(
+            plan.is_none(),
+            "every section keeps its own block at its own seq: the ledger must not hear about it"
+        );
+    }
+
+    #[test]
+    fn kept_blocks_with_moved_seqs_still_fire() {
+        let (body, mut blocks, chunks) = build_fixture(&[(SECTION_A, 1), (SECTION_B, 1)]);
+        // Same two identity-preserving sections, different slots: the partition is NOT the live
+        // one, so the op must fire (kept entries carrying the NEW seqs).
+        blocks[0].seq = 1;
+        blocks[1].seq = 0;
+        blocks.reverse(); // the op reads blocks in seq order
+        let plan = compute_reblock_partition(
+            ResourceId::from(Uuid::now_v7()),
+            &body,
+            &blocks,
+            &chunks,
+            &[],
+        )
+        .unwrap()
+        .expect("moved seqs are a change");
+        assert_eq!(plan.manifest.kept.len(), 2);
+        assert_eq!(plan.manifest.kept[0].seq, 0, "sections keep document order");
+        assert!(plan.manifest.created.is_empty() && plan.manifest.folded.is_empty());
+    }
+
+    #[test]
+    fn one_block_holding_two_sections_splits() {
+        let whole = format!("{SECTION_A}{SECTION_B}");
+        let (body, blocks, chunks) = build_fixture(&[(whole.as_str(), 2)]);
+        let plan = compute_reblock_partition(
+            ResourceId::from(Uuid::now_v7()),
+            &body,
+            &blocks,
+            &chunks,
+            &[],
+        )
+        .unwrap()
+        .expect("a two-section body over one block must repartition");
+        assert_eq!(plan.manifest.folded, vec![BlockId::from(blocks[0].id)]);
+        assert_eq!(plan.manifest.created.len(), 2);
+        assert!(plan.manifest.kept.is_empty());
+        let counts: Vec<usize> = plan
+            .manifest
+            .created
+            .iter()
+            .map(|c| c.chunks.len())
+            .collect();
+        assert_eq!(counts, vec![1, 1], "one chunk per section at this size");
+        // chunk_index renumbers within the NEW block, and the assignment draws EXISTING ids.
+        for c in &plan.manifest.created {
+            for (i, chunk) in c.chunks.iter().enumerate() {
+                assert_eq!(chunk.chunk_index, i as i32);
+                assert!(chunks.iter().any(|l| l.id == chunk.chunk_id.uuid()));
+            }
+        }
+        // The created slices' concatenation IS the body — the sidecar stores byte-exact parts.
+        let mut composed = String::new();
+        for (_, text) in &plan.slices {
+            composed.push_str(text);
+        }
+        assert_eq!(composed, body);
+    }
+
+    #[test]
+    fn a_mismatched_chunk_sequence_is_a_refusal_not_a_plan() {
+        let (body, mut blocks, mut chunks) = build_fixture(&[(SECTION_A, 1)]);
+        chunks[0].content_hash = "deadbeef".repeat(8);
+        blocks[0].body_hash = Some(sha(&["deadbeef".repeat(8).as_str()]));
+        let err = compute_reblock_partition(
+            ResourceId::from(Uuid::now_v7()),
+            &body,
+            &blocks,
+            &chunks,
+            &[],
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("refusing"),
+            "the refusal names the refusal: {err}"
+        );
+    }
+
+    #[test]
+    fn an_identical_second_section_whose_incumbent_hash_drifts_creates_a_twin() {
+        // Two IDENTICAL sections; only the first has an incumbent whose DERIVED hash matches.
+        // The second section's run hashes identically (duplicate paragraphs) but identity is
+        // claimed by derived-hash equality against an UNCLAIMED block — the twin is created
+        // over the second run of chunk ids, never re-asserted onto the first block. The drift
+        // (a stale derived hash) is what forces the second section out of keep.
+        let (body, blocks, chunks) = build_fixture(&[(SECTION_A, 1), (SECTION_A, 1)]);
+        let mut blocks = blocks;
+        blocks[1].body_hash = Some("drifted".to_string());
+        let plan = compute_reblock_partition(
+            ResourceId::from(Uuid::now_v7()),
+            &body,
+            &blocks,
+            &chunks,
+            &[],
+        )
+        .unwrap()
+        .expect("section two can no longer keep its drifted block");
+        assert_eq!(plan.manifest.kept.len(), 1, "section one keeps block one");
+        assert_eq!(plan.manifest.created.len(), 1, "section two creates a twin");
+        assert_eq!(plan.manifest.folded, vec![BlockId::from(blocks[1].id)]);
+        assert_ne!(
+            plan.manifest.created[0].block_id, plan.manifest.kept[0].block_id,
+            "the twin is a NEW row, never the first block re-asserted"
+        );
+    }
+
+    #[test]
+    fn split_of_an_attributed_block_carries_to_both_created_halves() {
+        let whole = format!("{SECTION_A}{SECTION_B}");
+        let (body, blocks, chunks) = build_fixture(&[(whole.as_str(), 2)]);
+        let source = ProvenanceSource::Resource(Uuid::now_v7());
+        let attributions = vec![AttributionRow {
+            block_id: blocks[0].id,
+            source: source.clone(),
+            accretion_seq: 3,
+        }];
+        let plan = compute_reblock_partition(
+            ResourceId::from(Uuid::now_v7()),
+            &body,
+            &blocks,
+            &chunks,
+            &attributions,
+        )
+        .unwrap()
+        .expect("the block splits into two created sections");
+        assert_eq!(plan.manifest.created.len(), 2);
+        for c in &plan.manifest.created {
+            assert_eq!(c.attribution.len(), 1, "each half gets the source");
+            assert_eq!(c.attribution[0].source, source);
+            assert_eq!(c.attribution[0].seq, 3, "accretion order is preserved");
+            assert!(
+                c.attribution[0].carried,
+                "a split copy is CARRIED, never direct"
+            );
+        }
+    }
+
+    #[test]
+    fn absorbed_attribution_unions_as_asserted_and_kept_rows_are_never_relisted() {
+        // Block one = section A (kept, asserted source S1). Block two = section B (hash tampered
+        // so its section is CREATED) carrying S2: section B ABSORBS block two's whole run, so S2
+        // unions as carried = false — and neither S1 nor S2 is re-listed onto the kept row.
+        let (body, blocks, chunks) = build_fixture(&[(SECTION_A, 1), (SECTION_B, 1)]);
+        let s1 = ProvenanceSource::Resource(Uuid::now_v7());
+        let s2 = ProvenanceSource::Resource(Uuid::now_v7());
+        let mut blocks = blocks;
+        blocks[1].body_hash = Some("drifted".to_string());
+        let attributions = vec![
+            AttributionRow {
+                block_id: blocks[0].id,
+                source: s1.clone(),
+                accretion_seq: 0,
+            },
+            AttributionRow {
+                block_id: blocks[1].id,
+                source: s2.clone(),
+                accretion_seq: 1,
+            },
+        ];
+        let plan = compute_reblock_partition(
+            ResourceId::from(Uuid::now_v7()),
+            &body,
+            &blocks,
+            &chunks,
+            &attributions,
+        )
+        .unwrap()
+        .expect("section B's drifted block is replaced");
+        assert_eq!(plan.manifest.kept.len(), 1);
+        assert_eq!(plan.manifest.created.len(), 1);
+        let created = &plan.manifest.created[0];
+        assert_eq!(created.attribution.len(), 1, "only the absorbed S2 rides");
+        assert_eq!(created.attribution[0].source, s2);
+        assert!(
+            !created.attribution[0].carried,
+            "an absorbed union is DIRECT"
+        );
+        assert_ne!(
+            created.attribution[0].source, s1,
+            "the kept block's own source is never re-listed under the new event"
+        );
+    }
 }
