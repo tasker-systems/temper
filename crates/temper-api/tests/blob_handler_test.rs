@@ -964,6 +964,117 @@ async fn begin_refuses_an_unknown_home_table(pool: PgPool) {
     );
 }
 
+// ─── Witness: abandoned-staging-reaped — the TTL reaper's 404-parity face ────────────────────
+
+/// A reaped session is indistinguishable from an unknown one — to its OWN owner, on every
+/// face a resume can knock on (append, progress, finalize): same status, same refusal body.
+/// Ruling 4 of the reaper task (2026-09-05): a probe learns nothing about whether a session
+/// it once held was reaped or never existed, the `an_invisible_blob_is_not_found` idiom
+/// carried to the staging door.
+///
+/// FAILS IF: the reaper leaves the session on (a no-op pass, a predicate that misses, a TTL
+/// read off `created` for a long-lived session) — then the owner's probes here SUCCEED
+/// where the unknown-id probes refuse, and the parity assert reds. A reaper that is not yet
+/// wired cannot pass this witness: the reaped leg of every comparison is the reaper's own
+/// deletion, so the green is only reachable through it.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_reaped_session_is_indistinguishable_from_an_unknown_one(pool: PgPool) {
+    let cfg = blob_cfg(1 << 20, &["image/png"], 64 * 1024);
+    let app = blob_app(pool, cfg).await;
+    let (_profile, ctx, token) = owner(&app.pool).await;
+
+    // A real session through the real door, then abandoned: begun, one segment landed,
+    // never finalized.
+    let resp = begin_upload(&app, &token, "kb_contexts", ctx).await;
+    assert_eq!(resp.status().as_u16(), 200);
+    let upload_id: Uuid = resp.json::<serde_json::Value>().await.expect("json")["upload_id"]
+        .as_str()
+        .expect("upload_id")
+        .parse()
+        .expect("uuid");
+    let resp = append_segment_req(&app, &token, upload_id, 0, b"abandoned-bytes")
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(resp.status().as_u16(), 200);
+
+    // Abandonment, expressed directly: last touch pushed past the default TTL (one day).
+    // `created` is backdated even further, so a sweep judging the window on the wrong
+    // column reaps nothing here and the parity assert below reds — the column choice is
+    // under witness, not assumed.
+    sqlx::query(
+        "UPDATE kb_blob_uploads \
+            SET updated = now() - interval '2 days', \
+                created = now() - interval '5 days' \
+          WHERE id = $1",
+    )
+    .bind(upload_id)
+    .execute(&app.pool)
+    .await
+    .expect("backdate staged session");
+
+    let summary =
+        temper_services::services::blob_reap_service::reap_abandoned_blob_uploads(&app.pool)
+            .await
+            .expect("the reaper runs");
+    assert_eq!(
+        summary.uploads_reaped, 1,
+        "the abandoned session is reaped, not spared"
+    );
+
+    let unknown_id = Uuid::now_v7();
+    for (face, reaped_req, unknown_req) in [
+        (
+            "append",
+            append_segment_req(&app, &token, upload_id, 0, b"resume-attempt")
+                .send()
+                .await
+                .expect("request failed"),
+            append_segment_req(&app, &token, unknown_id, 0, b"resume-attempt")
+                .send()
+                .await
+                .expect("request failed"),
+        ),
+        (
+            "progress",
+            app.client
+                .get(app.url(&format!("/api/blobs/uploads/{upload_id}")))
+                .header("Authorization", format!("Bearer {token}"))
+                .send()
+                .await
+                .expect("request failed"),
+            app.client
+                .get(app.url(&format!("/api/blobs/uploads/{unknown_id}")))
+                .header("Authorization", format!("Bearer {token}"))
+                .send()
+                .await
+                .expect("request failed"),
+        ),
+        (
+            "finalize",
+            finalize_upload(&app, &token, upload_id, 2, 999, None).await,
+            finalize_upload(&app, &token, unknown_id, 2, 999, None).await,
+        ),
+    ] {
+        let reaped_status = reaped_req.status().as_u16();
+        let unknown_status = unknown_req.status().as_u16();
+        let reaped_text = reaped_req.text().await.unwrap_or_default();
+        let unknown_text = unknown_req.text().await.unwrap_or_default();
+        assert_eq!(
+            reaped_status, 404,
+            "{face} against a reaped session must render as plain absence"
+        );
+        assert_eq!(
+            reaped_status, unknown_status,
+            "{face}: a reaped session and an unknown one must share a status"
+        );
+        assert_eq!(
+            reaped_text, unknown_text,
+            "{face}: a reaped session and an unknown one render the SAME refusal"
+        );
+    }
+}
+
 // ─── S4 witnesses: the list + relations surfaces (the relate face of D3) ─────────────────────
 
 /// The relate request body, in the wire's own vocabulary.

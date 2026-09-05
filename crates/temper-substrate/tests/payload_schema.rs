@@ -50,6 +50,7 @@ fn payload_schemas_match_snapshots() {
     check::<p::DataArtifactCommitted>("data_artifact_committed");
     check::<p::ShapeDeclared>("shape_declared");
     check::<p::BlobCommitted>("blob_committed");
+    check::<p::ResourceReblocked>("resource_reblocked");
 }
 
 #[test]
@@ -65,7 +66,7 @@ fn snapshot_files_cover_exactly_the_typed_names() {
     assert_eq!(on_disk, expected);
 }
 
-/// FAILS IF: the migration's embedded `$JS$` payload_schema literal drifts from the committed
+/// FAILS IF: a migration's embedded `$JS$` payload_schema literal drifts from the committed
 /// fixture (review A-C1: `20260903000020_kb_blobs.sql` was pasted from a pre-`kb_blobs`-enum
 /// render and nothing gated the seam). `payload_schemas_match_snapshots` pins Rust → fixture;
 /// this pins fixture → migration, completing the repo == registry == Rust chain the migration
@@ -74,28 +75,36 @@ fn snapshot_files_cover_exactly_the_typed_names() {
 /// literal is not a wire fact.
 #[test]
 fn the_migration_literal_matches_the_committed_fixture() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../migrations/20260903000020_kb_blobs.sql"
-    );
-    let migration = std::fs::read_to_string(path).unwrap();
-    let start = migration
-        .find("$JS$")
-        .expect("the migration carries a $JS$ payload_schema literal")
-        + 4;
-    let end = start
-        + migration[start..]
+    for (migration, fixture_name) in [
+        (
+            "20260903000020_kb_blobs.sql",
+            "blob_committed.v1.schema.json",
+        ),
+        (
+            "20260905000010_resource_reblock.sql",
+            "resource_reblocked.v1.schema.json",
+        ),
+    ] {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../migrations/");
+        let migration = std::fs::read_to_string(format!("{path}{migration}")).unwrap();
+        let start = migration
             .find("$JS$")
-            .expect("the $JS$ literal is closed");
-    let literal: serde_json::Value = serde_json::from_str(&migration[start..end])
-        .expect("the migration's embedded literal parses as JSON");
-    let fixture: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(format!("{DIR}/blob_committed.v1.schema.json")).unwrap(),
-    )
-    .expect("the committed fixture parses as JSON");
-    assert_eq!(
-        literal, fixture,
-        "the migration's embedded payload_schema drifted from the committed fixture — \
-         re-paste the fixture into the $JS$ literal (see the migration's own instruction)"
-    );
+            .expect("the migration carries a $JS$ payload_schema literal")
+            + 4;
+        let end = start
+            + migration[start..]
+                .find("$JS$")
+                .expect("the $JS$ literal is closed");
+        let literal: serde_json::Value = serde_json::from_str(&migration[start..end])
+            .expect("the migration's embedded literal parses as JSON");
+        let fixture: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(format!("{DIR}/{fixture_name}")).unwrap(),
+        )
+        .expect("the committed fixture parses as JSON");
+        assert_eq!(
+            literal, fixture,
+            "the migration's embedded payload_schema drifted from the committed fixture — \
+             re-paste the fixture into the $JS$ literal (see the migration's own instruction)"
+        );
+    }
 }

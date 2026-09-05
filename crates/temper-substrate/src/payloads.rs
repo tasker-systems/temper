@@ -1460,8 +1460,85 @@ pub struct SubscriptionDeliveryDisposed {
     pub decided_by_invocation_id: Option<Uuid>,
 }
 
-/// The 25 typed event names — the registry-stamping and snapshot surfaces iterate this.
-pub const TYPED_EVENT_NAMES: [&str; 25] = [
+/// One attribution row a re-block writes — the DELTA, never a re-listing.
+///
+/// `source` + `seq` mirror [`Incorporation`] (the `kb_block_provenance`
+/// `(block_id, source_kind, source_id, contributed_by_event_id)` UNIQUE grain carries the event
+/// id; `seq` is the accretion order). `carried` is the load-bearing marking: `false` for a merge
+/// union (the content IS in the block, so the attribution is direct), `true` for a split copy —
+/// the same source attributed to a block that holds only PART of the content it once covered,
+/// distinguishable at row grain from asserted attribution and never readable as direct.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct ReblockAttribution {
+    pub source: ProvenanceSource,
+    pub seq: i32,
+    pub carried: bool,
+}
+
+/// One block a re-block CREATES: fresh identity, a slot in the new partition, and its
+/// chunk assignments.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct ReblockCreatedBlock {
+    /// Identity-as-input: minted by the operation and carried here so replay reproduces the
+    /// same row id (`kb_content_blocks.id` carries a column DEFAULT, but a re-partition's block
+    /// identity is chosen by the op, never minted by the projector — the create-path
+    /// identity-as-input rule applied to an existing table).
+    pub block_id: BlockId,
+    /// The block's position in the NEW partition.
+    pub seq: i32,
+    /// The EXISTING chunk rows reassigned to this block, in order, with renumbered
+    /// `chunk_index`. Chunks are never inserted, deleted, or rewritten by a re-block — the
+    /// `content_hash` here must equal the live row's, and the embedding rides the row through
+    /// the reparent untouched. The projector derives the block's `block_body_hash` from these
+    /// ordered hashes, the create-path derivation.
+    pub chunks: Vec<ChunkManifest>,
+    /// The attribution DELTA to write for this block. Deliberately never re-lists sources
+    /// already on a kept row: the survivor's own provenance rides along untouched, and
+    /// re-inserting it under a new `contributed_by_event_id` would double-count it in every
+    /// standing read. Empty for an unattributed block.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attribution: Vec<ReblockAttribution>,
+}
+
+/// One block a re-block KEEPS: the row survives with its content, chunks, and provenance
+/// untouched — only its `seq` may move (the projector applies the move only when it changed).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct ReblockKeptBlock {
+    pub block_id: BlockId,
+    /// The block's position in the NEW partition.
+    pub seq: i32,
+}
+
+/// `resource_reblocked` — re-cut one resource's blocks along section boundaries (the re-block
+/// substrate, task 2026-09-04).
+///
+/// The manifest IS the operation: the mapping rides in the payload and replay re-derives
+/// nothing. Three arms, mutually exhaustive over the resource's incumbent live blocks —
+/// `folded` (superseded in place, history intact), `created` (fresh blocks holding
+/// reassigned EXISTING chunks), and `kept` (rows that already carry exactly one section's
+/// content, named by derived-hash identity, never by a heuristic). Pure metadata: no content
+/// rewrite, no re-embed — `body = concat(blocks ORDER BY seq)` composes identically before
+/// and after, which is the invariant the payload exists to preserve.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct ResourceReblocked {
+    pub resource_id: ResourceId,
+    /// The blocks the partition creates, in seq order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub created: Vec<ReblockCreatedBlock>,
+    /// The incumbent rows that survive unchanged (up to an explicit seq move).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kept: Vec<ReblockKeptBlock>,
+    /// The incumbent rows the partition supersedes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub folded: Vec<BlockId>,
+}
+
+/// The 26 typed event names — the registry-stamping and snapshot surfaces iterate this.
+pub const TYPED_EVENT_NAMES: [&str; 26] = [
     "cogmap_seeded",
     "resource_created",
     "relationship_asserted",
@@ -1487,6 +1564,7 @@ pub const TYPED_EVENT_NAMES: [&str; 25] = [
     "data_artifact_committed",
     "shape_declared",
     "blob_committed",
+    "resource_reblocked",
 ];
 
 /// FOREIGN event names — registered permissive (NULL `payload_schema`) because their body is a
@@ -1599,6 +1677,12 @@ pub async fn verify_ledger_roundtrip(pool: &sqlx::PgPool) -> anyhow::Result<()> 
                 // where the typed contract meets a really-emitted payload.
                 "subscription_delivery_disposed" => {
                     serde_json::from_value::<SubscriptionDeliveryDisposed>(r.payload.clone())?;
+                }
+                // The re-block substrate: `writes::reblock_resource` emits it, so it gets an arm
+                // for the same reason the grant events do — this is where the typed contract
+                // meets a really-emitted payload.
+                "resource_reblocked" => {
+                    serde_json::from_value::<ResourceReblocked>(r.payload.clone())?;
                 }
                 // Unlisted types (e.g. taxonomy entries no write path emits yet) are intentionally
                 // not roundtripped here; add an arm when a write path begins emitting one.

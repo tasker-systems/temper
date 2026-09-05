@@ -175,7 +175,7 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
     let rows = sqlx::query(
         "SELECT e.id, et.name, e.payload \
            FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
-          WHERE et.name IN ('cogmap_seeded','resource_created','block_created','block_mutated','charter_set') ORDER BY e.id",
+          WHERE et.name IN ('cogmap_seeded','resource_created','block_created','block_mutated','charter_set','resource_reblocked') ORDER BY e.id",
     )
     .fetch_all(pool)
     .await?;
@@ -202,6 +202,10 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
                 .get("chunks")
                 .cloned()
                 .map(|chunks| serde_json::json!([{ "chunks": chunks }])),
+            // A re-block reparents EXISTING chunk rows and inserts none — the chunk walk below
+            // must do nothing, so an EMPTY manifest (every chunk id already has its CAS row,
+            // which the walk would only re-read). Only the `__blocks` re-supply matters here.
+            EventKind::ResourceReblocked => Some(serde_json::json!([])),
             // The SQL query above restricts to the three content-bearing types, so the
             // remaining variants are unreachable here — they carry no chunk manifests.
             EventKind::ResourceUpdated
@@ -271,7 +275,7 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
                     .context("chunk_id missing")?
                     .parse()?;
                 let row = sqlx::query(
-                    "SELECT cc.content, c.embedding::text, c.embedded_with \
+                    "SELECT cc.content, c.embedding::text, c.embedded_with, c.header_path, c.heading_depth \
                        FROM kb_chunk_content cc JOIN kb_chunks c ON c.id = cc.chunk_id \
                       WHERE cc.chunk_id = $1",
                 )
@@ -286,16 +290,25 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
                 // `embedded_with` is sidecar-only (it is NOT on the ledger payload), so replay can
                 // only recover it from the projected row — exactly as it already does for the vector
                 // itself. Omitting it would make every replayed chunk land NULL: the projection stops
-                // being byte-identical (which is what the replay-roundtrip tests assert), and a real
+                // being byte-identical (which is the replay-roundtrip tests assert), and a real
                 // rebuild-from-ledger would silently discard all provenance and re-stale the whole
                 // index.
                 let embedded_with: Option<String> = row.get(2);
+                // Header metadata rides the same projected row for the same reason: a
+                // heading-sectioned body's chunks carry `header_path`/`heading_depth`, and a
+                // sidecar without them would reproject every chunk with NULLs — invisible to
+                // bodies with no headings, which is exactly why it stayed a hole until a
+                // heading-sectioned resource entered the replay diff.
+                let header_path: Option<String> = row.get(3);
+                let heading_depth: Option<i16> = row.get(4);
                 side.insert(
                     chunk_id.to_string(),
                     serde_json::json!({
                         "content": content,
                         "embedding": embedding,
                         "embedded_with": embedded_with,
+                        "header_path": header_path,
+                        "heading_depth": heading_depth,
                     }),
                 );
             }
@@ -314,6 +327,20 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
                     .parse()?;
                 vec![(bid.to_string(), bid)]
             }
+            // A re-block keys by BLOCK ID (the mutate-path keying — its fire arm builds `__blocks`
+            // keyed by created block id), and only for the CREATED blocks: kept blocks' bytes ride
+            // their untouched revisions, folded blocks' revisions are history. Each created block
+            // mints exactly one revision per event, so the (block_id, occurred_at) lookup below
+            // stays 1:1.
+            EventKind::ResourceReblocked => payload["created"]
+                .as_array()
+                .context("resource_reblocked payload missing created")?
+                .iter()
+                .filter_map(|b| {
+                    let bid: Uuid = b["block_id"].as_str()?.parse().ok()?;
+                    Some((bid.to_string(), bid))
+                })
+                .collect(),
             // create/append/charter: key by seq, look up by block id — both live on the manifest.
             _ => manifests
                 .as_array()
@@ -731,6 +758,20 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // kb_subscriptions, which is mutable infra and not itself replayable, so a rebuild
             // would silently reproject today's declarations onto yesterday's events.
             | EventKind::SubscriptionDeliveryDisposed => {}
+            // The re-block substrate: pure projector half, the `_project_block_mutated` arity
+            // (payload + sidecar). Deliberately NOT a `CONTENT_EVENTS` member — a re-block
+            // changes no region-formation input (chunks are reparented, never rewritten; the
+            // chunk-equality witnesses pin that premise), so it must never advance a
+            // materialization threshold, the `SalienceRefreshed` posture (events.rs).
+            EventKind::ResourceReblocked => {
+                let side = snap.sidecars.get(&id).context("missing sidecar")?;
+                // A compile-checked macro, like the ContextRetired/ContextRestored arms: this is
+                // a fixed projector call with bound parameters, and the audit's dynamic-table
+                // reason does not cover those — it converts, and gains a .sqlx entry.
+                sqlx::query_scalar!("SELECT _project_resource_reblocked($1,$2,$3)", id, payload, side)
+                    .fetch_one(pool)
+                    .await?;
+            }
         }
     }
     restore_table(pool, "kb_team_cogmaps", &snap.team_cogmaps).await?;
