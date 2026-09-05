@@ -103,15 +103,31 @@ export const trail: EventTrail = {
 export const edges: GraphEdgeRow[] = [
 	{
 		edge_id: 'edge-1',
-		peer_resource_id: 'peer-1',
+		peer_table: 'kb_resources',
+		peer_id: 'peer-1',
 		peer_title: 'A peer the harness invented',
 		peer_slug: 'a-peer-the-harness-invented',
 		edge_kind: 'near',
 		polarity: 'forward',
 		label: 'relates to',
-		direction: 'out',
+		direction: 'outgoing',
 		weight: 0.5,
 		created: '2026-08-30T10:00:00Z',
+	},
+	{
+		// A blob peer: addressed by id alone, no title — and the list renders it
+		// without a resource-route link.
+		edge_id: 'edge-2',
+		peer_table: 'kb_blobs',
+		peer_id: 'blob-harness-invented',
+		peer_title: null,
+		peer_slug: null,
+		edge_kind: 'express',
+		polarity: 'forward',
+		label: 'derivation_source',
+		direction: 'outgoing',
+		weight: 1.0,
+		created: '2026-08-30T10:05:00Z',
 	},
 ];
 

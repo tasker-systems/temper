@@ -69,13 +69,14 @@ const trailOf = (count: number): EventTrail => ({
 
 const edge = (n: number): GraphEdgeRow => ({
 	edge_id: `edge-${n}`,
-	peer_resource_id: `peer-${n}`,
+	peer_table: 'kb_resources',
+	peer_id: `peer-${n}`,
 	peer_title: `A peer ${n}`,
 	peer_slug: `peer-${n}`,
 	edge_kind: 'near',
 	polarity: 'forward',
 	label: 'relates to',
-	direction: 'out',
+	direction: 'outgoing',
 	weight: 0.5,
 	created: '2026-08-20T10:00:00Z',
 });

@@ -112,31 +112,40 @@ async fn edges_endpoint_returns_resource_edges(pool: sqlx::PgPool) {
 
     // A --depends_on--> B
     assert_edge(&app, resource_a.id, resource_b.id, "depends_on").await;
+    let resource_a_id: uuid::Uuid = resource_a.id.into();
+    let resource_b_id: uuid::Uuid = resource_b.id.into();
 
     // A's view: one outgoing edge to B.
     let edges_a = app
         .client
         .resources()
-        .edges(resource_a.id.into())
+        .edges(resource_a_id)
         .await
         .expect("fetch edges for A");
     assert_eq!(edges_a.len(), 1, "A should have 1 edge");
     assert_eq!(edges_a[0].label, "depends_on");
-    assert_eq!(edges_a[0].direction, "outgoing");
-    assert_eq!(edges_a[0].peer_slug, "base-doc");
-    assert_eq!(edges_a[0].peer_resource_id, resource_b.id);
+    assert_eq!(edges_a[0].peer_table, "kb_resources");
+    assert_eq!(
+        edges_a[0].direction,
+        temper_core::types::blob::BlobRelationEdgeDirection::Outgoing
+    );
+    assert_eq!(edges_a[0].peer_slug.as_deref(), Some("base-doc"));
+    assert_eq!(edges_a[0].peer_id, resource_b_id);
 
     // B's view: the same edge, incoming.
     let edges_b = app
         .client
         .resources()
-        .edges(resource_b.id.into())
+        .edges(resource_b_id)
         .await
         .expect("fetch edges for B");
     assert_eq!(edges_b.len(), 1, "B should have 1 incoming edge");
-    assert_eq!(edges_b[0].direction, "incoming");
-    assert_eq!(edges_b[0].peer_slug, "dependent-doc");
-    assert_eq!(edges_b[0].peer_resource_id, resource_a.id);
+    assert_eq!(
+        edges_b[0].direction,
+        temper_core::types::blob::BlobRelationEdgeDirection::Incoming
+    );
+    assert_eq!(edges_b[0].peer_slug.as_deref(), Some("dependent-doc"));
+    assert_eq!(edges_b[0].peer_id, resource_a_id);
 }
 
 /// `graph_expand` toggles expansion end to end: on ⇒ the neighbor surfaces,

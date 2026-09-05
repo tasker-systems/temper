@@ -4429,17 +4429,38 @@ export interface components {
             /** @description `true` when this call inserted a fresh grant; `false` when it updated an existing one. */
             granted: boolean;
         };
-        /** @description Edge listing row — mirrors the `graph_resource_edges()` SQL function. */
+        /**
+         * @description Edge listing row — the `/edges` handler's response body. The peer is
+         *     polymorphic (the 2026-09-02 S6 deferral, landed): a resource (title + slug
+         *     present) or a blob (addressed by bare/decorated id alone — a blob has no
+         *     title). This is the edge LISTING's face only; the walk surfaces stay
+         *     node-typed and never materialize a blob.
+         */
         GraphEdgeRow: {
             /** Format: date-time */
             created: string;
-            direction: string;
+            /**
+             * @description The edge listing's own vocabulary (`outgoing` = the queried resource is
+             *     the source), typed — never a bare string (C-C3, 2026-09-04 review).
+             */
+            direction: components["schemas"]["BlobRelationEdgeDirection"];
             edge_id: components["schemas"]["EdgeId"];
             edge_kind: components["schemas"]["EdgeKind"];
             label: string;
-            peer_resource_id: components["schemas"]["ResourceId"];
-            peer_slug: string;
-            peer_title: string;
+            /**
+             * Format: uuid
+             * @description The peer's id — a `kb_resources.id` or a `kb_blobs.id` per `peer_table`.
+             */
+            peer_id: string;
+            /** @description Slug derived from the peer title; `None` for a blob peer. */
+            peer_slug?: string | null;
+            /**
+             * @description `kb_resources` | `kb_blobs` — spelled exactly as the DDL.
+             *     Cogmap-ended edges are not rendered by this view (declared scope).
+             */
+            peer_table: string;
+            /** @description The peer resource's title; `None` for a blob peer. */
+            peer_title?: string | null;
             polarity: components["schemas"]["Polarity"];
             /** Format: double */
             weight: number;

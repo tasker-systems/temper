@@ -1,0 +1,105 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n            e.id AS edge_id,\n            (CASE WHEN e.source_id = $2 THEN e.target_table ELSE e.source_table END)\n                AS \"peer_table!\",\n            (CASE WHEN e.source_id = $2 THEN e.target_id ELSE e.source_id END) AS \"peer_id!\",\n            peer.title AS \"peer_title?\",\n            lower(regexp_replace(\n                regexp_replace(peer.title, '[^a-zA-Z0-9]+', '-', 'g'),\n                '(^-+|-+$)', '', 'g')) AS \"peer_slug?\",\n            e.edge_kind AS \"edge_kind: EdgeKind\",\n            e.polarity AS \"polarity: Polarity\",\n            COALESCE(e.label, '') AS \"label!\",\n            (CASE WHEN e.source_id = $2 THEN 'outgoing' ELSE 'incoming' END) AS \"direction!\",\n            e.weight AS weight,\n            e.created AS created\n          FROM kb_edges e\n          JOIN edges_visible_to($1) v ON v.edge_id = e.id\n          LEFT JOIN kb_resources peer\n            ON (CASE WHEN e.source_id = $2 THEN e.target_table ELSE e.source_table END)\n                = 'kb_resources'\n           AND peer.id = (CASE WHEN e.source_id = $2 THEN e.target_id ELSE e.source_id END)\n         WHERE (e.source_id = $2 OR e.target_id = $2)\n           AND (CASE WHEN e.source_id = $2 THEN e.target_table ELSE e.source_table END)\n                 IN ('kb_resources', 'kb_blobs')",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "edge_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "peer_table!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "peer_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "peer_title?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "peer_slug?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "edge_kind: EdgeKind",
+        "type_info": {
+          "Custom": {
+            "name": "edge_kind",
+            "kind": {
+              "Enum": [
+                "express",
+                "contains",
+                "leads_to",
+                "near"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "polarity: Polarity",
+        "type_info": {
+          "Custom": {
+            "name": "edge_polarity",
+            "kind": {
+              "Enum": [
+                "forward",
+                "inverse"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "label!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "direction!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "weight",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 10,
+        "name": "created",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null,
+      false,
+      null,
+      false,
+      false,
+      null,
+      null,
+      false,
+      false
+    ]
+  },
+  "hash": "0eddb125d49851e1852e4ad5a830c07251fda288788b41d3bd5dd081d2003032"
+}

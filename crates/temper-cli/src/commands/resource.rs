@@ -1788,6 +1788,7 @@ fn map_projection_error(err: temper_core::projection::ProjectionError) -> Temper
 /// `show`. Returns data — `show` decides how to render it.
 fn fetch_edges(id: temper_core::types::ids::ResourceId) -> Result<EdgesReport> {
     use crate::actions::runtime;
+    use temper_core::types::blob::BlobRelationEdgeDirection;
 
     let edges: Vec<temper_workflow::types::graph::GraphEdgeRow> = runtime::with_client(|client| {
         Box::pin(async move {
@@ -1801,12 +1802,12 @@ fn fetch_edges(id: temper_core::types::ids::ResourceId) -> Result<EdgesReport> {
 
     let outgoing: Vec<_> = edges
         .iter()
-        .filter(|e| e.direction == "outgoing")
+        .filter(|e| e.direction == BlobRelationEdgeDirection::Outgoing)
         .cloned()
         .collect();
     let incoming: Vec<_> = edges
         .iter()
-        .filter(|e| e.direction == "incoming")
+        .filter(|e| e.direction == BlobRelationEdgeDirection::Incoming)
         .cloned()
         .collect();
 
@@ -3758,20 +3759,22 @@ mod resource_list_render_tests {
 #[cfg(test)]
 mod edges_report_tests {
     use super::EdgesReport;
+    use temper_core::types::blob::BlobRelationEdgeDirection;
     use temper_core::types::graph::{EdgeKind, Polarity};
-    use temper_core::types::ids::{EdgeId, ResourceId};
+    use temper_core::types::ids::EdgeId;
     use temper_workflow::types::graph::GraphEdgeRow;
 
-    fn make_edge(direction: &str, label: &str) -> GraphEdgeRow {
+    fn make_edge(direction: BlobRelationEdgeDirection, label: &str) -> GraphEdgeRow {
         GraphEdgeRow {
             edge_id: EdgeId::from(uuid::Uuid::nil()),
-            peer_resource_id: ResourceId::from(uuid::Uuid::nil()),
-            peer_title: "Peer Title".to_string(),
-            peer_slug: "peer-slug".to_string(),
+            peer_table: "kb_resources".to_string(),
+            peer_id: uuid::Uuid::nil(),
+            peer_title: Some("Peer Title".to_string()),
+            peer_slug: Some("peer-slug".to_string()),
             edge_kind: EdgeKind::Express,
             polarity: Polarity::Forward,
             label: label.to_string(),
-            direction: direction.to_string(),
+            direction,
             weight: 1.0,
             created: chrono::DateTime::from_timestamp(0, 0).unwrap(),
         }
@@ -3780,8 +3783,8 @@ mod edges_report_tests {
     #[test]
     fn render_edges_report_json_passthrough() {
         let report = EdgesReport {
-            outgoing: vec![make_edge("outgoing", "depends_on")],
-            incoming: vec![make_edge("incoming", "blocks")],
+            outgoing: vec![make_edge(BlobRelationEdgeDirection::Outgoing, "depends_on")],
+            incoming: vec![make_edge(BlobRelationEdgeDirection::Incoming, "blocks")],
         };
         let out =
             crate::format::render(&report, crate::format::OutputFormat::Json).expect("json render");

@@ -646,13 +646,13 @@ pub enum ResourceAction {
         /// `open-meta`; `--with edges` folds this resource's graph edges into the same
         /// document (the long form of `--edges`).
         ///
-        /// The edges section is RESOURCE↔RESOURCE by decision (2026-09-02, blob surfaces
-        /// S6): edges with a blob endpoint — the `derivation_source` edge
-        /// `--preserve-source` asserts, say — are admitted by the SQL visibility gate but
-        /// deliberately not rendered here, because the peer row is resource-typed. The
-        /// derivation answer lives one door over: `temper blob relations <blob-id>` (the
-        /// blob-side view). Widening this section to polymorphic peers is a named
-        /// follow-up, not an omission.
+        /// The peer is polymorphic (the 2026-09-02 S6 deferral, landed): resource peers
+        /// carry their title; blob peers — the `derivation_source` edge
+        /// `--preserve-source` asserts, say — are addressed by bare/decorated id alone,
+        /// so this section answers "what is this resource derived from" from the
+        /// resource side. `temper blob relations <blob-id>` remains the blob-side view.
+        /// Cogmap-ended edges are not rendered here, and the walk surfaces stay
+        /// node-typed: an edge listing may render a blob, a walk never materializes one.
         #[arg(long = "with", value_delimiter = ',',
               value_parser = crate::commands::resource_sections::show_section_parser())]
         with: Vec<String>,

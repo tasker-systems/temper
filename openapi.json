@@ -12474,12 +12474,11 @@
       },
       "GraphEdgeRow": {
         "type": "object",
-        "description": "Edge listing row — mirrors the `graph_resource_edges()` SQL function.",
+        "description": "Edge listing row — the `/edges` handler's response body. The peer is\npolymorphic (the 2026-09-02 S6 deferral, landed): a resource (title + slug\npresent) or a blob (addressed by bare/decorated id alone — a blob has no\ntitle). This is the edge LISTING's face only; the walk surfaces stay\nnode-typed and never materialize a blob.",
         "required": [
           "edge_id",
-          "peer_resource_id",
-          "peer_title",
-          "peer_slug",
+          "peer_table",
+          "peer_id",
           "edge_kind",
           "polarity",
           "label",
@@ -12493,7 +12492,8 @@
             "format": "date-time"
           },
           "direction": {
-            "type": "string"
+            "$ref": "#/components/schemas/BlobRelationEdgeDirection",
+            "description": "The edge listing's own vocabulary (`outgoing` = the queried resource is\nthe source), typed — never a bare string (C-C3, 2026-09-04 review)."
           },
           "edge_id": {
             "$ref": "#/components/schemas/EdgeId"
@@ -12504,14 +12504,28 @@
           "label": {
             "type": "string"
           },
-          "peer_resource_id": {
-            "$ref": "#/components/schemas/ResourceId"
+          "peer_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The peer's id — a `kb_resources.id` or a `kb_blobs.id` per `peer_table`."
           },
           "peer_slug": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Slug derived from the peer title; `None` for a blob peer."
+          },
+          "peer_table": {
+            "type": "string",
+            "description": "`kb_resources` | `kb_blobs` — spelled exactly as the DDL.\nCogmap-ended edges are not rendered by this view (declared scope)."
           },
           "peer_title": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The peer resource's title; `None` for a blob peer."
           },
           "polarity": {
             "$ref": "#/components/schemas/Polarity"

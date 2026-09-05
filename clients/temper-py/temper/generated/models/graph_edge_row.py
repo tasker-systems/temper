@@ -19,8 +19,9 @@ import json
 
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, StrictStr
-from typing import Any, ClassVar, Dict, List, Union
+from typing import Any, ClassVar, Dict, List, Optional, Union
 from uuid import UUID
+from temper.generated.models.blob_relation_edge_direction import BlobRelationEdgeDirection
 from temper.generated.models.edge_kind import EdgeKind
 from temper.generated.models.polarity import Polarity
 from typing import Optional, Set
@@ -29,19 +30,20 @@ from pydantic_core import to_jsonable_python
 
 class GraphEdgeRow(BaseModel):
     """
-    Edge listing row — mirrors the `graph_resource_edges()` SQL function.
+    Edge listing row — the `/edges` handler's response body. The peer is polymorphic (the 2026-09-02 S6 deferral, landed): a resource (title + slug present) or a blob (addressed by bare/decorated id alone — a blob has no title). This is the edge LISTING's face only; the walk surfaces stay node-typed and never materialize a blob.
     """ # noqa: E501
     created: datetime
-    direction: StrictStr
+    direction: BlobRelationEdgeDirection = Field(description="The edge listing's own vocabulary (`outgoing` = the queried resource is the source), typed — never a bare string (C-C3, 2026-09-04 review).")
     edge_id: UUID = Field(description="A `kb_edges.id` value — a declared relationship assertion.  Returned by `Backend::assert_relationship` and fed back into retype/reweight/fold. Post-WS6-flip there is a single substrate-backed backend, so this is always a real `kb_edges` row id (not a backend-opaque correlation handle).")
     edge_kind: EdgeKind
     label: StrictStr
-    peer_resource_id: UUID = Field(description="A `kb_resources.id` value.")
-    peer_slug: StrictStr
-    peer_title: StrictStr
+    peer_id: UUID = Field(description="The peer's id — a `kb_resources.id` or a `kb_blobs.id` per `peer_table`.")
+    peer_slug: Optional[StrictStr] = Field(default=None, description="Slug derived from the peer title; `None` for a blob peer.")
+    peer_table: StrictStr = Field(description="`kb_resources` | `kb_blobs` — spelled exactly as the DDL. Cogmap-ended edges are not rendered by this view (declared scope).")
+    peer_title: Optional[StrictStr] = Field(default=None, description="The peer resource's title; `None` for a blob peer.")
     polarity: Polarity
     weight: Union[StrictFloat, StrictInt]
-    __properties: ClassVar[List[str]] = ["created", "direction", "edge_id", "edge_kind", "label", "peer_resource_id", "peer_slug", "peer_title", "polarity", "weight"]
+    __properties: ClassVar[List[str]] = ["created", "direction", "edge_id", "edge_kind", "label", "peer_id", "peer_slug", "peer_table", "peer_title", "polarity", "weight"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -82,6 +84,16 @@ class GraphEdgeRow(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # set to None if peer_slug (nullable) is None
+        # and model_fields_set contains the field
+        if self.peer_slug is None and "peer_slug" in self.model_fields_set:
+            _dict['peer_slug'] = None
+
+        # set to None if peer_title (nullable) is None
+        # and model_fields_set contains the field
+        if self.peer_title is None and "peer_title" in self.model_fields_set:
+            _dict['peer_title'] = None
+
         return _dict
 
     @classmethod
@@ -99,8 +111,9 @@ class GraphEdgeRow(BaseModel):
             "edge_id": obj.get("edge_id"),
             "edge_kind": obj.get("edge_kind"),
             "label": obj.get("label"),
-            "peer_resource_id": obj.get("peer_resource_id"),
+            "peer_id": obj.get("peer_id"),
             "peer_slug": obj.get("peer_slug"),
+            "peer_table": obj.get("peer_table"),
             "peer_title": obj.get("peer_title"),
             "polarity": obj.get("polarity"),
             "weight": obj.get("weight")

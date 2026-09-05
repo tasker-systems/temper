@@ -106,8 +106,11 @@ pub(super) async fn fetch_principles(
         // keeps a principle that ever cites another principle from absorbing it as a member.
         let members = edges
             .iter()
-            .filter(|e| e.direction == "incoming" && e.label == EVIDENCES_LABEL)
-            .map(|e| e.peer_resource_id.uuid())
+            .filter(|e| {
+                e.direction == temper_core::types::blob::BlobRelationEdgeDirection::Incoming
+                    && e.label == EVIDENCES_LABEL
+            })
+            .map(|e| e.peer_id)
             .collect();
         let statement = client
             .resources()

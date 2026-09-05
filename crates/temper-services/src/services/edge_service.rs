@@ -9,24 +9,28 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
+use crate::services::blob_service::parse_wire_relation_direction;
 use temper_core::types::facet_requests::EdgeFacetRow;
 use temper_core::types::graph::{EdgeKind, Polarity};
-use temper_core::types::ids::{EdgeId, ResourceId};
+use temper_core::types::ids::EdgeId;
 use temper_workflow::types::graph::GraphEdgeRow;
 
 /// List the edges incident to a resource, scoped to profile visibility.
 ///
 /// Reads the substrate `kb_edges` + `edges_visible_to`. Returns
 /// [`GraphEdgeRow`] for the `/edges` handler. §9-non-invariant shaping:
-/// - `peer_slug` is §7-dissolved in the substrate, so it is derived from the
-///   peer title (matching Rust `text::slugify` / the substrate `graph_nodes`).
+/// - the peer is polymorphic: a resource peer carries its title + derived slug
+///   (§7-dissolved in the substrate, so derived here — matching Rust
+///   `text::slugify` / the substrate `graph_nodes`); a blob peer is addressed
+///   by bare/decorated id, title and slug both null.
 /// - `direction` keeps the legacy `'outgoing'`/`'incoming'` vocabulary, derived
-///   from which endpoint is the queried resource.
+///   from which endpoint is the queried resource — typed on the wire
+///   (`BlobRelationEdgeDirection`) and parsed through the scrubbed choke point.
 ///
 /// Compile-time-checked (`query!`), and the row is constructed explicitly rather
-/// than decoded by `FromRow`: `GraphEdgeRow` carries the `EdgeId`/`ResourceId`
-/// newtypes, which the macros do not decode into, so the ids come back as `Uuid`
-/// and are converted in the mapping closure (the repo's incumbent shape).
+/// than decoded by `FromRow`: `GraphEdgeRow` carries the `EdgeId` newtype, which
+/// the macros do not decode into, so the id comes back as `Uuid` and is converted
+/// in the mapping closure (the repo's incumbent shape).
 pub async fn list_resource_edges(
     pool: &PgPool,
     profile_id: Uuid,
@@ -53,31 +57,39 @@ pub async fn list_resource_edges(
         ));
     }
 
-    // Nullability overrides, each earned: `peer_resource_id`/`direction` are total `CASE`s (an ELSE
-    // arm, both arms non-null — `kb_edges.source_id`/`target_id` are NOT NULL); `peer_slug` composes
-    // strict functions over `peer.title`, which is NOT NULL and INNER-joined; `label` is a COALESCE
-    // onto a non-null literal. sqlx types every expression column nullable, which is why all four
-    // need the annotation while the plain `e.*` columns do not.
+    // Nullability overrides, each earned: `peer_table`/`peer_id`/`direction` are total `CASE`s
+    // (an ELSE arm, both arms non-null — `kb_edges.source_id`/`target_id` are NOT NULL);
+    // `peer_title`/`peer_slug` arrive through the LEFT JOIN and are NULL exactly when the peer
+    // is a blob (a blob has no title; the slug derives from the title); `label` is a COALESCE
+    // onto a non-null literal. sqlx types every expression column nullable, which is why the
+    // total CASEs take the `!` override while the LEFT-JOIN columns keep `?`.
     //
     // `edge_kind`/`polarity` take an explicit type override so the SQL enums decode straight into
     // `EdgeKind`/`Polarity` (both derive `sqlx::Type` with their `type_name`) — no `::text`
     // round-trip, matching what the runtime version decoded.
     //
-    // DECIDED (2026-09-02, blob surfaces S6): this view is resource↔resource BY DECISION.
-    // `edges_visible_to` admits blob-ended edges (D3's "an edge listing may render the
-    // edge"), but the peer row here is resource-typed (`GraphEdgeRow`), so rendering them
-    // would need a polymorphic peer — a wire-type change, deferred as a named follow-up.
-    // The blob-side answer exists one door over: `blob_service::blob_relations` (CLI
-    // `temper blob relations`). This filter is a SURFACE decision riding a gate that admits
-    // more — never cite the wider gate as if it were this query's answer.
+    // LANDED (2026-09-04, the S6 follow-up): the view renders the blob-ended edges the gate
+    // already admitted — the `derivation_source` edge `--preserve-source` asserts now answers
+    // "what is this resource derived from" from the resource side. The blob peer rides as
+    // `peer_table`/`peer_id` alone; no blob metadata beyond the id is disclosed here. Scope is
+    // still declared: resource and blob peers only — cogmap-ended edges are not rendered by
+    // this view — and the walk surfaces stay node-typed (D3's exclusion unchanged): this
+    // widened the edge LISTING, never a node universe.
+    //
+    // The negative face rides the same gate, never a restatement: `edges_visible_to` carries
+    // the `readable_blobs` set mirroring `blob_readable_by_profile` branch-for-branch
+    // (20260903000030), so an edge whose blob endpoint the caller cannot read is not admitted
+    // at all — a reader who cannot see a blob learns nothing of it from this listing.
     let edges = sqlx::query!(
         r#"SELECT
             e.id AS edge_id,
-            (CASE WHEN e.source_id = $2 THEN e.target_id ELSE e.source_id END) AS "peer_resource_id!",
-            peer.title AS peer_title,
+            (CASE WHEN e.source_id = $2 THEN e.target_table ELSE e.source_table END)
+                AS "peer_table!",
+            (CASE WHEN e.source_id = $2 THEN e.target_id ELSE e.source_id END) AS "peer_id!",
+            peer.title AS "peer_title?",
             lower(regexp_replace(
                 regexp_replace(peer.title, '[^a-zA-Z0-9]+', '-', 'g'),
-                '(^-+|-+$)', '', 'g')) AS "peer_slug!",
+                '(^-+|-+$)', '', 'g')) AS "peer_slug?",
             e.edge_kind AS "edge_kind: EdgeKind",
             e.polarity AS "polarity: Polarity",
             COALESCE(e.label, '') AS "label!",
@@ -86,29 +98,35 @@ pub async fn list_resource_edges(
             e.created AS created
           FROM kb_edges e
           JOIN edges_visible_to($1) v ON v.edge_id = e.id
-          JOIN kb_resources peer
-            ON peer.id = (CASE WHEN e.source_id = $2 THEN e.target_id ELSE e.source_id END)
-         WHERE e.source_table = 'kb_resources' AND e.target_table = 'kb_resources'
-           AND (e.source_id = $2 OR e.target_id = $2)"#,
+          LEFT JOIN kb_resources peer
+            ON (CASE WHEN e.source_id = $2 THEN e.target_table ELSE e.source_table END)
+                = 'kb_resources'
+           AND peer.id = (CASE WHEN e.source_id = $2 THEN e.target_id ELSE e.source_id END)
+         WHERE (e.source_id = $2 OR e.target_id = $2)
+           AND (CASE WHEN e.source_id = $2 THEN e.target_table ELSE e.source_table END)
+                 IN ('kb_resources', 'kb_blobs')"#,
         profile_id,
         resource_id,
     )
     .fetch_all(pool)
     .await?
     .into_iter()
-    .map(|r| GraphEdgeRow {
-        edge_id: EdgeId::from(r.edge_id),
-        peer_resource_id: ResourceId::from(r.peer_resource_id),
-        peer_title: r.peer_title,
-        peer_slug: r.peer_slug,
-        edge_kind: r.edge_kind,
-        polarity: r.polarity,
-        label: r.label,
-        direction: r.direction,
-        weight: r.weight,
-        created: r.created,
+    .map(|r| {
+        Ok(GraphEdgeRow {
+            edge_id: EdgeId::from(r.edge_id),
+            peer_table: r.peer_table,
+            peer_id: r.peer_id,
+            peer_title: r.peer_title,
+            peer_slug: r.peer_slug,
+            edge_kind: r.edge_kind,
+            polarity: r.polarity,
+            label: r.label,
+            direction: parse_wire_relation_direction(&r.direction)?,
+            weight: r.weight,
+            created: r.created,
+        })
     })
-    .collect();
+    .collect::<ApiResult<Vec<_>>>()?;
 
     Ok(edges)
 }

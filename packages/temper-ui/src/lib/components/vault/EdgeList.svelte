@@ -19,21 +19,27 @@
 	{#if edges.length === 0}
 		<RegionState state="empty" label="connections" />
 	{:else}
-		{#each edges as edge (edge.edge_id)}
-			<div class="edge">
-				<span class="rel">
-					{edge.direction === 'out' ? '' : '← '}{edge.label || edge.edge_kind}{edge.direction ===
-					'out'
-						? ' →'
-						: ''}
-				</span>
-				<a class="peer" href="/vault/r/{edge.peer_resource_id}">{edge.peer_title}</a>
-				<span class="w">
-					· {edge.weight.toFixed(1)}{#if edge.polarity !== 'forward'}
-						· {edge.polarity}{/if}
-				</span>
-			</div>
-		{/each}
+	{#each edges as edge (edge.edge_id)}
+		<div class="edge">
+			<span class="rel">
+				{edge.direction === 'outgoing' ? '' : '← '}{edge.label || edge.edge_kind}{edge.direction ===
+				'outgoing'
+					? ' →'
+					: ''}
+			</span>
+			<!-- A blob peer is addressed by id alone (no title) and is not a resource: it
+			     never links into /vault/r, which would route a blob id into a resource page. -->
+			{#if edge.peer_table === 'kb_resources'}
+				<a class="peer" href="/vault/r/{edge.peer_id}">{edge.peer_title}</a>
+			{:else}
+				<span class="peer">blob · {edge.peer_id.slice(0, 8)}</span>
+			{/if}
+			<span class="w">
+				· {edge.weight.toFixed(1)}{#if edge.polarity !== 'forward'}
+					· {edge.polarity}{/if}
+			</span>
+		</div>
+	{/each}
 	{/if}
 </section>
 
