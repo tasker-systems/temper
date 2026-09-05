@@ -12,7 +12,7 @@
 CREATE INDEX idx_kb_blob_uploads_updated ON kb_blob_uploads(updated);
 
 SELECT declare_migration(
-    20260905000010,
+    20260905000020,
     'additive',
     'idx_kb_blob_uploads_updated: the abandoned-staging TTL reaper''s steady-state read — keeps the delete-nothing pass an index probe, the same role idx_kb_saml_replay_expires plays for the AS sweep. The reaper itself is binary-side only (no DDL).'
 );
