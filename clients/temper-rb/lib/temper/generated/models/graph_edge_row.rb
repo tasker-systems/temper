@@ -14,7 +14,7 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # Edge listing row — the `/edges` handler's response body. The peer is polymorphic (the 2026-09-02 S6 deferral, landed): a resource (title + slug present) or a blob (addressed by bare/decorated id alone — a blob has no title). This is the edge LISTING's face only; the walk surfaces stay node-typed and never materialize a blob.
+  # Edge listing row — the `/edges` handler's response body. The peer is polymorphic (the 2026-09-02 S6 deferral, landed): a resource (title + slug present) or a blob (addressed by bare id alone — a blob has no title, and no slug, so no decorated form). This is the edge LISTING's face only; the walk surfaces stay node-typed and never materialize a blob.
   class GraphEdgeRow < ApiModelBase
     attr_accessor :created
 

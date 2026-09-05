@@ -648,8 +648,8 @@ pub enum ResourceAction {
         ///
         /// The peer is polymorphic (the 2026-09-02 S6 deferral, landed): resource peers
         /// carry their title; blob peers — the `derivation_source` edge
-        /// `--preserve-source` asserts, say — are addressed by bare/decorated id alone,
-        /// so this section answers "what is this resource derived from" from the
+        /// `--preserve-source` asserts, say — are addressed by bare id alone, so this
+        /// section answers "what is this resource derived from" from the
         /// resource side. `temper blob relations <blob-id>` remains the blob-side view.
         /// Cogmap-ended edges are not rendered here, and the walk surfaces stay
         /// node-typed: an edge listing may render a blob, a walk never materializes one.

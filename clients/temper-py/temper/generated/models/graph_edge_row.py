@@ -30,7 +30,7 @@ from pydantic_core import to_jsonable_python
 
 class GraphEdgeRow(BaseModel):
     """
-    Edge listing row — the `/edges` handler's response body. The peer is polymorphic (the 2026-09-02 S6 deferral, landed): a resource (title + slug present) or a blob (addressed by bare/decorated id alone — a blob has no title). This is the edge LISTING's face only; the walk surfaces stay node-typed and never materialize a blob.
+    Edge listing row — the `/edges` handler's response body. The peer is polymorphic (the 2026-09-02 S6 deferral, landed): a resource (title + slug present) or a blob (addressed by bare id alone — a blob has no title, and no slug, so no decorated form). This is the edge LISTING's face only; the walk surfaces stay node-typed and never materialize a blob.
     """ # noqa: E501
     created: datetime
     direction: BlobRelationEdgeDirection = Field(description="The edge listing's own vocabulary (`outgoing` = the queried resource is the source), typed — never a bare string (C-C3, 2026-09-04 review).")

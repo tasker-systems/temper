@@ -9835,7 +9835,7 @@
               },
               "target": {
                 "$ref": "#/components/schemas/ResourceId",
-                "description": "Target resource — a pre-resolved id (both endpoints are resolved now)."
+                "description": "The target's id: a `kb_resources.id` when `target_table` is `resource`\n(the default), a `kb_blobs.id` when it is `blob`."
               },
               "target_table": {
                 "$ref": "#/components/schemas/RelationshipTarget",
@@ -10282,7 +10282,7 @@
       },
       "BlobRelationEdgeDirection": {
         "type": "string",
-        "description": "The direction a listed edge runs relative to the blob — the relations listing's own\nvocabulary (`outgoing` = the blob is the edge's source, `incoming` = the blob is the\ntarget). Typed, not a free string (the typed-structs rule, C-C3 2026-09-04 review):\nthe readback's SQL CASE is the only writer, so a value outside the pair is a DB/code\ndisagreement and is refused at the parse boundary, never passed through. Distinct\nfrom [`BlobRelationDirection`] — that is the ASSERT request's vocabulary (which end\nof a new edge the blob occupies); this is what a LISTED edge already does.",
+        "description": "The direction a listed edge runs relative to the blob — the relations listing's own\nvocabulary (`outgoing` = the blob is the edge's source, `incoming` = the blob is the\ntarget). Typed, not a free string (the typed-structs rule, C-C3 2026-09-04 review):\nthe readback's SQL CASE is the only writer, so a value outside the pair is a DB/code\ndisagreement and is refused at the parse boundary, never passed through. Distinct\nfrom [`BlobRelationDirection`] — that is the ASSERT request's vocabulary (which end\nof a new edge the blob occupies); this is what a LISTED edge already does.\n\nIts ts-rs export owns a PER-TYPE file, deliberately: this is the one core blob type a\ntemper-workflow wire type's transitive closure reaches (through `GraphEdgeRow`), and a\nts-rs pass truncates every file its closure touches. Exporting into `blob.ts` let the\nworkflow pass truncate the file to this one type, silently dropping the other eleven\n(found by review 2026-09-05). A per-type file is single-owner, so the truncation is a\nno-op — the `EdgeId.ts` precedent.",
         "enum": [
           "outgoing",
           "incoming"
@@ -12478,7 +12478,7 @@
       },
       "GraphEdgeRow": {
         "type": "object",
-        "description": "Edge listing row — the `/edges` handler's response body. The peer is\npolymorphic (the 2026-09-02 S6 deferral, landed): a resource (title + slug\npresent) or a blob (addressed by bare/decorated id alone — a blob has no\ntitle). This is the edge LISTING's face only; the walk surfaces stay\nnode-typed and never materialize a blob.",
+        "description": "Edge listing row — the `/edges` handler's response body. The peer is\npolymorphic (the 2026-09-02 S6 deferral, landed): a resource (title + slug\npresent) or a blob (addressed by bare id alone — a blob has no title, and\nno slug, so no decorated form). This is the edge LISTING's face only; the\nwalk surfaces stay node-typed and never materialize a blob.",
         "required": [
           "edge_id",
           "peer_table",

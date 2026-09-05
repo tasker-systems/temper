@@ -43,7 +43,7 @@ class AssertRelationshipRequest(BaseModel):
     label: StrictStr
     polarity: Polarity
     source: UUID = Field(description="Source resource — a pre-resolved id (both endpoints are resolved now).")
-    target: UUID = Field(description="Target resource — a pre-resolved id (both endpoints are resolved now).")
+    target: UUID = Field(description="The target's id: a `kb_resources.id` when `target_table` is `resource` (the default), a `kb_blobs.id` when it is `blob`.")
     target_table: Optional[RelationshipTarget] = Field(default=None, description="Which table `target` addresses. Defaults to `resource`; `blob` points the edge at a binary blob the caller can read (task 01a06ee1).")
     weight: Union[StrictFloat, StrictInt]
     __properties: ClassVar[List[str]] = ["confidence", "correlation_id", "invocation_id", "model", "persona", "rationale", "reasoning", "edge_kind", "label", "polarity", "source", "target", "target_table", "weight"]

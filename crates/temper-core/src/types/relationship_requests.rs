@@ -39,7 +39,8 @@ pub enum RelationshipTarget {
 pub struct AssertRelationshipRequest {
     /// Source resource — a pre-resolved id (both endpoints are resolved now).
     pub source: ResourceId,
-    /// Target resource — a pre-resolved id (both endpoints are resolved now).
+    /// The target's id: a `kb_resources.id` when `target_table` is `resource`
+    /// (the default), a `kb_blobs.id` when it is `blob`.
     pub target: ResourceId,
     /// Which table `target` addresses. Defaults to `resource`; `blob` points
     /// the edge at a binary blob the caller can read (task 01a06ee1).

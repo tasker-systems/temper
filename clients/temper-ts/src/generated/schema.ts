@@ -2612,7 +2612,10 @@ export interface components {
             polarity: components["schemas"]["Polarity"];
             /** @description Source resource — a pre-resolved id (both endpoints are resolved now). */
             source: components["schemas"]["ResourceId"];
-            /** @description Target resource — a pre-resolved id (both endpoints are resolved now). */
+            /**
+             * @description The target's id: a `kb_resources.id` when `target_table` is `resource`
+             *     (the default), a `kb_blobs.id` when it is `blob`.
+             */
             target: components["schemas"]["ResourceId"];
             /**
              * @description Which table `target` addresses. Defaults to `resource`; `blob` points
@@ -2907,6 +2910,13 @@ export interface components {
          *     disagreement and is refused at the parse boundary, never passed through. Distinct
          *     from [`BlobRelationDirection`] — that is the ASSERT request's vocabulary (which end
          *     of a new edge the blob occupies); this is what a LISTED edge already does.
+         *
+         *     Its ts-rs export owns a PER-TYPE file, deliberately: this is the one core blob type a
+         *     temper-workflow wire type's transitive closure reaches (through `GraphEdgeRow`), and a
+         *     ts-rs pass truncates every file its closure touches. Exporting into `blob.ts` let the
+         *     workflow pass truncate the file to this one type, silently dropping the other eleven
+         *     (found by review 2026-09-05). A per-type file is single-owner, so the truncation is a
+         *     no-op — the `EdgeId.ts` precedent.
          * @enum {string}
          */
         BlobRelationEdgeDirection: "outgoing" | "incoming";
@@ -4437,9 +4447,9 @@ export interface components {
         /**
          * @description Edge listing row — the `/edges` handler's response body. The peer is
          *     polymorphic (the 2026-09-02 S6 deferral, landed): a resource (title + slug
-         *     present) or a blob (addressed by bare/decorated id alone — a blob has no
-         *     title). This is the edge LISTING's face only; the walk surfaces stay
-         *     node-typed and never materialize a blob.
+         *     present) or a blob (addressed by bare id alone — a blob has no title, and
+         *     no slug, so no decorated form). This is the edge LISTING's face only; the
+         *     walk surfaces stay node-typed and never materialize a blob.
          */
         GraphEdgeRow: {
             /** Format: date-time */

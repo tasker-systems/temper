@@ -211,9 +211,9 @@ pub struct GraphNeighborRow {
 
 /// Edge listing row — the `/edges` handler's response body. The peer is
 /// polymorphic (the 2026-09-02 S6 deferral, landed): a resource (title + slug
-/// present) or a blob (addressed by bare/decorated id alone — a blob has no
-/// title). This is the edge LISTING's face only; the walk surfaces stay
-/// node-typed and never materialize a blob.
+/// present) or a blob (addressed by bare id alone — a blob has no title, and
+/// no slug, so no decorated form). This is the edge LISTING's face only; the
+/// walk surfaces stay node-typed and never materialize a blob.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "graph.ts"))]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]

@@ -46,7 +46,7 @@ module Temper::Generated
     # Source resource — a pre-resolved id (both endpoints are resolved now).
     attr_accessor :source
 
-    # Target resource — a pre-resolved id (both endpoints are resolved now).
+    # The target's id: a `kb_resources.id` when `target_table` is `resource` (the default), a `kb_blobs.id` when it is `blob`.
     attr_accessor :target
 
     # Which table `target` addresses. Defaults to `resource`; `blob` points the edge at a binary blob the caller can read (task 01a06ee1).

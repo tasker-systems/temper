@@ -22,7 +22,8 @@ use temper_workflow::types::graph::GraphEdgeRow;
 /// - the peer is polymorphic: a resource peer carries its title + derived slug
 ///   (§7-dissolved in the substrate, so derived here — matching Rust
 ///   `text::slugify` / the substrate `graph_nodes`); a blob peer is addressed
-///   by bare/decorated id, title and slug both null.
+///   by bare id, title and slug both null (a blob has no slug, so no
+///   decorated form).
 /// - `direction` keeps the legacy `'outgoing'`/`'incoming'` vocabulary, derived
 ///   from which endpoint is the queried resource — typed on the wire
 ///   (`BlobRelationEdgeDirection`) and parsed through the scrubbed choke point.

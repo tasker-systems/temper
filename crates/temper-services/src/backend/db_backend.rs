@@ -1157,7 +1157,7 @@ impl DbBackend {
                 &self.pool,
                 writes::AssertAnchoredEdgeParams {
                     source: AnchorRef::resource(src),
-                    target: AnchorRef::blob(BlobId::from(uuid::Uuid::from(tgt))),
+                    target: AnchorRef::blob(BlobId::from(edge.tgt)),
                     kind,
                     polarity,
                     label,

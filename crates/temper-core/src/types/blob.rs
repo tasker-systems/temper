@@ -174,8 +174,18 @@ pub struct BlobRelationRow {
 /// disagreement and is refused at the parse boundary, never passed through. Distinct
 /// from [`BlobRelationDirection`] — that is the ASSERT request's vocabulary (which end
 /// of a new edge the blob occupies); this is what a LISTED edge already does.
+///
+/// Its ts-rs export owns a PER-TYPE file, deliberately: this is the one core blob type a
+/// temper-workflow wire type's transitive closure reaches (through `GraphEdgeRow`), and a
+/// ts-rs pass truncates every file its closure touches. Exporting into `blob.ts` let the
+/// workflow pass truncate the file to this one type, silently dropping the other eleven
+/// (found by review 2026-09-05). A per-type file is single-owner, so the truncation is a
+/// no-op — the `EdgeId.ts` precedent.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "blob.ts"))]
+#[cfg_attr(
+    feature = "typescript",
+    ts(export, export_to = "BlobRelationEdgeDirection.ts")
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]

@@ -102,13 +102,16 @@ pub(super) async fn fetch_principles(
             .edges(id)
             .await
             .map_err(client_err_to_temper)?;
-        // `incoming` is the memory → principle direction. Filtering on direction as well as label
-        // keeps a principle that ever cites another principle from absorbing it as a member.
+        // `incoming` is the memory → principle direction. Filtering on direction, label, AND
+        // peer table keeps a principle that ever cites another principle from absorbing it as a
+        // member — and keeps a blob peer (the listing is polymorphic) from crossing into a
+        // resource-id member set: the widened edge LISTING never widens a node universe.
         let members = edges
             .iter()
             .filter(|e| {
                 e.direction == temper_core::types::blob::BlobRelationEdgeDirection::Incoming
                     && e.label == EVIDENCES_LABEL
+                    && e.peer_table == "kb_resources"
             })
             .map(|e| e.peer_id)
             .collect();

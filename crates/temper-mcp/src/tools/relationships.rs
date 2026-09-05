@@ -30,7 +30,8 @@ use crate::service::TemperMcpService;
 pub struct AssertRelationshipInput {
     /// Source resource ref: a UUID or the decorated `slug-<uuid>` form.
     pub source: String,
-    /// Target resource ref: a UUID or the decorated `slug-<uuid>` form.
+    /// The target's id: a resource UUID or the decorated `slug-<uuid>` form when
+    /// `target_table` is `resource`; a bare blob UUID when it is `blob`.
     pub target: String,
     /// What `target` addresses. Defaults to `resource`; `blob` points the edge
     /// at a binary blob the caller can READ (its source doc / evidence), with
@@ -301,7 +302,8 @@ pub struct RelationshipInput {
     /// Source resource ref (UUID or `slug-<uuid>`). Required for `assert`; ignored otherwise.
     #[serde(default)]
     pub source: Option<String>,
-    /// Target resource ref (UUID or `slug-<uuid>`). Required for `assert`; ignored otherwise.
+    /// Target ref: a resource (UUID or `slug-<uuid>`), or a bare blob UUID when
+    /// `target_table` is `blob`. Required for `assert`; ignored otherwise.
     #[serde(default)]
     pub target: Option<String>,
     /// What `target` addresses. Defaults to `resource`; `blob` points the edge

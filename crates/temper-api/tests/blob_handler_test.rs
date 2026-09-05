@@ -1778,6 +1778,80 @@ async fn a_resource_assert_can_point_at_a_readable_blob_across_homes(pool: PgPoo
     assert_eq!(rows[0]["label"], "depends_on");
 }
 
+/// The blob-target assert's no-existence-oracle face: an UNREADABLE blob and an UNKNOWN
+/// one render the same refusal. The endpoint gate's message echoes the caller's own probe
+/// id (`kb_blobs {id} not found`) — that echo is the caller's input, not a leak — so parity
+/// is asserted with the id normalized out: everything else about the two refusals must be
+/// byte-identical.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_blob_target_asserts_the_same_not_found_for_unreadable_and_unknown(pool: PgPool) {
+    let cfg = blob_cfg(1 << 20, &["application/pdf"], 64 * 1024);
+    let app = blob_app(pool, cfg).await;
+    let (resource_owner, ctx_a, token_a) = owner(&app.pool).await;
+    let resource = seed_witness_resource(&app, ctx_a, resource_owner, "Pointing doc").await;
+
+    // The blob lives in a home the caller has NO standing in — invisible, not absent.
+    let blob_owner_email = format!("blob-parity-owner-{}@example.com", Uuid::new_v4());
+    let (_blob_owner, ctx_b) =
+        fixtures::create_test_profile_with_context(&app.pool, &blob_owner_email).await;
+    let blob_owner_token = generate_test_jwt(&format!("test|{_blob_owner}"), &blob_owner_email);
+    let resp = commit_multipart(
+        &app,
+        &blob_owner_token,
+        b"%PDF-1.4 invisible".to_vec(),
+        "application/pdf",
+        "kb_contexts",
+        ctx_b,
+    )
+    .send()
+    .await
+    .expect("request failed");
+    let blob: serde_json::Value = resp.json().await.expect("json body");
+    let invisible_id: String = blob["blob_id"]
+        .as_str()
+        .expect("blob_id")
+        .parse()
+        .expect("uuid");
+
+    let probe = |blob_id: String| {
+        let app = &app;
+        let token = &token_a;
+        async move {
+            app.client
+                .post(app.url("/api/relationships"))
+                .header("Authorization", format!("Bearer {token}"))
+                .json(&serde_json::json!({
+                    "source": resource.to_string(),
+                    "target": blob_id,
+                    "target_table": "blob",
+                    "edge_kind": "express",
+                    "polarity": "forward",
+                    "label": "derivation_source",
+                    "weight": 1.0
+                }))
+                .send()
+                .await
+                .expect("request failed")
+        }
+    };
+
+    let unreadable = probe(invisible_id.clone()).await;
+    assert_eq!(unreadable.status().as_u16(), 404, "unreadable = not found");
+    let unknown_id = Uuid::now_v7();
+    let unknown = probe(unknown_id.to_string()).await;
+    assert_eq!(unknown.status().as_u16(), 404, "unknown = not found too");
+
+    let normalize = |text: String, id: String| text.replace(&id, "<probed>");
+    assert_eq!(
+        normalize(
+            unknown.text().await.unwrap_or_default(),
+            unknown_id.to_string()
+        ),
+        normalize(unreadable.text().await.unwrap_or_default(), invisible_id),
+        "an unreadable blob and an unknown one render the SAME refusal"
+    );
+}
+
 // ─── F8: the commit door's transport bound is the config's threshold, not axum's 2 MB ──
 
 /// A multipart commit between axum's inherited 2 MB default and the D7 threshold must
