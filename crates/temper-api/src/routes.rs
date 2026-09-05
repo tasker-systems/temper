@@ -436,7 +436,9 @@ fn slack_link_public_routes() -> Router<AppState> {
 /// - `/api/embed/dispatch` — the async-embed drain (issue #299).
 /// - `/api/embed/warm` — cold-start warmup for server-side query embedding (issue #427).
 /// - `/api/slack/intents/reap` — hourly retention sweep for expired/consumed link intents (T4).
-/// - `/api/as/reap` — daily retention sweep for the three Authorization Server tables (TMPR-56).
+/// - `/api/as/reap` — daily retention sweep for the three Authorization Server tables
+///   (TMPR-56), and — since 2026-09-05 — for abandoned staged blob uploads, which ride
+///   the same cron by ruling (task 01a0715d).
 ///
 /// NOTE: `embed::dispatch`'s `#[utoipa::path]` declares `get` only, but the route
 /// mounts BOTH GET and POST on the same handler. This plain `.route()` (rather than
@@ -463,7 +465,9 @@ fn embed_internal_routes() -> Router<AppState> {
                 .post(handlers::slack_disconnect::reap_intents),
         )
         // Daily retention sweep for the AS tables (TMPR-56) — kb_saml_replay, kb_oauth_flow and
-        // kb_oauth_refresh_tokens, none of which anything had ever deleted from. Same self-gated
+        // kb_oauth_refresh_tokens, none of which anything had ever deleted from — plus the
+        // abandoned-staged-blob-upload TTL reaper (task 01a0715d), which rides this scheduler
+        // entry by ruling rather than minting a second cron. Same self-gated
         // posture and GET+POST-on-one-handler shape as `dispatch`/`warm`. It belongs in this group
         // rather than on the public function for the reason the group exists: the FIRST run drains
         // a backlog accumulated since 20260701000006, and a capped pass over months of rows is not

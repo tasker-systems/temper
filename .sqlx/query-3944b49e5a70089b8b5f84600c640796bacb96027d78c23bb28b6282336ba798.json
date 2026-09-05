@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            WITH victims AS (\n                 SELECT ctid, id\n                   FROM kb_blob_uploads\n                  WHERE updated < now() - make_interval(secs => $1::double precision)\n                  LIMIT $2\n            ), freed AS (\n                 SELECT COALESCE(SUM(octet_length(s.bytes)), 0)::bigint AS \"bytes\"\n                   FROM kb_blob_upload_segments s\n                   JOIN victims v ON s.upload_id = v.id\n            ), gone AS (\n                 DELETE FROM kb_blob_uploads\n                  WHERE ctid IN (SELECT ctid FROM victims)\n                  RETURNING id\n            )\n            SELECT (SELECT count(*) FROM gone)::bigint AS \"uploads!\",\n                   (SELECT bytes FROM freed)           AS \"bytes!\"\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "uploads!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "bytes!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Float8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "3944b49e5a70089b8b5f84600c640796bacb96027d78c23bb28b6282336ba798"
+}
