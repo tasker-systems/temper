@@ -10,8 +10,8 @@ use crate::output;
 use temper_core::types::facet_requests::EdgeFacetSetRequest;
 use temper_core::types::graph::{EdgeKind, Polarity};
 use temper_core::types::relationship_requests::{
-    AssertRelationshipRequest, FoldRelationshipRequest, RelationshipAck, RetypeRelationshipRequest,
-    ReweightRelationshipRequest,
+    AssertRelationshipRequest, FoldRelationshipRequest, RelationshipAck, RelationshipTarget,
+    RetypeRelationshipRequest, ReweightRelationshipRequest,
 };
 
 impl From<CliEdgeKind> for EdgeKind {
@@ -46,10 +46,29 @@ pub fn run(action: EdgeAction, fmt: OutputFormat) -> Result<()> {
             act,
         } => {
             let source = temper_workflow::operations::parse_ref(&source)?;
-            let target = temper_workflow::operations::parse_ref(&target)?;
+            // A blob target spells itself: `blob:<uuid>` — blobs have no slugs, so a
+            // prefix rather than the decorated form. Anything else is a resource ref.
+            let (target, target_table) = match target.strip_prefix("blob:") {
+                Some(raw) => {
+                    let id = uuid::Uuid::parse_str(raw).map_err(|e| {
+                        crate::error::TemperError::Project(format!(
+                            "blob target must be `blob:<uuid>`: {e}"
+                        ))
+                    })?;
+                    (
+                        temper_core::types::ids::ResourceId::from(id),
+                        RelationshipTarget::Blob,
+                    )
+                }
+                None => (
+                    temper_workflow::operations::parse_ref(&target)?,
+                    RelationshipTarget::Resource,
+                ),
+            };
             let req = AssertRelationshipRequest {
                 source,
                 target,
+                target_table,
                 edge_kind: kind.into(),
                 polarity: polarity.into(),
                 label,

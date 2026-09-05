@@ -14,7 +14,7 @@ use temper_core::error::TemperError;
 use temper_core::types::authorship::ActInput;
 use temper_core::types::graph::{EdgeKind, Polarity};
 use temper_core::types::ids::{EdgeId, ProfileId};
-use temper_core::types::relationship_requests::RelationshipAck;
+use temper_core::types::relationship_requests::{RelationshipAck, RelationshipTarget};
 use temper_services::backend::DbBackend;
 use temper_workflow::operations::{
     AssertRelationship, Backend, FoldRelationship, RetypeRelationship, ReweightRelationship,
@@ -30,8 +30,14 @@ use crate::service::TemperMcpService;
 pub struct AssertRelationshipInput {
     /// Source resource ref: a UUID or the decorated `slug-<uuid>` form.
     pub source: String,
-    /// Target resource ref: a UUID or the decorated `slug-<uuid>` form.
+    /// The target's id: a resource UUID or the decorated `slug-<uuid>` form when
+    /// `target_table` is `resource`; a bare blob UUID when it is `blob`.
     pub target: String,
+    /// What `target` addresses. Defaults to `resource`; `blob` points the edge
+    /// at a binary blob the caller can READ (its source doc / evidence), with
+    /// the edge homed in the source resource's home.
+    #[serde(default)]
+    pub target_table: RelationshipTarget,
     /// Structural edge kind — one of `express`, `contains`, `leads_to`, `near`.
     pub edge_kind: EdgeKind,
     /// Edge direction sign — `forward` or `inverse`.
@@ -138,6 +144,7 @@ pub async fn assert_relationship(
     let cmd = AssertRelationship {
         source,
         target,
+        target_table: input.target_table,
         edge_kind: input.edge_kind,
         polarity: input.polarity,
         label: input.label,
@@ -295,9 +302,15 @@ pub struct RelationshipInput {
     /// Source resource ref (UUID or `slug-<uuid>`). Required for `assert`; ignored otherwise.
     #[serde(default)]
     pub source: Option<String>,
-    /// Target resource ref (UUID or `slug-<uuid>`). Required for `assert`; ignored otherwise.
+    /// Target ref: a resource (UUID or `slug-<uuid>`), or a bare blob UUID when
+    /// `target_table` is `blob`. Required for `assert`; ignored otherwise.
     #[serde(default)]
     pub target: Option<String>,
+    /// What `target` addresses. Defaults to `resource`; `blob` points the edge
+    /// at a binary blob the caller can READ (its source doc / evidence), with
+    /// the edge homed in the source resource's home. Used only with `assert`.
+    #[serde(default)]
+    pub target_table: Option<RelationshipTarget>,
     /// The edge handle (from `assert`'s response). Required for `retype`, `reweight`, `fold`; ignored for `assert`.
     #[serde(default)]
     pub edge_handle: Option<Uuid>,
@@ -352,6 +365,7 @@ pub async fn relationship(
                 AssertRelationshipInput {
                     source,
                     target,
+                    target_table: input.target_table.unwrap_or_default(),
                     edge_kind,
                     polarity,
                     label,

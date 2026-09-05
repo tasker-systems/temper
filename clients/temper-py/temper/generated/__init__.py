@@ -267,6 +267,7 @@ __all__ = [
     "RegionDisclosure",
     "RegionHit",
     "RelationshipAck",
+    "RelationshipTarget",
     "RemoveMemberOutcome",
     "RenameContextOutcome",
     "RenameContextRequest",
@@ -610,6 +611,7 @@ from temper.generated.models.refusal_reason import RefusalReason as RefusalReaso
 from temper.generated.models.region_disclosure import RegionDisclosure as RegionDisclosure
 from temper.generated.models.region_hit import RegionHit as RegionHit
 from temper.generated.models.relationship_ack import RelationshipAck as RelationshipAck
+from temper.generated.models.relationship_target import RelationshipTarget as RelationshipTarget
 from temper.generated.models.remove_member_outcome import RemoveMemberOutcome as RemoveMemberOutcome
 from temper.generated.models.rename_context_outcome import RenameContextOutcome as RenameContextOutcome
 from temper.generated.models.rename_context_request import RenameContextRequest as RenameContextRequest

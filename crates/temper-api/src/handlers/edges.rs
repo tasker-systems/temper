@@ -103,6 +103,7 @@ pub async fn assert(
     let cmd = AssertRelationship {
         source: req.source,
         target: req.target,
+        target_table: req.target_table,
         edge_kind: req.edge_kind,
         polarity: req.polarity,
         label: req.label,

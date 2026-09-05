@@ -958,8 +958,10 @@ fn parse_wire_polarity(s: &str) -> ApiResult<WirePolarity> {
 /// CASE literal (`outgoing`/`incoming`) — but the treatment is the same (C-C3,
 /// 2026-09-04 review): the pair is typed on the wire ([`WireRelationDirection`], the
 /// typed-structs rule), and a miss here is a readback/code disagreement, scrubbed at the
-/// F9 choke point like its siblings.
-fn parse_wire_relation_direction(s: &str) -> ApiResult<WireRelationDirection> {
+/// F9 choke point like its siblings. Shared with `edge_service` (the resource-side
+/// listing parses the same CASE literal into the same wire enum) so the two listings
+/// cannot drift on the parse.
+pub(crate) fn parse_wire_relation_direction(s: &str) -> ApiResult<WireRelationDirection> {
     match s {
         "outgoing" => Ok(WireRelationDirection::Outgoing),
         "incoming" => Ok(WireRelationDirection::Incoming),

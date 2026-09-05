@@ -77,6 +77,7 @@ fn assert_cmd(src: Uuid, tgt: Uuid) -> AssertRelationship {
     AssertRelationship {
         source: ResourceId::from(src),
         target: ResourceId::from(tgt),
+        target_table: Default::default(),
         edge_kind: graph::EdgeKind::LeadsTo,
         polarity: graph::Polarity::Forward,
         label: String::new(),

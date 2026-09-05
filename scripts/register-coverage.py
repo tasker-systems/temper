@@ -282,7 +282,7 @@ def advances_targets(task_id: str) -> list:
     """Resource ids this task points at with an `advances` edge."""
     record = run_temper(["resource", "show", task_id, "--edges"])
     edges = (record.get("edges") or {}).get("outgoing", [])
-    return [e["peer_resource_id"] for e in edges if e.get("label") == "advances"]
+    return [e["peer_id"] for e in edges if e.get("label") == "advances" and e.get("peer_table") == "kb_resources"]
 
 
 def build_report(goal_ref: str) -> dict:

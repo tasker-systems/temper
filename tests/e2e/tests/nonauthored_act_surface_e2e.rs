@@ -123,6 +123,7 @@ async fn api_nonauthored_writes_under_invocation_stamp_authorship(pool: sqlx::Pg
         .assert(&AssertRelationshipRequest {
             source: src.id,
             target: tgt.id,
+            target_table: Default::default(),
             edge_kind: EdgeKind::Near,
             polarity: Polarity::Forward,
             label: "relates".to_string(),

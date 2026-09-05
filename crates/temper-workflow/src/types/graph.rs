@@ -5,6 +5,7 @@
 //! `temper_core::types::graph`; the frontmatter-relation mapping half lives here.
 
 use serde::{Deserialize, Serialize};
+use temper_core::types::blob::BlobRelationEdgeDirection;
 use temper_core::types::graph::{EdgeKind, Polarity};
 use temper_core::types::ids::{EdgeId, ResourceId};
 use uuid::Uuid;
@@ -208,20 +209,32 @@ pub struct GraphNeighborRow {
     pub weight: f64,
 }
 
-/// Edge listing row — mirrors the `graph_resource_edges()` SQL function.
+/// Edge listing row — the `/edges` handler's response body. The peer is
+/// polymorphic (the 2026-09-02 S6 deferral, landed): a resource (title + slug
+/// present) or a blob (addressed by bare id alone — a blob has no title, and
+/// no slug, so no decorated form). This is the edge LISTING's face only; the
+/// walk surfaces stay node-typed and never materialize a blob.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "graph.ts"))]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct GraphEdgeRow {
     pub edge_id: EdgeId,
-    pub peer_resource_id: ResourceId,
-    pub peer_title: String,
-    pub peer_slug: String,
+    /// `kb_resources` | `kb_blobs` — spelled exactly as the DDL.
+    /// Cogmap-ended edges are not rendered by this view (declared scope).
+    pub peer_table: String,
+    /// The peer's id — a `kb_resources.id` or a `kb_blobs.id` per `peer_table`.
+    pub peer_id: Uuid,
+    /// The peer resource's title; `None` for a blob peer.
+    pub peer_title: Option<String>,
+    /// Slug derived from the peer title; `None` for a blob peer.
+    pub peer_slug: Option<String>,
     pub edge_kind: EdgeKind,
     pub polarity: Polarity,
     pub label: String,
-    pub direction: String,
+    /// The edge listing's own vocabulary (`outgoing` = the queried resource is
+    /// the source), typed — never a bare string (C-C3, 2026-09-04 review).
+    pub direction: BlobRelationEdgeDirection,
     pub weight: f64,
     pub created: chrono::DateTime<chrono::Utc>,
 }
