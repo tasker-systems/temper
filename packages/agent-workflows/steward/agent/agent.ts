@@ -24,6 +24,6 @@ export default defineAgent({
     //      package is only shipped into the hosted function when named here, so nitro traces the
     //      rebuilt dist + its @opentelemetry deps (static + the dynamic instrumentHttp imports)
     //      into server/node_modules.
-    externalDependencies: ["temper-telemetry-ts", "openapi-fetch"],
+    externalDependencies: ["temper-telemetry-ts"],
   },
 });
