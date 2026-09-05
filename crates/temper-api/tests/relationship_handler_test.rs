@@ -204,6 +204,84 @@ async fn assert_relationship_on_other_profile_resource_returns_403(pool: PgPool)
     );
 }
 
+// ─── Test 3b: an absent source and an unauthorized source refuse ALIKE ───────
+
+/// FAILS IF: the source-home lookup renders an absent source as anything but the
+/// unauthorized source's own refusal. Pre-2026-09-05 the home row was read with
+/// `fetch_one` BEFORE the source-modify clause, so an absent source rendered 500 beside
+/// the unauthorized source's 403 — a caller could read existence off the status code, the
+/// oracle the 2026-09-05 review found (task 01a06f5c). The clause now leads —
+/// `can_modify_resource` answers false for absent and unauthorized alike — so both legs
+/// must render the same status AND the same body, byte for byte.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_absent_source_and_an_unauthorized_source_refuse_alike(pool: PgPool) {
+    let app = common::setup_test_app(pool.clone()).await;
+
+    // P owns a real resource: the unauthorized-source leg.
+    let email_p = format!("rh-absent-p-{}@example.com", Uuid::new_v4());
+    let (profile_p, context_p) =
+        common::fixtures::create_test_profile_with_context(&pool, &email_p).await;
+    let resource_p = insert_resource(&pool, profile_p, context_p, "P's Doc", "rh-absent-doc").await;
+
+    // Q probes both legs across every face the source clause answers, collecting status
+    // and body before asserting — one pass, byte parity read off the pairs.
+    let email_q = format!("rh-absent-q-{}@example.com", Uuid::new_v4());
+    let (profile_q, _) = common::fixtures::create_test_profile_with_context(&pool, &email_q).await;
+    let token_q = common::generate_test_jwt(&format!("test|{profile_q}"), &email_q);
+
+    let probe = |source: Uuid| {
+        let app = &app;
+        let token_q = token_q.clone();
+        async move {
+            app.client
+                .post(app.url("/api/relationships"))
+                .header("Authorization", format!("Bearer {token_q}"))
+                .json(&json!({
+                    "source": source.to_string(),
+                    "target": Uuid::new_v4().to_string(),
+                    "edge_kind": "near",
+                    "polarity": "forward",
+                    "label": "relates_to",
+                    "weight": 1.0
+                }))
+                .send()
+                .await
+                .expect("request failed")
+        }
+    };
+
+    // The target leg is a fresh unknown id in every payload, so any parity break is the
+    // source's.
+    let (unauthorized_status, unauthorized_text) = {
+        let resp = probe(resource_p).await;
+        (
+            resp.status().as_u16(),
+            resp.text().await.unwrap_or_default(),
+        )
+    };
+    let (absent_status, absent_text) = {
+        let resp = probe(Uuid::now_v7()).await;
+        (
+            resp.status().as_u16(),
+            resp.text().await.unwrap_or_default(),
+        )
+    };
+
+    assert_eq!(
+        unauthorized_status, 403,
+        "the unauthorized source must render the source-modify clause's refusal; body: \
+         {unauthorized_text}"
+    );
+    assert_eq!(
+        unauthorized_status, absent_status,
+        "an absent source and an unauthorized one must share a status code"
+    );
+    assert_eq!(
+        unauthorized_text, absent_text,
+        "an absent source and an unauthorized one must render the SAME refusal body"
+    );
+}
+
 // ─── Test 4: POST /api/relationships/{cid}/fold → 200, edge marked folded ────
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
