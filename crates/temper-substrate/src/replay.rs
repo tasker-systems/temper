@@ -260,6 +260,11 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             // provider object's presence was verified at commit and is replay's input, not its
             // output.
             | EventKind::BlobCommitted
+            // A re-block carries no CHUNK content — its chunk ids reference existing CAS rows.
+            // Its created blocks' verbatim bytes DO need a `__blocks` re-supply in the sidecar;
+            // that pass is wired alongside the write path that fires the event. Not selected by
+            // this query's type list until then.
+            | EventKind::ResourceReblocked
             | EventKind::WebhookReceived => None,
         }
         .context("content-bearing payload missing blocks")?;
@@ -731,6 +736,14 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // kb_subscriptions, which is mutable infra and not itself replayable, so a rebuild
             // would silently reproject today's declarations onto yesterday's events.
             | EventKind::SubscriptionDeliveryDisposed => {}
+            // The re-block substrate: the projector (`_project_resource_reblocked`) arrives with
+            // the write path that fires the event, later on this same branch. Until then a
+            // replayed resource_reblocked event must LOUDLY fail — silently skipping a
+            // structure-rewriting event would report a rebuilt ledger quiescent while every
+            // created block is missing. Unreachable on any baseline that never fired one.
+            EventKind::ResourceReblocked => {
+                anyhow::bail!("no projector for resource_reblocked — arrives with the re-block write path")
+            }
         }
     }
     restore_table(pool, "kb_team_cogmaps", &snap.team_cogmaps).await?;

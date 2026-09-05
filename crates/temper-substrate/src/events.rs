@@ -136,6 +136,16 @@ pub enum EventKind {
     /// carries the hash, never the bytes — the bytes live at the content-addressed pathname in
     /// external object storage.
     BlobCommitted,
+    /// Re-cut one resource's blocks along section boundaries (the re-block substrate,
+    /// 2026-09-04). Fires `resource_reblocked`, projected by `_project_resource_reblocked`:
+    /// fold the superseded blocks, insert the created ones (reparenting EXISTING chunk rows),
+    /// apply kept blocks' seq moves — one transaction, because the partial
+    /// `UNIQUE (resource_id, seq) WHERE NOT is_folded` rejects every intermediate state. The
+    /// payload carries the whole re-partition manifest, so replay re-derives nothing.
+    /// TYPED, registered by `20260905000010`. Deliberately NOT a `CONTENT_EVENTS` member —
+    /// region formation reads membership/edges/facets and chunk content, none of which a
+    /// re-partition changes.
+    ResourceReblocked,
 }
 
 impl EventKind {
@@ -180,6 +190,7 @@ impl EventKind {
             EventKind::PrincipalGovernanceChanged => "principal_governance_changed",
             EventKind::CitationAudited => "citation_audited",
             EventKind::BlobCommitted => "blob_committed",
+            EventKind::ResourceReblocked => "resource_reblocked",
         }
     }
 
@@ -229,6 +240,7 @@ impl EventKind {
             "principal_governance_changed" => EventKind::PrincipalGovernanceChanged,
             "citation_audited" => EventKind::CitationAudited,
             "blob_committed" => EventKind::BlobCommitted,
+            "resource_reblocked" => EventKind::ResourceReblocked,
             _ => return None,
         })
     }

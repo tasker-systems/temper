@@ -50,6 +50,7 @@ fn payload_schemas_match_snapshots() {
     check::<p::DataArtifactCommitted>("data_artifact_committed");
     check::<p::ShapeDeclared>("shape_declared");
     check::<p::BlobCommitted>("blob_committed");
+    check::<p::ResourceReblocked>("resource_reblocked");
 }
 
 #[test]
