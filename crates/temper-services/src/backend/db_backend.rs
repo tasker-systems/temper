@@ -1039,7 +1039,9 @@ impl DbBackend {
     /// Assert an edge from `edge.src` to `edge.tgt`, homing it on the SOURCE resource's
     /// anchor — a context for ordinary resources, or the cognitive map itself for
     /// cogmap-homed nodes. Reads the source's home WITHOUT assuming a context (an
-    /// `anchor_table='kb_contexts'` filter returns zero rows for cogmap-homed sources).
+    /// `anchor_table='kb_contexts'` filter returns zero rows for cogmap-homed sources) —
+    /// after clause 1, not before: the source-modify refusal is what keeps the gate from
+    /// becoming a source-existence oracle, and the home lookup rides behind it.
     ///
     /// **This helper OWNS edge-creation authorization (F-1).** It did not gate at all until the
     /// 2026-07-18 audit's F-1 was closed; the contract was "callers hold the source check", which
@@ -1048,10 +1050,18 @@ impl DbBackend {
     ///
     /// 1. **`can_modify_resource(src)`** — retained, and load-bearing for a reason clause 2 does not
     ///    cover: it carries the soft-delete WRITE floor (`r.is_active`). Container-write alone would
-    ///    happily assert an edge out of a tombstone.
+    ///    happily assert an edge out of a tombstone. It also LEADS the home lookup, and that order
+    ///    is load-bearing too: `can_modify_resource` answers false for an ABSENT source and an
+    ///    unauthorized one alike, so bare `Forbidden` discloses neither — the refusal an absent
+    ///    source and an unauthorized one render is the same status and the same body. Reading the
+    ///    home first rendered an absent source as a 500 beside this 403, an existence oracle in the
+    ///    status code (2026-09-05 review, task 01a06f5c).
     /// 2. **container-write on the resolved home** — an edge is an object *homed* in a context or
     ///    cogmap, so authoring one is authoring into that container. Same rule F-2 established for
-    ///    placing a resource. This subsumes clause 1's non-tombstone arms (container-write is
+    ///    placing a resource. The home lookup is `fetch_optional` and its missing row renders the
+    ///    uniform not-found the target gate uses — reachable only as a data inconsistency (an
+    ///    authorized, live resource with no home row), never as a 500. This subsumes clause 1's
+    ///    non-tombstone arms (container-write is
     ///    `can_modify_resource`'s arm 4), so the effective source authority is container authority.
     /// 3. **`endpoint_readable_by_profile(tgt)`** — you may point at what you can see. Closes F-1's
     ///    "a caller who can modify A can attach A→B to any B by id, including resources they cannot
@@ -1075,20 +1085,39 @@ impl DbBackend {
         edge: SourceHomedEdge<'_>,
         act_ctx: EventContext,
     ) -> Result<EdgeId, TemperError> {
+        // Clause 1 leads, and its refusal is the point of the order: `can_modify_resource`
+        // answers false for an ABSENT source and an unauthorized one alike, so bare
+        // `Forbidden` discloses neither — a probe cannot read the source's existence off
+        // the status code. Reading the home before this clause rendered an absent source
+        // as a 500 beside this 403, an existence oracle in the status code (the 2026-09-05
+        // review's finding, task 01a06f5c). Auth before any write (F-1). See this
+        // function's doc for why all three clauses exist and why clause 1 is not redundant
+        // despite clause 2 subsuming its non-tombstone arms.
+        self.check_can_modify_next(edge.src).await?;
+
+        // Clause 2's input, resolved after clause 1 and folded behind the anchor gate's
+        // parity posture: `fetch_optional`, and a missing row renders the same uniform
+        // not-found the target gate uses. Reaching the None arm means an authorized, live
+        // resource with no home row — a data inconsistency, refused as absent rather than
+        // surfacing as a 500. The anchor predicate is the kernel (cogmap-homed) detection
+        // and is unchanged: it admits both anchor kinds, never assuming a context.
         let home = sqlx::query!(
             "SELECT anchor_id, anchor_table FROM kb_resource_homes \
              WHERE resource_id=$1 AND anchor_table IN ('kb_contexts', 'kb_cogmaps') \
              LIMIT 1",
             edge.src,
         )
-        .fetch_one(&self.pool)
+        .fetch_optional(&self.pool)
         .await
-        .map_err(|e| TemperError::Api(e.to_string()))?;
+        .map_err(api_err)?;
+        let Some(home) = home else {
+            return Err(TemperError::NotFound(format!(
+                "kb_resources {} not found",
+                edge.src
+            )));
+        };
         let (home_id, home_table) = (home.anchor_id, home.anchor_table);
 
-        // Auth before any write (F-1). See this function's doc for why all three clauses exist and
-        // why clause 1 is not redundant despite clause 2 subsuming its non-tombstone arms.
-        self.check_can_modify_next(edge.src).await?;
         self.check_container_authorable(&home_table, home_id)
             .await?;
         // The endpoint table follows the target (resources on the incumbent paths — the
