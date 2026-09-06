@@ -2502,4 +2502,49 @@ mod reblock_tests {
             "the kept block's own source is never re-listed under the new event"
         );
     }
+
+    /// The reachability AC, made executable: the re-block op must have ZERO production callers
+    /// outside this file — it is reachable only through the gated write paths
+    /// (`create_resource` / `update_resource` / `finalize_ingest`, each dispatched behind the
+    /// DbBackend gate train). Enforced by grep over every crate's `src/` tree rather than by
+    /// trusting a maintained allowlist (the `assert_every_compiled_in_doc_is_vetoed` precedent:
+    /// derive the set, never list it). Test trees are deliberately not scanned — the substrate
+    /// witnesses invoke the op directly.
+    #[test]
+    fn reblock_op_is_reachable_only_through_the_gated_write_paths() {
+        let crates_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .expect("workspace root")
+            .join("crates");
+        let writes_rs = std::path::Path::new("temper-substrate/src/writes.rs");
+        let mut offenders = Vec::new();
+        for crate_dir in std::fs::read_dir(&crates_dir).expect("crates/ must exist") {
+            let src = crate_dir.expect("dir entry").path().join("src");
+            if !src.is_dir() {
+                continue;
+            }
+            let mut stack = vec![src];
+            while let Some(dir) = stack.pop() {
+                for entry in std::fs::read_dir(&dir).expect("walk src") {
+                    let path = entry.expect("dir entry").path();
+                    if path.is_dir() {
+                        stack.push(path);
+                    } else if path.extension().is_some_and(|e| e == "rs")
+                        && !path.ends_with(writes_rs)
+                        && std::fs::read_to_string(&path)
+                            .map(|s| s.contains("reblock_resource"))
+                            .unwrap_or(false)
+                    {
+                        offenders.push(path);
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "reblock_resource must stay reachable ONLY through the gated write paths in \
+             temper-substrate/src/writes.rs; production callers found: {offenders:?}"
+        );
+    }
 }

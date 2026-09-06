@@ -1678,7 +1678,7 @@ pub async fn verify_ledger_roundtrip(pool: &sqlx::PgPool) -> anyhow::Result<()> 
                 "subscription_delivery_disposed" => {
                     serde_json::from_value::<SubscriptionDeliveryDisposed>(r.payload.clone())?;
                 }
-                // The re-block substrate: `writes::reblock_resource` emits it, so it gets an arm
+                // The re-block substrate: the gated write path emits it, so it gets an arm
                 // for the same reason the grant events do — this is where the typed contract
                 // meets a really-emitted payload.
                 "resource_reblocked" => {
