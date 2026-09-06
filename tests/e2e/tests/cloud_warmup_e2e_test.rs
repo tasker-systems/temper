@@ -25,7 +25,7 @@
 
 mod common;
 
-use temper_core::types::ingest::{pack_chunks, IngestPayload, PackedChunk};
+use temper_core::types::ingest::{pack_chunks, IngestPayload};
 
 /// Shared env-var builder for cloud-mode CLI lib invocations. Mirrors the
 /// helper in `cloud_task_lookup_e2e_test.rs`. `TEMPER_GLOBAL_CONFIG` points at
@@ -70,15 +70,9 @@ async fn seed_session(
     // `VARCHAR(64)`, so the seed uses a plain 64-char hex digest — not
     // `compute_body_hash`, which prefixes `sha256:` and overflows the column.
     let content_hash = hex_sha256(body);
-    let chunk = PackedChunk {
-        chunk_index: 0,
-        header_path: String::new(),
-        heading_depth: 0,
-        content: body.to_string(),
-        content_hash: content_hash.clone(),
-        embedding: vec![0.0_f32; 768],
-        embedded_with: None,
-    };
+    // Chunks from the REAL chunker: the write path applies the blocking policy, so a chunk
+    // set that no fresh chunking of the body reproduces is a drift the op refuses.
+    let chunk = common::chunked(body, 0.0);
 
     let payload = IngestPayload {
         idempotency_key: None,
@@ -94,7 +88,7 @@ async fn seed_session(
         metadata: None,
         managed_meta: Some(serde_json::json!({})),
         open_meta: None,
-        chunks_packed: Some(pack_chunks(&[chunk]).expect("encode session chunk")),
+        chunks_packed: Some(pack_chunks(&chunk).expect("encode session chunk")),
         act: Default::default(),
         sources: Vec::new(),
     };

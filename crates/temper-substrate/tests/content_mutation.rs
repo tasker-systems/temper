@@ -993,6 +993,7 @@ async fn revise_block(
             chunks: &prepared.chunks,
             raw: Some(prose),
             incorporated: sources,
+            replaces_body: false,
             emitter: EntityId::from(emitter),
         },
     )
@@ -1293,6 +1294,7 @@ async fn fire_manifest(
         block_id: BlockId::from(block),
         chunks: array_order.iter().map(ChunkManifest::from).collect(),
         incorporated: vec![],
+        replaces_body: false,
     };
     let mut chunk_map = std::collections::HashMap::new();
     payloads::content_sidecar_chunks(&mut chunk_map, array_order);

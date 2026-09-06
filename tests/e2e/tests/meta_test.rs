@@ -2,7 +2,7 @@
 
 mod common;
 
-use temper_core::types::ingest::{pack_chunks, IngestPayload, PackedChunk};
+use temper_core::types::ingest::{pack_chunks, IngestPayload};
 use temper_workflow::types::managed_meta::{ManagedMeta, MetaUpdatePayload};
 
 /// Ingest a resource, then update its meta via PUT /api/resources/:id/meta,
@@ -44,7 +44,13 @@ async fn update_meta_cascades_title(pool: sqlx::PgPool) {
         metadata: None,
         managed_meta: None,
         open_meta: Some(serde_json::json!({"date": "2026-04-10"})),
-        chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
+        chunks_packed: Some(
+            pack_chunks(&common::chunked(
+                "# Meta Test\n\nContent for meta testing.",
+                0.1,
+            ))
+            .expect("pack chunks"),
+        ),
         act: Default::default(),
         sources: Vec::new(),
     };
@@ -145,25 +151,12 @@ async fn meta_patch_preserves_chunks_and_body_hash(pool: sqlx::PgPool) {
         .expect("context create failed");
 
     // Ingest a resource with two real packed chunks so the body side has
-    // something to be disturbed.
-    let chunk_a = PackedChunk {
-        chunk_index: 0,
-        header_path: "Heading A".to_string(),
-        heading_depth: 1,
-        content: "# Heading A\n\nContent for chunk A.".to_string(),
-        content_hash: format!("{:0>64}", "a"),
-        embedding: vec![0.1_f32; 768],
-        embedded_with: None,
-    };
-    let chunk_b = PackedChunk {
-        chunk_index: 1,
-        header_path: "Heading B".to_string(),
-        heading_depth: 1,
-        content: "# Heading B\n\nContent for chunk B.".to_string(),
-        content_hash: format!("{:0>64}", "b"),
-        embedding: vec![0.2_f32; 768],
-        embedded_with: None,
-    };
+    // something to be disturbed. Chunks come from the REAL chunker: the write
+    // path applies the blocking policy, so client chunks must reproduce a
+    // fresh chunking of the body.
+    let body_two_sections =
+        "# Heading A\n\nContent for chunk A.\n\n# Heading B\n\nContent for chunk B.";
+    let chunks = common::chunked(body_two_sections, 0.1);
 
     let payload = IngestPayload {
         idempotency_key: None,
@@ -179,12 +172,11 @@ async fn meta_patch_preserves_chunks_and_body_hash(pool: sqlx::PgPool) {
         content_hash: Some(
             "chunkpreserve0000000000000000000000000000000000000000000000000000".to_string(),
         ),
-        content: "# Heading A\n\nContent for chunk A.\n\n# Heading B\n\nContent for chunk B."
-            .to_string(),
+        content: body_two_sections.to_string(),
         metadata: None,
         managed_meta: None,
         open_meta: Some(serde_json::json!({"date": "2026-04-12"})),
-        chunks_packed: Some(pack_chunks(&[chunk_a, chunk_b]).expect("pack chunks")),
+        chunks_packed: Some(pack_chunks(&chunks).expect("pack chunks")),
         act: Default::default(),
         sources: Vec::new(),
     };
@@ -335,7 +327,13 @@ async fn meta_patch_authorization_and_errors(pool: sqlx::PgPool) {
         metadata: None,
         managed_meta: Some(serde_json::json!({})),
         open_meta: Some(serde_json::json!({})),
-        chunks_packed: Some(pack_chunks(&[]).expect("pack chunks")),
+        chunks_packed: Some(
+            pack_chunks(&common::chunked(
+                "# Errors\n\nResource for error mapping.",
+                0.1,
+            ))
+            .expect("pack chunks"),
+        ),
         act: Default::default(),
         sources: Vec::new(),
     };
@@ -440,24 +438,8 @@ async fn get_meta_returns_current_meta_without_touching_chunks(pool: sqlx::PgPoo
 
     // Seed two real packed chunks so we can prove the GET path does not
     // touch the body side.
-    let chunk_a = PackedChunk {
-        chunk_index: 0,
-        header_path: "Section A".to_string(),
-        heading_depth: 1,
-        content: "# Section A\n\nBody for A.".to_string(),
-        content_hash: format!("{:0>64}", "a"),
-        embedding: vec![0.1_f32; 768],
-        embedded_with: None,
-    };
-    let chunk_b = PackedChunk {
-        chunk_index: 1,
-        header_path: "Section B".to_string(),
-        heading_depth: 1,
-        content: "# Section B\n\nBody for B.".to_string(),
-        content_hash: format!("{:0>64}", "b"),
-        embedding: vec![0.2_f32; 768],
-        embedded_with: None,
-    };
+    let body_two_sections = "# Section A\n\nBody for A.\n\n# Section B\n\nBody for B.";
+    let chunks = common::chunked(body_two_sections, 0.1);
 
     // Property-only managed tier (identity/type travel first-class, not here).
     let seeded_managed = serde_json::json!({
@@ -483,7 +465,7 @@ async fn get_meta_returns_current_meta_without_touching_chunks(pool: sqlx::PgPoo
         metadata: None,
         managed_meta: Some(seeded_managed.clone()),
         open_meta: Some(seeded_open.clone()),
-        chunks_packed: Some(pack_chunks(&[chunk_a, chunk_b]).expect("pack chunks")),
+        chunks_packed: Some(pack_chunks(&chunks).expect("pack chunks")),
         act: Default::default(),
         sources: Vec::new(),
     };

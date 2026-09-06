@@ -324,6 +324,8 @@ async fn apply_mutation(pool: &PgPool, loaded: &mut Loaded, step: &Step) -> Resu
                     // Scenario `revise` carries no provenance sources (T7 threads them on the
                     // production write path, not the YAML DSL).
                     incorporated: &[],
+                    // A DSL revise addresses one block — never a whole-body replace.
+                    replaces_body: false,
                     emitter: EntityId::from(loaded.emitter),
                 },
             )

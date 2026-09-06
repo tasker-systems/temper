@@ -19,7 +19,7 @@ use std::time::{Duration, SystemTime};
 
 use filetime::{set_file_mtime, FileTime};
 use temper_cli::actions::show_cache::{self, FreshnessTier, ShowCacheParams};
-use temper_core::types::ingest::{pack_chunks, IngestPayload, PackedChunk};
+use temper_core::types::ingest::{pack_chunks, IngestPayload};
 
 /// Tier-3 healing path: when the local file has no parseable frontmatter
 /// (the corruption mode reported in the bug ticket), `attempt_remote` must
@@ -54,15 +54,7 @@ async fn tier3_rebuilds_full_frontmatter_when_local_file_is_corrupted(pool: sqlx
         .expect("context create");
 
     let body = "# Heal Me\n\n## Section\n\nbody text\n".to_string();
-    let chunk = PackedChunk {
-        chunk_index: 0,
-        header_path: String::new(),
-        heading_depth: 0,
-        content: body.clone(),
-        content_hash: format!("{:0>64}", "h"),
-        embedding: vec![0.0_f32; 768],
-        embedded_with: None,
-    };
+    let chunk = common::chunked(&body, 0.0);
     let payload = IngestPayload {
         idempotency_key: None,
         segmented: None,
@@ -81,7 +73,7 @@ async fn tier3_rebuilds_full_frontmatter_when_local_file_is_corrupted(pool: sqlx
         // deserializes into ManagedMeta::stage (a mis-named key is rejected).
         managed_meta: Some(serde_json::json!({"temper-stage": "draft"})),
         open_meta: Some(serde_json::json!({"tags": ["regression"]})),
-        chunks_packed: Some(pack_chunks(&[chunk]).expect("pack chunks")),
+        chunks_packed: Some(pack_chunks(&chunk).expect("pack chunks")),
         act: Default::default(),
         sources: Vec::new(),
     };
@@ -162,15 +154,7 @@ async fn tier3_preserves_frontmatter_when_local_temper_updated_diverges(pool: sq
         .expect("context create");
 
     let body = "# Mismatch\n\nbody\n".to_string();
-    let chunk = PackedChunk {
-        chunk_index: 0,
-        header_path: String::new(),
-        heading_depth: 0,
-        content: body.clone(),
-        content_hash: format!("{:0>64}", "m"),
-        embedding: vec![0.0_f32; 768],
-        embedded_with: None,
-    };
+    let chunk = common::chunked(&body, 0.0);
     let payload = IngestPayload {
         idempotency_key: None,
         segmented: None,
@@ -185,7 +169,7 @@ async fn tier3_preserves_frontmatter_when_local_temper_updated_diverges(pool: sq
         metadata: None,
         managed_meta: None,
         open_meta: None,
-        chunks_packed: Some(pack_chunks(&[chunk]).expect("pack chunks")),
+        chunks_packed: Some(pack_chunks(&chunk).expect("pack chunks")),
         act: Default::default(),
         sources: Vec::new(),
     };

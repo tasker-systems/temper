@@ -1190,6 +1190,15 @@ pub struct BlockMutated {
     pub chunks: Vec<ChunkManifest>,
     #[serde(default)]
     pub incorporated: Vec<Incorporation>,
+    /// Whole-body replace semantics: the revised text is the resource's ENTIRE new body, so the
+    /// projector folds every sibling live block (their chunk generations retire; the folded rows
+    /// keep revisions and provenance as ledger history). `false` — the serde default, so every
+    /// pre-existing event replays identically — for a per-block revise (`content_block`
+    /// addressing), where siblings are untouched. Absent from the payload JSON when `false` is
+    /// meaningless to older readers either way: readers of `block_mutated` key on
+    /// `block_id`/`chunks`, never on the absence of this key.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub replaces_body: bool,
 }
 
 /// Payload for `block_provenance_annotated` — attach provenance sources to an EXISTING block

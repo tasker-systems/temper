@@ -460,6 +460,11 @@ pub enum SeedAction<'a> {
         /// `&[]` for the scenario/charter/no-source paths; the resource-update write path passes the
         /// caller's sources.
         incorporated: &'a [payloads::Incorporation],
+        /// Whole-body replace semantics (the write-path update's default): the revised text is the
+        /// resource's ENTIRE new body, so the projector folds every sibling live block (their chunk
+        /// generations retire; the folded rows keep revisions and provenance as history). `false`
+        /// for a per-block revise (`content_block` addressing) — siblings are untouched.
+        replaces_body: bool,
         emitter: EntityId,
     },
     /// Attach provenance sources to an EXISTING block without a content revise (issue #355). Unlike
@@ -1509,12 +1514,14 @@ pub async fn fire_with(
             chunks,
             raw,
             incorporated,
+            replaces_body,
             emitter,
         } => {
             let payload = payloads::BlockMutated {
                 block_id: block,
                 chunks: chunks.iter().map(payloads::ChunkManifest::from).collect(),
                 incorporated: incorporated.to_vec(), // recorded into kb_block_provenance by the projector
+                replaces_body,
             };
             // The mutate sidecar keys `__blocks` by BLOCK ID (this path hardcodes seq 0), unlike the
             // create/append sidecar which keys by seq — hence the sibling construction rather than
@@ -2124,6 +2131,7 @@ mod tests {
                 chunks: &chunks,
                 raw: None,
                 incorporated: &[],
+                replaces_body: false,
                 emitter,
             }
             .event_type()

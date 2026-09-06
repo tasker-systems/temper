@@ -1891,6 +1891,7 @@ async fn mutate_block(pool: &sqlx::PgPool, block: Uuid, emitter: EntityId, prose
             block: BlockId::from(block),
             chunks: &prepared.chunks,
             raw: None,
+            replaces_body: false,
             emitter,
         },
     )

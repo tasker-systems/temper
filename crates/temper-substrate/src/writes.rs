@@ -457,10 +457,56 @@ pub async fn update_resource_in_tx(
     ctx: EventContext,
     defer: bool,
 ) -> Result<()> {
+    // A whole-body write (body set, no `content_block`) is the CLI/UI default: the new text IS
+    // the resource's entire body. On a multi-block resource — the shape every multi-section
+    // document lands in under the blocking policy — the whole body REPLACES the partition: the
+    // first live block takes the full new chunk set with `replaces_body = true` (the projector
+    // folds the siblings), and the policy hook below re-partitions in the same transaction.
+    // Explicit `content_block` addressing stays per-block; an empty body stays the reconcile
+    // sentinel (per-block, no prose).
+    let mut body_write: Option<(BlockId, bool)> = None;
     if let Some(body) = p.body {
-        let block_id =
-            resolve_target_block(&mut *conn, p.resource, p.content_block, "update_resource")
-                .await?;
+        if p.content_block.is_none() && !body.is_empty() {
+            let live = sqlx::query!(
+                r#"SELECT b.id, bc.content AS "content: Option<String>" FROM kb_content_blocks b
+                   LEFT JOIN kb_block_content bc ON bc.block_revision_id = b.current_revision_id
+                   WHERE b.resource_id = $1 AND NOT b.is_folded ORDER BY b.seq"#,
+                p.resource.uuid()
+            )
+            .fetch_all(&mut *conn)
+            .await?;
+            body_write = match live.as_slice() {
+                [] => anyhow::bail!("update_resource: resource {} has no live block", p.resource),
+                [only] => Some((BlockId::from(only.id), false)),
+                [first, ..] => {
+                    // Identical whole-body rewrite → the ledger must stay silent (the no-op
+                    // clause): no block_mutate, no re-block, no hook. Bytes, not hashes — the
+                    // whitespace-straddling edge (equal hashes over different bytes) is a real
+                    // change and must write. A sibling without stored bytes (a derived shape)
+                    // makes the composed body unknowable → no short-circuit, replace proceeds.
+                    let short_circuit = live.iter().all(|r| r.content.is_some())
+                        && live
+                            .iter()
+                            .filter_map(|r| r.content.as_deref())
+                            .collect::<String>()
+                            == body;
+                    if short_circuit {
+                        None
+                    } else {
+                        Some((BlockId::from(first.id), true))
+                    }
+                }
+            };
+        } else {
+            let block_id =
+                resolve_target_block(&mut *conn, p.resource, p.content_block, "update_resource")
+                    .await?;
+            body_write = Some((BlockId::from(block_id), false));
+        }
+    }
+
+    if let Some((block_id, replaces_body)) = body_write {
+        let body = p.body.unwrap_or("");
         let mut prepared = match (p.chunks, defer) {
             (Some(chunks), _) => prepare_block_from_chunks(0, None, chunks),
             (None, false) => prepare_block(0, None, body)?,
@@ -475,15 +521,19 @@ pub async fn update_resource_in_tx(
         fire_with(
             &mut *conn,
             SeedAction::BlockMutate {
-                block: crate::ids::BlockId::from(block_id),
+                block: block_id,
                 chunks: &prepared.chunks,
-                // The revised block's raw bytes, stored verbatim. `body` is the new content of the
-                // addressed block (the update path refuses a whole-body write on a multi-block
-                // resource, so this is that block's whole text). An empty body (the reconcile
-                // "reblock from chunks" sentinel — `db_backend` passes `Some("")`) stores no bytes ⇒
-                // the revision is honestly `derived`, never `verbatim` over zero bytes. See `raw_body`.
+                // The revised block's raw bytes, stored verbatim. On the whole-body arm this is
+                // the resource's ENTIRE new body (written into the first live block; its policy
+                // re-partition follows in the same transaction); on the per-block arm it is the
+                // addressed block's whole text. An empty body (the reconcile "reblock from
+                // chunks" sentinel — `db_backend` passes `Some("")`) stores no bytes ⇒ the
+                // revision is honestly `derived`, never `verbatim` over zero bytes. See `raw_body`.
                 raw: (!body.is_empty()).then_some(body),
                 incorporated: &prepared.incorporated,
+                // `true` only on the whole-body multi-block arm — the projector folds the
+                // sibling live blocks (superseded body) in the same event.
+                replaces_body,
                 emitter: p.emitter,
             },
             ctx.clone(),
@@ -692,18 +742,52 @@ fn compute_reblock_partition(
         "slice_sections must rejoin the body byte-for-byte"
     );
 
-    // Fresh chunking of each section (with its ancestor breadcrumb) gives the EXPECTED
-    // chunk-hash sequence. The live chunk sequence must reproduce it exactly: the chunk-hash
-    // sequence is a function of the body alone, so a mismatch means the stored chunking is not
-    // reproducible (an older chunker, a foreign write) and any re-partition would be a guess.
-    let mut section_counts: Vec<usize> = Vec::with_capacity(slices.len());
+    // A heading-only slice — a document title above subsections (`# T` then `## S`) is the
+    // common shape — produces NO chunks: chunk content excludes heading lines. Such a slice
+    // cannot own a block (the projector refuses a created block with no chunks), so it folds
+    // into a neighbor that carries content: leading slices prepend into the first chunked
+    // section, trailing/interior ones append into the previous. The fold concatenates slice
+    // bytes, so block bytes still compose to the body (re-asserted below); the flat expected
+    // sequence above is unchanged by construction, so the drift checks keep their meaning.
     let mut expected: Vec<temper_ingest::chunk::ChunkData> = Vec::new();
+    let mut sections: Vec<(String, Vec<temper_ingest::chunk::ChunkData>)> = Vec::new();
+    let mut pending_leading = String::new();
     for s in &slices {
         let chunks =
             temper_ingest::chunk::chunk_markdown_with_prefix(&s.text, &s.initial_breadcrumb);
-        section_counts.push(chunks.len());
-        expected.extend(chunks);
+        expected.extend(chunks.iter().cloned());
+        if chunks.is_empty() {
+            if sections.is_empty() {
+                pending_leading.push_str(&s.text);
+            } else if let Some((text, _)) = sections.last_mut() {
+                text.push_str(&s.text);
+            }
+            continue;
+        }
+        let text = if sections.is_empty() && !pending_leading.is_empty() {
+            let merged = pending_leading.clone() + &s.text;
+            pending_leading.clear();
+            merged
+        } else {
+            s.text.clone()
+        };
+        sections.push((text, chunks));
     }
+    if sections.is_empty() {
+        // The body chunked to nothing (headings only): there is no prose to partition and no
+        // chunk set any block could own — the same no-prose judgment as the hook's
+        // composable-skip. Silence: no event, no write.
+        return Ok(None);
+    }
+    let mut composed = String::new();
+    for (text, _) in &sections {
+        composed.push_str(text);
+    }
+    assert_eq!(
+        composed, body,
+        "the folded sections must rejoin the body byte-for-byte"
+    );
+
     if expected.len() != live_chunks.len() {
         anyhow::bail!(
             "reblock_resource: resource {resource} has {live} live chunk(s) but its body now chunks to {fresh} — \
@@ -725,11 +809,11 @@ fn compute_reblock_partition(
 
     // Section k owns live chunk positions [start, end): sections partition the expected
     // sequence in order, and expected ≡ live positionally (just proven hash-by-hash).
-    let mut section_ranges: Vec<(usize, usize)> = Vec::with_capacity(slices.len());
+    let mut section_ranges: Vec<(usize, usize)> = Vec::with_capacity(sections.len());
     let mut offset = 0usize;
-    for count in &section_counts {
-        section_ranges.push((offset, offset + count));
-        offset += count;
+    for (_, chunks) in &sections {
+        section_ranges.push((offset, offset + chunks.len()));
+        offset += chunks.len();
     }
 
     // Kept detection: derived-merkle equality against an unclaimed incumbent.
@@ -738,7 +822,7 @@ fn compute_reblock_partition(
     let mut slices_out: Vec<(BlockId, String)> = Vec::new();
     let mut claimed: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
 
-    for (k, s) in slices.iter().enumerate() {
+    for (k, (text, _)) in sections.iter().enumerate() {
         let (start, end) = section_ranges[k];
         let run = &live_chunks[start..end];
 
@@ -756,7 +840,7 @@ fn compute_reblock_partition(
         let incumbent = live_blocks.iter().find(|b| {
             b.body_hash.as_deref() == Some(merkle.as_str())
                 && !claimed.contains(&b.id)
-                && b.bytes.as_deref() == Some(s.text.as_str())
+                && b.bytes.as_deref() == Some(text.as_str())
         });
         match incumbent {
             Some(b) => {
@@ -782,7 +866,7 @@ fn compute_reblock_partition(
                         .collect(),
                     attribution: Vec::new(), // filled below
                 });
-                slices_out.push((new_id, s.text.clone()));
+                slices_out.push((new_id, text.clone()));
             }
         }
     }

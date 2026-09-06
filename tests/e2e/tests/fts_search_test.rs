@@ -2,7 +2,7 @@
 
 mod common;
 
-use temper_core::types::ingest::{pack_chunks, IngestPayload, PackedChunk};
+use temper_core::types::ingest::{pack_chunks, IngestPayload};
 
 /// Helper: ingest a resource with chunks so the FTS index gets populated via trigger.
 async fn ingest_with_chunks(
@@ -33,15 +33,7 @@ async fn ingest_with_open_meta(
     context_name: &str,
     open_meta: serde_json::Value,
 ) {
-    let chunk = PackedChunk {
-        chunk_index: 0,
-        header_path: title.to_string(),
-        heading_depth: 0,
-        content: content.to_string(),
-        content_hash: format!("{:0>64x}", slug.len()),
-        embedding: vec![0.1_f32; 768],
-        embedded_with: None,
-    };
+    let chunks = common::chunked(content, 0.1);
     let payload = IngestPayload {
         idempotency_key: None,
         segmented: None,
@@ -51,12 +43,12 @@ async fn ingest_with_open_meta(
         context_ref: format!("@me/{context_name}"),
         home_cogmap_id: None,
         doc_type_name: "research".to_string(),
-        content_hash: Some(format!("{:0>64x}", title.len())),
+        content_hash: Some(temper_core::hash::sha256_hex(content.as_bytes())),
         content: content.to_string(),
         metadata: None,
         managed_meta: None,
         open_meta: Some(open_meta),
-        chunks_packed: Some(pack_chunks(&[chunk]).expect("pack chunks")),
+        chunks_packed: Some(pack_chunks(&chunks).expect("pack chunks")),
         act: Default::default(),
         sources: Vec::new(),
     };
@@ -280,15 +272,7 @@ async fn ingest_rejects_misshaped_open_meta(pool: sqlx::PgPool) {
         .await
         .expect("context create");
 
-    let chunk = PackedChunk {
-        chunk_index: 0,
-        header_path: "Bad Meta".to_string(),
-        heading_depth: 0,
-        content: "body".to_string(),
-        content_hash: format!("{:0>64x}", 4),
-        embedding: vec![0.1_f32; 768],
-        embedded_with: None,
-    };
+    let chunk = common::chunked("body", 0.1);
     let payload = IngestPayload {
         idempotency_key: None,
         segmented: None,
@@ -304,7 +288,7 @@ async fn ingest_rejects_misshaped_open_meta(pool: sqlx::PgPool) {
         managed_meta: None,
         // `descriptor` is a recognized FTS-indexed key; a number is a shape violation.
         open_meta: Some(serde_json::json!({"descriptor": 42})),
-        chunks_packed: Some(pack_chunks(&[chunk]).expect("pack chunks")),
+        chunks_packed: Some(pack_chunks(&chunk).expect("pack chunks")),
         act: Default::default(),
         sources: Vec::new(),
     };
@@ -316,15 +300,7 @@ async fn ingest_rejects_misshaped_open_meta(pool: sqlx::PgPool) {
     );
 
     // An unknown key with any shape must still pass (the tier stays open — version-skew tolerant).
-    let ok_chunk = PackedChunk {
-        chunk_index: 0,
-        header_path: "Good Meta".to_string(),
-        heading_depth: 0,
-        content: "body".to_string(),
-        content_hash: format!("{:0>64x}", 5),
-        embedding: vec![0.1_f32; 768],
-        embedded_with: None,
-    };
+    let ok_chunk = common::chunked("body", 0.1);
     let ok_payload = IngestPayload {
         idempotency_key: None,
         title: "Good Meta".to_string(),
@@ -332,7 +308,7 @@ async fn ingest_rejects_misshaped_open_meta(pool: sqlx::PgPool) {
         content_hash: Some(format!("{:0>64x}", 9)),
         // An unrecognized key of any shape is fine; `descriptor` here is well-shaped.
         open_meta: Some(serde_json::json!({"some_future_key": 42, "descriptor": "ok"})),
-        chunks_packed: Some(pack_chunks(&[ok_chunk]).expect("pack chunks")),
+        chunks_packed: Some(pack_chunks(&ok_chunk).expect("pack chunks")),
         ..payload
     };
     app.client

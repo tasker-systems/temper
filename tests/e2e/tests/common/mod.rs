@@ -946,3 +946,22 @@ pub async fn setup_eddsa_with_provider(pool: PgPool, provider: &str) -> E2eTestA
         vault_dir,
     }
 }
+
+/// Chunks for `body` as the REAL chunker produces them, packed with an inert constant vector —
+/// ONNX-free, and by construction a fresh chunking: the write path applies the blocking policy,
+/// so a client chunk set whose hashes no fresh chunking reproduces is a chunker drift the op
+/// refuses. Every e2e fixture that ingests a body with explicit chunks must build them here.
+pub fn chunked(text: &str, fill: f32) -> Vec<temper_core::types::ingest::PackedChunk> {
+    temper_ingest::chunk::chunk_markdown(text)
+        .into_iter()
+        .map(|c| temper_core::types::ingest::PackedChunk {
+            chunk_index: c.chunk_index,
+            header_path: c.header_path,
+            heading_depth: c.heading_depth,
+            content: c.content,
+            content_hash: c.content_hash,
+            embedding: vec![fill; 768],
+            embedded_with: None,
+        })
+        .collect()
+}
