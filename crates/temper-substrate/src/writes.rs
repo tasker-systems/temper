@@ -300,7 +300,7 @@ async fn create_resource_impl(
             emitter: p.emitter,
             segmented: mode.segmented,
         },
-        ctx,
+        ctx.clone(),
     )
     .await?
     .resource()?;
@@ -316,6 +316,15 @@ async fn create_resource_impl(
             },
         )
         .await?;
+    }
+    // Write-path policy application (the goal's synchronous arm): an ordinary create commits
+    // already policy-partitioned. A bodyless/empty-body create has no prose to partition (and its
+    // block stores no verbatim bytes, which the op refuses) — the later real-body update applies
+    // policy. A segmented create is born `in_progress`; the resource is not complete yet and the
+    // op refuses a partition decision over a still-arriving body — `finalize_ingest` applies
+    // policy when the body lands complete.
+    if !p.body.is_empty() && !mode.segmented {
+        apply_blocking_policy_in_tx(&mut tx, new_id, p.emitter, ctx).await?;
     }
     tx.commit().await?;
     Ok((new_id, false))
@@ -480,6 +489,15 @@ pub async fn update_resource_in_tx(
             ctx.clone(),
         )
         .await?;
+        // Write-path policy application: the revise re-partitions the WHOLE resource to the body's
+        // heading structure in the same transaction, so a committed update never observably
+        // carries a partition that does not correspond to its new content. Guarded on non-empty:
+        // the `Some("")` sentinel (raw = None, a derived rebuild) has no prose to partition and
+        // stores no verbatim bytes the op could compose — it must skip, exactly as `raw_body`
+        // above skips storing bytes for it.
+        if !body.is_empty() {
+            apply_blocking_policy_in_tx(conn, p.resource, p.emitter, ctx.clone()).await?;
+        }
     }
 
     for (key, value) in p.properties {
@@ -1023,6 +1041,33 @@ pub async fn reblock_resource_in_tx(
     .await?
     .reblocked_event()?;
     Ok(ReblockOutcome::Reblocked { event })
+}
+
+/// The write-path policy application point: re-partition a just-written body to the blocking
+/// policy (v1: heading-aligned sections) inside the write's own transaction.
+///
+/// This is the ONE server-side application point behind the goal register's convergence claim —
+/// every cloud write surface (API, CLI, UI, MCP; human or machine principal) reaches its body
+/// write through `create_resource` / `update_resource` / `finalize_ingest`, and each of those
+/// calls this at its tail, so a surface cannot produce an observable partition that contradicts
+/// policy. Authorization is never re-checked here: the caller has already run the standard gate
+/// train (DbBackend gates before dispatching), and the re-block fires on-behalf-of the write's
+/// acting principal — `ctx` carries the authorship/correlation into `kb_events` (the authored-4
+/// pattern), keeping the substrate principal-free by architecture. The op is reachable ONLY
+/// through these gated write paths (enforced by the `reblock_scope_fence` tripwire).
+///
+/// `NoOp` is silence by design: a write that does not change the effective partition must be
+/// indistinguishable in the ledger from one that never happened (the op fires nothing). The op's
+/// refusals (derived shape, chunker drift) propagate as errors — the enclosing write rolls back
+/// whole, a well-formed no rather than an approximation presented as a partition.
+async fn apply_blocking_policy_in_tx(
+    conn: &mut sqlx::PgConnection,
+    resource: ResourceId,
+    emitter: EntityId,
+    ctx: EventContext,
+) -> Result<()> {
+    let _ = reblock_resource_in_tx(conn, ReblockParams { resource, emitter }, ctx).await?;
+    Ok(())
 }
 
 /// Record an auditor's signed verdict on one `(block, source)` citation (Set 5, spec §4.1-4.2).
@@ -1950,6 +1995,15 @@ pub async fn finalize_ingest(pool: &PgPool, p: FinalizeParams) -> Result<EventId
         expected_body_hash: p.expected_body_hash,
         expected_content_hash: p.expected_content_hash,
     };
+    // Finalize and everything that must be atomic with "this resource is now complete" share one
+    // transaction. `resource_finalize` is a plain plpgsql function (20260715000030 — it RAISEs
+    // TF001/TF002/TF003 on mismatch and appends + projects inside its caller's tx), so wrapping it
+    // in a scoped tx is behavior-preserving for the error paths (the raise rolls the whole thing
+    // back, exactly as its own implicit tx did) — and it is what lets the write-path policy
+    // application (see `apply_blocking_policy_in_tx`) run in the same atomic step: the resource
+    // becomes complete and policy-partitioned in one commit, with no observer able to read a
+    // complete resource whose partition contradicts policy.
+    let mut tx = begin_scoped(pool).await?;
     let ev = sqlx::query_scalar!(
         "SELECT resource_finalize($1,$2,$3,$4)",
         serde_json::to_value(&payload)?,
@@ -1957,9 +2011,16 @@ pub async fn finalize_ingest(pool: &PgPool, p: FinalizeParams) -> Result<EventId
         serde_json::json!({}),
         Option::<Uuid>::None,
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?
     .context("resource_finalize returned null")?;
+    // Write-path policy application: a segmented upload lands policy-partitioned at the same
+    // instant it becomes complete — the only observer-visible state is the committed one. The
+    // finalize act itself is emitter-stamped without an authorship/correlation context (see the
+    // `resource_finalize` call above: `{}` metadata, NULL invocation), so the re-block matches
+    // that posture — never less attributed than the finalize it rides.
+    apply_blocking_policy_in_tx(&mut tx, p.resource, p.emitter, EventContext::default()).await?;
+    tx.commit().await?;
     Ok(EventId::from(ev))
 }
 
