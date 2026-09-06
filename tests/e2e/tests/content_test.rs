@@ -2,7 +2,7 @@
 
 mod common;
 
-use temper_core::types::ingest::{pack_chunks, IngestPayload, PackedChunk};
+use temper_core::types::ingest::{pack_chunks, IngestPayload};
 
 /// GET /api/resources/{id}/content — ingest then retrieve markdown content.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
@@ -23,16 +23,7 @@ async fn resource_content_retrieval(pool: sqlx::PgPool) {
 
     let chunk_content = "# Content Test\n\nThis document tests the content retrieval endpoint.";
 
-    let chunks = vec![PackedChunk {
-        chunk_index: 0,
-        header_path: String::new(),
-        heading_depth: 0,
-        content: chunk_content.to_string(),
-        content_hash: "cont0test0000000000000000000000000000000000000000000000000000000"
-            .to_string(),
-        embedding: vec![0.0_f32; 768],
-        embedded_with: None,
-    }];
+    let chunks = common::chunked(chunk_content, 0.0);
 
     let payload = IngestPayload {
         idempotency_key: None,

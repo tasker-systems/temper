@@ -41,7 +41,13 @@ async fn ingest_creates_resource(pool: sqlx::PgPool) {
         metadata: None,
         managed_meta: None,
         open_meta: Some(serde_json::json!({"date": "2026-04-10"})),
-        chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
+        chunks_packed: Some(
+            pack_chunks(&common::chunked(
+                "# E2E Test\n\nThis is a test document for e2e testing.",
+                0.1,
+            ))
+            .expect("pack chunks"),
+        ),
         act: Default::default(),
         sources: Vec::new(),
     };
