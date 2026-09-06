@@ -10,6 +10,10 @@
 -- (carrying the old blocks' sources onto text that no longer contains them would fabricate).
 -- Sibling chunk generations retire exactly as the target's own superseded generation always has.
 --
+-- TRUST BOUNDARY: `replaces_body` is set ONLY by the gated write path (temper-substrate
+-- `update_resource_in_tx` derives it from the update's shape); no surface passes caller JSON to
+-- this payload, and the reachability tripwire keeps the fold semantics fenced.
+--
 -- ADDITIVE: `replaces_body` is an optional payload key. Absent (every pre-existing event, and
 -- every per-block revise) ⇒ coalesce false ⇒ byte-identical behavior to 20260714000002's
 -- definition. The payload struct is serde-defaulted Rust-side; older events replay unchanged.

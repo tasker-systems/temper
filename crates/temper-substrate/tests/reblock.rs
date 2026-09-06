@@ -886,7 +886,7 @@ async fn refusals_decline_without_events(pool: sqlx::PgPool) {
     // (a) A derived-shape resource: the cogmap's telos charter carries no verbatim bytes.
     let (cogmap, telos) = common::genesis_cogmap(&pool, "refusal-cogmap", "Refusal").await;
     let telos_resource = ResourceId::from(telos);
-    let err = writes::reblock_resource(
+    let declined = writes::reblock_resource(
         &pool,
         ReblockParams {
             resource: telos_resource,
@@ -894,10 +894,10 @@ async fn refusals_decline_without_events(pool: sqlx::PgPool) {
         },
     )
     .await
-    .unwrap_err();
+    .unwrap();
     assert!(
-        err.to_string().contains("verbatim bytes"),
-        "the derived-shape refusal names its reason: {err}"
+        matches!(declined, ReblockOutcome::Declined { ref reason } if reason.contains("verbatim bytes")),
+        "the derived-shape decline names its reason: {declined:?}"
     );
     let _ = cogmap;
 
@@ -926,7 +926,7 @@ async fn refusals_decline_without_events(pool: sqlx::PgPool) {
     )
     .await
     .unwrap();
-    let err = writes::reblock_resource(
+    let declined = writes::reblock_resource(
         &pool,
         ReblockParams {
             resource: in_progress,
@@ -934,10 +934,10 @@ async fn refusals_decline_without_events(pool: sqlx::PgPool) {
         },
     )
     .await
-    .unwrap_err();
+    .unwrap();
     assert!(
-        err.to_string().contains("in_progress"),
-        "the in_progress refusal names its reason: {err}"
+        matches!(declined, ReblockOutcome::Declined { ref reason } if reason.contains("in_progress")),
+        "the mid-ingest decline names its reason: {declined:?}"
     );
 
     assert_eq!(
@@ -959,7 +959,7 @@ async fn block_roles_are_never_fabricated(pool: sqlx::PgPool) {
         actor.0,
         emitter_of(&actor),
         &home,
-        "noop",
+        "role-fabrication",
         BODY_A_B,
         vec![],
     )

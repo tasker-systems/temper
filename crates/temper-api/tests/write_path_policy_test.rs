@@ -371,3 +371,178 @@ async fn derived_rebuild_sentinel_skips_the_policy(pool: PgPool) {
         "the rebuilt block is honestly derived — no verbatim bytes stored"
     );
 }
+
+/// w7 — a segmented upload whose landed chunk set a fresh whole-body chunking cannot reproduce
+/// (segments cut mid-section) still FINALIZES: the policy application declines and the hook
+/// skips, so the resource commits complete with its honest partition. A decline must never
+/// strand the upload `in_progress` — the bytes cannot be re-offered.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn finalize_with_an_unreproducible_chunking_declines_and_commits(pool: PgPool) {
+    let app = common::setup_test_app(pool.clone()).await;
+    let (token, _profile, context_id) = auth(&pool).await;
+
+    let seg1 = "# One\n\nalpha bravo\n";
+    let begin_payload: Value = json!({
+        "title": "Drift Skip Witness",
+        "origin_uri": format!("test://wpp-drift-{}", Uuid::new_v4()),
+        "context_ref": context_id.to_string(),
+        "doc_type_name": "research",
+        "content": seg1,
+        "chunks_packed": pack_body_chunks(seg1),
+        "segmented": {
+            "total_blocks_hint": 2,
+            "block_budget": 262_144,
+            "source_hash": null
+        }
+    });
+    let begin: Value = app
+        .client
+        .post(app.url("/api/ingest"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&begin_payload)
+        .send()
+        .await
+        .expect("begin failed")
+        .json()
+        .await
+        .expect("begin JSON");
+    let resource = begin["resource_id"].as_str().expect("resource id");
+
+    // The second segment continues the SAME section — its landed chunk ("charlie delta") cannot
+    // appear in a fresh chunking of the composed body (which merges the lines into one chunk).
+    let seg2 = "charlie delta\n";
+    let append: Value = json!({
+        "seq": 1,
+        "content": seg2,
+        "content_hash": temper_core::hash::sha256_hex(seg2.as_bytes()),
+        "chunks_packed": pack_body_chunks(seg2),
+        "sources": []
+    });
+    let resp = app
+        .client
+        .post(app.url(&format!("/api/resources/{resource}/blocks")))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&append)
+        .send()
+        .await
+        .expect("append failed");
+    assert_eq!(resp.status().as_u16(), 200, "append must land");
+
+    let body_hash: String = sqlx::query_scalar("SELECT body_hash FROM kb_resources WHERE id = $1")
+        .bind(Uuid::parse_str(resource).unwrap())
+        .fetch_one(&pool)
+        .await
+        .expect("body hash");
+    let resp = app
+        .client
+        .post(app.url(&format!("/api/resources/{resource}/finalize")))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&json!({
+            "expected_blocks": 2,
+            "expected_body_hash": body_hash,
+            "expected_content_hash": null
+        }))
+        .send()
+        .await
+        .expect("finalize failed");
+    assert_eq!(
+        resp.status().as_u16(),
+        204,
+        "a policy decline at finalize must NOT fail the finalize; body: {}",
+        resp.text().await.unwrap_or_default()
+    );
+
+    let state: String = sqlx::query_scalar("SELECT ingest_state FROM kb_resources WHERE id = $1")
+        .bind(Uuid::parse_str(resource).unwrap())
+        .fetch_one(&pool)
+        .await
+        .expect("ingest state");
+    assert_eq!(state, "complete", "the upload commits");
+    assert_eq!(
+        reblocked_events(&pool, resource).await.len(),
+        0,
+        "the declined partition decision fires no re-block event"
+    );
+}
+
+/// w8 — a segmented upload cannot craft a byteless block: begin and append both require the
+/// prose. A contentless segment would make the finalize-time policy application decline and
+/// silently commit an unpoliced partition.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn segmented_uploads_cannot_craft_byteless_blocks(pool: PgPool) {
+    let app = common::setup_test_app(pool.clone()).await;
+    let (token, _profile, context_id) = auth(&pool).await;
+
+    // Begin with chunks but NO content → refused.
+    let begin_payload: Value = json!({
+        "title": "Byteless Begin",
+        "origin_uri": format!("test://wpp-byteless-{}", Uuid::new_v4()),
+        "context_ref": context_id.to_string(),
+        "doc_type_name": "research",
+        "content": "",
+        "chunks_packed": pack_body_chunks("irrelevant"),
+        "segmented": {
+            "block_budget": 262_144,
+            "source_hash": null
+        }
+    });
+    let resp = app
+        .client
+        .post(app.url("/api/ingest"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&begin_payload)
+        .send()
+        .await
+        .expect("begin request failed");
+    assert_eq!(
+        resp.status().as_u16(),
+        400,
+        "a chunks-only segmented begin must be refused; body: {}",
+        resp.text().await.unwrap_or_default()
+    );
+
+    // Append with chunks but NO content → refused.
+    let begin2_resp = app
+        .client
+        .post(app.url("/api/ingest"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&json!({
+            "title": "Byteless Append",
+            "origin_uri": format!("test://wpp-byteless-append-{}", Uuid::new_v4()),
+            "context_ref": context_id.to_string(),
+            "doc_type_name": "research",
+            "content": "# Real\n\nfirst segment\n",
+            "chunks_packed": pack_body_chunks("# Real\n\nfirst segment\n"),
+            "segmented": { "block_budget": 262_144, "source_hash": null }
+        }))
+        .send()
+        .await
+        .expect("begin request failed");
+    assert_eq!(begin2_resp.status().as_u16(), 200);
+    let resource = begin2_resp.json::<Value>().await.expect("begin JSON")["resource_id"]
+        .as_str()
+        .expect("resource id")
+        .to_string();
+
+    let empty_chunk = pack_body_chunks("placeholder");
+    let resp = app
+        .client
+        .post(app.url(&format!("/api/resources/{resource}/blocks")))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&json!({
+            "seq": 1,
+            "content": "",
+            "content_hash": temper_core::hash::sha256_hex(b""),
+            "chunks_packed": empty_chunk,
+            "sources": []
+        }))
+        .send()
+        .await
+        .expect("append request failed");
+    assert_eq!(
+        resp.status().as_u16(),
+        400,
+        "a contentless append must be refused even with chunks; body: {}",
+        resp.text().await.unwrap_or_default()
+    );
+}

@@ -324,7 +324,7 @@ async fn create_resource_impl(
     // op refuses a partition decision over a still-arriving body — `finalize_ingest` applies
     // policy when the body lands complete.
     if !p.body.is_empty() && !mode.segmented {
-        apply_blocking_policy_in_tx(&mut tx, new_id, p.emitter, ctx).await?;
+        apply_blocking_policy_in_tx(&mut tx, new_id, p.emitter, ctx, Decline::Fatal).await?;
     }
     tx.commit().await?;
     Ok((new_id, false))
@@ -334,7 +334,11 @@ async fn create_resource_impl(
 #[derive(Debug)]
 pub struct UpdateParams<'a> {
     pub resource: ResourceId,
-    /// New body prose; revises the resource's single non-folded block (re-chunked + re-embedded).
+    /// New body prose. With `content_block` unset this is a WHOLE-BODY write: on a multi-block
+    /// resource it replaces the partition (the first live block takes the full new chunk set and
+    /// the siblings fold; the blocking policy re-partitions in the same transaction), and an
+    /// identical rewrite short-circuits to no events. With `content_block` set, the text revises
+    /// that block alone.
     pub body: Option<&'a str>,
     pub title: Option<&'a str>,
     pub origin_uri: Option<&'a str>,
@@ -348,10 +352,10 @@ pub struct UpdateParams<'a> {
     /// into `kb_block_provenance` (accretes onto whatever the block already carried). Empty for an
     /// ordinary body revise with no attribution.
     pub sources: Vec<Incorporation>,
-    /// Which content block the body revise + `sources` target. `None` → the resource's sole non-folded
-    /// body block (the default; errors if the resource has zero or >1 live blocks). `Some(id)` →
-    /// address that block explicitly (must belong to the resource and be non-folded); this is also the
-    /// escape hatch for revising a resource that has more than one block.
+    /// Which content block a PER-BLOCK body revise + `sources` target. `None` → whole-body
+    /// semantics (see `body`). `Some(id)` → address that block explicitly (must belong to the
+    /// resource and be non-folded) — the surgical hatch when a caller wants to revise one block
+    /// of a partitioned resource without touching the rest.
     pub content_block: Option<Uuid>,
     /// Destination context for a move (`move_to.context_to`).
     pub rehome_to: Option<ContextId>,
@@ -479,12 +483,16 @@ pub async fn update_resource_in_tx(
                 [] => anyhow::bail!("update_resource: resource {} has no live block", p.resource),
                 [only] => Some((BlockId::from(only.id), false)),
                 [first, ..] => {
-                    // Identical whole-body rewrite → the ledger must stay silent (the no-op
-                    // clause): no block_mutate, no re-block, no hook. Bytes, not hashes — the
-                    // whitespace-straddling edge (equal hashes over different bytes) is a real
-                    // change and must write. A sibling without stored bytes (a derived shape)
-                    // makes the composed body unknowable → no short-circuit, replace proceeds.
-                    let short_circuit = live.iter().all(|r| r.content.is_some())
+                    // Identical whole-body rewrite with no new sources → the ledger must stay
+                    // silent (the no-op clause): no block_mutate, no re-block, no hook. Bytes,
+                    // not hashes — the whitespace-straddling edge (equal hashes over different
+                    // bytes) is a real change and must write. Sources break the short-circuit
+                    // (block_mutate's own dedup rule: a write carrying sources is never a no-op
+                    // — short-circuiting would silently drop them). A sibling without stored
+                    // bytes (a derived shape) makes the composed body unknowable → no
+                    // short-circuit, replace proceeds.
+                    let short_circuit = p.sources.is_empty()
+                        && live.iter().all(|r| r.content.is_some())
                         && live
                             .iter()
                             .filter_map(|r| r.content.as_deref())
@@ -506,7 +514,9 @@ pub async fn update_resource_in_tx(
     }
 
     if let Some((block_id, replaces_body)) = body_write {
-        let body = p.body.unwrap_or("");
+        let body = p
+            .body
+            .expect("body_write is Some only when p.body was Some");
         let mut prepared = match (p.chunks, defer) {
             (Some(chunks), _) => prepare_block_from_chunks(0, None, chunks),
             (None, false) => prepare_block(0, None, body)?,
@@ -514,7 +524,8 @@ pub async fn update_resource_in_tx(
         };
         if prepared.chunks.is_empty() {
             anyhow::bail!(
-                "update_resource: empty/whitespace body — refusing to write a contentless block"
+                "update_resource: body produces no chunks (empty, whitespace, or headings only) — \
+                 refusing to write a contentless block"
             );
         }
         prepared.incorporated = p.sources;
@@ -546,7 +557,8 @@ pub async fn update_resource_in_tx(
         // stores no verbatim bytes the op could compose — it must skip, exactly as `raw_body`
         // above skips storing bytes for it.
         if !body.is_empty() {
-            apply_blocking_policy_in_tx(conn, p.resource, p.emitter, ctx.clone()).await?;
+            apply_blocking_policy_in_tx(conn, p.resource, p.emitter, ctx.clone(), Decline::Fatal)
+                .await?;
         }
     }
 
@@ -670,11 +682,21 @@ pub struct ReblockParams {
     pub emitter: EntityId,
 }
 
-/// What a re-block did. [`ReblockOutcome::NoOp`] means the ledger is indistinguishable from the
-/// operation never having run — no event, no write.
+/// What a re-block did.
+///
+/// - [`ReblockOutcome::NoOp`] — the partition already matches; the ledger is indistinguishable
+///   from the operation never having run.
+/// - [`ReblockOutcome::Declined`] — a precondition for a trustworthy partition decision did not
+///   hold (mid-ingest, no live blocks, a block without stored bytes, or a stored chunking that a
+///   fresh chunking of the body does not reproduce). Returned as a VALUE, not an error, because
+///   the right handling is the CALLER's: the write-path hook declines silently on finalize
+///   (stranding an upload forever is worse than an unpartitioned commit) and treats a decline as
+///   fatal elsewhere; a direct caller (adoption tooling) gets the typed reason to surface.
+/// - [`ReblockOutcome::Reblocked`] — the manifest fired; the ledger carries the act.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReblockOutcome {
     NoOp,
+    Declined { reason: String },
     Reblocked { event: EventId },
 }
 
@@ -723,13 +745,23 @@ struct ReblockPlan {
 /// the chunk-run geometry — a folded block whose chunk run lies inside a created section is
 /// absorbed (union, `carried = false`); one spanning the section boundary is split (copies,
 /// `carried = true`); a kept block's rows ride along untouched and are never re-listed.
+///
+/// The decision is a value, not an error: a [`Partition::Declined`] names the precondition that
+/// failed so the caller can handle it per its own recovery posture (see [`Decline`]).
+#[derive(Debug)]
+enum Partition {
+    NoOp,
+    Declined(String),
+    Plan(ReblockPlan),
+}
+
 fn compute_reblock_partition(
     resource: ResourceId,
     body: &str,
     live_blocks: &[LiveBlock],
     live_chunks: &[LiveChunk],
     attributions: &[AttributionRow],
-) -> Result<Option<ReblockPlan>> {
+) -> Result<Partition> {
     // The slices ARE the new partition; their concatenation must BE the body (asserted, not
     // assumed — this is the byte-exactness contract's compute-side half).
     let slices = slice_sections(body);
@@ -777,7 +809,7 @@ fn compute_reblock_partition(
         // The body chunked to nothing (headings only): there is no prose to partition and no
         // chunk set any block could own — the same no-prose judgment as the hook's
         // composable-skip. Silence: no event, no write.
-        return Ok(None);
+        return Ok(Partition::NoOp);
     }
     let mut composed = String::new();
     for (text, _) in &sections {
@@ -789,21 +821,21 @@ fn compute_reblock_partition(
     );
 
     if expected.len() != live_chunks.len() {
-        anyhow::bail!(
-            "reblock_resource: resource {resource} has {live} live chunk(s) but its body now chunks to {fresh} — \
-             the stored chunking does not reproduce, refusing rather than guessing",
+        return Ok(Partition::Declined(format!(
+            "resource {resource} has {live} live chunk(s) but its body now chunks to {fresh} — \
+             the stored chunking does not reproduce",
             live = live_chunks.len(),
             fresh = expected.len(),
-        );
+        )));
     }
     for (i, (e, l)) in expected.iter().zip(live_chunks).enumerate() {
         if e.content_hash != l.content_hash {
-            anyhow::bail!(
-                "reblock_resource: resource {resource} live chunk #{i} does not match a fresh chunking of its body \
-                 (hash {live_hash} vs expected {fresh_hash}) — refusing rather than guessing",
+            return Ok(Partition::Declined(format!(
+                "resource {resource} live chunk #{i} does not match a fresh chunking of its body \
+                 (hash {live_hash} vs expected {fresh_hash})",
                 live_hash = l.content_hash,
                 fresh_hash = e.content_hash,
-            );
+            )));
         }
     }
 
@@ -958,10 +990,10 @@ fn compute_reblock_partition(
             .any(|b| b.id == k.block_id.uuid() && b.seq != k.seq)
     });
     if created.is_empty() && folded.is_empty() && !seqs_moved {
-        return Ok(None);
+        return Ok(Partition::NoOp);
     }
 
-    Ok(Some(ReblockPlan {
+    Ok(Partition::Plan(ReblockPlan {
         manifest: payloads::ResourceReblocked {
             resource_id: resource,
             created,
@@ -1006,11 +1038,13 @@ pub async fn reblock_resource_in_tx(
     .await
     .with_context(|| format!("reblock_resource: resource {} not found", p.resource))?;
     if ingest_state == "in_progress" {
-        anyhow::bail!(
-            "reblock_resource: resource {} is mid-ingest (in_progress) — a partition decision over a \
-             still-arriving body would be a guess",
-            p.resource
-        );
+        return Ok(ReblockOutcome::Declined {
+            reason: format!(
+                "resource {} is mid-ingest (in_progress) — a partition decision over a \
+                 still-arriving body would be a guess",
+                p.resource
+            ),
+        });
     }
 
     let live_blocks: Vec<LiveBlock> = sqlx::query!(
@@ -1035,22 +1069,21 @@ pub async fn reblock_resource_in_tx(
     })
     .collect();
     if live_blocks.is_empty() {
-        anyhow::bail!(
-            "reblock_resource: resource {} has no live blocks to partition",
-            p.resource
-        );
+        return Ok(ReblockOutcome::Declined {
+            reason: format!("resource {} has no live blocks to partition", p.resource),
+        });
     }
     // The design slices STORED block content and never mutates text — a block whose bytes were
     // never stored (a derived charter/scenario shape) would force the body to be re-derived
     // from chunks, fabricating bytes the ledger never carried.
     if let Some(missing) = live_blocks.iter().find(|b| b.bytes.is_none()) {
-        anyhow::bail!(
-            "reblock_resource: block {} (seq {}) of resource {} stores no verbatim bytes (a derived shape) — \
-             re-blocking composes the body from stored bytes only, refusing",
-            missing.id,
-            missing.seq,
-            p.resource
-        );
+        return Ok(ReblockOutcome::Declined {
+            reason: format!(
+                "block {} (seq {}) of resource {} stores no verbatim bytes (a derived shape) — \
+                 re-blocking composes the body from stored bytes only",
+                missing.id, missing.seq, p.resource
+            ),
+        });
     }
 
     let live_chunks: Vec<LiveChunk> = sqlx::query!(
@@ -1107,10 +1140,16 @@ pub async fn reblock_resource_in_tx(
         body.push_str(b.bytes.as_deref().expect("refused above"));
     }
 
-    let Some(plan) =
-        compute_reblock_partition(p.resource, &body, &live_blocks, &live_chunks, &attributions)?
-    else {
-        return Ok(ReblockOutcome::NoOp);
+    let plan = match compute_reblock_partition(
+        p.resource,
+        &body,
+        &live_blocks,
+        &live_chunks,
+        &attributions,
+    )? {
+        Partition::NoOp => return Ok(ReblockOutcome::NoOp),
+        Partition::Declined(reason) => return Ok(ReblockOutcome::Declined { reason }),
+        Partition::Plan(plan) => plan,
     };
 
     let event = fire_with(
@@ -1149,6 +1188,7 @@ async fn apply_blocking_policy_in_tx(
     resource: ResourceId,
     emitter: EntityId,
     ctx: EventContext,
+    decline: Decline,
 ) -> Result<()> {
     // A resource whose live blocks do not all store verbatim bytes (a derived shape — the
     // reconcile sentinel, or the contract-legal chunks-without-content append) has no body to
@@ -1169,8 +1209,23 @@ async fn apply_blocking_policy_in_tx(
     if byteless.unwrap_or(0) > 0 {
         return Ok(());
     }
-    let _ = reblock_resource_in_tx(conn, ReblockParams { resource, emitter }, ctx).await?;
-    Ok(())
+    match reblock_resource_in_tx(conn, ReblockParams { resource, emitter }, ctx).await? {
+        ReblockOutcome::NoOp | ReblockOutcome::Reblocked { .. } => Ok(()),
+        ReblockOutcome::Declined { reason } => match decline {
+            Decline::Fatal => anyhow::bail!("reblock_resource: {reason}"),
+            Decline::Skip => Ok(()),
+        },
+    }
+}
+
+/// What the hook does when the re-block op [`ReblockOutcome::Declined`]s.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Decline {
+    /// The enclosing write is caller-fixable (create/update): surface the decline as an error.
+    Fatal,
+    /// The enclosing write has no recovery path (finalize): commit the honest, unpoliced
+    /// partition. Silence, never an approximation presented as a partition.
+    Skip,
 }
 
 /// Record an auditor's signed verdict on one `(block, source)` citation (Set 5, spec §4.1-4.2).
@@ -2122,7 +2177,14 @@ pub async fn finalize_ingest(pool: &PgPool, p: FinalizeParams) -> Result<EventId
     // finalize act itself is emitter-stamped without an authorship/correlation context (see the
     // `resource_finalize` call above: `{}` metadata, NULL invocation), so the re-block matches
     // that posture — never less attributed than the finalize it rides.
-    apply_blocking_policy_in_tx(&mut tx, p.resource, p.emitter, EventContext::default()).await?;
+    apply_blocking_policy_in_tx(
+        &mut tx,
+        p.resource,
+        p.emitter,
+        EventContext::default(),
+        Decline::Skip,
+    )
+    .await?;
     tx.commit().await?;
     Ok(EventId::from(ev))
 }
@@ -2400,7 +2462,7 @@ mod reblock_tests {
         )
         .unwrap();
         assert!(
-            plan.is_none(),
+            matches!(plan, Partition::NoOp),
             "one body, one identical block: nothing to do"
         );
     }
@@ -2417,7 +2479,7 @@ mod reblock_tests {
         )
         .unwrap();
         assert!(
-            plan.is_none(),
+            matches!(plan, Partition::NoOp),
             "every section keeps its own block at its own seq: the ledger must not hear about it"
         );
     }
@@ -2437,8 +2499,11 @@ mod reblock_tests {
             &chunks,
             &[],
         )
-        .unwrap()
-        .expect("moved seqs are a change");
+        .unwrap();
+        let plan = match plan {
+            Partition::Plan(plan) => plan,
+            other => panic!("expected a plan, got {other:?}"),
+        };
         assert_eq!(plan.manifest.kept.len(), 2);
         assert_eq!(plan.manifest.kept[0].seq, 0, "sections keep document order");
         assert!(plan.manifest.created.is_empty() && plan.manifest.folded.is_empty());
@@ -2455,8 +2520,11 @@ mod reblock_tests {
             &chunks,
             &[],
         )
-        .unwrap()
-        .expect("a two-section body over one block must repartition");
+        .unwrap();
+        let plan = match plan {
+            Partition::Plan(plan) => plan,
+            other => panic!("expected a plan, got {other:?}"),
+        };
         assert_eq!(plan.manifest.folded, vec![BlockId::from(blocks[0].id)]);
         assert_eq!(plan.manifest.created.len(), 2);
         assert!(plan.manifest.kept.is_empty());
@@ -2487,17 +2555,21 @@ mod reblock_tests {
         let (body, mut blocks, mut chunks) = build_fixture(&[(SECTION_A, 1)]);
         chunks[0].content_hash = "deadbeef".repeat(8);
         blocks[0].body_hash = Some(sha(&["deadbeef".repeat(8).as_str()]));
-        let err = compute_reblock_partition(
+        let decision = compute_reblock_partition(
             ResourceId::from(Uuid::now_v7()),
             &body,
             &blocks,
             &chunks,
             &[],
         )
-        .unwrap_err();
+        .unwrap();
+        let declined = match decision {
+            Partition::Declined(reason) => reason,
+            other => panic!("expected a decline, got {other:?}"),
+        };
         assert!(
-            err.to_string().contains("refusing"),
-            "the refusal names the refusal: {err}"
+            declined.contains("does not match a fresh chunking"),
+            "the decline names the refusal: {declined}"
         );
     }
 
@@ -2518,8 +2590,11 @@ mod reblock_tests {
             &chunks,
             &[],
         )
-        .unwrap()
-        .expect("section two can no longer keep its drifted block");
+        .unwrap();
+        let plan = match plan {
+            Partition::Plan(plan) => plan,
+            other => panic!("expected a plan, got {other:?}"),
+        };
         assert_eq!(plan.manifest.kept.len(), 1, "section one keeps block one");
         assert_eq!(plan.manifest.created.len(), 1, "section two creates a twin");
         assert_eq!(plan.manifest.folded, vec![BlockId::from(blocks[1].id)]);
@@ -2546,8 +2621,11 @@ mod reblock_tests {
             &chunks,
             &attributions,
         )
-        .unwrap()
-        .expect("the block splits into two created sections");
+        .unwrap();
+        let plan = match plan {
+            Partition::Plan(plan) => plan,
+            other => panic!("expected a plan, got {other:?}"),
+        };
         assert_eq!(plan.manifest.created.len(), 2);
         for c in &plan.manifest.created {
             assert_eq!(c.attribution.len(), 1, "each half gets the source");
@@ -2589,8 +2667,11 @@ mod reblock_tests {
             &chunks,
             &attributions,
         )
-        .unwrap()
-        .expect("section B's drifted block is replaced");
+        .unwrap();
+        let plan = match plan {
+            Partition::Plan(plan) => plan,
+            other => panic!("expected a plan, got {other:?}"),
+        };
         assert_eq!(plan.manifest.kept.len(), 1);
         assert_eq!(plan.manifest.created.len(), 1);
         let created = &plan.manifest.created[0];
@@ -2620,7 +2701,12 @@ mod reblock_tests {
             .nth(2)
             .expect("workspace root")
             .join("crates");
-        let writes_rs = std::path::Path::new("temper-substrate/src/writes.rs");
+        // The op (writes.rs) and the substrate's own fire plumbing (events.rs, whose
+        // `_event_append` call reaches the SQL wrapper) are the only legitimate homes.
+        let allowed: &[std::path::PathBuf] = &[
+            std::path::PathBuf::from("temper-substrate/src/writes.rs"),
+            std::path::PathBuf::from("temper-substrate/src/events.rs"),
+        ];
         let mut offenders = Vec::new();
         for crate_dir in std::fs::read_dir(&crates_dir).expect("crates/ must exist") {
             let src = crate_dir.expect("dir entry").path().join("src");
@@ -2634,9 +2720,14 @@ mod reblock_tests {
                     if path.is_dir() {
                         stack.push(path);
                     } else if path.extension().is_some_and(|e| e == "rs")
-                        && !path.ends_with(writes_rs)
+                        && !allowed.iter().any(|a| path.ends_with(a))
                         && std::fs::read_to_string(&path)
-                            .map(|s| s.contains("reblock_resource"))
+                            .map(|s| {
+                                // The Rust op AND the SQL entry wrapper carrying the same fold
+                                // semantics — either called from outside the substrate's own
+                                // write/fire plumbing is a bypass.
+                                s.contains("reblock_resource") || s.contains("resource_reblock(")
+                            })
                             .unwrap_or(false)
                     {
                         offenders.push(path);
@@ -2646,8 +2737,8 @@ mod reblock_tests {
         }
         assert!(
             offenders.is_empty(),
-            "reblock_resource must stay reachable ONLY through the gated write paths in \
-             temper-substrate/src/writes.rs; production callers found: {offenders:?}"
+            "reblock_resource/resource_reblock must stay reachable ONLY through the gated write \
+             paths (temper-substrate/src/writes.rs + events.rs); production callers found: {offenders:?}"
         );
     }
 }
