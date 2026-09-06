@@ -18,17 +18,19 @@ use uuid::Uuid;
 
 use temper_core::types::ingest::{pack_chunks, IngestPayload, PackedChunk};
 
-/// A synthetic, already-embedded chunk: a KNOWN embedding the server must persist verbatim
-/// (a real server re-embed would produce a bge vector, never a constant).
-fn synthetic_chunk(index: u32, content: &str, hash_seed: &str, fill: f32) -> PackedChunk {
-    // content_hash is stored as opaque text; a 64-hex-ish string keeps it realistic.
-    let content_hash = format!("{hash_seed:0>64}");
+/// An already-embedded chunk with a KNOWN embedding the server must persist verbatim (a real
+/// server re-embed would produce a bge vector, never a constant) and the REAL chunker hash for
+/// its content — the write path applies the blocking policy, so a hash no fresh chunking
+/// produces is a chunker drift and the write is refused.
+fn synthetic_chunk(index: u32, content: &str, _hash_seed: &str, fill: f32) -> PackedChunk {
+    let hashed = temper_ingest::chunk::chunk_markdown(content);
+    let c = &hashed[index as usize];
     PackedChunk {
         chunk_index: index,
-        header_path: String::new(),
-        heading_depth: 0,
+        header_path: c.header_path.clone(),
+        heading_depth: c.heading_depth,
         content: content.to_string(),
-        content_hash,
+        content_hash: c.content_hash.clone(),
         embedding: vec![fill; 768],
         embedded_with: None,
     }
@@ -173,7 +175,7 @@ async fn update_honors_client_chunks_no_server_embed(pool: PgPool) {
         .header("Authorization", format!("Bearer {token}"))
         .json(&json!({
             "content": "Revised client body.",
-            "content_hash": format!("{:0>64}", "cc"),
+            "content_hash": null,
             "chunks_packed": pack_chunks(&update_chunks).expect("pack"),
         }))
         .send()

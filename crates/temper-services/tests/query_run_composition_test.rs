@@ -1083,14 +1083,21 @@ async fn an_intermediate_survey_stage_discloses_the_regions_it_matched(pool: PgP
     let home = ctx(&pool, owner, "survey-disclosure").await;
 
     // Two chunked members — survey's lateral join drops any resource with no current chunk.
-    let chunk = |title: &'static str, body: &'static str| IncomingChunk {
-        chunk_index: 0,
-        content_hash: format!("{:0>64}", title),
-        content: body.to_string(),
-        embedding: vec![0.1_f32; 768],
-        embedded_with: None,
-        header_path: String::new(),
-        heading_depth: 0,
+    // Real chunker hashes: the write path now applies the blocking policy, so a chunks-arm
+    // create carrying a hash no fresh chunking produces is a chunker drift and is refused.
+    let chunks_for = |body: &str| -> Vec<IncomingChunk> {
+        temper_ingest::chunk::chunk_markdown(body)
+            .into_iter()
+            .map(|c| IncomingChunk {
+                chunk_index: c.chunk_index as i32,
+                content_hash: c.content_hash,
+                content: c.content,
+                embedding: vec![0.1_f32; 768],
+                embedded_with: None,
+                header_path: c.header_path,
+                heading_depth: c.heading_depth as i16,
+            })
+            .collect()
     };
     let r1 = writes::create_resource(
         &pool,
@@ -1106,7 +1113,7 @@ async fn an_intermediate_survey_stage_discloses_the_regions_it_matched(pool: PgP
             originator: owner,
             emitter,
             properties: &[],
-            chunks: Some(vec![chunk("survey member one", "about regions")]),
+            chunks: Some(chunks_for("about regions")),
         },
     )
     .await
@@ -1126,7 +1133,7 @@ async fn an_intermediate_survey_stage_discloses_the_regions_it_matched(pool: PgP
             originator: owner,
             emitter,
             properties: &[],
-            chunks: Some(vec![chunk("survey member two", "about regions too")]),
+            chunks: Some(chunks_for("about regions too")),
         },
     )
     .await

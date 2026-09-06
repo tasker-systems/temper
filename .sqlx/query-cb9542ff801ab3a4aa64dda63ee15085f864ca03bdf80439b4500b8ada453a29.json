@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) FROM kb_content_blocks b\n           LEFT JOIN kb_block_content bc ON bc.block_revision_id = b.current_revision_id\n           WHERE b.resource_id = $1 AND NOT b.is_folded AND bc.block_revision_id IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "cb9542ff801ab3a4aa64dda63ee15085f864ca03bdf80439b4500b8ada453a29"
+}

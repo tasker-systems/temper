@@ -1066,6 +1066,25 @@ async fn apply_blocking_policy_in_tx(
     emitter: EntityId,
     ctx: EventContext,
 ) -> Result<()> {
+    // A resource whose live blocks do not all store verbatim bytes (a derived shape — the
+    // reconcile sentinel, or the contract-legal chunks-without-content append) has no body to
+    // compose, so this write can make no partition decision: skip. Same "no prose to partition"
+    // judgment as the empty-body guards at the call sites — and unlike a direct op invocation,
+    // the enclosing write often has NO recovery path (a finalize refusal would strand the
+    // resource `in_progress` forever; the upload cannot be re-offered), so declining is not
+    // available here. Derived shapes stay outside v1 policy reach (the goal register's declared
+    // boundary); the skip is silence, never an approximation presented as a partition.
+    let byteless: Option<i64> = sqlx::query_scalar!(
+        r#"SELECT count(*) FROM kb_content_blocks b
+           LEFT JOIN kb_block_content bc ON bc.block_revision_id = b.current_revision_id
+           WHERE b.resource_id = $1 AND NOT b.is_folded AND bc.block_revision_id IS NULL"#,
+        resource.uuid()
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    if byteless.unwrap_or(0) > 0 {
+        return Ok(());
+    }
     let _ = reblock_resource_in_tx(conn, ReblockParams { resource, emitter }, ctx).await?;
     Ok(())
 }

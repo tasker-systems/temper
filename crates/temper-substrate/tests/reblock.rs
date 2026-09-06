@@ -1,16 +1,20 @@
 #![cfg(feature = "artifact-tests")]
 //! Witnesses for the re-block substrate (task 2026-09-04, goal Anchor addressability phase 1).
-//! One behavior per test, each against the real write paths — resources are seeded through
-//! `writes::create_resource` (verbatim bytes present, the op's own precondition), never
-//! hand-inserted. The identity/attribution fixtures build multi-block resources through the
-//! segmented-ingest trio (create-segmented → append → finalize), which is the one honest way a
-//! resource gets blocks whose boundaries are NOT its section boundaries.
+//! One behavior per test, each against the real write paths — resources are seeded through the
+//! real write machinery (real chunk rows, verbatim bytes present — the op's own precondition),
+//! never hand-inserted. Op-grain witnesses that need the SINGLE-block multi-section shape fire
+//! `ResourceCreate` directly: the write path itself now applies the blocking policy at create,
+//! so that shape is only reachable by direct invocation — exactly as adoption/replay-style
+//! direct callers face it. The identity/attribution fixtures build multi-block resources
+//! through the segmented-ingest trio (create-segmented → append → finalize), which is the one
+//! honest way a resource gets blocks whose boundaries are NOT its section boundaries.
 //!
 //! ONNX-dependent. Isolated ephemeral DB via `temper_substrate::MIGRATOR`.
 
 mod common;
 
 use temper_substrate::content::{body_hash_from_block_chunk_hashes, prepare_block_with_prefix};
+use temper_substrate::events::{fire, SeedAction};
 use temper_substrate::ids::{BlockId, EntityId, ProfileId, ResourceId};
 use temper_substrate::payloads::{AnchorRef, Incorporation, ProvenanceSource};
 use temper_substrate::writes::{
@@ -218,6 +222,46 @@ async fn event_count(pool: &sqlx::PgPool) -> i64 {
         .unwrap()
 }
 
+/// Seed a SINGLE-block resource whose body has multiple sections by firing `ResourceCreate`
+/// directly — real chunk rows and verbatim bytes, no policy application. The write path now
+/// partitions bodies at create, so this shape (the op's classic input: one incumbent, N
+/// sections) is only reachable by direct invocation, exactly as the adoption tooling (goal
+/// phase 4) and replay will invoke it.
+async fn fire_single_block_body_resource(
+    pool: &sqlx::PgPool,
+    owner: ProfileId,
+    emitter: EntityId,
+    home: &AnchorRef,
+    title: &str,
+    body: &str,
+    sources: Vec<Incorporation>,
+) -> ResourceId {
+    let mut block = prepare_block_with_prefix(0, None, body, &[]).unwrap();
+    block.raw_text = Some(body.to_string());
+    block.incorporated = sources;
+    let blocks = [block];
+    let mut conn = pool.acquire().await.unwrap();
+    fire(
+        &mut conn,
+        SeedAction::ResourceCreate {
+            title,
+            origin_uri: &format!("temper://reblock/{title}"),
+            resource_id: None,
+            home: *home,
+            owner,
+            originator: Some(owner),
+            blocks: &blocks,
+            doc_type: Some("concept"),
+            emitter,
+            segmented: false,
+        },
+    )
+    .await
+    .unwrap()
+    .resource()
+    .unwrap()
+}
+
 async fn reblocked_event_count(pool: &sqlx::PgPool) -> i64 {
     sqlx::query_scalar(
         "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id=e.event_type_id \
@@ -243,7 +287,7 @@ async fn the_projector_applies_the_manifest_transactionally(pool: sqlx::PgPool) 
     bootseed::seed_system(&pool).await.unwrap();
     let actor = system_actor(&pool).await;
     let home = make_home(&pool, actor.0, "reblock-txn").await;
-    let resource = create_body_resource(
+    let resource = fire_single_block_body_resource(
         &pool,
         actor.0,
         emitter_of(&actor),
@@ -527,7 +571,7 @@ async fn an_identical_partition_fires_nothing(pool: sqlx::PgPool) {
     bootseed::seed_system(&pool).await.unwrap();
     let actor = system_actor(&pool).await;
     let home = make_home(&pool, actor.0, "reblock-noop").await;
-    let resource = create_body_resource(
+    let resource = fire_single_block_body_resource(
         &pool,
         actor.0,
         emitter_of(&actor),
@@ -910,12 +954,12 @@ async fn block_roles_are_never_fabricated(pool: sqlx::PgPool) {
     bootseed::seed_system(&pool).await.unwrap();
     let actor = system_actor(&pool).await;
     let home = make_home(&pool, actor.0, "reblock-roles").await;
-    let resource = create_body_resource(
+    let resource = fire_single_block_body_resource(
         &pool,
         actor.0,
         emitter_of(&actor),
         &home,
-        "roles",
+        "noop",
         BODY_A_B,
         vec![],
     )

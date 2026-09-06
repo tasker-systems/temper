@@ -123,13 +123,20 @@ async fn birth_cogmap(pool: &PgPool, owner: uuid::Uuid, name: &str) -> uuid::Uui
     cogmap
 }
 
-fn one_chunk_packed(text: &str, hash_seed: &str) -> String {
+fn one_chunk_packed(text: &str, _hash_seed: &str) -> String {
+    // Real chunker hash: the write path now applies the blocking policy, so a chunk hash no
+    // fresh chunking produces is a chunker drift and the create is refused.
+    let content_hash = temper_ingest::chunk::chunk_markdown(text)
+        .into_iter()
+        .next()
+        .map(|c| c.content_hash)
+        .unwrap_or_default();
     let chunk = PackedChunk {
         chunk_index: 0,
         header_path: String::new(),
         heading_depth: 0,
         content: text.to_owned(),
-        content_hash: format!("{hash_seed:0>64}"),
+        content_hash,
         embedding: vec![0.1_f32; 768],
         embedded_with: None,
     };
@@ -362,18 +369,19 @@ fn vec_text(v: &[f32]) -> String {
 /// membership and the centroid is computable in the test, exactly.
 fn create_cmd_embedded(home: HomeAnchor, slug: &str, embedding: Vec<f32>) -> CreateResource {
     let content = format!("body of {slug}");
+    // Real chunker hash: the write path applies the blocking policy — a synthetic hash is a
+    // chunker drift and the create is refused.
+    let content_hash = temper_ingest::chunk::chunk_markdown(&content)
+        .into_iter()
+        .next()
+        .map(|c| c.content_hash)
+        .unwrap_or_default();
     let chunk = PackedChunk {
         chunk_index: 0,
         header_path: String::new(),
         heading_depth: 0,
         content: content.clone(),
-        content_hash: {
-            use std::collections::hash_map::DefaultHasher;
-            use std::hash::{Hash, Hasher};
-            let mut h = DefaultHasher::new();
-            slug.hash(&mut h);
-            format!("{:0>64}", h.finish())
-        },
+        content_hash,
         embedding,
         embedded_with: None,
     };

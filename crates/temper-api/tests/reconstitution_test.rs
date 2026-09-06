@@ -28,47 +28,23 @@ async fn test_reconstitution_preserves_heading_markers(pool: PgPool) {
     // D11: born Denied. Approve so the gated ingest/reconstitution endpoints admit this caller.
     common::fixtures::approve_standing_by_email(&app.pool, &email).await;
 
-    // Build chunks that simulate what the CLI chunker produces for:
+    // Chunks for a heading-sectioned doc, built by the REAL CLI chunker (the write path applies
+    // the blocking policy, so client chunks must carry hashes a fresh chunking reproduces):
     //   "Preamble text.\n\n## Decision\n\nWe chose option B.\n\n### Rationale\n\nIt was simpler.\n\n## Implementation\n\nCode goes here."
+    const DOC: &str = "Preamble text.\n\n## Decision\n\nWe chose option B.\n\n### Rationale\n\nIt was simpler.\n\n## Implementation\n\nCode goes here.";
     let fake_embedding = vec![0.0_f32; 768];
-    let chunks = vec![
-        PackedChunk {
-            chunk_index: 0,
-            header_path: String::new(),
-            heading_depth: 0,
-            content: "Preamble text.".to_string(),
-            content_hash: "sha256:aaa".to_string(),
+    let chunks: Vec<PackedChunk> = temper_ingest::chunk::chunk_markdown(DOC)
+        .into_iter()
+        .map(|c| PackedChunk {
+            chunk_index: c.chunk_index,
+            header_path: c.header_path,
+            heading_depth: c.heading_depth,
+            content: c.content,
+            content_hash: c.content_hash,
             embedding: fake_embedding.clone(),
             embedded_with: None,
-        },
-        PackedChunk {
-            chunk_index: 1,
-            header_path: "Decision".to_string(),
-            heading_depth: 2,
-            content: "We chose option B.".to_string(),
-            content_hash: "sha256:bbb".to_string(),
-            embedding: fake_embedding.clone(),
-            embedded_with: None,
-        },
-        PackedChunk {
-            chunk_index: 2,
-            header_path: "Decision > Rationale".to_string(),
-            heading_depth: 3,
-            content: "It was simpler.".to_string(),
-            content_hash: "sha256:ccc".to_string(),
-            embedding: fake_embedding.clone(),
-            embedded_with: None,
-        },
-        PackedChunk {
-            chunk_index: 3,
-            header_path: "Implementation".to_string(),
-            heading_depth: 2,
-            content: "Code goes here.".to_string(),
-            content_hash: "sha256:ddd".to_string(),
-            embedding: fake_embedding,
-            embedded_with: None,
-        },
-    ];
+        })
+        .collect();
     let chunks_packed = pack_chunks(&chunks).expect("pack_chunks failed");
 
     // Ingest via POST /api/ingest
