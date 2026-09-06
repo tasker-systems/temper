@@ -26,7 +26,7 @@
 
 mod common;
 
-use temper_substrate::blob_store::{blob_pathname, InMemoryBlobStore};
+use temper_substrate::blob_store::{blob_pathname, BlobStore, InMemoryBlobStore};
 use temper_substrate::events::EventContext;
 use temper_substrate::ids::{BlobId, ContextId, EntityId, ProfileId, ResourceId};
 use temper_substrate::payloads::AnchorRef;
@@ -704,6 +704,386 @@ async fn replay_reproduces_blob_projections(pool: sqlx::PgPool) {
     for ((table_a, a), (_table_b, b)) in before.iter().zip(after.iter()) {
         assert_eq!(a, b, "projection table {table_a} diverged under replay");
     }
+}
+
+// ── the strike substrate (the delete-act design, ruled 2026-09-06; migration 20260906000010) ──
+// The shared emptying act behind BOTH forms — the ordinary delete and erasure. What is pinned:
+//
+// 1. The emptied shape is D5.2 — pathname/type/bytes nulled; hash, home, owner KEPT
+//    (`the-ledger-tells-delete-from-erasure`: no row-shape marker of which act; attribution
+//    survives a delete).
+// 2. The strike touches NO edge (`no-strike-under-anothers-custody`'s twin ruling): the edge
+//    rows persist unfolded and render absent because the blob is gone, never because the
+//    relation ended.
+// 3. The byte fate is the SAME-TRANSACTION live-row refcount, LIVE rows only (`no-pre-count`):
+//    released ⟺ the struck row was the last live row carrying its hash.
+// 4. A re-commit into a struck row's slot mints a FRESH row (`delete-replay-reproduces-absence`).
+// 5. Every read floor renders the struck blob as the absence an unknown id gets.
+// 6. Replay reproduces the emptied state exactly.
+
+/// The strike path: commit (the caller's store is pre-populated here — that IS the upload
+/// in a fake world) and strike, returning the strike verdict.
+async fn commit_then_strike(
+    pool: &sqlx::PgPool,
+    store: &InMemoryBlobStore,
+    home: ContextId,
+    owner: ProfileId,
+    bytes: &[u8],
+    emitter: EntityId,
+) -> (BlobId, writes::StruckBlob) {
+    let (p, _hash, pathname) = params(home, owner, bytes, "image/png", emitter);
+    store.insert(pathname);
+    let blob = writes::commit_blob(pool, store, p).await.unwrap();
+    let struck = writes::delete_blob(pool, blob, emitter).await.unwrap();
+    (blob, struck)
+}
+
+/// FAILS IF: the strike leaves any live metadata behind (an emptied row that still names its
+/// pathname or byte count is a half-strike: the read floors would hide it but the dedup slot
+/// would stay occupied, refusing a re-commit) — or if it drops the hash, home, or owner
+/// (the ledger's prior account of the blob's life must remain true and readable; attribution
+/// breaks only at erasure). Also pins the fired event: typed, domain, home-anchored.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_strike_empties_the_row_into_the_d5_2_shape_and_fires_its_event(pool: sqlx::PgPool) {
+    let (owner, emitter, home) = blob_world(&pool, "strike-shape").await;
+    let store = InMemoryBlobStore::default();
+    let (blob, struck) =
+        commit_then_strike(&pool, &store, home, owner, b"strike-me", emitter).await;
+
+    assert!(
+        struck.released,
+        "the only live row carrying the hash releases its bytes"
+    );
+    assert_eq!(struck.blob, blob);
+
+    let row: (
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        String,
+        String,
+        String,
+        Uuid,
+    ) = sqlx::query_as(
+        "SELECT blob_pathname, content_type, content_bytes, content_hash, \
+                    home_table, home_id::text, owner_profile_id \
+               FROM kb_blobs WHERE id = $1",
+    )
+    .bind(blob.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let (pathname, ctype, cbytes, hash, home_table, home_id, owner_id) = row;
+    assert!(pathname.is_none(), "the emptied row carries no pathname");
+    assert!(ctype.is_none(), "the emptied row carries no content type");
+    assert!(cbytes.is_none(), "the emptied row carries no byte count");
+    assert_eq!(hash, sha(b"strike-me"), "the hash survives the strike");
+    assert_eq!(home_table, "kb_contexts", "the home survives the strike");
+    assert_eq!(home_id, home.uuid().to_string());
+    assert_eq!(owner_id, owner.uuid(), "attribution survives a delete");
+
+    // The event: the act's own type, domain category, anchored at the home, carrying the
+    // blob id and nothing else (custody is derivable — never stamped).
+    let ev: (String, String) = sqlx::query_as(
+        "SELECT et.name, et.category::text \
+           FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+          WHERE e.payload->>'blob_id' = $1 AND et.name = 'blob_deleted'",
+    )
+    .bind(blob.uuid().to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(ev, ("blob_deleted".into(), "domain".into()));
+    let anchored: (String, Uuid) = sqlx::query_as(
+        "SELECT producing_anchor_table, producing_anchor_id FROM kb_events \
+          WHERE payload->>'blob_id' = $1 AND event_type_id = \
+                (SELECT id FROM kb_event_types WHERE name = 'blob_deleted')",
+    )
+    .bind(blob.uuid().to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(anchored.0, "kb_contexts");
+    assert_eq!(anchored.1, home.uuid());
+
+    // The row's currency stamp moved to the strike event (assert/fold linkage, as every
+    // sibling projection table carries).
+    let last: Uuid = sqlx::query_scalar(
+        "SELECT e.id FROM kb_blobs b JOIN kb_events e ON e.id = b.last_event_id \
+          WHERE b.id = $1",
+    )
+    .bind(blob.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let struck_ev: Uuid = sqlx::query_scalar(
+        "SELECT e.id FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+          WHERE et.name = 'blob_deleted' AND e.payload->>'blob_id' = $1",
+    )
+    .bind(blob.uuid().to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(last, struck_ev, "last_event_id is the strike's own event");
+}
+
+/// FAILS IF: the strike folds the blob's edges (a folded relation reads as DELIBERATELY
+/// ended — the ledger would lie about N relations for one act) — or if the edges stay
+/// visible (a struck blob's relations must render absent BECAUSE THE BLOB IS GONE, through
+/// the same floors that hide the blob itself).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_strike_folds_no_edge_and_the_relations_render_absent(pool: sqlx::PgPool) {
+    let (owner, emitter, home) = blob_world(&pool, "strike-edges").await;
+    let resource = temper_substrate_test_resource(&pool, owner, emitter, home).await;
+
+    // The properly-ordered sequence: live blob, edge asserted, THEN the strike.
+    let store = InMemoryBlobStore::default();
+    let (p, _h, path) = params(home, owner, b"ordered-bytes", "image/png", emitter);
+    store.insert(path);
+    let blob = writes::commit_blob(&pool, &store, p).await.unwrap();
+    let edge = assert_edge_to_blob(&pool, emitter, resource, blob, home).await;
+
+    let visible_before: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM edges_visible_to($1) WHERE edge_id = $2)")
+            .bind(owner.uuid())
+            .bind(edge)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(visible_before, "the live blob's edge is visible");
+
+    writes::delete_blob(&pool, blob, emitter).await.unwrap();
+
+    // The edge ROW persists, unfolded, untouched — the ledger keeps the relation's whole life.
+    let edge_row: (bool, i64) = sqlx::query_as(
+        "SELECT (SELECT NOT is_folded FROM kb_edges WHERE id = $1), \
+                (SELECT count(*) FROM kb_edges WHERE id = $1)",
+    )
+    .bind(edge)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(edge_row.1, 1, "the edge row persists");
+    assert!(edge_row.0, "FAILS IF the strike folded the edge");
+
+    // …and renders ABSENT: the endpoint is unreadable and the edge invisible — the same
+    // absence an unknown id gets, for the blob and everything that named it.
+    let endpoint: bool =
+        sqlx::query_scalar("SELECT endpoint_readable_by_profile($1, 'kb_blobs', $2)")
+            .bind(owner.uuid())
+            .bind(blob.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        !endpoint,
+        "a struck blob's endpoint is unreadable — to its OWN home's reader"
+    );
+    let visible_after: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM edges_visible_to($1) WHERE edge_id = $2)")
+            .bind(owner.uuid())
+            .bind(edge)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(!visible_after, "the struck blob's edge renders absent");
+
+    // The read-through agrees: by-id and relations both answer the unknown-id shape.
+    let by_id = temper_substrate::readback::blob_by_id(&pool, owner, blob)
+        .await
+        .unwrap();
+    assert!(by_id.is_none(), "a struck blob reads as absent by id");
+    let relations = temper_substrate::readback::blob_relations(&pool, owner, blob)
+        .await
+        .unwrap();
+    assert!(
+        relations.is_none(),
+        "a struck blob's relations answer 404-parity None"
+    );
+    let listed = temper_substrate::readback::blobs_readable_by_profile(&pool, owner, None)
+        .await
+        .unwrap();
+    assert!(
+        listed.iter().all(|r| r.blob_id != blob),
+        "a struck blob is listed nowhere"
+    );
+}
+
+/// FAILS IF: the byte fate leaves the strike's own transaction (a pre-count) or counts
+/// struck rows (a struck row would hold the bytes hostage forever — the count could never
+/// reach the last-live case). N homes over one provider object: the first strike keeps the
+/// bytes (N-1 live neighbors), the last releases them.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_refcount_releases_bytes_only_when_the_last_live_row_strikes(pool: sqlx::PgPool) {
+    let (owner, emitter, home_a) = blob_world(&pool, "refcount-a").await;
+    let home_b = ContextId::from(
+        common::insert_context(
+            &pool,
+            "kb_profiles",
+            owner.uuid(),
+            "refcount-b",
+            "refcount-b",
+        )
+        .await
+        .unwrap(),
+    );
+    let bytes = b"shared-bytes".to_vec();
+    let hash = sha(&bytes);
+    let pathname = blob_pathname(&hash);
+    let store = InMemoryBlobStore::default().with_object(pathname.clone());
+
+    let (pa, _h, _) = params(home_a, owner, &bytes, "image/png", emitter);
+    let blob_a = writes::commit_blob(&pool, &store, pa).await.unwrap();
+    let (pb, _h2, _) = params(home_b, owner, &bytes, "image/png", emitter);
+    let blob_b = writes::commit_blob(&pool, &store, pb).await.unwrap();
+    assert_ne!(
+        blob_a, blob_b,
+        "per-home identity: two homes, two rows, one object"
+    );
+
+    let struck_a = writes::delete_blob(&pool, blob_a, emitter).await.unwrap();
+    assert!(
+        !struck_a.released,
+        "a neighbor home still holds the bytes live — they stay"
+    );
+    assert!(
+        store.contains(&pathname),
+        "the provider bytes are not struck"
+    );
+
+    let struck_b = writes::delete_blob(&pool, blob_b, emitter).await.unwrap();
+    assert!(
+        struck_b.released,
+        "the last live row's strike releases the bytes"
+    );
+    assert_eq!(struck_b.pathname.as_deref(), Some(pathname.as_str()));
+
+    // The release is the CALLER's act, after the commit — the substrate's contract returns
+    // the verdict and the address; it never touches the provider itself.
+    store.delete(&[&pathname]).await.unwrap();
+    assert!(
+        !store.contains(&pathname),
+        "the bytes are gone from the provider"
+    );
+}
+
+/// FAILS IF: a re-commit of identical bytes into a struck row's (home, hash) slot is
+/// refused by the slot (the unique constraint binding ALL rows — the pre-widening shape)
+/// or dedup-hits the struck row (returning the emptied row's identity: a row the caller
+/// can commit "into" but never read). The fresh row must be LIVE, the struck row must
+/// stay emptied, and the ledger must tell both apart.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_recommit_into_a_struck_row_s_slot_mints_a_fresh_row(pool: sqlx::PgPool) {
+    let (owner, emitter, home) = blob_world(&pool, "strike-recommit").await;
+    let bytes = b"recommit-bytes".to_vec();
+    let store = InMemoryBlobStore::default();
+    let (blob, _struck) = commit_then_strike(&pool, &store, home, owner, &bytes, emitter).await;
+
+    // The re-commit: same home, same bytes — the store still holds them (the release may
+    // or may not have happened; the commit verifies presence either way).
+    let (p2, hash, _path) = params(home, owner, &bytes, "image/png", emitter);
+    let fresh = writes::commit_blob(&pool, &store, p2).await.unwrap();
+    assert_ne!(
+        fresh, blob,
+        "the re-commit mints a FRESH row, never the struck identity"
+    );
+
+    let shapes: Vec<(Uuid, bool)> = sqlx::query_as(
+        "SELECT id, (content_type IS NOT NULL) FROM kb_blobs \
+          WHERE home_table = 'kb_contexts' AND home_id = $1 AND content_hash = $2 \
+          ORDER BY id",
+    )
+    .bind(home.uuid())
+    .bind(hash)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(shapes.len(), 2, "the struck row and the fresh row coexist");
+    assert_eq!(shapes[0].0, blob.uuid());
+    assert!(!shapes[0].1, "the struck row stays emptied");
+    assert_eq!(shapes[1].0, fresh.uuid());
+    assert!(shapes[1].1, "the fresh row is live");
+}
+
+/// FAILS IF: a second strike of one row appends a second emptying event or re-empties
+/// anything — one act, one event; the wrapper refuses in its own voice and the ledger
+/// carries exactly one blob_deleted for the row.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_already_struck_blob_refuses_in_the_wrappers_own_voice(pool: sqlx::PgPool) {
+    let (owner, emitter, home) = blob_world(&pool, "strike-twice").await;
+    let store = InMemoryBlobStore::default();
+    let (blob, _first) =
+        commit_then_strike(&pool, &store, home, owner, b"twice-struck", emitter).await;
+
+    let err = writes::delete_blob(&pool, blob, emitter).await.unwrap_err();
+    // `{err:#}` prints the whole anyhow chain: the fire arm's fetch context wraps the
+    // wrapper's RAISE, and the refusal's own voice is the inner link — the part the
+    // vocabulary rule governs.
+    let chain = format!("{err:#}");
+    assert!(chain.contains("already struck"), "{chain}");
+
+    let events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+          WHERE et.name = 'blob_deleted' AND e.payload->>'blob_id' = $1",
+    )
+    .bind(blob.uuid().to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        events, 1,
+        "one act, one event — the refusal appended nothing"
+    );
+}
+
+/// FAILS IF: replay of a ledger carrying a strike resurrects the row or desyncs any
+/// sibling projection — the emptied state must reproduce exactly (`delete-replay-
+/// reproduces-absence`), edges included, and a post-strike re-commit in the ledger must
+/// replay to a fresh live row beside the emptied one.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn replay_reproduces_a_strike(pool: sqlx::PgPool) {
+    use temper_substrate::replay;
+
+    let (owner, emitter, home) = blob_world(&pool, "strike-replay").await;
+    let resource = temper_substrate_test_resource(&pool, owner, emitter, home).await;
+    let bytes = b"replayed-strike".to_vec();
+    let store = InMemoryBlobStore::default();
+    let (blob, _struck) = commit_then_strike(&pool, &store, home, owner, &bytes, emitter).await;
+    // An edge asserted BEFORE the strike: persists through it, renders absent after replay too.
+    let edge = assert_edge_to_blob(&pool, emitter, resource, blob, home).await;
+    // And a fresh-row re-commit after the strike: replay must reproduce BOTH rows.
+    let (p2, _h, _path) = params(home, owner, &bytes, "image/png", emitter);
+    writes::commit_blob(&pool, &store, p2).await.unwrap();
+
+    let before = replay::dump_projections(&pool).await.unwrap();
+    let snap = replay::snapshot(&pool).await.unwrap();
+
+    common::reset_schema(&pool).await;
+    replay::replay(&pool, &snap).await.unwrap();
+
+    let after = replay::dump_projections(&pool).await.unwrap();
+    for ((table_a, a), (_table_b, b)) in before.iter().zip(after.iter()) {
+        assert_eq!(
+            a, b,
+            "projection table {table_a} diverged under replay of a strike"
+        );
+    }
+
+    // The emptied row stayed emptied and the edge row stayed unfolded — replay reproduced
+    // the strike's shape, not a resurrection.
+    let emptied: bool =
+        sqlx::query_scalar("SELECT content_type IS NULL FROM kb_blobs WHERE id = $1")
+            .bind(blob.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(emptied, "the struck row stays emptied after replay");
+    let folded: bool = sqlx::query_scalar("SELECT is_folded FROM kb_edges WHERE id = $1")
+        .bind(edge)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(!folded, "the strike's edge stays unfolded after replay");
 }
 
 // ── S3: staged uploads — the pre-ledger transport half (D7) ──────────────────────────────────

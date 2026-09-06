@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BlobDeleted",
+  "description": "Strike one blob — the shared emptying act behind BOTH forms, the ordinary delete and\nerasure (ruled 2026-09-06: one byte-fate, one emptied-row shape; the ledger alone tells\nthem apart). Identity-only, the `ResourceDeleted` shape: the event's envelope carries the\nhome (producing anchor), the actor (`emitter_entity_id`), and the time (`occurred_at`);\ncustody is derivable by replay from the persisted edges and the peers' homes, so it is\nnever stamped. `kb_events.\"references\"` is erasure's apparatus and is never populated here.\n\nThe projection empties the row into the D5.2 shape — pathname/type/bytes nulled, the hash\nand home and owner kept — so the row shape carries no marker of WHICH act emptied it, and\na re-commit of identical bytes into the same home mints a fresh row (the per-home UNIQUE\nis partial on live rows). Attribution never breaks at a delete: `owner_profile_id`\nsurvives; it dies only at erasure, by the pseudonym break, never by nulling.",
+  "type": "object",
+  "properties": {
+    "blob_id": {
+      "$ref": "#/$defs/BlobId"
+    }
+  },
+  "required": [
+    "blob_id"
+  ],
+  "$defs": {
+    "BlobId": {
+      "description": "A `kb_blobs.id` value — one immutable, content-addressed binary blob, homed like a\nresource and related to resources by edges (spec: binary blobs, 2026-09-01).",
+      "type": "string",
+      "format": "uuid"
+    }
+  }
+}

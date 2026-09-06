@@ -252,6 +252,36 @@ impl BlobStore for VercelBlobStore {
             }
         }
     }
+
+    async fn delete(&self, pathnames: &[&str]) -> Result<()> {
+        if pathnames.is_empty() {
+            return Ok(());
+        }
+        let bearer = self.bearer()?;
+        // Grounded del wire shape (@vercel/blob 2.8.0 dist, src/del.ts — extracted
+        // 2026-09-06): a POST to `{api_base}/delete` whose JSON body is `{"urls": [...]}` —
+        // NOT an HTTP DELETE. The SDK passes URLs or pathnames through verbatim; ours are the
+        // content-addressed pathnames (del accepts either form). The provider holds 200 for a
+        // pathname it does not hold ("won't throw if the blob url doesn't exist"), which is
+        // the idempotence the trait's contract promises an at-least-once caller.
+        let url = self.api_url("/delete", "");
+        let mut headers = self.api_headers(&bearer)?;
+        headers.insert("content-type", "application/json".parse()?);
+        let resp = self
+            .http
+            .post(&url)
+            .headers(headers)
+            .body(serde_json::json!({ "urls": pathnames }).to_string())
+            .send()
+            .await
+            .context("blob provider delete: request failed")?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("blob provider delete: {status}: {}", truncate(&body));
+        }
+        Ok(())
+    }
 }
 
 fn truncate(s: &str) -> &str {
@@ -485,5 +515,76 @@ mod tests {
         );
         // Bounded: the read window tripped well inside the mock's 30s hold.
         assert!(elapsed < Duration::from_secs(5), "put took {elapsed:?}");
+    }
+
+    // The delete wire shape, grounded against the SDK's del (@vercel/blob 2.8.0 src/del.ts):
+    // a POST to /delete whose JSON body carries the whole pathname list under "urls" —
+    // batched, never a per-pathname request — with the same store-id/api-version auth the
+    // other API calls carry and the content-type the JSON body demands.
+    #[tokio::test]
+    async fn delete_posts_the_grounded_batched_wire_shape() {
+        let server = MockServer::start().await;
+        let store = store_with("tok-1").with_test_endpoints(&server.uri());
+        Mock::given(method("POST"))
+            .and(path("/api/blob/delete"))
+            .and(header("authorization", "Bearer tok-1"))
+            .and(header("x-vercel-blob-store-id", "abc123"))
+            .and(header("x-api-version", "12"))
+            .and(header("content-type", "application/json"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        store
+            .delete(&["ab/abcd", "cd/ef01"])
+            .await
+            .expect("the batched delete succeeds");
+
+        // The whole list rode ONE request body, verbatim.
+        let reqs = server.received_requests().await.unwrap();
+        assert_eq!(reqs.len(), 1, "the batch rides one request");
+        let body: serde_json::Value = serde_json::from_slice(&reqs[0].body).unwrap();
+        assert_eq!(
+            body["urls"],
+            serde_json::json!(["ab/abcd", "cd/ef01"]),
+            "{body}"
+        );
+    }
+
+    // FAILS IF: delete stops being idempotent — a provider that errors on an already-absent
+    // pathname would break the at-least-once callers (the post-commit release's retry, the
+    // erasure drain's fence), whose retry legitimately re-asks for a pathname it already
+    // struck. The provider answers 200 for missing urls; the client must accept it.
+    #[tokio::test]
+    async fn delete_accepts_the_providers_answer_for_a_missing_url() {
+        let server = MockServer::start().await;
+        let store = store_with("tok-1").with_test_endpoints(&server.uri());
+        Mock::given(method("POST"))
+            .and(path("/api/blob/delete"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        store
+            .delete(&["zz/absent"])
+            .await
+            .expect("deleting an absent pathname is a successful no-op");
+    }
+
+    // FAILS IF: a provider failure is swallowed into a success-shaped delete — the strike
+    // path logs-and-continues only for the PROVIDER's own idempotent answer, never for a
+    // real failure (the reconciler's age-alerting fence must see the truth).
+    #[tokio::test]
+    async fn delete_surfaces_a_provider_failure() {
+        let server = MockServer::start().await;
+        let store = store_with("tok-1").with_test_endpoints(&server.uri());
+        Mock::given(method("POST"))
+            .and(path("/api/blob/delete"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+
+        let err = store.delete(&["ab/abcd"]).await.unwrap_err().to_string();
+        assert!(err.contains("503"), "{err}");
     }
 }

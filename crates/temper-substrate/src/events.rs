@@ -146,6 +146,16 @@ pub enum EventKind {
     /// region formation reads membership/edges/facets and chunk content, none of which a
     /// re-partition changes.
     ResourceReblocked,
+    /// Strike one blob — the shared emptying act behind the ordinary delete and erasure
+    /// (ruled 2026-09-06, the delete-act design). Fires `blob_deleted`, projected by
+    /// `_project_blob_deleted`: the row empties into the D5.2 shape (pathname/type/bytes
+    /// nulled; hash, home and owner kept) and the strike touches NO edge — a folded relation
+    /// reads as deliberately ended, which a strike must never say (the strike empties the row;
+    /// edges persist and render absent because the blob is gone). TYPED, identity-only —
+    /// custody is derivable from the persisted edges, never stamped. Registered by the strike
+    /// substrate (`20260906000010`); the erasure arm registers and fires its OWN type through
+    /// the same SQL wrapper and projector, which take the event type as a parameter.
+    BlobDeleted,
 }
 
 impl EventKind {
@@ -191,6 +201,7 @@ impl EventKind {
             EventKind::CitationAudited => "citation_audited",
             EventKind::BlobCommitted => "blob_committed",
             EventKind::ResourceReblocked => "resource_reblocked",
+            EventKind::BlobDeleted => "blob_deleted",
         }
     }
 
@@ -241,6 +252,7 @@ impl EventKind {
             "citation_audited" => EventKind::CitationAudited,
             "blob_committed" => EventKind::BlobCommitted,
             "resource_reblocked" => EventKind::ResourceReblocked,
+            "blob_deleted" => EventKind::BlobDeleted,
             _ => return None,
         })
     }
@@ -410,6 +422,12 @@ pub enum SeedAction<'a> {
         allowlist: &'a [String],
         emitter: EntityId,
     },
+    /// Strike one blob (ruled 2026-09-06 — the shared emptying act). The row empties into the
+    /// D5.2 shape and the event appends in the SAME transaction; the strike touches no edge.
+    /// The SQL wrapper decides the byte fate from the same-transaction live-row refcount and
+    /// returns whether the provider bytes are releasable — the CALLER deletes them after the
+    /// commit (a provider call cannot join the transaction).
+    BlobDelete { blob: BlobId, emitter: EntityId },
     LensCreate {
         /// `None` ⇒ a global system lens (`cogmap_id NULL`).
         cogmap: Option<CogmapId>,
@@ -602,6 +620,7 @@ impl SeedAction<'_> {
             SeedAction::DataArtifactCommit { .. } => EventKind::DataArtifactCommitted,
             SeedAction::ShapeDeclare { .. } => EventKind::ShapeDeclared,
             SeedAction::BlobCommit { .. } => EventKind::BlobCommitted,
+            SeedAction::BlobDelete { .. } => EventKind::BlobDeleted,
             SeedAction::LensCreate { .. } => EventKind::LensCreated,
             SeedAction::Materialize { .. } => EventKind::RegionMaterialized,
             SeedAction::SalienceRefresh { .. } => EventKind::SalienceRefreshed,
@@ -669,6 +688,17 @@ pub enum Fired {
     /// payload's own home (D2 get-or-create, per-home as amended: same bytes in one scope is
     /// one row; the returned id is always the caller's own handle).
     Blob(BlobId),
+    /// The strike a `BlobDelete` fire performed. `released` is the same-transaction
+    /// live-row refcount's verdict — true when the struck row was the LAST live row
+    /// carrying its content hash, so the provider bytes at `pathname` are releasable
+    /// (the caller deletes them AFTER the commit; they are `None` when already struck
+    /// rows hold no pathname). False means another live home still references the
+    /// bytes — the strike empties the row and the bytes stay.
+    BlobStrike {
+        blob: BlobId,
+        released: bool,
+        pathname: Option<String>,
+    },
     /// The event id a `ResourceReblock` fire appended (the manifest rode the payload, so the
     /// event id is the only new identity — the created block ids were minted by the op and
     /// carried in).
@@ -708,6 +738,20 @@ impl Fired {
         match self {
             Fired::Blob(id) => Ok(id),
             other => anyhow::bail!("expected Fired::Blob, got {other:?}"),
+        }
+    }
+
+    /// Extract the strike verdict a `BlobDelete` fire produced: the struck row's id, whether
+    /// the provider bytes are releasable (the same-transaction refcount's answer), and the
+    /// content-addressed pathname to delete them at when they are.
+    pub fn blob_strike(self) -> Result<(BlobId, bool, Option<String>)> {
+        match self {
+            Fired::BlobStrike {
+                blob,
+                released,
+                pathname,
+            } => Ok((blob, released, pathname)),
+            other => anyhow::bail!("expected Fired::BlobStrike, got {other:?}"),
         }
     }
 
@@ -1380,6 +1424,43 @@ pub async fn fire_with(
                     .map(BlobId::from)
                     .ok_or_else(|| anyhow::anyhow!("blob_commit returned an empty id array"))?,
             ))
+        }
+
+        SeedAction::BlobDelete { blob, emitter } => {
+            // Identity-only payload (the ResourceDeleted shape): the envelope carries the home
+            // (the wrapper resolves it off the row for the producing anchor), the actor, and
+            // the time; custody is derivable by replay — never stamped.
+            let payload = payloads::BlobDeleted { blob_id: blob };
+            // The wrapper is act-parameterized (p_event_type): the erasure arm registers and
+            // fires its own type through the same wrapper + projector; this arm speaks the
+            // delete act's ruled vocabulary.
+            let row = sqlx::query!(
+                r#"SELECT blob_id, released, pathname
+                     FROM blob_delete($1,$2,$3,$4,$5,$6)"#,
+                EventKind::BlobDeleted.as_canonical_name(),
+                serde_json::to_value(&payload)?,
+                emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
+                ctx_corr,
+            )
+            .fetch_one(&mut *conn)
+            .await
+            .context("blob_delete returned no row")?;
+            Ok(Fired::BlobStrike {
+                // The wrapper's RETURNS TABLE columns arrive as nullable OUT parameters —
+                // sqlx cannot see through them — but the body guarantees all three on the
+                // success path: the struck row's id, its release verdict, and its pathname
+                // (an already-struck row RAISES, it never returns a null-shaped row).
+                blob: BlobId::from(
+                    row.blob_id
+                        .expect("blob_delete returns the struck row's id"),
+                ),
+                released: row
+                    .released
+                    .expect("blob_delete always returns a release verdict"),
+                pathname: row.pathname,
+            })
         }
 
         SeedAction::LensCreate {
