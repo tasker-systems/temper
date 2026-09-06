@@ -76,6 +76,28 @@ pub fn single_request_threshold_refusal(
     })
 }
 
+/// The SQL wrapper's allowlist refusal, restated byte-for-byte (the RAISE in
+/// 20260903000020:294). D9 keeps the wrapper the sole allowlist AUTHORITY — the commit-time
+/// check still runs, and refuses anything this restatement could ever miss — while this
+/// restatement, placed before the provider put, is what keeps the wrapper's refusal
+/// bytes-free: the cap pre-check's role for the sibling rule. One builder, three doors
+/// (single-request commit, finalize, begin), so the vocabulary cannot drift between the
+/// places it is spoken.
+fn allowlist_refusal(content_type: &str, allowlist: &[String]) -> ApiError {
+    ApiError::BadRequest(format!(
+        "blob_commit: content_type {content_type} is not admitted — the allowlist in \
+         force is {}",
+        allowlist.join(", ")
+    ))
+}
+
+/// Is this media type admissible under the operator's allowlist? The membership arm the
+/// three pre-check doors share; the wrapper's `v_type = ANY (p_allowlist)` is the
+/// authority this mirrors.
+fn allowlist_admits(content_type: &str, allowlist: &[String]) -> bool {
+    allowlist.iter().any(|admitted| admitted == content_type)
+}
+
 /// What a commit reports to its surface. `blob_id` is the id the bytes live under — freshly
 /// minted, or the EXISTING id on a dedup hit within the caller's own home (get-or-create is
 /// per-home, D2 as amended; a hash known only to other scopes is the caller's fresh row).
@@ -286,6 +308,14 @@ pub async fn commit_blob(
     let home = parse_home(home_table, home_id)?;
     check_home_standing(pool, caller, &home).await?;
 
+    // The allowlist pre-check, before any byte can reach the provider. The wrapper is
+    // still the authority (D9) — this restatement exists so its refusal is bytes-free: an
+    // inadmissible media type refused here leaves no object at the content-addressed
+    // pathname, and therefore no orphan a ledger row will never point at.
+    if !allowlist_admits(&content_type, &config.allowlist) {
+        return Err(allowlist_refusal(&content_type, &config.allowlist));
+    }
+
     let content_hash = temper_core::hash::sha256_hex(&bytes);
     let pathname = temper_substrate::blob_store::blob_pathname(&content_hash);
 
@@ -409,14 +439,22 @@ pub struct BlobUploadFinalizeOutcome {
 
 /// Begin a staged upload: standing two-step on the declared home (fail fast — no orphan
 /// session for the unauthorized), then the server-minted session row. The allowlist is
-/// NOT examined here: the SQL wrapper is the sole allowlist authority, at finalize (D9).
+/// restated here as the begin-time courtesy (a session begun for a media type that can
+/// never commit would fill to the staging ceiling before finalize refused it — the same
+/// fail-fast spirit as the standing check), in the wrapper's own vocabulary; the wrapper
+/// stays the sole allowlist AUTHORITY at finalize (D9), where the check runs again —
+/// configuration can change mid-upload, and the begin-time answer is not the commit's.
 pub async fn begin_upload(
     pool: &PgPool,
+    config: &crate::config::BlobConfig,
     caller: ProfileId,
     home: temper_substrate::payloads::AnchorRef,
     content_type: String,
 ) -> ApiResult<Uuid> {
     check_home_standing(pool, caller, &home).await?;
+    if !allowlist_admits(&content_type, &config.allowlist) {
+        return Err(allowlist_refusal(&content_type, &config.allowlist));
+    }
     temper_substrate::uploads::create_session(pool, caller, &home, &content_type)
         .await
         .map_err(|e| ApiError::internal_scrubbed("blob upload begin failed", e))
@@ -518,8 +556,10 @@ pub async fn upload_progress(
 /// seq order, hash, and exactly the S2 commit path — optional integrity hash checked (a
 /// mismatch is [`ApiError::ContentIntegrity`] — the ingest precedent's face for "the
 /// assembled bytes do not hash to the declaration"), readability-gated dedup pre-check,
-/// provider put unless deduped, then `commit_blob` whose cap/allowlist refusals surface
-/// verbatim. Staging dies on success only; every failure keeps it (keep-and-declare — a
+/// provider put unless deduped, then `commit_blob` whose cap refusal surfaces verbatim —
+/// the allowlist refusal now surfaces from the pre-check above the put, in the wrapper's
+/// own words, so a refused finalize never costs a provider object. Staging dies on
+/// success only; every failure keeps it (keep-and-declare — a
 /// TTL reaper is a declared hole, never silently clean).
 pub async fn finalize_upload(
     pool: &PgPool,
@@ -570,6 +610,13 @@ pub async fn finalize_upload(
              the cap",
             config.max_bytes
         )));
+    }
+    // The allowlist, the cap pre-check's sibling in the same block and the same spirit:
+    // the wrapper stays the commit-time authority (D9), and restating its rule here keeps
+    // its refusal bytes-free — a finalize refused on the media type leaves the provider
+    // holding nothing and the staging exactly as it was (resumable, like the cap).
+    if !allowlist_admits(&session.content_type, &config.allowlist) {
+        return Err(allowlist_refusal(&session.content_type, &config.allowlist));
     }
 
     let body = temper_substrate::uploads::assemble_body(pool, upload_id)

@@ -8482,7 +8482,7 @@ export interface operations {
                     "application/json": components["schemas"]["BlobUploadBeginResponse"];
                 };
             };
-            /** @description Refused — unknown home anchor table, or the blob flow is disabled (no store configured, or BLOB_ENABLED closed it) */
+            /** @description Refused — unknown home anchor table, the blob flow is disabled (no store configured, or BLOB_ENABLED closed it), or the declared content_type is not in the configured allowlist */
             400: {
                 headers: {
                     [name: string]: unknown;
