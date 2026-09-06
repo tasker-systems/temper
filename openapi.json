@@ -811,7 +811,7 @@
             }
           },
           "400": {
-            "description": "Refused — unknown home anchor table, or the blob flow is disabled (no store configured, or BLOB_ENABLED closed it)",
+            "description": "Refused — unknown home anchor table, the blob flow is disabled (no store configured, or BLOB_ENABLED closed it), or the declared content_type is not in the configured allowlist",
             "content": {
               "application/json": {
                 "schema": {

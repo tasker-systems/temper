@@ -275,7 +275,7 @@ fn parse_home_table(table: &str) -> ApiResult<AnchorTable> {
     request_body = BlobUploadBeginRequest,
     responses(
         (status = 200, description = "Upload session created", body = BlobUploadBeginResponse),
-        (status = 400, description = "Refused — unknown home anchor table, or the blob flow is disabled (no store configured, or BLOB_ENABLED closed it)", body = ErrorBody),
+        (status = 400, description = "Refused — unknown home anchor table, the blob flow is disabled (no store configured, or BLOB_ENABLED closed it), or the declared content_type is not in the configured allowlist", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 404, description = "Home not found or not readable — indistinguishable by design", body = ErrorBody),
         (status = 403, description = "Home readable but not authorable", body = ErrorBody),
@@ -296,6 +296,11 @@ pub async fn begin_upload(
     };
     let upload_id = temper_services::services::blob_service::begin_upload(
         &state.pool,
+        state
+            .config
+            .blob
+            .as_ref()
+            .expect("blob config checked above"),
         caller,
         home,
         payload.content_type,
