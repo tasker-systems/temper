@@ -691,13 +691,12 @@ pub enum Fired {
     /// The strike a `BlobDelete` fire performed. `released` is the same-transaction
     /// live-row refcount's verdict — true when the struck row was the LAST live row
     /// carrying its content hash, so the provider bytes at `pathname` are releasable
-    /// (the caller deletes them AFTER the commit; they are `None` when already struck
-    /// rows hold no pathname). False means another live home still references the
-    /// bytes — the strike empties the row and the bytes stay.
+    /// (the caller deletes them AFTER the commit). False means another live home still
+    /// references the bytes — the strike empties the row and the bytes stay.
     BlobStrike {
         blob: BlobId,
         released: bool,
-        pathname: Option<String>,
+        pathname: String,
     },
     /// The event id a `ResourceReblock` fire appended (the manifest rode the payload, so the
     /// event id is the only new identity — the created block ids were minted by the op and
@@ -744,7 +743,7 @@ impl Fired {
     /// Extract the strike verdict a `BlobDelete` fire produced: the struck row's id, whether
     /// the provider bytes are releasable (the same-transaction refcount's answer), and the
     /// content-addressed pathname to delete them at when they are.
-    pub fn blob_strike(self) -> Result<(BlobId, bool, Option<String>)> {
+    pub fn blob_strike(self) -> Result<(BlobId, bool, String)> {
         match self {
             Fired::BlobStrike {
                 blob,
@@ -1459,7 +1458,9 @@ pub async fn fire_with(
                 released: row
                     .released
                     .expect("blob_delete always returns a release verdict"),
-                pathname: row.pathname,
+                pathname: row
+                    .pathname
+                    .expect("blob_delete returns the live row's pathname — absence RAISEs"),
             })
         }
 

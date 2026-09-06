@@ -924,8 +924,12 @@ impl DbBackend {
                 .await
                 .map_err(api_err)?;
                 if !live_and_readable.unwrap_or(false) {
-                    // The edge row was visible, but its blob is gone from under it (erasure
-                    // pre-pass) or unreadable — an inconsistent probe, refused as absent.
+                    // The edge row was visible, but its blob is gone from under it (a
+                    // strike — 20260906000010's blob_delete — or the erasure pre-pass)
+                    // or unreadable — an inconsistent probe, refused as absent. Note the
+                    // ruled asymmetry: the strike never folds this edge, and nothing can
+                    // fold it now (the floor reads false forever) — the relation renders
+                    // absent because the blob is gone, which IS the ledger's truth.
                     return Err(TemperError::NotFound(format!("edge {edge_id} not found")));
                 }
             }

@@ -956,7 +956,7 @@ async fn the_refcount_releases_bytes_only_when_the_last_live_row_strikes(pool: s
         struck_b.released,
         "the last live row's strike releases the bytes"
     );
-    assert_eq!(struck_b.pathname.as_deref(), Some(pathname.as_str()));
+    assert_eq!(struck_b.pathname, pathname);
 
     // The release is the CALLER's act, after the commit — the substrate's contract returns
     // the verdict and the address; it never touches the provider itself.
@@ -1034,6 +1034,67 @@ async fn an_already_struck_blob_refuses_in_the_wrappers_own_voice(pool: sqlx::Pg
         events, 1,
         "one act, one event — the refusal appended nothing"
     );
+}
+
+/// FAILS IF: the wrapper's absent-blob refusal loses its own voice — the never-committed
+/// id must be named as absent (the wrapper's vocabulary), not fall through to some
+/// constraint error with a message nobody chose.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_strike_of_a_never_committed_blob_refuses_in_the_wrappers_own_voice(pool: sqlx::PgPool) {
+    let (_owner, emitter, _home) = blob_world(&pool, "strike-absent").await;
+    let absent = BlobId::from(Uuid::now_v7());
+
+    let err = writes::delete_blob(&pool, absent, emitter)
+        .await
+        .unwrap_err();
+    let chain = format!("{err:#}");
+    assert!(chain.contains("blob_delete: blob"), "{chain}");
+    assert!(chain.contains("not found"), "{chain}");
+}
+
+/// FAILS IF: the strike wrapper fires an event type nobody chose for it — the
+/// act-parameterized seam must refuse a type outside the domain vocabulary (an admin type
+/// here) in its own voice, before any event is appended.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_strike_refuses_an_event_type_outside_the_domain_vocabulary(pool: sqlx::PgPool) {
+    let (owner, emitter, home) = blob_world(&pool, "strike-vocab").await;
+    let store = InMemoryBlobStore::default();
+    let (p, _hash, pathname) = params(home, owner, b"vocab-bytes", "image/png", emitter);
+    store.insert(pathname);
+    let blob = writes::commit_blob(&pool, &store, p).await.unwrap();
+
+    // `principal_standing_changed` is registered and real — and admin, not domain.
+    let payload = serde_json::json!({ "blob_id": blob.uuid() });
+    let err = sqlx::query("SELECT * FROM blob_delete($1,$2,$3)")
+        .bind("principal_standing_changed")
+        .bind(payload)
+        .bind(emitter.uuid())
+        .execute(&pool)
+        .await
+        .unwrap_err();
+    let chain = err.to_string();
+    assert!(
+        chain.contains("not a registered domain event type"),
+        "{chain}"
+    );
+
+    // Nothing was appended and the row is still live.
+    let events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+          WHERE et.name = 'principal_standing_changed' AND e.payload->>'blob_id' = $1",
+    )
+    .bind(blob.uuid().to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(events, 0, "the refused strike appended nothing");
+    let live: bool =
+        sqlx::query_scalar("SELECT content_type IS NOT NULL FROM kb_blobs WHERE id = $1")
+            .bind(blob.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(live, "the refused strike emptied nothing");
 }
 
 /// FAILS IF: replay of a ledger carrying a strike resurrects the row or desyncs any

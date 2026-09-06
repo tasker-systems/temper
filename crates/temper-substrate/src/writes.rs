@@ -2150,10 +2150,21 @@ pub struct StruckBlob {
     /// The same-transaction live-row refcount's verdict: `true` when the struck row was the
     /// LAST live row carrying its content hash — delete the provider bytes after the commit.
     /// `false` means another live home still references them; the row empties, the bytes stay.
+    ///
+    /// **The concurrency contract, stated honestly.** Strikes and commits on one hash
+    /// serialize on a hash-keyed transaction advisory lock, so the refcount's snapshot is
+    /// never stale against a concurrent strike or a concurrent commit's get-or-create —
+    /// `released` is exact as of the strike's commit. What NO transaction can close is the
+    /// window AFTER that commit: the caller's provider delete lands when it lands, and a
+    /// commit whose own presence check ran earlier can insert a live row in between. That
+    /// window is the register's declared-open rate axis, and it heals on re-upload (the
+    /// re-commit re-puts the bytes at the same content-addressed pathname); the erasure
+    /// build's queue fence (retry + age alerting) is what watches the residue. A build that
+    /// deletes bytes MUST run that fence or its equivalent.
     pub released: bool,
-    /// The content-addressed pathname the bytes live at, `Some` exactly when the row was
-    /// live (an already-struck row is refused by the wrapper, never returned as a no-op).
-    pub pathname: Option<String>,
+    /// The content-addressed pathname the bytes live at — always present: an already-struck
+    /// row is refused by the wrapper, never returned as a no-op.
+    pub pathname: String,
 }
 
 /// [`delete_blob_with`] under the default (un-attributed) context.

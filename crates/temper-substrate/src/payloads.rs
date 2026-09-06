@@ -1582,8 +1582,8 @@ pub const TYPED_EVENT_NAMES: [&str; 27] = [
     "data_artifact_committed",
     "shape_declared",
     "blob_committed",
-    "blob_deleted",
     "resource_reblocked",
+    "blob_deleted",
 ];
 
 /// FOREIGN event names — registered permissive (NULL `payload_schema`) because their body is a
