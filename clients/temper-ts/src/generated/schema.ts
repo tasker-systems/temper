@@ -3077,6 +3077,15 @@ export interface components {
             /** Format: date-time */
             created: string;
             /**
+             * @description Carried attribution: `true` for a split/absorbed COPY written by a re-block or a
+             *     whole-body replace — this block holds only part of the content the source once covered
+             *     (or a duplicate of it), distinguishable at row grain from a direct assertion, never
+             *     readable as direct. `false` — the serde default, so a NEW client reading an OLD server
+             *     (deploy skew, field absent on the wire) parses, reading unmarked rows as asserted, which
+             *     is exactly what they were.
+             */
+            is_carried?: boolean;
+            /**
              * Format: uuid
              * @description The contributing resource/event id, or (for `"remote"`) the minted `kb_remote_sources` id.
              */
