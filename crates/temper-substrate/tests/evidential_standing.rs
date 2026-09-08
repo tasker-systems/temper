@@ -137,11 +137,16 @@ async fn seed_finding_with_n_provenance(
     .await
     .unwrap();
     for (i, base) in bases.iter().enumerate().skip(1) {
+        // The body stays STABLE across revises: each revise is an assertion-only whole-body
+        // write (the section keeps, the caller source appends across events), so all N sources
+        // end up LIVE citations of the one finding — exactly the standing population this
+        // suite tests. (A rewriting revise would make the prior source's content content-gone:
+        // history on the folded block, not a live citation.)
         writes::update_resource_with(
             pool,
             UpdateParams {
                 resource: finding,
-                body: Some(&format!("revised body incorporating source {i}")),
+                body: Some("the claim under standing"),
                 title: None,
                 origin_uri: None,
                 properties: &[],
@@ -319,11 +324,13 @@ async fn cite_again(
     seq: i32,
     emitter: EntityId,
 ) {
+    // The body stays stable: re-citing is an assertion-only whole-body write (the section
+    // keeps, the source appends across events) — each call adds ONE citation row.
     writes::update_resource_with(
         pool,
         UpdateParams {
             resource: finding,
-            body: Some(&format!("revision {seq}")),
+            body: Some("the claim under standing"),
             title: None,
             origin_uri: None,
             properties: &[],
