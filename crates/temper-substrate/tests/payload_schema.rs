@@ -50,6 +50,7 @@ fn payload_schemas_match_snapshots() {
     check::<p::DataArtifactCommitted>("data_artifact_committed");
     check::<p::ShapeDeclared>("shape_declared");
     check::<p::BlobCommitted>("blob_committed");
+    check::<p::BlobDeleted>("blob_deleted");
     check::<p::ResourceReblocked>("resource_reblocked");
 }
 
@@ -83,6 +84,10 @@ fn the_migration_literal_matches_the_committed_fixture() {
         (
             "20260905000010_resource_reblock.sql",
             "resource_reblocked.v1.schema.json",
+        ),
+        (
+            "20260906000010_blob_strike_substrate.sql",
+            "blob_deleted.v1.schema.json",
         ),
     ] {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../migrations/");

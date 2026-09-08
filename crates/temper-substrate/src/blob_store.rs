@@ -77,6 +77,19 @@ pub trait BlobStore: Send + Sync + std::fmt::Debug {
     /// cheap pre-flight: visibility is checked in SQL first; this answers "are the bytes
     /// actually there" without pulling them.
     async fn head(&self, pathname: &str) -> Result<Option<BlobHead>>;
+
+    /// Strike the bytes at each content-addressed pathname. Idempotent — a pathname the
+    /// provider does not hold is a successful no-op, so an at-least-once caller (the erasure
+    /// queue's retry fence) needs no existence guard — and batched: one call for the whole
+    /// list, never a per-pathname loop (the provider's array form). The ONLY byte-level
+    /// destructive verb: bytes only ever strike, there is no byte-level soft state
+    /// (`no-byte-soft-delete`). Ruled 2026-09-06 (the delete-act design): one batch verb
+    /// serves both emptying acts — the ordinary delete's post-commit release and the erasure
+    /// queue's drain.
+    ///
+    /// There is deliberately no `list`: a drain knows its pathnames (derived, never
+    /// enumerated), and enumeration would make this seam an erasure-surface.
+    async fn delete(&self, pathnames: &[&str]) -> Result<()>;
 }
 
 /// In-memory fake for integration tests: the caller pre-registers the pathnames it has
@@ -95,6 +108,16 @@ impl InMemoryBlobStore {
             ("application/octet-stream".into(), Bytes::new()),
         );
         self
+    }
+
+    /// Pre-register an "uploaded" object without consuming `self` — the shape a test helper
+    /// needs when the same store must stay live across a commit, a strike, and a re-commit.
+    pub fn insert(&self, pathname: impl Into<String>) {
+        self.objects
+            .lock()
+            .unwrap()
+            .entry(pathname.into())
+            .or_insert_with(|| ("application/octet-stream".into(), Bytes::new()));
     }
 
     pub fn contains(&self, pathname: &str) -> bool {
@@ -155,5 +178,39 @@ impl BlobStore for InMemoryBlobStore {
                 content_type: Some(content_type.clone()),
                 content_bytes: bytes.len() as i64,
             }))
+    }
+
+    async fn delete(&self, pathnames: &[&str]) -> Result<()> {
+        let mut objects = self.objects.lock().unwrap();
+        for pathname in pathnames {
+            // Absent ⇒ no-op: the trait's idempotence contract, so the caller's retry of a
+            // partially-landed batch cannot fail on the pathname it already struck.
+            objects.remove(*pathname);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // FAILS IF: the fake's delete loses the trait's contract — batched (one call for the
+    // list), idempotent (an absent pathname is a no-op, never an error), and total (every
+    // named pathname is gone, nothing else).
+    #[tokio::test]
+    async fn delete_strikes_every_named_pathname_and_tolerates_an_absent_one() {
+        let store = InMemoryBlobStore::default()
+            .with_object("ab/aa")
+            .with_object("cd/bb");
+        assert!(store.contains("ab/aa") && store.contains("cd/bb"));
+
+        store.delete(&["ab/aa", "zz/absent"]).await.unwrap();
+
+        assert!(!store.contains("ab/aa"), "the named pathname is struck");
+        assert!(store.contains("cd/bb"), "the unnamed pathname survives");
+        // Idempotence: the retry — same list, the first already gone — succeeds.
+        store.delete(&["ab/aa", "zz/absent"]).await.unwrap();
+        assert!(store.contains("cd/bb"));
     }
 }

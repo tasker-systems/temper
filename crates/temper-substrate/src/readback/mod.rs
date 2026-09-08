@@ -2592,7 +2592,11 @@ pub struct RetrievedBlob {
     pub blob_pathname: String,
     /// The allowlist-checked media type the blob was committed under. `NOT NULL` on live rows —
     /// `blob_commit` refuses a null/absent type by allowlist vocabulary — so this is a `!`
-    /// override on the macro read; the erasure pre-pass (D5.2, another task) is what nulls it.
+    /// override on the macro read. The strike substrate (20260906000010) nulls it, and the
+    /// widened read floors exclude the emptied row entirely — a struck blob renders the same
+    /// absence an unknown id gets (the ruled posture: as if never committed), so no read path
+    /// can hand back a `None` here in practice; the DDL's nullability is the EMPTIED marker,
+    /// never a rendered shape.
     pub content_type: String,
     pub content_bytes: i64,
     pub created: DateTime<Utc>,
@@ -2638,6 +2642,12 @@ pub async fn blob_by_id(
 /// caller cannot see never answers here — and under per-home identity it never answers
 /// ANYWHERE for them: their commit is a fresh row of their own, asserted by their own event,
 /// carrying their own identity. Storage dedup is pathname-level and unaffected.
+///
+/// Emptied (struck) rows read as ABSENT here — the ruled N3 widening (2026-09-06, the
+/// delete-act design): a re-commit of identical bytes after a strike must re-put and mint a
+/// fresh row, never dedup-hit the emptied one (that path skips the put and then fails D4's
+/// `store.exists` gate — the confusing refusal the widening exists to remove). The currency
+/// predicate is the D5.2 nullability: a marker of EMPTINESS, never of which act emptied.
 pub async fn home_blob_id_by_hash(
     pool: &PgPool,
     home: &crate::payloads::AnchorRef,
@@ -2649,6 +2659,7 @@ pub async fn home_blob_id_by_hash(
             WHERE b.content_hash = $1
               AND b.home_table = $2
               AND b.home_id = $3
+              AND b.content_type IS NOT NULL
             LIMIT 1"#,
         content_hash,
         home.table.as_str(),
@@ -2666,8 +2677,11 @@ pub async fn home_blob_id_by_hash(
 /// One blob as the list surface reports it: the commit's own metadata. No pathname — the
 /// provider address is the API's private knowledge (D6), and a list is where a leak would
 /// be wholesale, so the row type simply cannot carry it. `content_type` is `Option` (the
-/// DDL is nullable for the erasure pre-pass, unlike the read-through's `!` override — a
-/// list must be able to RENDER a post-erasure row honestly, not crash on it).
+/// DDL is nullable for the D5.2 emptied shape). The read floors exclude emptied rows — a
+/// struck blob is listed nowhere, the same absence an unknown id gets — so a listed row
+/// always renders `Some` in practice; the Option mirrors the DDL, it is not a rendered
+/// post-strike shape (that posture — "renders honestly rather than being hidden" — was the
+/// pre-ruling stamp; the ruled posture is renders-absent-everywhere).
 #[derive(Debug, Clone)]
 pub struct BlobListRow {
     pub blob_id: BlobId,

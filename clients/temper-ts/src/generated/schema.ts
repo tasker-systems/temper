@@ -2956,8 +2956,10 @@ export interface components {
             /** @description Bare sha256 hex — the dedup key and the erasure join key. */
             content_hash: string;
             /**
-             * @description The stored media type; `None` only on a post-erasure row (metadata nulled, bytes
-             *     unreachable — the erased shape renders honestly rather than being hidden).
+             * @description The stored media type; `None` only on an EMPTIED row (the D5.2 strike shape). The
+             *     widened read floors exclude emptied rows — a struck blob reads as absent everywhere,
+             *     as if never committed — so a listed row renders `Some` in practice; the Option mirrors
+             *     the DDL's nullability, it is not a rendered post-strike shape.
              */
             content_type?: string | null;
             /** Format: date-time */

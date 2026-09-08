@@ -784,7 +784,9 @@ async fn i1_read_duality(pool: &PgPool, w: &World) -> sqlx::Result<Vec<Violation
     // is exactly its home anchor's answer (the row IS its home, D2 as amended) — so the
     // fixture needs no blob-specific world content, only rows that exist. The event-id FKs
     // are satisfied by the world's own events; the per-home unique key makes re-minting a
-    // no-op.
+    // no-op. The conflict target carries the partial index's WHERE clause
+    // (20260906000010): uniqueness binds LIVE rows only, so the arbiter must be inferred
+    // on the same predicate.
     let fixture_owner = w.profiles[0];
     let fixture_event: Uuid =
         sqlx::query_scalar("SELECT id FROM kb_events ORDER BY occurred_at, id LIMIT 1")
@@ -798,7 +800,8 @@ async fn i1_read_duality(pool: &PgPool, w: &World) -> sqlx::Result<Vec<Violation
              SELECT gen_random_uuid(), 'harness-' || a.id, 'ha/' || a.id, \
                     'application/octet-stream', 0, $2, a.id, $1, $1, $3, $3 \
                FROM unnest($4::uuid[]) AS a(id) \
-             ON CONFLICT (home_table, home_id, content_hash) DO NOTHING",
+             ON CONFLICT (home_table, home_id, content_hash) WHERE content_type IS NOT NULL \
+             DO NOTHING",
         )
         .bind(fixture_owner)
         .bind(table)

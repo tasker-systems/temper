@@ -259,11 +259,14 @@ pub struct BlobCommitCommand {
 
 /// The row's STORED media type, read back from the committed row — the N2 rule in one
 /// place: on a dedup hit the row is the FIRST committer's, and a committing surface must
-/// report what is stored, never what was just declared. **This is the single query site
-/// the erasure build's N3 arm must widen**: the `content_type!` override is sound at HEAD
-/// (the wrapper refuses a NULL type before the event) and nothing nulls the column until
-/// erasure — when it does, THIS read changes shape, and because it is the only one, the
-/// widening cannot be forgotten at a duplicate.
+/// report what is stored, never what was just declared.
+///
+/// The `content_type!` override is sound by REACHABILITY, not by the column's DDL (the
+/// strike substrate nulls it, 20260906000010): both callers read the id `commit_blob`
+/// returned — the caller's fresh row or the dedup hit's live row, never a struck one (the
+/// strike's own rows are excluded from every read path by the widened floors, and a struck
+/// row cannot be re-committed INTO — the slot is vacated). If a future caller reaches this
+/// with an arbitrary id, THIS read changes shape first.
 async fn stored_content_type(pool: &PgPool, id: uuid::Uuid) -> Result<String, sqlx::Error> {
     sqlx::query_scalar!(
         r#"SELECT content_type AS "content_type!" FROM kb_blobs WHERE id = $1"#,

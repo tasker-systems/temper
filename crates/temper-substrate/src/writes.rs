@@ -2142,6 +2142,76 @@ pub async fn commit_blob_with(
     Ok(id)
 }
 
+/// What a [`delete_blob_with`] strike did: the struck row, whether the provider bytes at
+/// the pathname are releasable, and the pathname to delete them at when they are.
+#[derive(Debug)]
+pub struct StruckBlob {
+    pub blob: BlobId,
+    /// The same-transaction live-row refcount's verdict: `true` when the struck row was the
+    /// LAST live row carrying its content hash — delete the provider bytes after the commit.
+    /// `false` means another live home still references them; the row empties, the bytes stay.
+    ///
+    /// **The concurrency contract, stated honestly.** Strikes and commits on one hash
+    /// serialize on a hash-keyed transaction advisory lock, so the refcount's snapshot is
+    /// never stale against a concurrent strike or a concurrent commit's get-or-create —
+    /// `released` is exact as of the strike's commit. What NO transaction can close is the
+    /// window AFTER that commit: the caller's provider delete lands when it lands, and a
+    /// commit whose own presence check ran earlier can insert a live row in between. That
+    /// window is the register's declared-open rate axis, and it heals on re-upload (the
+    /// re-commit re-puts the bytes at the same content-addressed pathname); the erasure
+    /// build's queue fence (retry + age alerting) is what watches the residue. A build that
+    /// deletes bytes MUST run that fence or its equivalent.
+    pub released: bool,
+    /// The content-addressed pathname the bytes live at — always present: an already-struck
+    /// row is refused by the wrapper, never returned as a no-op.
+    pub pathname: String,
+}
+
+/// [`delete_blob_with`] under the default (un-attributed) context.
+pub async fn delete_blob(pool: &PgPool, blob: BlobId, emitter: EntityId) -> Result<StruckBlob> {
+    delete_blob_with(pool, blob, emitter, EventContext::default()).await
+}
+
+/// Strike one blob under an explicit [`EventContext`] — the shared emptying act (ruled
+/// 2026-09-06): one transaction appends the act's event, empties the row into the D5.2 shape
+/// (pathname/type/bytes nulled; hash, home and owner kept), decides the byte fate from the
+/// same-transaction live-row refcount, and touches NO edge (a folded relation reads as
+/// deliberately ended — the strike's relations render absent because the blob is gone, never
+/// because they were ended). The refcount is same-transaction, never a pre-count, and counts
+/// LIVE rows only — struck rows never hold bytes hostage. The provider bytes are deleted by
+/// the CALLER after the commit, at `pathname`, when `released` — a provider call cannot join
+/// the transaction, so a crash between the two leaves the row emptied (unreachable through
+/// every read path) and the bytes swept later by the erasure queue (derive-don't-remember).
+pub async fn delete_blob_with(
+    pool: &PgPool,
+    blob: BlobId,
+    emitter: EntityId,
+    ctx: EventContext,
+) -> Result<StruckBlob> {
+    let mut tx = begin_scoped(pool).await?;
+    let struck = delete_blob_in_tx(&mut tx, blob, emitter, ctx).await?;
+    tx.commit().await?;
+    Ok(struck)
+}
+
+/// In-transaction variant of [`delete_blob`] — fires on a caller-supplied connection (no
+/// begin/commit), so a door can run its standing checks and the strike in ONE transaction.
+pub async fn delete_blob_in_tx(
+    conn: &mut sqlx::PgConnection,
+    blob: BlobId,
+    emitter: EntityId,
+    ctx: EventContext,
+) -> Result<StruckBlob> {
+    let (blob, released, pathname) = fire_with(conn, SeedAction::BlobDelete { blob, emitter }, ctx)
+        .await?
+        .blob_strike()?;
+    Ok(StruckBlob {
+        blob,
+        released,
+        pathname,
+    })
+}
+
 /// [`declare_shape_with`] under the default (un-attributed) context.
 pub async fn declare_shape(pool: &PgPool, p: DeclareShapeParams<'_>) -> Result<ShapeId> {
     declare_shape_with(pool, p, EventContext::default()).await
