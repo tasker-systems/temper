@@ -707,6 +707,24 @@ pub struct BlobCommitted {
     pub content_bytes: i64,
 }
 
+/// Strike one blob — the shared emptying act behind BOTH forms, the ordinary delete and
+/// erasure (ruled 2026-09-06: one byte-fate, one emptied-row shape; the ledger alone tells
+/// them apart). Identity-only, the `ResourceDeleted` shape: the event's envelope carries the
+/// home (producing anchor), the actor (`emitter_entity_id`), and the time (`occurred_at`);
+/// custody is derivable by replay from the persisted edges and the peers' homes, so it is
+/// never stamped. `kb_events."references"` is erasure's apparatus and is never populated here.
+///
+/// The projection empties the row into the D5.2 shape — pathname/type/bytes nulled, the hash
+/// and home and owner kept — so the row shape carries no marker of WHICH act emptied it, and
+/// a re-commit of identical bytes into the same home mints a fresh row (the per-home UNIQUE
+/// is partial on live rows). Attribution never breaks at a delete: `owner_profile_id`
+/// survives; it dies only at erasure, by the pseudonym break, never by nulling.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct BlobDeleted {
+    pub blob_id: BlobId,
+}
+
 /// The conformance state of a data artifact against any shape declared for its family.
 ///
 /// This is where `unchecked-never-reads-as-checked` gets its first purchase: the reader is told
@@ -1547,7 +1565,7 @@ pub struct ResourceReblocked {
 }
 
 /// The 26 typed event names — the registry-stamping and snapshot surfaces iterate this.
-pub const TYPED_EVENT_NAMES: [&str; 26] = [
+pub const TYPED_EVENT_NAMES: [&str; 27] = [
     "cogmap_seeded",
     "resource_created",
     "relationship_asserted",
@@ -1574,6 +1592,7 @@ pub const TYPED_EVENT_NAMES: [&str; 26] = [
     "shape_declared",
     "blob_committed",
     "resource_reblocked",
+    "blob_deleted",
 ];
 
 /// FOREIGN event names — registered permissive (NULL `payload_schema`) because their body is a

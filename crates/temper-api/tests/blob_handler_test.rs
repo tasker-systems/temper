@@ -2044,6 +2044,9 @@ async fn a_provider_bail_is_scrubbed_from_the_wire(pool: PgPool) {
         ) -> anyhow::Result<Option<temper_substrate::blob_store::BlobHead>> {
             unreachable!("the commit path never heads")
         }
+        async fn delete(&self, _pathnames: &[&str]) -> anyhow::Result<()> {
+            unreachable!("the commit path never strikes")
+        }
     }
 
     let cfg = blob_cfg(1 << 20, &["image/png"], 64 * 1024);

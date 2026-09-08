@@ -32,7 +32,7 @@ class BlobSummary(BaseModel):
     blob_id: UUID = Field(description="A `kb_blobs.id` value — one immutable, content-addressed binary blob, homed like a resource and related to resources by edges (spec: binary blobs, 2026-09-01).")
     content_bytes: StrictInt
     content_hash: StrictStr = Field(description="Bare sha256 hex — the dedup key and the erasure join key.")
-    content_type: Optional[StrictStr] = Field(default=None, description="The stored media type; `None` only on a post-erasure row (metadata nulled, bytes unreachable — the erased shape renders honestly rather than being hidden).")
+    content_type: Optional[StrictStr] = Field(default=None, description="The stored media type; `None` only on an EMPTIED row (the D5.2 strike shape). The widened read floors exclude emptied rows — a struck blob reads as absent everywhere, as if never committed — so a listed row renders `Some` in practice; the Option mirrors the DDL's nullability, it is not a rendered post-strike shape.")
     created: datetime
     __properties: ClassVar[List[str]] = ["blob_id", "content_bytes", "content_hash", "content_type", "created"]
 

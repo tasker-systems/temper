@@ -262,8 +262,11 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             // A blob commit carries the hash, never the bytes (D4): there is no sidecar at all —
             // not even a content table — because the bytes live in external object storage. The
             // provider object's presence was verified at commit and is replay's input, not its
-            // output.
+            // output. A blob strike (20260906000010) is the same shape: identity-only payload,
+            // the bytes are external and were released (or not) by the live-row refcount —
+            // replay re-empties the row via the idempotent projector, it never touches bytes.
             | EventKind::BlobCommitted
+            | EventKind::BlobDeleted
             | EventKind::WebhookReceived => None,
         }
         .context("content-bearing payload missing blocks")?;
@@ -518,6 +521,15 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                 // reads only the payload. Macro form for the same static-literal reason as the
                 // arms above.
                 sqlx::query!("SELECT _project_blob_committed($1,$2)", id, payload)
+                    .fetch_one(pool)
+                    .await?;
+            }
+            EventKind::BlobDeleted => {
+                // A strike re-empties the row into the D5.2 shape — the projector's
+                // `WHERE content_type IS NOT NULL` guard makes it a no-op on the replayed
+                // event's own second application and on any later strike of the same row.
+                // No sidecar, macro form, same reasons as the commit arm above.
+                sqlx::query!("SELECT _project_blob_deleted($1,$2)", id, payload)
                     .fetch_one(pool)
                     .await?;
             }
