@@ -42,7 +42,9 @@ async fn show_without_body_returns_the_view_minus_the_body(pool: sqlx::PgPool) {
         metadata: None,
         managed_meta: Some(serde_json::json!({"temper-stage": "in-progress"})),
         open_meta: None,
-        chunks_packed: Some(pack_chunks(&[]).unwrap()),
+        chunks_packed: Some(
+            pack_chunks(&common::chunked("# Show Meta\n\nBody here.", 0.1)).unwrap(),
+        ),
         act: Default::default(),
         sources: Vec::new(),
     };

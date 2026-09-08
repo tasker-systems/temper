@@ -47,7 +47,13 @@ async fn ingest_create_with_at_me_slug_succeeds(pool: sqlx::PgPool) {
         metadata: None,
         managed_meta: None,
         open_meta: None,
-        chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
+        chunks_packed: Some(
+            pack_chunks(&common::chunked(
+                "# Context Ref Test\n\n@me/slug form.",
+                0.1,
+            ))
+            .expect("pack chunks"),
+        ),
         act: Default::default(),
         sources: Vec::new(),
     };
@@ -148,7 +154,10 @@ async fn ingest_create_with_uuid_context_ref_succeeds(pool: sqlx::PgPool) {
         metadata: None,
         managed_meta: None,
         open_meta: None,
-        chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
+        chunks_packed: Some(
+            pack_chunks(&common::chunked("# Context Ref Test\n\nUUID form.", 0.1))
+                .expect("pack chunks"),
+        ),
         act: Default::default(),
         sources: Vec::new(),
     };

@@ -273,7 +273,7 @@ async fn cloud_update_meta_only_partial_managed_meta(pool: sqlx::PgPool) {
             "temper-stage": "backlog"
         })),
         open_meta: None,
-        chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
+        chunks_packed: Some(pack_chunks(&common::chunked(body_text, 0.1)).expect("pack chunks")),
         act: Default::default(),
         sources: Vec::new(),
     };
@@ -440,7 +440,7 @@ async fn cloud_update_body_and_meta_in_one_request(pool: sqlx::PgPool) {
             "temper-stage": "backlog"
         })),
         open_meta: None,
-        chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
+        chunks_packed: Some(pack_chunks(&common::chunked(initial_body, 0.1)).expect("pack chunks")),
         act: Default::default(),
         sources: Vec::new(),
     };
@@ -617,7 +617,7 @@ async fn cloud_update_body_only_no_managed_meta(pool: sqlx::PgPool) {
             "temper-stage": "in-progress"
         })),
         open_meta: None,
-        chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
+        chunks_packed: Some(pack_chunks(&common::chunked(initial_body, 0.1)).expect("pack chunks")),
         act: Default::default(),
         sources: Vec::new(),
     };
@@ -777,7 +777,7 @@ async fn cloud_update_body_at_empty_file_errors_and_does_not_mutate(pool: sqlx::
             "temper-stage": "backlog"
         })),
         open_meta: None,
-        chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
+        chunks_packed: Some(pack_chunks(&common::chunked(initial_body, 0.1)).expect("pack chunks")),
         act: Default::default(),
         sources: Vec::new(),
     };
@@ -1839,7 +1839,7 @@ async fn cloud_update_admits_a_doctype_the_enum_does_not_name(pool: sqlx::PgPool
         metadata: None,
         managed_meta: None,
         open_meta: None,
-        chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
+        chunks_packed: Some(pack_chunks(&common::chunked(body_text, 0.1)).expect("pack chunks")),
         act: Default::default(),
         sources: Vec::new(),
     };

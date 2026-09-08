@@ -18,19 +18,28 @@ use temper_core::types::ingest::{
     SegmentedBegin, SegmentedBeginResponse,
 };
 
-/// A single pre-chunked, pre-embedded segment (bring-your-own-vectors path) — ONNX-free.
-fn one_chunk_packed(text: &str, hash_seed: &str) -> String {
+/// A single pre-chunked, pre-embedded segment (bring-your-own-vectors path) — ONNX-free. Carries
+/// the REAL chunker hash for `text`: the write path applies the blocking policy, so a hash no
+/// fresh chunking produces is a chunker drift and the finalize is refused.
+fn one_chunk_packed(text: &str, _hash_seed: &str) -> String {
+    let c = &temper_ingest::chunk::chunk_markdown(text)[0];
     let chunk = PackedChunk {
         chunk_index: 0,
-        header_path: String::new(),
-        heading_depth: 0,
-        content: text.to_owned(),
-        content_hash: format!("{hash_seed:0>64}"),
+        header_path: c.header_path.clone(),
+        heading_depth: c.heading_depth,
+        content: c.content.clone(),
+        content_hash: c.content_hash.clone(),
         embedding: vec![0.1_f32; 768],
         embedded_with: None,
     };
     pack_chunks(&[chunk]).expect("pack chunk")
 }
+
+/// Section-aligned segments: their concat carries a line-start heading boundary, so the composed
+/// body's fresh chunking reproduces the two landed chunk hashes. (Two separator-less fragments
+/// would compose to a body that chunks as ONE chunk — a shape no real segmentation produces.)
+const SEG1: &str = "# One\n\nfirst segment";
+const SEG2: &str = "\n## Two\n\nsecond segment";
 
 /// Build a profile + JWT + owned context. Mirrors `resource_chunks_packed_test.rs`'s `auth`.
 async fn auth(pool: &PgPool, tag: &str) -> (String, Uuid) {
@@ -58,11 +67,11 @@ async fn segmented_begin_append_list_finalize_over_http(pool: PgPool) {
         doc_type_name: "research".to_string(),
         goal: None,
         content_hash: None,
-        content: "first segment".to_string(),
+        content: SEG1.to_string(),
         metadata: None,
         managed_meta: None,
         open_meta: None,
-        chunks_packed: Some(one_chunk_packed("first segment", "aa")),
+        chunks_packed: Some(one_chunk_packed(SEG1, "aa")),
         sources: Vec::new(),
         act: Default::default(),
         segmented: Some(SegmentedBegin {
@@ -93,9 +102,9 @@ async fn segmented_begin_append_list_finalize_over_http(pool: PgPool) {
     // Append seq 1.
     let append_payload = AppendBlockPayload {
         seq: 1,
-        content: "second segment".to_string(),
-        content_hash: temper_core::hash::sha256_hex(b"second segment"),
-        chunks_packed: Some(one_chunk_packed("second segment", "bb")),
+        content: SEG2.to_string(),
+        content_hash: temper_core::hash::sha256_hex(SEG2.as_bytes()),
+        chunks_packed: Some(one_chunk_packed(SEG2, "bb")),
         sources: Vec::new(),
     };
     let append_resp = app
@@ -176,11 +185,11 @@ async fn finalize_rejects_wrong_content_hash_and_stays_resumable(pool: PgPool) {
         doc_type_name: "research".to_string(),
         goal: None,
         content_hash: None,
-        content: "first segment".to_string(),
+        content: SEG1.to_string(),
         metadata: None,
         managed_meta: None,
         open_meta: None,
-        chunks_packed: Some(one_chunk_packed("first segment", "aa")),
+        chunks_packed: Some(one_chunk_packed(SEG1, "aa")),
         sources: Vec::new(),
         act: Default::default(),
         segmented: Some(SegmentedBegin {
@@ -205,9 +214,9 @@ async fn finalize_rejects_wrong_content_hash_and_stays_resumable(pool: PgPool) {
     // Append seq 1 = "second segment".
     let append_payload = AppendBlockPayload {
         seq: 1,
-        content: "second segment".to_string(),
-        content_hash: temper_core::hash::sha256_hex(b"second segment"),
-        chunks_packed: Some(one_chunk_packed("second segment", "bb")),
+        content: SEG2.to_string(),
+        content_hash: temper_core::hash::sha256_hex(SEG2.as_bytes()),
+        chunks_packed: Some(one_chunk_packed(SEG2, "bb")),
         sources: Vec::new(),
     };
     let append_resp = app
@@ -221,7 +230,7 @@ async fn finalize_rejects_wrong_content_hash_and_stays_resumable(pool: PgPool) {
     assert_eq!(append_resp.status().as_u16(), 200, "append should land");
 
     // The stored verbatim body is the concat of the raw block bytes in seq order — no separator.
-    let good_content_hash = temper_core::hash::sha256_hex(b"first segmentsecond segment");
+    let good_content_hash = temper_core::hash::sha256_hex(format!("{SEG1}{SEG2}").as_bytes());
     let body_merkle: String = sqlx::query_scalar("SELECT body_hash FROM kb_resources WHERE id=$1")
         .bind(resource_id)
         .fetch_one(&pool)
@@ -410,7 +419,7 @@ async fn append_on_other_profile_resource_returns_403(pool: PgPool) {
         doc_type_name: "research".to_string(),
         goal: None,
         content_hash: None,
-        content: "first segment".to_string(),
+        content: SEG1.to_string(),
         metadata: None,
         managed_meta: None,
         open_meta: None,

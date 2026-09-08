@@ -3,7 +3,7 @@
 
 mod common;
 
-use temper_core::types::ingest::{pack_chunks, IngestPayload, PackedChunk};
+use temper_core::types::ingest::{pack_chunks, IngestPayload};
 use temper_core::types::ResourceId;
 use uuid::Uuid;
 
@@ -17,20 +17,9 @@ async fn seed_resource(
     title: &str,
 ) -> ResourceId {
     let body = format!("# {title}\n\nBody text for {title}.");
-    // The per-chunk `content_hash` column is VARCHAR(64); `compute_body_hash`
-    // returns a 71-char `sha256:<hex>` string, so use the raw 64-char hex.
-    let chunk_hash = temper_core::hash::compute_body_hash(&body)
-        .trim_start_matches("sha256:")
-        .to_string();
-    let chunk = PackedChunk {
-        chunk_index: 0,
-        header_path: String::new(),
-        heading_depth: 0,
-        content: body.clone(),
-        content_hash: chunk_hash,
-        embedding: vec![0.0_f32; 768],
-        embedded_with: None,
-    };
+    // Chunks from the REAL chunker: the write path applies the blocking policy, so a chunk
+    // set that no fresh chunking of the body reproduces is a drift the op refuses.
+    let chunk = common::chunked(&body, 0.0);
     let slug = title.to_lowercase().replace(' ', "-");
     let payload = IngestPayload {
         idempotency_key: None,
@@ -46,7 +35,7 @@ async fn seed_resource(
         metadata: None,
         managed_meta: None,
         open_meta: None,
-        chunks_packed: Some(pack_chunks(&[chunk]).expect("pack chunks")),
+        chunks_packed: Some(pack_chunks(&chunk).expect("pack chunks")),
         act: Default::default(),
         sources: Vec::new(),
     };

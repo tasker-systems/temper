@@ -73,13 +73,20 @@ async fn seed_profile_with_context(pool: &PgPool, email: &str) -> (uuid::Uuid, u
 
 /// A single pre-chunked, pre-embedded segment (bring-your-own-vectors path) — ONNX-free, so the
 /// create lands without touching the server-side embedder. Mirrors `segmented_backend_test.rs`.
-fn one_chunk_packed(text: &str, hash_seed: &str) -> String {
+fn one_chunk_packed(text: &str, _hash_seed: &str) -> String {
+    // Real chunker hash: the write path applies the blocking policy — a synthetic hash is a
+    // chunker drift and the create is refused.
+    let content_hash = temper_ingest::chunk::chunk_markdown(text)
+        .into_iter()
+        .next()
+        .map(|c| c.content_hash)
+        .unwrap_or_default();
     let chunk = PackedChunk {
         chunk_index: 0,
         header_path: String::new(),
         heading_depth: 0,
         content: text.to_owned(),
-        content_hash: format!("{hash_seed:0>64}"),
+        content_hash,
         embedding: vec![0.1_f32; 768],
         embedded_with: None,
     };

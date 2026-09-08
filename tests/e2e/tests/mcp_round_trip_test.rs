@@ -17,20 +17,6 @@ fn sha2_hex(content: &str) -> String {
 }
 
 /// Helper: build a fake `PackedChunk` with a unit-vector embedding.
-fn fake_chunk(index: u32, header: &str, content: &str) -> temper_core::types::ingest::PackedChunk {
-    let val = 1.0_f32 / (768.0_f32).sqrt();
-    let hash = &sha2_hex(content)[..16];
-    temper_core::types::ingest::PackedChunk {
-        chunk_index: index,
-        header_path: header.to_string(),
-        heading_depth: 0,
-        content: content.to_string(),
-        content_hash: hash.to_string(),
-        embedding: vec![val; 768],
-        embedded_with: None,
-    }
-}
-
 /// Helper: resolve the e2e test profile from the database.
 ///
 /// Runtime query: test-target macros aren't cached by `cargo sqlx prepare`
@@ -104,11 +90,7 @@ async fn mcp_create_resource_with_markdown_is_searchable(pool: sqlx::PgPool) {
         .expect("context create");
 
     let content = "# Concept: Round-Trip Search\n\nThis concept tests that resources with chunks are searchable.";
-    let chunks = vec![fake_chunk(
-        0,
-        "Concept: Round-Trip Search",
-        "This concept tests that resources with chunks are searchable.",
-    )];
+    let chunks = common::chunked(content, 0.125);
     let packed = temper_core::types::ingest::pack_chunks(&chunks).expect("pack chunks");
 
     let payload = temper_core::types::ingest::IngestPayload {
@@ -244,7 +226,7 @@ async fn mcp_ingest_persists_content_as_chunks(pool: sqlx::PgPool) {
     let content = format!("# Session Note\n\n{body}");
 
     // Pre-pack chunks (avoids ONNX model load; pipeline is tested separately)
-    let chunks = vec![fake_chunk(0, "Session Note", body)];
+    let chunks = common::chunked(&content, 0.125);
     let packed = temper_core::types::ingest::pack_chunks(&chunks).expect("pack chunks");
 
     let payload = temper_core::types::ingest::IngestPayload {
@@ -341,13 +323,9 @@ async fn mcp_update_resource_changes_content_and_reindexes(pool: sqlx::PgPool) {
 
     // 1. Create resource with 1 chunk via the ingest path
     let original_content = "# Original Research\n\nOriginal content for reindex test.";
-    let original_chunks = vec![fake_chunk(
-        0,
-        "Original Research",
-        "Original content for reindex test.",
-    )];
     let original_packed =
-        temper_core::types::ingest::pack_chunks(&original_chunks).expect("pack original");
+        temper_core::types::ingest::pack_chunks(&common::chunked(original_content, 0.125))
+            .expect("pack original");
 
     let payload = temper_core::types::ingest::IngestPayload {
         idempotency_key: None,
@@ -381,12 +359,9 @@ async fn mcp_update_resource_changes_content_and_reindexes(pool: sqlx::PgPool) {
 
     // 2. Update with 2 new chunks via the MCP write path (DbBackend, Surface::Mcp)
     let updated_content = "# Updated Research\n\nNew section A.\nNew section B.";
-    let updated_chunks = vec![
-        fake_chunk(0, "Updated Research", "New section A."),
-        fake_chunk(1, "Updated Research > Section B", "New section B."),
-    ];
     let updated_packed =
-        temper_core::types::ingest::pack_chunks(&updated_chunks).expect("pack updated");
+        temper_core::types::ingest::pack_chunks(&common::chunked(updated_content, 0.125))
+            .expect("pack updated");
     let updated_hash = format!("sha256:{}", sha2_hex(updated_content));
 
     let cmd = UpdateResource {
@@ -495,10 +470,9 @@ async fn mcp_update_resource_meta_preserves_chunks_and_body_hash(pool: sqlx::PgP
         .expect("context create");
 
     // Seed a resource with two real packed chunks.
-    let chunk_a = fake_chunk(0, "Section A", "Body for section A.");
-    let chunk_b = fake_chunk(1, "Section B", "Body for section B.");
     let content = "# Section A\n\nBody for section A.\n\n# Section B\n\nBody for section B.";
-    let packed = temper_core::types::ingest::pack_chunks(&[chunk_a, chunk_b]).expect("pack chunks");
+    let packed = temper_core::types::ingest::pack_chunks(&common::chunked(content, 0.125))
+        .expect("pack chunks");
 
     let payload = temper_core::types::ingest::IngestPayload {
         idempotency_key: None,
@@ -631,7 +605,7 @@ async fn mcp_update_resource_meta_merges_partial_managed_meta(pool: sqlx::PgPool
     // Seed a task with several managed fields set.
     let body = "Task body for gap6.";
     let content = format!("# Gap6 Merge Task\n\n{body}");
-    let packed = temper_core::types::ingest::pack_chunks(&[fake_chunk(0, "Gap6 Merge Task", body)])
+    let packed = temper_core::types::ingest::pack_chunks(&common::chunked(&content, 0.125))
         .expect("pack chunks");
     let payload = temper_core::types::ingest::IngestPayload {
         idempotency_key: None,
@@ -737,9 +711,8 @@ async fn mcp_update_resource_meta_rejects_schema_invalid_field(pool: sqlx::PgPoo
 
     let body = "Task body for gap5.";
     let content = format!("# Gap5 Validate Task\n\n{body}");
-    let packed =
-        temper_core::types::ingest::pack_chunks(&[fake_chunk(0, "Gap5 Validate Task", body)])
-            .expect("pack chunks");
+    let packed = temper_core::types::ingest::pack_chunks(&common::chunked(&content, 0.125))
+        .expect("pack chunks");
     let payload = temper_core::types::ingest::IngestPayload {
         idempotency_key: None,
         segmented: None,
@@ -842,7 +815,7 @@ async fn mcp_get_resource_routes_through_selector_legacy(pool: sqlx::PgPool) {
         .expect("context create");
     let body = "Selector routing keeps the legacy contract intact.";
     let content = format!("# Selector Route\n\n{body}");
-    let packed = temper_core::types::ingest::pack_chunks(&[fake_chunk(0, "Selector Route", body)])
+    let packed = temper_core::types::ingest::pack_chunks(&common::chunked(&content, 0.125))
         .expect("pack chunks");
     let payload = temper_core::types::ingest::IngestPayload {
         idempotency_key: None,
@@ -1014,7 +987,7 @@ async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
     ] {
         let body = format!("body for {slug}");
         let content = format!("# {title}\n\n{body}");
-        let packed = temper_core::types::ingest::pack_chunks(&[fake_chunk(0, title, &body)])
+        let packed = temper_core::types::ingest::pack_chunks(&common::chunked(&content, 0.125))
             .expect("pack chunks");
         // The two kinds are the point of this loop, so the FILLER is conditioned rather than
         // the doc type changed: a research does not carry a task's stage.

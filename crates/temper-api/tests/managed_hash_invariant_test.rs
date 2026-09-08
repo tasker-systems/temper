@@ -25,14 +25,16 @@ use sqlx::PgPool;
 use temper_core::types::ingest::{pack_chunks, IngestPayload, PackedChunk};
 use uuid::Uuid;
 
-/// Minimal chunk fixture for ingest.
+/// Minimal chunk fixture for ingest — carrying the REAL chunker hash for `content` (the write
+/// path applies the blocking policy; a hash no fresh chunking produces is refused as drift).
 fn fake_chunk(content: &str, idx: u32) -> PackedChunk {
+    let c = &temper_ingest::chunk::chunk_markdown(content)[idx as usize];
     PackedChunk {
         chunk_index: idx,
-        header_path: String::new(),
-        heading_depth: 0,
-        content: content.to_string(),
-        content_hash: format!("sha256:fake-{idx}"),
+        header_path: c.header_path.clone(),
+        heading_depth: c.heading_depth,
+        content: c.content.clone(),
+        content_hash: c.content_hash.clone(),
         embedding: vec![0.0_f32; 768],
         embedded_with: None,
     }

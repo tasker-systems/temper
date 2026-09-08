@@ -39,20 +39,27 @@ async fn make_context(pool: &sqlx::PgPool, owner: ProfileId, slug: &str) -> Cont
     ContextId::from(id)
 }
 
-/// A single fake-embedded chunk carrying `content`. ONNX-free: the verbatim-bytes assertions key off
-/// the block's raw_text (the whole body), never the chunk text, so the chunk content is immaterial.
-fn one_incoming_chunk(content: &str) -> IncomingChunk {
-    let mut embedding = vec![0.0_f32; 768];
-    embedding[0] = 1.0;
-    IncomingChunk {
-        chunk_index: 0,
-        content_hash: format!("{:064x}", Uuid::now_v7().as_u128()),
-        content: content.to_string(),
-        embedding,
-        embedded_with: None,
-        header_path: String::new(),
-        heading_depth: 0,
-    }
+/// Chunks for `body` carrying the REAL chunker's content hashes. ONNX-free (`chunk_markdown`
+/// is the pure chunker; the embedding is an inert full-width fill). The real hashes are
+/// load-bearing now that the write path applies the blocking policy: a chunks-arm create with
+/// synthetic hashes is a chunker-drift the op correctly refuses.
+fn incoming_chunks_for_body(body: &str) -> Vec<IncomingChunk> {
+    temper_ingest::chunk::chunk_markdown(body)
+        .into_iter()
+        .map(|c| IncomingChunk {
+            chunk_index: c.chunk_index as i32,
+            content_hash: c.content_hash,
+            content: c.content,
+            embedding: {
+                let mut embedding = vec![0.0_f32; 768];
+                embedding[0] = 1.0;
+                embedding
+            },
+            embedded_with: None,
+            header_path: c.header_path,
+            heading_depth: c.heading_depth as i16,
+        })
+        .collect()
 }
 
 /// Create one resource through the CHUNKS arm (the CLI's path), returning its id. `body` is stored
@@ -77,7 +84,7 @@ async fn create_via_chunks_arm(
             originator: owner,
             emitter,
             properties: &[],
-            chunks: Some(vec![one_incoming_chunk(body)]),
+            chunks: Some(incoming_chunks_for_body(body)),
             sources: vec![],
         },
     )
@@ -211,7 +218,7 @@ async fn superseded_revisions_keep_their_own_bytes(pool: sqlx::PgPool) {
             title: None,
             origin_uri: None,
             properties: &[],
-            chunks: Some(vec![one_incoming_chunk("v2 body\n")]),
+            chunks: Some(incoming_chunks_for_body("v2 body\n")),
             sources: vec![],
             content_block: None,
             rehome_to: None,
@@ -276,7 +283,7 @@ async fn empty_body_with_real_chunks_is_derived_not_empty_verbatim(pool: sqlx::P
             originator: owner,
             emitter,
             properties: &[],
-            chunks: Some(vec![one_incoming_chunk("real distilled content")]),
+            chunks: Some(incoming_chunks_for_body("real distilled content")),
             sources: vec![],
         },
     )

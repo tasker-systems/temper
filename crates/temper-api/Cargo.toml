@@ -59,6 +59,9 @@ test-embed = []
 # `test-support` gives the flush-ordering test an in-memory exporter to assert against, so the
 # layer ordering in `apply_transport_layers` is verified against the real router.
 temper-telemetry = { path = "../temper-telemetry", features = ["test-support"] }
+# The pure chunker (`chunk_markdown`) — body-write fixtures must carry the REAL chunk hashes
+# now that the write path applies the blocking policy (a synthetic hash is a drift refusal).
+temper-ingest = { path = "../temper-ingest", default-features = false }
 opentelemetry_sdk = { version = "0.32", features = ["testing"] }
 # `SpanKind` — the flush test locates the request root span by its server kind rather than by its
 # (now per-route) exported name, so the assertion survives the route-dimension naming.

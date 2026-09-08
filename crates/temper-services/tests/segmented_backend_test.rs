@@ -77,7 +77,7 @@ async fn seed_segmented_resource(
     pool: &PgPool,
     email: &str,
     slug: &str,
-) -> (DbBackend, temper_core::types::resource_view::ResourceView) {
+) -> (DbBackend, temper_core::types::ids::ResourceId) {
     let (profile, context) = seed_profile_with_context(pool, email).await;
     let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
     let created = backend
@@ -99,7 +99,8 @@ async fn seed_segmented_resource(
         })
         .await
         .expect("create block 0")
-        .value;
+        .value
+        .id;
     (backend, created)
 }
 
@@ -112,37 +113,48 @@ async fn seed_resource_with_body(
     email: &str,
     slug: &str,
     body: &str,
-) -> (DbBackend, temper_core::types::resource_view::ResourceView) {
+) -> (DbBackend, temper_core::types::ids::ResourceId) {
     use temper_workflow::operations::BodyUpdate;
     let (profile, context) = seed_profile_with_context(pool, email).await;
     let backend = DbBackend::new(pool.clone(), ProfileId::from(profile));
+    // A SEGMENTED begin: an append lands on an in-progress resource. A plain one-shot create of a
+    // multi-section body now lands policy-partitioned (the write-path blocking policy), and an
+    // append onto a complete partitioned resource correctly collides.
     let created = backend
-        .create_resource(CreateResource {
-            idempotency_key: None,
-            slug: slug.to_string(),
-            doctype: "research".to_string(),
-            home: HomeAnchor::Context(ContextId::from(context)),
-            title: slug.to_string(),
-            body: Some(BodyUpdate {
-                content: body.to_string(),
-                content_hash: None,
+        .begin_segmented_ingest(
+            CreateResource {
+                idempotency_key: None,
+                slug: slug.to_string(),
+                doctype: "research".to_string(),
+                home: HomeAnchor::Context(ContextId::from(context)),
+                title: slug.to_string(),
+                body: Some(BodyUpdate {
+                    content: body.to_string(),
+                    content_hash: None,
+                    chunks_packed: None,
+                    sources: Vec::new(),
+                    content_block: None,
+                }),
+                managed_meta: ManagedMeta::default(),
+                open_meta: None,
+                goal: None,
+                origin_uri: Some(format!("test://{slug}")),
                 chunks_packed: None,
-                sources: Vec::new(),
-                content_block: None,
-            }),
-            managed_meta: ManagedMeta::default(),
-            open_meta: None,
-            goal: None,
-            origin_uri: Some(format!("test://{slug}")),
-            chunks_packed: None,
-            content_hash: None,
-            act: ActContext::default(),
-            origin: Surface::ApiHttp,
-        })
+                content_hash: None,
+                act: ActContext::default(),
+                origin: Surface::ApiHttp,
+            },
+            temper_core::types::ingest::SegmentedBegin {
+                total_blocks_hint: Some(2),
+                block_budget: 262_144,
+                source_hash: None,
+            },
+        )
         .await
         .expect("create block 0 (server-chunked)")
-        .value;
-    (backend, created)
+        .value
+        .resource_id;
+    (backend, temper_core::types::ids::ResourceId::from(created))
 }
 
 // The MCP caller: no chunker, no embedder. It sends raw segment text and the server chunks it,
@@ -163,7 +175,7 @@ async fn server_chunks_an_append_with_no_packed_chunks_and_carries_the_breadcrum
     let text = "beta continues here\n";
     backend
         .append_block(
-            created.id,
+            created,
             AppendBlockPayload {
                 seq: 1,
                 content_hash: temper_core::hash::sha256_hex(text.as_bytes()),
@@ -181,7 +193,7 @@ async fn server_chunks_an_append_with_no_packed_chunks_and_carries_the_breadcrum
            JOIN kb_content_blocks b ON b.id = c.block_id \
           WHERE b.resource_id = $1 AND b.seq = 1 AND c.is_current ORDER BY c.chunk_index",
     )
-    .bind(created.id.uuid())
+    .bind(created.uuid())
     .fetch_all(&pool)
     .await
     .unwrap();
@@ -203,7 +215,7 @@ async fn append_with_no_chunks_and_empty_content_is_rejected(pool: PgPool) {
 
     let err = backend
         .append_block(
-            created.id,
+            created,
             AppendBlockPayload {
                 seq: 1,
                 content: String::new(),
@@ -237,7 +249,13 @@ async fn begin_segmented_ingest_lands_block_zero_and_records_the_source(pool: Pg
                 doctype: "research".to_string(),
                 home: HomeAnchor::Context(ContextId::from(context)),
                 title: "ZZ begin probe".to_string(),
-                body: None,
+                body: Some(temper_workflow::operations::BodyUpdate {
+                    content: "first segment".to_string(),
+                    content_hash: None,
+                    chunks_packed: Some(one_chunk_packed("first segment", "aa")),
+                    sources: Vec::new(),
+                    content_block: None,
+                }),
                 managed_meta: ManagedMeta::default(),
                 open_meta: None,
                 goal: None,
@@ -285,7 +303,7 @@ async fn an_mcp_append_is_attributed_to_the_mcp_emitter(pool: PgPool) {
     let text = "second segment";
     backend
         .append_block(
-            created.id,
+            created,
             AppendBlockPayload {
                 seq: 1,
                 content: text.to_string(),
@@ -324,7 +342,7 @@ async fn append_rejects_a_content_hash_that_does_not_match_content(pool: PgPool)
 
     let err = backend
         .append_block(
-            created.id,
+            created,
             AppendBlockPayload {
                 seq: 1,
                 content: "second segment".to_string(),
@@ -345,7 +363,7 @@ async fn append_rejects_a_content_hash_that_does_not_match_content(pool: PgPool)
     let blocks: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM kb_content_blocks WHERE resource_id=$1 AND NOT is_folded",
     )
-    .bind(created.id.uuid())
+    .bind(created.uuid())
     .fetch_one(&pool)
     .await
     .unwrap();
@@ -362,7 +380,7 @@ async fn append_returns_the_live_body_hash(pool: PgPool) {
     let text = "second segment";
     let out = backend
         .append_block(
-            created.id,
+            created,
             AppendBlockPayload {
                 seq: 1,
                 content: text.to_string(),
@@ -377,7 +395,7 @@ async fn append_returns_the_live_body_hash(pool: PgPool) {
         .value;
 
     let stored: String = sqlx::query_scalar("SELECT body_hash FROM kb_resources WHERE id = $1")
-        .bind(created.id.uuid())
+        .bind(created.uuid())
         .fetch_one(&pool)
         .await
         .unwrap();
@@ -390,7 +408,7 @@ async fn append_returns_the_live_body_hash(pool: PgPool) {
     // And it round-trips: echoing it back finalizes cleanly.
     backend
         .finalize_ingest(
-            created.id,
+            created,
             FinalizePayload {
                 expected_blocks: 2,
                 expected_body_hash: out.body_hash,
@@ -428,12 +446,13 @@ async fn segmented_ingest_begin_append_list_finalize(pool: PgPool) {
         })
         .await
         .expect("create block 0")
-        .value;
+        .value
+        .id;
 
     // Append seq 1.
     let appended = backend
         .append_block(
-            created.id,
+            created,
             AppendBlockPayload {
                 seq: 1,
                 content: "second segment".to_string(),
@@ -457,7 +476,7 @@ async fn segmented_ingest_begin_append_list_finalize(pool: PgPool) {
     // Re-append the SAME segment — idempotent (no duplicate, same reported set).
     let reappended = backend
         .append_block(
-            created.id,
+            created,
             AppendBlockPayload {
                 seq: 1,
                 content: "second segment".to_string(),
@@ -474,7 +493,7 @@ async fn segmented_ingest_begin_append_list_finalize(pool: PgPool) {
 
     // list_blocks reflects the same landed set, including the merkle content_hash.
     let listed = backend
-        .list_blocks(created.id)
+        .list_blocks(created)
         .await
         .expect("list_blocks")
         .value;
@@ -488,14 +507,14 @@ async fn segmented_ingest_begin_append_list_finalize(pool: PgPool) {
 
     // Finalize against the actual multi-block merkle `_recompute_resource_body_hash` maintains.
     let actual_hash: String = sqlx::query_scalar("SELECT body_hash FROM kb_resources WHERE id=$1")
-        .bind(created.id.uuid())
+        .bind(created.uuid())
         .fetch_one(&pool)
         .await
         .expect("fetch body_hash");
 
     backend
         .finalize_ingest(
-            created.id,
+            created,
             FinalizePayload {
                 expected_blocks: 2,
                 expected_body_hash: actual_hash,
@@ -509,7 +528,7 @@ async fn segmented_ingest_begin_append_list_finalize(pool: PgPool) {
     // Wrong expected_blocks is rejected (mirrors Beat 1's `finalize_validates_block_count_and_hash`).
     let bad = backend
         .finalize_ingest(
-            created.id,
+            created,
             FinalizePayload {
                 expected_blocks: 5,
                 expected_body_hash: "deadbeef".to_string(),
@@ -545,7 +564,8 @@ async fn append_by_non_owning_profile_is_forbidden(pool: PgPool) {
         })
         .await
         .expect("create block 0")
-        .value;
+        .value
+        .id;
 
     let (other, _other_context) =
         seed_profile_with_context(&pool, "segmented-other@example.com").await;
@@ -555,7 +575,7 @@ async fn append_by_non_owning_profile_is_forbidden(pool: PgPool) {
     // write (auth-before-writes).
     let err = other_backend
         .append_block(
-            created.id,
+            created,
             AppendBlockPayload {
                 seq: 1,
                 content: "second segment".to_string(),
@@ -575,7 +595,7 @@ async fn append_by_non_owning_profile_is_forbidden(pool: PgPool) {
     // The same denial applies to list_blocks (brief: gated the same as append/finalize — an
     // in-progress segmented ingest's landed set is caller-private).
     let list_err = other_backend
-        .list_blocks(created.id)
+        .list_blocks(created)
         .await
         .expect_err("non-owner list_blocks must be denied");
     assert!(

@@ -6052,6 +6052,7 @@ dependencies = [
  "sqlx",
  "temper-auth",
  "temper-core",
+ "temper-ingest",
  "temper-migrate",
  "temper-principal",
  "temper-services",

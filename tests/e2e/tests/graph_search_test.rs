@@ -15,21 +15,12 @@ use serde_json::json;
 use temper_core::types::api::SearchParams;
 use temper_core::types::graph::{EdgeKind, Polarity};
 use temper_core::types::ids::ResourceId;
-use temper_core::types::ingest::{pack_chunks, IngestPayload, PackedChunk};
+use temper_core::types::ingest::{pack_chunks, IngestPayload};
 use temper_core::types::relationship_requests::AssertRelationshipRequest;
 
 /// Helper: build an IngestPayload with a dummy embedding.
 fn test_payload(title: &str, slug: &str, context: &str) -> IngestPayload {
-    let dummy_embedding = vec![0.1_f32; 768];
-    let chunks = vec![PackedChunk {
-        chunk_index: 0,
-        header_path: title.to_string(),
-        heading_depth: 1,
-        content: format!("{title} content for testing"),
-        content_hash: format!("{slug}-hash"),
-        embedding: dummy_embedding,
-        embedded_with: None,
-    }];
+    let chunks = common::chunked(&format!("# {title}\n\n{title} content for testing."), 0.1);
 
     IngestPayload {
         idempotency_key: None,

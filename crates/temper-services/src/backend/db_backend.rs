@@ -208,9 +208,16 @@ fn validate_append(payload: &AppendBlockPayload) -> Result<(), TemperError> {
             payload.seq, payload.content_hash, actual
         )));
     }
-    if payload.chunks_packed.is_none() && payload.content.is_empty() {
+    // BOTH arms require non-empty content. The empty-content + chunks_packed shape would land a
+    // byteless block; segmented uploads are byte-provenance-bearing by design (concatenated
+    // segments must reproduce the source), and a byteless block makes the finalize-time blocking
+    // policy application decline — a caller-crafted shape that would silently commit an
+    // unpoliced partition. (The chunker needs the prose anyway; the chunks arm carries the text
+    // alongside the packed chunks.)
+    if payload.content.is_empty() {
         return Err(TemperError::BadRequest(
-            "append with no chunks_packed requires non-empty content".to_owned(),
+            "append requires non-empty content (a segment is source bytes, not just chunks)"
+                .to_owned(),
         ));
     }
     Ok(())
@@ -3738,6 +3745,21 @@ impl Backend for DbBackend {
         cmd: CreateResource,
         seg: SegmentedBegin,
     ) -> Result<CommandOutput<SegmentedBeginResponse>, TemperError> {
+        // A segmented upload is byte-provenance-bearing by design (concatenated segments must
+        // reproduce the source), so block 0 must carry the prose: a chunks-only begin would land
+        // a byteless block 0 and make the finalize-time blocking policy application decline — a
+        // caller-crafted shape that would silently commit an unpoliced partition. (Content-only
+        // begins are the MCP shape; content + chunks the CLI's; both carry the text.)
+        match cmd.body.as_ref().map(|b| b.content.is_empty()) {
+            Some(true) | None => {
+                return Err(TemperError::BadRequest(
+                    "segmented begin requires non-empty content (a segment is source bytes, not \
+                     just chunks)"
+                        .to_owned(),
+                ));
+            }
+            Some(false) => {}
+        }
         // `origin_uri` feeds the ingestion record below, so take it before `cmd` moves into create.
         let origin_uri = cmd.origin_uri.clone().unwrap_or_default();
 

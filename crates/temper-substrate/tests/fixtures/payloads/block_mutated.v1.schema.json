@@ -18,6 +18,10 @@
       "items": {
         "$ref": "#/$defs/Incorporation"
       }
+    },
+    "replaces_body": {
+      "description": "Whole-body replace semantics: the revised text is the resource's ENTIRE new body, so the\nprojector folds every sibling live block (their chunk generations retire; the folded rows\nkeep revisions and provenance as ledger history). `false` — the serde default, so every\npre-existing event replays identically — for a per-block revise (`content_block`\naddressing), where siblings are untouched. Absent from the payload JSON when `false` is\nmeaningless to older readers either way: readers of `block_mutated` key on\n`block_id`/`chunks`, never on the absence of this key.",
+      "type": "boolean"
     }
   },
   "required": [

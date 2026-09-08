@@ -15,14 +15,17 @@ use uuid::Uuid;
 
 use temper_core::types::ingest::{pack_chunks, IngestPayload, PackedChunk};
 
-/// A synthetic, already-embedded chunk (constant vector) so the test-db tier needs no ONNX.
-fn synthetic_chunk(index: u32, content: &str, hash_seed: &str) -> PackedChunk {
+/// An already-embedded chunk (constant vector) so the test-db tier needs no ONNX, carrying the
+/// REAL chunker hash — the write path applies the blocking policy; a synthetic hash is a drift
+/// refusal.
+fn synthetic_chunk(index: u32, content: &str, _hash_seed: &str) -> PackedChunk {
+    let c = &temper_ingest::chunk::chunk_markdown(content)[index as usize];
     PackedChunk {
         chunk_index: index,
-        header_path: String::new(),
-        heading_depth: 0,
-        content: content.to_string(),
-        content_hash: format!("{hash_seed:0>64}"),
+        header_path: c.header_path.clone(),
+        heading_depth: c.heading_depth,
+        content: c.content.clone(),
+        content_hash: c.content_hash.clone(),
         embedding: vec![0.5; 768],
         embedded_with: None,
     }

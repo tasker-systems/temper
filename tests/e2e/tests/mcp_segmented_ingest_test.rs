@@ -311,13 +311,16 @@ async fn segmented_server_chunked_ingest_equals_a_one_shot_create(pool: sqlx::Pg
     );
 
     // `body_hash` is a merkle over PER-BLOCK hashes ordered by seq (`_recompute_resource_body_hash`),
-    // so block structure is part of it by construction. A 3-block segmented resource and a 1-block
-    // one-shot resource with identical chunks therefore have different body_hashes — by design, not
-    // by accident. Pinned so nobody "fixes" it into an equality later.
-    assert_ne!(
+    // so block structure is part of it by construction. It USED to be that the 3-block segmented
+    // resource and the 1-block one-shot resource therefore disagreed — transport grain leaked into
+    // the hash. The write-path blocking policy (this goal) ends that: finalize re-partitions the
+    // segmented body to the same heading-aligned partition the one-shot create lands in, so both
+    // hashes converge. Equal hashes are the policy's strongest observable: the partition is a
+    // function of the CONTENT, never of how it was transported.
+    assert_eq!(
         stored_body_hash(&pool, segmented).await,
         stored_body_hash(&pool, reference).await,
-        "body_hash folds in block structure; identical content in different block counts differs"
+        "policy-partitioned content must land in the same state however it was transported"
     );
 }
 
@@ -538,36 +541,65 @@ async fn appended_segments_record_block_aligned_provenance(pool: sqlx::PgPool) {
 
     let rows = provenance(&pool, profile, begin.resource_id).await;
 
-    // One row per attributed append, none for the un-attributed begin block.
+    // Finalize applies the blocking policy: the corpus re-partitions into its FIVE heading
+    // sections (Manual, Setup, Usage, Caveats, Appendix). Attribution follows the final
+    // partition under the substrate carry rules — a source whose append block SPLIT across two
+    // sections carries to both halves (distinguishable, never asserted); a source absorbed by
+    // one section rides direct. Neither source may appear on the un-attributed begin content.
     assert_eq!(
         rows.len(),
-        2,
-        "one provenance row per attributed append, zero for the begin block; got {rows:?}"
+        3,
+        "src_one carried onto both its sections, src_two absorbed by its own; got {rows:?}"
     );
     assert!(
         rows.iter().all(|r| r.block_seq != 0),
-        "block 0 (the un-attributed begin) records no provenance; got {rows:?}"
+        "the un-attributed begin's content records no provenance; got {rows:?}"
     );
 
-    // Block alignment: each source is on its own block, in append order.
+    // Final partition: seq 0 Manual, 1 Setup, 2 Usage, 3 Caveats, 4 Appendix. src_one's append
+    // spanned Usage+Caveats → carried copies on seqs 2 and 3; src_two's append IS Appendix →
+    // one direct row on seq 4.
     let by_seq = |seq: i32| {
         rows.iter()
             .find(|r| r.block_seq == seq)
             .unwrap_or_else(|| panic!("no provenance row for block_seq {seq}; got {rows:?}"))
     };
-    let b1 = by_seq(1);
-    assert_eq!(b1.source_kind, "remote");
-    assert_eq!(b1.source_uri.as_deref(), Some(src_one));
-    assert_eq!(b1.accretion_seq, 0, "single source per block sits at seq 0");
+    let u = by_seq(2);
+    let c = by_seq(3);
+    let a = by_seq(4);
+    for r in [&u, &c] {
+        assert_eq!(r.source_kind, "remote");
+        assert_eq!(
+            r.source_uri.as_deref(),
+            Some(src_one),
+            "carried copy of src_one"
+        );
+        assert_eq!(r.accretion_seq, 0, "single source per block sits at seq 0");
+    }
+    assert_eq!(a.source_kind, "remote");
+    assert_eq!(a.source_uri.as_deref(), Some(src_two));
 
-    let b2 = by_seq(2);
-    assert_eq!(b2.source_kind, "remote");
-    assert_eq!(b2.source_uri.as_deref(), Some(src_two));
+    // The carried/direct distinction is queryable at the ledger grain (the read row does not
+    // expose the column; the substrate marking is the contract).
+    let carried: Vec<(i32, bool)> = sqlx::query_as(
+        "SELECT b.seq, p.is_carried FROM kb_block_provenance p \
+           JOIN kb_content_blocks b ON b.id = p.block_id \
+          WHERE b.resource_id = $1 AND NOT b.is_folded ORDER BY b.seq",
+    )
+    .bind(begin.resource_id)
+    .fetch_all(&pool)
+    .await
+    .expect("is_carried rows");
+    assert_eq!(
+        carried,
+        vec![(2, true), (3, true), (4, false)],
+        "a split source is carried on both halves; an absorbed one is direct"
+    );
 
     // The two sources landed on distinct blocks — the whole point of per-block (not per-resource)
     // attribution.
     assert_ne!(
-        b1.block_id, b2.block_id,
+        u.block_id, a.block_id,
         "each append's source is recorded against its own content block"
     );
 }

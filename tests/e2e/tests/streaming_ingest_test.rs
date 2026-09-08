@@ -69,14 +69,17 @@ async fn count_events(pool: &PgPool, event_type: &str, resource_id: Uuid) -> i64
 
 /// A single pre-chunked, pre-embedded segment (bring-your-own-vectors path) — ONNX-free.
 /// Mirrors `segments_handler_test.rs`'s helper of the same name exactly, so the small-body
-/// one-shot regression guard can run without ONNX Runtime.
-fn one_chunk_packed(text: &str, hash_seed: &str) -> String {
+/// one-shot regression guard can run without ONNX Runtime. Carries the REAL chunker hash for
+/// `text`: the write path applies the blocking policy, so a hash no fresh chunking produces is
+/// a chunker drift and the create is refused.
+fn one_chunk_packed(text: &str, _hash_seed: &str) -> String {
+    let c = &temper_ingest::chunk::chunk_markdown(text)[0];
     let chunk = PackedChunk {
         chunk_index: 0,
-        header_path: String::new(),
-        heading_depth: 0,
-        content: text.to_owned(),
-        content_hash: format!("{hash_seed:0>64}"),
+        header_path: c.header_path.clone(),
+        heading_depth: c.heading_depth,
+        content: c.content.clone(),
+        content_hash: c.content_hash.clone(),
         embedding: vec![0.1_f32; 768],
         embedded_with: None,
     };
