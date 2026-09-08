@@ -96,11 +96,11 @@ COMMENT ON FUNCTION _project_block_mutated(uuid, jsonb, jsonb) IS
     'body storage, and the search vector. With payload key replaces_body=true (the whole-body '
     'update arm) it first folds every sibling live block and retires their chunk generations — '
     'the revised text is the resource''s ENTIRE body. Folded rows keep revisions and provenance '
-    'as history. Absent/false key: per-block revise, siblings untouched (pre-20260906000010 '
-    'behavior). Amended by 20260906000010_block_mutate_whole_body.sql.';
+    'as history. Absent/false key: per-block revise, siblings untouched (pre-20260906000080 '
+    'behavior). Amended by 20260906000080_block_mutate_whole_body.sql.';
 
 SELECT declare_migration(
-    20260906000010,
+    20260906000080,
     'additive',
     'block_mutated gains the optional payload key replaces_body: the whole-body update arm folds '
     'sibling live blocks so a whole-body revise can REPLACE a policy-partitioned multi-block body. '
