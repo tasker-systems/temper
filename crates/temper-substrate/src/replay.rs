@@ -205,7 +205,16 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             // A re-block reparents EXISTING chunk rows and inserts none — the chunk walk below
             // must do nothing, so an EMPTY manifest (every chunk id already has its CAS row,
             // which the walk would only re-read). Only the `__blocks` re-supply matters here.
-            EventKind::ResourceReblocked => Some(serde_json::json!([])),
+            // EXCEPTION — the whole-body replace shape (`replaces_body` marker): its created
+            // blocks MINT new chunk rows, so their chunk content re-supplies exactly like
+            // `resource_created`'s block manifests.
+            EventKind::ResourceReblocked => {
+                if payload.get("replaces_body") == Some(&serde_json::Value::Bool(true)) {
+                    payload.get("created").cloned()
+                } else {
+                    Some(serde_json::json!([]))
+                }
+            }
             // The SQL query above restricts to the three content-bearing types, so the
             // remaining variants are unreachable here — they carry no chunk manifests.
             EventKind::ResourceUpdated
@@ -828,6 +837,13 @@ pub async fn recorded_materializations(
 /// the formation gate share this set so they can never disagree on "what is a content touch" (the
 /// bug they'd otherwise drift into).
 ///
+/// `resource_reblocked` deserves its own note: the SHIPPED op shape must never advance a content
+/// clock (chunks are reparented, never rewritten — the exclusion premise pinned by the
+/// chunk-equality witnesses), but the whole-body REPLACE shape rewrites chunks wholesale — new
+/// prose, new embeddings — and is therefore a content touch. The discrimination cannot ride a
+/// name list, so the three gate queries below carry the `REPLACE_REBLOCKED` SQL arm beside
+/// `CONTENT_EVENTS`; all three use it, which is what keeps the gates agreeing.
+///
 /// Emittability, since this list mixes both and a stale claim here is load-bearing:
 /// `block_mutated` and `block_created` **fire today** — `block_created` since
 /// `20260708000012_streaming_ingest.sql` ("activate the dormant `block_created` event"), via
@@ -836,6 +852,13 @@ pub async fn recorded_materializations(
 /// (This comment previously said `block_created` had no write path, seventeen days after it gained
 /// one; see the auditor trigger-model register §8.2a — "is commented inert ≠ is inert".)
 const CONTENT_EVENTS: &[&str] = &["block_mutated", "block_created", "block_folded"];
+
+/// SQL arm matching exactly the replace-shaped `resource_reblocked` events — the content-clock
+/// members of that event name. Kept beside `CONTENT_EVENTS` (which deliberately does NOT list
+/// the name: the shipped reparent-only shape must not match) and used by ALL THREE gate queries
+/// so they can never disagree on what a content touch is.
+const REPLACE_REBLOCKED: &str =
+    "(et.name = 'resource_reblocked' AND e.payload->>'replaces_body' = 'true')";
 
 /// The STRUCTURAL events: they change a region-formation input that lives in the component
 /// fingerprint (membership / edges / facets), so they drive re-clustering, not a readout refresh.
@@ -893,7 +916,8 @@ pub(crate) async fn last_materialize_event<'e, E: sqlx::PgExecutor<'e>>(
 
 /// Did any event whose type is in `names` touch this anchor after `watermark`? The shared body behind
 /// the formation and content gates — the anchor-scoping predicate is load-bearing and easy to get
-/// wrong, so it lives in exactly one place.
+/// wrong, so it lives in exactly one place. The `REPLACE_REBLOCKED` arm rides beside the name list:
+/// the one event name whose content-touch membership is payload-shaped, not name-shaped.
 async fn touched_since(
     pool: &PgPool,
     anchor: HomeAnchor,
@@ -901,11 +925,14 @@ async fn touched_since(
     names: &[&str],
 ) -> Result<bool> {
     Ok(sqlx::query_scalar(
-        "SELECT EXISTS ( \
+        &("SELECT EXISTS ( \
             SELECT 1 FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
              WHERE e.id > $3 \
                AND e.producing_anchor_table = $1 AND e.producing_anchor_id = $2 \
-               AND et.name = ANY($4))",
+               AND (et.name = ANY($4) OR "
+            .to_owned()
+            + REPLACE_REBLOCKED
+            + "))"),
     )
     .bind(anchor.table())
     .bind(anchor.uuid())
@@ -952,11 +979,14 @@ pub async fn formation_touched_count_since(
         .copied()
         .collect();
     Ok(sqlx::query_scalar(
-        "SELECT count(*) \
+        &("SELECT count(*) \
            FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
           WHERE ($3::uuid IS NULL OR e.id > $3) \
             AND e.producing_anchor_table = $1 AND e.producing_anchor_id = $2 \
-            AND et.name = ANY($4)",
+            AND (et.name = ANY($4) OR "
+            .to_owned()
+            + REPLACE_REBLOCKED
+            + ")"),
     )
     .bind(anchor.table())
     .bind(anchor.uuid())
@@ -1011,14 +1041,29 @@ pub async fn content_touched_resources_since(
     anchor: HomeAnchor,
     watermark: Uuid,
 ) -> Result<Vec<Uuid>> {
+    // Two arms, mutually exclusive, so the gates can never disagree on what a content touch is:
+    // the CONTENT_EVENTS name list (block-grain events, resolved block → owning resource), and
+    // the replace-shaped re-block (resolves its payload resource_id directly — the event carries
+    // no top-level block_id, and every section it wrote is the resource's own content).
     Ok(sqlx::query_scalar(
-        "SELECT DISTINCT b.resource_id \
-           FROM kb_events e \
-           JOIN kb_event_types et ON et.id = e.event_type_id \
-           JOIN kb_content_blocks b ON b.id = (e.payload->>'block_id')::uuid \
-          WHERE e.id > $3 \
-            AND e.producing_anchor_table = $1 AND e.producing_anchor_id = $2 \
-            AND et.name = ANY($4)",
+        &("SELECT DISTINCT resource_id FROM ( \
+            SELECT b.resource_id \
+              FROM kb_events e \
+              JOIN kb_event_types et ON et.id = e.event_type_id \
+              JOIN kb_content_blocks b ON b.id = (e.payload->>'block_id')::uuid \
+             WHERE e.id > $3 \
+               AND e.producing_anchor_table = $1 AND e.producing_anchor_id = $2 \
+               AND et.name = ANY($4) \
+            UNION \
+            SELECT (e.payload->>'resource_id')::uuid \
+              FROM kb_events e \
+              JOIN kb_event_types et ON et.id = e.event_type_id \
+             WHERE e.id > $3 \
+               AND e.producing_anchor_table = $1 AND e.producing_anchor_id = $2 \
+               AND "
+            .to_owned()
+            + REPLACE_REBLOCKED
+            + ") t"),
     )
     .bind(anchor.table())
     .bind(anchor.uuid())

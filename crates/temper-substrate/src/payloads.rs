@@ -1515,11 +1515,14 @@ pub struct ReblockCreatedBlock {
     pub block_id: BlockId,
     /// The block's position in the NEW partition.
     pub seq: i32,
-    /// The EXISTING chunk rows reassigned to this block, in order, with renumbered
-    /// `chunk_index`. Chunks are never inserted, deleted, or rewritten by a re-block — the
-    /// `content_hash` here must equal the live row's, and the embedding rides the row through
-    /// the reparent untouched. The projector derives the block's `block_body_hash` from these
-    /// ordered hashes, the create-path derivation.
+    /// The chunk assignments for this block, in order. SHAPE-DEPENDENT: on the shipped op shape
+    /// these are EXISTING chunk rows reassigned — chunks are never inserted, deleted, or rewritten
+    /// by a re-block, the `content_hash` here must equal the live row's, and the embedding rides
+    /// the row through the reparent untouched. On the whole-body replace shape
+    /// (`ResourceReblocked::replaces_body`) these are NEW chunk ids minted by the operation, with
+    /// their content/embedding riding the sidecar map (the `block_mutate` posture) — the same
+    /// manifest field carries both, discriminated by the marker. The projector derives the block's
+    /// `block_body_hash` from these ordered hashes, the create-path derivation.
     pub chunks: Vec<ChunkManifest>,
     /// The attribution DELTA to write for this block. Deliberately never re-lists sources
     /// already on a kept row: the survivor's own provenance rides along untouched, and
@@ -1537,6 +1540,15 @@ pub struct ReblockKeptBlock {
     pub block_id: BlockId,
     /// The block's position in the NEW partition.
     pub seq: i32,
+    /// NEW assertions only — the delta this event writes onto the survivor. Deliberately never a
+    /// re-listing of the survivor's OWN rows (those ride along untouched; re-inserting them under
+    /// a new `contributed_by_event_id` would double-count them in every standing read): this list
+    /// carries the populations the replace-shaped partition adds — caller whole-body sources
+    /// (appended across events, the same semantic as `block_mutate`'s incorporated rows and the
+    /// annotate path) and absorbed unions from folded duplicates (skipping sources the survivor
+    /// already holds). Empty for a kept block with nothing new to assert.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attribution: Vec<ReblockAttribution>,
 }
 
 /// `resource_reblocked` — re-cut one resource's blocks along section boundaries (the re-block
@@ -1562,6 +1574,13 @@ pub struct ResourceReblocked {
     /// The incumbent rows the partition supersedes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub folded: Vec<BlockId>,
+    /// Whole-body replace semantics (the update path's arm): the sections chunk the caller's NEW
+    /// body, the created blocks MINT their chunks (the content sidecar carries them — the
+    /// reparent-only premise does not hold), and folded incumbents' chunk generations retire.
+    /// `false` — the serde default, so every pre-existing event replays identically — for the
+    /// shipped op shape: created blocks reparent EXISTING CAS rows and nothing is inserted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub replaces_body: bool,
 }
 
 /// The 26 typed event names — the registry-stamping and snapshot surfaces iterate this.

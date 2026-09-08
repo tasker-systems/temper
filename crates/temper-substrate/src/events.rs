@@ -498,11 +498,17 @@ pub enum SeedAction<'a> {
     /// manifest is computed by the Rust op — `temper_ingest`'s section slicing plus the
     /// chunk-hash diff against the live blocks — and rides the payload whole. `slices` carries
     /// each CREATED block's verbatim source bytes for the `__blocks` sidecar (keyed by block
-    /// id, the mutate-path keying); no chunk content rides the sidecar, because every chunk id
-    /// references an existing CAS row the projector reparents in place.
+    /// id, the mutate-path keying); no chunk content rides the sidecar on the shipped op
+    /// shape, because every chunk id references an existing CAS row the projector reparents in
+    /// place. On the whole-body replace shape (`manifest.replaces_body`) `chunks` carries the
+    /// created blocks' PREPARED chunks — new ids, content, and embeddings ride the sidecar's
+    /// chunk map exactly as `BlockMutate`'s do, and the projector inserts them.
     ResourceReblock {
         manifest: payloads::ResourceReblocked,
         slices: &'a [(BlockId, String)],
+        /// The created blocks' prepared chunks, in manifest order. Empty unless
+        /// `manifest.replaces_body` — the op shape inserts nothing.
+        chunks: &'a [crate::content::PreparedChunk],
         emitter: EntityId,
     },
     /// Record an auditor's signed verdict on one `(block, source)` citation (Set 5, spec
@@ -1662,14 +1668,20 @@ pub async fn fire_with(
         SeedAction::ResourceReblock {
             manifest,
             slices,
+            chunks,
             emitter,
         } => {
-            // The re-block sidecar carries NO chunk content — every chunk id references an
-            // existing CAS row the projector reparents in place. Only `__blocks` rides: each
-            // CREATED block's verbatim slice bytes, keyed by block id (the mutate-path keying —
-            // a re-block addresses blocks by id, never by seq).
+            // The re-block sidecar carries NO chunk content on the shipped op shape — every
+            // chunk id references an existing CAS row the projector reparents in place. Only
+            // `__blocks` rides: each CREATED block's verbatim slice bytes, keyed by block id
+            // (the mutate-path keying — a re-block addresses blocks by id, never by seq). On
+            // the whole-body replace shape the created blocks MINT their chunks: the chunk map
+            // carries each prepared chunk's content/embedding exactly as the mutate sidecar
+            // does, keyed by chunk id.
+            let mut chunk_map = std::collections::HashMap::new();
+            payloads::content_sidecar_chunks(&mut chunk_map, chunks);
             let sidecar = payloads::ContentSidecar {
-                chunks: std::collections::HashMap::new(),
+                chunks: chunk_map,
                 blocks: (!slices.is_empty()).then(|| {
                     slices
                         .iter()
