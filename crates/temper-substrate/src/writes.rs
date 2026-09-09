@@ -1384,6 +1384,14 @@ fn compute_replace_partition(
         carried: bool,
         from_caller: bool,
     }
+
+    /// Per-source seats in one section's delta: the absorbed union (if a folded incumbent
+    /// contributed it) and the caller assertion (if the caller asserted it).
+    struct SourceSeats {
+        source: ProvenanceSource,
+        union: Option<DeltaEntry>,
+        caller: Option<DeltaEntry>,
+    }
     let mut delta: std::collections::HashMap<usize, Vec<DeltaEntry>> =
         std::collections::HashMap::new();
     for a in attributions {
@@ -1458,35 +1466,56 @@ fn compute_replace_partition(
         let Some(entries) = delta.remove(&k) else {
             continue;
         };
-        let mut sorted = entries;
-        sorted.sort_by_key(|e| (e.carried, e.seq));
-        let mut seen: Vec<ProvenanceSource> = Vec::new();
-        let deduped: Vec<DeltaEntry> = sorted
-            .into_iter()
-            .filter(|e| {
-                if seen.contains(&e.source) {
-                    false
-                } else {
-                    seen.push(e.source.clone());
-                    true
+        // Resolve per SOURCE, not per entry — a caller assertion and an absorbed union of the
+        // same source can meet in one section, and resolution must never depend on seq
+        // ordering: the union (direct-quality, carried = false) wins when it lands; when the
+        // union is dropped (survivor already holds the source) the CALLER's assertion is the
+        // fallback and still appends. Within one event a source lands at most one row per
+        // block, deterministically.
+        let block_id = match slot {
+            Slot::Kept { block_id, .. } => block_id.uuid(),
+            Slot::Created { .. } => Uuid::nil(),
+        };
+        let survivor_holds =
+            |e: &DeltaEntry| held.get(&block_id).is_some_and(|v| v.contains(&&e.source));
+        // ProvenanceSource is Eq, not Hash — a Vec scan, the same grain the shipped dedup uses.
+        let mut by_source: Vec<SourceSeats> = Vec::new();
+        for e in entries {
+            let seat = match by_source.iter_mut().find(|s| s.source == e.source) {
+                Some(seat) => seat,
+                None => {
+                    by_source.push(SourceSeats {
+                        source: e.source.clone(),
+                        union: None,
+                        caller: None,
+                    });
+                    by_source.last_mut().unwrap()
                 }
+            };
+            if e.from_caller {
+                // lowest caller seq wins the representative seat
+                match &seat.caller {
+                    Some(prev) if prev.seq <= e.seq => {}
+                    _ => seat.caller = Some(e),
+                }
+            } else {
+                match &seat.union {
+                    Some(prev) if prev.seq <= e.seq => {}
+                    _ => seat.union = Some(e),
+                }
+            }
+        }
+        let mut resolved: Vec<DeltaEntry> = by_source
+            .into_iter()
+            .filter_map(|seat| match seat.union {
+                Some(u) if !survivor_holds(&u) => Some(u),
+                Some(_) => seat.caller, // union held: the caller's append is the fallback
+                None => seat.caller,
             })
             .collect();
-        let attribution: Vec<payloads::ReblockAttribution> = deduped
+        resolved.sort_by_key(|e| (e.carried, e.seq));
+        let attribution: Vec<payloads::ReblockAttribution> = resolved
             .into_iter()
-            .filter(|e| {
-                if e.from_caller {
-                    return true; // caller assertions append across events, never filtered
-                }
-                // An absorbed union onto a kept survivor skips when the survivor already holds
-                // the source; onto a created block nothing is held (absent from `held`).
-                let block_id = match slot {
-                    Slot::Kept { block_id, .. } => block_id.uuid(),
-                    Slot::Created { .. } => Uuid::nil(),
-                };
-                let survivor_holds = held.get(&block_id).is_some_and(|v| v.contains(&&e.source));
-                !survivor_holds
-            })
             .map(|e| payloads::ReblockAttribution {
                 source: e.source,
                 seq: e.seq,

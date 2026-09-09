@@ -543,8 +543,10 @@ async fn an_identical_body_without_sources_is_silent(pool: sqlx::PgPool) {
     let stable = blocks_of(&pool, resource).await;
     assert_eq!(stable.len(), 1);
     let events_before: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM kb_events e JOIN kb_content_blocks b \
-           ON b.id = (e.payload->>'block_id')::uuid WHERE b.resource_id=$1",
+        "SELECT count(*) FROM kb_events e \
+          WHERE (e.payload->>'resource_id')::uuid = $1 \
+             OR EXISTS (SELECT 1 FROM kb_content_blocks b \
+                         WHERE b.id = (e.payload->>'block_id')::uuid AND b.resource_id = $1)",
     )
     .bind(resource.uuid())
     .fetch_one(&pool)
@@ -556,8 +558,10 @@ async fn an_identical_body_without_sources_is_silent(pool: sqlx::PgPool) {
 
     assert_eq!(blocks_of(&pool, resource).await, before, "nothing moves");
     let events_after: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM kb_events e JOIN kb_content_blocks b \
-           ON b.id = (e.payload->>'block_id')::uuid WHERE b.resource_id=$1",
+        "SELECT count(*) FROM kb_events e \
+          WHERE (e.payload->>'resource_id')::uuid = $1 \
+             OR EXISTS (SELECT 1 FROM kb_content_blocks b \
+                         WHERE b.id = (e.payload->>'block_id')::uuid AND b.resource_id = $1)",
     )
     .bind(resource.uuid())
     .fetch_one(&pool)
@@ -566,6 +570,68 @@ async fn an_identical_body_without_sources_is_silent(pool: sqlx::PgPool) {
     assert_eq!(
         events_before, events_after,
         "a no-op write appends no event"
+    );
+}
+
+/// The dedup-fallback: when an update both ABSORBS a folded duplicate holding source S onto a
+/// kept survivor that already holds S, AND the caller re-asserts S, the caller's append still
+/// lands (a second row under the replace event) — resolution never depends on seq ordering,
+/// and a held union never silently swallows the caller's assertion.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_held_union_does_not_silently_swallow_the_callers_reassertion(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "wb-fallback").await;
+    // Two byte-identical copies, EACH annotated with S.
+    let resource =
+        create_two_block(&pool, owner, emitter, &home, SECTION_A, SECTION_A, vec![]).await;
+    for seq in 0..=1 {
+        let block_id: Uuid = sqlx::query_scalar(
+            "SELECT id FROM kb_content_blocks WHERE resource_id=$1 AND seq=$2 AND NOT is_folded",
+        )
+        .bind(resource.uuid())
+        .bind(seq)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        writes::annotate_block_sources(
+            &pool,
+            writes::AnnotateParams {
+                resource,
+                sources: vec![source("https://ex.com/dup-src", 0)],
+                content_block: Some(block_id),
+                emitter,
+            },
+        )
+        .await
+        .unwrap();
+    }
+    // Collapse to ONE byte-equal section: copy 1 keeps, copy 2 folds (its S unions onto the
+    // survivor, which holds S — dropped), AND the caller re-asserts S. The append must land.
+    update_body(
+        &pool,
+        emitter,
+        resource,
+        SECTION_A,
+        vec![source("https://ex.com/dup-src", 5)],
+    )
+    .await;
+
+    let rows = provenance_rows(&pool, resource).await;
+    let dup_rows: Vec<_> = rows
+        .iter()
+        .filter(|(l, _, _, _)| *l == "https://ex.com/dup-src")
+        .collect();
+    assert_eq!(
+        dup_rows.len(),
+        2,
+        "the caller's re-assertion appended alongside the held row"
+    );
+    let event_ids: std::collections::HashSet<Uuid> = dup_rows.iter().map(|r| r.3).collect();
+    assert_eq!(
+        event_ids.len(),
+        2,
+        "two rows, two events: the annotate and the replace"
     );
 }
 
@@ -632,6 +698,42 @@ async fn replay_reproduces_a_whole_body_replace(pool: sqlx::PgPool) {
         blocks_of(&pool, resource).await,
         "the replace partition survives replay"
     );
+}
+
+/// A KEPT-ONLY replace (section permutation — `created` empty, so the payload serializes no
+/// `created` key at all) replays: the snapshot arm treats the absent key as an empty manifest,
+/// and the round-trip reproduces the partition. This is the flagship shape the marker was
+/// written to admit — a permutation anywhere must never poison the replay proof.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn replay_reproduces_a_kept_only_replace(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "wb-replay-kept").await;
+    let resource =
+        create_two_block(&pool, owner, emitter, &home, SECTION_A, SECTION_B, vec![]).await;
+    // Pure permutation: both incumbents keep, only seqs move, `created` is empty.
+    update_body(
+        &pool,
+        emitter,
+        resource,
+        "## Beta\n\nBeta body paragraph.\n# Alpha\n\nAlpha body paragraph.\n",
+        vec![],
+    )
+    .await;
+    let expected = blocks_of(&pool, resource).await;
+    assert_eq!(expected.len(), 2);
+
+    let before = replay::dump_projections(&pool).await.unwrap();
+    let snap = replay::snapshot(&pool).await.unwrap();
+    common::reset_schema(&pool).await;
+    replay::replay(&pool, &snap).await.unwrap();
+    let after = replay::dump_projections(&pool).await.unwrap();
+
+    for ((table_a, a), (table_b, b)) in before.iter().zip(after.iter()) {
+        assert_eq!(table_a, table_b);
+        assert_eq!(a, b, "projection table {table_a} diverged under replay");
+    }
+    assert_eq!(expected, blocks_of(&pool, resource).await);
 }
 
 /// The replace shape advances the content clock: the region readout-refresh gate must see the

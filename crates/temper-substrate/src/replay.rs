@@ -210,7 +210,10 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             // `resource_created`'s block manifests.
             EventKind::ResourceReblocked => {
                 if payload.get("replaces_body") == Some(&serde_json::Value::Bool(true)) {
-                    payload.get("created").cloned()
+                    // A KEPT-ONLY replace (assertion-only, section permutation) serializes no
+                    // `created` key at all (skip_serializing_if) — it minted no chunks, so the
+                    // empty manifest is correct, not an error.
+                    Some(payload.get("created").cloned().unwrap_or(serde_json::json!([])))
                 } else {
                     Some(serde_json::json!([]))
                 }
@@ -346,13 +349,18 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             // stays 1:1.
             EventKind::ResourceReblocked => payload["created"]
                 .as_array()
-                .context("resource_reblocked payload missing created")?
-                .iter()
-                .filter_map(|b| {
-                    let bid: Uuid = b["block_id"].as_str()?.parse().ok()?;
-                    Some((bid.to_string(), bid))
+                // Kept-only replaces (assertion-only, permutation) carry no `created` key and
+                // no `__blocks` re-supply: nothing was minted.
+                .map(|created| {
+                    created
+                        .iter()
+                        .filter_map(|b| {
+                            let bid: Uuid = b["block_id"].as_str()?.parse().ok()?;
+                            Some((bid.to_string(), bid))
+                        })
+                        .collect()
                 })
-                .collect(),
+                .unwrap_or_default(),
             // create/append/charter: key by seq, look up by block id — both live on the manifest.
             _ => manifests
                 .as_array()
@@ -780,10 +788,11 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // would silently reproject today's declarations onto yesterday's events.
             | EventKind::SubscriptionDeliveryDisposed => {}
             // The re-block substrate: pure projector half, the `_project_block_mutated` arity
-            // (payload + sidecar). Deliberately NOT a `CONTENT_EVENTS` member — a re-block
-            // changes no region-formation input (chunks are reparented, never rewritten; the
-            // chunk-equality witnesses pin that premise), so it must never advance a
-            // materialization threshold, the `SalienceRefreshed` posture (events.rs).
+            // (payload + sidecar). Clock membership is SHAPE-dependent, not name-dependent: the
+            // shipped reparent-only shape changes no region-formation input (the
+            // chunk-equality witnesses pin that premise) and stays outside the gates; the
+            // whole-body REPLACE shape rewrites chunks and DOES advance them — via the
+            // `REPLACE_REBLOCKED` arm in the three gate queries below, never via this list.
             EventKind::ResourceReblocked => {
                 let side = snap.sidecars.get(&id).context("missing sidecar")?;
                 // A compile-checked macro, like the ContextRetired/ContextRestored arms: this is
