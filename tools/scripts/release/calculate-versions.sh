@@ -258,7 +258,12 @@ read_leaf_version() {
         echo ""
         return
     fi
-    grep -m1 -E "$pattern" "${REPO_ROOT}/${file}" | sed -E "s/.*['\"]([0-9]+\.[0-9]+\.[0-9]+)['\"].*/\1/"
+    # A pattern that matches nothing must be loud, not an empty read: the gem's
+    # version line is indented (`  VERSION = `), so the anchor admits leading
+    # whitespace without widening to `CONTRACT_VERSION = `.
+    local matched
+    matched=$(grep -m1 -E "$pattern" "${REPO_ROOT}/${file}") || die "Leaf version pattern '${pattern}' matched nothing in ${file} — refusing to compute from an unreadable version site."
+    sed -E "s/.*['\"]([0-9]+\.[0-9]+\.[0-9]+)['\"].*/\1/" <<< "$matched"
 }
 
 leaf_next() {
@@ -288,7 +293,7 @@ emit_leaf() {
     fi
 }
 
-emit_leaf RB "clients/temper-rb/lib/temper/version.rb" "^VERSION = "   "$RB_RELEASE"
+emit_leaf RB "clients/temper-rb/lib/temper/version.rb" "^[[:space:]]*VERSION = "   "$RB_RELEASE"
 emit_leaf PY "clients/temper-py/temper/version.py"     "__version__"  "$PY_RELEASE"
 emit_leaf TS "clients/temper-ts/package.json"          '"version"'    "$TS_RELEASE"
 emit_leaf UI "packages/temper-ui/package.json"         '"version"'    "$UI_RELEASE"
