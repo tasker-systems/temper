@@ -64,6 +64,14 @@ pub struct BlockProvenanceRow {
     /// The `block_mutated` event that recorded this incorporation.
     pub contributed_by_event_id: Uuid,
     pub created: chrono::DateTime<chrono::Utc>,
+    /// Carried attribution: `true` for a split/absorbed COPY written by a re-block or a
+    /// whole-body replace — this block holds only part of the content the source once covered
+    /// (or a duplicate of it), distinguishable at row grain from a direct assertion, never
+    /// readable as direct. `false` — the serde default, so a NEW client reading an OLD server
+    /// (deploy skew, field absent on the wire) parses, reading unmarked rows as asserted, which
+    /// is exactly what they were.
+    #[serde(default)]
+    pub is_carried: bool,
 }
 
 #[cfg(test)]

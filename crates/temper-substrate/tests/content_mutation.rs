@@ -346,7 +346,9 @@ async fn revise_accretes_a_second_source(pool: sqlx::PgPool) {
     .await
     .expect("revise");
 
-    // Two provenance rows on the resource's block, both source_ids present.
+    // Two provenance rows on the resource, both source_ids present: source B asserted fresh on
+    // the live section, source A history on the folded incumbent (its content was rewritten
+    // away — content-gone rows stay reference, they do not feed live standing).
     let count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM kb_block_provenance p JOIN kb_content_blocks b ON b.id=p.block_id \
          WHERE b.resource_id=$1 AND NOT p.is_corrected",
@@ -357,10 +359,48 @@ async fn revise_accretes_a_second_source(pool: sqlx::PgPool) {
     .unwrap();
     assert_eq!(
         count, 2,
-        "create source A + revise source B accrete two rows"
+        "create source A (folded history) + revise source B (live) — two rows"
     );
 
-    // The already-wired read signal reflects the accretion.
+    // The already-wired read signal reflects LIVE sources only: A's content was rewritten away,
+    // so its citation feeds standing as history on the folded block, never from live prose.
+    let reinforce: i64 = sqlx::query_scalar(
+        "SELECT reinforce_count FROM resource_blocks($1, 'profile', $2, NULL) LIMIT 1",
+    )
+    .bind(resource.uuid())
+    .bind(owner)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        reinforce, 1,
+        "only the live section's source reinforces standing"
+    );
+
+    // Accretion across events: an identical rewrite carrying a THIRD source keeps the section
+    // (kept, no re-mint) and appends C alongside B — two live rows, two events.
+    let src_c = uuid::Uuid::now_v7();
+    writes::update_resource_with(
+        &pool,
+        UpdateParams {
+            resource,
+            body: Some("a revised body about staged rollout and canary cadence over regions"),
+            title: None,
+            origin_uri: None,
+            properties: &[],
+            chunks: None,
+            sources: vec![Incorporation {
+                source: ProvenanceSource::Resource(src_c),
+                seq: 2,
+            }],
+            content_block: None,
+            rehome_to: None,
+            emitter: EntityId::from(emitter),
+        },
+        EventContext::default(),
+    )
+    .await
+    .expect("re-revise");
     let reinforce: i64 = sqlx::query_scalar(
         "SELECT reinforce_count FROM resource_blocks($1, 'profile', $2, NULL) LIMIT 1",
     )
@@ -371,7 +411,7 @@ async fn revise_accretes_a_second_source(pool: sqlx::PgPool) {
     .unwrap();
     assert_eq!(
         reinforce, 2,
-        "resource_blocks.reinforce_count reflects both sources"
+        "the kept section accreted source C across events (B + C live)"
     );
 }
 

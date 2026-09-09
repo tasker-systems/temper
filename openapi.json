@@ -10533,6 +10533,10 @@
             "type": "string",
             "format": "date-time"
           },
+          "is_carried": {
+            "type": "boolean",
+            "description": "Carried attribution: `true` for a split/absorbed COPY written by a re-block or a\nwhole-body replace — this block holds only part of the content the source once covered\n(or a duplicate of it), distinguishable at row grain from a direct assertion, never\nreadable as direct. `false` — the serde default, so a NEW client reading an OLD server\n(deploy skew, field absent on the wire) parses, reading unmarked rows as asserted, which\nis exactly what they were."
+          },
           "source_id": {
             "type": "string",
             "format": "uuid",

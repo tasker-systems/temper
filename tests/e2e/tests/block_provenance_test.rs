@@ -345,7 +345,11 @@ async fn sources_round_trip_through_cli_api_db(pool: sqlx::PgPool) {
     assert_eq!(prov[0].source_id, source1);
     assert_eq!(prov[0].accretion_seq, 0);
 
-    // ---- Update the distilled body attributing it to source2 → accretion ----
+    // ---- Update attributing it to source2 → accretion ----
+    // The body stays STABLE: an accreting update is an assertion-only whole-body write (the
+    // section keeps, the new source appends across events), so BOTH sources stay live. (A
+    // rewriting update makes the prior source's content content-gone — history on the folded
+    // block, never a live citation; asserted in the rewrite leg below.)
     let api_url = format!("http://{}", app.addr);
     let token = app.token.clone();
     let global_config = global_config_path(&app);
@@ -353,7 +357,11 @@ async fn sources_round_trip_through_cli_api_db(pool: sqlx::PgPool) {
     let distilled_ref = distilled.to_string();
     let source2_ref = source2.to_string();
     let upd_body = app.vault_dir.path().join("distilled-v2.md");
-    std::fs::write(&upd_body, "# Distilled Note\n\nNow also from source two.\n").unwrap();
+    std::fs::write(
+        &upd_body,
+        "# Distilled Note\n\nDistilled from source one.\n",
+    )
+    .unwrap();
     let upd_body_flag = format!("@{}", upd_body.display());
     tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url, &token, &global_config), || {
@@ -406,6 +414,72 @@ async fn sources_round_trip_through_cli_api_db(pool: sqlx::PgPool) {
     assert!(
         source_ids.contains(&source1) && source_ids.contains(&source2),
         "both sources present after accretion; got {prov2:?}"
+    );
+
+    // ---- Rewrite leg: an update that rewrites the source-one prose away is ruled content-gone —
+    // source1 feeds standing as history on the folded block, never as a live citation. ----
+    let upd3_body = app.vault_dir.path().join("distilled-v3.md");
+    std::fs::write(
+        &upd3_body,
+        "# Distilled Note\n\nNow also from source two.\n",
+    )
+    .unwrap();
+    let upd3_body_flag = format!("@{}", upd3_body.display());
+    let api_url3 = format!("http://{}", app.addr);
+    let token3 = app.token.clone();
+    let global_config3 = global_config_path(&app);
+    let cli_config3 = app.cli_config.clone();
+    let distilled_ref3 = distilled.to_string();
+    let source2_ref3 = source2.to_string();
+    tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(cloud_env(&api_url3, &token3, &global_config3), || {
+            let sources = [source2_ref3];
+            let params = temper_cli::commands::resource::UpdateParams {
+                open_meta: None,
+                open_meta_add: None,
+                goal: None,
+                clear_goal: false,
+                r#ref: &distilled_ref3,
+                type_to: None,
+                context_to: None,
+                title: None,
+                tags: &[],
+                aliases: &[],
+                relates_to: &[],
+                references: &[],
+                depends_on: &[],
+                extends: &[],
+                preceded_by: &[],
+                derived_from: &[],
+                stage: None,
+                mode: None,
+                effort: None,
+                seq: None,
+                branch: None,
+                pr: None,
+                status: None,
+                body: Some(upd3_body_flag),
+                sources: &sources,
+                content_block: None,
+                format: temper_cli::format::OutputFormat::Json,
+                act: Default::default(),
+            };
+            temper_cli::commands::resource::update(&cli_config3, &params)
+                .expect("rewriting update should succeed")
+        })
+    })
+    .await
+    .expect("spawn_blocking joined");
+    let prov3 = app
+        .client
+        .resources()
+        .provenance(distilled)
+        .await
+        .expect("provenance read after rewrite");
+    let live_ids: Vec<uuid::Uuid> = prov3.iter().map(|r| r.source_id).collect();
+    assert!(
+        !live_ids.contains(&source1) && live_ids.contains(&source2),
+        "a content-gone source leaves the live citation set; got {prov3:?}"
     );
 
     // ---- Assertion 3: the CLI `show --provenance` surface returns cleanly ----

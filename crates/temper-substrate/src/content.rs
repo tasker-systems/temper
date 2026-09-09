@@ -131,7 +131,7 @@ fn plan_chunks_with_prefix(
 /// Collapsing the two (the pre-streaming rule: `depth == 0 ⇒ both NULL`) was invisible while every
 /// chunk with depth 0 also had an empty path. A segment cut mid-section produces depth 0 *with* an
 /// ancestor path, and the old rule silently discarded that breadcrumb.
-fn map_heading(header_path: String, heading_depth: u8) -> (Option<String>, Option<i16>) {
+pub(crate) fn map_heading(header_path: String, heading_depth: u8) -> (Option<String>, Option<i16>) {
     let path = (!header_path.is_empty()).then_some(header_path);
     let depth = (heading_depth > 0).then_some(heading_depth as i16);
     (path, depth)
