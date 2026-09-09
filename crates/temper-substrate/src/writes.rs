@@ -1047,6 +1047,8 @@ fn compute_reblock_partition(
     let mut created: Vec<payloads::ReblockCreatedBlock> = Vec::new();
     let mut slices_out: Vec<(BlockId, String)> = Vec::new();
     let mut claimed: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
+    // Section k's surviving block, kept or created — the disposition map's successor names.
+    let mut section_block_ids: Vec<BlockId> = Vec::with_capacity(sections.len());
 
     for (k, (text, _)) in sections.iter().enumerate() {
         let (start, end) = section_ranges[k];
@@ -1071,6 +1073,7 @@ fn compute_reblock_partition(
         match incumbent {
             Some(b) => {
                 claimed.insert(b.id);
+                section_block_ids.push(BlockId::from(b.id));
                 kept.push(payloads::ReblockKeptBlock {
                     block_id: BlockId::from(b.id),
                     seq: k as i32,
@@ -1081,6 +1084,7 @@ fn compute_reblock_partition(
             }
             None => {
                 let new_id = BlockId::from(Uuid::now_v7());
+                section_block_ids.push(new_id);
                 created.push(payloads::ReblockCreatedBlock {
                     block_id: new_id,
                     seq: k as i32,
@@ -1190,6 +1194,32 @@ fn compute_reblock_partition(
         return Ok(Partition::NoOp);
     }
 
+    // The disposition map (D-D2): where each folded incumbent's content went, captured HERE —
+    // one step before the attribution delta drops incumbent identity — by the same positional
+    // geometry the delta consumes. Absorbers are sections fully containing the incumbent's
+    // chunk run (kept AND created); carries are sections holding a strict subset (a partial
+    // overlap, kept or created — content location, not the delta's write targets). A chunkless
+    // incumbent has no entry in `block_range`: no geometry, nothing locatable.
+    let mut dispositions: payloads::FoldDispositions = payloads::FoldDispositions::new();
+    for b in live_blocks.iter().filter(|b| !claimed.contains(&b.id)) {
+        let disposition = match block_range.get(&b.id) {
+            None => payloads::FoldDisposition::ContentGone,
+            Some(&(start, end)) => {
+                let mut absorbers = Vec::new();
+                let mut carried = Vec::new();
+                for (k, &(s_start, s_end)) in section_ranges.iter().enumerate() {
+                    if start >= s_start && end <= s_end {
+                        absorbers.push(section_block_ids[k]);
+                    } else if start < s_end && end > s_start {
+                        carried.push(section_block_ids[k]);
+                    }
+                }
+                payloads::FoldDisposition::from_geometry(absorbers, carried)
+            }
+        };
+        dispositions.insert(BlockId::from(b.id), disposition);
+    }
+
     Ok(Partition::Plan(ReblockPlan {
         manifest: payloads::ResourceReblocked {
             resource_id: resource,
@@ -1197,6 +1227,7 @@ fn compute_reblock_partition(
             kept,
             folded,
             replaces_body: false,
+            dispositions,
         },
         slices: slices_out,
     }))
@@ -1583,6 +1614,45 @@ fn compute_replace_partition(
         return Ok(None);
     }
 
+    // The disposition map (D-D2): where each folded incumbent's content went, captured HERE —
+    // one step before the attribution delta drops incumbent identity — by the same
+    // hash-multiset geometry the delta consumes. Created absorbers are the COMMON case on this
+    // arm (a rewritten-away incumbent is absorbed into a freshly minted section), so absorbers
+    // name kept AND created blocks. A chunkless incumbent has no entry in `block_hashes`: no
+    // geometry, its disposition is content-gone — the named arm, not an inference.
+    let mut dispositions: payloads::FoldDispositions = payloads::FoldDispositions::new();
+    for b in live_blocks.iter().filter(|b| !claimed.contains(&b.id)) {
+        let disposition = match block_hashes.get(&b.id) {
+            None => payloads::FoldDisposition::ContentGone,
+            Some(hashes) => {
+                // Multiplicity-aware: the section must hold every hash as often as the
+                // incumbent does (the same containment the delta's absorbed[] computes).
+                let mut need: std::collections::HashMap<&str, usize> =
+                    std::collections::HashMap::new();
+                for h in hashes {
+                    *need.entry(h).or_default() += 1;
+                }
+                let mut absorbers = Vec::new();
+                let mut carried = Vec::new();
+                for (k, counts) in section_counts.iter().enumerate() {
+                    let section_id = match &slots[k] {
+                        Slot::Kept { block_id, .. } | Slot::Created { block_id, .. } => *block_id,
+                    };
+                    if need
+                        .iter()
+                        .all(|(h, n)| counts.get(h).is_some_and(|c| c >= n))
+                    {
+                        absorbers.push(section_id);
+                    } else if hashes.iter().any(|h| counts.contains_key(h)) {
+                        carried.push(section_id);
+                    }
+                }
+                payloads::FoldDisposition::from_geometry(absorbers, carried)
+            }
+        };
+        dispositions.insert(BlockId::from(b.id), disposition);
+    }
+
     // The sidecar chunk set: every CREATED block's prepared chunks, renumbered per block, in
     // manifest order. Kept blocks' chunks ride their untouched rows and contribute nothing.
     let mut chunks_out: Vec<crate::content::PreparedChunk> = Vec::new();
@@ -1617,6 +1687,7 @@ fn compute_replace_partition(
             kept,
             folded,
             replaces_body: true,
+            dispositions,
         },
         slices: slices_out,
         chunks: chunks_out,

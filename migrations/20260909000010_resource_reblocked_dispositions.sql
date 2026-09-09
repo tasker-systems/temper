@@ -1,4 +1,15 @@
-{
+-- The per-folded-id disposition map on `resource_reblocked` (the defined-dangling-state
+-- design, D-D2): `ResourceReblocked` gains `dispositions` — for each folded incumbent, the
+-- surviving blocks holding its content (absorbers = full chunk-hash multiset, kept AND
+-- created; carried = strict subsets) or the content-gone arm. Additive payload-schema change,
+-- `serde(default)`: absent key = no mapping recorded, the defined `unrecorded` disposition on
+-- every reading surface — never a guess. Both Rust arms (shipped op, whole-body replace)
+-- populate it at computation time; both fold faces write through the same projector, which
+-- does not read the map — no projector change rides this stamp. Registry re-stamp: the
+-- regenerated fixture, byte for byte (repo == registry == Rust types). `_event_append` does
+-- NOT validate payloads against this column (20260624000002), so the re-stamp rides migration
+-- application, not a deploy gate. Additive posture — `schema_version` stays 1.
+UPDATE kb_event_types SET payload_schema = $JS${
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ResourceReblocked",
   "description": "`resource_reblocked` — re-cut one resource's blocks along section boundaries (the re-block\nsubstrate, task 2026-09-04).\n\nThe manifest IS the operation: the mapping rides in the payload and replay re-derives\nnothing. Three arms, mutually exhaustive over the resource's incumbent live blocks —\n`folded` (superseded in place, history intact), `created` (fresh blocks holding\nreassigned EXISTING chunks), and `kept` (rows that already carry exactly one section's\ncontent, named by derived-hash identity, never by a heuristic). Pure metadata: no content\nrewrite, no re-embed — `body = concat(blocks ORDER BY seq)` composes identically before\nand after, which is the invariant the payload exists to preserve.",
@@ -263,3 +274,5 @@
     }
   }
 }
+$JS$::jsonb
+WHERE name = 'resource_reblocked';
