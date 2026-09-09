@@ -16,6 +16,13 @@
 
 <!-- What was run, and what a reviewer can re-run. Name the test that fails if this regresses. -->
 
+## Compat class
+
+<!-- Declared wire-compat class(es): `additive` / `shape-breaking` / `behavioral`. List every
+     class this PR carries, plus the row it lands in RELEASE_REGISTER.md (same PR). `none` only
+     when no wire surface changes (HTTP/MCP shapes, CLI stdout, client skins, schema). CI checks
+     the declaration against the diff; the behavioral class is review's, not CI's. -->
+
 <!-- ─────────────────────────────────────────────────────────────────────────────────────────
      Four rules. Full reasoning: internal/agents/conventions.md → "PR descriptions".
 
