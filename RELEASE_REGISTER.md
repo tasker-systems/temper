@@ -111,6 +111,19 @@ classes: behavioral
 surfaces: clients, http, mcp, cli-stdout
 status: blocked:first block-aware client release at scale
 
+- **This branch — the semver mechanism itself: version plumbing with no shape movement (spec D-S3)**
+  The release spine lands (`tools/scripts/release/`), the PR compat-class declaration field and
+  this register arrive, and `openapi.json` `info.version` now derives from `VERSION` at emit
+  time — the live 0.1.0-vs-0.4.0 divergence closes (spec D-S3). The `openapi.json` diff is
+  info.version-only: 0.1.0 → 0.4.0 with the jq-stripped base and head identical, no shape
+  movement; the generated client cores (temper-rb, temper-py) re-staled with the bump, resting
+  the same shapes against the same paths. Existing clients observe nothing but the version
+  string.
+pr: self
+classes: additive
+surfaces: http, clients
+status: signal-only
+
 ## Pre-policy (classified retroactively)
 
 - **PR #858 — wire half: graph-edge listing DTO reshaped (`peer_resource_id!` → `peer_id!`)**
