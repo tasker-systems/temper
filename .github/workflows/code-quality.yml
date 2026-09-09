@@ -478,11 +478,29 @@ jobs:
           GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: bash .github/scripts/sqlx-schema-crosscheck.sh
 
+      # The wire half of the declared-class gate (shared-semver-policy spec §4, D-S4): every PR
+      # touching a wire surface (temper-api/temper-mcp/temper-client, openapi.json, clients/,
+      # packages/) lands its compat-class row in RELEASE_REGISTER.md, and this cross-check
+      # verifies the mechanical half — row presence, register well-formedness, and that the
+      # declared shape class survives the actual openapi diff (anything beyond .info.version).
+      # It sits below the SQL cross-check deliberately: same predicate, same asymmetry, second
+      # wire. And it is MORE barred than that one — behavior is not in any diff, so a green
+      # run here can never certify the behavioral class; the script's output says so on every
+      # pass. jq is preinstalled on the runner; no toolchain, so it lives in this job.
+      - name: Wire-touching PRs declare their compat class (register cross-check)
+        env:
+          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: bash .github/scripts/wire-class-crosscheck.sh
+
       - name: Guard test — sqlx-wire-diff
         run: bash .github/scripts/test-sqlx-wire-diff.sh
 
       - name: Guard test — sqlx-schema-crosscheck
         run: bash .github/scripts/test-sqlx-schema-crosscheck.sh
+
+      - name: Guard test — wire-class-crosscheck
+        run: bash .github/scripts/test-wire-class-crosscheck.sh
 
       # The Ignored Build Step's polarity is inverted (exit 0 skips, exit 1 builds), so a
       # sign error there stops production deploying while every check stays green. This
