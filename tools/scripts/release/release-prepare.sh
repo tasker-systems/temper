@@ -108,7 +108,7 @@ log_info "gh CLI available"
 log_section "Detecting changes and calculating versions"
 
 CALC_OUTPUT="$("${SCRIPT_DIR}/calculate-versions.sh" ${CALC_ARGS[@]+"${CALC_ARGS[@]}"})" \
-    || die "calculate-versions.sh refused this release (see the register gate output above)"
+    || die "calculate-versions.sh failed (register gates refuse, or a version site was unreadable — see its output above)"
 eval "$CALC_OUTPUT"
 
 log_info "Base ref: ${CHANGES_BASE_REF}"
