@@ -65,6 +65,7 @@ kb_profiles.handle                        | identifier    | full      | also den
 kb_profiles.display_name                  | identifier    | full      | also denormalized into kb_teams.name — see below
 kb_profiles.preferences                   | incidental    | full      | open jsonb, user-controlled
 kb_profiles.created                       | none          | n-a       |
+kb_profiles.tombstoned_at                 | none          | n-a       | the erasure act's own marker (D5): WHEN the pseudonym broke — act metadata, not an identifier; the identifier nulling happens in the same act
 kb_profile_auth_links.id                  | none          | n-a       | surrogate
 kb_profile_auth_links.profile_id          | reference     | pseudonym |
 kb_profile_auth_links.email               | identifier    | full      |
@@ -142,7 +143,7 @@ kb_oauth_refresh_tokens.claims            | identifier    | full      | IdP clai
 
 # ── pseudonymous references; each ceases to identify when the profile is tombstoned ──────────
 kb_access_grants.granted_by_profile_id    | reference     | pseudonym |
-kb_blobs.owner_profile_id                 | reference     | pseudonym | bytes live in object storage; erasure empties the row; the BYTES are NOT yet erasure-reachable — no reconciler exists, BlobStore has no delete verb; D5 (spec 2026-09-01) is the designed end state, unbuilt, owned by the erasure composition build (01a05d01); home folded into the row (20260903000060)
+kb_blobs.owner_profile_id                 | reference     | pseudonym | bytes live in object storage; erasure empties the row; the delete verb landed (BlobStore::delete, 2026-09-06) and erasure-reachability IS the erasure build in flight (01a0577c) — the strike's byte fate + the erasure queue's fence are that build's work; home folded into the row (20260903000060)
 kb_blobs.originator_profile_id            | reference     | pseudonym |
 kb_blob_uploads.owner_profile_id          | reference     | pseudonym | staged-upload transport state (D7); pre-ledger, no event/replay copy; segments cascade when the session row goes
 kb_citation_audits.audited_by_profile_id  | reference     | pseudonym |

@@ -247,6 +247,12 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             // NULL-anchored, content-free shape as the ledger events above.
             | EventKind::PrincipalStandingChanged
             | EventKind::PrincipalGovernanceChanged
+            // The erasure act's admin pair (spec 2026-08-31): authority acts about a PERSON,
+            // never knowledge. Same NULL-anchored, content-free shape — and the redaction
+            // pre-pass that will READ principal_erased is a later build; the walk posture is
+            // already the right one (no sidecar, no cognition half).
+            | EventKind::PrincipalErased
+            | EventKind::PrincipalErasureRefused
             // A delivery disposition (S2 chunk C) carries reasoning and confidence, not content:
             // no blocks, no chunks, no sidecar. A received webhook (S2 chunk B) carries the
             // remote's verbatim body — foreign content temper did not author and does not chunk.
@@ -265,8 +271,11 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             // output. A blob strike (20260906000010) is the same shape: identity-only payload,
             // the bytes are external and were released (or not) by the live-row refcount —
             // replay re-empties the row via the idempotent projector, it never touches bytes.
+            // The ERASURE arm (`blob_erased`) is the identical shape through the same
+            // projector — the vocabulary differs, the sidecar posture does not.
             | EventKind::BlobCommitted
             | EventKind::BlobDeleted
+            | EventKind::BlobErased
             | EventKind::WebhookReceived => None,
         }
         .context("content-bearing payload missing blocks")?;
@@ -533,6 +542,15 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     .fetch_one(pool)
                     .await?;
             }
+            EventKind::BlobErased => {
+                // The erasure arm of the same act: the SAME idempotent projector re-empties
+                // the row into the identical D5.2 shape — replay reproduces the emptied state
+                // without knowing or caring which act struck the row, because no row-shape
+                // marker of the act exists. No sidecar, macro form, same reasons as above.
+                sqlx::query!("SELECT _project_blob_deleted($1,$2)", id, payload)
+                    .fetch_one(pool)
+                    .await?;
+            }
             EventKind::BlockMutated => {
                 let side = snap.sidecars.get(&id).context("missing sidecar")?;
                 sqlx::query("SELECT _project_block_mutated($1,$2,$3)")
@@ -754,6 +772,13 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // kb_principal_governance input tables, not rebuilt from these events.
             | EventKind::PrincipalStandingChanged
             | EventKind::PrincipalGovernanceChanged
+            // The erasure act's admin pair (spec 2026-08-31, D1/D6): NULL-anchored admin events
+            // with no cognition half — the walk is a no-op. In THIS build the erased-content
+            // set and the profile tombstone are maintained by the erasure execution, not by
+            // the walk; the redaction pre-pass that reads principal_erased during a walk is a
+            // later beat, and this no-op posture stays correct until it lands.
+            | EventKind::PrincipalErased
+            | EventKind::PrincipalErasureRefused
             // A received webhook (S2 chunk B) touches no _project_* cognition half: intake appends
             // the event and projects delivery rows in Rust, in the same transaction. Without this
             // arm `replay()` errored with "no projector for event type webhook_received" against

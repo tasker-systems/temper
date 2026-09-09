@@ -123,6 +123,15 @@ pub enum EventKind {
     /// from the same transition functions, paired with a standing change when a demote is a
     /// consequence of `Revoke`/`Deactivate`.
     PrincipalGovernanceChanged,
+    /// The erasure act's completion event (spec 2026-08-31, D1) — the ONE admin event of a
+    /// completed erasure, identity + content as payload data. Category `admin`, NULL-anchored
+    /// (the cognition firewall): an authority act has no cognition home. TYPED, registered by
+    /// the erasure vocabulary migration; execution lands with the erasure build.
+    PrincipalErased,
+    /// The erasure act's refusal face (spec 2026-08-31, D6) — one type, three reason codes in
+    /// the payload. Same `admin` / NULL-anchored posture. TYPED; execution lands with the
+    /// erasure build.
+    PrincipalErasureRefused,
     /// An auditor's signed verdict on one `(block, source)` citation (Set 5, spec §4.1-4.2).
     /// Append-only — fires `citation_audited`, projected by `_project_citation_audited` into
     /// `kb_citation_audits` with no supersession. Registered permissive (NULL `payload_schema`),
@@ -156,6 +165,14 @@ pub enum EventKind {
     /// substrate (`20260906000010`); the erasure arm registers and fires its OWN type through
     /// the same SQL wrapper and projector, which take the event type as a parameter.
     BlobDeleted,
+    /// Erase one blob — the ERASURE arm's strike vocabulary (ruled 2026-09-06: the erasure arm
+    /// registers and fires its OWN type through the shared wrapper). Fires `blob_erased`,
+    /// projected by the SAME `_project_blob_deleted`: the row empties into the identical D5.2
+    /// shape — no row-shape marker of which act emptied it exists, the ledger alone tells
+    /// delete from erasure, and the strike folds no edge. TYPED, category `domain` (the
+    /// wrapper refuses anything else in its own voice), registered by the erasure vocabulary
+    /// migration.
+    BlobErased,
 }
 
 impl EventKind {
@@ -198,10 +215,13 @@ impl EventKind {
             EventKind::SubscriptionDeliveryDisposed => "subscription_delivery_disposed",
             EventKind::PrincipalStandingChanged => "principal_standing_changed",
             EventKind::PrincipalGovernanceChanged => "principal_governance_changed",
+            EventKind::PrincipalErased => "principal_erased",
+            EventKind::PrincipalErasureRefused => "principal_erasure_refused",
             EventKind::CitationAudited => "citation_audited",
             EventKind::BlobCommitted => "blob_committed",
             EventKind::ResourceReblocked => "resource_reblocked",
             EventKind::BlobDeleted => "blob_deleted",
+            EventKind::BlobErased => "blob_erased",
         }
     }
 
@@ -249,10 +269,13 @@ impl EventKind {
             "subscription_delivery_disposed" => EventKind::SubscriptionDeliveryDisposed,
             "principal_standing_changed" => EventKind::PrincipalStandingChanged,
             "principal_governance_changed" => EventKind::PrincipalGovernanceChanged,
+            "principal_erased" => EventKind::PrincipalErased,
+            "principal_erasure_refused" => EventKind::PrincipalErasureRefused,
             "citation_audited" => EventKind::CitationAudited,
             "blob_committed" => EventKind::BlobCommitted,
             "resource_reblocked" => EventKind::ResourceReblocked,
             "blob_deleted" => EventKind::BlobDeleted,
+            "blob_erased" => EventKind::BlobErased,
             _ => return None,
         })
     }
@@ -428,6 +451,11 @@ pub enum SeedAction<'a> {
     /// returns whether the provider bytes are releasable — the CALLER deletes them after the
     /// commit (a provider call cannot join the transaction).
     BlobDelete { blob: BlobId, emitter: EntityId },
+    /// Erase one blob (the erasure act's strike arm). Same act as [`SeedAction::BlobDelete`]
+    /// through the SAME act-parameterized wrapper — same D5.2 emptying, same byte fate, no
+    /// edge touched — speaking the ERASURE vocabulary (`blob_erased`): the ledger alone tells
+    /// the two acts apart.
+    BlobErase { blob: BlobId, emitter: EntityId },
     LensCreate {
         /// `None` ⇒ a global system lens (`cogmap_id NULL`).
         cogmap: Option<CogmapId>,
@@ -626,6 +654,7 @@ impl SeedAction<'_> {
             SeedAction::ShapeDeclare { .. } => EventKind::ShapeDeclared,
             SeedAction::BlobCommit { .. } => EventKind::BlobCommitted,
             SeedAction::BlobDelete { .. } => EventKind::BlobDeleted,
+            SeedAction::BlobErase { .. } => EventKind::BlobErased,
             SeedAction::LensCreate { .. } => EventKind::LensCreated,
             SeedAction::Materialize { .. } => EventKind::RegionMaterialized,
             SeedAction::SalienceRefresh { .. } => EventKind::SalienceRefreshed,
@@ -1456,6 +1485,39 @@ pub async fn fire_with(
                 // sqlx cannot see through them — but the body guarantees all three on the
                 // success path: the struck row's id, its release verdict, and its pathname
                 // (an already-struck row RAISES, it never returns a null-shaped row).
+                blob: BlobId::from(
+                    row.blob_id
+                        .expect("blob_delete returns the struck row's id"),
+                ),
+                released: row
+                    .released
+                    .expect("blob_delete always returns a release verdict"),
+                pathname: row
+                    .pathname
+                    .expect("blob_delete returns the live row's pathname — absence RAISEs"),
+            })
+        }
+
+        SeedAction::BlobErase { blob, emitter } => {
+            // The ERASURE arm of the same act: identity-only payload (the exact BlobDeleted
+            // shape) through the SAME act-parameterized wrapper + projector. Nothing is
+            // duplicated here but the vocabulary — the row shape and byte fate are the
+            // wrapper's, and no row-shape marker of which act emptied may ever exist.
+            let payload = payloads::BlobErased { blob_id: blob };
+            let row = sqlx::query!(
+                r#"SELECT blob_id, released, pathname
+                     FROM blob_delete($1,$2,$3,$4,$5,$6)"#,
+                EventKind::BlobErased.as_canonical_name(),
+                serde_json::to_value(&payload)?,
+                emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
+                ctx_corr,
+            )
+            .fetch_one(&mut *conn)
+            .await
+            .context("blob_delete returned no row")?;
+            Ok(Fired::BlobStrike {
                 blob: BlobId::from(
                     row.blob_id
                         .expect("blob_delete returns the struck row's id"),

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BlobErased",
+  "description": "Erase one blob — the erasure act's OWN strike vocabulary, fired through the SAME\n`blob_delete` wrapper and `_project_blob_deleted` projector as [`BlobDeleted`] (ruled\n2026-09-06: the emptying shape and the byte fate are shared, the vocabulary never is).\nIdentity-only, the exact `BlobDeleted` shape: the envelope carries the home (producing\nanchor), the actor (`emitter_entity_id`), and the time (`occurred_at`).\n\nThe row empties into the IDENTICAL D5.2 shape — there is deliberately no row-shape marker\nof which act emptied it, and the ledger alone tells delete from erasure. Attribution dies\nhere (never at a delete): the pseudonym break is the erasure act's work, not this event's\nrow write. The hash stays — it is the erased-content set's key (D4), which refuses\nre-admission of the erased bytes.",
+  "type": "object",
+  "properties": {
+    "blob_id": {
+      "$ref": "#/$defs/BlobId"
+    }
+  },
+  "required": [
+    "blob_id"
+  ],
+  "$defs": {
+    "BlobId": {
+      "description": "A `kb_blobs.id` value — one immutable, content-addressed binary blob, homed like a\nresource and related to resources by edges (spec: binary blobs, 2026-09-01).",
+      "type": "string",
+      "format": "uuid"
+    }
+  }
+}

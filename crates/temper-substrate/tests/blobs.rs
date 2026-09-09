@@ -1147,6 +1147,188 @@ async fn replay_reproduces_a_strike(pool: sqlx::PgPool) {
     assert!(!folded, "the strike's edge stays unfolded after replay");
 }
 
+// ── the erasure act's strike arm (Beat 1, the erasure vocabulary) ────────────────────────────
+// The ruled shape: the erasure arm fires its OWN type (`blob_erased`, category domain) through
+// the UNTOUCHED `blob_delete` wrapper + `_project_blob_deleted` projector; the row empties into
+// the identical D5.2 shape — no row-shape marker of which act emptied it exists — and the
+// erasure admin vocabulary (`principal_erased`) is REFUSED by the wrapper's domain guard, in
+// its own voice.
+
+/// FAILS IF: the erasure arm's strike does not land as a per-row domain event — the fired
+/// event must be `blob_erased`/`domain`/home-anchored, the row must empty into the D5.2
+/// shape (pathname/type/bytes nulled; hash, home, owner KEPT — attribution breaks only at
+/// the later pseudonym break, never at the strike), and the byte-fate verdict must come back.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_erasure_strike_fires_blob_erased_through_the_shared_wrapper(pool: sqlx::PgPool) {
+    use temper_substrate::events::{fire, SeedAction};
+
+    let (owner, emitter, home) = blob_world(&pool, "erase-strike-shape").await;
+    let store = InMemoryBlobStore::default();
+    let (p, hash, pathname) = params(home, owner, b"erase-me", "image/png", emitter);
+    store.insert(pathname.clone());
+    let blob = writes::commit_blob(&pool, &store, p).await.unwrap();
+
+    let mut tx = pool.begin().await.unwrap();
+    let (struck_blob, released, struck_path) =
+        fire(&mut tx, SeedAction::BlobErase { blob, emitter })
+            .await
+            .unwrap()
+            .blob_strike()
+            .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(struck_blob, blob);
+    assert!(
+        released,
+        "the only live row carrying the hash releases its bytes"
+    );
+    assert_eq!(struck_path, pathname);
+
+    // The D5.2 emptied row — identical to a delete's, by ruling: NO second marker.
+    let row: (
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        String,
+        String,
+        String,
+    ) = sqlx::query_as(
+        "SELECT blob_pathname, content_type, content_bytes, content_hash, \
+                    home_table, owner_profile_id::text \
+               FROM kb_blobs WHERE id = $1",
+    )
+    .bind(blob.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let (p_path, p_type, p_bytes, r_hash, r_home, r_owner) = row;
+    assert!(p_path.is_none(), "the emptied row carries no pathname");
+    assert!(p_type.is_none(), "the emptied row carries no content type");
+    assert!(p_bytes.is_none(), "the emptied row carries no byte count");
+    assert_eq!(r_hash, hash, "the hash survives the erasure strike");
+    assert_eq!(
+        r_home, "kb_contexts",
+        "the home survives the erasure strike"
+    );
+    assert_eq!(
+        r_owner,
+        owner.uuid().to_string(),
+        "attribution survives the strike — it dies only at the pseudonym break"
+    );
+
+    // The event: the erasure act's own type, domain category, home-anchored, identity-only.
+    let ev: (String, String) = sqlx::query_as(
+        "SELECT et.name, et.category::text \
+           FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+          WHERE e.payload->>'blob_id' = $1 AND et.name = 'blob_erased'",
+    )
+    .bind(blob.uuid().to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(ev, ("blob_erased".into(), "domain".into()));
+    let anchored: (String, Uuid) = sqlx::query_as(
+        "SELECT producing_anchor_table, producing_anchor_id FROM kb_events \
+          WHERE payload->>'blob_id' = $1 AND event_type_id = \
+                (SELECT id FROM kb_event_types WHERE name = 'blob_erased')",
+    )
+    .bind(blob.uuid().to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(anchored.0, "kb_contexts");
+    assert_eq!(anchored.1, home.uuid());
+}
+
+/// FAILS IF: the wrapper accepts the erasure act's ADMIN vocabulary (or refuses it in any
+/// voice but its own) — `principal_erased` is registered admin, and a strike may only fire a
+/// DOMAIN type. The refusal appends nothing and empties nothing.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_wrapper_refuses_the_erasure_admin_vocabulary_in_its_own_voice(pool: sqlx::PgPool) {
+    let (owner, emitter, home) = blob_world(&pool, "erase-vocab").await;
+    let store = InMemoryBlobStore::default();
+    let (p, _hash, pathname) = params(home, owner, b"admin-vocab-bytes", "image/png", emitter);
+    store.insert(pathname);
+    let blob = writes::commit_blob(&pool, &store, p).await.unwrap();
+
+    // `principal_erased` is registered and real — and admin, not domain.
+    let payload = serde_json::json!({ "blob_id": blob.uuid() });
+    let err = sqlx::query("SELECT * FROM blob_delete($1,$2,$3)")
+        .bind("principal_erased")
+        .bind(payload)
+        .bind(emitter.uuid())
+        .execute(&pool)
+        .await
+        .unwrap_err();
+    let chain = err.to_string();
+    assert!(
+        chain.contains("not a registered domain event type"),
+        "{chain}"
+    );
+
+    // Nothing was appended under either name and the row is still live.
+    let events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+          WHERE et.name IN ('principal_erased', 'blob_erased') \
+            AND e.payload->>'blob_id' = $1",
+    )
+    .bind(blob.uuid().to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(events, 0, "the refused strike appended nothing");
+    let live: bool =
+        sqlx::query_scalar("SELECT content_type IS NOT NULL FROM kb_blobs WHERE id = $1")
+            .bind(blob.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(live, "the refused strike emptied nothing");
+}
+
+/// FAILS IF: replay of a ledger carrying an ERASURE strike resurrects the row or desyncs a
+/// sibling projection — the emptied state must reproduce exactly, through the same shared
+/// projector the delete arm uses.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn replay_reproduces_an_erasure_strike(pool: sqlx::PgPool) {
+    use temper_substrate::events::{fire, SeedAction};
+    use temper_substrate::replay;
+
+    let (owner, emitter, home) = blob_world(&pool, "erase-strike-replay").await;
+    let store = InMemoryBlobStore::default();
+    let bytes = b"erased-replayed".to_vec();
+    let (p, _hash, pathname) = params(home, owner, &bytes, "image/png", emitter);
+    store.insert(pathname);
+    let blob = writes::commit_blob(&pool, &store, p).await.unwrap();
+
+    let mut tx = pool.begin().await.unwrap();
+    fire(&mut tx, SeedAction::BlobErase { blob, emitter })
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let before = replay::dump_projections(&pool).await.unwrap();
+    let snap = replay::snapshot(&pool).await.unwrap();
+
+    common::reset_schema(&pool).await;
+    replay::replay(&pool, &snap).await.unwrap();
+
+    let after = replay::dump_projections(&pool).await.unwrap();
+    for ((table_a, a), (_table_b, b)) in before.iter().zip(after.iter()) {
+        assert_eq!(
+            a, b,
+            "projection table {table_a} diverged under replay of an erasure strike"
+        );
+    }
+
+    let emptied: bool =
+        sqlx::query_scalar("SELECT content_type IS NULL FROM kb_blobs WHERE id = $1")
+            .bind(blob.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(emptied, "the erased row stays emptied after replay");
+}
+
 // ── S3: staged uploads — the pre-ledger transport half (D7) ──────────────────────────────────
 // The begin/append/finalize precedent's row mechanics, owned by `temper_substrate::uploads`.
 // What is unknown here, and therefore what these pin:

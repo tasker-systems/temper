@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PrincipalErasureRefused",
+  "description": "`principal_erasure_refused` — the negative face of the erasure act (erasure spec D6).\n\nSame subject spelling as [`PrincipalErased`] (`subject_table` / `subject_id`, never the\ntrail's join-key shapes); the operator is distinguishable from the subject exactly as\nthere. One type with a reason code — three outcomes, not three types.",
+  "type": "object",
+  "properties": {
+    "actor": {
+      "description": "Who ATTEMPTED the erasure — an attempt leaves a trail too.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProfileId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "detail": {
+      "description": "The named unhonourable part, or the obligation held — the reason's evidence.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reason": {
+      "$ref": "#/$defs/ErasureRefusalReason"
+    },
+    "subject_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "subject_table": {
+      "$ref": "#/$defs/AnchorTable"
+    }
+  },
+  "required": [
+    "subject_table",
+    "subject_id",
+    "reason"
+  ],
+  "$defs": {
+    "AnchorTable": {
+      "description": "A polymorphic anchor/endpoint reference. Serializes table names exactly as the DDL spells them.",
+      "type": "string",
+      "enum": [
+        "kb_contexts",
+        "kb_cogmaps",
+        "kb_resources",
+        "kb_edges",
+        "kb_content_blocks",
+        "kb_teams",
+        "kb_profiles",
+        "kb_connections",
+        "kb_machine_clients",
+        "kb_blobs",
+        "kb_events"
+      ]
+    },
+    "ErasureRefusalReason": {
+      "description": "The closed refusal vocabulary for `principal_erasure_refused` (erasure spec D6). A refused\nattempt to erase a person is exactly the event an operator later needs, and the reason code\nis the WHY the subject receives.",
+      "oneOf": [
+        {
+          "description": "The caller lacks erasure standing.",
+          "type": "string",
+          "const": "unauthorized"
+        },
+        {
+          "description": "The scope cannot be honoured in full; the unhonourable part is named in `detail`\n(accepted-in-part lands here, never silent).",
+          "type": "string",
+          "const": "unhonourable_scope"
+        },
+        {
+          "description": "The system holds the data under an obligation, named in `detail`.",
+          "type": "string",
+          "const": "independent_obligation"
+        }
+      ]
+    },
+    "ProfileId": {
+      "description": "A `kb_profiles.id` value.",
+      "type": "string",
+      "format": "uuid"
+    }
+  }
+}
