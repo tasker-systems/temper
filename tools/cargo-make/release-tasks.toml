@@ -24,17 +24,10 @@ script = [
 ]
 
 [tasks.release-prepare-minor]
-description = "Release-prepare with a minor bump (0.1.x -> 0.2.0)"
+description = "Release-prepare with a hand-raised minor (0.4.x -> 0.5.0) — required when the register window carries shape-breaking rows"
 category = "Release"
 script = [
-    "./tools/scripts/release/release-prepare.sh --bump minor"
-]
-
-[tasks.release-prepare-major]
-description = "Release-prepare with a major bump (0.x.y -> 1.0.0)"
-category = "Release"
-script = [
-    "./tools/scripts/release/release-prepare.sh --bump major"
+    "./tools/scripts/release/release-prepare.sh --minor"
 ]
 
 [tasks.skill-package]
