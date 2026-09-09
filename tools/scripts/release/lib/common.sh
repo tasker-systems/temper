@@ -222,17 +222,21 @@ update_package_json_version() {
 register_window_rows() {
     local file="$1"
     if [[ ! -f "$file" ]]; then
-        log_warn "Release register not found: $file"
-        return 0
+        # The register is the durable home of the declared-class gate (spec
+        # §4.1); the calculator is the last line before a release. A missing
+        # register must not render as "zero rows" — that would silence both
+        # gates. The --register flag exists for harness fixtures.
+        log_error "Release register not found: $file"
+        return 1
     fi
 
     local in_window=false citation="" pr="" classes="" surfaces="" status=""
 
     flush_row() {
-        if [[ -n "$citation" ]]; then
+        if [[ "$in_window" == "true" && -n "$citation" ]]; then
             printf '%s\t%s\t%s\t%s\t%s\n' "$pr" "$classes" "$surfaces" "$status" "$citation"
         fi
-        pr=""; classes=""; surfaces=""; status=""
+        citation=""; pr=""; classes=""; surfaces=""; status=""
     }
 
     local line
@@ -248,8 +252,10 @@ register_window_rows() {
                 ;;
             '- **'*)
                 flush_row
-                citation="${line#- \*\*}"
-                citation="${citation%\*\*}"
+                if [[ "$in_window" == "true" ]]; then
+                    citation="${line#- \*\*}"
+                    citation="${citation%\*\*}"
+                fi
                 ;;
             pr:*|classes:*|surfaces:*|status:*)
                 if [[ "$in_window" == "true" ]]; then

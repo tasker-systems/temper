@@ -52,22 +52,28 @@ done
 # ---------------------------------------------------------------------------
 if [[ -n "$FROM_REF" ]]; then
     BASE_REF="$FROM_REF"
-elif BASE_REF=$(git describe --tags --match 'release-*' --abbrev=0 HEAD 2>/dev/null); then
-    : # Found a release-* tag
 elif BASE_REF=$(git describe --tags --match 'v*' --abbrev=0 HEAD 2>/dev/null); then
-    : # Found a v* tag
+    : # Found the latest v<VERSION> tag (temper's only tag form; RELEASING.md)
 else
-    # No release tags exist yet — compare against the initial commit
+    # No release tag reachable — the degraded base is the repo root. Every
+    # class reads true against it, so say so loudly instead of silently
+    # diffing all of history.
     local_roots=$(git rev-list --max-parents=0 HEAD 2>/dev/null)
     BASE_REF=$(head -n1 <<< "$local_roots")
+    log_warn "No release tag reachable from HEAD; degrading to the root commit ${BASE_REF}."
+    log_warn "Every path class will read true. Re-point the release tag on a main-reachable commit before releasing."
+fi
+
+if ! git cat-file -e "${BASE_REF}^{commit}" 2>/dev/null; then
+    die "Base ref does not resolve: ${BASE_REF}. A diff base that cannot be read must not render as an empty diff."
 fi
 
 log_info "Comparing HEAD to ${BASE_REF}" >&2
 
 # ---------------------------------------------------------------------------
-# Get changed files
+# Get changed files (no `|| true`: a failed diff is not an empty diff)
 # ---------------------------------------------------------------------------
-CHANGED_FILES=$(git diff "${BASE_REF}" HEAD --name-only 2>/dev/null || true)
+CHANGED_FILES=$(git diff "${BASE_REF}" HEAD --name-only)
 
 if [[ -z "$CHANGED_FILES" ]]; then
     log_info "No files changed since ${BASE_REF}" >&2

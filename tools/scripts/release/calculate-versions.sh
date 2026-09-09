@@ -89,8 +89,12 @@ done
 # ---------------------------------------------------------------------------
 # Path-class detection (only --from is meaningful to detect-changes)
 # ---------------------------------------------------------------------------
+# Capture, don't eval: a detect-changes death must stop this script, and
+# `eval "$(dying-cmd)"` would swallow the non-zero exit (the same trap
+# release-prepare.sh defends against).
+DETECT_OUTPUT="$("${SCRIPT_DIR}/detect-changes.sh" ${DETECT_ARGS[@]+"${DETECT_ARGS[@]}"})" || die "detect-changes.sh failed — refusing to compute versions from an unreadable window."
 # shellcheck disable=SC2046
-eval "$("${SCRIPT_DIR}/detect-changes.sh" ${DETECT_ARGS[@]+"${DETECT_ARGS[@]}"})"
+eval "$DETECT_OUTPUT"
 
 # ---------------------------------------------------------------------------
 # Read current core version (the single anchor — spec §3)
@@ -179,9 +183,11 @@ if [[ "$SHAPE_BREAKING_ROWS" -gt 0 && "$MINOR" != "true" ]]; then
     die "Refusing to compute a patch next for a window containing shape-breaking rows. Re-run with --minor to hand-raise M."
 fi
 
-# Gate 2: blocked rows refuse a release that includes client skins.
+# Gate 2: blocked rows refuse a release that includes any client leaf
+# (skins and npm packages alike — spec §3 counts them all as client leaves;
+# §8: "No release exposing block-grain annotations ... can be snuck past it").
 if [[ "$BLOCKED_ROWS" -gt 0 ]]; then
-    if [[ "$RB_RELEASE" == "true" || "$PY_RELEASE" == "true" || "$TS_RELEASE" == "true" ]]; then
+    if [[ "$RB_RELEASE" == "true" || "$PY_RELEASE" == "true" || "$TS_RELEASE" == "true" || "$UI_RELEASE" == "true" || "$CLOUD_RELEASE" == "true" ]]; then
         if [[ "$OVERRIDE_BLOCKER" != "true" ]]; then
             log_error "This release includes client skins and the register carries a blocked release-class:"
             log_error "  ${BLOCKED_CLASSES%; }"
@@ -201,7 +207,7 @@ if [[ "$CORE_CHANGED" == "true" || "$WIRE_CHANGED" == "true" || "$CLIENTS_CHANGE
     # http, mcp, cli-stdout with it, and internal rows gate every release.
     RELEASE_SURFACES="http mcp cli-stdout internal"
 fi
-if [[ "$CLIENTS_CHANGED" == "true" || "$RB_RELEASE" == "true" || "$PY_RELEASE" == "true" || "$TS_RELEASE" == "true" ]]; then
+if [[ "$CLIENTS_CHANGED" == "true" || "$RB_RELEASE" == "true" || "$PY_RELEASE" == "true" || "$TS_RELEASE" == "true" || "$UI_RELEASE" == "true" || "$CLOUD_RELEASE" == "true" ]]; then
     RELEASE_SURFACES+=" clients"
 fi
 if [[ "$SCHEMA_CHANGED" == "true" ]]; then
@@ -282,7 +288,7 @@ emit_leaf() {
     fi
 }
 
-emit_leaf RB "clients/temper-rb/lib/temper/version.rb" "VERSION = "   "$RB_RELEASE"
+emit_leaf RB "clients/temper-rb/lib/temper/version.rb" "^VERSION = "   "$RB_RELEASE"
 emit_leaf PY "clients/temper-py/temper/version.py"     "__version__"  "$PY_RELEASE"
 emit_leaf TS "clients/temper-ts/package.json"          '"version"'    "$TS_RELEASE"
 emit_leaf UI "packages/temper-ui/package.json"         '"version"'    "$UI_RELEASE"
