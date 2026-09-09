@@ -23,6 +23,10 @@ use temper_workflow::types::resource::{
 // (for info/tags/security/component-schemas) and then collects paths from every
 // `.routes(routes!(…))` registration. The router is the single source of truth;
 // this struct supplies only the ambient document metadata.
+/// The repo-root `VERSION` file's content, read at compile time (D-S3).
+///
+/// A missing file fails the build here — there is no fallback literal to drift against.
+const API_VERSION: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../VERSION"));
 #[derive(OpenApi)]
 #[openapi(
     components(schemas(
@@ -204,7 +208,7 @@ use temper_workflow::types::resource::{
     ),
     info(
         title = "Temper Cloud API",
-        version = "0.1.0",
+        version = API_VERSION.trim(),
         description = "Knowledge base management API for temper cloud",
         // Declared explicitly rather than inherited from `CARGO_PKG_LICENSE`: no crate in this
         // workspace sets `license` in its Cargo.toml, so utoipa fabricates `{"name": ""}` — an
@@ -411,7 +415,13 @@ mod tests {
 
         // Verify basic structure
         assert!(json.contains("\"title\": \"Temper Cloud API\""));
-        assert!(json.contains("\"version\": \"0.1.0\""));
+        // D-S3: `info.version` derives from the repo-root `VERSION` file at compile time —
+        // never a literal here. The test reads the file at *runtime*, so a literal regression
+        // (or a hardcoded fallback) fails this assert against the file's actual content.
+        let file_version =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../VERSION"))
+                .expect("repo-root VERSION file is readable");
+        assert!(json.contains(&format!("\"version\": \"{}\"", file_version.trim())));
 
         // An empty `info.license.name` is invalid OpenAPI and makes `openapi-generator validate`
         // reject the whole document, so no client can be generated. utoipa fabricates exactly that
