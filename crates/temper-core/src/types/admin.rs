@@ -193,6 +193,10 @@ pub enum LedgerRefRel {
     /// WHO the act was performed FOR.
     #[serde(rename = "principal")]
     Principal,
+    /// The erasure act's opaque request reference. Mirrors
+    /// `temper_substrate::payloads::RefRel::Request`.
+    #[serde(rename = "request")]
+    Request,
 }
 
 /// What an event points at. Mirrors `temper_substrate::payloads::AnchorTable`.

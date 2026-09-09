@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT (e.payload->>'blob_id')::uuid       AS \"blob_id: Uuid\",\n               NOT EXISTS (\n                   SELECT 1 FROM kb_blobs live\n                    WHERE live.content_hash = b.content_hash\n                      AND live.content_type IS NOT NULL) AS \"released: bool\",\n               b.blob_pathname                           AS pathname\n          FROM kb_events e\n          JOIN kb_event_types t ON t.id = e.event_type_id AND t.name = 'blob_erased'\n          JOIN kb_blobs b ON b.id = (e.payload->>'blob_id')::uuid\n         WHERE e.correlation_id = (SELECT correlation_id FROM kb_events WHERE id = $1)\n           AND e.id <> $1\n         ORDER BY e.occurred_at, e.id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "blob_id: Uuid",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "released: bool",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "pathname",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      true
+    ]
+  },
+  "hash": "a33d6c2becb4829c8a0b25d83e9dd4e0e3d0df835f14ca2368126d4a867da028"
+}

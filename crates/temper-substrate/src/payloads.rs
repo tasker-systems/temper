@@ -156,6 +156,14 @@ pub enum RefRel {
     /// WHO the act was performed FOR (the team granted, the profile promoted).
     #[serde(rename = "principal")]
     Principal,
+    /// The erasure act's opaque request reference (erasure spec D1: one request, one
+    /// operator, one reference; ruled 2026-09-09 that the reference is `references`
+    /// apparatus, never payload). The target's `id` IS the reference — a token the
+    /// operator's DSAR records mint. It addresses no row in any table: `kb_events` is
+    /// spelled because the vocabulary demands a kind and the token's only ledger life is
+    /// ON these events — match it, never resolve it.
+    #[serde(rename = "request")]
+    Request,
 }
 
 /// `AnchorRef`'s wire shape inside `references`: `{kind, id}` rather than `{table, id}`.
