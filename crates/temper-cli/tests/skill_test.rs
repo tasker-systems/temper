@@ -111,6 +111,8 @@ fn test_skill_install_writes_directory() {
         assert!(skill_dir.join("plan-verification.md").exists());
         assert!(skill_dir.join("implementation-grounding.md").exists());
         assert!(skill_dir.join("session-lifecycle.md").exists());
+        assert!(skill_dir.join("working-a-goal.md").exists());
+        assert!(skill_dir.join("project-setup.md").exists());
         assert!(skill_dir.join("cognitive-maps.md").exists());
         assert!(skill_dir.join("workflows/build-small.md").exists());
         assert!(skill_dir.join("workflows/build-medium.md").exists());

@@ -27,7 +27,8 @@ learn, evolve the roadmap, create the next task.
    - What external constraints exist (APIs, compatibility, performance)?
    - Where are the highest-risk areas?
    - Present the map to the user before proceeding.
-4. **Produce a goal roadmap** — create a structured goal:
+4. **Produce a goal roadmap** — read `outcome-registers.md` first (creating a goal is authoring
+   one), then create the structured goal:
    ```bash
    temper resource create --type goal --title "<goal title>" --context @me/<ctx>
    ```
@@ -37,9 +38,10 @@ learn, evolve the roadmap, create the next task.
    - Validation gates: how to know each chunk is done
    - Open questions that need resolution during implementation
    - Dependencies between chunks
-5. **Create the FIRST actionable task** — pick the first chunk from the roadmap:
+5. **Create the FIRST actionable task** — pick the first chunk from the roadmap, linked to the
+   goal so `resource list --type task --goal <ref>` can follow the arc:
    ```bash
-   temper resource create --type task --title "<first task title>" --context @me/<ctx> --mode build --effort <effort>
+   temper resource create --type task --title "<first task title>" --context @me/<ctx> --mode build --effort <effort> --goal <goal-ref>
    ```
 6. **Code only if pushed** — the primary output of plan/large is the roadmap and first
    task, not code. Only write code if the user actively requests it in this session.

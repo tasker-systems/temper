@@ -45,6 +45,7 @@ This file is the router. Read a supporting file when the work calls for it, not 
 | `implementation-grounding.md` | Writing a plan, or writing code from one — including yourself |
 | `data-artifacts.md` | **Before storing structured data** — when to commit a data artifact vs. writing into a resource body, and the selection vocabulary |
 | `outcome-registers.md` | **Authoring or amending a goal**, or deciding whether a criterion belongs on one |
+| `working-a-goal.md` | **Working a goal** — uptake, resume, advance, record, decompose, close |
 
 > **Read these as principles, not checklists**: a worked example is evidence *for* its principle,
 > never the scope of it.
@@ -199,5 +200,7 @@ Stated rather than left to be discovered, because coverage is never inferred fro
   provenance, fold-then-recreate supersession, cross-map linking — ships only in the CLI packaging.
   Read from a map freely; before **authoring** into one, say so and ask.
 - **Teams.** Creating teams, invitations, roles and offboarding have no guide here.
+- **Project setup.** `/temper init` — fundamentals authoring and the onboarding flow — ships
+  only in the CLI packaging; this surface has no slash command, skill directory, or wizard.
 - **Per-cell workflow files.** The CLI packaging carries a file per `mode × effort` cell. They are
   written against CLI commands, so they are not shipped here rather than shipped wrong.

@@ -104,3 +104,12 @@ pub struct OutcomeRegistersTemplate<'a> {
 pub struct DataArtifactsTemplate<'a> {
     pub surface: &'a str,
 }
+
+/// The goal arc — uptake, resume, advance, record, decompose, close. Shared sequence; the
+/// invocation examples diverge by surface, including one phase where the surfaces genuinely
+/// differ in affordance (the CLI has `graph traverse`; the MCP surface hops by ref and says so).
+#[derive(Template)]
+#[template(path = "shared/working-a-goal.md")]
+pub struct WorkingAGoalTemplate<'a> {
+    pub surface: &'a str,
+}
