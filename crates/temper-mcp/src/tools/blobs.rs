@@ -108,8 +108,9 @@ pub struct BlobManageInput {
     /// blob). Defaults to `blob_as_source`, the wire's default. For `relate`.
     #[serde(default)]
     pub direction: Option<BlobRelationDirection>,
-    /// The peer endpoint's table — `kb_resources`, `kb_cogmaps` or `kb_blobs`. Required for
-    /// `relate`; ignored otherwise.
+    /// The peer endpoint's table — `kb_resources` (blob-relation peers narrow to
+    /// `kb_resources`: no delete standing resolves over a cogmap or blob peer, so any
+    /// other table is refused). Required for `relate`; ignored otherwise.
     #[serde(default)]
     pub peer_table: Option<String>,
     /// The peer endpoint's UUID. Required for `relate`; ignored otherwise.

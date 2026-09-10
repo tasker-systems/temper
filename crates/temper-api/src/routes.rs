@@ -61,6 +61,7 @@ fn gated_routes() -> OpenApiRouter<AppState> {
         // through [`blob_commit_routes`] / [`blob_segment_routes`] with limits sized from
         // the config and the plan numbers (see those functions, merged in [`create_app`]).
         .routes(routes!(handlers::blobs::get))
+        .routes(routes!(handlers::blobs::delete))
         // One `.routes()` per handler: the multi-handler form is for same-path method
         // grouping (the ingest blocks GET+POST shape); distinct paths in one call mangle
         // the mounted patterns into overlaps.

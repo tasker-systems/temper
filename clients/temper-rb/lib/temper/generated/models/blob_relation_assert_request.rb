@@ -45,7 +45,7 @@ module Temper::Generated
 
     attr_accessor :peer_id
 
-    # `kb_resources` | `kb_cogmaps` | `kb_blobs` — the peer endpoint's table.
+    # `kb_resources` — the peer endpoint's table. Blob-relation peers narrow to `kb_resources` (no delete standing resolves over a cogmap or blob peer, so any other table is refused).
     attr_accessor :peer_table
 
     attr_accessor :polarity

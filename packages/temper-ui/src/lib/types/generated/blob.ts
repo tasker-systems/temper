@@ -29,6 +29,17 @@ content_hash: string,
 content_type: string, content_bytes: bigint, deduped: boolean, };
 
 /**
+ * The acknowledgement of `DELETE /api/blobs/{id}` — the strike's own verdict. `released`
+ * is the same-transaction live-row refcount's answer: `true` means the struck row was the
+ * last live row carrying its content hash, so the provider bytes at the content-addressed
+ * pathname are this act's to release (the byte fate is watched by the delete fence's
+ * retry-plus-age-alerting posture — the same fence the erasure act runs); `false` means
+ * another live home still references them and the bytes stay. The pathname is
+ * provider-internal and never rides the wire.
+ */
+export type BlobDeleteAck = { blob_id: string, released: boolean, };
+
+/**
  * The acknowledgement of `POST /api/blobs/{id}/relations` — the edge handle, feeding the
  * incumbent fold endpoint (`POST /api/relationships/{edge_handle}/fold`) for retraction.
  * Relations come and go individually (`one-blob-many-relations`); folding rides the
@@ -45,7 +56,9 @@ export type BlobRelationAck = { edge_handle: string, };
  */
 export type BlobRelationAssertRequest = { direction: BlobRelationDirection, 
 /**
- * `kb_resources` | `kb_cogmaps` | `kb_blobs` — the peer endpoint's table.
+ * `kb_resources` — the peer endpoint's table. Blob-relation peers narrow to
+ * `kb_resources` (no delete standing resolves over a cogmap or blob peer, so any
+ * other table is refused).
  */
 peer_table: string, peer_id: string, edge_kind: EdgeKind, polarity: Polarity, label: string, weight: number, 
 /**

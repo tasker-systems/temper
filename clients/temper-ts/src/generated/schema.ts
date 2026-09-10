@@ -368,7 +368,18 @@ export interface paths {
         get: operations["get_blob"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete one blob — the ordinary delete act's ruled door
+         * @description One gate, two arms, inside the strike's own transaction: delete standing (custody) over
+         *     EVERY live relation's resource peer, or — when the blob has no live relations — custody
+         *     of its home (a personal context's owner; a team context's owning-team owner role). The
+         *     strike empties the row, fires exactly one `blob_deleted`, and folds no edge; when the
+         *     struck row was the LAST live row carrying its content hash (`released: true`), the
+         *     provider bytes are deleted post-commit and the byte-delete fence retries-and-alerts on
+         *     any residue. Already-struck and unknown ids both read 404 with no second event. Author
+         *     standing, role, and admin standing confer nothing here — custody alone deletes.
+         */
+        delete: operations["delete_blob"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2887,6 +2898,20 @@ export interface components {
             deduped: boolean;
         };
         /**
+         * @description The acknowledgement of `DELETE /api/blobs/{id}` — the strike's own verdict. `released`
+         *     is the same-transaction live-row refcount's answer: `true` means the struck row was the
+         *     last live row carrying its content hash, so the provider bytes at the content-addressed
+         *     pathname are this act's to release (the byte fate is watched by the delete fence's
+         *     retry-plus-age-alerting posture — the same fence the erasure act runs); `false` means
+         *     another live home still references them and the bytes stay. The pathname is
+         *     provider-internal and never rides the wire.
+         */
+        BlobDeleteAck: {
+            /** Format: uuid */
+            blob_id: string;
+            released: boolean;
+        };
+        /**
          * Format: uuid
          * @description A `kb_blobs.id` value — one immutable, content-addressed binary blob, homed like a
          *     resource and related to resources by edges (spec: binary blobs, 2026-09-01).
@@ -2915,7 +2940,11 @@ export interface components {
             label: string;
             /** Format: uuid */
             peer_id: string;
-            /** @description `kb_resources` | `kb_cogmaps` | `kb_blobs` — the peer endpoint's table. */
+            /**
+             * @description `kb_resources` — the peer endpoint's table. Blob-relation peers narrow to
+             *     `kb_resources` (no delete standing resolves over a cogmap or blob peer, so any
+             *     other table is refused).
+             */
             peer_table: string;
             polarity: components["schemas"]["Polarity"];
             /** Format: double */
@@ -8894,6 +8923,80 @@ export interface operations {
                 };
             };
             /** @description Not found or not visible — indistinguishable by design */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    delete_blob: {
+        parameters: {
+            query?: {
+                /**
+                 * @description The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a
+                 *     correlation aid, never a substitute for authn/authz.
+                 */
+                invocation_id?: null | components["schemas"]["InvocationId"];
+                /**
+                 * @description The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-
+                 *     minted, provenance-only. Rides independently of `invocation_id` and of authorship.
+                 */
+                correlation_id?: null | components["schemas"]["CorrelationId"];
+                /** @description Free-text reasoning for the act. Authorship field — requires `confidence`. */
+                reasoning?: string | null;
+                /** @description Graded self-assessed confidence band. Required whenever any other authorship field is set. */
+                confidence?: null | components["schemas"]["ConfidenceBand"];
+                /** @description Structured rationale for the act. Authorship field — requires `confidence`. */
+                rationale?: string | null;
+                /** @description The persona/role the author acted as. Authorship field — requires `confidence`. */
+                persona?: string | null;
+                /** @description The model that authored the act. Authorship field — requires `confidence`. */
+                model?: string | null;
+            };
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Blob ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Struck — the row is emptied and one `blob_deleted` fired; `released` reports whether the provider bytes were this act's to release */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlobDeleteAck"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The blob is readable but the caller holds no delete standing over it (custody refusal, `blob_delete:` vocabulary) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Blob absent, not visible, or already struck — each indistinguishable from absent by design; no second event */
             404: {
                 headers: {
                     [name: string]: unknown;

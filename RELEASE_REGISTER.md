@@ -14,6 +14,29 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.4.0 — unreleased
 
+- **The delete act's ruled door — `DELETE /api/blobs/{id}` (+ temper-client/SDK `delete_blob`)**
+  A born route and verb: a custodian strikes one blob under the ruled two-arm custody gate
+  (relation arm: delete standing over every live relation's resource peer; home arm: the
+  home custodian when none exist — personal owner, team owner role). One `blob_deleted`
+  fires; already-struck and unknown ids read the same 404; no existing request class
+  changes shape. Released bytes are deleted post-commit and watched by the existing fence.
+  The SDKs inherit the new operation from the contract.
+pr: self
+classes: additive
+surfaces: http, clients
+status: signal-only
+
+- **Blob relate narrowed to `kb_resources` peers (HTTP/MCP/CLI one parse point)**
+  A blob relation whose peer is a `kb_cogmaps` or `kb_blobs` anchor now refuses with the
+  naming 400 (`blob_relate:` vocabulary), where it succeeded before. Ruled with the
+  delete-act design: no delete standing resolves over such a peer, so the edge would pin
+  its row permanently. Existing resource-peered relations are untouched; pre-narrowing
+  edges persist (rendering as they always did) and their fold exit is unchanged.
+pr: self
+classes: behavioral
+surfaces: http, mcp, cli-stdout
+status: signal-only
+
 - **The defined dangling state — the born block-addressed read (HTTP route)**
   `GET /api/resources/{id}/blocks/{block_id}` exists; no block-id-addressed read existed
   before, so no existing request class changes shape. Three states by name: 200 live, 410

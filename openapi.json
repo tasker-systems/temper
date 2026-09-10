@@ -1230,6 +1230,170 @@
           }
         ],
         "x-apidog-folder": "Reference/API Reference/Blobs"
+      },
+      "delete": {
+        "tags": [
+          "Blobs"
+        ],
+        "summary": "Delete one blob — the ordinary delete act's ruled door",
+        "description": "One gate, two arms, inside the strike's own transaction: delete standing (custody) over\nEVERY live relation's resource peer, or — when the blob has no live relations — custody\nof its home (a personal context's owner; a team context's owning-team owner role). The\nstrike empties the row, fires exactly one `blob_deleted`, and folds no edge; when the\nstruck row was the LAST live row carrying its content hash (`released: true`), the\nprovider bytes are deleted post-commit and the byte-delete fence retries-and-alerts on\nany residue. Already-struck and unknown ids both read 404 with no second event. Author\nstanding, role, and admin standing confer nothing here — custody alone deletes.",
+        "operationId": "delete_blob",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Blob ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "invocation_id",
+            "in": "query",
+            "description": "The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a\ncorrelation aid, never a substitute for authn/authz.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/InvocationId"
+                }
+              ]
+            }
+          },
+          {
+            "name": "correlation_id",
+            "in": "query",
+            "description": "The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-\nminted, provenance-only. Rides independently of `invocation_id` and of authorship.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/CorrelationId"
+                }
+              ]
+            }
+          },
+          {
+            "name": "reasoning",
+            "in": "query",
+            "description": "Free-text reasoning for the act. Authorship field — requires `confidence`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "confidence",
+            "in": "query",
+            "description": "Graded self-assessed confidence band. Required whenever any other authorship field is set.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/ConfidenceBand"
+                }
+              ]
+            }
+          },
+          {
+            "name": "rationale",
+            "in": "query",
+            "description": "Structured rationale for the act. Authorship field — requires `confidence`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "persona",
+            "in": "query",
+            "description": "The persona/role the author acted as. Authorship field — requires `confidence`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "description": "The model that authored the act. Authorship field — requires `confidence`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Struck — the row is emptied and one `blob_deleted` fired; `released` reports whether the provider bytes were this act's to release",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlobDeleteAck"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The blob is readable but the caller holds no delete standing over it (custody refusal, `blob_delete:` vocabulary)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Blob absent, not visible, or already struck — each indistinguishable from absent by design; no second event",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Blobs"
       }
     },
     "/api/blobs/{id}/relations": {
@@ -10303,6 +10467,23 @@
           }
         }
       },
+      "BlobDeleteAck": {
+        "type": "object",
+        "description": "The acknowledgement of `DELETE /api/blobs/{id}` — the strike's own verdict. `released`\nis the same-transaction live-row refcount's answer: `true` means the struck row was the\nlast live row carrying its content hash, so the provider bytes at the content-addressed\npathname are this act's to release (the byte fate is watched by the delete fence's\nretry-plus-age-alerting posture — the same fence the erasure act runs); `false` means\nanother live home still references them and the bytes stay. The pathname is\nprovider-internal and never rides the wire.",
+        "required": [
+          "blob_id",
+          "released"
+        ],
+        "properties": {
+          "blob_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "released": {
+            "type": "boolean"
+          }
+        }
+      },
       "BlobId": {
         "type": "string",
         "format": "uuid",
@@ -10353,7 +10534,7 @@
               },
               "peer_table": {
                 "type": "string",
-                "description": "`kb_resources` | `kb_cogmaps` | `kb_blobs` — the peer endpoint's table."
+                "description": "`kb_resources` — the peer endpoint's table. Blob-relation peers narrow to\n`kb_resources` (no delete standing resolves over a cogmap or blob peer, so any\nother table is refused)."
               },
               "polarity": {
                 "$ref": "#/components/schemas/Polarity"

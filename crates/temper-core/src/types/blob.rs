@@ -230,7 +230,9 @@ pub enum BlobRelationDirection {
 pub struct BlobRelationAssertRequest {
     #[serde(default)]
     pub direction: BlobRelationDirection,
-    /// `kb_resources` | `kb_cogmaps` | `kb_blobs` — the peer endpoint's table.
+    /// `kb_resources` — the peer endpoint's table. Blob-relation peers narrow to
+    /// `kb_resources` (no delete standing resolves over a cogmap or blob peer, so any
+    /// other table is refused).
     pub peer_table: String,
     pub peer_id: uuid::Uuid,
     pub edge_kind: EdgeKind,
@@ -253,4 +255,21 @@ pub struct BlobRelationAssertRequest {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct BlobRelationAck {
     pub edge_handle: uuid::Uuid,
+}
+
+/// The acknowledgement of `DELETE /api/blobs/{id}` — the strike's own verdict. `released`
+/// is the same-transaction live-row refcount's answer: `true` means the struck row was the
+/// last live row carrying its content hash, so the provider bytes at the content-addressed
+/// pathname are this act's to release (the byte fate is watched by the delete fence's
+/// retry-plus-age-alerting posture — the same fence the erasure act runs); `false` means
+/// another live home still references them and the bytes stay. The pathname is
+/// provider-internal and never rides the wire.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "blob.ts"))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct BlobDeleteAck {
+    pub blob_id: uuid::Uuid,
+    pub released: bool,
 }

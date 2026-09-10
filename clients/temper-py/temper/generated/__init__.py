@@ -81,6 +81,7 @@ __all__ = [
     "BindTeamOutcome",
     "BindTeamRequest",
     "BlobCommitResponse",
+    "BlobDeleteAck",
     "BlobRelationAck",
     "BlobRelationAssertRequest",
     "BlobRelationDirection",
@@ -435,6 +436,7 @@ from temper.generated.models.auditor_job_complete_ack import AuditorJobCompleteA
 from temper.generated.models.bind_team_outcome import BindTeamOutcome as BindTeamOutcome
 from temper.generated.models.bind_team_request import BindTeamRequest as BindTeamRequest
 from temper.generated.models.blob_commit_response import BlobCommitResponse as BlobCommitResponse
+from temper.generated.models.blob_delete_ack import BlobDeleteAck as BlobDeleteAck
 from temper.generated.models.blob_relation_ack import BlobRelationAck as BlobRelationAck
 from temper.generated.models.blob_relation_assert_request import BlobRelationAssertRequest as BlobRelationAssertRequest
 from temper.generated.models.blob_relation_direction import BlobRelationDirection as BlobRelationDirection

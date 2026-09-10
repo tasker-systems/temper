@@ -36,6 +36,7 @@ dependencies = [
   "rust-machete",
   "openapi-check",
   "openapi-routes-check",
+  "wire-register-crosscheck",
   "openapi-summary-lint",
   "tripwires",
   "openapi-rb-drift",
@@ -50,6 +51,36 @@ dependencies = [
   "docs-coverage",
   "ts-check"
 ]
+
+[tasks.wire-register-crosscheck]
+description = "Fail if this branch's wire changes carry no RELEASE_REGISTER.md declaration row, or declare a class their openapi.json diff contradicts"
+# The declared-class gate (shared-semver-policy spec §4), joined to local `check` on
+# 2026-09-10 — PR #874's session is the case it closes: a wire-touching branch passed a
+# fully green local `cargo make check` and failed CI twice on the register (a missing row,
+# then a shape verdict its row did not declare), because the gate ran ONLY in CI's Guard
+# Tests job. That is the exact green-local-then-red-CI round-trip the tripwires task's own
+# header names as the reason it exists — and the reason its set is derived, not listed.
+#
+# Local semantics: the script diffs against a merge-base with origin/main, which is what a
+# developer machine has. A shallow CI checkout (rust-quality runs depth-2 with no
+# origin/main ref) cannot derive that base, so the task SKIPS LOUDLY there — the enforcing
+# gate in CI is the dedicated `wire-class-crosscheck` Guard step, which feeds the exact
+# GITHUB_BASE_SHA. This mirrors the openapi drift gates' skip rules: the weakest form that
+# still catches the failure mode where it can actually catch it, loud everywhere else.
+script = '''
+set -u
+cd "${CARGO_MAKE_WORKING_DIRECTORY}"
+
+base="$(git merge-base origin/main HEAD 2>/dev/null || true)"
+if [ -z "${base}" ]; then
+  echo "  ! wire-register-crosscheck: no merge-base with origin/main — SKIPPING loudly." >&2
+  echo "    Fetch (git fetch origin main) so the local gate can diff this branch's wire" >&2
+  echo "    changes against main; CI's wire-class-crosscheck guard step runs it regardless." >&2
+  exit 0
+fi
+
+exec bash .github/scripts/wire-class-crosscheck.sh --base "${base}"
+'''
 
 [tasks.skills-drift]
 description = "Fail if the committed agent-skills/ projection has drifted from the templates that produce it"

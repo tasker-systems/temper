@@ -13,7 +13,7 @@ Commands:
   put     Commit a file's bytes as a blob, homed in a context or cogmap you can author
   get     Read a blob's bytes back, whole, streamed (to --out, or stdout)
   list    List the blobs you can read (optionally scoped to one home anchor)
-  relate  Relate a blob to another anchor (resource by ref, or cogmap/blob id)
+  relate  Relate a blob to a resource (blob-relation peers narrow to resources)
   help    Print this message or the help of the given subcommand(s)
 
 Options:
@@ -108,7 +108,7 @@ Options:
 ### `temper blob relate`
 
 ```text
-Relate a blob to another anchor (resource by ref, or cogmap/blob id).
+Relate a blob to a resource (blob-relation peers narrow to resources).
 
 The edge homes on the blob's home anchor; retraction rides `temper edge fold <handle>`. Re-asserting the same relation updates its weight and returns the same handle — a relation neither creates nor removes any other.
 
@@ -120,7 +120,7 @@ Arguments:
 
 Options:
       --to <TO>
-          The peer: a resource ref (UUID or `slug-<uuid>` — the common case), or a cogmap/blob id with --peer-table
+          The peer: a resource ref (UUID or `slug-<uuid>`)
 
       --vault <VAULT>
           Path to vault (overrides TEMPER_VAULT and auto-detection)
@@ -129,7 +129,7 @@ Options:
           Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
 
       --peer-table <PEER_TABLE>
-          The peer's table when --to is a bare cogmap or blob id
+          The peer's table when --to is a bare id. Only resource peers are accepted — a cogmap or blob peer is refused (no delete standing resolves over one, so such an edge would pin its row permanently)
           
           [default: resource]
           [possible values: resource, cogmap, blob]

@@ -21,7 +21,7 @@ use axum::response::Response;
 use axum::Json;
 use serde::Deserialize;
 use temper_core::types::blob::{
-    BlobCommitResponse, BlobRelationAck, BlobRelationAssertRequest, BlobSummary,
+    BlobCommitResponse, BlobDeleteAck, BlobRelationAck, BlobRelationAssertRequest, BlobSummary,
     BlobUploadBeginRequest, BlobUploadBeginResponse, BlobUploadFinalizeRequest, BlobUploadProgress,
 };
 use temper_core::types::ids::{BlobId, ProfileId};
@@ -600,4 +600,59 @@ pub async fn relations(
     )
     .await?;
     Ok(Json(rows))
+}
+
+/// Delete one blob — the ordinary delete act's ruled door
+///
+/// One gate, two arms, inside the strike's own transaction: delete standing (custody) over
+/// EVERY live relation's resource peer, or — when the blob has no live relations — custody
+/// of its home (a personal context's owner; a team context's owning-team owner role). The
+/// strike empties the row, fires exactly one `blob_deleted`, and folds no edge; when the
+/// struck row was the LAST live row carrying its content hash (`released: true`), the
+/// provider bytes are deleted post-commit and the byte-delete fence retries-and-alerts on
+/// any residue. Already-struck and unknown ids both read 404 with no second event. Author
+/// standing, role, and admin standing confer nothing here — custody alone deletes.
+#[utoipa::path(
+    delete,
+    operation_id = "delete_blob",
+    path = "/api/blobs/{id}",
+    tag = "Blobs",
+    params(
+        ("id" = Uuid, Path, description = "Blob ID"),
+        temper_core::types::authorship::ActInput
+    ),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Struck — the row is emptied and one `blob_deleted` fired; `released` reports whether the provider bytes were this act's to release", body = BlobDeleteAck),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "The blob is readable but the caller holds no delete standing over it (custody refusal, `blob_delete:` vocabulary)", body = ErrorBody),
+        (status = 404, description = "Blob absent, not visible, or already struck — each indistinguishable from absent by design; no second event", body = ErrorBody),
+    )
+)]
+pub async fn delete(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    RequestSurface(surface): RequestSurface,
+    Path(blob_id): Path<Uuid>,
+    Query(act_in): Query<temper_core::types::authorship::ActInput>,
+) -> ApiResult<Json<BlobDeleteAck>> {
+    let store = state
+        .blob_store
+        .as_deref()
+        .ok_or_else(|| state.blob_refusal())?;
+    let caller = ProfileId::from(auth.0.profile().id);
+    // DELETE carries no body — authorship rides query params
+    // (`?invocation_id=…&reasoning=…&confidence=…`), deserialized flat via serde_urlencoded
+    // (the `resources::delete` door's shape).
+    let act = act_in.into_act_context().map_err(ApiError::from)?;
+    let ack = temper_services::services::blob_service::delete_blob(
+        &state.pool,
+        caller,
+        temper_core::types::ids::BlobId::from(blob_id),
+        store,
+        act,
+        surface,
+    )
+    .await?;
+    Ok(Json(ack))
 }

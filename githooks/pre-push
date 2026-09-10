@@ -1,3 +1,48 @@
 #!/bin/sh
+# The CI-preview battery (2026-09-10, PR #874's session). A branch passed a green local
+# `cargo make check` and two commits later failed CI twice — once on the release-register
+# cross-check (a gate `check` did not run), once on a needless_borrow CI's clippy saw that a
+# commit-time clippy pass had skipped: the lint landed inside the same mtime granularity
+# window that wrote the previous clippy's fingerprint, so cargo judged the crate fresh and
+# re-linted nothing (a 0.40s "Clippy OK" over an edited test target). Push is the last local
+# moment, it is rare enough to afford a real battery, and both of those failures were fully
+# computable here.
+#
+# What runs, and why these two:
+#   1. wire-class-crosscheck against the merge-base with origin/main — the exact command the
+#      code-quality Guard step runs in CI, minus the GITHUB_BASE_SHA that only CI knows. A
+#      wire-touching branch without its register row, or whose row's class its openapi.json
+#      diff contradicts, fails HERE rather than three CI minutes in.
+#   2. clippy --workspace --all-targets --all-features — the Rust Quality bar, verbatim. On a
+#      warm target directory this is usually seconds; after the stale-fingerprint race it is
+#      also the run that actually lints. CI remains the backstop — this hook is a pre-filter,
+#      the same posture githooks/pre-commit carries.
+#
+# Skips loudly, never silently: no merge-base (no origin/main fetched) prints why and exits 0
+# — CI runs both gates regardless.
+
 command -v git-lfs >/dev/null 2>&1 || { printf >&2 "\n%s\n\n" "This repository is configured for Git LFS but 'git-lfs' was not found on your path. If you no longer wish to use Git LFS, remove this hook by deleting the 'pre-push' file in the hooks directory (set by 'core.hookspath'; usually '.git/hooks')."; exit 2; }
-git lfs pre-push "$@"
+git lfs pre-push "$@" || exit $?
+
+repo="$(git rev-parse --show-toplevel)" || exit 0
+base="$(git merge-base origin/main HEAD 2>/dev/null || true)"
+
+if [ -n "${base}" ]; then
+  echo "==> pre-push: wire-register cross-check (base ${base})..."
+  (cd "${repo}" && bash .github/scripts/wire-class-crosscheck.sh --base "${base}") || {
+    printf >&2 "\n==> pre-push: the release-register cross-check failed — fix the register row (or the wire diff it describes) before pushing. CI runs this same gate.\n"
+    exit 1
+  }
+  echo "==> wire-register cross-check OK"
+else
+  echo "==> pre-push: no merge-base with origin/main — SKIPPING the wire cross-check loudly." >&2
+  echo "    CI runs it regardless." >&2
+fi
+
+echo "==> pre-push: clippy --workspace --all-targets (the CI Rust Quality bar)..."
+SQLX_OFFLINE=true cargo clippy --workspace --all-targets --all-features -- -D warnings || {
+  printf >&2 "\n==> pre-push: clippy failed — CI's Rust Quality job runs this same command.\n"
+  exit 1
+}
+echo "==> clippy OK"
+
