@@ -133,3 +133,43 @@ grep -q "release upload .*temper-skill-v9.9.9.zip.sha256" "$CALLS_SKILL" \
     || fail "the skill bundle's sha256 sidecar was never uploaded: $(cat "$CALLS_SKILL")"
 
 echo "PASS: the skill bundle publishes without a manifest, and its sidecar rides along"
+
+# --- 5. The Python distributions ride to upload WITHOUT a manifest ------------
+# The wheel and sdist are Release assets for pip (PEP 508 direct references) —
+# GitHub Packages has no pip registry. Nothing installs a wheel through
+# install.sh, so the per-file manifest is meaningless for them and they must
+# pass the manifest guard untouched; but their sha256 sidecars are their
+# verification story and must reach the upload. Getting either half wrong is
+# silent in the direction that matters: a distribution held to the manifest
+# rule fails the whole release, and one that misses the upload glob is simply
+# never published while everything stays green.
+stage_artifacts "$TMP/py" "$ALL_THREE" "${TRIPLES[@]}"
+printf 'wheel' > "$TMP/py/temper_py-9.9.9-py3-none-any.whl"
+printf 'sdist' > "$TMP/py/temper_py-9.9.9.tar.gz"
+printf 'sha  file\n' > "$TMP/py/temper_py-9.9.9-py3-none-any.whl.sha256"
+printf 'sha  file\n' > "$TMP/py/temper_py-9.9.9.tar.gz.sha256"
+CALLS_PY="$TMP/calls-py"; : > "$CALLS_PY"
+run_target "$TMP/py" "$CALLS_PY" > "$TMP/py.log" 2>&1 \
+    || fail "a set including the Python distributions was refused: $(cat "$TMP/py.log")"
+grep -q "temper_py-9.9.9-py3-none-any.whl has no per-file manifest" "$TMP/py.log" \
+    && fail "the wheel was held to the manifest rule — it has no install.sh contract"
+grep -q "release upload .*temper_py-9.9.9-py3-none-any.whl" "$CALLS_PY" \
+    || fail "the wheel was never uploaded: $(cat "$CALLS_PY")"
+grep -q "release upload .*temper_py-9.9.9.tar.gz" "$CALLS_PY" \
+    || fail "the sdist was never uploaded: $(cat "$CALLS_PY")"
+grep -q "release upload .*temper_py-9.9.9.tar.gz.sha256" "$CALLS_PY" \
+    || fail "the sdist's sha256 sidecar was never uploaded: $(cat "$CALLS_PY")"
+
+echo "PASS: the Python distributions publish without a manifest, sidecars riding along"
+
+# --- 6. No Python distributions at all: the release is unchanged --------------
+# The py lane is a producer whose presence varies with the release; a tree
+# with none of it must publish exactly as before (nullglob contributes
+# nothing, nothing fails, nothing else changes).
+CALLS_NOPY="$TMP/calls-nopy"
+run_target "$TMP/good" "$CALLS_NOPY" > "$TMP/nopy.log" 2>&1 \
+    || fail "a release without Python distributions was refused: $(cat "$TMP/nopy.log")"
+grep -q "temper_py" "$TMP/nopy.log" \
+    && fail "an absent Python distribution was somehow uploaded: $(cat "$TMP/nopy.log")"
+
+echo "PASS: a release with no Python distributions publishes unchanged"

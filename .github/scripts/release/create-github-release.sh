@@ -74,10 +74,19 @@ else
 fi
 
 echo "Uploading artifacts from ${ARTIFACT_DIR}..."
+# The temper_py-* distributions are the Python client's wheel and sdist,
+# published as Release assets (GitHub Packages has no pip registry). They are
+# deliberately NOT held to the manifest invariant above: a manifest exists so
+# install.sh can verify an extracted CLI archive before an atomic swap, and
+# nothing installs a wheel that way — the wheel's verification story is its
+# sha256 sidecar and its provenance attestation.
 for f in "${ARTIFACT_DIR}"/temper-*.tar.gz \
          "${ARTIFACT_DIR}"/temper-*.zip \
          "${ARTIFACT_DIR}"/temper-*.sha256 \
-         "${ARTIFACT_DIR}"/temper-*.manifest.json; do
+         "${ARTIFACT_DIR}"/temper-*.manifest.json \
+         "${ARTIFACT_DIR}"/temper_py-*.whl \
+         "${ARTIFACT_DIR}"/temper_py-*.tar.gz \
+         "${ARTIFACT_DIR}"/temper_py-*.sha256; do
     echo "  Uploading $(basename "$f")..."
     gh release upload "$TAG" "$f" --clobber
 done
