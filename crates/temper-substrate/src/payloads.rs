@@ -19,7 +19,7 @@ use crate::ids::{
     InvocationId, LensId, ProfileId, PropertyId, RegionId, ResourceId, ShapeId,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::property_owner::PropertyOwner;
 use temper_core::types::slack::IdpRevocation;
@@ -1581,6 +1581,62 @@ pub struct ResourceReblocked {
     /// shipped op shape: created blocks reparent EXISTING CAS rows and nothing is inserted.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub replaces_body: bool,
+    /// Where each folded incumbent's content went — the per-folded-id disposition map (the
+    /// defined-dangling-state design, D-D2). `folded` records WHICH blocks the partition
+    /// supersedes; this map records what a dangling read may name as successors, captured HERE
+    /// because the manifest alone cannot resolve them (a folded block absorbed into a kept
+    /// block can leave no trace in the payload). Both arms populate it; a folded id absent
+    /// from it (pre-map events, `charter_set`, historical `block_mutated` replaces-body folds)
+    /// is the defined `unrecorded` disposition on every reading surface — never a guess.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dispositions: BTreeMap<BlockId, FoldDisposition>,
+}
+
+/// The per-folded-id disposition map (D-D2) — a [`BTreeMap`] so event bytes serialize
+/// deterministically ([`BlockId`] is `Ord`). Carried by `ResourceReblocked`; the dangling
+/// read's folded envelope re-exports the same shape.
+pub type FoldDispositions = BTreeMap<BlockId, FoldDisposition>;
+
+/// One folded incumbent's content disposition (D-D2), recorded at computation time while the
+/// fold logic still knows the mapping. Resolved read-path only: a dangling read walks the
+/// folded row's `last_event_id` to the fold event and reads this map — no successor pointer
+/// is born on block rows, and the ledger stays the authority.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum FoldDisposition {
+    /// Content locatable in surviving blocks: every section holding the incumbent's FULL
+    /// chunk-hash multiset names its block under `absorbers` (kept AND created — on the
+    /// whole-body path a rewritten-away incumbent is absorbed into a freshly minted section,
+    /// so created absorbers are the common case); every further section holding a strict
+    /// subset names its block under `carried`. Absorbers can legitimately be empty: content
+    /// spread across section boundaries may live everywhere in part and nowhere in whole.
+    Located {
+        /// Surviving blocks whose section contains the incumbent's full chunk-hash multiset.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        absorbers: Vec<BlockId>,
+        /// Surviving blocks holding only part of the incumbent's content.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        carried: Vec<BlockId>,
+    },
+    /// Nothing locatable: the incumbent had no current chunks, or its chunk hashes appear in
+    /// no section of the new partition. A named arm, never an inference — its provenance rows
+    /// stay history on the folded row, and no successor is named.
+    ContentGone,
+}
+
+impl FoldDisposition {
+    /// The disposition from computed geometry: full-multiset homes name absorbers, partial
+    /// copies name carries — and when NOTHING is locatable in any section (no chunks at all,
+    /// or the caller deleted the content), the content-gone arm. Never a `Located` with
+    /// nothing in it: an empty envelope would be a guess wearing Located's name.
+    pub(crate) fn from_geometry(absorbers: Vec<BlockId>, carried: Vec<BlockId>) -> Self {
+        if absorbers.is_empty() && carried.is_empty() {
+            Self::ContentGone
+        } else {
+            Self::Located { absorbers, carried }
+        }
+    }
 }
 
 /// The 26 typed event names — the registry-stamping and snapshot surfaces iterate this.

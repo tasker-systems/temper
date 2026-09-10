@@ -57,6 +57,13 @@ pub enum ClientError {
     #[error("{message}")]
     NotFound { message: String },
 
+    /// 410 Gone — the addressed thing PERSISTS but is gone for this operation: a folded
+    /// content block under write addressing (the defined-dangling-state design). Distinct
+    /// from [`Self::NotFound`] so the folded state is named, never collapsed into "never
+    /// existed"; carries the server's sentence verbatim and renders it bare, like NotFound.
+    #[error("{message}")]
+    Gone { message: String },
+
     #[error("conflict: {message}")]
     Conflict { message: String },
 

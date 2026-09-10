@@ -10,7 +10,7 @@ tools for writes and search.
 Trigger when: the user mentions their knowledge base, vault, notes, contexts,
 sessions, research, or wants to look up / store information across conversations.
 
-## The Tool Surface (35 tools, read/write separable)
+## The Tool Surface (36 tools, read/write separable)
 
 The MCP surface is consolidated: each tool serves an agent use case, not an
 administrative one. Tools that shared a lifecycle are collapsed into one tool
@@ -18,11 +18,12 @@ with a discriminator (`action`, `view`, or `target`). Read and write are
 separable — a consumer gating on "read-only" can grant the read tools without
 drilling into action parameters.
 
-**Reads (18):** `search`, `run_query`, `get_resource`, `list_resources`,
-`resource_lineage`, `element_trail`, `get_block_provenance`, `cogmap_read`,
-`cogmap_list`, `context_read`, `describe_schema`, `invocation_read`,
-`facets_read`, `steward_ingest_delta`, `list_data_artifacts`,
-`get_data_artifact`, `list_data_artifact_shapes`, `get_data_artifact_shape`
+**Reads (19):** `search`, `run_query`, `get_resource`, `list_resources`,
+`resource_lineage`, `element_trail`, `get_block`, `get_block_provenance`,
+`cogmap_read`, `cogmap_list`, `context_read`, `describe_schema`,
+`invocation_read`, `facets_read`, `steward_ingest_delta`,
+`list_data_artifacts`, `get_data_artifact`, `list_data_artifact_shapes`,
+`get_data_artifact_shape`
 
 **Writes (17):** `create_resource`, `update_resource`, `update_resource_meta`,
 `delete_resource`, `annotate_resource`, `relationship`, `facet_set`,
@@ -36,6 +37,8 @@ drilling into action parameters.
 > and the two data-artifact writes. This file is hand-written — `generate_agent_skill_files()`
 > deliberately does not emit it — so no gate re-derives its contents, and the tool-NAME half of
 > that gap is covered only by tests in temper-mcp.
+> `[2026-09-09]` `get_block` joined the reads (36 tools, 19 reads / 17 writes) — the
+> three-state block read.
 
 **Declared off-MCP (CLI door):** grants (`resource_grant`/`revoke`,
 `cogmap_grant`/`revoke`), `admin_ledger`, cogmap bind/unbind, team invitations,
@@ -58,6 +61,7 @@ MCP is a declaration, not a gap.
 | Build a large / resumable body as ordered blocks | Tool: `segmented_ingest` (action: begin → append → finalize) | Segmented lifecycle; action: blocks reads landed segments to resume |
 | Attach provenance sources without rewriting the body | Tool: `annotate_resource` | Provenance-only backfill — body_hash + embeddings unchanged |
 | Read a resource's per-block provenance | Tool: `get_block_provenance` | Which sources each content block was distilled from |
+| Read one content block — is it live, where did folded content go | Tool: `get_block` | Three-state read: `live` (chunks + provenance), `folded` (attribution history + disposition), absent is an error |
 | Read a resource or relationship's event history | Tool: `element_trail` | Append-only ledger — who created/updated/touched it and when |
 | Read a resource with content via tool | Tool: `get_resource` with `include_content: true` | When resource browsing isn't available |
 | Delete a resource | Tool: `delete_resource` | Soft-delete, tools only |
@@ -369,6 +373,22 @@ Input: { "resource": "<resource UUID>" }
 
 Returns each content block's provenance in (block, accretion) order — the sources each block
 was distilled from, including any preserved span-locator fragments.
+
+### `get_block` — the three-state block read
+
+```
+Tool: get_block
+Input: { "resource": "<resource UUID>", "block_id": "<block UUID>" }
+```
+
+Every answer names its `state`. `live` carries the block's identity, its chunks' identities
+(structure and hashes — content prose rides the body/content reads), and its provenance rows.
+`folded` means a re-partition folded the block away: the envelope carries the already-persisted
+attribution history plus a `disposition` stating where the content went — `located` names the
+absorber and carried successor blocks (only those you can read), `content_gone`, or
+`unrecorded` (the ledger does not carry the mapping — a defined answer, never a guess).
+A block that does not exist or is not visible to you is a not-found error. To follow a folded
+block's content, address a named successor the same way — pass its `block_id` here.
 
 ### `element_trail` — read an element's event history
 

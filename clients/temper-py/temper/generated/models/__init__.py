@@ -54,7 +54,17 @@ from temper.generated.models.blob_upload_begin_response import BlobUploadBeginRe
 from temper.generated.models.blob_upload_finalize_request import BlobUploadFinalizeRequest
 from temper.generated.models.blob_upload_progress import BlobUploadProgress
 from temper.generated.models.blob_upload_segment_info import BlobUploadSegmentInfo
+from temper.generated.models.block_chunk_ref import BlockChunkRef
+from temper.generated.models.block_fold_disposition import BlockFoldDisposition
+from temper.generated.models.block_fold_disposition_one_of import BlockFoldDispositionOneOf
+from temper.generated.models.block_fold_disposition_one_of1 import BlockFoldDispositionOneOf1
+from temper.generated.models.block_fold_disposition_one_of2 import BlockFoldDispositionOneOf2
 from temper.generated.models.block_provenance_row import BlockProvenanceRow
+from temper.generated.models.block_read import BlockRead
+from temper.generated.models.block_read_one_of import BlockReadOneOf
+from temper.generated.models.block_read_one_of1 import BlockReadOneOf1
+from temper.generated.models.block_read_one_of2 import BlockReadOneOf2
+from temper.generated.models.block_successor import BlockSuccessor
 from temper.generated.models.blocks_response import BlocksResponse
 from temper.generated.models.body_storage import BodyStorage
 from temper.generated.models.bridge import Bridge

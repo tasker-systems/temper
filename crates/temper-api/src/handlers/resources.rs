@@ -1,4 +1,5 @@
 use axum::extract::{Path, Query, State};
+use axum::response::IntoResponse;
 use axum::Json;
 use uuid::Uuid;
 
@@ -19,7 +20,7 @@ use temper_core::types::cognitive_maps::{
 };
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{ProfileId, ResourceId};
-use temper_core::types::provenance::BlockProvenanceRow;
+use temper_core::types::provenance::{BlockProvenanceRow, BlockRead};
 use temper_core::types::resource_grant::{ResourceGrantBody, ResourceRevokeBody};
 use temper_core::types::resource_view::ResourceView;
 use temper_workflow::operations::{Backend, CreateResource, DeleteResource};
@@ -151,6 +152,57 @@ pub async fn provenance(
     )
     .await
     .map(Json)
+}
+
+/// Read one content block by address (the three-state resolution)
+///
+/// The defined-dangling-state design: `200` the block is live (identity, chunk identities,
+/// provenance), `410 Gone` the block is folded (the envelope carries its attribution history
+/// and its gated successor dispositions), `404` absent. No redirect — successor names ride as
+/// data inside the gated envelope, never as a Location the caller may not be authorized to
+/// follow.
+#[utoipa::path(
+    get,
+    operation_id = "read_block",
+    path = "/api/resources/{id}/blocks/{block_id}",
+    tag = "Resources",
+    params(
+        ("id" = Uuid, Path, description = "Resource ID"),
+        ("block_id" = Uuid, Path, description = "Content block ID"),
+    ),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The block resolves and is live", body = BlockRead),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 404, description = "No such block (or not visible — indistinguishable, denying existence)", body = ErrorBody),
+        (status = 410, description = "The block is folded: state envelope with disposition and successors", body = BlockRead),
+    )
+)]
+pub async fn read_block(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((resource_id, block_id)): Path<(Uuid, Uuid)>,
+) -> ApiResult<axum::response::Response> {
+    let read = temper_services::backend::substrate_read::block_read_select(
+        &state.pool,
+        ProfileId::from(auth.0.profile().id),
+        resource_id,
+        block_id,
+    )
+    .await?;
+    // The tri-state keeps its status contract (D-D3): `absent` never serializes here — it
+    // renders the ordinary 404 face, the same dialect not-visible already arrived through.
+    match read {
+        BlockRead::Folded { .. } => {
+            let mut response = axum::Json(read).into_response();
+            *response.status_mut() = axum::http::StatusCode::GONE;
+            Ok(response)
+        }
+        BlockRead::Absent { .. } => Err(ApiError::NotFound(format!(
+            "content block {block_id} not found"
+        ))),
+        BlockRead::Live { .. } => Ok(axum::Json(read).into_response()),
+    }
 }
 
 /// Attach provenance sources to a resource

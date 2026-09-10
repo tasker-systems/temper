@@ -272,6 +272,14 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 ResourceAction::Evidence { r#ref } => {
                     temper_cli::commands::resource::evidence(&config, &r#ref, output_format)
                 }
+                ResourceAction::ReadBlock { r#ref, block_id } => {
+                    temper_cli::commands::resource::read_block(
+                        &config,
+                        &r#ref,
+                        block_id,
+                        output_format,
+                    )
+                }
                 ResourceAction::Update {
                     r#ref,
                     type_to,

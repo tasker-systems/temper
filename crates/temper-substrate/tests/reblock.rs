@@ -16,7 +16,7 @@ mod common;
 use temper_substrate::content::{body_hash_from_block_chunk_hashes, prepare_block_with_prefix};
 use temper_substrate::events::{fire, SeedAction};
 use temper_substrate::ids::{BlockId, EntityId, ProfileId, ResourceId};
-use temper_substrate::payloads::{AnchorRef, Incorporation, ProvenanceSource};
+use temper_substrate::payloads::{self, AnchorRef, Incorporation, ProvenanceSource};
 use temper_substrate::writes::{
     self, AppendParams, CreateMode, CreateParams, FinalizeParams, ReblockOutcome, ReblockParams,
 };
@@ -1024,5 +1024,174 @@ async fn block_roles_are_never_fabricated(pool: sqlx::PgPool) {
     assert_eq!(
         live_roles, 0,
         "created blocks are born roleless — never fabricated"
+    );
+}
+
+// ── the disposition map (the defined-dangling-state design, D-D2) ───────────────────────────
+
+/// The latest `resource_reblocked` event's payload for the resource, TYPED — the wire bytes
+/// the write path actually fired. The map is asserted through this door so the witness bites
+/// on the event, where a read surface will.
+async fn latest_reblocked_payload(
+    pool: &sqlx::PgPool,
+    resource: ResourceId,
+) -> payloads::ResourceReblocked {
+    let raw: serde_json::Value = sqlx::query_scalar(
+        "SELECT e.payload FROM kb_events e \
+         JOIN kb_event_types t ON t.id = e.event_type_id \
+         WHERE t.name='resource_reblocked' AND (e.payload->>'resource_id')::uuid = $1 \
+         ORDER BY e.occurred_at DESC, e.id DESC LIMIT 1",
+    )
+    .bind(resource.uuid())
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    serde_json::from_value(raw).unwrap()
+}
+
+/// RULE: the map is captured in BOTH event arms — this is the shipped op's face. The split
+/// shape (one incumbent, two created halves) maps the folded incumbent to carried locations
+/// naming the CREATED blocks — on this arm too, the survivors a dangling read may name are
+/// freshly minted sections, not kept incumbents — and the map agrees with the rows the delta
+/// actually wrote.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_shipped_op_records_the_disposition_map(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let actor = system_actor(&pool).await;
+    let home = make_home(&pool, actor.0, "reblock-dispositions").await;
+    let resource = create_body_resource(
+        &pool,
+        actor.0,
+        emitter_of(&actor),
+        &home,
+        "dispositions",
+        BODY_A_B,
+        vec![Incorporation {
+            source: ProvenanceSource::Remote("https://example.test/origin".into()),
+            seq: 0,
+        }],
+    )
+    .await;
+    writes::reblock_resource(
+        &pool,
+        ReblockParams {
+            resource,
+            emitter: emitter_of(&actor),
+        },
+    )
+    .await
+    .unwrap();
+
+    let manifest = latest_reblocked_payload(&pool, resource).await;
+    assert!(!manifest.replaces_body, "fixture: the shipped op arm fired");
+    assert_eq!(manifest.folded.len(), 1, "the single incumbent folds");
+    let live: std::collections::HashSet<Uuid> = blocks_of(&pool, resource)
+        .await
+        .iter()
+        .filter(|(_, _, is_folded, _, _, _)| !is_folded)
+        .map(|(id, _, _, _, _, _)| *id)
+        .collect();
+    match manifest
+        .dispositions
+        .get(&manifest.folded[0])
+        .expect("the folded incumbent is mapped")
+    {
+        payloads::FoldDisposition::Located { absorbers, carried } => {
+            assert!(
+                absorbers.is_empty(),
+                "no single section holds BOTH halves — the incumbent spanned the split"
+            );
+            assert_eq!(carried.len(), 2, "carried names every section holding part");
+            for c in carried {
+                assert_ne!(
+                    *c, manifest.folded[0],
+                    "the survivors are CREATED sections — never a kept-only reading"
+                );
+                assert!(
+                    live.contains(&c.uuid()),
+                    "a carried name is a surviving block"
+                );
+            }
+        }
+        payloads::FoldDisposition::ContentGone => {
+            panic!("both halves hold the incumbent's hashes — content-gone would be a lie")
+        }
+    }
+
+    // Map ⇔ projection: the carried names are exactly the blocks the delta marked carried.
+    let carried_rows: Vec<Uuid> = sqlx::query_as(
+        "SELECT p.block_id FROM kb_block_provenance p \
+         JOIN kb_content_blocks b ON b.id=p.block_id AND NOT b.is_folded \
+         WHERE b.resource_id=$1 AND p.is_carried",
+    )
+    .bind(resource.uuid())
+    .fetch_all(&pool)
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|(id,): (Uuid,)| id)
+    .collect();
+    let named: std::collections::HashSet<Uuid> =
+        match manifest.dispositions.get(&manifest.folded[0]).unwrap() {
+            payloads::FoldDisposition::Located { carried, .. } => {
+                carried.iter().map(|b| b.uuid()).collect()
+            }
+            _ => unreachable!(),
+        };
+    assert_eq!(
+        named,
+        carried_rows.into_iter().collect(),
+        "the map names exactly the blocks the delta wrote carried rows onto"
+    );
+}
+
+/// Replay safety (the serde-default contract): a pre-map event — every `resource_reblocked`
+/// fired before the map existed — deserializes with an EMPTY map, which the reading surface
+/// renders as the defined `unrecorded` disposition. The tagged arms round-trip too, pinning
+/// the wire shape (`state: located|content_gone`) the snapshots and SQL re-stamp carry.
+#[test]
+fn a_pre_map_payload_defaults_to_an_empty_map() {
+    let pre_map = serde_json::json!({
+        "resource_id": Uuid::nil(),
+        "created": [],
+        "kept": [],
+        "folded": [Uuid::nil()],
+        "replaces_body": false,
+    });
+    let manifest: payloads::ResourceReblocked = serde_json::from_value(pre_map).unwrap();
+    assert!(
+        manifest.dispositions.is_empty(),
+        "a pre-map event carries no dispositions — the unrecorded posture, never a guess"
+    );
+
+    let folded = BlockId::from(Uuid::now_v7());
+    let absorber = BlockId::from(Uuid::now_v7());
+    let full = serde_json::json!({
+        "resource_id": Uuid::nil(),
+        "folded": [folded],
+        "dispositions": {
+            folded.to_string(): { "state": "located", "absorbers": [absorber], "carried": [] },
+        },
+    });
+    let manifest: payloads::ResourceReblocked = serde_json::from_value(full).unwrap();
+    assert_eq!(
+        manifest.dispositions.get(&folded),
+        Some(&payloads::FoldDisposition::Located {
+            absorbers: vec![absorber],
+            carried: vec![],
+        }),
+        "the located arm round-trips with kept-or-created absorbers named"
+    );
+
+    let gone = serde_json::json!({
+        "resource_id": Uuid::nil(),
+        "folded": [folded],
+        "dispositions": { folded.to_string(): { "state": "content_gone" } },
+    });
+    let manifest: payloads::ResourceReblocked = serde_json::from_value(gone).unwrap();
+    assert_eq!(
+        manifest.dispositions.get(&folded),
+        Some(&payloads::FoldDisposition::ContentGone),
+        "the content-gone arm round-trips as the named arm"
     );
 }

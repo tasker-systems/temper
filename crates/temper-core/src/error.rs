@@ -83,6 +83,13 @@ pub enum TemperError {
     #[error("Not found: {0}")]
     NotFound(String),
 
+    /// The addressed thing PERSISTS but is gone for this operation — a folded content block
+    /// under write addressing (the defined-dangling-state design). Distinct from
+    /// [`Self::NotFound`]: the row survives as history, and a silent 404 would read as "never
+    /// existed". 410 on HTTP, named on every surface.
+    #[error("{0}")]
+    Gone(String),
+
     #[error("Bad request: {0}")]
     BadRequest(String),
 
@@ -154,6 +161,7 @@ impl TemperError {
             Self::Api(_) => "api",
             Self::Network(_) => "network",
             Self::NotFound(_) => "not-found",
+            Self::Gone(_) => "gone",
             Self::BadRequest(_) => "bad-request",
             Self::Conflict(_) => "conflict",
             Self::ContentIntegrity(_) => "content-integrity",
