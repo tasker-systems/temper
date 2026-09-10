@@ -233,6 +233,70 @@ if [ "$rc" -eq 0 ] && ! printf '%s' "$out" | grep -qi 'shape (openapi.json'; the
   ok "temper-api wire paths + own row: passes, presence-only, no shape ruling invented"
 else bad "temper-api wire paths + own row: passes, presence-only, no shape ruling invented" "exit=$rc" "$out"; fi
 
+# ── 15. DERIVATION — the shape comparator itself (wire-shape.jq) ────────────────────────────────
+# The verdict-handling probes above feed --shape-verdict, so they never exercise the jq that
+# COMPUTES the verdict. The #874 class lived exactly there: a schema emitted as
+# `{allOf: [...], description}` leaf-compared its array whole, so a PROSE edit the whitelist
+# exists to allow read as a break and failed an honest additive declaration. These probes pin
+# the comparator directly, both directions.
+SHAPE_JQ="${SCRIPT_DIR}/wire-shape.jq"
+shape_fixture() { # $1 = file, payload on stdin
+  jq -S 'del(.info.version)' > "$1"
+}
+derive_with() { # $1 = base fixture, $2 = head fixture
+  jq -n -r -f "$SHAPE_JQ" --slurpfile base "$1" --slurpfile head "$2" 2>&1
+}
+
+BASE_OAS="${WORK}/base.json"
+HEAD_OAS="${WORK}/head.json"
+
+# The base contract: one path, one allOf-shaped schema (the utoipa flattened-doc shape).
+cat > "$BASE_OAS" <<'JSON'
+{"paths":{"/api/blobs/{id}":{"get":{"responses":{"200":{"description":"ok"}}}}},
+ "components":{"schemas":{"Example":{"allOf":[{"type":"object","properties":{"peer_table":{"type":"string","description":"`kb_resources` | `kb_cogmaps` | `kb_blobs` — the peer endpoint's table."}},"required":["peer_table"]}],"description":"Assert a relation."}}}}
+JSON
+cp "$BASE_OAS" "$HEAD_OAS"
+
+# 15a — prose edit INSIDE the allOf array: grew, never moved.
+jq -S '.components.schemas.Example.allOf[0].properties.peer_table.description = "`kb_resources` — the peer endpoint'"'"'s table (blob-relation peers narrow)."' "$BASE_OAS" > "$HEAD_OAS"
+v="$(derive_with "$BASE_OAS" "$HEAD_OAS")"
+if [ "$v" = "grew" ]; then
+  ok "derivation: a prose edit inside allOf computes as grew (the #874 class)"
+else bad "derivation: a prose edit inside allOf computes as grew (the #874 class)" "verdict=$v"; fi
+
+# 15b — a rename INSIDE the allOf member: moved. The whitelist must not leak through arrays.
+jq -S '.components.schemas.Example.allOf[0].properties.peer_type = .components.schemas.Example.allOf[0].properties.peer_table | del(.components.schemas.Example.allOf[0].properties.peer_table)' "$BASE_OAS" > "$HEAD_OAS"
+v="$(derive_with "$BASE_OAS" "$HEAD_OAS")"
+if [ "$v" = "moved" ]; then
+  ok "derivation: a rename inside allOf still computes as moved"
+else bad "derivation: a rename inside allOf still computes as moved" "verdict=$v"; fi
+
+# 15c — an ADDED allOf member (compositor growth = an intersection tightening): moved.
+jq -S '.components.schemas.Example.allOf += [{"type":"object","required":["extra"]}]' "$BASE_OAS" > "$HEAD_OAS"
+v="$(derive_with "$BASE_OAS" "$HEAD_OAS")"
+if [ "$v" = "moved" ]; then
+  ok "derivation: an added allOf member (length change) computes as moved"
+else bad "derivation: an added allOf member (length change) computes as moved" "verdict=$v"; fi
+
+# 15d — born path and born schema alongside the untouched survivor: grew (the canonical additive).
+jq -S '.paths["/api/blobs/{id}"].delete = {"responses":{"200":{"description":"struck"}}} | .components.schemas.BornAck = {"type":"object","properties":{"blob_id":{"type":"string"}}}' "$BASE_OAS" > "$HEAD_OAS"
+v="$(derive_with "$BASE_OAS" "$HEAD_OAS")"
+if [ "$v" = "grew" ]; then
+  ok "derivation: a born operation and a born schema alongside an untouched survivor compute as grew"
+else bad "derivation: a born operation and a born schema alongside an untouched survivor compute as grew" "verdict=$v"; fi
+
+# 15e — required GROWN inside allOf: moved; required SHRUNK: the tolerant direction, grew.
+jq -S '.components.schemas.Example.allOf[0].required = ["peer_table","extra"]' "$BASE_OAS" > "$HEAD_OAS"
+v="$(derive_with "$BASE_OAS" "$HEAD_OAS")"
+if [ "$v" = "moved" ]; then
+  ok "derivation: required grown inside allOf computes as moved"
+else bad "derivation: required grown inside allOf computes as moved" "verdict=$v"; fi
+jq -S '.components.schemas.Example.allOf[0].required = []' "$BASE_OAS" > "$HEAD_OAS"
+v="$(derive_with "$BASE_OAS" "$HEAD_OAS")"
+if [ "$v" = "grew" ]; then
+  ok "derivation: required shrunk (the tolerant direction) computes as grew"
+else bad "derivation: required shrunk (the tolerant direction) computes as grew" "verdict=$v"; fi
+
 echo
 echo "  ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

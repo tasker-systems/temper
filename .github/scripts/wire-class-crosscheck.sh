@@ -92,6 +92,8 @@ set -uo pipefail
 
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 REGISTER_FILE="RELEASE_REGISTER.md"
 REGISTER_EXPLICIT=0
 PR_NUMBER="${GITHUB_PR_NUMBER:-}"
@@ -355,53 +357,11 @@ derive_shape() {
     if [ ! -s "$tmp_base" ] || [ ! -s "$tmp_head" ]; then rm -f "$tmp_base" "$tmp_head"; echo "undeterminable"; return 0; fi
     if cmp -s "$tmp_base" "$tmp_head"; then rm -f "$tmp_base" "$tmp_head"; echo "unchanged"; return 0; fi
     local verdict
-    verdict="$(jq -n -r -f /dev/stdin \
-        --slurpfile base "$tmp_base" --slurpfile head "$tmp_head" <<'SHAPE_JQ'
-def broke_node($b; $h):
-  ($b | type) != ($h | type)
-  or (
-    ($b | type) == "object"
-    and (
-      ([ $b | keys[] ] - [ $h | keys[] ] | length > 0)
-      or (
-        [ $b | keys[] as $k
-          | if (($b[$k] | type) == "object") and (($h[$k] | type) == "object")
-            then broke_node($b[$k]; $h[$k])
-            elif $k == "required" and (($b[$k] | type) == "array")
-            then (($h[$k] - $b[$k]) | length > 0)
-            elif $k == "description" or $k == "title" or $k == "summary"
-              or $k == "example" or $k == "examples"
-            then false
-            else $b[$k] != $h[$k]
-            end ]
-        | any
-      )
-      or (
-        (($b | has("properties")) and ($h | has("properties")))
-        and (
-          [ ([ $h.properties | keys[] ] - [ $b.properties | keys[] ])[]
-              as $p
-              | select((($h.required // []) | index($p)) != null) ]
-          | length > 0
-        )
-      )
-    )
-  )
-  or (($b | type) != "object" and $b != $h);
-
-[ ($base[0].paths | keys[]) as $p
-  | if ($head[0].paths | has($p)) | not then "moved"
-    elif broke_node($base[0].paths[$p]; $head[0].paths[$p]) then "moved"
-    else empty end ]
-+ [ (($base[0].components // {}) | keys[]) as $c
-    | if (($head[0].components // {}) | has($c) | not) then "moved" else empty end ]
-+ [ (($base[0].components.schemas // {}) | keys[]) as $s
-    | if (($head[0].components.schemas // {}) | has($s)) | not then "moved"
-      elif broke_node($base[0].components.schemas[$s]; $head[0].components.schemas[$s]) then "moved"
-      else empty end ]
-| if length > 0 then "moved" else "grew" end
-SHAPE_JQ
-    )" 2>/dev/null || verdict="moved"
+    # The comparator is ONE definition (wire-shape.jq) shared with its harness — the #874
+    # lesson: the derivation is where shape honesty is computed, so it is the part that
+    # must be probeable, not only the verdict handling around it.
+    verdict="$(jq -n -r -f "${SCRIPT_DIR}/wire-shape.jq" \
+        --slurpfile base "$tmp_base" --slurpfile head "$tmp_head" 2>/dev/null)" || verdict="moved"
     rm -f "$tmp_base" "$tmp_head"
     verdict="${verdict//\"/}"
     [ -z "$verdict" ] && verdict="moved"
