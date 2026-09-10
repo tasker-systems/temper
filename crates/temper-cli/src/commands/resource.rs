@@ -1830,17 +1830,36 @@ pub fn read_block(
 /// `<resource>#<block-uuid>` is the one declared string form (span-address-form spec §5):
 /// `splitn(2, '#')` — neither the bare-uuid nor the decorated slug-uuid resource form
 /// contains `#`, so any further `#` lands in the block half and fails its uuid validation,
-/// an input error, never a guess. Length-capped before parsing; the composed and separate
-/// forms are mutually exclusive, and a bare resource names no block.
+/// an input error, never a guess. Input machinery at the CLI trust boundary: the wire never
+/// parses this string (HTTP and MCP carry the pair structurally); clause 3's edge properties
+/// declare their own parse. The composed form is length-capped; the hashless two-argument
+/// form passes through exactly as before this form existed.
 fn split_block_address<'a>(
     resource_ref: &'a str,
     block_id: Option<&'a str>,
 ) -> Result<(&'a str, Option<&'a str>)> {
     const MAX_ADDRESS_LEN: usize = 256;
-    if resource_ref.len() > MAX_ADDRESS_LEN {
-        return Err(TemperError::BadRequest(format!(
-            "resource ref exceeds {MAX_ADDRESS_LEN} bytes"
-        )));
+    if resource_ref.contains('#') {
+        if resource_ref.len() > MAX_ADDRESS_LEN {
+            return Err(TemperError::BadRequest(format!(
+                "composed block address exceeds {MAX_ADDRESS_LEN} bytes"
+            )));
+        }
+        if block_id.is_some() {
+            return Err(TemperError::BadRequest(
+                "give the composed address <resource>#<block-uuid> or the separate arguments, not both"
+                    .into(),
+            ));
+        }
+        let mut halves = resource_ref.splitn(2, '#');
+        let resource = halves.next().unwrap_or("");
+        let block = halves.next().unwrap_or("");
+        if resource.is_empty() || block.is_empty() {
+            return Err(TemperError::BadRequest(format!(
+                "a composed block address needs both halves: <resource>#<block-uuid>, got {resource_ref:?}"
+            )));
+        }
+        return Ok((resource, Some(block)));
     }
     if let Some(b) = block_id {
         if b.len() > MAX_ADDRESS_LEN {
@@ -1849,24 +1868,7 @@ fn split_block_address<'a>(
             )));
         }
     }
-    if !resource_ref.contains('#') {
-        return Ok((resource_ref, block_id));
-    }
-    if block_id.is_some() {
-        return Err(TemperError::BadRequest(
-            "give the composed address <resource>#<block-uuid> or the separate arguments, not both"
-                .into(),
-        ));
-    }
-    let mut halves = resource_ref.splitn(2, '#');
-    let resource = halves.next().unwrap_or("");
-    let block = halves.next().unwrap_or("");
-    if resource.is_empty() || block.is_empty() {
-        return Err(TemperError::BadRequest(format!(
-            "a composed block address needs both halves: <resource>#<block-uuid>, got {resource_ref:?}"
-        )));
-    }
-    Ok((resource, Some(block)))
+    Ok((resource_ref, block_id))
 }
 
 fn map_projection_error(err: temper_core::projection::ProjectionError) -> TemperError {
@@ -4300,9 +4302,41 @@ mod split_block_address_tests {
     }
 
     #[test]
-    fn oversized_input_is_capped_before_parsing() {
-        let long = "a".repeat(257);
+    fn the_decorated_resource_half_splits_the_same_way() {
+        let (r, b) = split_block_address(
+            "my-task-01890a5d-ac96-774b-bcce-b302099a8057#019f0000-0000-7000-8000-000000000001",
+            None,
+        )
+        .unwrap();
+        assert_eq!(r, "my-task-01890a5d-ac96-774b-bcce-b302099a8057");
+        assert_eq!(b, Some("019f0000-0000-7000-8000-000000000001"));
+    }
+
+    #[test]
+    fn a_second_hash_lands_in_the_block_half_for_uuid_validation_to_reject() {
+        let (r, b) =
+            split_block_address("01890a5d-ac96-774b-bcce-b302099a8057#block#tail", None).unwrap();
+        assert_eq!(r, "01890a5d-ac96-774b-bcce-b302099a8057");
+        assert_eq!(b, Some("block#tail"));
+        // read_block's uuid validation rejects the tail; the split never guesses.
+        assert!(uuid::Uuid::parse_str(b.unwrap()).is_err());
+    }
+
+    #[test]
+    fn oversized_composed_input_is_capped_before_parsing() {
+        let long = format!("01890a5d-ac96-774b-bcce-b302099a8057#{}", "a".repeat(300));
         assert!(split_block_address(&long, None).is_err());
-        assert!(split_block_address("res", Some(&long)).is_err());
+        assert!(split_block_address("res", Some(&"a".repeat(300))).is_err());
+    }
+
+    #[test]
+    fn a_long_hashless_ref_is_not_capped_the_two_argument_form_keeps_its_prior_behavior() {
+        // Decorated refs are unbounded (sluggified titles); the cap governs the composed
+        // form only, so the pre-existing form reaches parse_ref unchanged.
+        let long = format!("{}-01890a5d-ac96-774b-bcce-b302099a8057", "t".repeat(300));
+        let (r, b) =
+            split_block_address(&long, Some("019f0000-0000-7000-8000-000000000001")).unwrap();
+        assert_eq!(r, long);
+        assert!(b.is_some());
     }
 }

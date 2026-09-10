@@ -10866,7 +10866,7 @@
               "null"
             ],
             "format": "uuid",
-            "description": "The resource the successor's row lives on — the same value the pair-keyed read fork\nkeys on, so the gated envelope alone constructs the successor's `<home>#<block>`\naddress."
+            "description": "The resource the successor's row lives on — the same value the pair-keyed read fork\nkeys on, so the gated envelope alone constructs the successor's `<home>#<block>`\naddress.\n\nCONSTRUCTION RULE, load-bearing: the only writer of this type is the per-successor\ngate (`gate_successors` in temper-substrate's readback), populating from the same\nrow lookup that probes visibility. Never build one from ledger payload data — a\nclaimed home is the authz-on-claim defect the span-address-form design's review\nrefuted; a future fold producer needing successors in the LEDGER's disposition map\nkeeps the bare-id shape the payloads carry today."
           }
         }
       },

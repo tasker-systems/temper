@@ -25,5 +25,12 @@ block_id: string,
  * The resource the successor's row lives on — the same value the pair-keyed read fork
  * keys on, so the gated envelope alone constructs the successor's `<home>#<block>`
  * address.
+ *
+ * CONSTRUCTION RULE, load-bearing: the only writer of this type is the per-successor
+ * gate (`gate_successors` in temper-substrate's readback), populating from the same
+ * row lookup that probes visibility. Never build one from ledger payload data — a
+ * claimed home is the authz-on-claim defect the span-address-form design's review
+ * refuted; a future fold producer needing successors in the LEDGER's disposition map
+ * keeps the bare-id shape the payloads carry today.
  */
-home_resource_id: string | null, };
+home_resource_id?: string, };

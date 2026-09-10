@@ -214,6 +214,8 @@ status: signal-only
   `request` arm naming the erasure request an event fulfils; the temper-core mirror gains the
   matching arm and the parity test compiles the two together. Nothing emits the arm yet — the
   request reference rides references, not payloads, and no ledger row carries it — so no
+  existing read or write changes; the arm is forward vocabulary rendered by the admin-ledger
+  read once rows exist.
 pr: self
 classes: additive
 surfaces: http, internal

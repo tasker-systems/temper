@@ -385,10 +385,11 @@ Every answer names its `state`. `live` carries the block's identity, its chunks'
 (structure and hashes — content prose rides the body/content reads), and its provenance rows.
 `folded` means a re-partition folded the block away: the envelope carries the already-persisted
 attribution history plus a `disposition` stating where the content went — `located` names the
-absorber and carried successor blocks (only those you can read), `content_gone`, or
-`unrecorded` (the ledger does not carry the mapping — a defined answer, never a guess).
-A block that does not exist or is not visible to you is a not-found error. To follow a folded
-block's content, address a named successor the same way — pass its `block_id` here.
+absorber and carried successor blocks (only those you can read, each with its
+`home_resource_id`), `content_gone`, or `unrecorded` (the ledger does not carry the mapping —
+a defined answer, never a guess). A block that does not exist or is not visible to you is a
+not-found error. To follow a folded block's content, address a named successor by passing its
+`home_resource_id` as `resource` and its `block_id` as `block_id`.
 
 ### `element_trail` — read an element's event history
 
