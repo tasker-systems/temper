@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const startSpan = vi.fn();
 
-vi.mock('temper-telemetry-ts', async (importOriginal) => {
-	const actual = await importOriginal<typeof import('temper-telemetry-ts')>();
+vi.mock('@tasker-systems/temper-telemetry-ts', async (importOriginal) => {
+	const actual = await importOriginal<typeof import('@tasker-systems/temper-telemetry-ts')>();
 	return {
 		...actual,
 		isTelemetryEnabled: () => true,

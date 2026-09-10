@@ -2,7 +2,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type MockApi, type MockIssuer, startMockApi, startMockIssuer } from "temper-ts/testing";
+import { type MockApi, type MockIssuer, startMockApi, startMockIssuer } from "@tasker-systems/temper-ts/testing";
 
 import {
   DEFAULT_AUDITOR_FALLBACKS,

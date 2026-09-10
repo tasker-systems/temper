@@ -48,6 +48,7 @@
         "@fontsource-variable/jetbrains-mono": "^5.3.0",
         "@fontsource-variable/source-serif-4": "^5.3.0",
         "@opentelemetry/api": "^1.9.1",
+        "@tasker-systems/temper-telemetry-ts": "file:../../clients/temper-telemetry-ts",
         "@vercel/functions": "^3.7.6",
         "d3-force": "^3",
         "d3-hierarchy": "^3",
@@ -60,7 +61,6 @@
         "marked": "^18.0.0",
         "marked-highlight": "^2.2.4",
         "postgres": "^3",
-        "temper-telemetry-ts": "file:../../clients/temper-telemetry-ts",
         "wx-svelte-grid": "^2.6.1",
       },
       "devDependencies": {
@@ -1135,7 +1135,7 @@
 
     "@tailwindcss/oxide-wasm32-wasi/tslib": ["tslib@2.8.1", "", { "bundled": true }, "sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w=="],
 
-    "@temper/ui/temper-telemetry-ts": ["temper-telemetry-ts@file:clients/temper-telemetry-ts", { "dependencies": { "@opentelemetry/api": "^1.9.1", "@opentelemetry/context-async-hooks": "^2.10.0", "@opentelemetry/core": "^2.10.0", "@opentelemetry/exporter-trace-otlp-proto": "^0.221.0", "@opentelemetry/instrumentation": "^0.221.0", "@opentelemetry/instrumentation-undici": "^0.18.0", "@opentelemetry/resources": "^2.10.0", "@opentelemetry/sdk-trace-base": "^2.10.0", "@opentelemetry/sdk-trace-node": "^2.10.0", "@opentelemetry/semantic-conventions": "^1.43.0" }, "devDependencies": { "@types/node": "24.x", "typescript": "^5.8", "vitest": "^3" } }],
+    "@temper/ui/@tasker-systems/temper-telemetry-ts": ["@tasker-systems/temper-telemetry-ts@file:clients/temper-telemetry-ts", { "dependencies": { "@opentelemetry/api": "^1.9.1", "@opentelemetry/context-async-hooks": "^2.10.0", "@opentelemetry/core": "^2.10.0", "@opentelemetry/exporter-trace-otlp-proto": "^0.221.0", "@opentelemetry/instrumentation": "^0.221.0", "@opentelemetry/instrumentation-undici": "^0.18.0", "@opentelemetry/resources": "^2.10.0", "@opentelemetry/sdk-trace-base": "^2.10.0", "@opentelemetry/sdk-trace-node": "^2.10.0", "@opentelemetry/semantic-conventions": "^1.43.0" }, "devDependencies": { "@types/node": "24.x", "typescript": "^5.8", "vitest": "^3" } }],
 
     "@testing-library/dom/aria-query": ["aria-query@5.3.0", "", { "dependencies": { "dequal": "^2.0.3" } }, "sha512-b0P0sZPKtyu8HkeRAfCq0IfURZK+SuwMjY1UXGBU27wpAiTwQAIlq56IbIO+ytk/JjS1fMR14ee5WBBfKi5J6A=="],
 
@@ -1201,7 +1201,7 @@
 
     "@opentelemetry/instrumentation-undici/@opentelemetry/instrumentation/import-in-the-middle": ["import-in-the-middle@2.0.6", "", { "dependencies": { "acorn": "^8.15.0", "acorn-import-attributes": "^1.9.5", "cjs-module-lexer": "^2.2.0", "module-details-from-path": "^1.0.4" } }, "sha512-3vZV3jX0XRFW3EJDTwzWoZa+RH1b8eTTx6YOCjglrLyPuepwoBti1k3L2dKwdCUrnVEfc5CuRuGstaC/uQJJaw=="],
 
-    "@temper/ui/temper-telemetry-ts/@types/node": ["@types/node@24.13.3", "", { "dependencies": { "undici-types": "~7.18.0" } }, "sha512-Dh8vAsV36ig5wa9OX4pXvMc9D3Veibfw2wix0CUwYODLD8nkj9UsLjASr49nPg+2eKzxhBV+v7L8pXvT4e639Q=="],
+    "@temper/ui/@tasker-systems/temper-telemetry-ts/@types/node": ["@types/node@24.13.3", "", { "dependencies": { "undici-types": "~7.18.0" } }, "sha512-Dh8vAsV36ig5wa9OX4pXvMc9D3Veibfw2wix0CUwYODLD8nkj9UsLjASr49nPg+2eKzxhBV+v7L8pXvT4e639Q=="],
 
     "@types/xml-encryption/@types/node/undici-types": ["undici-types@7.18.2", "", {}, "sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w=="],
 
@@ -1271,6 +1271,6 @@
 
     "wrap-ansi/strip-ansi/ansi-regex": ["ansi-regex@6.2.2", "", {}, "sha512-Bq3SmSpyFHaWjPk8If9yc6svM8c56dB5BAtW4Qbw5jHTwwXXcTLoRMkpDJp6VL0XzlWaCHTXrkFURMYmD0sLqg=="],
 
-    "@temper/ui/temper-telemetry-ts/@types/node/undici-types": ["undici-types@7.18.2", "", {}, "sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w=="],
+    "@temper/ui/@tasker-systems/temper-telemetry-ts/@types/node/undici-types": ["undici-types@7.18.2", "", {}, "sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w=="],
   }
 }

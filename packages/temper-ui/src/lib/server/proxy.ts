@@ -21,7 +21,7 @@
 
 import { randomBytes } from 'node:crypto';
 import { error, type RequestEvent } from '@sveltejs/kit';
-import { activeTraceparent } from 'temper-telemetry-ts';
+import { activeTraceparent } from '@tasker-systems/temper-telemetry-ts';
 import { env } from '$env/dynamic/private';
 
 /** Path roots forwarded to the upstream API/MCP host. */

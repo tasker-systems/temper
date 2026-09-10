@@ -1,5 +1,5 @@
 import { defineSchedule } from "eve/schedules";
-import { TEMPER_TS_VERSION } from "temper-ts";
+import { TEMPER_TS_VERSION } from "@tasker-systems/temper-ts";
 
 import worker from "../channels/worker.js";
 import { requireEnv, temperFetch } from "../lib/temper-auth.js";

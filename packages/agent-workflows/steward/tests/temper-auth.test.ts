@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type MockApi, type MockIssuer, startMockApi, startMockIssuer } from "temper-ts/testing";
+import { type MockApi, type MockIssuer, startMockApi, startMockIssuer } from "@tasker-systems/temper-ts/testing";
 
 let issuer: MockIssuer | undefined;
 let api: MockApi | undefined;

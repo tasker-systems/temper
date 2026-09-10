@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { shouldExportSpans } from "temper-telemetry-ts";
+import { shouldExportSpans } from "@tasker-systems/temper-telemetry-ts";
 
 /**
  * A W3C `traceparent` for an outbound MCP call, grouping every call made within

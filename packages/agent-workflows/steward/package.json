@@ -22,8 +22,8 @@
     "ai": "^7.0.0",
     "eve": "^0.18.1",
     "openapi-fetch": "^0.17.0",
-    "temper-telemetry-ts": "file:../../../clients/temper-telemetry-ts",
-    "temper-ts": "file:../../../clients/temper-ts",
+    "@tasker-systems/temper-telemetry-ts": "file:../../../clients/temper-telemetry-ts",
+    "@tasker-systems/temper-ts": "file:../../../clients/temper-ts",
     "zod": "4.4.3"
   },
   "devDependencies": {

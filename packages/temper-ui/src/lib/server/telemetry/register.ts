@@ -6,7 +6,7 @@
  * in place before the first request is handled.
  */
 
-import { initTelemetry } from 'temper-telemetry-ts';
+import { initTelemetry } from '@tasker-systems/temper-telemetry-ts';
 
 // temper-ui injects trace context at its own known call sites (proxy + SSR loaders),
 // so it does not need HTTP auto-instrumentation (instrumentHttp stays off). The eve

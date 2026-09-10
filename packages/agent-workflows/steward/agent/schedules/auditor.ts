@@ -1,5 +1,5 @@
 import { defineSchedule } from "eve/schedules";
-import { TEMPER_TS_VERSION, type components } from "temper-ts";
+import { TEMPER_TS_VERSION, type components } from "@tasker-systems/temper-ts";
 
 import auditorWorker from "../channels/auditor-worker.js";
 import { AUDITOR_ENABLED, agentEnabled, tokenIssuanceUnavailable } from "../lib/optional-agent.js";

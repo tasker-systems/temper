@@ -1,5 +1,5 @@
 import { defineInstrumentation } from "eve/instrumentation";
-import { initTelemetry, NEVER_RECORD_MODEL_IO } from "temper-telemetry-ts";
+import { initTelemetry, NEVER_RECORD_MODEL_IO } from "@tasker-systems/temper-telemetry-ts";
 
 /**
  * OTLP span export for the steward (and its declared auditor subagent).

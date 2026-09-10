@@ -1,5 +1,5 @@
 import { getToken } from "@vercel/connect";
-import { BearerToken, ClientCredentials, type Credentials, type TokenResult } from "temper-ts";
+import { BearerToken, ClientCredentials, type Credentials, type TokenResult } from "@tasker-systems/temper-ts";
 
 import { fetchWithRetry, type RetryOptions } from "./fetch-retry.js";
 
