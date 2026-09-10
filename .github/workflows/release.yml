@@ -169,11 +169,40 @@ jobs:
           VERSION: ${{ needs.determine-version.outputs.version }}
         run: bash tools/scripts/release/publish-npm.sh "$VERSION"
 
+  # The Ruby gem publishes to GitHub Packages RubyGems. There is no versions
+  # API on that host, so the publish script treats a duplicate-version push
+  # refusal as a loud idempotent skip (see its header) — re-cutting an
+  # existing tag stays safe here the same way it is for npm.
+  publish-ruby-client:
+    name: Publish Ruby Client
+    needs: determine-version
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          # .ruby-version / mise.toml is 3.4.10.
+          ruby-version: "3.4"
+
+      - name: Publish the gem
+        env:
+          VERSION: ${{ needs.determine-version.outputs.version }}
+        run: bash tools/scripts/release/publish-ruby.sh "$VERSION"
+
   release-summary:
     name: Release Summary
     runs-on: ubuntu-22.04
     timeout-minutes: 5
-    needs: [determine-version, build-cli-binaries, build-skill-bundle, publish-npm-clients]
+    needs: [determine-version, build-cli-binaries, build-skill-bundle, publish-npm-clients, publish-ruby-client]
     if: always()
     permissions:
       contents: write
@@ -197,6 +226,7 @@ jobs:
           BUILD_RESULT: ${{ needs.build-cli-binaries.result }}
           SKILL_RESULT: ${{ needs.build-skill-bundle.result }}
           NPM_RESULT: ${{ needs.publish-npm-clients.result }}
+          RUBY_RESULT: ${{ needs.publish-ruby-client.result }}
         run: |
           icon_for() {
             case "$1" in
@@ -215,13 +245,14 @@ jobs:
             echo "| CLI binaries (darwin-arm64 / linux-x64 / windows-x64) | $(icon_for "$BUILD_RESULT") ${BUILD_RESULT} |"
             echo "| Agent Skill bundle (temper-skill-v${VERSION}.zip) | $(icon_for "$SKILL_RESULT") ${SKILL_RESULT} |"
             echo "| npm clients (@tasker-systems/temper-ts, @tasker-systems/temper-telemetry-ts) | $(icon_for "$NPM_RESULT") ${NPM_RESULT} |"
+            echo "| Ruby gem (temper-rb on GitHub Packages) | $(icon_for "$RUBY_RESULT") ${RUBY_RESULT} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
       # Gated on BOTH producers. A release missing the skill bundle would publish silently and
       # look complete — the same "absence is indistinguishable from never-had-it" failure the
       # manifest guard inside this script exists to prevent, one artifact over.
       - name: Create GitHub Release
-        if: needs.build-cli-binaries.result == 'success' && needs.build-skill-bundle.result == 'success' && needs.publish-npm-clients.result == 'success'
+        if: needs.build-cli-binaries.result == 'success' && needs.build-skill-bundle.result == 'success' && needs.publish-npm-clients.result == 'success' && needs.publish-ruby-client.result == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.determine-version.outputs.version }}
@@ -229,7 +260,7 @@ jobs:
         run: ./.github/scripts/release/create-github-release.sh
 
       - name: Fail the job if any producer did not succeed
-        if: needs.build-cli-binaries.result != 'success' || needs.build-skill-bundle.result != 'success' || needs.publish-npm-clients.result != 'success'
+        if: needs.build-cli-binaries.result != 'success' || needs.build-skill-bundle.result != 'success' || needs.publish-npm-clients.result != 'success' || needs.publish-ruby-client.result != 'success'
         run: |
-          echo "::error::build-cli-binaries: ${{ needs.build-cli-binaries.result }}, build-skill-bundle: ${{ needs.build-skill-bundle.result }}, publish-npm-clients: ${{ needs.publish-npm-clients.result }} — release not published."
+          echo "::error::build-cli-binaries: ${{ needs.build-cli-binaries.result }}, build-skill-bundle: ${{ needs.build-skill-bundle.result }}, publish-npm-clients: ${{ needs.publish-npm-clients.result }}, publish-ruby-client: ${{ needs.publish-ruby-client.result }} — release not published."
           exit 1
