@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT e.id           AS \"erasure_event_id!: Uuid\",\n               e.occurred_at  AS \"occurred_at!: DateTime<Utc>\",\n               e.payload->'targets' AS \"targets!: serde_json::Value\"\n          FROM kb_events e\n          JOIN kb_event_types t ON t.id = e.event_type_id AND t.name = 'principal_erased'\n         ORDER BY e.occurred_at, e.id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "erasure_event_id!: Uuid",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "occurred_at!: DateTime<Utc>",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 2,
+        "name": "targets!: serde_json::Value",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "aacfe1cc757a72d6e46b4b5890798153580d7684aad3e6c32a82994a5b45fc8d"
+}

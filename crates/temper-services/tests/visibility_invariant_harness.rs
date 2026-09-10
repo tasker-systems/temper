@@ -1831,6 +1831,14 @@ const CONSUMES: &[&str] = &[
     "shape_by_id",
     "shapes_for_home",
     "steward_team_contexts",
+    // principal_erasure_execute — the scan hit is a body COMMENT, not a call: the strike arm
+    // spells its derivation as "the read model's own owner arm (contexts_readable_by arm 1,
+    // 20260712000010)" and then restates the governed-home predicate inline. It consults no
+    // substrate authority — erasure's scope is the two indexed halves filtered to governed
+    // personal contexts BY RULING (20260909000020) — so there is no authority here to drive.
+    // Acknowledged explicitly rather than silently excluded. (Landed with 20260909000020;
+    // the enrollment gate caught it at Beat 4's full-suite run.)
+    "principal_erasure_execute",
 ];
 
 /// Any function whose body consults the visibility substrate must be enrolled. The vocabulary is

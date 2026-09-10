@@ -14,6 +14,7 @@ pub mod delivery_service;
 pub mod drain_span;
 pub mod edge_service;
 pub mod embed_service;
+pub mod erasure_fence_service;
 pub mod erasure_service;
 pub mod event_service;
 pub mod evidential_standing_service;

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT erasure_delete_fail($1, $2) AS \"n!: i32\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "n!: i32",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "4bed8d7a7c8dd7fce138a4084d9ecba40da13885c79d2265c45e9b737980cbd1"
+}

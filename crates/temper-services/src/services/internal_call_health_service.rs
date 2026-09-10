@@ -279,7 +279,7 @@ pub async fn check_internal_call_health(pool: &PgPool) -> ApiResult<InternalCall
     .await?;
 
     let now = Utc::now();
-    let mut channels = Vec::with_capacity(WATCHED_CHANNELS.len());
+    let mut channels = Vec::with_capacity(WATCHED_CHANNELS.len() + 1);
     for name in WATCHED_CHANNELS {
         let row = rows.iter().find(|r| r.channel == name);
         let state = derive_state(row, now);
@@ -296,8 +296,14 @@ pub async fn check_internal_call_health(pool: &PgPool) -> ApiResult<InternalCall
             failing_for_seconds: row
                 .and_then(|r| r.failing_since)
                 .map(|since| (now - since).num_seconds()),
-        });
+        })
     }
+
+    // The erasure byte-delete fence reports through this same check and vocabulary, appended
+    // after the row-derived channels (order stability: existing consumers find their channel by
+    // name, and the span tests `find` the reconcile channel first). Its facts are derived from
+    // the fence's own durable table — see `erasure_fence_service` for the state mapping.
+    channels.push(crate::services::erasure_fence_service::fence_channel_report(pool, now).await?);
 
     for report in &channels {
         emit_channel_span(report);

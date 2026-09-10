@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id AS \"id!: Uuid\", content_hash AS \"content_hash!\", pathname AS \"pathname!\"\n          FROM erasure_delete_claim($1, $2)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!: Uuid",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "content_hash!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "pathname!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "15dcee80ec2bd30df31abcddca3decd12317d2e228000b6afaf8983c57bcaf53"
+}
