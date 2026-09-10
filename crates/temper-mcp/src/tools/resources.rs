@@ -826,10 +826,11 @@ pub async fn get_block_provenance(
 }
 
 /// Read one content block by address — the three-state resolution (D-D1). Service-direct
-/// read (reads bypass the Backend trait); the access gate lives in the substrate readback,
-/// and an absent OR not-visible block arrives as `ApiError::NotFound`, denying existence.
-/// All three states render as data with `state` named — MCP has no status codes, so the
-/// state tag (`live` / `folded`) is what a caller branches on, and a folded successor is
+/// read (reads bypass the Backend trait); the home-resource gate lives in the substrate
+/// readback. The two denial shapes are DIFFERENT here, and the tool description promises
+/// exactly this split: an absent address arrives as `Ok(BlockRead::Absent)` and renders as
+/// data (`state: "absent"`), while a not-visible home arrives as `ApiError::NotFound` and
+/// maps to `invalid_params` — denying existence, never 403. A folded successor is
 /// addressed by calling this again with its own block id.
 pub async fn get_block(
     svc: &TemperMcpService,

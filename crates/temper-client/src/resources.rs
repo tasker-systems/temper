@@ -217,7 +217,16 @@ impl<'a> ResourceClient<'a> {
                 let bytes = resp.bytes().await?;
                 Ok(serde_json::from_slice(&bytes)?)
             }
-            Err(ClientError::NotFound { .. }) => Ok(BlockRead::Absent { block_id }),
+            // The route's OWN 404 names the block ("content block {id} not found") — that is
+            // the defined absent face. Any OTHER 404 (an unmatched route on an older server,
+            // a proxy fallback) propagates as an error: synthesizing `absent` from it would
+            // tell a caller "no such row, ever" about a block the skewing server simply
+            // cannot address — the one lie in the worst direction.
+            Err(ClientError::NotFound { message })
+                if message.contains(&block_id.to_string()) && message.contains("not found") =>
+            {
+                Ok(BlockRead::Absent { block_id })
+            }
             Err(e) => Err(e),
         }
     }

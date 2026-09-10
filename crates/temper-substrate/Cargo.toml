@@ -21,6 +21,9 @@ scenario-schema = ["schemars", "temper-core/scenario-schema"]
 
 [dependencies]
 temper-core = { path = "../temper-core" }
+# The readback degradation log (a folded map that fails to parse resolves unrecorded, and
+# says so) — workspace-pinned, logging-only.
+tracing = "0.1"
 # MIGRATOR + the ledger runner. Light on purpose (sqlx/tokio/clap/anyhow) so the deploy can
 # compile the migrate binary without ort — see crates/temper-migrate/Cargo.toml.
 temper-migrate = { path = "../temper-migrate" }

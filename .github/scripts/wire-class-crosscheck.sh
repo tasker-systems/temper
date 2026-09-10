@@ -293,7 +293,12 @@ else
 fi
 
 classes_contain() {
-    case ",$(printf '%s' "$1" | tr -d ' ')," in
+    # Normalize the class list to comma-separated tokens BEFORE wrapping in commas:
+    # `tr -d ' '` here would fuse "additive behavioral" into "additivebehavioral" and no
+    # multi-class row could ever match — the bug this branch's six-row declaration exposed.
+    local normalized
+    normalized="$(printf '%s' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/[[:space:]][[:space:]]*/,/g')"
+    case ",$normalized," in
         *",$2,"*) return 0 ;;
         *) return 1 ;;
     esac
@@ -319,16 +324,88 @@ if [ "$HAS_OWN_ROW" -eq 0 ]; then
 fi
 
 # ── Check 3: shape honesty ──────────────────────────────────────────────────────────────────────
+# The spec's class table (§4) is the authority on what movement means:
+#   additive       "shapes only grow; tolerant in both skew directions" — so GROWTH (a born path,
+#                  a born schema, a new optional field) is the CANONICAL additive movement.
+#                  Demanding shape-breaking for it would red the spec's own definition (D-S1:
+#                  additive changes bump wire contracts — they move shapes by growing them).
+#   shape-breaking "non-additive: a rename, a removal, a type change, an envelope change".
+# The verdict therefore splits movement the way the spec does:
+#   unchanged — identical (version stripped);
+#   grew      — the base contract survives INTACT and the head only adds. A surviving node may
+#               gain optional properties (new keys in `properties` never listed in `required` —
+#               the serde(default) tolerance the spec names) and may edit prose
+#               (description/summary/title/examples). Anything else on a surviving node — a
+#               property removed, a type changed, a requirement added (array `required` grown,
+#               boolean `required` tightened) — is breaking. Additions of whole paths/schemas
+#               are growth; removals are always breaking.
+#   moved     — the base contract changed or shrank anywhere: the M question.
+# Fail closed: anything undecidable computes as moved.
 derive_shape() {
     command -v jq >/dev/null 2>&1 || { echo "undeterminable"; return 0; }
     # openapi.json absent from the base: the whole contract is new in this PR — maximal movement.
     if ! git cat-file -e "${BASE}:openapi.json" 2>/dev/null; then
         echo "moved"; return 0
     fi
-    base_s="$(git show "${BASE}:openapi.json" 2>/dev/null | jq -S 'del(.info.version)' 2>/dev/null)" || { echo "undeterminable"; return 0; }
-    head_s="$(jq -S 'del(.info.version)' openapi.json 2>/dev/null)" || { echo "undeterminable"; return 0; }
-    if [ -z "$base_s" ] || [ -z "$head_s" ]; then echo "undeterminable"; return 0; fi
-    if [ "$base_s" = "$head_s" ]; then echo "unchanged"; else echo "moved"; fi
+    local tmp_base tmp_head
+    tmp_base="$(mktemp)"; tmp_head="$(mktemp)"
+    trap 'rm -f "$CHANGED_FILE" "$WIRE_FILES" "$ADDED_LINES" "$tmp_base" "$tmp_head"' EXIT
+    git show "${BASE}:openapi.json" 2>/dev/null | jq -S 'del(.info.version)' > "$tmp_base" 2>/dev/null || { rm -f "$tmp_base" "$tmp_head"; echo "undeterminable"; return 0; }
+    jq -S 'del(.info.version)' openapi.json > "$tmp_head" 2>/dev/null || { rm -f "$tmp_base" "$tmp_head"; echo "undeterminable"; return 0; }
+    if [ ! -s "$tmp_base" ] || [ ! -s "$tmp_head" ]; then rm -f "$tmp_base" "$tmp_head"; echo "undeterminable"; return 0; fi
+    if cmp -s "$tmp_base" "$tmp_head"; then rm -f "$tmp_base" "$tmp_head"; echo "unchanged"; return 0; fi
+    local verdict
+    verdict="$(jq -n -r -f /dev/stdin \
+        --slurpfile base "$tmp_base" --slurpfile head "$tmp_head" <<'SHAPE_JQ'
+def broke_node($b; $h):
+  ($b | type) != ($h | type)
+  or (
+    ($b | type) == "object"
+    and (
+      ([ $b | keys[] ] - [ $h | keys[] ] | length > 0)
+      or (
+        [ $b | keys[] as $k
+          | if (($b[$k] | type) == "object") and (($h[$k] | type) == "object")
+            then broke_node($b[$k]; $h[$k])
+            elif $k == "required" and (($b[$k] | type) == "array")
+            then (($h[$k] - $b[$k]) | length > 0)
+            elif $k == "description" or $k == "title" or $k == "summary"
+              or $k == "example" or $k == "examples"
+            then false
+            else $b[$k] != $h[$k]
+            end ]
+        | any
+      )
+      or (
+        (($b | has("properties")) and ($h | has("properties")))
+        and (
+          [ ([ $h.properties | keys[] ] - [ $b.properties | keys[] ])[]
+              as $p
+              | select((($h.required // []) | index($p)) != null) ]
+          | length > 0
+        )
+      )
+    )
+  )
+  or (($b | type) != "object" and $b != $h);
+
+[ ($base[0].paths | keys[]) as $p
+  | if ($head[0].paths | has($p)) | not then "moved"
+    elif broke_node($base[0].paths[$p]; $head[0].paths[$p]) then "moved"
+    else empty end ]
++ [ (($base[0].components // {}) | keys[]) as $c
+    | if (($head[0].components // {}) | has($c) | not) then "moved" else empty end ]
++ [ (($base[0].components.schemas // {}) | keys[]) as $s
+    | if (($head[0].components.schemas // {}) | has($s)) | not then "moved"
+      elif broke_node($base[0].components.schemas[$s]; $head[0].components.schemas[$s]) then "moved"
+      else empty end ]
+| if length > 0 then "moved" else "grew" end
+SHAPE_JQ
+    )" 2>/dev/null || verdict="moved"
+    rm -f "$tmp_base" "$tmp_head"
+    verdict="${verdict//\"/}"
+    [ -z "$verdict" ] && verdict="moved"
+    echo "$verdict"
 }
 
 SHAPE_NOTE=""
@@ -353,6 +430,24 @@ if grep -qx "openapi.json" "$WIRE_FILES"; then
                 PROBLEMS="${PROBLEMS}  envelope change is the M class: the bump, the changelog, and the client-release plan are"
                 PROBLEMS="${PROBLEMS}"$'\n'
                 PROBLEMS="${PROBLEMS}  owed before merge (spec §4; the PR #858 class)."
+                PROBLEMS="${PROBLEMS}"$'\n'
+            fi
+            ;;
+        grew)
+            if classes_contain "$SELF_CLASSES" "additive"; then
+                SHAPE_NOTE="  shape GREW and the register declares additive — the spec's canonical additive case"
+                SHAPE_NOTE="${SHAPE_NOTE}"$'\n'
+                SHAPE_NOTE="${SHAPE_NOTE}  (\"shapes only grow\"): the P floor is on the record; nothing broke."
+            elif classes_contain "$SELF_CLASSES" "shape-breaking"; then
+                SHAPE_NOTE="  shape grew, but the register declares shape-breaking: PASS, NOTED. Honest"
+                SHAPE_NOTE="${SHAPE_NOTE}"$'\n'
+                SHAPE_NOTE="${SHAPE_NOTE}  over-declaration never fails here (the sqlx gate's asymmetry)."
+            else
+                PROBLEMS="${PROBLEMS}  openapi.json changed and this PR's register row(s) declare neither additive nor"
+                PROBLEMS="${PROBLEMS}"$'\n'
+                PROBLEMS="${PROBLEMS}  shape-breaking (declared:${SELF_CLASSES:- <none>}). 'behavioral' does not answer the shape"
+                PROBLEMS="${PROBLEMS}"$'\n'
+                PROBLEMS="${PROBLEMS}  question the openapi diff poses (spec §4)."
                 PROBLEMS="${PROBLEMS}"$'\n'
             fi
             ;;

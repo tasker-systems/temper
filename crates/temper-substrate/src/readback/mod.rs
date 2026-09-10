@@ -835,13 +835,46 @@ pub async fn block_read(
         };
         match event {
             Some((name, payload)) if name == "resource_reblocked" => {
+                // A stored map that no longer parses (schema-era skew, DB-level corruption)
+                // must not turn this block's read into a persistent 500: the resolution
+                // degrades to the defined `unrecorded` arm — the honest statement is still
+                // "the ledger does not carry a usable mapping" — with the parse fault
+                // logged for an operator. Replay is unaffected (it never typed-parses).
                 let manifest: crate::payloads::ResourceReblocked =
-                    serde_json::from_value(payload).map_err(|e| ReadbackError::Fault(e.into()))?;
+                    match serde_json::from_value(payload) {
+                        Ok(m) => m,
+                        Err(e) => {
+                            tracing::warn!(
+                                block = %block_id,
+                                event = %row.last_event_id,
+                                error = %e,
+                                "resource_reblocked payload failed to parse; resolving unrecorded"
+                            );
+                            return Ok(BlockRead::Folded {
+                                block_id: block_id.uuid(),
+                                folded_by_event_id: row.last_event_id,
+                                disposition: BlockFoldDisposition::Unrecorded,
+                                attribution_history: folded_history_rows(pool, block_id).await?,
+                            });
+                        }
+                    };
                 match manifest.dispositions.get(&block_id) {
                     Some(crate::payloads::FoldDisposition::Located { absorbers, carried }) => {
-                        BlockFoldDisposition::Located {
-                            absorbers: gate_successors(pool, principal, absorbers).await?,
-                            carried: gate_successors(pool, principal, carried).await?,
+                        // Per-successor gating can omit EVERY name (all successors invisible
+                        // to this caller). `from_geometry`'s "never an empty Located" rule is
+                        // then the honest rendering: naming nothing must not wear Located's
+                        // name — an empty `located` envelope would publish "withheld,
+                        // therefore something invisible exists", the aggregate-existence hint
+                        // the no-trace posture forbids.
+                        let gated_absorbers = gate_successors(pool, principal, absorbers).await?;
+                        let gated_carried = gate_successors(pool, principal, carried).await?;
+                        if gated_absorbers.is_empty() && gated_carried.is_empty() {
+                            BlockFoldDisposition::ContentGone
+                        } else {
+                            BlockFoldDisposition::Located {
+                                absorbers: gated_absorbers,
+                                carried: gated_carried,
+                            }
                         }
                     }
                     Some(crate::payloads::FoldDisposition::ContentGone) => {
@@ -934,6 +967,14 @@ async fn folded_history_rows(
 /// resource passes trivially today (visibility is resource-grain; the caller already read the
 /// home), which makes this defense-in-depth and the forward bound for span addressing, not a
 /// live gate. Omitted successors leave no trace: no id, no count, no existence hint.
+///
+/// Two deliberate postures recorded here so the next reader doesn't have to re-derive them:
+/// (1) when the gate omits EVERY name, the caller of this fn renders `content_gone`, never an
+/// empty `located` — see the call site; (2) the LEDGER's other map reader, the element trail,
+/// serves raw event payloads under the trail's home-grain gating posture and does NOT run
+/// this gate — correct today (every fold is within one resource, so a home-read caller can
+/// read every successor), and a decision to revisit the moment span addressing (register
+/// clause 2) lets a successor cross a resource boundary.
 async fn gate_successors(
     pool: &PgPool,
     principal: ProfileId,
@@ -949,9 +990,12 @@ async fn gate_successors(
     )
     .fetch_all(pool)
     .await?;
+    // Visibility memoized per unique home resource. The INPUT order is preserved — the map
+    // emits successors in section order (the partition's own geometry), and the envelope
+    // should carry that order, not `ANY($1)`'s unspecified row order.
     let mut readable: std::collections::HashMap<Uuid, bool> = std::collections::HashMap::new();
-    let mut out = Vec::new();
-    for row in rows {
+    let mut surviving: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
+    for row in &rows {
         let visible = match readable.get(&row.resource_id) {
             Some(v) => *v,
             None => {
@@ -962,10 +1006,14 @@ async fn gate_successors(
             }
         };
         if visible {
-            out.push(BlockSuccessor { block_id: row.id });
+            surviving.insert(row.id);
         }
     }
-    Ok(out)
+    Ok(successors
+        .iter()
+        .filter(|b| surviving.contains(&b.uuid()))
+        .map(|b| BlockSuccessor { block_id: b.uuid() })
+        .collect())
 }
 
 /// The telos resource id + its current body merkle for a cogmap — the charter reconcile diff source.

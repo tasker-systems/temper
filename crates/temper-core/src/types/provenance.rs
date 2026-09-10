@@ -90,6 +90,12 @@ pub struct BlockChunkRef {
 /// block ids, each surfaced only when the caller passes that successor's own canonical read
 /// predicate — invisible successors are omitted ENTIRELY (no id, no count: aggregate existence
 /// is still an existence leak).
+///
+/// WIRE DECISION, ON THE RECORD: a successor carries only its block id — addressable today
+/// because every fold producer folds within one resource, so the successor shares the folded
+/// block's home. When span addressing (register clause 2) lets a successor cross a resource
+/// boundary, this shape must grow a home-resource field (or the map must) — a deliberate
+/// change then, not an accident discovered by a client that cannot construct an address.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]

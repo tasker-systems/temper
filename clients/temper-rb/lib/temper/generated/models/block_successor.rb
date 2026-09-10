@@ -14,7 +14,7 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # One named successor of a folded block's content. The disposition map's absorbers/carried block ids, each surfaced only when the caller passes that successor's own canonical read predicate — invisible successors are omitted ENTIRELY (no id, no count: aggregate existence is still an existence leak).
+  # One named successor of a folded block's content. The disposition map's absorbers/carried block ids, each surfaced only when the caller passes that successor's own canonical read predicate — invisible successors are omitted ENTIRELY (no id, no count: aggregate existence is still an existence leak).  WIRE DECISION, ON THE RECORD: a successor carries only its block id — addressable today because every fold producer folds within one resource, so the successor shares the folded block's home. When span addressing (register clause 2) lets a successor cross a resource boundary, this shape must grow a home-resource field (or the map must) — a deliberate change then, not an accident discovered by a client that cannot construct an address.
   class BlockSuccessor < ApiModelBase
     # The surviving block (kept or created) holding the folded incumbent's content.
     attr_accessor :block_id
