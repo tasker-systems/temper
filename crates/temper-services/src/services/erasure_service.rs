@@ -9,7 +9,7 @@
 //! SQL commits, it does not decide legality (`principal_standing_apply`'s shape,
 //! migrations/20260720000030): the scope computation, the per-row governed-home strikes, the
 //! tombstone machinery and both events live in `principal_erasure_execute` /
-//! `principal_erasure_refuse` / `_erasure_apply_redaction` (migration 20260909000020). The
+//! `principal_erasure_refuse` / `_erasure_apply_redaction` (migration 20260909000025). The
 //! admin surface's HTTP door (`handlers::erasure::execute`) calls straight into
 //! [`execute_erasure`] — this module stays the service layer and carries no HTTP types.
 //!

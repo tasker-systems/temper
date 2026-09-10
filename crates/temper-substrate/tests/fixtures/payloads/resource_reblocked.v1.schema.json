@@ -11,6 +11,13 @@
         "$ref": "#/$defs/ReblockCreatedBlock"
       }
     },
+    "dispositions": {
+      "description": "Where each folded incumbent's content went — the per-folded-id disposition map (the\ndefined-dangling-state design, D-D2). `folded` records WHICH blocks the partition\nsupersedes; this map records what a dangling read may name as successors, captured HERE\nbecause the manifest alone cannot resolve them (a folded block absorbed into a kept\nblock can leave no trace in the payload). Both arms populate it; a folded id absent\nfrom it (pre-map events, `charter_set`, historical `block_mutated` replaces-body folds)\nis the defined `unrecorded` disposition on every reading surface — never a guess.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/FoldDisposition"
+      }
+    },
     "folded": {
       "description": "The incumbent rows the partition supersedes.",
       "type": "array",
@@ -66,6 +73,51 @@
         "chunk_id",
         "chunk_index",
         "content_hash"
+      ]
+    },
+    "FoldDisposition": {
+      "description": "One folded incumbent's content disposition (D-D2), recorded at computation time while the\nfold logic still knows the mapping. Resolved read-path only: a dangling read walks the\nfolded row's `last_event_id` to the fold event and reads this map — no successor pointer\nis born on block rows, and the ledger stays the authority.",
+      "oneOf": [
+        {
+          "description": "Content locatable in surviving blocks: every section holding the incumbent's FULL\nchunk-hash multiset names its block under `absorbers` (kept AND created — on the\nwhole-body path a rewritten-away incumbent is absorbed into a freshly minted section,\nso created absorbers are the common case); every further section holding a strict\nsubset names its block under `carried`. Absorbers can legitimately be empty: content\nspread across section boundaries may live everywhere in part and nowhere in whole.",
+          "type": "object",
+          "properties": {
+            "absorbers": {
+              "description": "Surviving blocks whose section contains the incumbent's full chunk-hash multiset.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/BlockId"
+              }
+            },
+            "carried": {
+              "description": "Surviving blocks holding only part of the incumbent's content.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/BlockId"
+              }
+            },
+            "state": {
+              "type": "string",
+              "const": "located"
+            }
+          },
+          "required": [
+            "state"
+          ]
+        },
+        {
+          "description": "Nothing locatable: the incumbent had no current chunks, or its chunk hashes appear in\nno section of the new partition. A named arm, never an inference — its provenance rows\nstay history on the folded row, and no successor is named.",
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "content_gone"
+            }
+          },
+          "required": [
+            "state"
+          ]
+        }
       ]
     },
     "ProvenanceSource": {

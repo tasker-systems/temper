@@ -100,7 +100,7 @@ const PROJECTION_DUMPS: &[(&str, &str)] = &[
         "kb_invocations",
         "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.id), '[]'::jsonb) FROM kb_invocations t",
     ),
-    // The erased-content set (D4, 20260909000010) diffs in FULL: content_hash is the primary key
+    // The erased-content set (D4, 20260909000015) diffs in FULL: content_hash is the primary key
     // and erased_by_event_id is payload-derivable (the admitting principal_erased event's own id,
     // restored verbatim), so there is nothing to mask. First-admit attribution (`ON CONFLICT DO
     // NOTHING`) makes the ledger-order rebuild byte-identical to the live set — this row is what
@@ -813,7 +813,7 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // which is why the content-empties below are belt-and-braces (idempotent no-ops
             // against the sidecars) while the arm's LOAD-BEARING effects are the ones nothing
             // else reproduces: the erased-content set refill (first-admit attribution,
-            // `ON CONFLICT DO NOTHING` — 20260909000020's step 6, the refusal set a rebuild
+            // `ON CONFLICT DO NOTHING` — 20260909000025's step 6, the refusal set a rebuild
             // derives) and the formation-watermark nulls, both in ledger order. It calls THE
             // ONE redaction definition — the Beat 2 migration header's demand ("the replay
             // pre-pass (Beat 3) must call the same function, never a second body"); re-implementing

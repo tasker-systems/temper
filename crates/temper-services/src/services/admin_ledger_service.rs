@@ -69,7 +69,7 @@ const ADMIN_EVENT_TYPES: &[&str] = &[
     // deliberate-absence note there for why neither gets a subject-axis arm below it.
     "principal_standing_changed",
     "principal_governance_changed",
-    // The erasure act's admin pair (20260909000010, spec 2026-08-31): the completion event IS
+    // The erasure act's admin pair (20260909000015, spec 2026-08-31): the completion event IS
     // the audit — who, under what request, against which pseudonym, with what remainder ("The
     // three readers", Operator row) — so it is readable here, through the admin arm above. No
     // subject-axis arm below, DELIBERATELY: the record names the subject only as the pseudonym

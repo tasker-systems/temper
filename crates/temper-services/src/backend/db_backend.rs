@@ -63,6 +63,20 @@ fn api_err(e: impl std::fmt::Display) -> TemperError {
     TemperError::Api(e.to_string())
 }
 
+/// Map a substrate write error, TYPING the block-addressing refusals before the generic
+/// Display bridge (the defined-dangling-state design): a folded target is `Gone` (410 — the
+/// row persists as history), an absent one `NotFound` (404) — never the 500-class `Api` the
+/// plain bridge produced. Every other substrate error is unchanged.
+fn write_err(e: anyhow::Error) -> TemperError {
+    match e.downcast_ref::<writes::BlockAddressError>() {
+        Some(writes::BlockAddressError::Folded { .. }) => TemperError::Gone(e.to_string()),
+        Some(writes::BlockAddressError::NotInResource { .. }) => {
+            TemperError::NotFound(e.to_string())
+        }
+        None => api_err(e),
+    }
+}
+
 /// The one wording of the cogmap-authorship refusal that **names the capability it withheld**.
 ///
 /// Three call sites establish "this caller cannot author this map" by two different routes, and they
@@ -2383,7 +2397,7 @@ impl Backend for DbBackend {
         } else {
             writes::update_resource_with(&self.pool, params, act_ctx.clone()).await
         }
-        .map_err(api_err)?;
+        .map_err(write_err)?;
 
         // Project the goal-edge patch (issue 019f3d55). `Set` folds any existing `advances`→goal
         // edge and asserts the new one (replace-in-place); `Clear` folds without re-asserting;
@@ -2555,7 +2569,7 @@ impl Backend for DbBackend {
             act_ctx,
         )
         .await
-        .map_err(api_err)?;
+        .map_err(write_err)?;
         let view =
             native_resource_view(&self.pool, self.profile_id, ResourceId::from(new_id)).await?;
         Ok(CommandOutput::new(view))

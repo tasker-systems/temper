@@ -6,7 +6,7 @@
 -- that fence or its equivalent — retry plus age alerting."
 --
 -- DERIVE, DON'T REMEMBER: pending deletes seed FROM the `principal_erased` payload's per-target
--- strike verdicts ("erased; released=true; pathname=…", 20260909000020:286-288) — specific
+-- strike verdicts ("erased; released=true; pathname=…", 20260909000025:286-288) — specific
 -- pathnames, never provider enumeration (no `list` on BlobStore). First-due is the EVENT's
 -- occurred_at, so the age measures how long bytes have been gone-from-the-server while still
 -- held at the provider. `erasure_delete_seed` is idempotent per (erasure_event_id, pathname):

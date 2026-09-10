@@ -6388,6 +6388,7 @@ dependencies = [
  "temper-ingest",
  "temper-migrate",
  "tokio",
+ "tracing",
  "uuid",
 ]
 

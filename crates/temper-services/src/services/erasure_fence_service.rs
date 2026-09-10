@@ -64,7 +64,7 @@ const SKIPPED_REOCCUPIED: &str = "skipped-reoccupied";
 const RESOLUTION_DELETED: &str = "deleted";
 
 /// The delete-target prefix of Beat 2's pinned v1 outcome vocabulary
-/// (`20260909000020`: `'erased; released=' || v_rel::text || '; pathname=' || v_path`): a
+/// (`20260909000025`: `'erased; released=' || v_rel::text || '; pathname=' || v_path`): a
 /// strike is a delete target exactly when it reads `erased; released=true` — `released=false`
 /// means the strike-time refcount found another live row holding the hash, so the bytes were
 /// never this act's to remove. `already-erased` and the `independent_obligation` remainder are
@@ -1090,7 +1090,7 @@ mod tests {
 
     // ── WITNESS: the prose interface fails loud ──────────────────────────────────────────
     /// FAILS IF the migration's strike-outcome template can drift from what the fence parses:
-    /// the pin asserts the SQL literal in 20260909000020 composes to exactly the Rust
+    /// the pin asserts the SQL literal in 20260909000025 composes to exactly the Rust
     /// constants — the released prefix the seed parses through, the held prefix it skips, and
     /// the two non-strike shapes. (Mirrors
     /// `payload_schema::the_migration_literal_matches_the_committed_fixture`.)
@@ -1098,7 +1098,7 @@ mod tests {
     fn the_migration_strike_template_matches_the_pinned_constants() {
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../migrations/20260909000020_erasure_act_execution.sql"
+            "/../../migrations/20260909000025_erasure_act_execution.sql"
         );
         let migration = std::fs::read_to_string(path).expect("the execution migration exists");
         // The template, spelled in the migration as literal || v_rel::text || literal || v_path.

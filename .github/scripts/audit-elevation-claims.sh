@@ -196,12 +196,12 @@ claim crates/temper-api/src/handlers/connections.rs 1 connection
 claim crates/temper-api/src/handlers/slack_disconnect.rs 1 -
 claim crates/temper-api/src/handlers/teams.rs 1 -
 claim crates/temper-cli/src/cli.rs 12 -
+claim crates/temper-cli/src/commands/admin.rs 3 -
 claim crates/temper-cli/src/commands/admin_connection.rs 2 connection
 claim crates/temper-cli/src/commands/admin_machine.rs 3 machine
 claim crates/temper-cli/src/commands/admin_saml.rs 1 -
 claim crates/temper-cli/src/commands/admin_slack.rs 1 -
 claim crates/temper-cli/src/commands/admin_subscription.rs 2 subscription
-claim crates/temper-cli/src/commands/admin.rs 3 -
 claim crates/temper-cli/src/commands/cogmap.rs 3 require_cogmap_write_admin
 claim crates/temper-cli/src/commands/context_cmd.rs 2 context_admin
 claim crates/temper-cli/src/commands/warmup.rs 1 is_system_admin
@@ -220,7 +220,7 @@ claim crates/temper-services/src/services/slack_disconnect_service.rs 2 -
 claim crates/temper-services/src/services/subscription_service.rs 6 subscription
 claim crates/temper-services/src/services/subscription_test_support.rs 1 subscription
 claim crates/temper-services/src/services/team_service.rs 2 require_manage_on_team,can_manage
-gate audit_gate 2765b1223b30
+gate audit_gate f7a794bde240
 gate connection 815137c3936d
 gate context_admin 14529ac51ace
 gate grant 3cfec3045c9a

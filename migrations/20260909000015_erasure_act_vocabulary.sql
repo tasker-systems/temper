@@ -258,7 +258,7 @@ CREATE TABLE kb_erased_content (
 );
 
 COMMENT ON TABLE kb_erased_content IS
-'The erased-content set (erasure spec D4, created 20260909000010): one row per content hash
+'The erased-content set (erasure spec D4, created 20260909000015): one row per content hash
 the erasure act has redacted — the refusal a stale-laptop sync hits (a re-admitting write
 refuses THROUGH this set, by hash; erasure is a refusal, not an absence). Derive-don''t-
 remember: rebuildable from `principal_erased` payloads alone, first admitting event
@@ -274,13 +274,13 @@ content rows carry.';
 ALTER TABLE kb_profiles ADD COLUMN tombstoned_at TIMESTAMPTZ;
 
 COMMENT ON COLUMN kb_profiles.tombstoned_at IS
-'Erasure act marker (spec D5, added 20260909000010): set at erase time when the pseudonym
+'Erasure act marker (spec D5, added 20260909000015): set at erase time when the pseudonym
 breaks. Not an identifier and not the redaction itself — the identifier nulling happens in
 the same act, by the erasure execution; this column records only that it happened, so the
 pseudonym''s surviving references stay resolvable and non-identifying.';
 
 SELECT declare_migration(
-    20260909000010,
+    20260909000015,
     'additive',
     'The erasure act''s vocabulary (spec 2026-08-31, Beat 1 of task 01a0577c): registers principal_erased + principal_erasure_refused (category admin, NULL-anchored — the cognition firewall) and blob_erased (category domain — the only vocabulary the blob_delete wrapper''s guard admits) with their generated payload schemas, one shot at category per the RESTRICT/append-only precedent; creates kb_erased_content, the hash-keyed erased-content set (spec D4 — projector-maintained by the later execution beat, rebuildable from principal_erased payloads alone); adds kb_profiles.tombstoned_at, the act marker (spec D5 — the identifier nulling itself happens at erase time, not here). Additive: new table, nullable column, new registry rows; nothing existing is altered.'
 );

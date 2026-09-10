@@ -57,7 +57,7 @@ event_types:
   # system MUST register it or the strike wrapper (and the replay of any ledger that ever
   # carried one) fails "event_type blob_deleted not seeded".
   - blob_deleted
-  # The erasure act's vocabulary (spec 2026-08-31), added by migration 20260909000010 — same
+  # The erasure act's vocabulary (spec 2026-08-31), added by migration 20260909000015 — same
   # posture: TYPED with committed payload snapshots; a reset+seed_system system MUST register
   # them or the erasure strike arm (and the replay of any ledger that ever carried one) fails
   # "event_type blob_erased not seeded". The admin pair carries an `admin` category

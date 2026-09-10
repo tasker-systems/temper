@@ -183,7 +183,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION _erasure_apply_redaction(uuid, text[], uuid) IS
-'the erasure act''s ONE redaction definition (20260909000020 — the text analog of the blobs''
+'the erasure act''s ONE redaction definition (20260909000025 — the text analog of the blobs''
 D5.2 shape): content emptied BY HASH with hashes kept, embeddings+provenance nulled
 together, search vectors emptied, the profile tombstoned to occurred_at, the
 sync_personal_team denormalization scrubbed to the sentinel derivation, the two no-FK
@@ -527,7 +527,7 @@ independent_obligation) — and mutates NOTHING else. Accepted-in-part is NOT th
 a completion with a named remainder is principal_erasure_execute''s payload data.';
 
 SELECT declare_migration(
-    20260909000020,
+    20260909000025,
     'additive',
     'The erasure act''s execution (spec 2026-08-31, Beat 2 of task 01a0577c): principal_erasure_execute (scope via the two indexed halves filtered to governed personal contexts — owner_table=''kb_profiles'' AND owner_id=subject, the read model''s own owner arm; per-row governed-home blob strikes through the substrate''s blob_delete(''blob_erased'', …) wrapper, team/cogmap homes named as the independent_obligation remainder; the ONE NULL-anchored principal_erased event whose references carry the subject + the opaque request reference and whose correlation id pairs it with its strikes; then _erasure_apply_redaction) and principal_erasure_refuse (D6''s negative face — reason code, nothing else mutated). _erasure_apply_redaction is the ONE text-redaction definition (content emptied by hash, hashes kept, embeddings+provenance nulled together, search vectors emptied, profile tombstoned to occurred_at, personal-team denormalization scrubbed to the sentinel derivation, no-FK Slack identifiers deleted, kb_erased_content first-admit refilled, formation watermarks nulled as the centroid recompute MARK) — the replay pre-pass (Beat 3) must call the same function, never a second body. Legality is the Rust caller''s (is_system_admin); SQL commits, it never decides. Additive: new functions only.'
 );

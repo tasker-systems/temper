@@ -1,5 +1,5 @@
 -- The erased-content refusal on the projection write-back arm (erasure spec 2026-08-31, D4
--- arm 1; task 01a0577c Beat 3). `kb_erased_content` (20260909000010) is the materialized set
+-- arm 1; task 01a0577c Beat 3). `kb_erased_content` (20260909000015) is the materialized set
 -- the write path refuses through: a revise whose incoming payload carries a hash in the set —
 -- any chunk hash, or the verbatim `__blocks` bytes hash — RAISES, before anything is appended
 -- or projected.

@@ -91,11 +91,15 @@ fn the_migration_literal_matches_the_committed_fixture() {
             &["resource_reblocked.v1.schema.json"],
         ),
         (
+            "20260909000010_resource_reblocked_dispositions.sql",
+            &["resource_reblocked.v1.schema.json"],
+        ),
+        (
             "20260906000010_blob_strike_substrate.sql",
             &["blob_deleted.v1.schema.json"],
         ),
         (
-            "20260909000010_erasure_act_vocabulary.sql",
+            "20260909000015_erasure_act_vocabulary.sql",
             &[
                 "principal_erased.v1.schema.json",
                 "principal_erasure_refused.v1.schema.json",

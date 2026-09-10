@@ -47,7 +47,7 @@ pub async fn embed_chunks(pool: &PgPool) -> Result<()> {
     Ok(())
 }
 
-/// The erased-hash exclusion, ONCE (erasure spec 2026-08-31, D4 arm 2 — 20260909000010's
+/// The erased-hash exclusion, ONCE (erasure spec 2026-08-31, D4 arm 2 — 20260909000015's
 /// `kb_erased_content`): a hash in the set is not embed work. The erasure nulled its vector
 /// and provenance together, and "never re-embedded" must hold whatever the chunk's prose says
 /// (emptiness must not be the gate; the set is). As a loop skip it would be the wedge this

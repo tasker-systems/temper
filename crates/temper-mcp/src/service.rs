@@ -174,6 +174,18 @@ impl TemperMcpService {
     }
 
     #[tool(
+        description = "Read one content block by address — the three-state resolution. `state` is always named: `live` returns the block's identity, its chunks' identities (structure and hashes, never prose), and its provenance rows; `folded` means a re-partition folded it away and returns its persisted attribution history plus `disposition` — where the content went (`located` names the absorber/carried successor blocks, only those you can read), `content_gone`, or `unrecorded` (the ledger does not carry the mapping). A non-existent address answers `state: \"absent\"`; only a block whose HOME RESOURCE you cannot see is a not-found error. Address a folded successor by calling this again with its block_id."
+    )]
+    async fn get_block(
+        &self,
+        Parameters(input): Parameters<tools::resources::GetBlockInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::resources::get_block(self, input).await
+    }
+
+    #[tool(
         description = "List resources in the knowledge base. Filter by context and/or document type. Returns most recent first. The response is a page: `rows` plus `total` (all matching rows), `returned`, `truncated`, `limit` and `offset`. When `truncated` is true there are matching rows you have not seen — do not conclude a resource is absent, or a set complete, from a truncated page; raise `limit`, page with `offset`, or narrow the filters. Each row carries a decorated `ref` (`slug-<uuid>`) you can pass straight back to any tool that takes one."
     )]
     async fn list_resources(

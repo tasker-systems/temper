@@ -77,6 +77,7 @@ fn gated_routes() -> OpenApiRouter<AppState> {
             handlers::resources::provenance,
             handlers::resources::annotate
         ))
+        .routes(routes!(handlers::resources::read_block))
         .routes(routes!(handlers::reassign::reassign_resource))
         .routes(routes!(handlers::edges::list))
         .routes(routes!(handlers::evidence::evidence))

@@ -12,7 +12,8 @@
 
 mod common;
 
-use temper_substrate::payloads::{AnchorRef, Incorporation, ProvenanceSource};
+use temper_substrate::ids::BlockId;
+use temper_substrate::payloads::{self, AnchorRef, Incorporation, ProvenanceSource};
 use temper_substrate::writes::{
     self, AppendParams, CreateMode, CreateParams, FinalizeParams, UpdateParams,
 };
@@ -208,6 +209,26 @@ fn source(url: &str, seq: i32) -> Incorporation {
     }
 }
 
+/// The latest `resource_reblocked` event's payload for the resource, TYPED — the wire bytes
+/// the write path actually fired, not an in-memory plan. The disposition map (D-D2) is
+/// asserted through this door so the witnesses bite on the event, where a read surface will.
+async fn latest_reblocked_payload(
+    pool: &sqlx::PgPool,
+    resource: temper_substrate::ids::ResourceId,
+) -> payloads::ResourceReblocked {
+    let raw: serde_json::Value = sqlx::query_scalar(
+        "SELECT e.payload FROM kb_events e \
+         JOIN kb_event_types t ON t.id = e.event_type_id \
+         WHERE t.name='resource_reblocked' AND (e.payload->>'resource_id')::uuid = $1 \
+         ORDER BY e.occurred_at DESC, e.id DESC LIMIT 1",
+    )
+    .bind(resource.uuid())
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    serde_json::from_value(raw).unwrap()
+}
+
 // ── the witnesses ───────────────────────────────────────────────────────────
 
 /// THE shipped defect, closed: a byte-identical whole-body rewrite carrying sources used to fold
@@ -381,6 +402,37 @@ async fn a_spanning_incumbents_rows_carry_to_every_section_holding_part(pool: sq
         span_rows[0].1, span_rows[1].1,
         "carried copies land on distinct sections"
     );
+
+    // The disposition map (D-D2) agrees with the rows: the spanning incumbent is mapped to
+    // the two sections holding part of it, absorbed nowhere.
+    let manifest = latest_reblocked_payload(&pool, resource).await;
+    let disposition = manifest
+        .dispositions
+        .get(&BlockId::from(block1_id))
+        .expect("the spanning incumbent is mapped");
+    match disposition {
+        payloads::FoldDisposition::Located { absorbers, carried } => {
+            assert!(
+                absorbers.is_empty(),
+                "no section holds BOTH span hashes — absorbed nowhere"
+            );
+            let live: std::collections::HashSet<Uuid> = blocks_of(&pool, resource)
+                .await
+                .iter()
+                .map(|(id, _)| *id)
+                .collect();
+            assert_eq!(carried.len(), 2, "carried names every section holding part");
+            for c in carried {
+                assert!(
+                    live.contains(&c.uuid()),
+                    "a carried name is a surviving block"
+                );
+            }
+        }
+        payloads::FoldDisposition::ContentGone => {
+            panic!("the span prose survives verbatim — content-gone would be a lie")
+        }
+    }
 }
 
 /// Content-gone (ruled, 2026-09-08): when the rewrite deletes an incumbent's content outright,
@@ -432,6 +484,100 @@ async fn content_gone_rows_stay_history_on_the_folded_block(pool: sqlx::PgPool) 
             .any(|(l, _)| l == "https://ex.com/doomed-src"),
         "the row survives as the folded block's reference"
     );
+
+    // The disposition map says the same thing as the rows: both folded incumbents are mapped,
+    // and both resolve to the named content-gone arm — never a guessed successor.
+    let manifest = latest_reblocked_payload(&pool, resource).await;
+    assert_eq!(manifest.folded.len(), 2, "fixture: both incumbents fold");
+    assert_eq!(
+        manifest.dispositions.len(),
+        2,
+        "every folded incumbent is mapped"
+    );
+    for disposition in manifest.dispositions.values() {
+        assert!(
+            matches!(disposition, payloads::FoldDisposition::ContentGone),
+            "content deleted outright maps to content-gone, never Located"
+        );
+    }
+}
+
+/// THE disposition map's dominant case (D-D2, the whole-body arm): a rewritten-away incumbent
+/// is absorbed into a FRESHLY MINTED section — created absorbers are the common case here, and
+/// a kept-only reading of "absorbers" would leave the dominant case unmapped.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_map_names_a_created_absorber(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "wb-map-created-absorber").await;
+    let resource = create_two_block(
+        &pool,
+        owner,
+        emitter,
+        &home,
+        SECTION_A,
+        SECTION_B,
+        vec![source("https://ex.com/alpha-src", 0)],
+    )
+    .await;
+    let before: Vec<Uuid> = blocks_of(&pool, resource)
+        .await
+        .iter()
+        .map(|(id, _)| *id)
+        .collect();
+
+    // The same geometry as the absorbed-annotation witness: A's section re-creates (A folds),
+    // but the alpha paragraph itself survives verbatim inside the NEW section.
+    let filler = "Brand new prose. ".repeat(120);
+    let new_body =
+        format!("# Alpha\n\nAlpha body paragraph.\n\n{filler}\n## Beta\n\nBeta body paragraph.\n");
+    update_body(&pool, emitter, resource, &new_body, vec![]).await;
+
+    let manifest = latest_reblocked_payload(&pool, resource).await;
+    assert!(
+        manifest.replaces_body,
+        "fixture: the whole-body replace arm fired"
+    );
+    let folded_a = before[0];
+    assert_eq!(
+        manifest.folded,
+        vec![BlockId::from(folded_a)],
+        "fixture: exactly the alpha incumbent folds"
+    );
+    let live: Vec<Uuid> = blocks_of(&pool, resource)
+        .await
+        .iter()
+        .map(|(id, _)| *id)
+        .collect();
+    match manifest
+        .dispositions
+        .get(&BlockId::from(folded_a))
+        .expect("the folded incumbent is mapped")
+    {
+        payloads::FoldDisposition::Located { absorbers, carried } => {
+            assert_eq!(
+                absorbers.len(),
+                1,
+                "the alpha chunk multiset lives whole in exactly one section"
+            );
+            let absorber = absorbers[0].uuid();
+            assert!(
+                !before.contains(&absorber),
+                "THE TRAP FACE: the absorber is a CREATED block, never a kept incumbent"
+            );
+            assert!(
+                live.contains(&absorber),
+                "the named absorber survives as a live block"
+            );
+            assert!(
+                carried.is_empty(),
+                "the whole multiset is in the absorber — no partial copies"
+            );
+        }
+        payloads::FoldDisposition::ContentGone => {
+            panic!("the alpha prose survives verbatim — content-gone would be a lie")
+        }
+    }
 }
 
 /// Duplicate identical sections: kept detection claims incumbents in seq order, deterministically;

@@ -15,6 +15,7 @@ Commands:
   describe-open-meta  Describe the recognized open_meta conventions (the self-describing schema)
   show                Show a resource's content
   evidence            Show a resource's evidential-standing shape — the maturity vector (independence-discounted breadth, adversarial survival, contradiction balance, freshness) plus a lossy read-time `band` chip carried WITH the shape, never in place of it. Calls GET /evidence
+  read-block          Read one content block by address — the three-state resolution
   update              Update a resource's frontmatter and/or body
   annotate            Attach provenance sources to a resource's block — WITHOUT a body revise (issue #355)
   delete              Delete a resource (soft-delete via the API)
@@ -276,6 +277,39 @@ Options:
       --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
       --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
   -h, --help               Print help
+```
+
+### `temper resource read-block`
+
+```text
+Read one content block by address — the three-state resolution
+
+States `live`, `folded`, or `absent` BY NAME in the envelope's `state` field. `live` carries the block's identity, its chunks' identities (structure and hashes, never prose), and its provenance rows. `folded` means a re-partition folded it away; the envelope carries the persisted attribution history plus a `disposition` stating where the content went — `located` names the absorber and carried successor blocks (only those you can read), `content_gone`, or `unrecorded` (the ledger does not carry the mapping). Address a folded successor the same way, by its own block id. `absent` — a block that does not exist or is not visible to you, indistinguishable by design — exits non-zero. Calls GET /resources/{id}/blocks/{block_id}.
+
+Usage: temper resource read-block [OPTIONS] <REF> <BLOCK_ID>
+
+Arguments:
+  <REF>
+          Resource ref: a UUID or the decorated `slug-<uuid>` form
+
+  <BLOCK_ID>
+          The content block to read (a block UUID)
+
+Options:
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 ### `temper resource update`

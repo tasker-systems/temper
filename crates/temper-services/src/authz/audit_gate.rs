@@ -188,8 +188,13 @@ pub(crate) async fn require_machine_principal(pool: &PgPool, caller: ProfileId) 
 /// [`ApiError::NotFound`], the same dialect [`AuditAuthority::denial`] uses, so "no such block" and
 /// "a block on a finding you may not audit" are indistinguishable to the caller.
 pub(crate) async fn finding_of_block(pool: &PgPool, block: BlockId) -> ApiResult<ResourceId> {
+    // `AND NOT is_folded`: a folded block is not a live citation (the defined-dangling-state
+    // design) — auditing one must be a defined refusal, never a silent success on a
+    // gone-citation. The filter lands the folded row in the same zero-rows arm as an unknown
+    // block, so both render NotFound: the gate's standing dialect, denying existence rather
+    // than opening an oracle over which refusals are which.
     let resource = sqlx::query_scalar!(
-        "SELECT resource_id FROM kb_content_blocks WHERE id = $1",
+        "SELECT resource_id FROM kb_content_blocks WHERE id = $1 AND NOT is_folded",
         block.uuid(),
     )
     .fetch_optional(pool)

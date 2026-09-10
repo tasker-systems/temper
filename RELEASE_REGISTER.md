@@ -14,6 +14,63 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.4.0 — unreleased
 
+- **The defined dangling state — the born block-addressed read (HTTP route)**
+  `GET /api/resources/{id}/blocks/{block_id}` exists; no block-id-addressed read existed
+  before, so no existing request class changes shape. Three states by name: 200 live, 410
+  folded (state envelope: attribution history + gated successor dispositions), 404 absent —
+  no redirect. Read callers observe it; the resolution contract is new.
+pr: self
+classes: additive
+surfaces: http
+status: signal-only
+
+- **The defined dangling state — MCP block-addressed resolution (`get_block`)**
+  Block-addressed resolution joins the provenance tool family, answering the same tri-state
+  envelope as data. No earlier tool addressed a block id for reads.
+pr: self
+classes: additive
+surfaces: mcp
+status: signal-only
+
+- **The defined dangling state — temper-client `BlockRead` types + CLI `resource read-block`**
+  The envelope and route types are born in temper-client and the CLI read command inherits
+  them; every Rust caller gets the tri-state contract. Born surfaces — nothing moved.
+pr: self
+classes: additive
+surfaces: clients, cli-stdout
+status: signal-only
+
+- **The defined dangling state — `ResourceReblocked` per-folded-id disposition map**
+  The fold event carries where each folded incumbent's content went (absorbers = full
+  chunk-hash multiset, kept AND created; carried copies; content-gone arm), captured at
+  computation time. Additive payload-schema change, `serde(default)`: pre-map events replay
+  identically and resolve to the defined `unrecorded` disposition. Schemars snapshot +
+  `kb_event_types` re-stamp ride the same change (precedent 20260908000010, additive posture,
+  `schema_version` stays 1).
+pr: self
+classes: additive
+surfaces: schema, internal
+status: signal-only
+
+- **The defined dangling state — annotate/revise on a folded or absent block: 500-class → defined states**
+  A write addressing a folded block now answers 410 Gone (`TemperError`/`ClientError::Gone`,
+  named on MCP and CLI), and a not-under-this-resource block answers 404 — where both
+  bridged to 500-class `internal_error` before. The discrimination is unchanged; only its
+  error class and shape moved. Existing request class, error→response.
+pr: self
+classes: behavioral
+surfaces: http, mcp, cli-stdout
+status: open
+
+- **The defined dangling state — citation-audit gate: folded ≡ live → defined refusal**
+  Auditing a citation whose block is folded is now refused (the gate's standing zero-rows→404
+  dialect) where it silently succeeded on a gone citation before. Existing request class,
+  success→refusal; the refusal face is unchanged, the resolved-to state moved.
+pr: self
+classes: behavioral
+surfaces: http, mcp, cli-stdout
+status: open
+
 - **Citation 1 — PR #867 briefing: identical body + sources preserves block identity**
   A whole-body update whose sections and sources are byte-identical now keeps their block ids,
   revision history, and provenance; before, every section re-minted fresh ids. Block-aware
@@ -106,10 +163,13 @@ status: signal-only
   rule, beside the landed redistribution and `is_carried` visibility. No release exposing
   block-grain annotations to end callers at scale may ship while this entry is open — the
   release verdict belongs to the semver arc.
+  RESOLVED by the defined-dangling-state build (this PR): the three-state resolution contract
+  (live/folded/absent, successor-naming via the disposition map) now exists on every read
+  surface, and the write and audit faces join it.
 pr: goal
 classes: behavioral
 surfaces: clients, http, mcp, cli-stdout
-status: blocked:first block-aware client release at scale
+status: satisfied
 
 - **This branch — the semver mechanism itself: version plumbing with no shape movement (spec D-S3)**
   The release spine lands (`tools/scripts/release/`), the PR compat-class declaration field and
