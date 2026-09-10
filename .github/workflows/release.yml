@@ -136,11 +136,44 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  # The TS clients publish to GitHub Packages npm (@tasker-systems/* scope).
+  # The script's duplicate probe decides BEFORE anything builds or publishes,
+  # so re-cutting an existing tag skips loudly rather than failing or
+  # overwriting (tools/scripts/release/publish-npm.sh header).
+  publish-npm-clients:
+    name: Publish npm Clients
+    needs: determine-version
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    env:
+      NODE_AUTH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Authenticate to GitHub Packages npm
+        run: |
+          auth_dir="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          printf '//npm.pkg.github.com/:_authToken=%s\n' "$NODE_AUTH_TOKEN" > "$auth_dir"
+
+      - name: Publish the TS clients
+        env:
+          VERSION: ${{ needs.determine-version.outputs.version }}
+        run: bash tools/scripts/release/publish-npm.sh "$VERSION"
+
   release-summary:
     name: Release Summary
     runs-on: ubuntu-22.04
     timeout-minutes: 5
-    needs: [determine-version, build-cli-binaries, build-skill-bundle]
+    needs: [determine-version, build-cli-binaries, build-skill-bundle, publish-npm-clients]
     if: always()
     permissions:
       contents: write
@@ -163,6 +196,7 @@ jobs:
           VERSION: ${{ needs.determine-version.outputs.version }}
           BUILD_RESULT: ${{ needs.build-cli-binaries.result }}
           SKILL_RESULT: ${{ needs.build-skill-bundle.result }}
+          NPM_RESULT: ${{ needs.publish-npm-clients.result }}
         run: |
           icon_for() {
             case "$1" in
@@ -180,21 +214,22 @@ jobs:
             echo "|---|---|"
             echo "| CLI binaries (darwin-arm64 / linux-x64 / windows-x64) | $(icon_for "$BUILD_RESULT") ${BUILD_RESULT} |"
             echo "| Agent Skill bundle (temper-skill-v${VERSION}.zip) | $(icon_for "$SKILL_RESULT") ${SKILL_RESULT} |"
+            echo "| npm clients (@tasker-systems/temper-ts, @tasker-systems/temper-telemetry-ts) | $(icon_for "$NPM_RESULT") ${NPM_RESULT} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
       # Gated on BOTH producers. A release missing the skill bundle would publish silently and
       # look complete — the same "absence is indistinguishable from never-had-it" failure the
       # manifest guard inside this script exists to prevent, one artifact over.
       - name: Create GitHub Release
-        if: needs.build-cli-binaries.result == 'success' && needs.build-skill-bundle.result == 'success'
+        if: needs.build-cli-binaries.result == 'success' && needs.build-skill-bundle.result == 'success' && needs.publish-npm-clients.result == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.determine-version.outputs.version }}
           ARTIFACT_DIR: cli-artifacts
         run: ./.github/scripts/release/create-github-release.sh
 
-      - name: Fail the job if either producer did not succeed
-        if: needs.build-cli-binaries.result != 'success' || needs.build-skill-bundle.result != 'success'
+      - name: Fail the job if any producer did not succeed
+        if: needs.build-cli-binaries.result != 'success' || needs.build-skill-bundle.result != 'success' || needs.publish-npm-clients.result != 'success'
         run: |
-          echo "::error::build-cli-binaries: ${{ needs.build-cli-binaries.result }}, build-skill-bundle: ${{ needs.build-skill-bundle.result }} — release not published."
+          echo "::error::build-cli-binaries: ${{ needs.build-cli-binaries.result }}, build-skill-bundle: ${{ needs.build-skill-bundle.result }}, publish-npm-clients: ${{ needs.publish-npm-clients.result }} — release not published."
           exit 1
