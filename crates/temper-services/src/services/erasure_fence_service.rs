@@ -63,52 +63,85 @@ const SKIPPED_REOCCUPIED: &str = "skipped-reoccupied";
 /// The completion resolution for bytes the provider actually struck.
 const RESOLUTION_DELETED: &str = "deleted";
 
-/// One strike-derived delete, parsed out of a `principal_erased` payload's per-target outcome.
-///
-/// The outcome string is Beat 2's pinned v1 vocabulary
+/// The delete-target prefix of Beat 2's pinned v1 outcome vocabulary
 /// (`20260909000020`: `'erased; released=' || v_rel::text || '; pathname=' || v_path`): a
 /// strike is a delete target exactly when it reads `erased; released=true` — `released=false`
 /// means the strike-time refcount found another live row holding the hash, so the bytes were
 /// never this act's to remove. `already-erased` and the `independent_obligation` remainder are
 /// not byte fates at all.
-struct StrikeDelete {
-    erasure_event_id: Uuid,
-    pathname: String,
-    content_hash: String,
-    first_due_at: DateTime<Utc>,
-}
-
 const RELEASED_STRIKE_PREFIX: &str = "erased; released=true; pathname=";
 
-fn parse_strike(
-    erasure_event_id: Uuid,
-    occurred_at: DateTime<Utc>,
-    t: &ErasureTargetOutcome,
-) -> Option<StrikeDelete> {
-    let pathname = t.outcome.strip_prefix(RELEASED_STRIKE_PREFIX)?;
-    if pathname.is_empty() {
-        return None;
+/// The strike-time refcount held: another live row re-holds the hash, so the bytes were never
+/// this act's to remove. A KNOWN shape, and never a delete target.
+const HELD_STRIKE_PREFIX: &str = "erased; released=false; pathname=";
+
+/// A governed-home row that was ALREADY struck when this act reached it. A KNOWN shape, and
+/// never a delete target.
+const ALREADY_ERASED_OUTCOME: &str = "already-erased";
+
+/// The named remainder (disposition iii): the row's home is governed by a team or map, so the
+/// act never struck it. A KNOWN shape, and never a delete target.
+const OBLIGATION_OUTCOME_PREFIX: &str = "independent_obligation: ";
+
+/// The only payload target whose outcome this fence parses — every other target kind's
+/// outcome is other vocabulary entirely.
+const BLOB_TARGET: &str = "kb_blobs";
+
+/// The total classification of a `kb_blobs` outcome string against the pinned v1 vocabulary.
+///
+/// The fence's prose interface MUST fail loud on drift (the substrate contract: retry plus age
+/// alerting — a verdict the fence cannot parse would otherwise silently no-op the whole
+/// derivation while the obligation stands, [`ChannelState::Healthy`] over unpaid debt). An
+/// outcome matching NONE of the known shapes is therefore its own arm, counted in the seed
+/// summary and raised as an alertable cause in [`fence_channel_report`] — never quietly
+/// treated as known.
+fn classify_blob_outcome(outcome: &str) -> BlobOutcomeClass {
+    if let Some(pathname) = outcome.strip_prefix(RELEASED_STRIKE_PREFIX) {
+        // The template demands a path; a released verdict with an empty pathname is drift,
+        // not a strike.
+        if !pathname.is_empty() {
+            return BlobOutcomeClass::Released(pathname.to_owned());
+        }
+        return BlobOutcomeClass::Unrecognized;
     }
-    // The pathname IS the derivation (`blob_pathname()`, blob_store.rs: `{hash[0:2]}/{hash}`),
-    // so the hash — the key the drain-time refcount check needs — is its last segment.
-    // Derived once, at seed, rather than re-parsed on every claim.
-    let content_hash = pathname.rsplit('/').next().unwrap_or(pathname).to_owned();
-    Some(StrikeDelete {
-        erasure_event_id,
-        pathname: pathname.to_owned(),
-        content_hash,
-        first_due_at: occurred_at,
-    })
+    if outcome.starts_with(HELD_STRIKE_PREFIX)
+        || outcome == ALREADY_ERASED_OUTCOME
+        || outcome.starts_with(OBLIGATION_OUTCOME_PREFIX)
+    {
+        return BlobOutcomeClass::Known;
+    }
+    BlobOutcomeClass::Unrecognized
+}
+
+enum BlobOutcomeClass {
+    /// `erased; released=true; pathname=…` — the bytes were this act's to remove.
+    Released(String),
+    /// A known, non-seeding shape (held strike, already-erased, independent_obligation).
+    Known,
+    /// No known shape — prose drift; counted and alertable, never silently skipped.
+    Unrecognized,
+}
+
+/// What one whole-catalogue derivation pass found.
+struct SeedScan {
+    /// Rows newly created.
+    seeded: u64,
+    /// `kb_blobs` targets whose outcome matched NO known shape — prose drift; never seeded,
+    /// counted so the fence fails loud (see [`classify_blob_outcome`]).
+    unparseable: usize,
 }
 
 /// Derive pending deletes from every `principal_erased` payload and seed the not-yet-seeded
-/// ones. Returns how many rows were newly created.
+/// ones. Store-independent by construction: the work is DERIVED from the ledger, and nothing
+/// here touches a provider (a derivation that needed the store could never run for a
+/// deployment whose provider configuration is gone — exactly the deployment whose stranded
+/// deletes most need the fence to see them).
 ///
 /// The scan is whole-catalogue on purpose: erasures are rare admin acts, the seed is
 /// `ON CONFLICT DO NOTHING` against the (event, pathname) key, and derive-don't-remember means
 /// the ledger alone drives the fence — there is no enqueue step whose failure could strand a
 /// release.
-async fn seed_from_ledger(pool: &PgPool) -> ApiResult<u64> {
+async fn seed_from_ledger(pool: &PgPool) -> ApiResult<SeedScan> {
     let rows = sqlx::query!(
         r#"
         SELECT e.id           AS "erasure_event_id!: Uuid",
@@ -122,7 +155,10 @@ async fn seed_from_ledger(pool: &PgPool) -> ApiResult<u64> {
     .fetch_all(pool)
     .await?;
 
-    let mut seeded: u64 = 0;
+    let mut scan = SeedScan {
+        seeded: 0,
+        unparseable: 0,
+    };
     for row in rows {
         let targets: Vec<ErasureTargetOutcome> =
             serde_json::from_value(row.targets).map_err(|e| {
@@ -132,24 +168,37 @@ async fn seed_from_ledger(pool: &PgPool) -> ApiResult<u64> {
                 ))
             })?;
         for t in &targets {
-            let Some(strike) = parse_strike(row.erasure_event_id, row.occurred_at, t) else {
+            if t.target != BLOB_TARGET {
                 continue;
+            }
+            let pathname = match classify_blob_outcome(&t.outcome) {
+                BlobOutcomeClass::Released(pathname) => pathname,
+                BlobOutcomeClass::Known => continue,
+                BlobOutcomeClass::Unrecognized => {
+                    scan.unparseable += 1;
+                    continue;
+                }
             };
+            // The pathname IS the derivation (`blob_pathname()`, blob_store.rs:
+            // `{hash[0:2]}/{hash}`), so the hash — the key the drain-time refcount check
+            // needs — is its last segment. Derived once, at seed, rather than re-parsed on
+            // every claim.
+            let content_hash = pathname.rsplit('/').next().unwrap_or(&pathname).to_owned();
             let seeded_id = sqlx::query_scalar!(
                 r#"SELECT erasure_delete_seed($1, $2, $3, $4) AS "id: Uuid""#,
-                strike.erasure_event_id,
-                strike.content_hash,
-                strike.pathname,
-                strike.first_due_at,
+                row.erasure_event_id,
+                content_hash,
+                pathname,
+                row.occurred_at,
             )
             .fetch_one(pool)
             .await?;
             if seeded_id.is_some() {
-                seeded += 1;
+                scan.seeded += 1;
             }
         }
     }
-    Ok(seeded)
+    Ok(scan)
 }
 
 /// What one drain tick did.
@@ -157,6 +206,10 @@ async fn seed_from_ledger(pool: &PgPool) -> ApiResult<u64> {
 pub struct DrainSummary {
     /// Deletes newly derived from `principal_erased` payloads this tick.
     pub seeded: u64,
+    /// `kb_blobs` targets whose outcome matched NO known strike-verdict shape (prose drift).
+    /// Never seeded; the report raises `unparseable_verdicts` as an alertable cause — the
+    /// prose interface fails loud rather than silently no-oping the fence.
+    pub unparseable_verdicts: usize,
     /// Leases the reaper reclaimed (a previous tick died mid-pass).
     pub reaped: i32,
     /// Deletes claimed this tick.
@@ -177,14 +230,28 @@ struct ClaimedDelete {
     pathname: String,
 }
 
+/// One fence tick WITHOUT a configured provider: seed-and-report only. Seeding is
+/// store-independent — the deletes are DERIVED from the ledger, never enumerated from a
+/// provider (BlobStore has no `list`) — so a deployment whose provider configuration is
+/// absent must still seed its erasures' released strikes and still age them into the
+/// alertable state. That is the substrate contract's exact stranding posture ("a byte-deleting
+/// build MUST run that fence or its equivalent — retry plus age alerting"): config-removal
+/// darks the provider CALLS, never the watching. No provider call, no claims.
+pub async fn drain_without_store(pool: &PgPool) -> ApiResult<DrainSummary> {
+    let scan = seed_from_ledger(pool).await?;
+    Ok(DrainSummary {
+        seeded: scan.seeded,
+        unparseable_verdicts: scan.unparseable,
+        ..DrainSummary::default()
+    })
+}
+
 /// One fence tick: derive → reap → claim → re-derive released-ness → one batched delete.
-pub async fn drain(
-    pool: &PgPool,
-    store: &dyn BlobStore,
-    cap: Option<i32>,
-) -> ApiResult<DrainSummary> {
+pub async fn drain(pool: &PgPool, store: &dyn BlobStore) -> ApiResult<DrainSummary> {
+    let scan = seed_from_ledger(pool).await?;
     let mut summary = DrainSummary {
-        seeded: seed_from_ledger(pool).await?,
+        seeded: scan.seeded,
+        unparseable_verdicts: scan.unparseable,
         ..DrainSummary::default()
     };
 
@@ -201,7 +268,7 @@ pub async fn drain(
         SELECT id AS "id!: Uuid", content_hash AS "content_hash!", pathname AS "pathname!"
           FROM erasure_delete_claim($1, $2)
         "#,
-        cap.unwrap_or(DRAIN_BATCH),
+        DRAIN_BATCH,
         LEASE_SECONDS,
     )
     .fetch_all(pool)
@@ -287,6 +354,12 @@ pub async fn drain(
 ///
 /// The state mapping, one arm per row-shape the table can hold:
 ///
+/// * any `kb_blobs` verdict in the erasure ledger matching NO known shape —
+///   [`ChannelState::Sustained`] with cause `unparseable_verdicts`: the fence's prose
+///   interface has drifted, its derivation would silently no-op, and the obligation stands.
+///   The scan is the same derive-don't-remember pass the seed runs, so the report cannot
+///   disagree with it. Checked FIRST: drift outranks every row-state, because a drifted
+///   template is permanent until code ships while row states can heal.
 /// * no rows at all — [`ChannelState::NoAttemptRecorded`]: a deployment that has never erased
 ///   anything has no fence history. Never alertable, exactly the reconcile channel's refusal to
 ///   read silence as failure.
@@ -315,6 +388,28 @@ pub async fn fence_channel_report(pool: &PgPool, now: DateTime<Utc>) -> ApiResul
         alertable_pathname: Option<String>,
         alertable_first_due: Option<DateTime<Utc>>,
     }
+
+    // The same scan the seed runs, parse-only: every `kb_blobs` outcome ever put on the
+    // ledger, for the unparseable-verdict arm above.
+    let outcomes: Vec<String> = sqlx::query!(
+        r#"
+        SELECT tg->>'outcome' AS "outcome!"
+          FROM kb_events e
+          JOIN kb_event_types t ON t.id = e.event_type_id AND t.name = 'principal_erased',
+               jsonb_array_elements(e.payload->'targets') AS tg
+         WHERE tg->>'target' = $1
+        "#,
+        BLOB_TARGET,
+    )
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|r| r.outcome)
+    .collect();
+    let unparseable_verdicts = outcomes
+        .iter()
+        .filter(|o| matches!(classify_blob_outcome(o), BlobOutcomeClass::Unrecognized))
+        .count();
 
     let counts = sqlx::query_as!(
         FenceCounts,
@@ -355,7 +450,9 @@ pub async fn fence_channel_report(pool: &PgPool, now: DateTime<Utc>) -> ApiResul
     .fetch_one(pool)
     .await?;
 
-    let state = if counts.rows_ever == 0 {
+    let state = if unparseable_verdicts > 0 {
+        ChannelState::Sustained
+    } else if counts.rows_ever == 0 {
         ChannelState::NoAttemptRecorded
     } else if counts.alertable_status.is_some() {
         ChannelState::Sustained
@@ -366,34 +463,49 @@ pub async fn fence_channel_report(pool: &PgPool, now: DateTime<Utc>) -> ApiResul
     };
 
     // The cause names WHY the fence is alertable, so the operator's action is readable off the
-    // span: retries exhausted outright, or a pending delete past the age bound.
-    let (failure_cause, failure_detail) = match counts.alertable_status.as_deref() {
-        Some("dead") => (
-            Some("retries_exhausted".to_string()),
+    // span: the prose interface drifted, retries exhausted outright, or a pending delete past
+    // the age bound.
+    let (failure_cause, failure_detail) = if unparseable_verdicts > 0 {
+        (
+            Some("unparseable_verdicts".to_string()),
             Some(format!(
-                "delete at {} exhausted its retry ladder",
-                counts.alertable_pathname.as_deref().unwrap_or("?"),
+                "{unparseable_verdicts} kb_blobs verdict(s) in the erasure ledger match no \
+                 known strike-outcome shape — the fence cannot derive work from them"
             )),
-        ),
-        Some(_) => {
-            let age = counts
-                .alertable_first_due
-                .map(|d| (now - d).num_seconds())
-                .unwrap_or(0);
-            (
-                Some("pending_past_age".to_string()),
+        )
+    } else {
+        match counts.alertable_status.as_deref() {
+            Some("dead") => (
+                Some("retries_exhausted".to_string()),
                 Some(format!(
-                    "delete at {} outstanding for {age}s (bound {ALERTABLE_AFTER_SECONDS}s)",
+                    "delete at {} exhausted its retry ladder",
                     counts.alertable_pathname.as_deref().unwrap_or("?"),
                 )),
-            )
+            ),
+            Some(_) => {
+                let age = counts
+                    .alertable_first_due
+                    .map(|d| (now - d).num_seconds())
+                    .unwrap_or(0);
+                (
+                    Some("pending_past_age".to_string()),
+                    Some(format!(
+                        "delete at {} outstanding for {age}s (bound {ALERTABLE_AFTER_SECONDS}s)",
+                        counts.alertable_pathname.as_deref().unwrap_or("?"),
+                    )),
+                )
+            }
+            None => (None, None),
         }
-        None => (None, None),
     };
 
     Ok(ChannelReport {
         channel: ERASURE_FENCE_CHANNEL.to_owned(),
         state,
+        // `consecutive_failures` is BORROWED vocabulary on this channel: the fence has no call
+        // streak to count, so the field carries the number of ACTIVE deletes that have failed
+        // at least once (attempts > 0) — the closest per-row analogue, reported so the alert
+        // rule reads one field shape across every channel.
         consecutive_failures: counts.active_failed as i32,
         failures_total: counts.failures_total,
         failure_cause,
@@ -641,7 +753,7 @@ mod tests {
         let store = fence_store_for(&strikes);
         store.failing.store(true, Ordering::SeqCst);
 
-        let summary = drain(&pool, &store, None).await.expect("tick runs");
+        let summary = drain(&pool, &store).await.expect("tick runs");
         assert_eq!(summary.seeded, 2, "both strikes derived from the payload");
         assert_eq!(summary.claimed, 2);
         assert_eq!(summary.failed, 2, "the failed batch is handed back");
@@ -677,7 +789,7 @@ mod tests {
         // The store recovers; the backoff elapses; the same fence pays the debt.
         store.failing.store(false, Ordering::SeqCst);
         elapse_backoff(&pool).await;
-        let summary = drain(&pool, &store, None).await.expect("second tick runs");
+        let summary = drain(&pool, &store).await.expect("second tick runs");
         assert_eq!(summary.deleted, 2);
         assert_eq!(
             summary.seeded, 0,
@@ -723,7 +835,7 @@ mod tests {
         let (_, _, strikes) = erased_world(&pool).await;
         let store = fence_store_for(&strikes);
         store.failing.store(true, Ordering::SeqCst);
-        drain(&pool, &store, None).await.expect("tick runs");
+        drain(&pool, &store).await.expect("tick runs");
 
         // Fresh debt: outstanding, not yet alertable.
         let fresh = fence_channel_report(&pool, now).await.expect("report runs");
@@ -775,7 +887,7 @@ mod tests {
         // Burn the ladder: five claims, each handed back through the fail path.
         for _ in 0..5 {
             elapse_backoff(&pool).await;
-            drain(&pool, &store, None).await.expect("tick runs");
+            drain(&pool, &store).await.expect("tick runs");
         }
         for (_, _, pathname) in &strikes {
             let (status, attempts, _, _) = row_of(&pool, pathname).await;
@@ -844,7 +956,7 @@ mod tests {
         assert_eq!(live_rows, 1, "the re-commit mints a live row for the hash");
 
         let store = fence_store_for(&strikes);
-        let summary = drain(&pool, &store, None).await.expect("tick runs");
+        let summary = drain(&pool, &store).await.expect("tick runs");
         assert_eq!(
             summary.skipped_reoccupied, 1,
             "the re-occupied strike skips"
@@ -877,7 +989,7 @@ mod tests {
         let (_, _, strikes) = erased_world(&pool).await;
         let store = fence_store_for(&strikes);
 
-        let summary = drain(&pool, &store, None).await.expect("tick runs");
+        let summary = drain(&pool, &store).await.expect("tick runs");
         assert_eq!(summary.deleted, 2);
 
         let batches = store.delete_batches();
@@ -896,17 +1008,186 @@ mod tests {
     async fn re_deriving_the_ledger_never_re_arms_paid_work(pool: sqlx::PgPool) {
         let (_, _, strikes) = erased_world(&pool).await;
         let store = fence_store_for(&strikes);
-        drain(&pool, &store, None).await.expect("first tick");
+        drain(&pool, &store).await.expect("first tick");
         let batches_after_first = store.delete_batches().len();
-        drain(&pool, &store, None).await.expect("second tick");
+        drain(&pool, &store).await.expect("second tick");
 
-        let summary = drain(&pool, &store, None).await.expect("third tick");
+        let summary = drain(&pool, &store).await.expect("third tick");
         assert_eq!(summary.seeded, 0, "the (event, pathname) keys exist");
         assert_eq!(summary.claimed, 0, "nothing is pending");
         assert_eq!(
             store.delete_batches().len(),
             batches_after_first,
             "a quiet fence never touches the provider again"
+        );
+    }
+
+    // ── WITNESS: seeding is store-independent ────────────────────────────────────────────
+    /// FAILS IF a deployment without a provider config never seeds: the store-less tick must
+    /// still derive the released strikes into `kb_erasure_blob_deletes` (first-due at the
+    /// EVENT's occurred_at, nothing claimed, no provider call — there is no store to call),
+    /// and the stranded debt must still age into the alertable `sustained` state. This is the
+    /// substrate contract's stranding posture: retry plus age alerting has no
+    /// store-configured precondition.
+    #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+    async fn a_store_less_deployment_still_seeds_and_ages_alertable(pool: sqlx::PgPool) {
+        let (_, _, strikes) = erased_world(&pool).await;
+
+        let summary = drain_without_store(&pool)
+            .await
+            .expect("store-less tick runs");
+        assert_eq!(
+            summary.seeded, 2,
+            "the released strikes seed WITHOUT any provider config"
+        );
+        for (_, _, pathname) in &strikes {
+            let (status, attempts, resolution, first_due, occurred): (
+                String,
+                i32,
+                Option<String>,
+                DateTime<Utc>,
+                DateTime<Utc>,
+            ) = sqlx::query_as(
+                "SELECT d.status, d.attempts, d.resolution, d.first_due_at, e.occurred_at \
+                   FROM kb_erasure_blob_deletes d \
+                   JOIN kb_events e ON e.id = d.erasure_event_id \
+                  WHERE d.pathname = $1",
+            )
+            .bind(pathname)
+            .fetch_one(&pool)
+            .await
+            .expect("the seeded fence row");
+            assert_eq!(status, "pending", "{pathname}");
+            assert_eq!(attempts, 0, "{pathname}: nothing was claimed");
+            assert_eq!(resolution, None, "{pathname}: no provider call was made");
+            assert_eq!(
+                first_due, occurred,
+                "{pathname}: first-due is the EVENT's occurred_at, so the age is real debt"
+            );
+        }
+
+        // The stranded deletes age durably — and the existing Sustained alert fires, which is
+        // the correct answer for bytes gone from the server but still held at a provider this
+        // deployment can no longer name.
+        sqlx::query(
+            "UPDATE kb_erasure_blob_deletes \
+                SET first_due_at = first_due_at - make_interval(secs => $1)",
+        )
+        .bind(ALERTABLE_AFTER_SECONDS + 60)
+        .execute(&pool)
+        .await
+        .expect("age the deletes");
+        let report = fence_channel_report(&pool, Utc::now())
+            .await
+            .expect("report runs");
+        assert_eq!(
+            report.state,
+            ChannelState::Sustained,
+            "config-removal strands the deletes into the alertable state, never silence"
+        );
+        assert_eq!(report.failure_cause.as_deref(), Some("pending_past_age"));
+    }
+
+    // ── WITNESS: the prose interface fails loud ──────────────────────────────────────────
+    /// FAILS IF the migration's strike-outcome template can drift from what the fence parses:
+    /// the pin asserts the SQL literal in 20260909000020 composes to exactly the Rust
+    /// constants — the released prefix the seed parses through, the held prefix it skips, and
+    /// the two non-strike shapes. (Mirrors
+    /// `payload_schema::the_migration_literal_matches_the_committed_fixture`.)
+    #[test]
+    fn the_migration_strike_template_matches_the_pinned_constants() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../migrations/20260909000020_erasure_act_execution.sql"
+        );
+        let migration = std::fs::read_to_string(path).expect("the execution migration exists");
+        // The template, spelled in the migration as literal || v_rel::text || literal || v_path.
+        let template = "'erased; released=' || v_rel::text || '; pathname=' || v_path";
+        assert!(
+            migration.contains(template),
+            "the strike-outcome template drifted in the SQL — the fence parses by exact \
+             prefix, so the Rust constants and this literal MUST move together"
+        );
+        // The migration's template asserts the two SQL literal halves; the constants are those
+        // halves with the verdict spliced in — spelled out here so a drift on EITHER side
+        // fails this pin rather than silently changing what the fence parses.
+        assert_eq!(
+            RELEASED_STRIKE_PREFIX, "erased; released=true; pathname=",
+            "the released prefix is the template at v_rel = true"
+        );
+        assert_eq!(
+            HELD_STRIKE_PREFIX, "erased; released=false; pathname=",
+            "the held prefix is the template at v_rel = false"
+        );
+        // The other two known kb_blobs shapes the migration spells.
+        assert!(
+            migration.contains(&format!("'outcome', '{ALREADY_ERASED_OUTCOME}'")),
+            "the already-erased kb_blobs shape is pinned"
+        );
+        assert!(
+            migration.contains(&format!("'outcome', '{OBLIGATION_OUTCOME_PREFIX}")),
+            "the independent_obligation remainder shape is pinned"
+        );
+    }
+
+    /// FAILS IF an unparseable `kb_blobs` verdict is silently skipped: a seeded target whose
+    /// outcome matches no known shape is COUNTED in the seed summary and makes the report
+    /// alertable (`sustained`, cause `unparseable_verdicts`) — prose drift must never no-op
+    /// the fence into healthy silence — while a lawful sibling verdict still seeds.
+    #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+    async fn an_unparseable_blob_verdict_is_counted_and_alertable(pool: sqlx::PgPool) {
+        let (_, _, strikes) = erased_world(&pool).await;
+        assert_eq!(
+            strikes.len(),
+            2,
+            "precondition: two lawful released verdicts"
+        );
+
+        // A SECOND erasure event whose kb_blobs verdict drifted — a future template the Rust
+        // pins never learned. The ledger is append-only, so the drifted event is appended via
+        // the same `_event_append` the act uses (NULL-anchored admin shape), never an UPDATE.
+        let drifted: Uuid = sqlx::query_scalar(
+            "SELECT _event_append('principal_erased', \
+                (SELECT e.id FROM kb_entities e LIMIT 1), NULL, NULL, \
+                jsonb_build_object('targets', jsonb_build_array(jsonb_build_object( \
+                    'target', 'kb_blobs', \
+                    'outcome', 'erased; released=YES; pathname=aa/bb'))))",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("append the drifted erasure event");
+        let _: Uuid = drifted;
+
+        let summary = drain_without_store(&pool).await.expect("tick runs");
+        assert_eq!(
+            summary.unparseable_verdicts, 1,
+            "the drifted verdict is counted, not silently skipped"
+        );
+        assert_eq!(
+            summary.seeded, 2,
+            "the lawful siblings still seed — drift refuses only itself"
+        );
+
+        let report = fence_channel_report(&pool, Utc::now())
+            .await
+            .expect("report runs");
+        assert_eq!(
+            report.state,
+            ChannelState::Sustained,
+            "prose drift is alertable, never a healthy no-op"
+        );
+        assert_eq!(
+            report.failure_cause.as_deref(),
+            Some("unparseable_verdicts"),
+            "the cause names the drift, not a row state"
+        );
+        assert!(
+            report
+                .failure_detail
+                .as_deref()
+                .is_some_and(|d| d.contains("match no known strike-outcome shape")),
+            "the detail says what drifted, got {:?}",
+            report.failure_detail
         );
     }
 }

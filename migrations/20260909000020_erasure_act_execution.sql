@@ -10,11 +10,13 @@
 --     is the text analog of the blobs' D5.2 shape: content emptied, hashes and
 --     embedding-provenance columns kept coherent, search vectors emptied, the profile
 --     tombstoned, the erased-content set refilled. It is the ONLY home of that shape — the
---     act calls it and BEAT 3's replay redaction pre-pass must call the SAME function with
---     the payload's `redacted_hashes` + the admitting event's id, never a second body. It is
---     hash-keyed (D2: the hash is the join key every reader shares) and idempotent.
---   * WHAT BEAT 3 MUST MIRROR (all of it lives in _erasure_apply_redaction): chunk/block
---     content emptied BY HASH with hashes retained (D3); kb_chunks.embedding AND
+--     act calls it and the replay redaction pre-pass calls the SAME function with the
+--     payload's `redacted_hashes` + the admitting event's id; re-deriving any of it is a
+--     second definition that drifts. It is hash-keyed (D2: the hash is the join key every
+--     reader shares) and idempotent.
+--   * THE REPLAY REDACTION MUST MIRROR ALL OF THIS (all of it lives in
+--     _erasure_apply_redaction; the replay arm calls the function — never re-derives it):
+--     chunk/block content emptied BY HASH with hashes retained (D3); kb_chunks.embedding AND
 --     embedded_with nulled together (the 20260713000040 coherence rule); search vectors
 --     emptied wholesale for hash-affected resources; tombstoned_at := the admitting event's
 --     occurred_at (NEVER now() — projected timestamps replay-stable by construction);
@@ -22,7 +24,11 @@
 --     to 'personal-' || that sentinel (the trigger's own derivation,
 --     20260624000002:95-98, applied to the sentinel identity); the two no-FK Slack
 --     identifier stores deleted via the auth-link principal join; kb_erased_content
---     refilled with ON CONFLICT DO NOTHING so FIRST admit keeps attribution; formation
+--     refilled with ON CONFLICT DO NOTHING so FIRST admit keeps attribution — and that
+--     attribution assumes live admission order equals ledger id order: concurrent erasures
+--     sharing a hash can interleave the set-insert. The divergence fails LOUD via the replay
+--     dump (kb_erased_content is in PROJECTION_DUMPS, replay.rs), and it is the register's
+--     declared-open concurrency axis. Formation
 --     watermarks (shape_materialized_event_id) nulled on the region-member anchors and the
 --     subject's governed contexts.
 --   * CENTROIDS ARE MARKED, NOT EMPTIED (D5): kb_cogmap_regions.centroid is NOT NULL and
@@ -169,6 +175,9 @@ BEGIN
                   AND mem.member_table = 'kb_resources'
                   AND mem.member_id IN (SELECT DISTINCT c.resource_id FROM kb_chunks c
                                          WHERE c.content_hash = ANY(p_hashes)))
+          -- The personal-context predicate again — the schema's own owner arm
+          -- (contexts_readable_by arm 1, 20260712000010:96-97): the subject's own contexts
+          -- only; team arms are a different read and a different governance.
           OR (c.owner_table = 'kb_profiles' AND c.owner_id = p_subject) );
 END;
 $$;
@@ -421,6 +430,9 @@ BEGIN
                   AND mem.member_table = 'kb_resources'
                   AND mem.member_id IN (SELECT DISTINCT c.resource_id FROM kb_chunks c
                                          WHERE c.content_hash = ANY(v_hashes)))
+          -- The personal-context predicate again — the schema's own owner arm
+          -- (contexts_readable_by arm 1, 20260712000010:96-97); team-owned and team-shared
+          -- contexts (arms 2-3) are NOT governed — disposition iii.
           OR (c.owner_table = 'kb_profiles' AND c.owner_id = p_subject) );
     IF v_n > 0 THEN
         v_targets := v_targets || jsonb_build_array(

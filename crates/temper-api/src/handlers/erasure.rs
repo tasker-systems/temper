@@ -27,7 +27,7 @@ use temper_services::error::{ApiError, ApiResult};
 use temper_services::services::erasure_fence_service::{self, DrainSummary};
 use temper_services::services::erasure_service::{self, ErasureOutcome};
 use temper_services::state::AppState;
-use temper_substrate::payloads::ErasureRefusalReason;
+use temper_substrate::payloads::{ErasureRefusalReason, ErasureTargetOutcome};
 
 use crate::middleware::auth::AuthUser;
 
@@ -60,6 +60,11 @@ pub enum ErasureExecuteResponse {
         already_erased: bool,
         /// The redacted set (D2): content hashes only.
         redacted_hashes: Vec<String>,
+        /// Per-target outcomes and the named remainder (D6's accepted-in-part arm): the
+        /// operator sees the `independent_obligation` remainder AT THE DOOR, not only in the
+        /// ledger — the completion's own payload is the audit, but the door's caller is the
+        /// actor and deserves the same facts.
+        targets: Vec<ErasureTargetOutcome>,
         blob_strikes: Vec<BlobStrikeView>,
     },
     /// The act was refused and the refusal RECORDED (D6). `unauthorized` never reaches the
@@ -76,6 +81,12 @@ pub enum ErasureExecuteResponse {
 /// Gate-free HERE on purpose: the service's `is_system_admin` gate is the authority (it runs
 /// first, before any mutation, and records the `unauthorized` refusal for a non-operator). This
 /// handler maps that refusal to the 404 posture and never re-asks the question.
+///
+/// The request reference tolerates retries: a retried POST with the SAME reference re-executes
+/// as a no-op completion (the subject is already tombstoned, so the act completes with
+/// `already_erased: true`). Correlation is INDEXED, never unique
+/// (20260624000001_canonical_schema.sql:491) — the reference pairs the act's events, it does
+/// not deduplicate the door.
 pub async fn execute(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -110,6 +121,7 @@ pub async fn execute(
             event_id: c.event_id,
             already_erased: c.already_erased,
             redacted_hashes: c.redacted_hashes,
+            targets: c.targets,
             blob_strikes: c
                 .blob_strikes
                 .into_iter()
@@ -132,12 +144,13 @@ pub struct FenceDrainResponse {
 
 /// `GET|POST /api/erasure/drain` — one byte-delete fence tick.
 ///
-/// A deployment with no blob provider configured has never held provider bytes (the commit
-/// door refuses without one), so there is no debt the fence could owe: the tick answers an
-/// all-zero summary rather than an error, and — the named limit — a deployment that HAD a
-/// provider and lost its configuration goes quiet here rather than loud. Config removal is an
-/// operator act that darks the whole blob surface, not just the fence; the fence does not build
-/// for it.
+/// Seeding is STORE-INDEPENDENT: the pending deletes are derived from the ledger, never from a
+/// provider, so a tick with no provider config still seeds every erasure's released strikes and
+/// still ages them into the alertable state ([`erasure_fence_service::drain_without_store`]) —
+/// the substrate contract's stranding posture ("retry plus age alerting") has no
+/// store-configured precondition, and a deployment that HAD a provider and lost its
+/// configuration must go LOUD about its stranded deletes, never quiet. Only the provider CALLS
+/// (claim → delete → resolve) require the store.
 pub async fn drain(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -146,9 +159,10 @@ pub async fn drain(
 
     match state.blob_store.as_deref() {
         Some(store) => {
-            let summary = erasure_fence_service::drain(&state.pool, store, None).await?;
+            let summary = erasure_fence_service::drain(&state.pool, store).await?;
             tracing::info!(
                 seeded = summary.seeded,
+                unparseable_verdicts = summary.unparseable_verdicts,
                 claimed = summary.claimed,
                 deleted = summary.deleted,
                 skipped = summary.skipped_reoccupied,
@@ -160,9 +174,18 @@ pub async fn drain(
                 store_configured: true,
             }))
         }
-        None => Ok(Json(FenceDrainResponse {
-            drain: DrainSummary::default(),
-            store_configured: false,
-        })),
+        None => {
+            let summary = erasure_fence_service::drain_without_store(&state.pool).await?;
+            tracing::info!(
+                seeded = summary.seeded,
+                unparseable_verdicts = summary.unparseable_verdicts,
+                store_configured = false,
+                "erasure fence seed-only pass complete (no provider configured)"
+            );
+            Ok(Json(FenceDrainResponse {
+                drain: summary,
+                store_configured: false,
+            }))
+        }
     }
 }

@@ -296,6 +296,22 @@ async fn replay_of_an_erasure_is_byte_identical_and_a_replayed_re_erase_is_a_no_
     let (blob, blob_hash) = seed_blob(&pool, &store, home, subject, emitter, &bytes).await;
     let _ = resource;
 
+    // A non-operator's attempt FIRST: the recorded refusal (D6) is part of the ledger this test
+    // replays, and the roundtrip witness below validates its typed shape against a
+    // really-emitted payload, not a fixture.
+    let attempted = execute_erasure(
+        &pool,
+        ProfileId::from(subject),
+        ProfileId::from(subject),
+        Uuid::now_v7(),
+    )
+    .await
+    .expect("the attempt is answered");
+    assert!(
+        matches!(attempted, ErasureOutcome::Refused(_)),
+        "a non-operator's attempt is refused and RECORDED, got {attempted:?}"
+    );
+
     let outcome = execute_erasure(
         &pool,
         ProfileId::from(operator),
@@ -380,6 +396,14 @@ async fn replay_of_an_erasure_is_byte_identical_and_a_replayed_re_erase_is_a_no_
         admits, 2,
         "the second replay's redaction arm re-fires idempotently: still exactly two admits"
     );
+
+    // The typed contract meets REALLY-EMITTED erasure payloads: every principal_erased /
+    // principal_erasure_refused / blob_erased event on this replayed ledger must deserialize
+    // into its Rust struct (verify_ledger_roundtrip's erasure arms) — the arms are what bind
+    // the structs to what the act and the door actually write.
+    temper_substrate::payloads::verify_ledger_roundtrip(&pool)
+        .await
+        .expect("the erasure ledger roundtrips into the typed payload contract");
 }
 
 // ── the order property: post-erasure re-commits SURVIVE replay ────────────────────────────────
@@ -549,7 +573,14 @@ async fn post_erasure_recommits_survive_replay(pool: sqlx::PgPool) {
         !set.contains(&new_hash),
         "a hash minted after the erasure never enters the set"
     );
-    let _ = world_shape(&pool, &chunk_hash).await;
+    // The redacted shape is a REPLAY FACT, not a live-only mutation: the pre-erasure chunk row
+    // survives emptied (D3 — hash kept, prose gone) in the replayed projection too.
+    let (content, kept_hash) = world_shape(&pool, &chunk_hash).await;
+    assert!(
+        content.is_empty() && kept_hash == chunk_hash,
+        "replay reproduces the redacted shape: prose emptied, hash kept (D3), got \
+         {content:?} / {kept_hash}"
+    );
 }
 
 /// Keep the redacted-shape assertion reachable for the second test without re-deriving the

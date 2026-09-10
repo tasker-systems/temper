@@ -845,3 +845,64 @@ async fn an_erased_hash_applies_empty_on_the_sync_arm(pool: PgPool) {
         "zero mutation events on the re-delivery"
     );
 }
+
+/// FAILS IF a fully-erased re-delivery is a hard error: when EVERY incoming chunk is erased the
+/// sanitized set empties, and re-blocking THROUGH `block_mutate` would RAISE ("a revise must
+/// carry content") — the stale laptop whose whole document was erased would diverge forever.
+/// The server state IS the erased state (D4 arm 3), so the entry converges as `unchanged`:
+/// no error, zero new events. (The partial-erased case is the test above and stays green.)
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_fully_erased_re_delivery_converges_as_unchanged(pool: PgPool) {
+    let be = backend(&pool).await;
+    let id = Uuid::now_v7();
+
+    let first = entry(
+        id,
+        "temper://kernel/concept/sync-all-erased",
+        "sync-all-erased",
+        "A cognitive map: a bounded, telos-governed view.",
+        "aa",
+        serde_json::json!({ "layer": "concept" }),
+        vec![],
+    );
+    let out1 = be
+        .reconcile_cognitive_map(cmd(L0_COGMAP, request(vec![first.clone()])))
+        .await
+        .expect("first reconcile")
+        .value;
+    assert_eq!(out1.created, 1);
+
+    // The erasure: the entry's ONLY chunk hash enters the set, so the next delivery's
+    // sanitized set is empty.
+    let h_erased = format!("{:0>64}", "aa");
+    sqlx::query(
+        "INSERT INTO kb_erased_content (content_hash, erased_by_event_id) \
+         VALUES ($1, (SELECT id FROM kb_events ORDER BY id LIMIT 1))",
+    )
+    .bind(&h_erased)
+    .execute(&pool)
+    .await
+    .expect("register the erased hash");
+
+    // The same request re-delivered: nothing lawful remains to apply, and the sync must
+    // CONVERGE — `unchanged`, not the "empty chunk set" raise from block_mutate.
+    let mut_before = mutation_event_count(&pool).await;
+    let out2 = be
+        .reconcile_cognitive_map(cmd(L0_COGMAP, request(vec![first])))
+        .await
+        .expect(
+            "a fully-erased re-delivery converges — the server state IS the erased state, \
+             never a hard error",
+        )
+        .value;
+    assert_eq!(
+        (out2.created, out2.updated, out2.unchanged),
+        (0, 0, 1),
+        "the all-erased re-delivery is a no-op completion"
+    );
+    let mut_after = mutation_event_count(&pool).await;
+    assert_eq!(
+        mut_after, mut_before,
+        "zero new events: the convergence writes nothing"
+    );
+}

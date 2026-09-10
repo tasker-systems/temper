@@ -47,6 +47,28 @@ pub async fn embed_chunks(pool: &PgPool) -> Result<()> {
     Ok(())
 }
 
+/// The erased-hash exclusion, ONCE (erasure spec 2026-08-31, D4 arm 2 — 20260909000010's
+/// `kb_erased_content`): a hash in the set is not embed work. The erasure nulled its vector
+/// and provenance together, and "never re-embedded" must hold whatever the chunk's prose says
+/// (emptiness must not be the gate; the set is). As a loop skip it would be the wedge this
+/// file's no-disjunct warning describes, with the polarity flipped: the chunk would stay
+/// stale forever, `remaining` would never reach zero, and the resource would be re-enqueued
+/// every minute embedding nothing. As a predicate exclusion it means an erased hash is not
+/// WORK: the chunk stops being stale, the resource converges with the vector NULL, and
+/// `count_stale_chunks` — which MUST select exactly what [`STALE_CHUNK_PREDICATE`] selects —
+/// stays in lockstep for free.
+///
+/// This const is the single spelling every consumer interpolates: [`STALE_CHUNK_PREDICATE`]
+/// below (pinned to it by `stale_chunk_predicate_carries_the_erased_hash_exclusion`), and the
+/// two "is there work?" queries in temper-services' `embed_service` (`enqueue_stale` /
+/// `stale_summary`), which build their SQL by `format!` for exactly this reason — a shared
+/// SQL clause cannot be interpolated into a compile-time-checked `query!` macro. The pin test
+/// is what keeps this const's copies honest; four sites moving together was the old contract,
+/// and four sites moved apart before it.
+pub const ERASED_HASH_EXCLUSION: &str = "NOT EXISTS ( \
+         SELECT 1 FROM kb_erased_content ec \
+          WHERE ec.content_hash = ch.content_hash)";
+
 /// A chunk is **stale** when its vector was not produced by the model this build embeds with.
 ///
 /// One clause, and it subsumes both jobs that used to need two mechanisms:
@@ -72,26 +94,31 @@ pub async fn embed_chunks(pool: &PgPool) -> Result<()> {
 /// the new generation current and the old non-current, so a job — whenever it runs — only ever embeds
 /// the resource's *live* chunks.
 ///
-/// The erased-content exclusion (erasure spec 2026-08-31, D4 arm 2 — 20260909000010's
-/// `kb_erased_content`) is load-bearing, and it lives HERE — in the shared predicate, never as a
-/// skip in the drain loop. A hash in the set is dead on the embed side: the erasure nulled its
-/// vector and provenance together, and "never re-embedded" must hold whatever the chunk's prose
-/// says (emptiness must not be the gate; the set is). As a loop skip it would be the wedge this
-/// const's own no-disjunct warning describes, with the polarity flipped: the chunk would stay
-/// stale forever, `remaining` would never reach zero, and the resource would be re-enqueued
-/// every minute embedding nothing. As a predicate exclusion it means an erased hash is not
-/// WORK: the chunk stops being stale, the resource converges with the vector NULL, and
-/// `count_stale_chunks` — which MUST select exactly what this predicate selects — stays in
-/// lockstep for free. The same exclusion is carried verbatim by the two "is there work?"
-/// queries in temper-services' `embed_service` (`enqueue_stale` / `stale_summary`); all four
-/// sites must move together or the operator's progress readout diverges from what the drain
-/// will lawfully do.
+/// The erased-content exclusion at the end is [`ERASED_HASH_EXCLUSION`], interpolated by
+/// consumers and pinned here by test; see that const for why exclusion, not loop-skip.
 pub const STALE_CHUNK_PREDICATE: &str = "ch.is_current \
      AND NOT b.is_folded \
      AND ch.embedded_with IS DISTINCT FROM $2 \
      AND NOT EXISTS ( \
          SELECT 1 FROM kb_erased_content ec \
           WHERE ec.content_hash = ch.content_hash)";
+
+// STALE_CHUNK_PREDICATE cannot itself interpolate the exclusion const (`const &str` has no
+// concatenation), so its inline copy is pinned to the const by the test below — the pin is
+// what makes them one spelling in practice.
+#[cfg(test)]
+mod predicate_pins {
+    use super::*;
+
+    #[test]
+    fn stale_chunk_predicate_carries_the_erased_hash_exclusion() {
+        assert!(
+            STALE_CHUNK_PREDICATE.contains(ERASED_HASH_EXCLUSION),
+            "STALE_CHUNK_PREDICATE drifted from ERASED_HASH_EXCLUSION — the exclusion is ONE \
+             clause (D4 arm 2); interpolate the const, never re-spell it"
+        );
+    }
+}
 
 /// Default chunk allowance for ONE dispatch invocation — **not** per resource.
 ///

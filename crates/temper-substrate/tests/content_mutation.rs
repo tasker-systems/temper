@@ -1524,3 +1524,198 @@ async fn an_erased_hash_refuses_the_write_back_while_a_non_erased_one_still_repa
         "no second copy, no resurrection — state is unchanged"
     );
 }
+
+// ── The create door (erasure spec D4's general clause — every content-admitting path) ─────────
+//
+// D4's general clause binds the create path too: a stale client POSTing erased text as a NEW
+// resource must be refused at the door, before `resource_created` fires or any chunk prose is
+// written — otherwise the erased-content set would refuse the revise and then watch the same
+// bytes walk back in under a fresh resource id. The refusal is Rust-side (`writes::refuse_
+// erased_content`) because the create chunks in Rust, before any SQL mutation exists to gate.
+
+/// Chunks for `body` carrying the REAL chunker's content hashes, ONNX-free — the same fixture
+/// shape block_content.rs uses (a chunks-arm create with synthetic hashes is a chunker-drift
+/// the write path's other guards correctly refuse, which would fake this test's verdict).
+fn erased_section_chunks(body: &str) -> Vec<temper_substrate::content::IncomingChunk> {
+    temper_ingest::chunk::chunk_markdown(body)
+        .into_iter()
+        .map(|c| temper_substrate::content::IncomingChunk {
+            chunk_index: c.chunk_index as i32,
+            content_hash: c.content_hash,
+            content: c.content,
+            embedding: {
+                let mut embedding = vec![0.0_f32; 768];
+                embedding[0] = 1.0;
+                embedding
+            },
+            embedded_with: None,
+            header_path: c.header_path,
+            heading_depth: c.heading_depth as i16,
+        })
+        .collect()
+}
+
+async fn create_door_fixture(pool: &sqlx::PgPool) -> (uuid::Uuid, uuid::Uuid, uuid::Uuid) {
+    prov_fixture(pool).await
+}
+
+/// The write-surface tallies a refused create must leave untouched: no resource_created event,
+/// no chunk rows, no verbatim prose, no search_vector.
+async fn create_surface_counts(pool: &sqlx::PgPool) -> (i64, i64, i64, i64) {
+    let events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e \
+           JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'resource_created'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let chunks: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_chunks")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let prose: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_block_content")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let fts: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_resource_search_index")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    (events, chunks, prose, fts)
+}
+
+async fn create_via_door(
+    pool: &sqlx::PgPool,
+    owner: uuid::Uuid,
+    emitter: uuid::Uuid,
+    home: uuid::Uuid,
+    body: &str,
+) -> anyhow::Result<temper_substrate::ids::ResourceId> {
+    use temper_substrate::ids::{ContextId, EntityId, ProfileId};
+    use temper_substrate::payloads::AnchorRef;
+    use temper_substrate::writes::{create_resource, CreateParams};
+
+    create_resource(
+        pool,
+        CreateParams {
+            idempotency_key: None,
+            title: "create-door",
+            origin_uri: "test://create-door",
+            body,
+            doc_type: "concept",
+            home: AnchorRef::context(ContextId::from(home)),
+            owner: ProfileId::from(owner),
+            originator: ProfileId::from(owner),
+            emitter: EntityId::from(emitter),
+            properties: &[],
+            chunks: Some(erased_section_chunks(body)),
+            sources: vec![],
+        },
+    )
+    .await
+}
+
+/// FAILS IF the create door re-admits erased text: a body reproducing an erased hash must be
+/// REFUSED with nothing written (no resource_created event, no chunk rows, no verbatim prose,
+/// no search_vector), while a non-erased body still creates.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_erased_hash_refuses_the_create_and_a_fresh_body_still_creates(pool: sqlx::PgPool) {
+    let (owner, emitter, home) = create_door_fixture(&pool).await;
+
+    const PROSE: &str = "the deployment cadence section the operator erased";
+    let erased_hash = erased_section_chunks(PROSE).remove(0).content_hash;
+    sqlx::query(
+        "INSERT INTO kb_erased_content (content_hash, erased_by_event_id) \
+         VALUES ($1, (SELECT id FROM kb_events ORDER BY id LIMIT 1))",
+    )
+    .bind(&erased_hash)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let before = create_surface_counts(&pool).await;
+    let err = create_via_door(&pool, owner, emitter, home, PROSE)
+        .await
+        .expect_err(
+            "a create whose body reproduces an ERASED hash must refuse — erasure is a \
+             refusal, not an absence",
+        );
+    let chain = err.to_string();
+    assert!(
+        chain.contains("ERASED"),
+        "the refusal names what it refuses, got: {chain}"
+    );
+    assert_eq!(
+        before,
+        create_surface_counts(&pool).await,
+        "the refused create wrote NOTHING — no event, no chunks, no prose, no search_vector"
+    );
+
+    // The door is not a wedge: a body with no erased hash still creates.
+    let fresh = create_via_door(
+        &pool,
+        owner,
+        emitter,
+        home,
+        "a wholly fresh and lawful body",
+    )
+    .await
+    .expect("a non-erased body still creates");
+    let (events, _, _, _): (i64, i64, i64, i64) = create_surface_counts(&pool).await;
+    assert_eq!(events, before.0 + 1, "the fresh create fired its event");
+    let _: temper_substrate::ids::ResourceId = fresh;
+}
+
+/// FAILS IF a create carrying ONE erased hash beside fresh ones is admitted in part: D4's
+/// refusal clause refuses the WHOLE create (refusal, not partial admission) — one erased chunk
+/// means no resource, no event, no rows.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_create_with_one_erased_and_one_fresh_chunk_refuses_whole(pool: sqlx::PgPool) {
+    let (owner, emitter, home) = create_door_fixture(&pool).await;
+
+    // A two-section body long enough that the chunker actually splits it (~1428-char budget):
+    // the chunker's real hashes, only the FIRST section's hash erased.
+    let erased_section = format!(
+        "## the erased rollout cadence\n\n{}",
+        "the deployment cadence paragraph. ".repeat(60)
+    );
+    let fresh_section = format!(
+        "## fresh lawful prose\n\n{}",
+        "a wholly lawful and unstained paragraph. ".repeat(60)
+    );
+    let body = format!("{erased_section}\n\n{fresh_section}");
+    let chunks = erased_section_chunks(&body);
+    assert!(
+        chunks.len() >= 2,
+        "precondition: the body chunks into >=2 sections so partial admission is even expressible"
+    );
+    let erased_hash = chunks[0].content_hash.clone();
+    let fresh_hash = chunks[chunks.len() - 1].content_hash.clone();
+    assert_ne!(erased_hash, fresh_hash);
+    sqlx::query(
+        "INSERT INTO kb_erased_content (content_hash, erased_by_event_id) \
+         VALUES ($1, (SELECT id FROM kb_events ORDER BY id LIMIT 1))",
+    )
+    .bind(&erased_hash)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let before = create_surface_counts(&pool).await;
+    let err = create_via_door(&pool, owner, emitter, home, &body)
+        .await
+        .expect_err(
+            "one erased + one fresh hash must refuse the WHOLE create — D4's refusal clause: \
+             refusal, not partial admission",
+        );
+    assert!(
+        err.to_string().contains("ERASED"),
+        "the refusal names the erased hash, got: {err:#}"
+    );
+    assert_eq!(
+        before,
+        create_surface_counts(&pool).await,
+        "the mixed create wrote nothing — the fresh chunk does not ride in behind the erased one"
+    );
+}

@@ -178,6 +178,11 @@ async fn an_operator_completes_an_erasure_through_the_door(pool: PgPool) {
         .expect("the response is the tagged outcome");
     assert_eq!(body["status"], "completed", "{body}");
     assert_eq!(body["already_erased"], false);
+    assert!(
+        body["targets"].is_array(),
+        "the door reports the per-target outcomes — the named remainder is visible at the \
+         door, not only in the ledger: {body}"
+    );
 }
 
 // ── WITNESS: the non-operator's 404 posture, the recorded refusal, and the bite ──────────────

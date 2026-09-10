@@ -21,6 +21,7 @@ use temper_core::types::workflow_job::{
     ClaimedEmbedJob, DispatchType, EmbedDispatchSummary, EmbeddingStatus, Persona,
     DEFAULT_EMBED_DISPATCH_CAP, DEFAULT_EMBED_LEASE_SECONDS,
 };
+use temper_substrate::embed::ERASED_HASH_EXCLUSION;
 
 /// Whether this deployment defers server-computed embeddings to the async drain (issue #299). Read
 /// from `TEMPER_ASYNC_EMBED` (`1`/`true` ⇒ on) per call — a deployment toggle flipped on once the
@@ -145,41 +146,37 @@ pub async fn enqueue_stale(
     // (anchor_table = 'kb_cogmaps'), so the anchor_table predicate is load-bearing, not decoration:
     // without it, a context-scoped re-embed would sweep in cogmap-homed resources too.
     //
-    // The erased-content exclusion is the same clause STALE_CHUNK_PREDICATE carries (D4 arm 2 —
-    // see its doc for why exclusion, not loop-skip): a hash in `kb_erased_content` is not work,
-    // so the enqueue sweep must not offer a resource whose only staleness is an erased hash.
-    // The two copies must move together or "what needs work" diverges from "what the drain may
-    // lawfully do" (and `stale_summary`'s readout below with them).
+    // The erased-content exclusion is ERASED_HASH_EXCLUSION, interpolated (D4 arm 2 — see the
+    // const for why exclusion, not loop-skip, and why this query is runtime SQL rather than a
+    // `query!` macro: the shared clause cannot ride a compile-time-checked string).
     let (resource_filter, context_filter) = match scope {
         ReembedScope::Resource(id) => (Some(id), None),
         ReembedScope::Context(id) => (None, Some(id)),
         ReembedScope::All => (None, None),
     };
 
-    let stale: Vec<Uuid> = sqlx::query_scalar!(
+    let stale: Vec<Uuid> = sqlx::query_scalar(&format!(
         "SELECT DISTINCT r.id \
-           FROM kb_resources r \
-           JOIN kb_chunks ch ON ch.resource_id = r.id \
-           JOIN kb_content_blocks b ON b.id = ch.block_id \
-          WHERE r.is_active \
-            AND ch.is_current \
-            AND NOT b.is_folded \
-            AND ch.embedded_with IS DISTINCT FROM $1 \
-            AND NOT EXISTS ( \
-                    SELECT 1 FROM kb_erased_content ec \
-                     WHERE ec.content_hash = ch.content_hash) \
-            AND ($2::uuid IS NULL OR r.id = $2::uuid) \
-            AND ($3::uuid IS NULL OR EXISTS ( \
-                    SELECT 1 FROM kb_resource_homes h \
-                     WHERE h.resource_id = r.id \
-                       AND h.anchor_table = 'kb_contexts' \
-                       AND h.anchor_id = $3::uuid)) \
-          LIMIT $4",
-        model,
-        resource_filter,
-        context_filter,
-        i64::from(limit),
-    )
+            FROM kb_resources r \
+            JOIN kb_chunks ch ON ch.resource_id = r.id \
+            JOIN kb_content_blocks b ON b.id = ch.block_id \
+           WHERE r.is_active \
+             AND ch.is_current \
+             AND NOT b.is_folded \
+             AND ch.embedded_with IS DISTINCT FROM $1 \
+             AND {ERASED_HASH_EXCLUSION} \
+             AND ($2::uuid IS NULL OR r.id = $2::uuid) \
+             AND ($3::uuid IS NULL OR EXISTS ( \
+                     SELECT 1 FROM kb_resource_homes h \
+                      WHERE h.resource_id = r.id \
+                        AND h.anchor_table = 'kb_contexts' \
+                        AND h.anchor_id = $3::uuid)) \
+           LIMIT $4"
+    ))
+    .bind(model)
+    .bind(resource_filter)
+    .bind(context_filter)
+    .bind(i64::from(limit))
     .fetch_all(pool)
     .await?;
 
@@ -212,39 +209,37 @@ pub async fn stale_summary(pool: &PgPool, scope: ReembedScope) -> ApiResult<(u64
         ReembedScope::All => (None, None),
     };
 
-    // Both counts take `!`: sqlx types every aggregate expression as nullable, but `count()` over an
-    // empty grouping set still returns 0 — it is never NULL. Aliased because the two columns would
-    // otherwise both be named `count`.
+    // Both counts take their columns positionally: `count()` over an empty grouping set still
+    // returns 0 — it is never NULL.
     //
-    // The erased-content exclusion is the same clause `enqueue_stale` carries above (D4 arm 2):
-    // the operator's convergence readout must count what the drain may lawfully embed — an
-    // erased hash is never that, and counting it would read as a wedge that cannot converge.
-    let row = sqlx::query!(
-        r#"SELECT count(DISTINCT r.id) AS "resources!", count(*) AS "chunks!"
-           FROM kb_resources r
-           JOIN kb_chunks ch ON ch.resource_id = r.id
-           JOIN kb_content_blocks b ON b.id = ch.block_id
-          WHERE r.is_active
-            AND ch.is_current
-            AND NOT b.is_folded
-            AND ch.embedded_with IS DISTINCT FROM $1
-            AND NOT EXISTS (
-                    SELECT 1 FROM kb_erased_content ec
-                     WHERE ec.content_hash = ch.content_hash)
-            AND ($2::uuid IS NULL OR r.id = $2::uuid)
-            AND ($3::uuid IS NULL OR EXISTS (
-                    SELECT 1 FROM kb_resource_homes h
-                     WHERE h.resource_id = r.id
-                       AND h.anchor_table = 'kb_contexts'
-                       AND h.anchor_id = $3::uuid))"#,
-        model,
-        resource_filter,
-        context_filter,
-    )
+    // The erased-content exclusion is ERASED_HASH_EXCLUSION, interpolated (D4 arm 2): the
+    // operator's convergence readout must count what the drain may lawfully embed — an erased
+    // hash is never that, and counting it would read as a wedge that cannot converge. Same
+    // runtime-SQL reason as `enqueue_stale` above.
+    let (resources, chunks): (i64, i64) = sqlx::query_as(&format!(
+        r#"SELECT count(DISTINCT r.id), count(*)
+            FROM kb_resources r
+            JOIN kb_chunks ch ON ch.resource_id = r.id
+            JOIN kb_content_blocks b ON b.id = ch.block_id
+           WHERE r.is_active
+             AND ch.is_current
+             AND NOT b.is_folded
+             AND ch.embedded_with IS DISTINCT FROM $1
+             AND {ERASED_HASH_EXCLUSION}
+             AND ($2::uuid IS NULL OR r.id = $2::uuid)
+             AND ($3::uuid IS NULL OR EXISTS (
+                     SELECT 1 FROM kb_resource_homes h
+                      WHERE h.resource_id = r.id
+                        AND h.anchor_table = 'kb_contexts'
+                        AND h.anchor_id = $3::uuid))"#
+    ))
+    .bind(model)
+    .bind(resource_filter)
+    .bind(context_filter)
     .fetch_one(pool)
     .await?;
 
-    Ok((row.resources as u64, row.chunks as u64))
+    Ok((resources as u64, chunks as u64))
 }
 
 /// Re-enqueue `dead` embed jobs so a following claim can drain them (issue #299, Phase 4). Returns the

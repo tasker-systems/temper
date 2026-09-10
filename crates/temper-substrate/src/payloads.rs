@@ -1834,11 +1834,19 @@ pub async fn verify_ledger_roundtrip(pool: &sqlx::PgPool) -> anyhow::Result<()> 
                 }
                 // The erasure act's strike (2026-09): fired through the same `blob_delete`
                 // wrapper as blob_deleted, so it gets an arm for the same reason — this is
-                // where the typed contract meets a really-emitted payload. The admin erasure
-                // pair has NO write path yet (Beat 2's execution), so per the rule below they
-                // stay unlisted.
+                // where the typed contract meets a really-emitted payload.
                 "blob_erased" => {
                     serde_json::from_value::<BlobErased>(r.payload.clone())?;
+                }
+                // The erasure act's admin pair (20260909000020): `principal_erasure_execute` /
+                // `principal_erasure_refuse` emit these, so per the rule below they get arms —
+                // this is where the typed contract meets a really-emitted payload (the
+                // erasure_replay corpus carries real ones).
+                "principal_erased" => {
+                    serde_json::from_value::<PrincipalErased>(r.payload.clone())?;
+                }
+                "principal_erasure_refused" => {
+                    serde_json::from_value::<PrincipalErasureRefused>(r.payload.clone())?;
                 }
                 // Unlisted types (e.g. taxonomy entries no write path emits yet) are intentionally
                 // not roundtripped here; add an arm when a write path begins emitting one.

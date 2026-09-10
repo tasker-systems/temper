@@ -9,9 +9,9 @@
 //! SQL commits, it does not decide legality (`principal_standing_apply`'s shape,
 //! migrations/20260720000030): the scope computation, the per-row governed-home strikes, the
 //! tombstone machinery and both events live in `principal_erasure_execute` /
-//! `principal_erasure_refuse` / `_erasure_apply_redaction` (migration 20260909000020). This
-//! module is the door the admin surface (Beat 4) will wire; there is deliberately no HTTP
-//! handler here.
+//! `principal_erasure_refuse` / `_erasure_apply_redaction` (migration 20260909000020). The
+//! admin surface's HTTP door (`handlers::erasure::execute`) calls straight into
+//! [`execute_erasure`] — this module stays the service layer and carries no HTTP types.
 //!
 //! The request reference is an opaque UUID supplied by the caller: it rides
 //! `kb_events."references"` (rel `request`) and the act's correlation id — never the payload —
@@ -28,13 +28,13 @@ use crate::error::{ApiError, ApiResult};
 use crate::services::access_service;
 
 /// One blob strike's verdict, exactly what the `blob_delete` wrapper returned. The provider
-/// bytes themselves are NOT this beat's business: a released verdict is drained by Beat 4's
-/// fence, which derives its work from the `principal_erased` payload (derive-don't-remember).
+/// bytes themselves are not the service's business: a released verdict is drained by the
+/// fence (`erasure_fence_service`), which derives its work from the `principal_erased`
+/// payload (derive-don't-remember).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlobStrikeOutcome {
     pub blob_id: Uuid,
     pub released: bool,
-    pub pathname: Option<String>,
 }
 
 /// A completed erasure — the full act or, on a re-erase, the no-op completion (spec §5:
@@ -83,6 +83,11 @@ struct ExecuteOutcomeWire {
 /// Authority FIRST: a caller without the `is_system_admin` standing gets the `unauthorized`
 /// refusal recorded and nothing else — the existence of the subject is never disclosed to a
 /// caller the gate has already declined (existence checks come after the gate, operator-only).
+///
+/// The request reference tolerates retries: a retried call with the SAME reference re-executes
+/// as a no-op completion on an already-erased subject (`already_erased`, spec §5). Correlation
+/// is INDEXED, never unique (20260624000001_canonical_schema.sql:491) — the reference pairs
+/// the act's events, it does not deduplicate the door.
 pub async fn execute_erasure(
     pool: &PgPool,
     caller: ProfileId,
@@ -156,8 +161,9 @@ pub async fn execute_erasure(
 /// The per-row strike verdicts for a completion: every `blob_erased` event sharing the
 /// completion's correlation id, joined to the row it emptied. The wrapper decided the byte
 /// fate inside the act's transaction (live-rows-only refcount under the hash lock); this
-/// re-derives the same verdict from the row state the act left behind — the pathname is the
-/// content-addressed object the fence would delete when `released`.
+/// re-derives the verdict from the row state the act left behind. The fence derives its own
+/// pathname from the payload's per-target outcome prose — the STRUCK row's `blob_pathname` is
+/// always NULL (the strike emptied it), so it is not read here.
 async fn strike_verdicts(
     pool: &PgPool,
     completion_event: Uuid,
@@ -168,8 +174,7 @@ async fn strike_verdicts(
                NOT EXISTS (
                    SELECT 1 FROM kb_blobs live
                     WHERE live.content_hash = b.content_hash
-                      AND live.content_type IS NOT NULL) AS "released: bool",
-               b.blob_pathname                           AS pathname
+                      AND live.content_type IS NOT NULL) AS "released: bool"
           FROM kb_events e
           JOIN kb_event_types t ON t.id = e.event_type_id AND t.name = 'blob_erased'
           JOIN kb_blobs b ON b.id = (e.payload->>'blob_id')::uuid
@@ -186,11 +191,12 @@ async fn strike_verdicts(
         .into_iter()
         .map(|r| BlobStrikeOutcome {
             blob_id: r.blob_id.expect("a blob_erased payload carries blob_id"),
-            // Released ⟺ no live row carries the hash anymore — the refcount's verdict,
-            // exact as of the strike's commit and stable since (re-commits mint fresh rows,
-            // which is the fence's declared-open window, not this read's business).
+            // Released ⟺ no live row carries the hash — the refcount's verdict, exact AS OF
+            // THIS READ. The strike-time verdict is the payload's: a re-commit after the act
+            // (the fence's declared-open window) flips this read to `false` while the
+            // strike-time prose still says `released=true` — both are honest about the moment
+            // they speak for, and neither overrules the other.
             released: r.released.unwrap_or(false),
-            pathname: r.pathname,
         })
         .collect())
 }
@@ -198,12 +204,16 @@ async fn strike_verdicts(
 /// Record a refusal (D6) — the negative face: ONE `principal_erasure_refused` event with the
 /// reason code and nothing else mutated.
 ///
-/// This is the recording primitive, not a gated door: `execute_erasure`'s authority gate is
-/// its caller for the `unauthorized` face (the attempt is attributed to whoever attempted
-/// it), and the operator-facing door Beat 4 wires will gate ITS callers before reaching here.
-/// `detail` carries the reason's evidence — the named unhonourable part, or the obligation
-/// held — and must never name a person (D6: the record never re-identifies).
-pub async fn refuse_erasure(
+/// This is the recording primitive, not a gated door: [`execute_erasure`]'s authority gate is
+/// its ONLY caller — a non-operator's attempt is refused there, attributed to whoever
+/// attempted it, and the HTTP door never calls this directly (it cannot: the refusal face
+/// belongs to the gate, and a second call site would be a second legality decision). The door
+/// does not pre-gate its callers either — the 404 posture is a RENDERING of this function's
+/// recorded refusal, not a separate check. `pub(crate)` until a second door exists to call it;
+/// widening it before then would invite a refusal path that bypasses the gate. `detail` carries
+/// the reason's evidence — the named unhonourable part, or the obligation held — and must
+/// never name a person (D6: the record never re-identifies).
+pub(crate) async fn refuse_erasure(
     pool: &PgPool,
     subject: ProfileId,
     attempted_by: ProfileId,
