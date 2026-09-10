@@ -86,6 +86,11 @@ static IMPLEMENTATION_GROUNDING_MD: &str =
 static COGNITIVE_MAPS_MD: &str = include_str!("../../skill-content/cognitive-maps.md");
 static QUERYING_MD: &str = include_str!("../../skill-content/querying.md");
 static TEAMS_MD: &str = include_str!("../../skill-content/teams.md");
+/// CLI-packaging only, like `cognitive-maps.md` and `teams.md`: `/temper init` is a slash
+/// command on CLI hosts, and everything the flow touches (the wizard, the skill's `guidance/`
+/// directory) exists only there. The MCP tree declares its absence rather than shipping an arm
+/// that names doors its client does not have.
+static PROJECT_SETUP_MD: &str = include_str!("../../skill-content/project-setup.md");
 static KNOWLEDGE_BASE_MD: &str =
     include_str!("../../../../agent-skills/temper-knowledge-base/knowledge-base.md");
 static WF_BUILD_SMALL: &str = include_str!("../../skill-content/workflows/build-small.md");
@@ -1282,6 +1287,7 @@ pub fn generate_skill_files_with_hash(
         COGNITIVE_MAPS_MD.to_string(),
     );
     files.insert("teams.md".to_string(), TEAMS_MD.to_string());
+    files.insert("project-setup.md".to_string(), PROJECT_SETUP_MD.to_string());
     // CLI-only, and declared absent from the MCP tree rather than shipped wrong: MCP has no query
     // tool yet (spec [2] defers it), so an MCP reader routed here would be sent to a door that is
     // not on their surface. Same reason `cognitive-maps.md` and `teams.md` are CLI-only.
@@ -1442,6 +1448,7 @@ mod tests {
         assert!(files.contains_key("memories.md"));
         assert!(files.contains_key("cognitive-maps.md"));
         assert!(files.contains_key("teams.md"));
+        assert!(files.contains_key("project-setup.md"));
         assert!(files.contains_key("knowledge-base.md"));
         assert!(files.contains_key("workflows/build-small.md"));
         assert!(files.contains_key("workflows/build-medium.md"));

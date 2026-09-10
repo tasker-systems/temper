@@ -200,5 +200,7 @@ Stated rather than left to be discovered, because coverage is never inferred fro
   provenance, fold-then-recreate supersession, cross-map linking — ships only in the CLI packaging.
   Read from a map freely; before **authoring** into one, say so and ask.
 - **Teams.** Creating teams, invitations, roles and offboarding have no guide here.
+- **Project setup.** `/temper init` — fundamentals authoring and the onboarding flow — ships
+  only in the CLI packaging; this surface has no slash command, skill directory, or wizard.
 - **Per-cell workflow files.** The CLI packaging carries a file per `mode × effort` cell. They are
   written against CLI commands, so they are not shipped here rather than shipped wrong.

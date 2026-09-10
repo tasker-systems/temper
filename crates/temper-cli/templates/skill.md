@@ -40,13 +40,16 @@ principle, never the scope of it.
 - `cognitive-maps.md` — Reading from and authoring into cognitive maps (telos-governed graphs)
 - `teams.md` — Teams: create, invite (email as correlator), join, roles, offboarding
 - `querying.md` — **Which door to ask through** (`search` vs `query`), compositions, reading a trace
+- `project-setup.md` — The `/temper init` flow: fundamentals authoring, and introducing the arc
+  to a project
 
 ### Workflow Files (`workflows/`)
 One file per mode/effort combination. Read only the one that matches the current task.
 
 ### Extension Files (`guidance/`)
 The project's own rules — `guidance/fundamentals.md` holds its conventions if it exists. Read
-them before substantive work in a project; `/temper init` offers to create them where missing.
+them before substantive work in a project; if missing, `/temper init` offers to create them
+(read `project-setup.md` for that flow).
 
 ## Outcome Discipline — applies to every task, whether or not you author a goal
 
@@ -152,6 +155,7 @@ session ritual performed before the purpose is known is effort spent on the wron
 | `session wrap` | Read `session-wrap.md`, then follow *Session End* in `session-lifecycle.md` |
 | Authoring or amending a goal or sub-goal, or deciding whether a criterion belongs on one | Read `outcome-registers.md` |
 | Working a goal — taking one up, resuming under it, advancing, recording, decomposing, or closing it | Read `working-a-goal.md` |
+| `/temper init` — or setting a project's fundamentals up when they are missing | Read `project-setup.md` |
 | Storing structured data (JSON, YAML, measurements, query plans) a later session must retrieve whole | Read `data-artifacts.md` |
 | Anything touching a cognitive map (read/author a map, telos, nodes/edges, regions) | Read `cognitive-maps.md` |
 | Block-level / segmented / attributable writes (per-block provenance/sources, citation-grade docs, `annotate`, `segmented_ingest` lifecycle) | Read `reference.md` → *Block-Grain Ingest & Attribution* |
