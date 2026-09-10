@@ -18,7 +18,7 @@ import re  # noqa: F401
 import json
 
 from pydantic import BaseModel, ConfigDict, Field
-from typing import Any, ClassVar, Dict, List
+from typing import Any, ClassVar, Dict, List, Optional
 from uuid import UUID
 from typing import Optional, Set
 from typing_extensions import Self
@@ -26,10 +26,11 @@ from pydantic_core import to_jsonable_python
 
 class BlockSuccessor(BaseModel):
     """
-    One named successor of a folded block's content. The disposition map's absorbers/carried block ids, each surfaced only when the caller passes that successor's own canonical read predicate — invisible successors are omitted ENTIRELY (no id, no count: aggregate existence is still an existence leak).  WIRE DECISION, ON THE RECORD: a successor carries only its block id — addressable today because every fold producer folds within one resource, so the successor shares the folded block's home. When span addressing (register clause 2) lets a successor cross a resource boundary, this shape must grow a home-resource field (or the map must) — a deliberate change then, not an accident discovered by a client that cannot construct an address.
+    One named successor of a folded block's content. The disposition map's absorbers/carried block ids, each surfaced only when the caller passes that successor's own canonical read predicate — invisible successors are omitted ENTIRELY (no id, no count: aggregate existence is still an existence leak).  The single-resource wire decision recorded here was retired deliberately by the span-address-form design (register clause 2, 2026-09-10): the shape grew its home field. The home is ROW-RESOLVED — the `resource_id` the gate's own batch lookup selects from `kb_content_blocks` and probes visibility against — never a ledger-claimed value: a claim about where a block lives must never gate a read or render an address (the unvalidated `_event_append` seam would let a claimed home name a visible decoy while the row sits behind an invisible one). `None` only under new-reader/old-writer skew — a pre-field server emits `{block_id}` alone, and the client then states the successor without a constructible address, the pre-field world declared (same skew pattern as `is_carried`).
     """ # noqa: E501
     block_id: UUID = Field(description="The surviving block (kept or created) holding the folded incumbent's content.")
-    __properties: ClassVar[List[str]] = ["block_id"]
+    home_resource_id: Optional[UUID] = Field(default=None, description="The resource the successor's row lives on — the same value the pair-keyed read fork keys on, so the gated envelope alone constructs the successor's `<home>#<block>` address.")
+    __properties: ClassVar[List[str]] = ["block_id", "home_resource_id"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -70,6 +71,11 @@ class BlockSuccessor(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # set to None if home_resource_id (nullable) is None
+        # and model_fields_set contains the field
+        if self.home_resource_id is None and "home_resource_id" in self.model_fields_set:
+            _dict['home_resource_id'] = None
+
         return _dict
 
     @classmethod
@@ -82,7 +88,8 @@ class BlockSuccessor(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "block_id": obj.get("block_id")
+            "block_id": obj.get("block_id"),
+            "home_resource_id": obj.get("home_resource_id")
         })
         return _obj
 
