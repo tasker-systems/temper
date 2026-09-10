@@ -25,6 +25,10 @@
         "$ref": "#/$defs/ReblockKeptBlock"
       }
     },
+    "replaces_body": {
+      "description": "Whole-body replace semantics (the update path's arm): the sections chunk the caller's NEW\nbody, the created blocks MINT their chunks (the content sidecar carries them — the\nreparent-only premise does not hold), and folded incumbents' chunk generations retire.\n`false` — the serde default, so every pre-existing event replays identically — for the\nshipped op shape: created blocks reparent EXISTING CAS rows and nothing is inserted.",
+      "type": "boolean"
+    },
     "resource_id": {
       "$ref": "#/$defs/ResourceId"
     }
@@ -157,7 +161,7 @@
           "$ref": "#/$defs/BlockId"
         },
         "chunks": {
-          "description": "The EXISTING chunk rows reassigned to this block, in order, with renumbered\n`chunk_index`. Chunks are never inserted, deleted, or rewritten by a re-block — the\n`content_hash` here must equal the live row's, and the embedding rides the row through\nthe reparent untouched. The projector derives the block's `block_body_hash` from these\nordered hashes, the create-path derivation.",
+          "description": "The chunk assignments for this block, in order. SHAPE-DEPENDENT: on the shipped op shape\nthese are EXISTING chunk rows reassigned — chunks are never inserted, deleted, or rewritten\nby a re-block, the `content_hash` here must equal the live row's, and the embedding rides\nthe row through the reparent untouched. On the whole-body replace shape\n(`ResourceReblocked::replaces_body`) these are NEW chunk ids minted by the operation, with\ntheir content/embedding riding the sidecar map (the `block_mutate` posture) — the same\nmanifest field carries both, discriminated by the marker. The projector derives the block's\n`block_body_hash` from these ordered hashes, the create-path derivation.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/ChunkManifest"
@@ -179,6 +183,13 @@
       "description": "One block a re-block KEEPS: the row survives with its content, chunks, and provenance\nuntouched — only its `seq` may move (the projector applies the move only when it changed).",
       "type": "object",
       "properties": {
+        "attribution": {
+          "description": "NEW assertions only — the delta this event writes onto the survivor. Deliberately never a\nre-listing of the survivor's OWN rows (those ride along untouched; re-inserting them under\na new `contributed_by_event_id` would double-count them in every standing read): this list\ncarries the populations the replace-shaped partition adds — caller whole-body sources\n(appended across events, the same semantic as `block_mutate`'s incorporated rows and the\nannotate path) and absorbed unions from folded duplicates (skipping sources the survivor\nalready holds). Empty for a kept block with nothing new to assert.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReblockAttribution"
+          }
+        },
         "block_id": {
           "$ref": "#/$defs/BlockId"
         },

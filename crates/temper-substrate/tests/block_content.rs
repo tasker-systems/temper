@@ -243,10 +243,11 @@ async fn superseded_revisions_keep_their_own_bytes(pool: sqlx::PgPool) {
     assert_eq!(all, vec!["v1 body\n".to_string(), "v2 body\n".to_string()]);
 
     // The live revision (current_revision_id) carries the latest bytes, and the resource stays verbatim.
+    // (Live-only: the folded incumbent keeps its own superseded bytes as history.)
     let current: String = sqlx::query_scalar(
         "SELECT bc.content FROM kb_content_blocks b \
            JOIN kb_block_content bc ON bc.block_revision_id = b.current_revision_id \
-          WHERE b.resource_id = $1",
+          WHERE b.resource_id = $1 AND NOT b.is_folded",
     )
     .bind(id.uuid())
     .fetch_one(&pool)

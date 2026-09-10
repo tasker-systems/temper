@@ -1565,7 +1565,8 @@ pub async fn resource_block_provenance_select(
                   source_uri,
                   accretion_seq       AS "accretion_seq!",
                   contributed_by_event_id AS "contributed_by_event_id!",
-                  created             AS "created!"
+                  created             AS "created!",
+                  is_carried          AS "is_carried!"
              FROM resource_block_provenance($1, 'profile', $2)"#,
         resource_id,
         profile_id.uuid(),

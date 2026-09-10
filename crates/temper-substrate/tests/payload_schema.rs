@@ -87,7 +87,7 @@ fn the_migration_literal_matches_the_committed_fixture() {
             &["blob_committed.v1.schema.json"][..],
         ),
         (
-            "20260905000010_resource_reblock.sql",
+            "20260908000010_whole_body_replace_reblock.sql",
             &["resource_reblocked.v1.schema.json"],
         ),
         (

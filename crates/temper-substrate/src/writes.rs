@@ -17,8 +17,8 @@ use crate::affinity::EdgeKind;
 use crate::content::{prepare_block, prepare_block_from_chunks, IncomingChunk, PreparedBlock};
 use crate::events::{fire, fire_with, EdgeHome, EventContext, SeedAction};
 use crate::ids::{
-    BlobId, BlockId, CogmapId, ContextId, DataArtifactId, EdgeId, EntityId, EventId, InvocationId,
-    ProfileId, PropertyId, ResourceId, ShapeId,
+    BlobId, BlockId, ChunkId, CogmapId, ContextId, DataArtifactId, EdgeId, EntityId, EventId,
+    InvocationId, ProfileId, PropertyId, ResourceId, ShapeId,
 };
 use crate::payloads::{self, AnchorRef, EdgePolarity, Incorporation, ProvenanceSource};
 use crate::text::slugify;
@@ -392,23 +392,26 @@ async fn create_resource_impl(
 #[derive(Debug)]
 pub struct UpdateParams<'a> {
     pub resource: ResourceId,
-    /// New body prose. With `content_block` unset this is a WHOLE-BODY write: on a multi-block
-    /// resource it replaces the partition (the first live block takes the full new chunk set and
-    /// the siblings fold; the blocking policy re-partitions in the same transaction), and an
-    /// identical rewrite short-circuits to no events. With `content_block` set, the text revises
-    /// that block alone.
+    /// New body prose. With `content_block` unset this is a WHOLE-BODY write: ONE replace-shaped
+    /// `resource_reblocked` — computed against the PRE-update incumbents — re-partitions to the
+    /// new body's heading structure (kept sections survive with identity; folded incumbents'
+    /// provenance redistributes under absorbed/carried; an identical rewrite with no sources is
+    /// silent). With `content_block` set, the text revises that block alone (the hook then
+    /// re-partitions in the same transaction, as shipped).
     pub body: Option<&'a str>,
     pub title: Option<&'a str>,
     pub origin_uri: Option<&'a str>,
     /// Property pairs to (re)assert (stage/mode/effort/doc_type + meta keys).
     pub properties: &'a [(String, serde_json::Value)],
     /// Caller-supplied, already-embedded chunks for the body revise. When `Some` (and `body` is
-    /// supplied), the new block is built from these verbatim (no server-side embed); when `None`, the
-    /// server chunks + embeds `body` (the fallback path). Reverses PR#71's discard contract.
+    /// supplied), section chunks whose content_hash matches a caller chunk ride the caller's
+    /// vector + `embedded_with` declaration; unmatched chunks fall to the async-embed backfill.
+    /// When `None`, the server chunks + embeds `body` (the fallback path).
     pub chunks: Option<Vec<IncomingChunk>>,
-    /// Provenance sources this revision incorporated — applied to the revised body block and recorded
-    /// into `kb_block_provenance` (accretes onto whatever the block already carried). Empty for an
-    /// ordinary body revise with no attribution.
+    /// Provenance sources this revision incorporated — BODY-GRAIN on the whole-body arm: each
+    /// source asserts onto every section (carried on a multi-section body, direct on a
+    /// single-section one), appended across events. On the per-block arm they apply to the
+    /// addressed block as before. Empty for an ordinary body revise with no attribution.
     pub sources: Vec<Incorporation>,
     /// Which content block a PER-BLOCK body revise + `sources` target. `None` → whole-body
     /// semantics (see `body`). `Some(id)` → address that block explicitly (must belong to the
@@ -515,7 +518,7 @@ async fn resolve_target_block(
 
 pub async fn update_resource_in_tx(
     conn: &mut sqlx::PgConnection,
-    p: UpdateParams<'_>,
+    mut p: UpdateParams<'_>,
     ctx: EventContext,
     defer: bool,
 ) -> Result<()> {
@@ -539,7 +542,11 @@ pub async fn update_resource_in_tx(
             .await?;
             body_write = match live.as_slice() {
                 [] => anyhow::bail!("update_resource: resource {} has no live block", p.resource),
-                [only] => Some((BlockId::from(only.id), false)),
+                // A single-block whole-body write is STILL a whole-body write: it goes through
+                // the replace-shaped partition like any other (the one incumbent is an
+                // incumbent like any other — kept when the section matches it, folded when the
+                // rewrite spans or rewrites it).
+                [only] => Some((BlockId::from(only.id), true)),
                 [first, ..] => {
                     // Identical whole-body rewrite with no new sources → the ledger must stay
                     // silent (the no-op clause): no block_mutate, no re-block, no hook. Bytes,
@@ -575,7 +582,78 @@ pub async fn update_resource_in_tx(
         let body = p
             .body
             .expect("body_write is Some only when p.body was Some");
-        let mut prepared = match (p.chunks, defer) {
+        // Taken here — AFTER the short-circuit decision above (which reads `p.sources`) and
+        // before the two exclusive body-write branches, each of which owns them; the tail moves
+        // `p` whole into `finish_update`.
+        let update_chunks = std::mem::take(&mut p.chunks);
+        let update_sources = std::mem::take(&mut p.sources);
+        if replaces_body {
+            // ── The whole-body replace arm (spec 2026-09-08, the replace-shaped redistribution) ──
+            // The revised text IS the resource's entire body, so ONE replace-shaped
+            // `resource_reblocked` — computed against the PRE-update incumbents — replaces the
+            // shipped fold-then-hook pair (mutate with `replaces_body = true`, then the policy
+            // hook over one live block). Kept sections survive with their identity; folded
+            // incumbents' provenance redistributes under absorbed/carried; the caller's
+            // whole-body sources assert body-grain. `replaces_body` is retired from this path:
+            // no event the write path fires any longer carries it (the projector arm stays for
+            // replay of shipped events).
+            //
+            // A partition decision over a still-arriving body is a guess (the shipped op's own
+            // decline — the check moves from the hook into the arm, same Fatal face).
+            let ingest_state: String = sqlx::query_scalar!(
+                "SELECT ingest_state FROM kb_resources WHERE id = $1",
+                p.resource.uuid()
+            )
+            .fetch_one(&mut *conn)
+            .await
+            .with_context(|| format!("update_resource: resource {} not found", p.resource))?;
+            if ingest_state == "in_progress" {
+                anyhow::bail!(
+                    "update_resource: resource {} is mid-ingest (in_progress) — a partition \
+                     decision over a still-arriving body would be a guess",
+                    p.resource
+                );
+            }
+            let base = match (update_chunks, defer) {
+                (Some(chunks), _) => prepare_block_from_chunks(0, None, chunks),
+                (None, false) => prepare_block(0, None, body)?,
+                (None, true) => crate::content::prepare_block_deferred(0, None, body),
+            };
+            if base.chunks.is_empty() {
+                anyhow::bail!(
+                    "update_resource: body produces no chunks (empty, whitespace, or headings \
+                     only) — refusing to write a contentless block"
+                );
+            }
+            let live_blocks = read_live_blocks(&mut *conn, p.resource).await?;
+            let live_chunks = read_live_chunks(&mut *conn, p.resource).await?;
+            let attributions = read_attributions(&mut *conn, p.resource).await?;
+            let plan = compute_replace_partition(
+                p.resource,
+                body,
+                &live_blocks,
+                &live_chunks,
+                &attributions,
+                base.chunks,
+                &update_sources,
+            )?;
+            if let Some(plan) = plan {
+                fire_with(
+                    &mut *conn,
+                    SeedAction::ResourceReblock {
+                        manifest: plan.manifest,
+                        slices: &plan.slices,
+                        chunks: &plan.chunks,
+                        emitter: p.emitter,
+                    },
+                    ctx.clone(),
+                )
+                .await?
+                .reblocked_event()?;
+            }
+            return finish_update(conn, p, ctx).await;
+        }
+        let mut prepared = match (update_chunks, defer) {
             (Some(chunks), _) => prepare_block_from_chunks(0, None, chunks),
             (None, false) => prepare_block(0, None, body)?,
             (None, true) => crate::content::prepare_block_deferred(0, None, body),
@@ -586,22 +664,19 @@ pub async fn update_resource_in_tx(
                  refusing to write a contentless block"
             );
         }
-        prepared.incorporated = p.sources;
+        prepared.incorporated = update_sources;
         fire_with(
             &mut *conn,
             SeedAction::BlockMutate {
                 block: block_id,
                 chunks: &prepared.chunks,
-                // The revised block's raw bytes, stored verbatim. On the whole-body arm this is
-                // the resource's ENTIRE new body (written into the first live block; its policy
-                // re-partition follows in the same transaction); on the per-block arm it is the
-                // addressed block's whole text. An empty body (the reconcile "reblock from
-                // chunks" sentinel — `db_backend` passes `Some("")`) stores no bytes ⇒ the
-                // revision is honestly `derived`, never `verbatim` over zero bytes. See `raw_body`.
+                // The revised block's raw bytes, stored verbatim. This is the PER-BLOCK arm
+                // (`content_block` addressing, or the `Some("")` reconcile sentinel): the text
+                // revises the addressed block alone. The whole-body replace took the other
+                // branch above — no event on this path carries `replaces_body = true` any more.
                 raw: (!body.is_empty()).then_some(body),
                 incorporated: &prepared.incorporated,
-                // `true` only on the whole-body multi-block arm — the projector folds the
-                // sibling live blocks (superseded body) in the same event.
+                // Always false here: the write path no longer folds siblings via block_mutate.
                 replaces_body,
                 emitter: p.emitter,
             },
@@ -619,7 +694,17 @@ pub async fn update_resource_in_tx(
                 .await?;
         }
     }
+    finish_update(conn, p, ctx).await
+}
 
+/// The tail of [`update_resource_in_tx`]: everything after the body write. Split so the
+/// whole-body replace arm can return through it without duplicating the property/title/rehome
+/// fires.
+async fn finish_update(
+    conn: &mut sqlx::PgConnection,
+    p: UpdateParams<'_>,
+    ctx: EventContext,
+) -> Result<()> {
     for (key, value) in p.properties {
         fire_with(
             &mut *conn,
@@ -787,6 +872,94 @@ struct AttributionRow {
     accretion_seq: i32,
 }
 
+/// The PRE-update reads both partition computations share — the direct op and the whole-body
+/// replace arm see the same live state (all incumbents are unfolded at this instant, so the
+/// attribution read's `NOT b.is_folded` filter sees every incumbent's rows).
+async fn read_live_blocks(
+    conn: &mut sqlx::PgConnection,
+    resource: ResourceId,
+) -> Result<Vec<LiveBlock>> {
+    Ok(sqlx::query!(
+        r#"SELECT b.id, b.seq,
+                  rev.block_body_hash AS "block_body_hash: Option<String>",
+                  bc.content AS "content: Option<String>"
+             FROM kb_content_blocks b
+             LEFT JOIN kb_block_revisions rev ON rev.id = b.current_revision_id
+             LEFT JOIN kb_block_content bc ON bc.block_revision_id = b.current_revision_id
+            WHERE b.resource_id = $1 AND NOT b.is_folded
+            ORDER BY b.seq"#,
+        resource.uuid()
+    )
+    .fetch_all(&mut *conn)
+    .await?
+    .into_iter()
+    .map(|r| LiveBlock {
+        id: r.id,
+        seq: r.seq,
+        body_hash: r.block_body_hash,
+        bytes: r.content,
+    })
+    .collect())
+}
+
+async fn read_live_chunks(
+    conn: &mut sqlx::PgConnection,
+    resource: ResourceId,
+) -> Result<Vec<LiveChunk>> {
+    Ok(sqlx::query!(
+        r#"SELECT c.id, c.block_id, c.content_hash
+             FROM kb_chunks c
+             JOIN kb_content_blocks b ON b.id = c.block_id
+            WHERE b.resource_id = $1 AND c.is_current AND NOT b.is_folded
+            ORDER BY b.seq, c.chunk_index"#,
+        resource.uuid()
+    )
+    .fetch_all(&mut *conn)
+    .await?
+    .into_iter()
+    .map(|r| LiveChunk {
+        id: r.id,
+        block_id: r.block_id,
+        content_hash: r.content_hash,
+    })
+    .collect())
+}
+
+async fn read_attributions(
+    conn: &mut sqlx::PgConnection,
+    resource: ResourceId,
+) -> Result<Vec<AttributionRow>> {
+    sqlx::query!(
+        r#"SELECT p.block_id, p.source_kind::text AS "source_kind!",
+                  p.source_id, p.accretion_seq, r.uri AS "uri: Option<String>"
+             FROM kb_block_provenance p
+             JOIN kb_content_blocks b ON b.id = p.block_id
+             LEFT JOIN kb_remote_sources r ON p.source_kind = 'remote' AND r.id = p.source_id
+            WHERE b.resource_id = $1 AND NOT b.is_folded AND NOT p.is_corrected"#,
+        resource.uuid()
+    )
+    .fetch_all(&mut *conn)
+    .await?
+    .into_iter()
+    .map(|r| {
+        let source = match r.source_kind.as_str() {
+            "remote" => ProvenanceSource::Remote(
+                r.uri
+                    .context("remote provenance row with no kb_remote_sources uri")?,
+            ),
+            "resource" => ProvenanceSource::Resource(r.source_id),
+            "event" => ProvenanceSource::Event(r.source_id),
+            other => anyhow::bail!("unknown provenance_source_kind {other:?}"),
+        };
+        Ok(AttributionRow {
+            block_id: r.block_id,
+            source,
+            accretion_seq: r.accretion_seq,
+        })
+    })
+    .collect()
+}
+
 /// The computed re-partition: the payload to fire plus each created block's verbatim slice
 /// bytes (the `__blocks` sidecar).
 #[derive(Debug)]
@@ -813,13 +986,20 @@ enum Partition {
     Plan(ReblockPlan),
 }
 
-fn compute_reblock_partition(
-    resource: ResourceId,
-    body: &str,
-    live_blocks: &[LiveBlock],
-    live_chunks: &[LiveChunk],
-    attributions: &[AttributionRow],
-) -> Result<Partition> {
+/// The shared first half of both partition computations: the per-section `(text, chunks)` list
+/// plus the flat expected chunk sequence.
+type Sections = (
+    Vec<(String, Vec<temper_ingest::chunk::ChunkData>)>,
+    Vec<temper_ingest::chunk::ChunkData>,
+);
+
+/// The shared first half of both partition computations: slice the body at heading boundaries,
+/// fold heading-only slices into chunked neighbors, and prove byte-exactness. Returns the
+/// per-section `(text, chunks)` list plus the flat expected chunk sequence, or `None` when the
+/// body chunks to nothing (headings only) — for the direct op that is silence (no prose to
+/// partition), for the whole-body replace arm the caller has already refused a chunkless body,
+/// so reaching `None` there is a caller-contract violation.
+fn partition_sections(body: &str) -> Option<Sections> {
     // The slices ARE the new partition; their concatenation must BE the body (asserted, not
     // assumed — this is the byte-exactness contract's compute-side half).
     let slices = slice_sections(body);
@@ -837,15 +1017,12 @@ fn compute_reblock_partition(
     // cannot own a block (the projector refuses a created block with no chunks), so it folds
     // into a neighbor that carries content: leading slices prepend into the first chunked
     // section, trailing/interior ones append into the previous. The fold concatenates slice
-    // bytes, so block bytes still compose to the body (re-asserted below); the flat expected
-    // sequence above is unchanged by construction, so the drift checks keep their meaning.
-    let mut expected: Vec<temper_ingest::chunk::ChunkData> = Vec::new();
+    // bytes, so block bytes still compose to the body (re-asserted below).
     let mut sections: Vec<(String, Vec<temper_ingest::chunk::ChunkData>)> = Vec::new();
     let mut pending_leading = String::new();
     for s in &slices {
         let chunks =
             temper_ingest::chunk::chunk_markdown_with_prefix(&s.text, &s.initial_breadcrumb);
-        expected.extend(chunks.iter().cloned());
         if chunks.is_empty() {
             if sections.is_empty() {
                 pending_leading.push_str(&s.text);
@@ -864,10 +1041,7 @@ fn compute_reblock_partition(
         sections.push((text, chunks));
     }
     if sections.is_empty() {
-        // The body chunked to nothing (headings only): there is no prose to partition and no
-        // chunk set any block could own — the same no-prose judgment as the hook's
-        // composable-skip. Silence: no event, no write.
-        return Ok(Partition::NoOp);
+        return None;
     }
     let mut composed = String::new();
     for (text, _) in &sections {
@@ -877,6 +1051,26 @@ fn compute_reblock_partition(
         composed, body,
         "the folded sections must rejoin the body byte-for-byte"
     );
+    let expected: Vec<temper_ingest::chunk::ChunkData> = sections
+        .iter()
+        .flat_map(|(_, chunks)| chunks.iter().cloned())
+        .collect();
+    Some((sections, expected))
+}
+
+fn compute_reblock_partition(
+    resource: ResourceId,
+    body: &str,
+    live_blocks: &[LiveBlock],
+    live_chunks: &[LiveChunk],
+    attributions: &[AttributionRow],
+) -> Result<Partition> {
+    let Some((sections, expected)) = partition_sections(body) else {
+        // The body chunked to nothing (headings only): there is no prose to partition and no
+        // chunk set any block could own — the same no-prose judgment as the hook's
+        // composable-skip. Silence: no event, no write.
+        return Ok(Partition::NoOp);
+    };
 
     if expected.len() != live_chunks.len() {
         return Ok(Partition::Declined(format!(
@@ -938,6 +1132,9 @@ fn compute_reblock_partition(
                 kept.push(payloads::ReblockKeptBlock {
                     block_id: BlockId::from(b.id),
                     seq: k as i32,
+                    // The shipped op shape asserts nothing NEW onto a kept row: the survivor's
+                    // own provenance rides along untouched (the delta-only rule).
+                    attribution: Vec::new(),
                 });
             }
             None => {
@@ -1057,8 +1254,430 @@ fn compute_reblock_partition(
             created,
             kept,
             folded,
+            replaces_body: false,
         },
         slices: slices_out,
+    }))
+}
+
+/// One replace-shaped partition: the manifest to fire plus each created block's verbatim slice
+/// bytes and its PREPARED chunks (new ids, content, embeddings — the sidecar's chunk map).
+#[derive(Debug)]
+struct ReplacePlan {
+    manifest: payloads::ResourceReblocked,
+    slices: Vec<(BlockId, String)>,
+    chunks: Vec<crate::content::PreparedChunk>,
+}
+
+/// The replace-shaped partition (whole-body write, spec 2026-09-08): sections chunk the caller's
+/// NEW body and are compared against the PRE-update incumbents by CONTENT, never by ordinal —
+/// the shipped op's drift check is what proves its two index spaces identical before ranges are
+/// compared (`compute_reblock_partition`), and the replace shape has no such proof, so the
+/// correspondence runs on chunk `content_hash` identity, the same currency kept detection runs
+/// on.
+///
+/// - KEPT: unchanged contract — derived-merkle equality AND byte equality against an unclaimed
+///   incumbent. Byteless incumbents cannot kept-match and fold (the same fold extent
+///   `replaces_body` dealt them under the shipped arm).
+/// - ABSORBED/CARRIED, content-grounded: an incumbent whose chunk-hash multiset is fully
+///   contained in one section's is ABSORBED there (`carried = false` — the content IS in the
+///   block); a section containing part of it receives a `carried = true` copy; the absorbing
+///   section never also receives a copy (the shipped `!absorbed` carve-out). An incumbent
+///   contained in SEVERAL duplicate sections is absorbed into each. Per section the dedup is
+///   the shipped sort — absorbed beats carried, then lower accretion_seq.
+/// - CONTENT-GONE (ruled, 2026-09-08): an incumbent whose hashes appear in no section describes
+///   deleted content — there is no honest live target, so its rows stay history on the folded
+///   row. Not redistributed is not lost.
+/// - ABSORBED-INTO-KEPT: a folded duplicate's rows union onto the kept survivor (`carried =
+///   false`), SKIPPING sources the survivor already holds (the union adds nothing). This arm
+///   retires the shipped delta's latent kept-section drop (the shipped delta is consumed by
+///   created sections only).
+/// - CALLER WHOLE-BODY SOURCES are body-grain over the new chunk space: `carried` is true on a
+///   multi-section body, false on a single-section one (the shipped single-block posture). They
+///   APPEND across events on kept blocks — the same semantic as `block_mutate`'s incorporated
+///   rows — but within one manifest each source lands once per block, deduped by the same sort.
+/// - NO-OP: everything kept at unchanged seqs AND no new assertions — the exact twin of the
+///   SQL entry guard, decided here (the Rust op's decision, never a second SQL opinion).
+fn compute_replace_partition(
+    resource: ResourceId,
+    body: &str,
+    live_blocks: &[LiveBlock],
+    live_chunks: &[LiveChunk],
+    attributions: &[AttributionRow],
+    prepared: Vec<crate::content::PreparedChunk>,
+    sources: &[payloads::Incorporation],
+) -> Result<Option<ReplacePlan>> {
+    let Some((sections, expected)) = partition_sections(body) else {
+        // Unreachable through the arm (a chunkless body is refused before this runs) — a
+        // headings-only body here would mean the caller contract broke.
+        anyhow::bail!(
+            "update_resource: body produces no chunks (empty, whitespace, or headings only) — \
+             refusing to write a contentless block"
+        );
+    };
+
+    // Positional expectation: the server chunker over the whole body yields exactly the flat
+    // section chunking (the same equivalence the streaming segment boundary rests on). Caller-
+    // supplied chunk sets may be a DIFFERENT chunking of the same body (chunker skew), so the
+    // base prepared set is claimed BY HASH, never by position — a hash with no caller match
+    // mints a fresh deferred chunk (content rides; the vector is backfilled by the drain).
+    let mut by_hash: std::collections::HashMap<String, Vec<crate::content::PreparedChunk>> =
+        std::collections::HashMap::new();
+    for pc in prepared {
+        by_hash.entry(pc.content_hash.clone()).or_default().push(pc);
+    }
+    let mut aligned: Vec<crate::content::PreparedChunk> = Vec::with_capacity(expected.len());
+    for (i, e) in expected.iter().enumerate() {
+        let claimed = by_hash.get_mut(&e.content_hash).and_then(|q| {
+            if q.is_empty() {
+                None
+            } else {
+                Some(q.remove(0))
+            }
+        });
+        match claimed {
+            Some(mut pc) => {
+                pc.chunk_index = i as i32;
+                aligned.push(pc);
+            }
+            None => {
+                let (header_path, heading_depth) =
+                    crate::content::map_heading(e.header_path.clone(), e.heading_depth);
+                aligned.push(crate::content::PreparedChunk {
+                    chunk_id: ChunkId::from(Uuid::now_v7()),
+                    chunk_index: i as i32,
+                    content_hash: e.content_hash.clone(),
+                    content: e.content.clone(),
+                    // No caller vector matched this chunk's content: the async-embed posture
+                    // persists text + hash now and the drain backfills the vector (issue #299).
+                    embedding: None,
+                    embedded_with: None,
+                    header_path,
+                    heading_depth,
+                });
+            }
+        }
+    }
+
+    // Kept detection: derived-merkle equality against an unclaimed incumbent, AND byte equality
+    // with the section text (chunk content_hash is over TRIMMED text — a boundary-straddling
+    // whitespace edge can hold equal hashes over different bytes; keeping such a row would
+    // re-compose the body from the incumbent's old bytes). Slots stay in SECTION order so every
+    // later stage (delta fold, sidecar assembly) indexes sections directly.
+    enum Slot {
+        Kept {
+            block_id: BlockId,
+            incumbent_seq: i32,
+            attribution: Vec<payloads::ReblockAttribution>,
+        },
+        Created {
+            block_id: BlockId,
+            attribution: Vec<payloads::ReblockAttribution>,
+        },
+    }
+    let mut slices_out: Vec<(BlockId, String)> = Vec::new();
+    let mut slots: Vec<Slot> = Vec::with_capacity(sections.len());
+    let mut claimed: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
+    let mut offset = 0usize;
+    for (text, chunks) in &sections {
+        let run = &aligned[offset..offset + chunks.len()];
+        offset += chunks.len();
+        let merkle = temper_ingest::merkle::block_merkle(
+            &run.iter()
+                .map(|c| c.content_hash.clone())
+                .collect::<Vec<_>>(),
+        );
+        let incumbent = live_blocks.iter().find(|b| {
+            b.body_hash.as_deref() == Some(merkle.as_str())
+                && !claimed.contains(&b.id)
+                && b.bytes.as_deref() == Some(text.as_str())
+        });
+        match incumbent {
+            Some(b) => {
+                claimed.insert(b.id);
+                slots.push(Slot::Kept {
+                    block_id: BlockId::from(b.id),
+                    incumbent_seq: b.seq,
+                    attribution: Vec::new(), // filled below
+                });
+            }
+            None => {
+                let new_id = BlockId::from(Uuid::now_v7());
+                slots.push(Slot::Created {
+                    block_id: new_id,
+                    attribution: Vec::new(), // filled below
+                });
+                slices_out.push((new_id, text.clone()));
+            }
+        }
+    }
+
+    // ── The attribution delta, CONTENT-grounded ──
+    // Incumbent chunk-hash runs (multiplicity-aware) and per-section hash count maps.
+    let mut block_hashes: std::collections::HashMap<Uuid, Vec<&str>> =
+        std::collections::HashMap::new();
+    for c in live_chunks {
+        block_hashes
+            .entry(c.block_id)
+            .or_default()
+            .push(c.content_hash.as_str());
+    }
+    let section_counts: Vec<std::collections::HashMap<&str, usize>> = sections
+        .iter()
+        .map(|(_, chunks)| {
+            let mut m: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+            for c in chunks {
+                *m.entry(c.content_hash.as_str()).or_default() += 1;
+            }
+            m
+        })
+        .collect();
+
+    /// One delta entry for section k. `from_caller` discriminates a caller whole-body assertion
+    /// (appends across events) from an absorbed union of a folded incumbent (skipped when the
+    /// survivor already holds the source).
+    struct DeltaEntry {
+        source: ProvenanceSource,
+        seq: i32,
+        carried: bool,
+        from_caller: bool,
+    }
+
+    /// Per-source seats in one section's delta: the absorbed union (if a folded incumbent
+    /// contributed it) and the caller assertion (if the caller asserted it).
+    struct SourceSeats {
+        source: ProvenanceSource,
+        union: Option<DeltaEntry>,
+        caller: Option<DeltaEntry>,
+    }
+    let mut delta: std::collections::HashMap<usize, Vec<DeltaEntry>> =
+        std::collections::HashMap::new();
+    for a in attributions {
+        let Some(hashes) = block_hashes.get(&a.block_id) else {
+            continue; // a chunkless incumbent has no content to locate — no geometry
+        };
+        if claimed.contains(&a.block_id) {
+            continue; // a kept incumbent's own rows ride along, never re-listed
+        }
+        let mut present_any = false;
+        let mut absorbed: Vec<bool> = vec![false; sections.len()];
+        for (k, counts) in section_counts.iter().enumerate() {
+            let mut need: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+            for h in hashes.iter() {
+                *need.entry(h).or_default() += 1;
+            }
+            absorbed[k] = need
+                .iter()
+                .all(|(h, n)| counts.get(h).is_some_and(|c| c >= n));
+            present_any |= hashes.iter().any(|h| counts.contains_key(h));
+        }
+        if !present_any {
+            // Content-gone (ruled): the caller deleted this incumbent's content. Its rows stay
+            // history on the folded row — there is no honest live target.
+            continue;
+        }
+        for (k, counts) in section_counts.iter().enumerate() {
+            let some = hashes.iter().any(|h| counts.contains_key(h));
+            if absorbed[k] {
+                delta.entry(k).or_default().push(DeltaEntry {
+                    source: a.source.clone(),
+                    seq: a.accretion_seq,
+                    carried: false,
+                    from_caller: false,
+                });
+            } else if some {
+                delta.entry(k).or_default().push(DeltaEntry {
+                    source: a.source.clone(),
+                    seq: a.accretion_seq,
+                    carried: true,
+                    from_caller: false,
+                });
+            }
+        }
+    }
+    // Caller whole-body sources: body-grain over the NEW chunk space — carried iff the body is
+    // multi-section; landed on every section, kept or created.
+    for inc in sources {
+        for k in 0..sections.len() {
+            delta.entry(k).or_default().push(DeltaEntry {
+                source: inc.source.clone(),
+                seq: inc.seq,
+                carried: sections.len() > 1,
+                from_caller: true,
+            });
+        }
+    }
+
+    // Fold the delta into the slots. Per section: the shipped dedup sort (absorbed beats
+    // carried, then lower accretion_seq), one entry per source; then the kept-skip — a deduped
+    // ABSORBED union entry whose source the survivor already holds is dropped (the union adds
+    // nothing), while a caller assertion appends by construction. On a created block nothing is
+    // ever "held" — every deduped entry lands.
+    let held: std::collections::HashMap<Uuid, Vec<&ProvenanceSource>> =
+        attributions
+            .iter()
+            .fold(std::collections::HashMap::new(), |mut m, a| {
+                m.entry(a.block_id).or_default().push(&a.source);
+                m
+            });
+    for (k, slot) in slots.iter_mut().enumerate() {
+        let Some(entries) = delta.remove(&k) else {
+            continue;
+        };
+        // Resolve per SOURCE, not per entry — a caller assertion and an absorbed union of the
+        // same source can meet in one section, and resolution must never depend on seq
+        // ordering: the union (direct-quality, carried = false) wins when it lands; when the
+        // union is dropped (survivor already holds the source) the CALLER's assertion is the
+        // fallback and still appends. Within one event a source lands at most one row per
+        // block, deterministically.
+        let block_id = match slot {
+            Slot::Kept { block_id, .. } => block_id.uuid(),
+            Slot::Created { .. } => Uuid::nil(),
+        };
+        let survivor_holds =
+            |e: &DeltaEntry| held.get(&block_id).is_some_and(|v| v.contains(&&e.source));
+        // ProvenanceSource is Eq, not Hash — a Vec scan, the same grain the shipped dedup uses.
+        let mut by_source: Vec<SourceSeats> = Vec::new();
+        for e in entries {
+            let seat = match by_source.iter_mut().find(|s| s.source == e.source) {
+                Some(seat) => seat,
+                None => {
+                    by_source.push(SourceSeats {
+                        source: e.source.clone(),
+                        union: None,
+                        caller: None,
+                    });
+                    by_source.last_mut().unwrap()
+                }
+            };
+            if e.from_caller {
+                // lowest caller seq wins the representative seat
+                match &seat.caller {
+                    Some(prev) if prev.seq <= e.seq => {}
+                    _ => seat.caller = Some(e),
+                }
+            } else {
+                match &seat.union {
+                    Some(prev) if prev.seq <= e.seq => {}
+                    _ => seat.union = Some(e),
+                }
+            }
+        }
+        let mut resolved: Vec<DeltaEntry> = by_source
+            .into_iter()
+            .filter_map(|seat| match seat.union {
+                Some(u) if !survivor_holds(&u) => Some(u),
+                Some(_) => seat.caller, // union held: the caller's append is the fallback
+                None => seat.caller,
+            })
+            .collect();
+        resolved.sort_by_key(|e| (e.carried, e.seq));
+        let attribution: Vec<payloads::ReblockAttribution> = resolved
+            .into_iter()
+            .map(|e| payloads::ReblockAttribution {
+                source: e.source,
+                seq: e.seq,
+                carried: e.carried,
+            })
+            .collect();
+        match slot {
+            Slot::Kept { attribution: a, .. } => *a = attribution,
+            Slot::Created { attribution: a, .. } => *a = attribution,
+        }
+    }
+
+    // Split the slots into the manifest's kept/created vecs, in section order.
+    let mut kept: Vec<payloads::ReblockKeptBlock> = Vec::new();
+    let mut created: Vec<payloads::ReblockCreatedBlock> = Vec::new();
+    let mut kept_incumbent_seq: Vec<i32> = Vec::new();
+    let mut created_section: Vec<usize> = Vec::new();
+    for (k, slot) in slots.iter().enumerate() {
+        match slot {
+            Slot::Kept {
+                block_id,
+                incumbent_seq,
+                attribution,
+            } => {
+                kept.push(payloads::ReblockKeptBlock {
+                    block_id: *block_id,
+                    seq: k as i32,
+                    attribution: attribution.clone(),
+                });
+                kept_incumbent_seq.push(*incumbent_seq);
+            }
+            Slot::Created {
+                block_id,
+                attribution,
+            } => {
+                created.push(payloads::ReblockCreatedBlock {
+                    block_id: *block_id,
+                    seq: k as i32,
+                    chunks: Vec::new(), // filled below
+                    attribution: attribution.clone(),
+                });
+                created_section.push(k);
+            }
+        }
+    }
+
+    let folded: Vec<BlockId> = live_blocks
+        .iter()
+        .filter(|b| !claimed.contains(&b.id))
+        .map(|b| BlockId::from(b.id))
+        .collect();
+
+    // No-op: everything kept at unchanged seqs AND no new assertions anywhere — the exact twin
+    // of the SQL entry guard. (The identical-bytes-no-sources whole-body write never reaches
+    // here on a multi-block resource — the arm's byte short-circuit fires first — but on a
+    // single-block resource it lands HERE: silence, the named behavior change.)
+    let seqs_moved = kept
+        .iter()
+        .zip(&kept_incumbent_seq)
+        .any(|(kb, inc_seq)| kb.seq != *inc_seq);
+    let has_assertions = !sources.is_empty()
+        || kept.iter().any(|kb| !kb.attribution.is_empty())
+        || created.iter().any(|c| !c.attribution.is_empty());
+    if created.is_empty() && folded.is_empty() && !seqs_moved && !has_assertions {
+        return Ok(None);
+    }
+
+    // The sidecar chunk set: every CREATED block's prepared chunks, renumbered per block, in
+    // manifest order. Kept blocks' chunks ride their untouched rows and contribute nothing.
+    let mut chunks_out: Vec<crate::content::PreparedChunk> = Vec::new();
+    let mut created_i = 0usize;
+    for (k, (_, chunks)) in sections.iter().enumerate() {
+        if created_section.get(created_i) == Some(&k) {
+            let c = &mut created[created_i];
+            created_i += 1;
+            let start: usize = sections[..k].iter().map(|(_, cs)| cs.len()).sum();
+            let run = &aligned[start..start + chunks.len()];
+            c.chunks = run
+                .iter()
+                .enumerate()
+                .map(|(i, pc)| payloads::ChunkManifest {
+                    chunk_id: pc.chunk_id,
+                    chunk_index: i as i32,
+                    content_hash: pc.content_hash.clone(),
+                })
+                .collect();
+            let mut renumbered: Vec<crate::content::PreparedChunk> = run.to_vec();
+            for (i, pc) in renumbered.iter_mut().enumerate() {
+                pc.chunk_index = i as i32;
+            }
+            chunks_out.extend(renumbered);
+        }
+    }
+
+    Ok(Some(ReplacePlan {
+        manifest: payloads::ResourceReblocked {
+            resource_id: resource,
+            created,
+            kept,
+            folded,
+            replaces_body: true,
+        },
+        slices: slices_out,
+        chunks: chunks_out,
     }))
 }
 
@@ -1105,27 +1724,7 @@ pub async fn reblock_resource_in_tx(
         });
     }
 
-    let live_blocks: Vec<LiveBlock> = sqlx::query!(
-        r#"SELECT b.id, b.seq,
-                  rev.block_body_hash AS "block_body_hash: Option<String>",
-                  bc.content AS "content: Option<String>"
-             FROM kb_content_blocks b
-             LEFT JOIN kb_block_revisions rev ON rev.id = b.current_revision_id
-             LEFT JOIN kb_block_content bc ON bc.block_revision_id = b.current_revision_id
-            WHERE b.resource_id = $1 AND NOT b.is_folded
-            ORDER BY b.seq"#,
-        p.resource.uuid()
-    )
-    .fetch_all(&mut *conn)
-    .await?
-    .into_iter()
-    .map(|r| LiveBlock {
-        id: r.id,
-        seq: r.seq,
-        body_hash: r.block_body_hash,
-        bytes: r.content,
-    })
-    .collect();
+    let live_blocks: Vec<LiveBlock> = read_live_blocks(&mut *conn, p.resource).await?;
     if live_blocks.is_empty() {
         return Ok(ReblockOutcome::Declined {
             reason: format!("resource {} has no live blocks to partition", p.resource),
@@ -1144,53 +1743,9 @@ pub async fn reblock_resource_in_tx(
         });
     }
 
-    let live_chunks: Vec<LiveChunk> = sqlx::query!(
-        r#"SELECT c.id, c.block_id, c.content_hash
-             FROM kb_chunks c
-             JOIN kb_content_blocks b ON b.id = c.block_id
-            WHERE b.resource_id = $1 AND c.is_current AND NOT b.is_folded
-            ORDER BY b.seq, c.chunk_index"#,
-        p.resource.uuid()
-    )
-    .fetch_all(&mut *conn)
-    .await?
-    .into_iter()
-    .map(|r| LiveChunk {
-        id: r.id,
-        block_id: r.block_id,
-        content_hash: r.content_hash,
-    })
-    .collect();
+    let live_chunks: Vec<LiveChunk> = read_live_chunks(&mut *conn, p.resource).await?;
 
-    let attributions: Vec<AttributionRow> = sqlx::query!(
-        r#"SELECT p.block_id, p.source_kind::text AS "source_kind!",
-                  p.source_id, p.accretion_seq, r.uri AS "uri: Option<String>"
-             FROM kb_block_provenance p
-             JOIN kb_content_blocks b ON b.id = p.block_id
-             LEFT JOIN kb_remote_sources r ON p.source_kind = 'remote' AND r.id = p.source_id
-            WHERE b.resource_id = $1 AND NOT b.is_folded AND NOT p.is_corrected"#,
-        p.resource.uuid()
-    )
-    .fetch_all(&mut *conn)
-    .await?
-    .into_iter()
-    .map(|r| {
-        let source = match r.source_kind.as_str() {
-            "remote" => ProvenanceSource::Remote(
-                r.uri
-                    .context("remote provenance row with no kb_remote_sources uri")?,
-            ),
-            "resource" => ProvenanceSource::Resource(r.source_id),
-            "event" => ProvenanceSource::Event(r.source_id),
-            other => anyhow::bail!("unknown provenance_source_kind {other:?}"),
-        };
-        Ok(AttributionRow {
-            block_id: r.block_id,
-            source,
-            accretion_seq: r.accretion_seq,
-        })
-    })
-    .collect::<Result<_>>()?;
+    let attributions: Vec<AttributionRow> = read_attributions(&mut *conn, p.resource).await?;
 
     // The body composes from verbatim block bytes only — never from chunk reconstruction.
     let mut body = String::new();
@@ -1215,6 +1770,9 @@ pub async fn reblock_resource_in_tx(
         SeedAction::ResourceReblock {
             manifest: plan.manifest,
             slices: &plan.slices,
+            // The shipped op shape inserts no chunks — the sidecar chunk map stays empty and
+            // the projector reparents existing CAS rows.
+            chunks: &[],
             emitter: p.emitter,
         },
         ctx,
