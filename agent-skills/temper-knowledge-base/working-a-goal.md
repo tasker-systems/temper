@@ -66,9 +66,9 @@ a task under the parent goal authors the child goal, and the child links back to
 
 ```
 Tool: create_resource  Input: { "context_ref": "@me/<ctx>", "doc_type_name": "goal", "title": "<sub-goal title>", "content": "…" }
-Tool: relationships    Input: { "source": "<child goal uuid>", "target": "<parent goal uuid>",
-                                "action": "assert", "edge_kind": "leads_to", "label": "derived_from",
-                                "polarity": "forward" }
+Tool: relationship     Input: { "action": "assert", "source": "<child goal uuid>", "target": "<parent goal uuid>",
+                                "edge_kind": "leads_to", "label": "derived_from", "polarity": "forward",
+                                "weight": 1.0 }
 ```
 
 Sibling goals are children of the same parent; the parent's register says which clauses each

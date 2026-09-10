@@ -96,9 +96,9 @@ temper edge assert <child-goal-ref> <parent-goal-ref> --kind leads-to --polarity
 
 ```
 Tool: create_resource  Input: { "context_ref": "@me/<ctx>", "doc_type_name": "goal", "title": "<sub-goal title>", "content": "…" }
-Tool: relationships    Input: { "source": "<child goal uuid>", "target": "<parent goal uuid>",
-                                "action": "assert", "edge_kind": "leads_to", "label": "derived_from",
-                                "polarity": "forward" }
+Tool: relationship     Input: { "action": "assert", "source": "<child goal uuid>", "target": "<parent goal uuid>",
+                                "edge_kind": "leads_to", "label": "derived_from", "polarity": "forward",
+                                "weight": 1.0 }
 ```
 {%- endif %}
 
