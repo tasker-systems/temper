@@ -184,3 +184,50 @@ async fn the_route_denies_existence_for_an_unreadable_home(pool: PgPool) {
         "an unreadable home denies existence (404, never 403) — got {status} {body}"
     );
 }
+
+/// CLAUSE: the route never answers an address with a redirect (D-D3, pinned — the claim was
+/// true but unpinned). All three resolved faces — live, folded, absent — must carry no 3xx
+/// status and no `Location` header: successor-naming rides as gated data inside the response
+/// body, never as a followable location the caller may not be authorized to follow.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_route_never_answers_an_address_with_a_redirect(pool: PgPool) {
+    let app = common::setup_test_app(pool.clone()).await;
+    let email = format!("block-no-redirect-{}@example.com", Uuid::new_v4());
+    let (profile_id, context_id) =
+        common::fixtures::create_test_profile_with_context(&pool, &email).await;
+    let token = common::generate_test_jwt(&format!("test|{profile_id}"), &email);
+
+    let resource_id = create_resource(&app, &token, context_id).await;
+    patch_content(&app, &token, &resource_id, BODY_A_B).await;
+    let blocks = live_block_ids(&pool, &resource_id).await;
+    let folded_id = blocks[0];
+    patch_content(&app, &token, &resource_id, &body_a_with_filler()).await;
+    let after = live_block_ids(&pool, &resource_id).await;
+    assert!(
+        !after.contains(&folded_id),
+        "fixture: the alpha incumbent folded"
+    );
+
+    for (face, block_id) in [
+        ("live", after[0]),
+        ("folded", folded_id),
+        ("absent", Uuid::new_v4()),
+    ] {
+        let resp = app
+            .client
+            .get(app.url(&format!("/api/resources/{resource_id}/blocks/{block_id}")))
+            .header("Authorization", format!("Bearer {token}"))
+            .send()
+            .await
+            .expect("block GET failed");
+        let status = resp.status();
+        assert!(
+            !status.is_redirection(),
+            "the {face} face must never redirect, got {status}"
+        );
+        assert!(
+            resp.headers().get("location").is_none(),
+            "the {face} face must never carry a Location header"
+        );
+    }
+}

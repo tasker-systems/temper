@@ -214,11 +214,43 @@ status: signal-only
   `request` arm naming the erasure request an event fulfils; the temper-core mirror gains the
   matching arm and the parity test compiles the two together. Nothing emits the arm yet — the
   request reference rides references, not payloads, and no ledger row carries it — so no
-  existing read or write changes; the arm is forward vocabulary rendered by the admin-ledger
-  read once rows exist.
 pr: self
 classes: additive
 surfaces: http, internal
+status: signal-only
+
+- **The span address form — `BlockSuccessor.home_resource_id` on the read envelope**
+  A named successor now carries its row home (`Option<Uuid>`, `serde(default)`): the gated
+  envelope alone constructs the successor's `<home>#<block>` address, resolving through the
+  same value the read fork keys on. Additive both skew directions — new-reader/old-writer via
+  the default (`None` = the pre-field world, declared; the `is_carried` pattern),
+  old-reader/new-writer via no `deny_unknown_fields`. The type doc's single-resource wire
+  decision is retired as it directed.
+pr: self
+classes: additive
+surfaces: http, mcp, cli-stdout, clients
+status: signal-only
+
+- **The span address form — CLI composed block address**
+  `resource read-block` accepts `<resource>#<block-uuid>` as one declared string form
+  (`splitn(2, '#')`, length-capped, block half uuid-validated); the two-argument form stays.
+  Input acceptance grows; stdout shape is unchanged.
+pr: self
+classes: additive
+surfaces: cli-stdout
+status: signal-only
+
+- **The span address form — MCP `get_block` description names the successor's home**
+  The tool description taught single-resource addressing ("call this again with its
+  block_id"), which after cross-resource successors exist resolves a foreign successor to a
+  false `absent`. The description and input docs now say a named successor's
+  `home_resource_id` is the resource to pass. Unchanged input schema; the meaning behind it
+  changes for agent callers — the tool description is the agent population's discovery
+  surface for the form. Declared limit: no live producer emits cross-resource successors
+  today, so the corrected instruction guards a future state, not a live defect.
+pr: self
+classes: behavioral
+surfaces: mcp
 status: signal-only
 
 ## Pre-policy (classified retroactively)
