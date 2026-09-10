@@ -1347,6 +1347,41 @@ impl DbBackend {
             // differently (whole-body `sha256:`-prefixed hash, not the chunk-merkle) and which the
             // server therefore does not trust. Trusting it would make every re-run re-block every entry.
             let incoming_chunks = unpack_incoming_chunks(&entry.chunks_packed)?;
+
+            // The erased-content set (erasure spec 2026-08-31, D4 arm 3 — sync apply): a hash in
+            // the set applies EMPTY. Because this arm's re-block fires THROUGH `block_mutate` —
+            // whose own arm-1 gate REFUSES any payload carrying an erased hash
+            // (20260909000030) — "applies empty" here means the chunk is emptied OUT of what
+            // applies: dropped from the incoming set BEFORE the merkle is computed, so the write
+            // never carries the hash and a re-delivery of the same request hashes to the stored
+            // merkle (idempotency survives the erasure; the sync converges instead of erroring
+            // forever). Prose and the client's vector go together — an erased hash is never
+            // re-embedded (arm 2). Dropped-before-merkle is the whole trick: a post-merkle scrub
+            // would store a body_hash the next re-delivery can never match.
+            let chunk_hashes: Vec<String> = incoming_chunks
+                .iter()
+                .map(|c| c.content_hash.clone())
+                .collect();
+            let erased: Vec<String> = sqlx::query!(
+                "SELECT content_hash FROM kb_erased_content WHERE content_hash = ANY($1)",
+                &chunk_hashes,
+            )
+            .fetch_all(&mut *conn)
+            .await
+            .map_err(api_err)?
+            .into_iter()
+            .map(|r| r.content_hash)
+            .collect();
+            let incoming_chunks: Vec<temper_substrate::content::IncomingChunk> =
+                if erased.is_empty() {
+                    incoming_chunks
+                } else {
+                    incoming_chunks
+                        .into_iter()
+                        .filter(|c| !erased.contains(&c.content_hash))
+                        .collect()
+                };
+
             let chunk_hashes: Vec<String> = incoming_chunks
                 .iter()
                 .map(|c| c.content_hash.clone())

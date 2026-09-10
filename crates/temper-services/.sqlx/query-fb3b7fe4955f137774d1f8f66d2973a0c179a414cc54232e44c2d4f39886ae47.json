@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT r.id FROM kb_resources r JOIN kb_chunks ch ON ch.resource_id = r.id JOIN kb_content_blocks b ON b.id = ch.block_id WHERE r.is_active AND ch.is_current AND NOT b.is_folded AND ch.embedded_with IS DISTINCT FROM $1 AND NOT EXISTS ( SELECT 1 FROM kb_erased_content ec WHERE ec.content_hash = ch.content_hash) AND ($2::uuid IS NULL OR r.id = $2::uuid) AND ($3::uuid IS NULL OR EXISTS ( SELECT 1 FROM kb_resource_homes h WHERE h.resource_id = r.id AND h.anchor_table = 'kb_contexts' AND h.anchor_id = $3::uuid)) LIMIT $4",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "fb3b7fe4955f137774d1f8f66d2973a0c179a414cc54232e44c2d4f39886ae47"
+}

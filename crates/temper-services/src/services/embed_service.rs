@@ -144,6 +144,12 @@ pub async fn enqueue_stale(
     // (anchor_table = 'kb_contexts'). The same table also homes cogmap nodes
     // (anchor_table = 'kb_cogmaps'), so the anchor_table predicate is load-bearing, not decoration:
     // without it, a context-scoped re-embed would sweep in cogmap-homed resources too.
+    //
+    // The erased-content exclusion is the same clause STALE_CHUNK_PREDICATE carries (D4 arm 2 —
+    // see its doc for why exclusion, not loop-skip): a hash in `kb_erased_content` is not work,
+    // so the enqueue sweep must not offer a resource whose only staleness is an erased hash.
+    // The two copies must move together or "what needs work" diverges from "what the drain may
+    // lawfully do" (and `stale_summary`'s readout below with them).
     let (resource_filter, context_filter) = match scope {
         ReembedScope::Resource(id) => (Some(id), None),
         ReembedScope::Context(id) => (None, Some(id)),
@@ -159,6 +165,9 @@ pub async fn enqueue_stale(
             AND ch.is_current \
             AND NOT b.is_folded \
             AND ch.embedded_with IS DISTINCT FROM $1 \
+            AND NOT EXISTS ( \
+                    SELECT 1 FROM kb_erased_content ec \
+                     WHERE ec.content_hash = ch.content_hash) \
             AND ($2::uuid IS NULL OR r.id = $2::uuid) \
             AND ($3::uuid IS NULL OR EXISTS ( \
                     SELECT 1 FROM kb_resource_homes h \
@@ -206,6 +215,10 @@ pub async fn stale_summary(pool: &PgPool, scope: ReembedScope) -> ApiResult<(u64
     // Both counts take `!`: sqlx types every aggregate expression as nullable, but `count()` over an
     // empty grouping set still returns 0 — it is never NULL. Aliased because the two columns would
     // otherwise both be named `count`.
+    //
+    // The erased-content exclusion is the same clause `enqueue_stale` carries above (D4 arm 2):
+    // the operator's convergence readout must count what the drain may lawfully embed — an
+    // erased hash is never that, and counting it would read as a wedge that cannot converge.
     let row = sqlx::query!(
         r#"SELECT count(DISTINCT r.id) AS "resources!", count(*) AS "chunks!"
            FROM kb_resources r
@@ -215,6 +228,9 @@ pub async fn stale_summary(pool: &PgPool, scope: ReembedScope) -> ApiResult<(u64
             AND ch.is_current
             AND NOT b.is_folded
             AND ch.embedded_with IS DISTINCT FROM $1
+            AND NOT EXISTS (
+                    SELECT 1 FROM kb_erased_content ec
+                     WHERE ec.content_hash = ch.content_hash)
             AND ($2::uuid IS NULL OR r.id = $2::uuid)
             AND ($3::uuid IS NULL OR EXISTS (
                     SELECT 1 FROM kb_resource_homes h
@@ -1193,5 +1209,159 @@ mod tests {
         // Idempotent: a second pass finds nothing.
         let again = dispatch_tick(&pool, Some(1), false).await.unwrap();
         assert_eq!(again.claimed, 0);
+    }
+
+    // ── the embed-repair gate (erasure spec D4, arm 2) ──────────────────────────────────────
+    //
+    // A hash in `kb_erased_content` is dead on the embed side: the erasure nulled its vector and
+    // provenance, and the drain must never re-embed it. The gate is an exclusion in the STALE
+    // predicate (temper_substrate::embed::STALE_CHUNK_PREDICATE and this file's two copies of
+    // the same query), NOT a skip in the loop — a skip would leave the chunk stale forever, and
+    // `remaining` would never reach zero (the wedge the predicate's doc warns about). Excluded
+    // chunks are not work; the resource converges with the vector NULL.
+
+    /// A current chunk carrying real prose (so the drain would embed it — the gate must do the
+    /// work, not emptiness), optionally registered in the erased-content set.
+    async fn a_prose_chunk(
+        pool: &PgPool,
+        block: Uuid,
+        resource: Uuid,
+        idx: i32,
+        hash: &str,
+    ) -> Uuid {
+        let id: Uuid = sqlx::query_scalar(
+            "INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash, is_current) \
+             VALUES ($1, $2, $3, $4, true) RETURNING id",
+        )
+        .bind(block)
+        .bind(resource)
+        .bind(idx)
+        .bind(hash)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO kb_chunk_content (chunk_id, content) VALUES ($1, $2)")
+            .bind(id)
+            .bind("prose the drain must never embed under an erased hash")
+            .execute(pool)
+            .await
+            .unwrap();
+        id
+    }
+
+    async fn erase_hash(pool: &PgPool, hash: &str) {
+        sqlx::query(
+            "INSERT INTO kb_erased_content (content_hash, erased_by_event_id) \
+             VALUES ($1, (SELECT id FROM kb_events ORDER BY id LIMIT 1))",
+        )
+        .bind(hash)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// FAILS IF the drain re-embeds (or even re-stamps provenance on) a tombstoned hash: the
+    /// chunk is stale-shaped (NULL vector + NULL provenance) and its content is NON-empty, so
+    /// emptiness does not protect it — only the gate does. The resource must CONVERGE
+    /// (`remaining` reaches zero, the drain's own wedge invariant) with the vector still NULL.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_tombstoned_hash_is_never_re_embedded(pool: PgPool) {
+        let r = a_named_resource(&pool, "tombstoned").await;
+        let b = a_block(&pool, r, 0, false).await;
+        let hash = "aa0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let chunk = a_prose_chunk(&pool, b, r, 0, hash).await;
+        erase_hash(&pool, hash).await;
+
+        let progress = temper_substrate::embed::embed_resource_chunks(
+            &pool,
+            r,
+            temper_substrate::embed::EMBED_CHUNK_BUDGET,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            progress.embedded, 0,
+            "an erased hash is never re-embedded — no inference, no vector"
+        );
+        assert_eq!(
+            progress.remaining, 0,
+            "and the resource CONVERGES: an excluded chunk is not work, so the drain does not \
+             re-enqueue it every minute forever (the wedge)"
+        );
+        let (emb, prov): (Option<String>, Option<String>) =
+            sqlx::query_as("SELECT embedding::text, embedded_with FROM kb_chunks WHERE id = $1")
+                .bind(chunk)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            (emb, prov),
+            (None, None),
+            "not even the blank-path provenance stamp may land on a redacted row"
+        );
+    }
+
+    /// The differential half, on both copies of the stale predicate: a NON-erased stale chunk on
+    /// the same resource is still drain work (counted, enqueued), and a resource whose ONLY
+    /// staleness is an erased hash drops out of the enqueue sweep entirely.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_non_erased_stale_chunk_is_still_work_and_a_fully_erased_one_is_not(pool: PgPool) {
+        // r_mixed: one erased-hash chunk + one fresh-hash chunk, both stale-shaped.
+        let r_mixed = a_named_resource(&pool, "mixed").await;
+        let b_mixed = a_block(&pool, r_mixed, 0, false).await;
+        let erased = "bb0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        a_prose_chunk(&pool, b_mixed, r_mixed, 0, erased).await;
+        a_prose_chunk(&pool, b_mixed, r_mixed, 1, "fresh").await;
+        erase_hash(&pool, erased).await;
+
+        // r_erased_only: the erased hash is its ONLY staleness.
+        let r_only = a_named_resource(&pool, "erased-only").await;
+        let b_only = a_block(&pool, r_only, 0, false).await;
+        a_prose_chunk(&pool, b_only, r_only, 0, erased).await;
+
+        let (mixed_stale, chunk_stale) = stale_summary(&pool, ReembedScope::All).await.unwrap();
+        assert_eq!(
+            (mixed_stale, chunk_stale),
+            (1, 1),
+            "the mixed resource is still work — and ONLY on its fresh chunk: the erased hash is \
+             out of the stale predicate, so count and embed stay in lockstep"
+        );
+
+        let enqueued = enqueue_stale(
+            &pool,
+            &crate::test_support::system_admin_proof(&pool).await,
+            ReembedScope::All,
+            100,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            enqueued,
+            vec![r_mixed],
+            "the mixed resource is enqueued for its fresh chunk; the fully-erased resource is \
+             not enqueued at all — there is nothing the drain may lawfully do for it"
+        );
+
+        // And the drain of the mixed resource leaves the erased chunk exactly as erasure left it.
+        let progress = temper_substrate::embed::embed_resource_chunks(
+            &pool,
+            r_mixed,
+            temper_substrate::embed::EMBED_CHUNK_BUDGET,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            progress.remaining, 0,
+            "the mixed resource converges on its fresh chunk's completion"
+        );
+        let stamped: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM kb_chunks WHERE content_hash = $1 \
+               AND (embedding IS NOT NULL OR embedded_with IS NOT NULL)",
+        )
+        .bind(erased)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(stamped, 0, "the erased hash stays vectorless and unstamped");
     }
 }

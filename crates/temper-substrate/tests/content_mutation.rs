@@ -1403,3 +1403,124 @@ async fn an_out_of_order_chunk_array_derives_and_suppresses_in_array_order(pool:
          compute a different merkle, miss the match, and append an event"
     );
 }
+
+// ── The erased-hash refusal (erasure spec D4, arm 1 — the projection write-back) ──────────────
+//
+// D4's exact undo scenario: erasure nulls the chunk embeddings; the no-op suppression then
+// SKIPS on check 3 (`AND NOT v_unembedded` — never swallow an embed repair); `block_mutated`
+// fires; and the projector writes the stale client's copy back in — prose re-admitted under a
+// hash the erased-content set holds. The refusal (20260909000030) sits BESIDE the five checks,
+// BEFORE suppression, so the write refuses even when it would otherwise have been suppressed —
+// and the differential arm proves check 3 is UNTOUCHED: a genuinely unembedded NON-erased
+// block still falls through to the embed-repair write.
+
+/// sha256(content.trim()) — the chunker's own content_hash derivation
+/// (temper-ingest/src/chunk.rs), so the fixture hash is exactly what `block_mutate` receives.
+fn prose_hash(prose: &str) -> String {
+    use sha2::Digest;
+    format!("{:x}", sha2::Sha256::digest(prose.trim()))
+}
+
+/// The erasure's embedding shape for every chunk of `block`: vector and provenance nulled
+/// TOGETHER (20260713000040's coherence rule) — no erasure event required, just the shape D4
+/// describes acting on.
+async fn null_embeddings(pool: &sqlx::PgPool, block: uuid::Uuid) {
+    sqlx::query("UPDATE kb_chunks SET embedding = NULL, embedded_with = NULL WHERE block_id = $1")
+        .bind(block)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_erased_hash_refuses_the_write_back_while_a_non_erased_one_still_repairs(
+    pool: sqlx::PgPool,
+) {
+    use temper_substrate::content;
+    use temper_substrate::events::{fire, SeedAction};
+    use temper_substrate::ids::{BlockId, EntityId};
+
+    const PROSE: &str = "rollout cadence, staging gates, and the promotion policy";
+    let (block, emitter) = alpha_block(&pool).await;
+
+    // Establish PROSE as the block's current content — a real change, so this one lands.
+    revise_block(&pool, block, emitter, PROSE, &[]).await;
+    let (_, cursor, revisions) = mutation_state(&pool, block).await;
+
+    // ── the differential arm: unembedded + NON-erased + byte-identical ⇒ the embed-repair
+    //    write still fires (check 3 unharmed — the refusal must sit beside it, not replace it).
+    null_embeddings(&pool, block).await;
+    revise_block(&pool, block, emitter, PROSE, &[]).await;
+    let (events_after_repair, cursor_after_repair, revisions_after_repair) =
+        mutation_state(&pool, block).await;
+    assert_eq!(
+        events_after_repair, 2,
+        "the unembedded non-erased revise still appends its embed-repair event"
+    );
+    assert_ne!(cursor_after_repair, cursor);
+    assert_eq!(revisions_after_repair, revisions + 1);
+
+    // ── the refusal arm: register the hash in the erased-content set (the projector-maintained
+    //    table D4 names; the refusal reads the set, not the event), re-null, re-send.
+    let erased_hash = prose_hash(PROSE);
+    sqlx::query(
+        "INSERT INTO kb_erased_content (content_hash, erased_by_event_id) \
+         VALUES ($1, (SELECT id FROM kb_events ORDER BY id LIMIT 1))",
+    )
+    .bind(&erased_hash)
+    .execute(&pool)
+    .await
+    .unwrap();
+    null_embeddings(&pool, block).await;
+
+    let prepared = content::prepare_block(0, None, PROSE).unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    let err = fire(
+        &mut tx,
+        SeedAction::BlockMutate {
+            block: BlockId::from(block),
+            chunks: &prepared.chunks,
+            raw: Some(PROSE),
+            incorporated: &[],
+            replaces_body: false,
+            emitter: EntityId::from(emitter),
+        },
+    )
+    .await
+    .expect_err(
+        "a write-back carrying an ERASED hash must refuse — erasure is a refusal, not an absence",
+    );
+    let chain = err.to_string();
+    assert!(
+        chain.contains("erased"),
+        "the refusal names what it refuses, got: {chain}"
+    );
+    drop(tx); // rolled back — the failed fire must have left nothing behind
+
+    let (events, cursor, revisions) = mutation_state(&pool, block).await;
+    assert_eq!(
+        (events, cursor, revisions),
+        (
+            events_after_repair,
+            cursor_after_repair,
+            revisions_after_repair
+        ),
+        "the refused write appended nothing, moved no cursor, minted no revision — and was NOT \
+         silently suppressed (the caller got the error)"
+    );
+    // The prose was not re-admitted under the erased hash: the current generation's content
+    // stays exactly what the last lawful write stored.
+    let stored: String = sqlx::query_scalar(
+        "SELECT bc.content FROM kb_content_blocks b \
+         JOIN kb_block_content bc ON bc.block_revision_id = b.current_revision_id \
+         WHERE b.id = $1",
+    )
+    .bind(block)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        stored, PROSE,
+        "no second copy, no resurrection — state is unchanged"
+    );
+}

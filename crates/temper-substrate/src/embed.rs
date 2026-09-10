@@ -71,9 +71,27 @@ pub async fn embed_chunks(pool: &PgPool) -> Result<()> {
 /// Scoping by `is_current` is what makes create-then-update supersede naturally: a body revise makes
 /// the new generation current and the old non-current, so a job — whenever it runs — only ever embeds
 /// the resource's *live* chunks.
+///
+/// The erased-content exclusion (erasure spec 2026-08-31, D4 arm 2 — 20260909000010's
+/// `kb_erased_content`) is load-bearing, and it lives HERE — in the shared predicate, never as a
+/// skip in the drain loop. A hash in the set is dead on the embed side: the erasure nulled its
+/// vector and provenance together, and "never re-embedded" must hold whatever the chunk's prose
+/// says (emptiness must not be the gate; the set is). As a loop skip it would be the wedge this
+/// const's own no-disjunct warning describes, with the polarity flipped: the chunk would stay
+/// stale forever, `remaining` would never reach zero, and the resource would be re-enqueued
+/// every minute embedding nothing. As a predicate exclusion it means an erased hash is not
+/// WORK: the chunk stops being stale, the resource converges with the vector NULL, and
+/// `count_stale_chunks` — which MUST select exactly what this predicate selects — stays in
+/// lockstep for free. The same exclusion is carried verbatim by the two "is there work?"
+/// queries in temper-services' `embed_service` (`enqueue_stale` / `stale_summary`); all four
+/// sites must move together or the operator's progress readout diverges from what the drain
+/// will lawfully do.
 pub const STALE_CHUNK_PREDICATE: &str = "ch.is_current \
      AND NOT b.is_folded \
-     AND ch.embedded_with IS DISTINCT FROM $2";
+     AND ch.embedded_with IS DISTINCT FROM $2 \
+     AND NOT EXISTS ( \
+         SELECT 1 FROM kb_erased_content ec \
+          WHERE ec.content_hash = ch.content_hash)";
 
 /// Default chunk allowance for ONE dispatch invocation — **not** per resource.
 ///

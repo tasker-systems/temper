@@ -69,6 +69,16 @@ const ADMIN_EVENT_TYPES: &[&str] = &[
     // deliberate-absence note there for why neither gets a subject-axis arm below it.
     "principal_standing_changed",
     "principal_governance_changed",
+    // The erasure act's admin pair (20260909000010, spec 2026-08-31): the completion event IS
+    // the audit — who, under what request, against which pseudonym, with what remainder ("The
+    // three readers", Operator row) — so it is readable here, through the admin arm above. No
+    // subject-axis arm below, DELIBERATELY: the record names the subject only as the pseudonym
+    // the act itself broke, and who acted on a person, right now, is the same in-flight-action
+    // signal the disconnect decision below withholds; the subject learns of their erasure (or a
+    // refused attempt) through the operator's response, not by polling a ledger door. Fail-closed
+    // default keeps both types admin-only until a ruling says otherwise.
+    "principal_erased",
+    "principal_erasure_refused",
 ];
 
 /// The §5 table, evaluated for one subject. Returns the event types `caller` may read about
