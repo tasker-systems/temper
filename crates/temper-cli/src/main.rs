@@ -276,7 +276,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     temper_cli::commands::resource::read_block(
                         &config,
                         &r#ref,
-                        block_id,
+                        block_id.as_deref(),
                         output_format,
                     )
                 }

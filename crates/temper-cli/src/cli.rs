@@ -683,16 +683,19 @@ pub enum ResourceAction {
     /// hashes, never prose), and its provenance rows. `folded` means a re-partition
     /// folded it away; the envelope carries the persisted attribution history plus a
     /// `disposition` stating where the content went — `located` names the absorber and
-    /// carried successor blocks (only those you can read), `content_gone`, or
-    /// `unrecorded` (the ledger does not carry the mapping). Address a folded
-    /// successor the same way, by its own block id. `absent` — a block that does not
-    /// exist or is not visible to you, indistinguishable by design — exits non-zero.
+    /// carried successor blocks (only those you can read, each with its
+    /// `home_resource_id`), `content_gone`, or `unrecorded` (the ledger does not carry
+    /// the mapping). Address a folded successor by its own composed address
+    /// `<home>#<block-uuid>`. `absent` — a block that does not exist or is not visible
+    /// to you, indistinguishable by design — exits non-zero.
     /// Calls GET /resources/{id}/blocks/{block_id}.
     ReadBlock {
-        /// Resource ref: a UUID or the decorated `slug-<uuid>` form
+        /// Resource ref: a UUID, the decorated `slug-<uuid>` form, or the composed block
+        /// address `<resource>#<block-uuid>`
         r#ref: String,
-        /// The content block to read (a block UUID)
-        block_id: uuid::Uuid,
+        /// The content block UUID. Omit when the ref carries the composed form
+        /// `<resource>#<block-uuid>`
+        block_id: Option<String>,
     },
     /// Update a resource's frontmatter and/or body
     ///
