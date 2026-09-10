@@ -136,11 +136,133 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  # The TS clients publish to GitHub Packages npm (@tasker-systems/* scope).
+  # The script's duplicate probe decides BEFORE anything builds or publishes,
+  # so re-cutting an existing tag skips loudly rather than failing or
+  # overwriting (tools/scripts/release/publish-npm.sh header).
+  publish-npm-clients:
+    name: Publish npm Clients
+    needs: determine-version
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    env:
+      NODE_AUTH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Authenticate to GitHub Packages npm
+        run: |
+          auth_dir="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          printf '//npm.pkg.github.com/:_authToken=%s\n' "$NODE_AUTH_TOKEN" > "$auth_dir"
+
+      - name: Publish the TS clients
+        env:
+          VERSION: ${{ needs.determine-version.outputs.version }}
+        run: bash tools/scripts/release/publish-npm.sh "$VERSION"
+
+  # The Ruby gem publishes to GitHub Packages RubyGems. There is no versions
+  # API on that host, so the publish script treats a duplicate-version push
+  # refusal as a loud idempotent skip (see its header) — re-cutting an
+  # existing tag stays safe here the same way it is for npm.
+  publish-ruby-client:
+    name: Publish Ruby Client
+    needs: determine-version
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          # .ruby-version / mise.toml is 3.4.10.
+          ruby-version: "3.4"
+
+      - name: Publish the gem
+        env:
+          VERSION: ${{ needs.determine-version.outputs.version }}
+        run: bash tools/scripts/release/publish-ruby.sh "$VERSION"
+
+  # The Python client ships as wheel + sdist ASSETS ON THE RELEASE ITSELF —
+  # GitHub Packages has no pip registry, and Release assets are the path
+  # "similar to the way we do the CLI builds": a pyproject.toml pins the client
+  # with a PEP 508 direct reference to the download URL, token-free on a
+  # public repo. Like the skill bundle this is its own job: it needs uv and
+  # Python, not the Rust toolchain. Each distribution gets a sha256 sidecar
+  # and a provenance attestation like every other published artifact; neither
+  # carries a per-file manifest — manifests exist for install.sh's pre-swap
+  # verification and nothing installs a wheel that way.
+  build-py-client:
+    name: Build Python Client
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    needs: determine-version
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      # uv via pipx, which is preinstalled on ubuntu-latest, rather than a
+      # setup-python: the build must run against the interpreter pinned in
+      # clients/temper-py/.python-version (the same choice test-python.yml
+      # makes).
+      - name: Install uv
+        run: pipx install uv
+
+      - name: Build wheel and sdist
+        working-directory: clients/temper-py
+        run: uv build
+
+      - name: Emit sha256 sidecars
+        working-directory: clients/temper-py/dist
+        run: sha256sum -- *.whl *.tar.gz
+
+      - name: Attest build provenance
+        # SHA-pinned for the same reason as build-cli-binaries.yml's copy: this
+        # job holds `attestations: write`, so anything it runs can obtain a
+        # genuine Sigstore signature.
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-path: |
+            clients/temper-py/dist/temper_py-*.whl
+            clients/temper-py/dist/temper_py-*.tar.gz
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          # Named `cli-v<version>-py` so it is picked up by release-summary's
+          # `pattern: cli-v<version>-*` download, like the skill bundle.
+          name: cli-v${{ needs.determine-version.outputs.version }}-py
+          path: |
+            clients/temper-py/dist/temper_py-*.whl
+            clients/temper-py/dist/temper_py-*.tar.gz
+            clients/temper-py/dist/temper_py-*.sha256
+          retention-days: 7
+          if-no-files-found: error
+
   release-summary:
     name: Release Summary
     runs-on: ubuntu-22.04
     timeout-minutes: 5
-    needs: [determine-version, build-cli-binaries, build-skill-bundle]
+    needs: [determine-version, build-cli-binaries, build-skill-bundle, build-py-client, publish-npm-clients, publish-ruby-client]
     if: always()
     permissions:
       contents: write
@@ -151,7 +273,7 @@ jobs:
       # One download, both producers: the skill bundle uploads under the same
       # `cli-v<version>-*` artifact-name prefix, so this pattern collects it too.
       - name: Download release artifacts
-        if: needs.build-cli-binaries.result == 'success' && needs.build-skill-bundle.result == 'success'
+        if: needs.build-cli-binaries.result == 'success' && needs.build-skill-bundle.result == 'success' && needs.build-py-client.result == 'success'
         uses: actions/download-artifact@v8
         with:
           pattern: cli-v${{ needs.determine-version.outputs.version }}-*
@@ -163,6 +285,9 @@ jobs:
           VERSION: ${{ needs.determine-version.outputs.version }}
           BUILD_RESULT: ${{ needs.build-cli-binaries.result }}
           SKILL_RESULT: ${{ needs.build-skill-bundle.result }}
+          NPM_RESULT: ${{ needs.publish-npm-clients.result }}
+          RUBY_RESULT: ${{ needs.publish-ruby-client.result }}
+          PY_RESULT: ${{ needs.build-py-client.result }}
         run: |
           icon_for() {
             case "$1" in
@@ -180,21 +305,24 @@ jobs:
             echo "|---|---|"
             echo "| CLI binaries (darwin-arm64 / linux-x64 / windows-x64) | $(icon_for "$BUILD_RESULT") ${BUILD_RESULT} |"
             echo "| Agent Skill bundle (temper-skill-v${VERSION}.zip) | $(icon_for "$SKILL_RESULT") ${SKILL_RESULT} |"
+            echo "| npm clients (@tasker-systems/temper-ts, @tasker-systems/temper-telemetry-ts) | $(icon_for "$NPM_RESULT") ${NPM_RESULT} |"
+            echo "| Ruby gem (temper-rb on GitHub Packages) | $(icon_for "$RUBY_RESULT") ${RUBY_RESULT} |"
+            echo "| Python client (temper_py wheel + sdist on the Release) | $(icon_for "$PY_RESULT") ${PY_RESULT} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
       # Gated on BOTH producers. A release missing the skill bundle would publish silently and
       # look complete — the same "absence is indistinguishable from never-had-it" failure the
       # manifest guard inside this script exists to prevent, one artifact over.
       - name: Create GitHub Release
-        if: needs.build-cli-binaries.result == 'success' && needs.build-skill-bundle.result == 'success'
+        if: needs.build-cli-binaries.result == 'success' && needs.build-skill-bundle.result == 'success' && needs.build-py-client.result == 'success' && needs.publish-npm-clients.result == 'success' && needs.publish-ruby-client.result == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.determine-version.outputs.version }}
           ARTIFACT_DIR: cli-artifacts
         run: ./.github/scripts/release/create-github-release.sh
 
-      - name: Fail the job if either producer did not succeed
-        if: needs.build-cli-binaries.result != 'success' || needs.build-skill-bundle.result != 'success'
+      - name: Fail the job if any producer did not succeed
+        if: needs.build-cli-binaries.result != 'success' || needs.build-skill-bundle.result != 'success' || needs.build-py-client.result != 'success' || needs.publish-npm-clients.result != 'success' || needs.publish-ruby-client.result != 'success'
         run: |
-          echo "::error::build-cli-binaries: ${{ needs.build-cli-binaries.result }}, build-skill-bundle: ${{ needs.build-skill-bundle.result }} — release not published."
+          echo "::error::build-cli-binaries: ${{ needs.build-cli-binaries.result }}, build-skill-bundle: ${{ needs.build-skill-bundle.result }}, build-py-client: ${{ needs.build-py-client.result }}, publish-npm-clients: ${{ needs.publish-npm-clients.result }}, publish-ruby-client: ${{ needs.publish-ruby-client.result }} — release not published."
           exit 1

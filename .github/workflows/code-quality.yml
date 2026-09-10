@@ -573,6 +573,23 @@ jobs:
       - name: Guard test — create-github-release (manifest presence)
         run: bash .github/scripts/test-create-github-release.sh
 
+      # The npm publish lane (GitHub Packages, @tasker-systems/*). Publishing runs
+      # for real only at a tagged release, so the duplicate probe's loud-skip path,
+      # the version-agreement guard, and the scope guard are bitten here instead:
+      # a probe that stopped deciding before publish, or a refusal that went
+      # silent, would otherwise be witnessed by an actual registry push.
+      - name: Guard test — publish-npm (duplicate probe + guards)
+        run: bash .github/scripts/test-publish-npm.sh
+
+      # The Ruby publish lane (GitHub Packages). That host has no versions API,
+      # so the push REFUSAL is the duplicate detector; this harness bites the
+      # classifier both ways — a duplicate refusal skips loudly exactly once,
+      # any other failure surfaces its text and exits non-zero — plus the
+      # version-agreement guard and the pinned --key/--host that keeps a push
+      # off rubygems.org.
+      - name: Guard test — publish-ruby-github (push-refusal classifier)
+        run: bash .github/scripts/test-publish-ruby-github.sh
+
       # The SHELL half of the containment-parity check. The Rust half rides the
       # `--workspace` selection in test-rust.yml's unit job
       # (`manifest.rs::containment_corpus_matches_the_shell`) — both read

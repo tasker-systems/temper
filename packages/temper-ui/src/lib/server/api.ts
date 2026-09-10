@@ -1,4 +1,4 @@
-import { activeTraceparent } from 'temper-telemetry-ts';
+import { activeTraceparent } from '@tasker-systems/temper-telemetry-ts';
 import { env } from '$env/dynamic/private';
 import { jsonBody } from './json-body';
 

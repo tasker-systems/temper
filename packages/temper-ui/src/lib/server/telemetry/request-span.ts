@@ -7,8 +7,13 @@
 
 import { context, SpanKind, SpanStatusCode, trace } from '@opentelemetry/api';
 import type { RequestEvent } from '@sveltejs/kit';
+import {
+	extractContext,
+	forceFlush,
+	getTracer,
+	isTelemetryEnabled,
+} from '@tasker-systems/temper-telemetry-ts';
 import { waitUntil } from '@vercel/functions';
-import { extractContext, forceFlush, getTracer, isTelemetryEnabled } from 'temper-telemetry-ts';
 import { proxiedRoot } from '$lib/server/proxy';
 
 /**

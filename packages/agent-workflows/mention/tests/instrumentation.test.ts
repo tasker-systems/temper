@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { NEVER_RECORD_MODEL_IO } from 'temper-telemetry-ts';
+import { NEVER_RECORD_MODEL_IO } from '@tasker-systems/temper-telemetry-ts';
 import instrumentation from "../agent/instrumentation.js";
 
 /**

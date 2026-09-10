@@ -14,6 +14,7 @@
 #   clients/temper-rb/lib/temper/version.rb    — skin float (--rb)
 #   clients/temper-py/temper/version.py        — skin float (--py)
 #   clients/temper-ts/package.json             — skin float (--ts)
+#   clients/temper-telemetry-ts/package.json   — skin float (--telemetry)
 #   packages/temper-ui/package.json            — npm float (--ui)
 #   packages/temper-cloud/package.json         — npm float (--cloud)
 #
@@ -24,7 +25,7 @@
 #
 # Usage:
 #   ./tools/scripts/release/update-versions.sh --core VERSION [--rb VER]
-#       [--py VER] [--ts VER] [--ui VER] [--cloud VER] [--dry-run]
+#       [--py VER] [--ts VER] [--telemetry VER] [--ui VER] [--cloud VER] [--dry-run]
 #
 # --core is always required. Leaf versions are optional and only needed when
 # those leaves are being released.
@@ -42,6 +43,7 @@ CORE_VERSION=""
 RB_VERSION=""
 PY_VERSION=""
 TS_VERSION=""
+TELEMETRY_VERSION=""
 UI_VERSION=""
 CLOUD_VERSION=""
 DRY_RUN=false
@@ -56,6 +58,8 @@ while [[ $# -gt 0 ]]; do
         --py=*)  PY_VERSION="${1#*=}"; shift ;;
         --ts)    TS_VERSION="$2"; shift 2 ;;
         --ts=*)  TS_VERSION="${1#*=}"; shift ;;
+        --telemetry)    TELEMETRY_VERSION="$2"; shift 2 ;;
+        --telemetry=*)  TELEMETRY_VERSION="${1#*=}"; shift ;;
         --ui)    UI_VERSION="$2"; shift 2 ;;
         --ui=*)  UI_VERSION="${1#*=}"; shift ;;
         --cloud) CLOUD_VERSION="$2"; shift 2 ;;
@@ -66,7 +70,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$CORE_VERSION" ]]; then
-    die "Usage: $0 --core VERSION [--rb VER] [--py VER] [--ts VER] [--ui VER] [--cloud VER] [--dry-run]"
+    die "Usage: $0 --core VERSION [--rb VER] [--py VER] [--ts VER] [--telemetry VER] [--ui VER] [--cloud VER] [--dry-run]"
 fi
 
 # ---------------------------------------------------------------------------
@@ -102,6 +106,11 @@ fi
 if [[ -n "$TS_VERSION" ]]; then
     log_section "temper-ts (client skin)"
     update_package_json_version "clients/temper-ts/package.json" "$TS_VERSION"
+fi
+
+if [[ -n "$TELEMETRY_VERSION" ]]; then
+    log_section "temper-telemetry-ts (client skin)"
+    update_package_json_version "clients/temper-telemetry-ts/package.json" "$TELEMETRY_VERSION"
 fi
 
 # ---------------------------------------------------------------------------

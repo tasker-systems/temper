@@ -184,6 +184,19 @@ classes: additive
 surfaces: http, clients
 status: signal-only
 
+- **This branch — the client publish lanes: hosting and scope, no client code change**
+  The first publish paths for the client packages: temper-ts and temper-telemetry-ts re-scope
+  to `@tasker-systems/*` for GitHub Packages npm (which requires scopes) and gain
+  publishConfig + repository metadata; the gem's `allowed_push_host` moves to
+  `rubygems.pkg.github.com/tasker-systems`; the temper-py wheel and sdist ride the GitHub
+  Release as PEP 508-referable assets. No generated client code, no wire shape, and no
+  dependency resolution changes in-repo — consumers sweep import specifiers and `file:` dep
+  keys to the new names mechanically. Publishing happens only at a tagged release.
+pr: self
+classes: additive
+surfaces: clients
+status: signal-only
+
 - **The erasure act — operator doors: `POST /api/admin/erasure` and the fence tick `/api/erasure/drain`**
   Born HTTP routes; no existing request class changes shape. The execute door takes the
   operator erasure request (subject profile + opaque request reference; authorization lives in

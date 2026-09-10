@@ -1,21 +1,64 @@
 # Releasing temper
 
 Cutting a release is an **OSS-commitment-level**, target-agnostic act: it produces
-the versioned source, the cross-platform `temper` CLI binaries, and a GitHub Release.
-It does **not** deploy any running site. A release is the artifact that the world and
-every deployment target consume; how a release reaches a running site is a separate,
-per-target concern — see [DEPLOYING.md](DEPLOYING.md).
+the versioned source, the cross-platform `temper` CLI binaries, the four client
+packages, and a GitHub Release. It does **not** deploy any running site. A release
+is the artifact that the world and every deployment target consume; how a release
+reaches a running site is a separate, per-target concern — see
+[DEPLOYING.md](DEPLOYING.md).
 
 ## What a release produces
 
 A `v*` tag invokes [`.github/workflows/release.yml`](.github/workflows/release.yml):
 
-`determine-version` → `build-cli-binaries` (darwin-arm64 / linux-x64 / windows-x64) →
-`release-summary` (publishes the GitHub Release with the CLI binaries attached).
+`determine-version` → `build-cli-binaries` (darwin-arm64 / linux-x64 / windows-x64)
+· `build-skill-bundle` · `build-py-client` (temper_py wheel + sdist) ·
+`publish-npm-clients` (@tasker-systems/temper-ts, @tasker-systems/temper-telemetry-ts
+→ GitHub Packages) · `publish-ruby-client` (temper-rb gem → GitHub Packages) →
+`release-summary` (publishes the GitHub Release with the CLI binaries, skill
+bundle, and Python distributions attached; the release is created only when every
+producer succeeded, and the summary table reports each lane).
 
 No Vercel deploy, no schema migration, no production side effects. Releasing and
 deploying are decoupled by design (see
 `temper-artifacts:specs/2026-06-25-multi-target-deployment-model-design.md`).
+
+## Installing the clients
+
+Client packages live on **GitHub** only — GitHub Packages for npm and RubyGems,
+GitHub Release assets for Python. There is no pypi / rubygems.org / npm-registry /
+crates.io presence yet; nothing here precludes one later. Consumers authenticate to
+GitHub Packages with a fine-grained PAT (or `GITHUB_TOKEN`) carrying `read:packages`
+— Packages installs need a token **even though the repository is public**. The
+Python path needs no token at all.
+
+**temper-ts / temper-telemetry-ts (npm)** — `~/.npmrc`:
+
+```
+@tasker-systems:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=<TOKEN>
+```
+
+then `npm install @tasker-systems/temper-ts@0.4.1` (telemetry-ts likewise).
+
+**temper-rb (RubyGems)** — a `Gemfile` with a scoped source and credentials:
+
+```
+source "https://rubygems.pkg.github.com/tasker-systems" do
+  gem "temper-rb", "0.4.1"
+end
+```
+
+with `bundle config set --global https://rubygems.pkg.github.com <USERNAME>:<TOKEN>`.
+
+**temper-py (Python)** — a PEP 508 direct reference in `pyproject.toml`; the wheel
+is a Release asset, so no token and no index:
+
+```
+dependencies = [
+  "temper-py @ https://github.com/tasker-systems/temper/releases/download/v0.4.1/temper_py-0.4.1-py3-none-any.whl",
+]
+```
 
 ## Release checklist
 
@@ -38,8 +81,10 @@ deploying are decoupled by design (see
    [`release-tag.yml`](.github/workflows/release-tag.yml) derives and pushes the
    `v<VERSION>` tag, which invokes `release.yml`.
 
-4. **Verify the GitHub Release.** The Actions run should be green and the Release
-   should list the three CLI binaries. That's the whole release.
+4. **Verify the GitHub Release.** The Actions run should be green and the
+   Release should list the three CLI binaries, the skill bundle, and the two
+   `temper_py-*` distributions; the npm and Ruby publish lanes report in the
+   run's summary table. That's the whole release.
 
 A release can also be (re-)run manually via **Actions → Release → Run workflow** with
 an explicit `tag` input — useful to re-cut binaries for an existing tag.

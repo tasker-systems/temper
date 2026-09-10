@@ -21,7 +21,10 @@ Gem::Specification.new do |spec|
   spec.metadata['homepage_uri']          = spec.homepage
   spec.metadata['source_code_uri']       = 'https://github.com/tasker-systems/temper/tree/main/clients/temper-rb'
   spec.metadata['bug_tracker_uri']       = 'https://github.com/tasker-systems/temper/issues'
-  spec.metadata['allowed_push_host']     = 'https://rubygems.org'
+  # GitHub Packages RubyGems — the push host this gem may ever be pushed to
+  # (tools/scripts/release/publish-ruby.sh). Publishing to rubygems.org is a
+  # future decision this gemspec does not preclude, but does not point at.
+  spec.metadata['allowed_push_host']     = 'https://rubygems.pkg.github.com/tasker-systems'
   spec.metadata['rubygems_mfa_required'] = 'true'
 
   spec.files = Dir['lib/**/*.rb', 'README.md', 'LICENSE'].select { |f| File.file?(f) }

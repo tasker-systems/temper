@@ -1,7 +1,6 @@
 {
-  "name": "temper-ts",
+  "name": "@tasker-systems/temper-ts",
   "version": "0.0.0",
-  "private": true,
   "description": "TypeScript client for the Temper knowledge base API.",
   "type": "module",
   "main": "./dist/index.js",
@@ -21,6 +20,14 @@
     }
   },
   "files": ["dist"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tasker-systems/temper.git",
+    "directory": "clients/temper-ts"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com/tasker-systems"
+  },
   "scripts": {
     "build": "tsc",
     "generate": "bash ../../.github/scripts/generate-temper-ts.sh",

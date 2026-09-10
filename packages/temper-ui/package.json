@@ -55,7 +55,7 @@
     "marked": "^18.0.0",
     "marked-highlight": "^2.2.4",
     "postgres": "^3",
-    "temper-telemetry-ts": "file:../../clients/temper-telemetry-ts",
+    "@tasker-systems/temper-telemetry-ts": "file:../../clients/temper-telemetry-ts",
     "wx-svelte-grid": "^2.6.1"
   }
 }
