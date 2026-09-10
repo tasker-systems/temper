@@ -623,7 +623,7 @@ async fn blob_in_context(pool: &sqlx::PgPool, profile: Uuid, context: Uuid) -> B
             .await
             .expect("emitter resolves");
     writes::commit_blob(
-        pool,
+        &pool,
         &store,
         writes::CommitBlobParams {
             id: BlobId::from(uuid::Uuid::now_v7()),
@@ -653,7 +653,7 @@ async fn relate_blob_edge(
 ) -> uuid::Uuid {
     use temper_core::types::blob::BlobRelationAssertRequest;
     let ack = blob_service::relate_blob(
-        pool,
+        &pool,
         ProfileId::from(profile),
         blob,
         &BlobRelationAssertRequest {
@@ -677,6 +677,11 @@ async fn relate_blob_edge(
 /// N5's missing arm: a cogmap-sourced blob edge (the map IS the source) is foldable by the
 /// edge-home author. FAILS IF: clause 1 denies `kb_cogmaps` sources unconditionally again —
 /// the creator could assert the edge but never retract it, a lifecycle dead end.
+///
+/// The edge is minted through the substrate write path DIRECTLY: the relate door narrows
+/// blob-relation peers to `kb_resources` (the delete-act design, ruled 2026-09-06), so no
+/// door mints this shape anymore — but edges minted before the narrowing persist and pin
+/// their row until folded, which is exactly the exit this witness protects.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_cogmap_sourced_blob_edge_is_foldable_by_the_home_author(pool: PgPool) {
     let (author, context, telos) = profile_with_resource(&pool, "n5-cogmap-author").await;
@@ -694,7 +699,32 @@ async fn a_cogmap_sourced_blob_edge_is_foldable_by_the_home_author(pool: PgPool)
     common::fixtures::grant_cogmap_write(&pool, cogmap, author).await;
 
     let blob = blob_in_context(&pool, author, context).await;
-    let edge_handle = relate_blob_edge(&pool, author, blob, "kb_cogmaps", cogmap).await;
+    let emitter =
+        writes::resolve_emitter(&pool, ProfileId::from(author), Surface::ApiHttp.marker())
+            .await
+            .expect("emitter resolves");
+    let edge = temper_substrate::writes::assert_anchored_edge_with(
+        &pool,
+        temper_substrate::writes::AssertAnchoredEdgeParams {
+            source: temper_substrate::payloads::AnchorRef {
+                table: temper_substrate::payloads::AnchorTable::Cogmaps,
+                id: cogmap,
+            },
+            target: temper_substrate::payloads::AnchorRef::blob(blob),
+            kind: temper_substrate::affinity::EdgeKind::LeadsTo,
+            polarity: temper_substrate::payloads::EdgePolarity::Forward,
+            label: Some("derivation_source"),
+            weight: 1.0,
+            home: temper_substrate::events::EdgeHome::Context(
+                temper_core::types::ids::ContextId::from(context),
+            ),
+            emitter,
+        },
+        temper_substrate::events::EventContext::default(),
+    )
+    .await
+    .expect("the legacy cogmap-sourced blob edge asserts through the substrate path");
+    let edge_handle = edge.uuid();
 
     DbBackend::new(pool.clone(), ProfileId::from(author))
         .fold_relationship(FoldRelationship {
