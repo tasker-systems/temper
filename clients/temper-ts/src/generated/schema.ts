@@ -2940,7 +2940,11 @@ export interface components {
             label: string;
             /** Format: uuid */
             peer_id: string;
-            /** @description `kb_resources` | `kb_cogmaps` | `kb_blobs` — the peer endpoint's table. */
+            /**
+             * @description `kb_resources` — the peer endpoint's table. Blob-relation peers narrow to
+             *     `kb_resources` (no delete standing resolves over a cogmap or blob peer, so any
+             *     other table is refused).
+             */
             peer_table: string;
             polarity: components["schemas"]["Polarity"];
             /** Format: double */
@@ -8913,7 +8917,28 @@ export interface operations {
     };
     delete_blob: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a
+                 *     correlation aid, never a substitute for authn/authz.
+                 */
+                invocation_id?: null | components["schemas"]["InvocationId"];
+                /**
+                 * @description The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-
+                 *     minted, provenance-only. Rides independently of `invocation_id` and of authorship.
+                 */
+                correlation_id?: null | components["schemas"]["CorrelationId"];
+                /** @description Free-text reasoning for the act. Authorship field — requires `confidence`. */
+                reasoning?: string | null;
+                /** @description Graded self-assessed confidence band. Required whenever any other authorship field is set. */
+                confidence?: null | components["schemas"]["ConfidenceBand"];
+                /** @description Structured rationale for the act. Authorship field — requires `confidence`. */
+                rationale?: string | null;
+                /** @description The persona/role the author acted as. Authorship field — requires `confidence`. */
+                persona?: string | null;
+                /** @description The model that authored the act. Authorship field — requires `confidence`. */
+                model?: string | null;
+            };
             header?: {
                 /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
                 "X-Temper-Surface"?: "cli" | "sdk";

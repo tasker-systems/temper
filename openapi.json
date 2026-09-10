@@ -1248,6 +1248,102 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "invocation_id",
+            "in": "query",
+            "description": "The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a\ncorrelation aid, never a substitute for authn/authz.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/InvocationId"
+                }
+              ]
+            }
+          },
+          {
+            "name": "correlation_id",
+            "in": "query",
+            "description": "The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-\nminted, provenance-only. Rides independently of `invocation_id` and of authorship.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/CorrelationId"
+                }
+              ]
+            }
+          },
+          {
+            "name": "reasoning",
+            "in": "query",
+            "description": "Free-text reasoning for the act. Authorship field — requires `confidence`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "confidence",
+            "in": "query",
+            "description": "Graded self-assessed confidence band. Required whenever any other authorship field is set.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/ConfidenceBand"
+                }
+              ]
+            }
+          },
+          {
+            "name": "rationale",
+            "in": "query",
+            "description": "Structured rationale for the act. Authorship field — requires `confidence`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "persona",
+            "in": "query",
+            "description": "The persona/role the author acted as. Authorship field — requires `confidence`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "description": "The model that authored the act. Authorship field — requires `confidence`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           }
         ],
         "responses": {
@@ -10438,7 +10534,7 @@
               },
               "peer_table": {
                 "type": "string",
-                "description": "`kb_resources` | `kb_cogmaps` | `kb_blobs` — the peer endpoint's table."
+                "description": "`kb_resources` — the peer endpoint's table. Blob-relation peers narrow to\n`kb_resources` (no delete standing resolves over a cogmap or blob peer, so any\nother table is refused)."
               },
               "polarity": {
                 "$ref": "#/components/schemas/Polarity"

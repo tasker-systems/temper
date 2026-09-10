@@ -393,6 +393,13 @@ module Temper::Generated
     # One gate, two arms, inside the strike's own transaction: delete standing (custody) over EVERY live relation's resource peer, or — when the blob has no live relations — custody of its home (a personal context's owner; a team context's owning-team owner role). The strike empties the row, fires exactly one `blob_deleted`, and folds no edge; when the struck row was the LAST live row carrying its content hash (`released: true`), the provider bytes are deleted post-commit and the byte-delete fence retries-and-alerts on any residue. Already-struck and unknown ids both read 404 with no second event. Author standing, role, and admin standing confer nothing here — custody alone deletes.
     # @param id [String] Blob ID
     # @param [Hash] opts the optional parameters
+    # @option opts [String] :invocation_id The invocation this act is correlated under (&#x60;kb_events.invocation_id&#x60;). Optional — a correlation aid, never a substitute for authn/authz.
+    # @option opts [String] :correlation_id The act-grain thread this write belongs to (&#x60;kb_events.correlation_id&#x60;). Optional, caller- minted, provenance-only. Rides independently of &#x60;invocation_id&#x60; and of authorship.
+    # @option opts [String] :reasoning Free-text reasoning for the act. Authorship field — requires &#x60;confidence&#x60;.
+    # @option opts [ConfidenceBand] :confidence Graded self-assessed confidence band. Required whenever any other authorship field is set.
+    # @option opts [String] :rationale Structured rationale for the act. Authorship field — requires &#x60;confidence&#x60;.
+    # @option opts [String] :persona The persona/role the author acted as. Authorship field — requires &#x60;confidence&#x60;.
+    # @option opts [String] :model The model that authored the act. Authorship field — requires &#x60;confidence&#x60;.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [BlobDeleteAck]
     def delete_blob(id, opts = {})
@@ -404,6 +411,13 @@ module Temper::Generated
     # One gate, two arms, inside the strike&#39;s own transaction: delete standing (custody) over EVERY live relation&#39;s resource peer, or — when the blob has no live relations — custody of its home (a personal context&#39;s owner; a team context&#39;s owning-team owner role). The strike empties the row, fires exactly one &#x60;blob_deleted&#x60;, and folds no edge; when the struck row was the LAST live row carrying its content hash (&#x60;released: true&#x60;), the provider bytes are deleted post-commit and the byte-delete fence retries-and-alerts on any residue. Already-struck and unknown ids both read 404 with no second event. Author standing, role, and admin standing confer nothing here — custody alone deletes.
     # @param id [String] Blob ID
     # @param [Hash] opts the optional parameters
+    # @option opts [String] :invocation_id The invocation this act is correlated under (&#x60;kb_events.invocation_id&#x60;). Optional — a correlation aid, never a substitute for authn/authz.
+    # @option opts [String] :correlation_id The act-grain thread this write belongs to (&#x60;kb_events.correlation_id&#x60;). Optional, caller- minted, provenance-only. Rides independently of &#x60;invocation_id&#x60; and of authorship.
+    # @option opts [String] :reasoning Free-text reasoning for the act. Authorship field — requires &#x60;confidence&#x60;.
+    # @option opts [ConfidenceBand] :confidence Graded self-assessed confidence band. Required whenever any other authorship field is set.
+    # @option opts [String] :rationale Structured rationale for the act. Authorship field — requires &#x60;confidence&#x60;.
+    # @option opts [String] :persona The persona/role the author acted as. Authorship field — requires &#x60;confidence&#x60;.
+    # @option opts [String] :model The model that authored the act. Authorship field — requires &#x60;confidence&#x60;.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<(BlobDeleteAck, Integer, Hash)>] BlobDeleteAck data, response status code and response headers
     def delete_blob_with_http_info(id, opts = {})
@@ -423,6 +437,13 @@ module Temper::Generated
 
       # query parameters
       query_params = opts[:query_params] || {}
+      query_params[:'invocation_id'] = opts[:'invocation_id'] if !opts[:'invocation_id'].nil?
+      query_params[:'correlation_id'] = opts[:'correlation_id'] if !opts[:'correlation_id'].nil?
+      query_params[:'reasoning'] = opts[:'reasoning'] if !opts[:'reasoning'].nil?
+      query_params[:'confidence'] = opts[:'confidence'] if !opts[:'confidence'].nil?
+      query_params[:'rationale'] = opts[:'rationale'] if !opts[:'rationale'].nil?
+      query_params[:'persona'] = opts[:'persona'] if !opts[:'persona'].nil?
+      query_params[:'model'] = opts[:'model'] if !opts[:'model'].nil?
 
       # header parameters
       header_params = opts[:header_params] || {}

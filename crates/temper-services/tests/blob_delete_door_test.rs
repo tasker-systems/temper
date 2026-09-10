@@ -364,11 +364,7 @@ async fn a_custodian_strikes_an_attached_blob_through_the_relation_arm(pool: PgP
     let resource = seed_resource(&pool, ctx, owner, emitter, "relation-arm-resource").await;
     let store = InMemoryBlobStore::default();
     let committed = commit_blob(&pool, &store, ctx, owner, b"attached-bytes").await;
-    let pathname = format!(
-        "{}/{}",
-        &committed.content_hash[..2],
-        committed.content_hash
-    );
+    let pathname = temper_substrate::blob_store::blob_pathname(&committed.content_hash);
     let edge = relate(
         &pool,
         owner,
@@ -442,7 +438,7 @@ async fn a_custodian_strikes_an_unattached_blob_through_the_home_arm(pool: PgPoo
 async fn a_team_owner_cannot_strike_an_attached_blob_their_custody_does_not_reach(pool: PgPool) {
     let (owner, _pctx, _owner_handle) =
         seed_profile_with_context(&pool, "team-owner@example.com").await;
-    let (member, _mctx, member_handle) =
+    let (member, mctx, member_handle) =
         seed_profile_with_context(&pool, "team-member@example.com").await;
     let (_team, tctx) = seed_team_context(
         &pool,
@@ -455,7 +451,7 @@ async fn a_team_owner_cannot_strike_an_attached_blob_their_custody_does_not_reac
     // delete standing over it.
     let resource = seed_resource(
         &pool,
-        _mctx,
+        mctx,
         member,
         member_emitter,
         "team-owner-refused-resource",
@@ -688,7 +684,7 @@ async fn a_held_strike_seeds_no_fence_row_and_keeps_the_bytes(pool: PgPool) {
     let store = InMemoryBlobStore::default();
     let a = commit_blob(&pool, &store, ctx_a, owner_a, b"shared-bytes").await;
     let b = commit_blob(&pool, &store, ctx_b, owner_b, b"shared-bytes").await;
-    let pathname = format!("{}/{}", &a.content_hash[..2], a.content_hash);
+    let pathname = temper_substrate::blob_store::blob_pathname(&a.content_hash);
 
     let ack = delete_blob(&pool, &store, owner_a, a.blob_id.uuid())
         .await
@@ -740,11 +736,7 @@ async fn a_failing_provider_delete_still_leaves_the_act_committed(pool: PgPool) 
         .await
         .expect("commit through the service")
     };
-    let pathname = format!(
-        "{}/{}",
-        &committed.content_hash[..2],
-        committed.content_hash
-    );
+    let pathname = temper_substrate::blob_store::blob_pathname(&committed.content_hash);
 
     let ack = delete_blob(&pool, &store, owner, committed.blob_id.uuid())
         .await

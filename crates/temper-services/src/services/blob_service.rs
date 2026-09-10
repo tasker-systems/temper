@@ -953,6 +953,22 @@ fn custody_refusal() -> ApiError {
     )
 }
 
+/// The strike wrapper's refusals render ABSENT: the same `map_commit_err` walk (the DB
+/// message's own prefix is the classifier — `blob_delete:` is the substrate's assigned
+/// voice), because a wrapper raise must never reach the wire as a 500 carrying the
+/// wrapper's prose. Through this door the arms are belt-and-suspenders (the gate read and
+/// the fire share the transaction), so every mapped case reads as the ruled 404.
+fn map_delete_err(e: anyhow::Error) -> ApiError {
+    for cause in e.chain() {
+        if let Some(sqlx::Error::Database(db)) = cause.downcast_ref::<sqlx::Error>() {
+            if db.message().starts_with("blob_delete:") {
+                return ApiError::NotFound("blob not found".to_string());
+            }
+        }
+    }
+    ApiError::internal_scrubbed("blob delete failed", e)
+}
+
 /// Strike one blob through the ruled door. The gate runs inside the strike's transaction
 /// (`delete_blob_in_tx`), so the relation enumeration, the custody verdict, the emptying,
 /// and the same-transaction refcount are one snapshot; the post-commit provider delete is
@@ -1089,17 +1105,7 @@ pub async fn delete_blob(
         },
     )
     .await
-    .map_err(|e| {
-        // The wrapper's own voice (`blob_delete: …`) renders ABSENT, never a 500: through
-        // this door its arms are belt-and-suspenders (the gate read and the fire share the
-        // transaction), but a race mapped as an internal error would leak the wrapper's
-        // prose to the wire.
-        if format!("{e:#}").contains("blob_delete:") {
-            ApiError::NotFound("blob not found".to_string())
-        } else {
-            ApiError::internal_scrubbed("blob delete failed", e)
-        }
-    })?;
+    .map_err(map_delete_err)?;
 
     // The fence seed, INSIDE the transaction: the identity-only payload cannot carry the
     // pathname, so the struck row's own state is the seed's source — its hash and its

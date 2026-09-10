@@ -56,7 +56,9 @@ export type BlobRelationAck = { edge_handle: string, };
  */
 export type BlobRelationAssertRequest = { direction: BlobRelationDirection, 
 /**
- * `kb_resources` | `kb_cogmaps` | `kb_blobs` — the peer endpoint's table.
+ * `kb_resources` — the peer endpoint's table. Blob-relation peers narrow to
+ * `kb_resources` (no delete standing resolves over a cogmap or blob peer, so any
+ * other table is refused).
  */
 peer_table: string, peer_id: string, edge_kind: EdgeKind, polarity: Polarity, label: string, weight: number, 
 /**

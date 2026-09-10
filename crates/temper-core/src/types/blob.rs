@@ -230,7 +230,9 @@ pub enum BlobRelationDirection {
 pub struct BlobRelationAssertRequest {
     #[serde(default)]
     pub direction: BlobRelationDirection,
-    /// `kb_resources` | `kb_cogmaps` | `kb_blobs` — the peer endpoint's table.
+    /// `kb_resources` — the peer endpoint's table. Blob-relation peers narrow to
+    /// `kb_resources` (no delete standing resolves over a cogmap or blob peer, so any
+    /// other table is refused).
     pub peer_table: String,
     pub peer_id: uuid::Uuid,
     pub edge_kind: EdgeKind,

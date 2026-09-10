@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from typing_extensions import Annotated
 
 from pydantic import Field, StrictStr, field_validator
-from typing import List, Optional
+from typing import Any, List, Optional
 from typing_extensions import Annotated
 from uuid import UUID
 from temper.generated.models.blob_commit_response import BlobCommitResponse
@@ -1515,6 +1515,13 @@ class BlobsApi:
     def delete_blob(
         self,
         id: Annotated[UUID, Field(description="Blob ID")],
+        invocation_id: Annotated[Optional[Any], Field(description="The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz.")] = None,
+        correlation_id: Annotated[Optional[Any], Field(description="The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.")] = None,
+        reasoning: Annotated[Optional[StrictStr], Field(description="Free-text reasoning for the act. Authorship field — requires `confidence`.")] = None,
+        confidence: Annotated[Optional[Any], Field(description="Graded self-assessed confidence band. Required whenever any other authorship field is set.")] = None,
+        rationale: Annotated[Optional[StrictStr], Field(description="Structured rationale for the act. Authorship field — requires `confidence`.")] = None,
+        persona: Annotated[Optional[StrictStr], Field(description="The persona/role the author acted as. Authorship field — requires `confidence`.")] = None,
+        model: Annotated[Optional[StrictStr], Field(description="The model that authored the act. Authorship field — requires `confidence`.")] = None,
         x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
         _request_timeout: Union[
             None,
@@ -1535,6 +1542,20 @@ class BlobsApi:
 
         :param id: Blob ID (required)
         :type id: UUID
+        :param invocation_id: The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz.
+        :type invocation_id: UUID
+        :param correlation_id: The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.
+        :type correlation_id: UUID
+        :param reasoning: Free-text reasoning for the act. Authorship field — requires `confidence`.
+        :type reasoning: str
+        :param confidence: Graded self-assessed confidence band. Required whenever any other authorship field is set.
+        :type confidence: ConfidenceBand
+        :param rationale: Structured rationale for the act. Authorship field — requires `confidence`.
+        :type rationale: str
+        :param persona: The persona/role the author acted as. Authorship field — requires `confidence`.
+        :type persona: str
+        :param model: The model that authored the act. Authorship field — requires `confidence`.
+        :type model: str
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
         :param _request_timeout: timeout setting for this request. If one
@@ -1561,6 +1582,13 @@ class BlobsApi:
 
         _param = self._delete_blob_serialize(
             id=id,
+            invocation_id=invocation_id,
+            correlation_id=correlation_id,
+            reasoning=reasoning,
+            confidence=confidence,
+            rationale=rationale,
+            persona=persona,
+            model=model,
             x_temper_surface=x_temper_surface,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -1589,6 +1617,13 @@ class BlobsApi:
     def delete_blob_with_http_info(
         self,
         id: Annotated[UUID, Field(description="Blob ID")],
+        invocation_id: Annotated[Optional[Any], Field(description="The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz.")] = None,
+        correlation_id: Annotated[Optional[Any], Field(description="The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.")] = None,
+        reasoning: Annotated[Optional[StrictStr], Field(description="Free-text reasoning for the act. Authorship field — requires `confidence`.")] = None,
+        confidence: Annotated[Optional[Any], Field(description="Graded self-assessed confidence band. Required whenever any other authorship field is set.")] = None,
+        rationale: Annotated[Optional[StrictStr], Field(description="Structured rationale for the act. Authorship field — requires `confidence`.")] = None,
+        persona: Annotated[Optional[StrictStr], Field(description="The persona/role the author acted as. Authorship field — requires `confidence`.")] = None,
+        model: Annotated[Optional[StrictStr], Field(description="The model that authored the act. Authorship field — requires `confidence`.")] = None,
         x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
         _request_timeout: Union[
             None,
@@ -1609,6 +1644,20 @@ class BlobsApi:
 
         :param id: Blob ID (required)
         :type id: UUID
+        :param invocation_id: The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz.
+        :type invocation_id: UUID
+        :param correlation_id: The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.
+        :type correlation_id: UUID
+        :param reasoning: Free-text reasoning for the act. Authorship field — requires `confidence`.
+        :type reasoning: str
+        :param confidence: Graded self-assessed confidence band. Required whenever any other authorship field is set.
+        :type confidence: ConfidenceBand
+        :param rationale: Structured rationale for the act. Authorship field — requires `confidence`.
+        :type rationale: str
+        :param persona: The persona/role the author acted as. Authorship field — requires `confidence`.
+        :type persona: str
+        :param model: The model that authored the act. Authorship field — requires `confidence`.
+        :type model: str
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
         :param _request_timeout: timeout setting for this request. If one
@@ -1635,6 +1684,13 @@ class BlobsApi:
 
         _param = self._delete_blob_serialize(
             id=id,
+            invocation_id=invocation_id,
+            correlation_id=correlation_id,
+            reasoning=reasoning,
+            confidence=confidence,
+            rationale=rationale,
+            persona=persona,
+            model=model,
             x_temper_surface=x_temper_surface,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -1663,6 +1719,13 @@ class BlobsApi:
     def delete_blob_without_preload_content(
         self,
         id: Annotated[UUID, Field(description="Blob ID")],
+        invocation_id: Annotated[Optional[Any], Field(description="The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz.")] = None,
+        correlation_id: Annotated[Optional[Any], Field(description="The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.")] = None,
+        reasoning: Annotated[Optional[StrictStr], Field(description="Free-text reasoning for the act. Authorship field — requires `confidence`.")] = None,
+        confidence: Annotated[Optional[Any], Field(description="Graded self-assessed confidence band. Required whenever any other authorship field is set.")] = None,
+        rationale: Annotated[Optional[StrictStr], Field(description="Structured rationale for the act. Authorship field — requires `confidence`.")] = None,
+        persona: Annotated[Optional[StrictStr], Field(description="The persona/role the author acted as. Authorship field — requires `confidence`.")] = None,
+        model: Annotated[Optional[StrictStr], Field(description="The model that authored the act. Authorship field — requires `confidence`.")] = None,
         x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
         _request_timeout: Union[
             None,
@@ -1683,6 +1746,20 @@ class BlobsApi:
 
         :param id: Blob ID (required)
         :type id: UUID
+        :param invocation_id: The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz.
+        :type invocation_id: UUID
+        :param correlation_id: The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.
+        :type correlation_id: UUID
+        :param reasoning: Free-text reasoning for the act. Authorship field — requires `confidence`.
+        :type reasoning: str
+        :param confidence: Graded self-assessed confidence band. Required whenever any other authorship field is set.
+        :type confidence: ConfidenceBand
+        :param rationale: Structured rationale for the act. Authorship field — requires `confidence`.
+        :type rationale: str
+        :param persona: The persona/role the author acted as. Authorship field — requires `confidence`.
+        :type persona: str
+        :param model: The model that authored the act. Authorship field — requires `confidence`.
+        :type model: str
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
         :param _request_timeout: timeout setting for this request. If one
@@ -1709,6 +1786,13 @@ class BlobsApi:
 
         _param = self._delete_blob_serialize(
             id=id,
+            invocation_id=invocation_id,
+            correlation_id=correlation_id,
+            reasoning=reasoning,
+            confidence=confidence,
+            rationale=rationale,
+            persona=persona,
+            model=model,
             x_temper_surface=x_temper_surface,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -1732,6 +1816,13 @@ class BlobsApi:
     def _delete_blob_serialize(
         self,
         id,
+        invocation_id,
+        correlation_id,
+        reasoning,
+        confidence,
+        rationale,
+        persona,
+        model,
         x_temper_surface,
         _request_auth,
         _content_type,
@@ -1757,6 +1848,34 @@ class BlobsApi:
         if id is not None:
             _path_params['id'] = id
         # process the query parameters
+        if invocation_id is not None:
+            
+            _query_params.append(('invocation_id', invocation_id))
+            
+        if correlation_id is not None:
+            
+            _query_params.append(('correlation_id', correlation_id))
+            
+        if reasoning is not None:
+            
+            _query_params.append(('reasoning', reasoning))
+            
+        if confidence is not None:
+            
+            _query_params.append(('confidence', confidence.value))
+            
+        if rationale is not None:
+            
+            _query_params.append(('rationale', rationale))
+            
+        if persona is not None:
+            
+            _query_params.append(('persona', persona))
+            
+        if model is not None:
+            
+            _query_params.append(('model', model))
+            
         # process the header parameters
         if x_temper_surface is not None:
             _header_params['X-Temper-Surface'] = x_temper_surface

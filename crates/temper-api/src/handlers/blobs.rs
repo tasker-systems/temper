@@ -617,7 +617,10 @@ pub async fn relations(
     operation_id = "delete_blob",
     path = "/api/blobs/{id}",
     tag = "Blobs",
-    params(("id" = Uuid, Path, description = "Blob ID")),
+    params(
+        ("id" = Uuid, Path, description = "Blob ID"),
+        temper_core::types::authorship::ActInput
+    ),
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Struck — the row is emptied and one `blob_deleted` fired; `released` reports whether the provider bytes were this act's to release", body = BlobDeleteAck),
@@ -631,15 +634,17 @@ pub async fn delete(
     auth: AuthUser,
     RequestSurface(surface): RequestSurface,
     Path(blob_id): Path<Uuid>,
+    Query(act_in): Query<temper_core::types::authorship::ActInput>,
 ) -> ApiResult<Json<BlobDeleteAck>> {
     let store = state
         .blob_store
         .as_deref()
         .ok_or_else(|| state.blob_refusal())?;
     let caller = ProfileId::from(auth.0.profile().id);
-    let act = temper_core::types::authorship::ActInput::default()
-        .into_act_context()
-        .map_err(ApiError::from)?;
+    // DELETE carries no body — authorship rides query params
+    // (`?invocation_id=…&reasoning=…&confidence=…`), deserialized flat via serde_urlencoded
+    // (the `resources::delete` door's shape).
+    let act = act_in.into_act_context().map_err(ApiError::from)?;
     let ack = temper_services::services::blob_service::delete_blob(
         &state.pool,
         caller,

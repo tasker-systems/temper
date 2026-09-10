@@ -2088,3 +2088,242 @@ async fn a_provider_bail_is_scrubbed_from_the_wire(pool: PgPool) {
         "a 5xx renders the generic internal message; body was {wire}"
     );
 }
+
+// ─── The delete act's ruled door at the wire ─────────────────────────────────
+// The service layer's custody witnesses live in temper-services' blob_delete_door_test;
+// these prove the HTTP faces the service cannot prove: the route mounts, the ack shape,
+// the 403/404 mappings through the real router, and the disabled posture.
+
+/// The app variant whose store handle STAYS with the test, so a wire-level strike's byte
+/// release is assertable (the provider is the same in-memory fake, shared by handle).
+async fn blob_app_with_store(pool: PgPool, cfg: BlobConfig) -> (TestApp, Arc<InMemoryBlobStore>) {
+    let store = Arc::new(InMemoryBlobStore::default());
+    let handle = store.clone();
+    let app = setup_test_app_with_state(pool, move |state| {
+        state.blob_store = Some(store);
+        let mut config = (*state.config).clone();
+        config.blob = Some(cfg);
+        state.config = Arc::new(config);
+    })
+    .await;
+    (app, handle)
+}
+
+async fn delete_blob_at(app: &TestApp, token: &str, blob: Uuid) -> (u16, serde_json::Value) {
+    let resp = app
+        .client
+        .delete(app.url(&format!("/api/blobs/{blob}")))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("request failed");
+    let status = resp.status().as_u16();
+    let body: serde_json::Value = resp.json().await.expect("json body");
+    (status, body)
+}
+
+/// The custodian strikes through the real router: 200 carrying the ruled ack, the bytes
+/// release from the provider, the row reads absent (the read-through 404s), and a second
+/// DELETE reads the SAME 404 — no second event, nothing distinguished.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_delete_door_strikes_through_the_router(pool: PgPool) {
+    let cfg = blob_cfg(1 << 20, &["image/png"], 64 * 1024);
+    let (app, store) = blob_app_with_store(pool, cfg).await;
+    let (_profile, ctx, token) = owner(&app.pool).await;
+
+    let resp = commit_multipart(
+        &app,
+        &token,
+        b"wire-delete-bytes".to_vec(),
+        "image/png",
+        "kb_contexts",
+        ctx,
+    )
+    .send()
+    .await
+    .expect("request failed");
+    let body: serde_json::Value = resp.json().await.expect("json body");
+    let blob_id: Uuid = body["blob_id"]
+        .as_str()
+        .expect("blob_id")
+        .parse()
+        .expect("uuid");
+    let hash: String = body["content_hash"]
+        .as_str()
+        .expect("content_hash")
+        .to_string();
+    let pathname = temper_substrate::blob_store::blob_pathname(&hash);
+    assert!(store.contains(&pathname), "the commit put the bytes");
+
+    let (status, ack) = delete_blob_at(&app, &token, blob_id).await;
+    assert_eq!(status, 200, "the custodian strikes; body: {ack}");
+    assert_eq!(
+        ack["blob_id"],
+        blob_id.to_string(),
+        "the ack names the struck row"
+    );
+    assert_eq!(ack["released"], true, "the last live row releases its hash");
+    assert!(
+        !ack.get("pathname").is_some(),
+        "the pathname is provider-internal and never rides the wire"
+    );
+    // FAILS IF: the post-commit release ever stops riding the caller's delete — the bytes
+    // would linger until the fence's drain, and the fast path would be a fiction.
+    assert!(
+        !store.contains(&pathname),
+        "the provider bytes released post-commit"
+    );
+
+    let resp = app
+        .client
+        .get(app.url(&format!("/api/blobs/{blob_id}")))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(resp.status().as_u16(), 404, "the struck row reads absent");
+
+    let (again, body2) = delete_blob_at(&app, &token, blob_id).await;
+    assert_eq!(
+        again, 404,
+        "already-struck reads the same 404; body: {body2}"
+    );
+    assert_eq!(
+        body2["error"]["message"], body2["error"]["message"],
+        "shape only — the face is the renders-absent posture, not a distinguishable answer"
+    );
+}
+
+/// A non-custodian who cannot READ the blob gets the same 404 an unknown id gets — the
+/// visibility face through the real router (the custody 403's wire mapping is proven by
+/// the reader-without-custody witness below).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_delete_door_reads_absent_to_a_non_reader(pool: PgPool) {
+    let cfg = blob_cfg(1 << 20, &["image/png"], 64 * 1024);
+    let (app, _store) = blob_app_with_store(pool, cfg).await;
+    let (_owner, ctx, owner_token) = owner(&app.pool).await;
+    let stranger_email = format!("blob-stranger-{}@example.com", Uuid::new_v4());
+    let (stranger, _) =
+        fixtures::create_test_profile_with_context(&app.pool, &stranger_email).await;
+    let stranger_token = generate_test_jwt(&format!("test|{stranger}"), &stranger_email);
+
+    let resp = commit_multipart(
+        &app,
+        &owner_token,
+        b"private-bytes".to_vec(),
+        "image/png",
+        "kb_contexts",
+        ctx,
+    )
+    .send()
+    .await
+    .expect("request failed");
+    let body: serde_json::Value = resp.json().await.expect("json body");
+    let blob_id: Uuid = body["blob_id"]
+        .as_str()
+        .expect("blob_id")
+        .parse()
+        .expect("uuid");
+
+    let (status, wire) = delete_blob_at(&app, &stranger_token, blob_id).await;
+    assert_eq!(status, 404, "a non-reader reads absent; body: {wire}");
+    let (status, wire) = delete_blob_at(&app, &stranger_token, Uuid::now_v7()).await;
+    assert_eq!(
+        status, 404,
+        "an unknown id reads the same absent; body: {wire}"
+    );
+}
+
+/// A reader WITHOUT custody meets the 403 naming the `blob_delete:` vocabulary — the
+/// ForbiddenDetail mapping through the real router. The fixture makes the stranger a plain
+/// MEMBER of the team that owns the blob's context: reader (membership confers read), never
+/// custodian (the owner role is).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_delete_door_refuses_a_reader_without_custody(pool: PgPool) {
+    let cfg = blob_cfg(1 << 20, &["image/png"], 64 * 1024);
+    let (app, _store) = blob_app_with_store(pool, cfg).await;
+    let owner_email = format!("blob-team-owner-{}@example.com", Uuid::new_v4());
+    let (team_owner, _) = fixtures::create_test_profile_with_context(&app.pool, &owner_email).await;
+    let member_email = format!("blob-team-member-{}@example.com", Uuid::new_v4());
+    let (member, _) = fixtures::create_test_profile_with_context(&app.pool, &member_email).await;
+
+    let team: Uuid =
+        sqlx::query_scalar("INSERT INTO kb_teams (slug, name) VALUES ($1,$2) RETURNING id")
+            .bind(format!("door-team-{team_owner}"))
+            .bind("door-team")
+            .fetch_one(&app.pool)
+            .await
+            .expect("seed team");
+    sqlx::query("INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1,$2,'owner')")
+        .bind(team)
+        .bind(team_owner)
+        .execute(&app.pool)
+        .await
+        .expect("seed owner");
+    sqlx::query("INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1,$2,'member')")
+        .bind(team)
+        .bind(member)
+        .execute(&app.pool)
+        .await
+        .expect("seed member");
+    let tctx: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) VALUES ('kb_teams',$1,$2,$2) RETURNING id",
+    )
+    .bind(team)
+    .bind("door-team-context")
+    .fetch_one(&app.pool)
+    .await
+    .expect("seed team context");
+
+    let owner_token = generate_test_jwt(&format!("test|{team_owner}"), &owner_email);
+    let member_token = generate_test_jwt(&format!("test|{member}"), &member_email);
+    let resp = commit_multipart(
+        &app,
+        &owner_token,
+        b"team-wire-bytes".to_vec(),
+        "image/png",
+        "kb_contexts",
+        tctx,
+    )
+    .send()
+    .await
+    .expect("request failed");
+    let body: serde_json::Value = resp.json().await.expect("json body");
+    let blob_id: Uuid = body["blob_id"]
+        .as_str()
+        .expect("blob_id")
+        .parse()
+        .expect("uuid");
+
+    let (status, wire) = delete_blob_at(&app, &member_token, blob_id).await;
+    assert_eq!(
+        status, 403,
+        "a reader without custody is refused; body: {wire}"
+    );
+    let message = wire["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        message.starts_with("blob_delete: "),
+        "the refusal speaks the assigned vocabulary; body was {wire}"
+    );
+}
+
+/// A disabled instance (no store configured) refuses the door in the same vocabulary the
+/// other blob doors speak — the operator hears WHY, not silence.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_disabled_door_refuses_delete(pool: PgPool) {
+    let app = setup_test_app(pool).await;
+    let (_profile, _ctx, token) = owner(&app.pool).await;
+    let (status, wire) = delete_blob_at(&app, &token, Uuid::now_v7()).await;
+    assert_eq!(status, 400, "the disabled posture refuses; body: {wire}");
+    let message = wire["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        message.contains("blob endpoints are disabled"),
+        "the refusal names the posture; body was {wire}"
+    );
+}

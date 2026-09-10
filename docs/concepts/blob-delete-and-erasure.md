@@ -71,10 +71,14 @@ alerting fence, so a storage outage strands nothing silently.
 
 Blobs relate to **resources**. The relate door refuses blob-to-cogmap and blob-to-blob
 relations: no delete standing could ever resolve over such a peer, so the relation would
-pin the blob's record permanently against any future delete. Existing relations to a
-resource are unaffected by a delete of another blob, and a struck blob's own relations
-persist as history — they render absent because the blob is gone, not because they were
-ended.
+pin the blob's record permanently against any future delete. A handful of relations minted
+before that narrowing may still exist — a blob related to a cogmap, say — and such a
+relation does exactly what it always would: it holds the blob's record until someone with
+standing over it folds it (the dependent's exit). If a delete is refused with the custody
+message and you hold custody of every resource you can see, look for one of these legacy
+relations on the blob's relations list. Existing relations to a resource are unaffected by
+a delete of another blob, and a struck blob's own relations persist as history — they
+render absent because the blob is gone, not because they were ended.
 
 ## Further reading
 

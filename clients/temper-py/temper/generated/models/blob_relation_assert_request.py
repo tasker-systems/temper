@@ -43,7 +43,7 @@ class BlobRelationAssertRequest(BaseModel):
     edge_kind: EdgeKind
     label: StrictStr
     peer_id: UUID
-    peer_table: StrictStr = Field(description="`kb_resources` | `kb_cogmaps` | `kb_blobs` — the peer endpoint's table.")
+    peer_table: StrictStr = Field(description="`kb_resources` — the peer endpoint's table. Blob-relation peers narrow to `kb_resources` (no delete standing resolves over a cogmap or blob peer, so any other table is refused).")
     polarity: Polarity
     weight: Union[StrictFloat, StrictInt]
     __properties: ClassVar[List[str]] = ["confidence", "correlation_id", "invocation_id", "model", "persona", "rationale", "reasoning", "direction", "edge_kind", "label", "peer_id", "peer_table", "polarity", "weight"]
