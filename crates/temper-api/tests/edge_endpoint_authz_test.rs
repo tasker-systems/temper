@@ -623,7 +623,7 @@ async fn blob_in_context(pool: &sqlx::PgPool, profile: Uuid, context: Uuid) -> B
             .await
             .expect("emitter resolves");
     writes::commit_blob(
-        &pool,
+        pool,
         &store,
         writes::CommitBlobParams {
             id: BlobId::from(uuid::Uuid::now_v7()),
@@ -653,7 +653,7 @@ async fn relate_blob_edge(
 ) -> uuid::Uuid {
     use temper_core::types::blob::BlobRelationAssertRequest;
     let ack = blob_service::relate_blob(
-        &pool,
+        pool,
         ProfileId::from(profile),
         blob,
         &BlobRelationAssertRequest {
