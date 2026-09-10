@@ -25,9 +25,9 @@ use temper_substrate::blob_store::{blob_pathname, InMemoryBlobStore};
 use temper_substrate::content::{self, IncomingChunk};
 use temper_substrate::events::{fire, EventContext, SeedAction};
 use temper_substrate::ids::{BlockId, ContextId, EntityId};
-use temper_substrate::payloads::AnchorRef;
+use temper_substrate::payloads::{AnchorRef, ArtifactIntent, KindOwner};
 use temper_substrate::replay;
-use temper_substrate::writes::{self, CommitBlobParams, CreateParams};
+use temper_substrate::writes::{self, CommitBlobParams, CommitDataArtifactParams, CreateParams};
 
 const ALLOWLIST: [&str; 1] = ["image/png"];
 const CAP: i64 = 10 * 1024 * 1024;
@@ -100,6 +100,89 @@ async fn insert_personal_context(pool: &PgPool, subject: Uuid, slug: &str) -> Co
         .await
         .expect("seed personal context"),
     )
+}
+
+const SLACK_PRINCIPAL: &str = "U1234567";
+
+/// The subject's identity surface beyond the profile row (Ruling 1, 2026-09-10): a Slack
+/// auth link carrying the manifest's identifier columns (email + the IdP subject id), the
+/// no-FK Slack stores keyed on that id, and a second entity whose name embeds the person's
+/// name. The identifier arms and the load-bearing arm ORDER all witness against these rows:
+/// the Slack stores must resolve their principals through `auth_provider_user_id` BEFORE
+/// the identifier arm unclaims it, so a wrong-ordered act leaves the stores standing.
+async fn seed_identity_surface(pool: &PgPool, subject: Uuid) {
+    sqlx::query(
+        "INSERT INTO kb_profile_auth_links (id, profile_id, auth_provider, auth_provider_user_id, email) \
+              VALUES ($1, $2, 'slack', $3, $4)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(subject)
+    .bind(SLACK_PRINCIPAL)
+    .bind("pete.taylor@x.test")
+    .execute(pool)
+    .await
+    .expect("seed slack auth link");
+    sqlx::query(
+        "INSERT INTO kb_slack_grant_vault (id, profile_id, slack_principal_id, key_version, rt_nonce, rt_ciphertext) \
+              VALUES ($1, $2, $3, 1, $4, $5)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(subject)
+    .bind(SLACK_PRINCIPAL)
+    .bind(vec![7u8; 12])
+    .bind(vec![9u8; 48])
+    .execute(pool)
+    .await
+    .expect("seed slack grant vault row");
+    sqlx::query(
+        "INSERT INTO kb_slack_link_intents (id, state_nonce, code_verifier, slack_principal_id, expires_at) \
+              VALUES ($1, $2, $3, $4, now() + interval '10 minutes')",
+    )
+    .bind(Uuid::now_v7())
+    .bind("state-nonce-1")
+    .bind("code-verifier-1")
+    .bind(SLACK_PRINCIPAL)
+    .execute(pool)
+    .await
+    .expect("seed slack link intent");
+    sqlx::query("INSERT INTO kb_entities (profile_id, name) VALUES ($1, $2)")
+        .bind(subject)
+        .bind("Pete Taylor (agent)")
+        .execute(pool)
+        .await
+        .expect("seed person-named entity");
+}
+
+/// One data artifact on `resource` through the REAL commit path; `kind_owner` decides whose
+/// kind namespace the content lives in — `None` exercises the home-derived default (the
+/// context's owner), which is the only namespace the ordinary write path ever stores. The
+/// subject's own kind on a governed home is what the act's artifact arm reaches; another
+/// principal's namespace (which arises when a context is REASSIGNED — the kind namespace is
+/// frozen at commit, identity-as-input) is the disposition-iii remainder.
+async fn seed_artifact(
+    pool: &PgPool,
+    resource: Uuid,
+    emitter: Uuid,
+    kind_owner: Option<KindOwner>,
+    content: &serde_json::Value,
+) -> Uuid {
+    use temper_substrate::ids::ResourceId;
+    temper_substrate::writes::commit_data_artifact(
+        pool,
+        CommitDataArtifactParams {
+            resource: ResourceId::from(resource),
+            kind: "notes/insight",
+            kind_owner,
+            intent: ArtifactIntent::Current,
+            precedence: 0.0,
+            content,
+            supersedes: &[],
+            emitter: EntityId::from(emitter),
+        },
+    )
+    .await
+    .expect("seed artifact through the commit path")
+    .uuid()
 }
 
 /// A single-chunk resource homed in `home`, built through the REAL create path with a
@@ -208,6 +291,11 @@ struct ErasedWorld {
     chunk_hash: String,
     blob: Uuid,
     blob_hash: String,
+    subject: Uuid,
+    subject_artifact: Uuid,
+    subject_artifact_hash: String,
+    team_artifact: Uuid,
+    team_artifact_content: serde_json::Value,
 }
 
 async fn assert_redacted_shape(pool: &PgPool, w: &ErasedWorld) {
@@ -250,6 +338,63 @@ async fn assert_redacted_shape(pool: &PgPool, w: &ErasedWorld) {
             .await
             .unwrap();
     assert_eq!(in_set, 2, "the erased-content set holds both hashes (D4)");
+
+    // Ruling 1: the entity names are sentineled to 'erased-' || the entity's OWN id — the
+    // per-row spelling the (profile_id, name) UNIQUE grain demands (two entities of one
+    // subject cannot share a subject-keyed sentinel). The entity UUIDs stay (the pseudonym).
+    let unsentineled: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_entities \
+          WHERE profile_id = $1 AND name IS DISTINCT FROM 'erased-' || id::text",
+    )
+    .bind(w.subject)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        unsentineled, 0,
+        "every entity name of the subject is sentineled"
+    );
+    let entities: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_entities WHERE profile_id = $1")
+            .bind(w.subject)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert!(
+        entities >= 2,
+        "the subject's entities survive (undeletable)"
+    );
+
+    // Ruling 1: the subject's OWN artifact content is emptied, hashes kept (D3's retention
+    // shape); the team-kind artifact on the SAME governed resource is untouched — the
+    // disposition-iii remainder, not the subject's data.
+    let (content, hash): (serde_json::Value, String) = sqlx::query_as(
+        "SELECT dac.content, dac.content_hash FROM kb_data_artifact_content dac \
+          WHERE dac.artifact_id = $1",
+    )
+    .bind(w.subject_artifact)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        content,
+        serde_json::json!({}),
+        "the subject's own artifact content is emptied"
+    );
+    assert_eq!(
+        hash, w.subject_artifact_hash,
+        "the artifact content hash is retained (D3)"
+    );
+    let (content,): (serde_json::Value,) =
+        sqlx::query_as("SELECT content FROM kb_data_artifact_content WHERE artifact_id = $1")
+            .bind(w.team_artifact)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        content, w.team_artifact_content,
+        "another principal's kind namespace on a governed resource is NOT struck"
+    );
 }
 
 fn diff_projections(before: &[(String, serde_json::Value)], after: &[(String, serde_json::Value)]) {
@@ -296,6 +441,107 @@ async fn replay_of_an_erasure_is_byte_identical_and_a_replayed_re_erase_is_a_no_
     let (blob, blob_hash) = seed_blob(&pool, &store, home, subject, emitter, &bytes).await;
     let _ = resource;
 
+    // Ruling 1's surface: the identity rows (auth links + Slack stores + a person-named
+    // entity) and TWO artifacts. The subject's own artifact on the subject's governed
+    // resource is what the artifact arm reaches. The OTHER's artifact reaches the governed
+    // set only through a context REASSIGNMENT — the kind namespace is frozen at commit
+    // (identity-as-input), so after the reassignment the row carries another principal's
+    // namespace inside a now-governed home: exactly the disposition-iii remainder the arm
+    // must NOT strike and the act's targets must name.
+    seed_identity_surface(&pool, subject).await;
+    let subject_artifact_content = serde_json::json!({"secret": "the plan, in artifact form"});
+    let subject_artifact = seed_artifact(
+        &pool,
+        resource,
+        emitter,
+        Some(KindOwner::Profile(subject)),
+        &subject_artifact_content,
+    )
+    .await;
+    let subject_artifact_hash: String = sqlx::query_scalar(
+        "SELECT content_hash FROM kb_data_artifact_content WHERE artifact_id = $1",
+    )
+    .bind(subject_artifact)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    // The OTHER principal, a TEAM-owned context, their authored resource, their artifact —
+    // the artifact's kind namespace defaults to the context owner (the team), frozen at
+    // commit — then the resource is REHOMED to the subject's personal context, pulling the
+    // team-namespaced artifact inside a governed home. This is the only real path to
+    // "another principal's kind namespace inside a governed home", and exactly the
+    // disposition-iii remainder the arm must NOT strike and the act's targets must name.
+    let (other, _) = insert_profile(&pool).await;
+    let other_emitter: Uuid = sqlx::query_scalar(
+        "SELECT id FROM kb_entities WHERE profile_id = $1 AND name LIKE '%@web'",
+    )
+    .bind(other)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let team: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_teams (slug, name) VALUES ('plans-team', 'Plans Team') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let team_context = ContextId::from(
+        sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
+                 VALUES ('kb_teams', $1, 'plans', 'plans') RETURNING id",
+        )
+        .bind(team)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+    );
+    let (other_resource, _) = seed_resource(
+        &pool,
+        other,
+        other_emitter,
+        team_context,
+        "team plans",
+        "the team plan prose",
+    )
+    .await;
+    let team_artifact_content = serde_json::json!({"team": "someone else's data"});
+    let team_artifact = seed_artifact(
+        &pool,
+        other_resource,
+        other_emitter,
+        None,
+        &team_artifact_content,
+    )
+    .await;
+    {
+        let mut tx = pool.begin().await.unwrap();
+        fire(
+            &mut tx,
+            SeedAction::ResourceRehome {
+                resource: temper_substrate::ids::ResourceId::from(other_resource),
+                home: AnchorRef::context(home),
+                emitter: EntityId::from(emitter),
+            },
+        )
+        .await
+        .expect("the resource rehomed into the subject's governed context");
+        tx.commit().await.unwrap();
+    }
+    let ko: (String, Uuid) = sqlx::query_as(
+        "SELECT kind_owner_table, kind_owner_id FROM kb_data_artifacts WHERE id = $1",
+    )
+    .bind(team_artifact)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        ko,
+        ("kb_teams".to_owned(), team),
+        "the artifact's kind namespace is the TEAM's — the rehome is what pulled it inside \
+         a governed home"
+    );
+
     // A non-operator's attempt FIRST: the recorded refusal (D6) is part of the ledger this test
     // replays, and the roundtrip witness below validates its typed shape against a
     // really-emitted payload, not a fixture.
@@ -332,8 +578,46 @@ async fn replay_of_an_erasure_is_byte_identical_and_a_replayed_re_erase_is_a_no_
         chunk_hash,
         blob,
         blob_hash,
+        subject,
+        subject_artifact,
+        subject_artifact_hash,
+        team_artifact,
+        team_artifact_content,
     };
     assert_redacted_shape(&pool, &world).await;
+
+    // The identity surface, LIVE-ONLY (these tables ride neither the projection dumps nor
+    // the replay inputs — they are identity-layer state, not projection state). The
+    // load-bearing ORDER evidence lives here: the Slack stores are EMPTY and the auth link's
+    // identifiers are unclaimed — had the identifier arm run first, the stores would still
+    // stand (their principal join reads auth_provider_user_id) with the id already gone.
+    let links: Vec<(Option<String>, String)> = sqlx::query_as(
+        "SELECT email, auth_provider_user_id FROM kb_profile_auth_links WHERE profile_id = $1",
+    )
+    .bind(subject)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(!links.is_empty(), "the auth links survive as rows (D5)");
+    assert!(
+        links.iter().all(|(email, sub)| email.is_none()
+            && sub.starts_with("erased-")
+            && sub != SLACK_PRINCIPAL),
+        "auth-link identifiers unclaimed: email NULL, IdP id sentineled, got {links:?}"
+    );
+    let slack_stores: (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM kb_slack_grant_vault WHERE slack_principal_id = $1), \
+                (SELECT count(*) FROM kb_slack_link_intents WHERE slack_principal_id = $1)",
+    )
+    .bind(SLACK_PRINCIPAL)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        slack_stores,
+        (0, 0),
+        "the no-FK Slack stores are gone — their principal join ran BEFORE the identifier arm"
+    );
 
     // ── replay #1 into a clean namespace ──
     let before = replay::dump_projections(&pool).await.unwrap();
@@ -361,8 +645,10 @@ async fn replay_of_an_erasure_is_byte_identical_and_a_replayed_re_erase_is_a_no_
         re_erase
             .targets
             .iter()
-            .all(|t| t.outcome == "already-erased"),
-        "targets ALL report already-erased, got {:?}",
+            .all(|t| t.outcome == "already-erased"
+                || t.outcome.starts_with("independent_obligation")),
+        "targets report already-erased, or the STANDING independent-obligation remainder \
+         (it persists by design and is re-named on every run), got {:?}",
         re_erase.targets
     );
     // First-admit attribution survived the round-trip AND the re-erase: every set row still

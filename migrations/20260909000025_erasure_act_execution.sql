@@ -23,7 +23,16 @@
 --     handle/display_name := 'erased-' || subject_id and the sync_personal_team row scrubbed
 --     to 'personal-' || that sentinel (the trigger's own derivation,
 --     20260624000002:95-98, applied to the sentinel identity); the two no-FK Slack
---     identifier stores deleted via the auth-link principal join; kb_erased_content
+--     identifier stores deleted via the auth-link principal join; the auth-link identifiers
+--     unclaimed AFTER those deletes (email NULLed, auth_provider_user_id sentineled to
+--     'erased-' || the row's own id — the Slack deletes resolve their principals THROUGH
+--     auth_provider_user_id, so the order is load-bearing; the per-row id is what the
+--     (auth_provider, auth_provider_user_id) UNIQUE grain demands of a sentinel); the
+--     subject's entity names sentineled to 'erased-' || each entity's own id (the
+--     (profile_id, name) UNIQUE grain — one shared sentinel cannot hold); the
+--     subject's own data-artifact content emptied on governed resources (kind_owner IS the
+--     subject's profile — another principal's kind namespace is the disposition-iii
+--     remainder, never struck); kb_erased_content
 --     refilled with ON CONFLICT DO NOTHING so FIRST admit keeps attribution — and that
 --     attribution assumes live admission order equals ledger id order: concurrent erasures
 --     sharing a hash can interleave the set-insert. The divergence fails LOUD via the replay
@@ -147,7 +156,64 @@ BEGIN
        AND l.auth_provider = 'slack'
        AND i.slack_principal_id = l.auth_provider_user_id;
 
-    -- (9) The centroid sites MARKED for recompute (D5): the formation watermark nulled on
+    -- (9) The auth-link identifiers (the manifest's identifier | full columns on
+    --     kb_profile_auth_links): the email and the IdP's subject id identify the person
+    --     DIRECTLY — the pseudonym break does not cover them, the same reasoning as the
+    --     Slack stores above. They are unclaimed only HERE, after (8): the Slack-store
+    --     deletes resolve their principals THROUGH auth_provider_user_id, so nulling first
+    --     would leave the external stores standing over a destroyed lookup. email is
+    --     nullable and NULLed; auth_provider_user_id is NOT NULL and sentineled — the D5
+    --     nulled/sentinel'd split. THE SENTINEL IS THE ROW'S OWN ID ('erased-' || id): the
+    --     kb_profiles derivation generalized, and unique by construction under
+    --     kb_profile_auth_links_auth_provider_auth_provider_user_id_key, which two rows of
+    --     one provider sharing a subject-keyed sentinel would violate. Every provider's
+    --     rows, not just Slack's: the manifest declares the columns, not a provider.
+    UPDATE kb_profile_auth_links l
+       SET email                 = NULL,
+           auth_provider_user_id = 'erased-' || l.id::text
+     WHERE l.profile_id = p_subject
+       AND (l.email IS NOT NULL OR l.auth_provider_user_id IS DISTINCT FROM 'erased-' || l.id::text);
+
+    -- (10) The subject's entities' names (manifest identifier | full: an agent-instance
+    --      name may embed the person's name). Sentineled to 'erased-' || the entity's own
+    --      id — the display_name sentinel derivation (the row's kept UUID is the
+    --      pseudonym), and the ONLY per-row spelling that satisfies the
+    --      (profile_id, name) UNIQUE grain: two of the subject's entities cannot share
+    --      one subject-keyed sentinel. The entity UUIDs stay.
+    UPDATE kb_entities en
+       SET name = 'erased-' || en.id::text
+     WHERE en.profile_id = p_subject
+       AND en.name IS DISTINCT FROM 'erased-' || en.id::text;
+
+    -- (11) The subject's own data-artifact content (manifest content | full). Artifacts are
+    --      reached only through what points at them, so the reach is the governed-home join:
+    --      the resource is homed in one of the subject's OWN personal contexts (the same
+    --      owner arm (12) spells) AND the kind is owned by the subject's profile. Emptied,
+    --      never deleted — the artifact id, kb_data_artifacts.content_hash and
+    --      kb_data_artifact_content.content_hash all stay, keeping the metadata/bytes split's
+    --      hash-retention shape (D3). A team-kind or other-profile-kind artifact on the
+    --      subject's governed resource is NOT the subject's data — the disposition-iii
+    --      remainder the act's targets name, never struck here. NOT admitted to
+    --      kb_erased_content: that set is the prose/binary re-admission refusal, and no
+    --      artifact consult site exists — the tombstone is what keeps the subject from
+    --      re-committing.
+    UPDATE kb_data_artifact_content dac
+       SET content = '{}'::jsonb
+      FROM kb_data_artifacts da
+     WHERE dac.artifact_id = da.id
+       AND da.kind_owner_table = 'kb_profiles'
+       AND da.kind_owner_id = p_subject
+       AND da.resource_id IN (
+           SELECT h.resource_id
+             FROM kb_resource_homes h
+            WHERE h.anchor_table = 'kb_contexts'
+              AND h.anchor_id IN (
+                  SELECT c.id FROM kb_contexts c
+                   WHERE c.owner_table = 'kb_profiles'
+                     AND c.owner_id = p_subject))
+       AND dac.content <> '{}'::jsonb;
+
+    -- (12) The centroid sites MARKED for recompute (D5): the formation watermark nulled on
     --     every anchor whose live regions hold redacted members, plus the subject's own
     --     governed contexts (their telos aggregates their goals). See the header bullet.
     UPDATE kb_cogmaps m
@@ -175,10 +241,10 @@ BEGIN
                   AND mem.member_table = 'kb_resources'
                   AND mem.member_id IN (SELECT DISTINCT c.resource_id FROM kb_chunks c
                                          WHERE c.content_hash = ANY(p_hashes)))
-          -- The personal-context predicate again — the schema's own owner arm
-          -- (contexts_readable_by arm 1, 20260712000010:96-97): the subject's own contexts
-          -- only; team arms are a different read and a different governance.
-          OR (c.owner_table = 'kb_profiles' AND c.owner_id = p_subject) );
+           -- The personal-context predicate again — the schema's own owner arm
+           -- (contexts_readable_by arm 1, 20260712000010:96-97): the subject's own contexts
+           -- only; team arms are a different read and a different governance.
+           OR (c.owner_table = 'kb_profiles' AND c.owner_id = p_subject) );
 END;
 $$;
 
@@ -187,7 +253,12 @@ COMMENT ON FUNCTION _erasure_apply_redaction(uuid, text[], uuid) IS
 D5.2 shape): content emptied BY HASH with hashes kept, embeddings+provenance nulled
 together, search vectors emptied, the profile tombstoned to occurred_at, the
 sync_personal_team denormalization scrubbed to the sentinel derivation, the two no-FK
-Slack identifier stores deleted, kb_erased_content first-admit refilled, formation
+Slack identifier stores deleted, the auth-link identifiers unclaimed (email NULL,
+auth_provider_user_id sentineled to ''erased-'' || the row''s own id — after the Slack
+deletes, whose principal join runs through it), the subject''s entity names sentineled
+per-row under the (profile_id, name) UNIQUE grain, the subject''s own data-artifact
+content emptied on governed resources (kind owned by the subject''s profile; hashes and
+ids kept), kb_erased_content first-admit refilled, formation
 watermarks nulled (the centroid recompute MARK — D5). Event-free and idempotent: the
 erasure act calls it inside its transaction and the replay redaction pre-pass (Beat 3)
 must call the SAME function with the payload''s hashes — a second body would be two
@@ -363,6 +434,71 @@ BEGIN
                 'outcome','deleted'));
     END IF;
 
+    -- The auth-link identifiers, the entity names, and the subject's own artifact content —
+    -- outcomes read against the PRE-redaction state exactly like every arm above (the
+    -- mutations live in _erasure_apply_redaction alone; these reads only report what it
+    -- will find). The artifact remainder subset is named with the disposition-iii
+    -- vocabulary the blob arm set: another principal's kind namespace on a governed
+    -- resource is an independent obligation, re-named on every run because it stands.
+    SELECT count(*) INTO v_n FROM kb_profile_auth_links l
+     WHERE l.profile_id = p_subject AND l.email IS NOT NULL;
+    IF v_n > 0 THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_profile_auth_links.email',
+                'outcome','erased'));
+    END IF;
+    SELECT count(*) INTO v_n FROM kb_profile_auth_links l
+     WHERE l.profile_id = p_subject
+       AND l.auth_provider_user_id IS DISTINCT FROM 'erased-' || l.id::text;
+    IF v_n > 0 THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_profile_auth_links.auth_provider_user_id',
+                'outcome','sentinel-scrubbed'));
+    END IF;
+    SELECT count(*) INTO v_n FROM kb_entities en
+     WHERE en.profile_id = p_subject
+       AND en.name IS DISTINCT FROM 'erased-' || en.id::text;
+    IF v_n > 0 THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_entities.name',
+                'outcome','sentinel-scrubbed'));
+    END IF;
+    SELECT count(*) INTO v_n FROM kb_data_artifacts da
+      JOIN kb_data_artifact_content dac ON dac.artifact_id = da.id
+     WHERE da.kind_owner_table = 'kb_profiles'
+       AND da.kind_owner_id = p_subject
+       AND dac.content <> '{}'::jsonb
+       AND da.resource_id IN (
+           SELECT h.resource_id FROM kb_resource_homes h
+            WHERE h.anchor_table = 'kb_contexts'
+              AND h.anchor_id IN (
+                  SELECT c.id FROM kb_contexts c
+                   WHERE c.owner_table = 'kb_profiles'
+                     AND c.owner_id = p_subject));
+    IF v_n > 0 THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_data_artifact_content.content',
+                'outcome','erased'));
+    END IF;
+    SELECT count(*) INTO v_n FROM kb_data_artifacts da
+      JOIN kb_data_artifact_content dac ON dac.artifact_id = da.id
+     WHERE dac.content <> '{}'::jsonb
+       AND (da.kind_owner_table <> 'kb_profiles' OR da.kind_owner_id <> p_subject)
+       AND da.resource_id IN (
+           SELECT h.resource_id FROM kb_resource_homes h
+            WHERE h.anchor_table = 'kb_contexts'
+              AND h.anchor_id IN (
+                  SELECT c.id FROM kb_contexts c
+                   WHERE c.owner_table = 'kb_profiles'
+                     AND c.owner_id = p_subject));
+    IF v_n > 0 THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_data_artifact_content.content (other-kind)',
+                'outcome','independent_obligation: the artifact''s kind is owned by '
+                           || 'another principal; content on a governed resource not '
+                           || 'struck'));
+    END IF;
+
     IF EXISTS (SELECT 1 FROM kb_chunk_content cc JOIN kb_chunks c ON c.id = cc.chunk_id
                 WHERE c.content_hash = ANY(v_hashes)) THEN
         v_targets := v_targets || jsonb_build_array(
@@ -529,5 +665,5 @@ a completion with a named remainder is principal_erasure_execute''s payload data
 SELECT declare_migration(
     20260909000025,
     'additive',
-    'The erasure act''s execution (spec 2026-08-31, Beat 2 of task 01a0577c): principal_erasure_execute (scope via the two indexed halves filtered to governed personal contexts — owner_table=''kb_profiles'' AND owner_id=subject, the read model''s own owner arm; per-row governed-home blob strikes through the substrate''s blob_delete(''blob_erased'', …) wrapper, team/cogmap homes named as the independent_obligation remainder; the ONE NULL-anchored principal_erased event whose references carry the subject + the opaque request reference and whose correlation id pairs it with its strikes; then _erasure_apply_redaction) and principal_erasure_refuse (D6''s negative face — reason code, nothing else mutated). _erasure_apply_redaction is the ONE text-redaction definition (content emptied by hash, hashes kept, embeddings+provenance nulled together, search vectors emptied, profile tombstoned to occurred_at, personal-team denormalization scrubbed to the sentinel derivation, no-FK Slack identifiers deleted, kb_erased_content first-admit refilled, formation watermarks nulled as the centroid recompute MARK) — the replay pre-pass (Beat 3) must call the same function, never a second body. Legality is the Rust caller''s (is_system_admin); SQL commits, it never decides. Additive: new functions only.'
+    'The erasure act''s execution (spec 2026-08-31, Beat 2 of task 01a0577c): principal_erasure_execute (scope via the two indexed halves filtered to governed personal contexts — owner_table=''kb_profiles'' AND owner_id=subject, the read model''s own owner arm; per-row governed-home blob strikes through the substrate''s blob_delete(''blob_erased'', …) wrapper, team/cogmap homes named as the independent_obligation remainder; the ONE NULL-anchored principal_erased event whose references carry the subject + the opaque request reference and whose correlation id pairs it with its strikes; then _erasure_apply_redaction) and principal_erasure_refuse (D6''s negative face — reason code, nothing else mutated). _erasure_apply_redaction is the ONE text-redaction definition (content emptied by hash, hashes kept, embeddings+provenance nulled together, search vectors emptied, profile tombstoned to occurred_at, personal-team denormalization scrubbed to the sentinel derivation, no-FK Slack identifiers deleted, kb_erased_content first-admit refilled, formation watermarks nulled as the centroid recompute MARK, the manifest-declared identifier columns reached — auth-link email NULLed and auth_provider_user_id sentineled to ''erased-'' || the row''s own id (after the Slack deletes whose principal join runs through it), the subject''s entity names sentineled per-row under the (profile_id, name) UNIQUE grain, the subject''s own data-artifact content emptied on governed personal-context resources with hashes and ids kept (another principal''s kind namespace is the disposition-iii remainder, never struck)) — the replay pre-pass (Beat 3) must call the same function, never a second body. Legality is the Rust caller''s (is_system_admin); SQL commits, it never decides. Additive: new functions only.'
 );

@@ -1839,6 +1839,14 @@ const CONSUMES: &[&str] = &[
     // Acknowledged explicitly rather than silently excluded. (Landed with 20260909000025;
     // the enrollment gate caught it at Beat 4's full-suite run.)
     "principal_erasure_execute",
+    // _erasure_apply_redaction — the same ruling as the strike above, in the execution arm: the
+    // scan hit is the SAME body COMMENT ("contexts_readable_by arm 1, 20260712000010") in the
+    // recompute-marking arm, not a call. The one redaction definition consults no substrate
+    // authority — its arms are hash-keyed content empties, the profile tombstone, the external
+    // identifier deletes, and the recompute marks whose context arm restates the governed
+    // personal-contexts predicate inline BY RULING (20260909000025). Acknowledged explicitly
+    // rather than silently excluded, on the principal_erasure_execute precedent.
+    "_erasure_apply_redaction",
 ];
 
 /// Any function whose body consults the visibility substrate must be enrolled. The vocabulary is

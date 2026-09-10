@@ -697,18 +697,22 @@ mod tests {
     }
 
     /// The world: a subject with a governed context and two blobs (so one act yields TWO
-    /// strikes), erased by an operator. Returns `(subject, home, strikes)` with the strikes as
-    /// `(blob, hash, pathname)`.
-    async fn erased_world(pool: &PgPool) -> (Uuid, Uuid, Vec<(Uuid, String, String)>) {
+    /// strikes), erased by an operator. Returns `(subject, home, subject_emitter, strikes)`
+    /// with the strikes as `(blob, hash, pathname)`. The emitter is captured BEFORE the act:
+    /// erasure sentinels the subject's entity names (20260909000025), so a post-erasure
+    /// re-commit must attribute by the captured id — looking the entity up by its
+    /// personal-name pattern afterwards is the lookup the act exists to break.
+    async fn erased_world(pool: &PgPool) -> (Uuid, Uuid, Uuid, Vec<(Uuid, String, String)>) {
         let subject = insert_profile(pool).await;
         let operator = insert_profile(pool).await;
         test_support::grant_governance(pool, operator).await;
         let home = insert_personal_context(pool, subject).await;
+        let subject_emitter = emitter_of(pool, subject).await;
         let fixture_store = InMemoryBlobStore::default();
         let first = seed_blob(pool, &fixture_store, home, subject, b"\x89PNG-first").await;
         let second = seed_blob(pool, &fixture_store, home, subject, b"\x89PNG-second").await;
         erase(pool, operator, subject).await;
-        (subject, home, vec![first, second])
+        (subject, home, subject_emitter, vec![first, second])
     }
 
     /// A FenceStore pre-put with the world's pathnames — the provider as the act left it.
@@ -749,7 +753,7 @@ mod tests {
     /// the tick after the store recovers must delete and record success.
     #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
     async fn a_failing_store_is_retried_and_the_success_is_recorded(pool: sqlx::PgPool) {
-        let (_, _, strikes) = erased_world(&pool).await;
+        let (_, _, _, strikes) = erased_world(&pool).await;
         let store = fence_store_for(&strikes);
         store.failing.store(true, Ordering::SeqCst);
 
@@ -832,7 +836,7 @@ mod tests {
         assert_eq!(quiet.seconds_since_success, None, "absent, not zero");
         assert_eq!(quiet.failure_cause, None);
 
-        let (_, _, strikes) = erased_world(&pool).await;
+        let (_, _, _, strikes) = erased_world(&pool).await;
         let store = fence_store_for(&strikes);
         store.failing.store(true, Ordering::SeqCst);
         drain(&pool, &store).await.expect("tick runs");
@@ -880,7 +884,7 @@ mod tests {
     /// alert, never silent-forever.
     #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
     async fn a_dead_delete_stays_alertable(pool: sqlx::PgPool) {
-        let (_, _, strikes) = erased_world(&pool).await;
+        let (_, _, _, strikes) = erased_world(&pool).await;
         let store = fence_store_for(&strikes);
         store.failing.store(true, Ordering::SeqCst);
 
@@ -917,7 +921,7 @@ mod tests {
     /// sibling is deleted.
     #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
     async fn a_re_occupied_hash_is_not_deleted_and_an_unrestored_one_is(pool: sqlx::PgPool) {
-        let (subject, home, strikes) = erased_world(&pool).await;
+        let (subject, home, subject_emitter, strikes) = erased_world(&pool).await;
         let (restored_blob, restored_hash, restored_path) = &strikes[0];
         let (_, _, untouched_path) = &strikes[1];
 
@@ -938,7 +942,7 @@ mod tests {
                 content_bytes: 16,
                 max_bytes: 10 * 1024 * 1024,
                 allowlist: &["image/png".to_string()],
-                emitter: EntityId::from(emitter_of(&pool, subject).await),
+                emitter: EntityId::from(subject_emitter),
             },
         )
         .await
@@ -986,7 +990,7 @@ mod tests {
     /// per-pathname loop is the shape the ruled verb exists to prevent.
     #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
     async fn the_drain_deletes_through_one_batched_call(pool: sqlx::PgPool) {
-        let (_, _, strikes) = erased_world(&pool).await;
+        let (_, _, _, strikes) = erased_world(&pool).await;
         let store = fence_store_for(&strikes);
 
         let summary = drain(&pool, &store).await.expect("tick runs");
@@ -1006,7 +1010,7 @@ mod tests {
     /// drained fence seeds nothing, claims nothing, and calls the provider not at all.
     #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
     async fn re_deriving_the_ledger_never_re_arms_paid_work(pool: sqlx::PgPool) {
-        let (_, _, strikes) = erased_world(&pool).await;
+        let (_, _, _, strikes) = erased_world(&pool).await;
         let store = fence_store_for(&strikes);
         drain(&pool, &store).await.expect("first tick");
         let batches_after_first = store.delete_batches().len();
@@ -1031,7 +1035,7 @@ mod tests {
     /// store-configured precondition.
     #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
     async fn a_store_less_deployment_still_seeds_and_ages_alertable(pool: sqlx::PgPool) {
-        let (_, _, strikes) = erased_world(&pool).await;
+        let (_, _, _, strikes) = erased_world(&pool).await;
 
         let summary = drain_without_store(&pool)
             .await
@@ -1136,7 +1140,7 @@ mod tests {
     /// the fence into healthy silence — while a lawful sibling verdict still seeds.
     #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
     async fn an_unparseable_blob_verdict_is_counted_and_alertable(pool: sqlx::PgPool) {
-        let (_, _, strikes) = erased_world(&pool).await;
+        let (_, _, _, strikes) = erased_world(&pool).await;
         assert_eq!(
             strikes.len(),
             2,
