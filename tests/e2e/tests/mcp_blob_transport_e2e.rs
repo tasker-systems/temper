@@ -306,7 +306,10 @@ async fn blob_tools_survive_the_real_transport_byte_for_byte(pool: sqlx::PgPool)
     )
     .await;
     let other_id = other["blob_id"].as_str().expect("second blob_id");
-    let related = call_tool(
+    // relate — the narrowing (ruled 2026-09-06) refuses a blob peer at the ONE parse
+    // point every surface shares, and the refusal still round-trips the real transport:
+    // a declined tools/call arrives as the MCP protocol error carrying the vocabulary.
+    let refused = call_tool_err(
         &peer,
         "blob_manage",
         serde_json::json!({
@@ -322,8 +325,8 @@ async fn blob_tools_survive_the_real_transport_byte_for_byte(pool: sqlx::PgPool)
     )
     .await;
     assert!(
-        related["edge_handle"].as_str().is_some(),
-        "relate ack carries the edge handle: {related}"
+        refused.message.contains("blob_relate:") && refused.message.contains("kb_resources"),
+        "the narrowing refusal names the vocabulary and the admitted peer: {refused:?}"
     );
 
     // list — the read-set answers over the wire: both blobs visible. The result is the row

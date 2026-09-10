@@ -2294,7 +2294,7 @@ pub enum BlobAction {
         #[arg(long, value_enum, default_value = "context")]
         home_table: CliHomeTable,
     },
-    /// Relate a blob to another anchor (resource by ref, or cogmap/blob id).
+    /// Relate a blob to a resource (blob-relation peers narrow to resources).
     ///
     /// The edge homes on the blob's home anchor; retraction rides
     /// `temper edge fold <handle>`. Re-asserting the same relation updates its weight
@@ -2302,11 +2302,12 @@ pub enum BlobAction {
     Relate {
         /// The blob's id.
         blob: uuid::Uuid,
-        /// The peer: a resource ref (UUID or `slug-<uuid>` — the common case), or a
-        /// cogmap/blob id with --peer-table.
+        /// The peer: a resource ref (UUID or `slug-<uuid>`).
         #[arg(long)]
         to: String,
-        /// The peer's table when --to is a bare cogmap or blob id.
+        /// The peer's table when --to is a bare id. Only resource peers are accepted —
+        /// a cogmap or blob peer is refused (no delete standing resolves over one, so
+        /// such an edge would pin its row permanently).
         #[arg(long, value_enum, default_value = "resource")]
         peer_table: CliPeerTable,
         /// Which end the blob occupies. blob-as-source is the `figure_of`-shaped act

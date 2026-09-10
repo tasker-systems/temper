@@ -1230,6 +1230,74 @@
           }
         ],
         "x-apidog-folder": "Reference/API Reference/Blobs"
+      },
+      "delete": {
+        "tags": [
+          "Blobs"
+        ],
+        "summary": "Delete one blob — the ordinary delete act's ruled door",
+        "description": "One gate, two arms, inside the strike's own transaction: delete standing (custody) over\nEVERY live relation's resource peer, or — when the blob has no live relations — custody\nof its home (a personal context's owner; a team context's owning-team owner role). The\nstrike empties the row, fires exactly one `blob_deleted`, and folds no edge; when the\nstruck row was the LAST live row carrying its content hash (`released: true`), the\nprovider bytes are deleted post-commit and the byte-delete fence retries-and-alerts on\nany residue. Already-struck and unknown ids both read 404 with no second event. Author\nstanding, role, and admin standing confer nothing here — custody alone deletes.",
+        "operationId": "delete_blob",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Blob ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Struck — the row is emptied and one `blob_deleted` fired; `released` reports whether the provider bytes were this act's to release",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlobDeleteAck"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The blob is readable but the caller holds no delete standing over it (custody refusal, `blob_delete:` vocabulary)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Blob absent, not visible, or already struck — each indistinguishable from absent by design; no second event",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Blobs"
       }
     },
     "/api/blobs/{id}/relations": {
@@ -10299,6 +10367,23 @@
             "description": "The row's STORED media type — allowlist-checked at commit (D9). On a dedup hit this\nis the FIRST committer's type (what read-through serves), never the re-commit's\ndeclaration (N2, 2026-09-03 review)."
           },
           "deduped": {
+            "type": "boolean"
+          }
+        }
+      },
+      "BlobDeleteAck": {
+        "type": "object",
+        "description": "The acknowledgement of `DELETE /api/blobs/{id}` — the strike's own verdict. `released`\nis the same-transaction live-row refcount's answer: `true` means the struck row was the\nlast live row carrying its content hash, so the provider bytes at the content-addressed\npathname are this act's to release (the byte fate is watched by the delete fence's\nretry-plus-age-alerting posture — the same fence the erasure act runs); `false` means\nanother live home still references them and the bytes stay. The pathname is\nprovider-internal and never rides the wire.",
+        "required": [
+          "blob_id",
+          "released"
+        ],
+        "properties": {
+          "blob_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "released": {
             "type": "boolean"
           }
         }

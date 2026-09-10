@@ -389,6 +389,76 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Delete one blob — the ordinary delete act's ruled door
+    # One gate, two arms, inside the strike's own transaction: delete standing (custody) over EVERY live relation's resource peer, or — when the blob has no live relations — custody of its home (a personal context's owner; a team context's owning-team owner role). The strike empties the row, fires exactly one `blob_deleted`, and folds no edge; when the struck row was the LAST live row carrying its content hash (`released: true`), the provider bytes are deleted post-commit and the byte-delete fence retries-and-alerts on any residue. Already-struck and unknown ids both read 404 with no second event. Author standing, role, and admin standing confer nothing here — custody alone deletes.
+    # @param id [String] Blob ID
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [BlobDeleteAck]
+    def delete_blob(id, opts = {})
+      data, _status_code, _headers = delete_blob_with_http_info(id, opts)
+      data
+    end
+
+    # Delete one blob — the ordinary delete act&#39;s ruled door
+    # One gate, two arms, inside the strike&#39;s own transaction: delete standing (custody) over EVERY live relation&#39;s resource peer, or — when the blob has no live relations — custody of its home (a personal context&#39;s owner; a team context&#39;s owning-team owner role). The strike empties the row, fires exactly one &#x60;blob_deleted&#x60;, and folds no edge; when the struck row was the LAST live row carrying its content hash (&#x60;released: true&#x60;), the provider bytes are deleted post-commit and the byte-delete fence retries-and-alerts on any residue. Already-struck and unknown ids both read 404 with no second event. Author standing, role, and admin standing confer nothing here — custody alone deletes.
+    # @param id [String] Blob ID
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(BlobDeleteAck, Integer, Hash)>] BlobDeleteAck data, response status code and response headers
+    def delete_blob_with_http_info(id, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: BlobsApi.delete_blob ...'
+      end
+      # verify the required parameter 'id' is set
+      if @api_client.config.client_side_validation && id.nil?
+        fail ArgumentError, "Missing the required parameter 'id' when calling BlobsApi.delete_blob"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/blobs/{id}'.sub('{id}', CGI.escape(id.to_s))
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body]
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'BlobDeleteAck'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"BlobsApi.delete_blob",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:DELETE, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: BlobsApi#delete_blob\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
     # Finalize a staged upload — assemble, hash, commit
     # Assembles the staged segments in seq order and runs the exact single-request commit path: standing re-run (the gate the put answers to), concurrency tokens checked (409, resumable), optional integrity hash checked (422 — the ingest precedent's face), the readability-gated dedup pre-check, the provider put unless deduped, then the SQL wrapper whose cap/allowlist refusals surface verbatim. Staging dies on success only — every failure keeps it, resumable.
     # @param id [String] Upload session ID

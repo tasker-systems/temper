@@ -839,15 +839,19 @@ pub async fn relate_blob(
     // AnchorRef are built in one place (the `parse_home` rule): the refusal mirrors the
     // substrate's endpoint terms, so the caller hears one voice regardless of which gate
     // declined.
+    //
+    // NARROWED to kb_resources (the delete-act design, ruled 2026-09-06): no delete standing
+    // resolves over a cogmap or blob peer, so a blob-relation to one would pin its row
+    // permanently — the relate door refuses it rather than minting an unstriking edge. The
+    // one parse point narrows every surface at once (API, MCP, CLI ride this function).
     use temper_substrate::payloads::AnchorTable as T;
     let peer_table = match req.peer_table.as_str() {
         "kb_resources" => T::Resources,
-        "kb_cogmaps" => T::Cogmaps,
-        "kb_blobs" => T::Blobs,
         other => {
             return Err(ApiError::BadRequest(format!(
-                "blob_relate: a relation points at a kb_resources, kb_cogmaps or kb_blobs \
-                 anchor — got peer table {other}"
+                "blob_relate: a relation points at a kb_resources anchor — blob-relation \
+                 peers narrow to kb_resources (no delete standing resolves over a {other} \
+                 peer, so such an edge would pin its row permanently)"
             )))
         }
     };
@@ -913,6 +917,239 @@ pub async fn relate_blob(
 
     Ok(WireRelationAck {
         edge_handle: edge.uuid(),
+    })
+}
+
+// ── The delete act's door (ruled 2026-09-06 — specs/2026-09-06-delete-act-design.md) ──
+// DELETE /api/blobs/{id}: one gate, two arms, evaluated in the strike's own transaction —
+// the relation arm (delete standing over EVERY live relation's resource peer, the settled
+// `can()`/`derived_access_profile` arm reused, never a new boundary) and the home arm (the
+// custodian of the blob's home when it has no live relations: a personal context's owner; a
+// team context's owning-team OWNER ROLE — blob-home custody that never confers delete over
+// any resource, and never widens to maintainers). Custody is relation/home-derived ONLY:
+// admin standing is never consulted, and the row's `owner_profile_id` is attribution, never
+// a gate — origin gates nothing. The strike folds no edges; already-struck and unknown ids
+// read the SAME 404 (the currency read floor — `blob_readable_by_profile` — makes struck
+// rows absent), so the door is never a struck-row existence oracle and no second
+// `blob_deleted` ever fires (the wrapper itself refuses an already-struck row).
+//
+// The refusal face speaks the `blob_delete:` vocabulary — the strike substrate's own voice,
+// already assigned (the erasure composition build's) — as a `ForbiddenDetail`: the caller
+// provably READS the blob (the gate read passed), so a 403 that names the refused
+// capability discloses nothing a read did not. There is no ledger refusal event: this act's
+// ruled vocabulary is one type, and refusal records are the wire face + the structured log.
+use temper_core::types::blob::BlobDeleteAck as WireBlobDeleteAck;
+use temper_substrate::blob_store::BlobStore;
+
+/// The one no-custody refusal, spoken at every arm of the gate: relation peers without
+/// delete standing, non-resource peers (no custody resolves over them — a legacy edge pins
+/// its row until its holder folds it), and homes without a custodial resolver (cogmap-homed
+/// rows — the design's named open). One sentence, so the two arms cannot drift apart.
+fn custody_refusal() -> ApiError {
+    ApiError::ForbiddenDetail(
+        "blob_delete: the caller holds no delete standing over this blob — custody over \
+         every live relation's resource peer, or over the blob's home when it has none"
+            .to_string(),
+    )
+}
+
+/// Strike one blob through the ruled door. The gate runs inside the strike's transaction
+/// (`delete_blob_in_tx`), so the relation enumeration, the custody verdict, the emptying,
+/// and the same-transaction refcount are one snapshot; the post-commit provider delete is
+/// the CALLER's act at `StruckBlob.pathname` when `released` — and because the ruled
+/// identity-only payload cannot carry the pathname, the door seeds the byte-delete fence's
+/// queue row INSIDE the same transaction (the (event, pathname) seed is idempotent and the
+/// fence's drain is derivation-agnostic), so a crashed or failing provider delete is
+/// retried with age alerting by the same per-minute drain that watches erasure's strikes.
+pub async fn delete_blob(
+    pool: &PgPool,
+    caller: ProfileId,
+    blob: BlobId,
+    store: &dyn BlobStore,
+    act: temper_core::types::authorship::ActContext,
+    surface: Surface,
+) -> ApiResult<WireBlobDeleteAck> {
+    // The emitter resolves BEFORE the transaction (a write of its own, the relate door's
+    // order) so the strike's transaction carries nothing but gate + strike + seed.
+    let emitter = temper_substrate::writes::resolve_emitter(pool, caller, surface.marker())
+        .await
+        .map_err(|e| ApiError::internal_scrubbed("blob emitter resolve failed", e))?;
+
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| ApiError::internal_scrubbed("blob delete transaction failed", e))?;
+
+    // The gate read IS the existence arm: the currency read floor renders unknown AND
+    // already-struck as the same absent, and the home rides the row (D2 as amended).
+    let row = sqlx::query!(
+        r#"SELECT b.home_table AS "home_table!", b.home_id
+             FROM kb_blobs b
+            WHERE b.id = $1
+              AND blob_readable_by_profile($2, $1)"#,
+        blob.uuid(),
+        caller.uuid(),
+    )
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|e| ApiError::internal_scrubbed("blob delete gate read failed", e))?
+    .ok_or_else(|| ApiError::NotFound("blob not found".to_string()))?;
+
+    // Relation arm: every LIVE relation (no fold filter drift — `NOT is_folded` is the
+    // substrate's own liveness vocabulary) needs delete standing over its RESOURCE peer.
+    // The enumeration is gate work in the strike's transaction — the no-pre-count clause
+    // bounds the byte fate, never the gate.
+    let relations = sqlx::query!(
+        r#"SELECT source_table, source_id, target_table, target_id
+             FROM kb_edges
+            WHERE NOT is_folded
+              AND ((source_table = 'kb_blobs' AND source_id = $1)
+                OR (target_table = 'kb_blobs' AND target_id = $1))"#,
+        blob.uuid(),
+    )
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|e| ApiError::internal_scrubbed("blob delete relation scan failed", e))?;
+
+    for edge in &relations {
+        let resource_peer = if edge.source_table == "kb_blobs" {
+            (edge.target_table.as_str(), edge.target_id)
+        } else {
+            (edge.source_table.as_str(), edge.source_id)
+        };
+        // A non-resource peer has no custodial resolver — fails closed, as ruled (a legacy
+        // edge pins its row until a holder of standing folds it; the relate door now
+        // refuses to mint new ones).
+        if resource_peer.0 != "kb_resources" {
+            return Err(custody_refusal());
+        }
+        // sqlx cannot see through the function's nullability — a NULL standing can only
+        // mean "no", so the unwrap defaults closed.
+        let standing = sqlx::query_scalar!(
+            r#"SELECT can('kb_profiles', $1, 'delete', 'kb_resources', $2)"#,
+            caller.uuid(),
+            resource_peer.1,
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| ApiError::internal_scrubbed("blob delete standing check failed", e))?
+        .unwrap_or(false);
+        if !standing {
+            return Err(custody_refusal());
+        }
+    }
+
+    // Home arm, at zero live relations. A personal context: the context owner. A team
+    // context: DIRECT membership in the owning team with the owner role — maintainers and
+    // members are excluded (the maintainer-widening rejection stands). A cogmap home has no
+    // custodial resolver: the named open, failing closed.
+    if relations.is_empty() {
+        if row.home_table == "kb_contexts" {
+            let home = sqlx::query!(
+                "SELECT owner_table, owner_id FROM kb_contexts WHERE id = $1",
+                row.home_id
+            )
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| ApiError::internal_scrubbed("blob delete home read failed", e))?
+            .ok_or_else(|| ApiError::NotFound("blob not found".to_string()))?;
+            let custodian = match home.owner_table.as_str() {
+                "kb_profiles" => home.owner_id == caller.uuid(),
+                "kb_teams" => sqlx::query_scalar!(
+                    r#"SELECT EXISTS (
+                           SELECT 1 FROM kb_team_members
+                            WHERE team_id = $1 AND profile_id = $2 AND role = 'owner'
+                       )"#,
+                    home.owner_id,
+                    caller.uuid(),
+                )
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|e| ApiError::internal_scrubbed("blob delete home read failed", e))?
+                .unwrap_or(false),
+                _ => false,
+            };
+            if !custodian {
+                return Err(custody_refusal());
+            }
+        } else {
+            // Cogmap-homed (the CHECK admits only these two home tables): fail closed.
+            return Err(custody_refusal());
+        }
+    }
+
+    let struck = temper_substrate::writes::delete_blob_in_tx(
+        &mut tx,
+        blob,
+        emitter,
+        temper_substrate::events::EventContext {
+            authorship: act.authorship,
+            invocation: act.invocation,
+            correlation: act.correlation,
+        },
+    )
+    .await
+    .map_err(|e| {
+        // The wrapper's own voice (`blob_delete: …`) renders ABSENT, never a 500: through
+        // this door its arms are belt-and-suspenders (the gate read and the fire share the
+        // transaction), but a race mapped as an internal error would leak the wrapper's
+        // prose to the wire.
+        if format!("{e:#}").contains("blob_delete:") {
+            ApiError::NotFound("blob not found".to_string())
+        } else {
+            ApiError::internal_scrubbed("blob delete failed", e)
+        }
+    })?;
+
+    // The fence seed, INSIDE the transaction: the identity-only payload cannot carry the
+    // pathname, so the struck row's own state is the seed's source — its hash and its
+    // `last_event_id` (the just-fired `blob_deleted`) with the event's `occurred_at` as
+    // first-due (the fence's clock). `released = false` seeds nothing: the bytes were never
+    // this act's to remove. Committed or rolled back with the strike — there is no
+    // enqueue-after-commit window to strand a release.
+    if struck.released {
+        let seed = sqlx::query!(
+            r#"SELECT b.content_hash, b.last_event_id, e.occurred_at
+                 FROM kb_blobs b JOIN kb_events e ON e.id = b.last_event_id
+                WHERE b.id = $1"#,
+            blob.uuid(),
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| ApiError::internal_scrubbed("blob delete fence seed read failed", e))?;
+        sqlx::query_scalar!(
+            r#"SELECT erasure_delete_seed($1, $2, $3, $4)"#,
+            seed.last_event_id,
+            seed.content_hash,
+            struck.pathname,
+            seed.occurred_at,
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| ApiError::internal_scrubbed("blob delete fence seed failed", e))?;
+    }
+
+    tx.commit()
+        .await
+        .map_err(|e| ApiError::internal_scrubbed("blob delete commit failed", e))?;
+
+    // The ruled caller-side release, POST-commit. Failure is never a door refusal — the act
+    // committed (the row reads absent through every read path); the queue row seeded above
+    // hands the release to the drain's retry ladder and the fence's age alert.
+    if struck.released {
+        if let Err(e) = store.delete(&[struck.pathname.as_str()]).await {
+            tracing::warn!(
+                blob = %blob,
+                error = format!("{e:#}"),
+                "post-commit provider delete failed — the byte-delete fence retries with \
+                 age alerting"
+            );
+        }
+    }
+
+    Ok(WireBlobDeleteAck {
+        blob_id: struck.blob.uuid(),
+        released: struck.released,
     })
 }
 

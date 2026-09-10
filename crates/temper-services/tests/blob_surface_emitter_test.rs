@@ -170,11 +170,18 @@ async fn the_commit_emitter_follows_the_surface_named(pool: PgPool) {
 
 /// The relate surface attributes through the same seam: an MCP relation's assert event
 /// carries the `<handle>@mcp` emitter, with the act context riding alongside. The peer is
-/// a second blob in the same home — kb_blobs is one of the three admissible peer tables
-/// (the `blob_relate:` vocabulary), and this witness is about ATTRIBUTION, not relation
-/// semantics; S4 witnessed those.
+/// a `kb_resources` anchor — the peer table the delete-act design's narrowing (ruled
+/// 2026-09-06) leaves the relate door speaking — and this witness is about ATTRIBUTION,
+/// not relation semantics; S4 witnessed those.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn an_mcp_relation_is_attributed_to_the_mcp_emitter(pool: PgPool) {
+    use temper_substrate::content::IncomingChunk;
+    use temper_substrate::events::EventContext;
+    use temper_substrate::ids::ContextId;
+    use temper_substrate::ids::{EntityId, ProfileId as SubstrateProfileId};
+    use temper_substrate::payloads::AnchorRef;
+    use temper_substrate::writes::{self, CreateParams};
+
     let (profile, ctx, handle) =
         seed_profile_with_context(&pool, "emitter-relate@example.com").await;
     let caller = ProfileId::from(profile);
@@ -197,21 +204,50 @@ async fn an_mcp_relation_is_attributed_to_the_mcp_emitter(pool: PgPool) {
     .await
     .expect("commit through the service");
 
-    let peer = blob_service::commit_blob(
+    // The peer: a resource in the caller's own context, through the real create path
+    // (readable to the caller, so the peer gate passes).
+    let emitter: Uuid = sqlx::query_scalar("SELECT id FROM kb_entities WHERE name = $1")
+        .bind(format!("{handle}@web"))
+        .fetch_one(&pool)
+        .await
+        .expect("seeded web emitter entity");
+    writes::create_resource_with(
         &pool,
-        &store,
-        &cfg,
-        blob_service::BlobCommitCommand {
-            caller,
-            home_table: Some("kb_contexts".to_string()),
-            home_id: Some(ctx.to_string()),
-            content_type: "image/png".to_string(),
-            bytes: bytes::Bytes::from_static(b"relate-peer-bytes"),
-            surface: Surface::Mcp,
+        CreateParams {
+            idempotency_key: None,
+            title: "relate-peer-resource",
+            origin_uri: "test://relate-peer-resource",
+            body: "prose",
+            doc_type: "research",
+            home: AnchorRef::context(ContextId::from(ctx)),
+            owner: SubstrateProfileId::from(profile),
+            originator: SubstrateProfileId::from(profile),
+            emitter: EntityId::from(emitter),
+            properties: &[],
+            chunks: Some(vec![IncomingChunk {
+                chunk_index: 0,
+                content_hash: {
+                    use sha2::Digest as _;
+                    format!("{:x}", sha2::Sha256::digest(b"prose".as_slice()))
+                },
+                content: "prose".to_string(),
+                embedding: vec![0.1; 768],
+                embedded_with: Some("model-sha-1".to_string()),
+                header_path: String::new(),
+                heading_depth: 0,
+            }]),
+            sources: vec![],
         },
+        EventContext::default(),
     )
     .await
-    .expect("commit the peer blob through the service");
+    .expect("seed the peer resource");
+    let peer_resource: Uuid =
+        sqlx::query_scalar("SELECT id FROM kb_resources WHERE origin_uri = $1")
+            .bind("test://relate-peer-resource")
+            .fetch_one(&pool)
+            .await
+            .expect("created peer resource");
 
     let ack = blob_service::relate_blob(
         &pool,
@@ -219,8 +255,8 @@ async fn an_mcp_relation_is_attributed_to_the_mcp_emitter(pool: PgPool) {
         committed.blob_id,
         &BlobRelationAssertRequest {
             direction: temper_core::types::blob::BlobRelationDirection::BlobAsSource,
-            peer_table: "kb_blobs".to_string(),
-            peer_id: peer.blob_id.uuid(),
+            peer_table: "kb_resources".to_string(),
+            peer_id: peer_resource,
             edge_kind: EdgeKind::Express,
             polarity: Polarity::Forward,
             label: "figure_of".to_string(),
