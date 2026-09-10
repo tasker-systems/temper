@@ -45,6 +45,7 @@ This file is the router. Read a supporting file when the work calls for it, not 
 | `implementation-grounding.md` | Writing a plan, or writing code from one — including yourself |
 | `data-artifacts.md` | **Before storing structured data** — when to commit a data artifact vs. writing into a resource body, and the selection vocabulary |
 | `outcome-registers.md` | **Authoring or amending a goal**, or deciding whether a criterion belongs on one |
+| `working-a-goal.md` | **Working a goal** — uptake, resume, advance, record, decompose, close |
 
 > **Read these as principles, not checklists**: a worked example is evidence *for* its principle,
 > never the scope of it.

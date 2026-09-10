@@ -11,7 +11,7 @@ use crate::error::{Result, TemperError};
 use crate::output;
 use crate::templates::{
     CommandWrapperTemplate, DataArtifactsTemplate, OutcomeRegistersTemplate,
-    SessionLifecycleTemplate, SkillTemplate,
+    SessionLifecycleTemplate, SkillTemplate, WorkingAGoalTemplate,
 };
 
 // ── Surfaces ─────────────────────────────────────────────────────────────────
@@ -54,6 +54,10 @@ fn render_outcome_registers(surface: &str) -> Result<String> {
 
 fn render_data_artifacts(surface: &str) -> Result<String> {
     render_md(&DataArtifactsTemplate { surface })
+}
+
+fn render_working_a_goal(surface: &str) -> Result<String> {
+    render_md(&WorkingAGoalTemplate { surface })
 }
 
 // ── Static content (compiled into the binary) ────────────────────────────────
@@ -858,6 +862,10 @@ pub fn generate_agent_skill_files() -> Result<HashMap<String, String>> {
         "data-artifacts.md".to_string(),
         render_data_artifacts(SURFACE_MCP)?,
     );
+    files.insert(
+        "working-a-goal.md".to_string(),
+        render_working_a_goal(SURFACE_MCP)?,
+    );
     files.insert("memories.md".to_string(), MEMORIES_MCP_MD.to_string());
     // Shipped to both surfaces verbatim: these three name no command on either, so they are the
     // same bytes in both trees rather than two renders of one template.
@@ -1263,6 +1271,10 @@ pub fn generate_skill_files_with_hash(
         "session-lifecycle.md".to_string(),
         render_session_lifecycle(SURFACE_CLI)?,
     );
+    files.insert(
+        "working-a-goal.md".to_string(),
+        render_working_a_goal(SURFACE_CLI)?,
+    );
     files.insert("session-wrap.md".to_string(), SESSION_WRAP_MD.to_string());
     files.insert("memories.md".to_string(), MEMORIES_CLI_MD.to_string());
     files.insert(
@@ -1426,6 +1438,7 @@ mod tests {
         assert!(files.contains_key("outcome-registers.md"));
         assert!(files.contains_key("data-artifacts.md"));
         assert!(files.contains_key("session-lifecycle.md"));
+        assert!(files.contains_key("working-a-goal.md"));
         assert!(files.contains_key("memories.md"));
         assert!(files.contains_key("cognitive-maps.md"));
         assert!(files.contains_key("teams.md"));
@@ -1523,6 +1536,7 @@ mod tests {
                 "session-lifecycle.md",
                 "session-wrap.md",
                 "subagent-guidance.md",
+                "working-a-goal.md",
             ],
             "the emitted set moved — the drift gate only ever compares what appears here, so a file \
              dropped from this map silently stops being checked"
@@ -1832,9 +1846,10 @@ mod tests {
         /// One shared template's renderer, paired with the filename it lands as.
         type SurfaceRenderer = (fn(&str) -> Result<String>, &'static str);
 
-        let renderers: [SurfaceRenderer; 2] = [
+        let renderers: [SurfaceRenderer; 3] = [
             (render_session_lifecycle, "session-lifecycle.md"),
             (render_outcome_registers, "outcome-registers.md"),
+            (render_working_a_goal, "working-a-goal.md"),
         ];
         for (render, name) in renderers {
             let cli = render(SURFACE_CLI).unwrap();

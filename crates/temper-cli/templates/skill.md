@@ -29,6 +29,8 @@ principle, never the scope of it.
   loop. Inject verbatim into plan-writing/implementing subagents
 - `outcome-registers.md` — Stating an outcome so its rigor survives decomposition. For
   **authoring or amending a goal**, not to start a task
+- `working-a-goal.md` — The goal arc: uptake, resume, advance, record, decompose, close. For
+  **working a goal**, not authoring one
 - `data-artifacts.md` — **Before storing structured data**: data artifact vs. resource body,
   the selection vocabulary, shape state
 - `session-lifecycle.md` — Session start/end patterns, drift detection, checkpoints
@@ -109,6 +111,7 @@ session ritual performed before the purpose is known is effort spent on the wron
    - `plan-verification.md` / `implementation-grounding.md` — when writing or executing a plan,
      or dispatching subagents
    - `outcome-registers.md` — before authoring or amending a goal
+   - `working-a-goal.md` — when the session picks a goal up, or decides what one needs next
 5. At session end, save via:
    ```bash
    cat <<'EOF' | temper resource create --type session --title "<title>" --context @me/<ctx>
@@ -148,6 +151,7 @@ session ritual performed before the purpose is known is effort spent on the wron
 | `session start [--context @me/<ctx>] [--purpose <text>]` | On Session Start |
 | `session wrap` | Read `session-wrap.md`, then follow *Session End* in `session-lifecycle.md` |
 | Authoring or amending a goal or sub-goal, or deciding whether a criterion belongs on one | Read `outcome-registers.md` |
+| Working a goal — taking one up, resuming under it, advancing, recording, decomposing, or closing it | Read `working-a-goal.md` |
 | Storing structured data (JSON, YAML, measurements, query plans) a later session must retrieve whole | Read `data-artifacts.md` |
 | Anything touching a cognitive map (read/author a map, telos, nodes/edges, regions) | Read `cognitive-maps.md` |
 | Block-level / segmented / attributable writes (per-block provenance/sources, citation-grade docs, `annotate`, `segmented_ingest` lifecycle) | Read `reference.md` → *Block-Grain Ingest & Attribution* |
