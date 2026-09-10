@@ -184,3 +184,77 @@ async fn the_route_denies_existence_for_an_unreadable_home(pool: PgPool) {
         "an unreadable home denies existence (404, never 403) — got {status} {body}"
     );
 }
+
+/// CLAUSE: the route never answers an address with a redirect (D-D3, pinned — the claim was
+/// true but unpinned). All three resolved faces — live, folded, absent — must carry no 3xx
+/// status and no `Location` header: successor-naming rides as gated data inside the response
+/// body, never as a followable location the caller may not be authorized to follow. The
+/// client DISABLES redirect-following — reqwest's default policy follows up to ten hops and
+/// reports the final response, which would keep this test green over exactly the regression
+/// it exists to catch. HEAD rides the same axum handler and the trailing-slash variant would
+/// be where a NormalizePathLayer-style redirect would surface; both are pinned too.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_route_never_answers_an_address_with_a_redirect(pool: PgPool) {
+    let app = common::setup_test_app(pool.clone()).await;
+    let email = format!("block-no-redirect-{}@example.com", Uuid::new_v4());
+    let (profile_id, context_id) =
+        common::fixtures::create_test_profile_with_context(&pool, &email).await;
+    let token = common::generate_test_jwt(&format!("test|{profile_id}"), &email);
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("no-redirect client");
+
+    let resource_id = create_resource(&app, &token, context_id).await;
+    patch_content(&app, &token, &resource_id, BODY_A_B).await;
+    let blocks = live_block_ids(&pool, &resource_id).await;
+    let folded_id = blocks[0];
+    patch_content(&app, &token, &resource_id, &body_a_with_filler()).await;
+    let after = live_block_ids(&pool, &resource_id).await;
+    assert!(
+        !after.contains(&folded_id),
+        "fixture: the alpha incumbent folded"
+    );
+
+    for (face, path) in [
+        (
+            "live",
+            format!("/api/resources/{resource_id}/blocks/{}", after[0]),
+        ),
+        (
+            "folded",
+            format!("/api/resources/{resource_id}/blocks/{folded_id}"),
+        ),
+        (
+            "absent",
+            format!("/api/resources/{resource_id}/blocks/{}", Uuid::new_v4()),
+        ),
+        // The variants a future normalization or method-routing change would answer
+        // somewhere else than this handler:
+        (
+            "head",
+            format!("/api/resources/{resource_id}/blocks/{}", after[0]),
+        ),
+        (
+            "trailing-slash",
+            format!("/api/resources/{resource_id}/blocks/{}/", after[0]),
+        ),
+    ] {
+        let mut request = if face == "head" {
+            client.head(app.url(&path))
+        } else {
+            client.get(app.url(&path))
+        };
+        request = request.header("Authorization", format!("Bearer {token}"));
+        let resp = request.send().await.expect("block request failed");
+        let status = resp.status();
+        assert!(
+            !status.is_redirection(),
+            "the {face} face must never redirect, got {status}"
+        );
+        assert!(
+            resp.headers().get("location").is_none(),
+            "the {face} face must never carry a Location header"
+        );
+    }
+}

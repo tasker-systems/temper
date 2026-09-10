@@ -284,16 +284,16 @@ Options:
 ```text
 Read one content block by address — the three-state resolution
 
-States `live`, `folded`, or `absent` BY NAME in the envelope's `state` field. `live` carries the block's identity, its chunks' identities (structure and hashes, never prose), and its provenance rows. `folded` means a re-partition folded it away; the envelope carries the persisted attribution history plus a `disposition` stating where the content went — `located` names the absorber and carried successor blocks (only those you can read), `content_gone`, or `unrecorded` (the ledger does not carry the mapping). Address a folded successor the same way, by its own block id. `absent` — a block that does not exist or is not visible to you, indistinguishable by design — exits non-zero. Calls GET /resources/{id}/blocks/{block_id}.
+States `live`, `folded`, or `absent` BY NAME in the envelope's `state` field. `live` carries the block's identity, its chunks' identities (structure and hashes, never prose), and its provenance rows. `folded` means a re-partition folded it away; the envelope carries the persisted attribution history plus a `disposition` stating where the content went — `located` names the absorber and carried successor blocks (only those you can read, each with its `home_resource_id`), `content_gone`, or `unrecorded` (the ledger does not carry the mapping). Address a folded successor by its own composed address `<home>#<block-uuid>`. `absent` — a block that does not exist or is not visible to you, indistinguishable by design — exits non-zero. Calls GET /resources/{id}/blocks/{block_id}.
 
-Usage: temper resource read-block [OPTIONS] <REF> <BLOCK_ID>
+Usage: temper resource read-block [OPTIONS] <REF> [BLOCK_ID]
 
 Arguments:
   <REF>
-          Resource ref: a UUID or the decorated `slug-<uuid>` form
+          Resource ref: a UUID, the decorated `slug-<uuid>` form, or the composed block address `<resource>#<block-uuid>`
 
-  <BLOCK_ID>
-          The content block to read (a block UUID)
+  [BLOCK_ID]
+          The content block UUID. Omit when the ref carries the composed form `<resource>#<block-uuid>`
 
 Options:
       --vault <VAULT>

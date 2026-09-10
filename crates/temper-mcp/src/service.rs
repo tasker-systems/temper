@@ -174,7 +174,7 @@ impl TemperMcpService {
     }
 
     #[tool(
-        description = "Read one content block by address — the three-state resolution. `state` is always named: `live` returns the block's identity, its chunks' identities (structure and hashes, never prose), and its provenance rows; `folded` means a re-partition folded it away and returns its persisted attribution history plus `disposition` — where the content went (`located` names the absorber/carried successor blocks, only those you can read), `content_gone`, or `unrecorded` (the ledger does not carry the mapping). A non-existent address answers `state: \"absent\"`; only a block whose HOME RESOURCE you cannot see is a not-found error. Address a folded successor by calling this again with its block_id."
+        description = "Read one content block by address — the three-state resolution. `state` is always named: `live` returns the block's identity, its chunks' identities (structure and hashes, never prose), and its provenance rows; `folded` means a re-partition folded it away and returns its persisted attribution history plus `disposition` — where the content went (`located` names the absorber/carried successor blocks, only those you can read, each with its `home_resource_id`), `content_gone`, or `unrecorded` (the ledger does not carry the mapping). A non-existent address answers `state: \"absent\"`; only a block whose HOME RESOURCE you cannot see is a not-found error. Address a folded successor by passing its `home_resource_id` as `resource` and its `block_id` as `block_id`."
     )]
     async fn get_block(
         &self,
