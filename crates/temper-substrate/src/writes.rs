@@ -405,6 +405,44 @@ pub async fn update_resource_deferred_with(
 /// begin/commit). The body-block lookup runs on `&mut *conn` so it shares the caller's transaction.
 /// `ctx` correlates every sub-event the update fires (`EventContext::default()` for an un-attributed
 /// update); it is cloned per sub-event since an update fans out to several.
+/// The write face's block-addressing refusals, TYPED so the surfaces render the defined
+/// states instead of a 500-class bridge (the defined-dangling-state design): a folded target
+/// maps to `Gone`/410 — the row persists as history — and an absent one to `NotFound`/404.
+/// The discrimination predates the typing (the messages already named folded vs
+/// not-belonging); the typing changes only the error's class and shape, keeping the wording.
+#[derive(Debug)]
+pub enum BlockAddressError {
+    /// The addressed block belongs to the resource but is folded — not addressable for writes.
+    Folded { op: String, block: uuid::Uuid },
+    /// No such block under the addressed resource.
+    NotInResource {
+        op: String,
+        block: uuid::Uuid,
+        resource: ResourceId,
+    },
+}
+
+impl std::fmt::Display for BlockAddressError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Folded { op, block } => write!(
+                f,
+                "{op}: content block {block} is folded (folded blocks are not addressable)"
+            ),
+            Self::NotInResource {
+                op,
+                block,
+                resource,
+            } => write!(
+                f,
+                "{op}: content block {block} does not belong to resource {resource}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for BlockAddressError {}
+
 /// Resolve which content block a body revise / annotate targets: an explicitly-addressed
 /// `content_block` (validated to belong to `resource` and be non-folded), or — when `None` — the
 /// resource's single non-folded body block. Shared by the update (revise) and annotate paths so both
@@ -429,13 +467,15 @@ async fn resolve_target_block(
             .await?;
             match is_folded {
                 Some(false) => Ok(target),
-                Some(true) => anyhow::bail!(
-                    "{op}: content block {target} is folded (folded blocks are not addressable)"
-                ),
-                None => anyhow::bail!(
-                    "{op}: content block {target} does not belong to resource {}",
-                    resource.uuid()
-                ),
+                Some(true) => anyhow::bail!(BlockAddressError::Folded {
+                    op: op.to_owned(),
+                    block: target,
+                }),
+                None => anyhow::bail!(BlockAddressError::NotInResource {
+                    op: op.to_owned(),
+                    block: target,
+                    resource,
+                }),
             }
         }
         // Default: resolve the resource's single non-folded body block (CONFORM scenario runner revise).

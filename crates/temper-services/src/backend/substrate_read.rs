@@ -38,7 +38,7 @@ use temper_core::types::cognitive_maps::{
 };
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{
-    CogmapId, ContextId, DataArtifactId, LensId, ProfileId, ResourceId, ShapeId,
+    BlockId, CogmapId, ContextId, DataArtifactId, LensId, ProfileId, ResourceId, ShapeId,
 };
 use temper_core::types::invocation::{
     Disposition, InvocationActRow, InvocationSummary, InvocationView,
@@ -1543,6 +1543,29 @@ pub async fn cogmap_charter_select(
     .fetch_all(pool)
     .await
     .map_err(api_err)
+}
+
+/// The block-addressed three-state read (the defined-dangling-state design). Service-direct
+/// (reads bypass the Backend trait). The home-resource gate runs first inside the substrate
+/// readback (`ensure_visible` — the canonical `resources_visible_to` predicate, the same one
+/// `resources_readable_by('profile', …)` delegates to): not-visible renders as `Err(NotFound)`,
+/// denying existence, never 403. All three arms return as DATA (MCP renders the envelope
+/// verbatim); the HTTP handler maps `Absent` → 404 and `Folded` → 410 so the route keeps its
+/// status contract.
+pub async fn block_read_select(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    resource_id: uuid::Uuid,
+    block_id: uuid::Uuid,
+) -> ApiResult<temper_core::types::provenance::BlockRead> {
+    readback::block_read(
+        pool,
+        profile_id,
+        ResourceId::from(resource_id),
+        BlockId::from(block_id),
+    )
+    .await
+    .map_err(|e| ApiError::from(map_readback_err(e)))
 }
 
 /// `resource_block_provenance` — the itemized per-block provenance read for one resource. Service-direct

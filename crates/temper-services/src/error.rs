@@ -20,6 +20,12 @@ pub enum ApiError {
     /// *cannot* name the subject even by accident — see the note on that method.
     #[error("{0}")]
     NotFound(String),
+    /// 410 Gone — the addressed thing PERSISTS but is gone for this operation: a folded
+    /// content block under write addressing (the defined-dangling-state design). Distinct
+    /// from [`Self::NotFound`] because the row survives as history; a silent 404 would read
+    /// as "never existed", and the write face joins the read contract's named states.
+    #[error("{0}")]
+    Gone(String),
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
     #[error("Forbidden")]
@@ -163,6 +169,7 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, code) = match &self {
             ApiError::NotFound(_) => (StatusCode::NOT_FOUND, "NOT_FOUND"),
+            ApiError::Gone(_) => (StatusCode::GONE, "GONE"),
             ApiError::Unauthorized(_) => (StatusCode::UNAUTHORIZED, "UNAUTHORIZED"),
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "FORBIDDEN"),
             ApiError::ForbiddenDetail(_) => (
@@ -230,6 +237,9 @@ impl IntoResponse for ApiError {
             }
             ApiError::BadRequest(_) => {
                 tracing::warn!(status_code, error_code = code, message = %bounded(&message), "bad request");
+            }
+            ApiError::Gone(_) => {
+                tracing::debug!(status_code, error_code = code, message = %bounded(&message), "gone (folded address)");
             }
             ApiError::PlanRefused { refusals } => {
                 // The count and the REASONS, never the refusals themselves — a composition is
@@ -339,6 +349,7 @@ impl From<ApiError> for temper_core::error::TemperError {
         use temper_core::error::{CliAccessDetails, TemperError};
         match err {
             ApiError::NotFound(s) => TemperError::NotFound(s),
+            ApiError::Gone(s) => TemperError::Gone(s),
             ApiError::Forbidden => TemperError::Forbidden,
             ApiError::ForbiddenDetail(s) => TemperError::ForbiddenDetail(s),
             ApiError::Unauthorized(s) => TemperError::Unauthorized(s),
@@ -387,6 +398,7 @@ impl From<temper_core::error::TemperError> for ApiError {
         match err {
             // Clean cases that mirror the inbound conversion
             TemperError::NotFound(s) => ApiError::NotFound(s),
+            TemperError::Gone(s) => ApiError::Gone(s),
             TemperError::Forbidden => ApiError::Forbidden,
             TemperError::ForbiddenDetail(s) => ApiError::ForbiddenDetail(s),
             TemperError::Unauthorized(s) => ApiError::Unauthorized(s),

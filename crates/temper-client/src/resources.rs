@@ -1,14 +1,14 @@
 //! Typed sub-client for the `/api/resources` endpoints.
 
-use reqwest::Method;
+use reqwest::{Method, StatusCode};
 use uuid::Uuid;
 
-use crate::error::Result;
+use crate::error::{ClientError, Result};
 use crate::http::HttpClient;
 use temper_core::types::citation_audit::CitationAuditRequest;
 use temper_core::types::cognitive_maps::{GrantOutcome, RevokeOutcome};
 use temper_core::types::lineage::ResourceLineage;
-use temper_core::types::provenance::BlockProvenanceRow;
+use temper_core::types::provenance::{BlockProvenanceRow, BlockRead};
 use temper_core::types::reassign::{ReassignAck, ReassignResourceRequest};
 use temper_core::types::resource_grant::{ResourceGrantBody, ResourceRevokeBody};
 use temper_core::types::resource_view::{ResourceSection, ResourceView};
@@ -192,6 +192,34 @@ impl<'a> ResourceClient<'a> {
         self.http
             .send_json(&Method::GET, &path, req, Some(&token))
             .await
+    }
+
+    /// Read one content block by address — the three-state resolution (D-D1): the
+    /// returned [`BlockRead`] states `live`, `folded`, or `absent` BY NAME.
+    ///
+    /// `GET /api/resources/{id}/blocks/{block_id}`. `200` and `410 Gone` carry the
+    /// same `BlockRead` envelope — the `state` tag distinguishes them — so both
+    /// parse as data (the 410 rides [`HttpClient::send_admitting`], which returns
+    /// the body the plain error mapping would discard). `404` — a block that does
+    /// not exist OR is not visible, indistinguishable by design — synthesizes
+    /// [`BlockRead::Absent`], denying existence. Every other failure (auth,
+    /// transport, 5xx) stays an `Err`, exactly as the sibling reads report.
+    pub async fn read_block(&self, resource_id: Uuid, block_id: Uuid) -> Result<BlockRead> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/resources/{resource_id}/blocks/{block_id}");
+        let req = self.http.get(&path);
+        match self
+            .http
+            .send_admitting(&Method::GET, &path, req, Some(&token), StatusCode::GONE)
+            .await
+        {
+            Ok(resp) => {
+                let bytes = resp.bytes().await?;
+                Ok(serde_json::from_slice(&bytes)?)
+            }
+            Err(ClientError::NotFound { .. }) => Ok(BlockRead::Absent { block_id }),
+            Err(e) => Err(e),
+        }
     }
 
     /// Read a resource's evidential-standing shape (the shape vector + lossy band chip),

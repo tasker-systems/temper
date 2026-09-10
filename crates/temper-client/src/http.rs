@@ -306,7 +306,28 @@ impl HttpClient {
         req: RequestBuilder,
         token: Option<&str>,
     ) -> Result<Response> {
-        self.send_inner(method, path, req, token, false).await
+        self.send_inner(method, path, req, token, false, None).await
+    }
+
+    /// Send a request like [`Self::send`], but return the raw [`Response`] when the
+    /// server answers with `admitted` instead of mapping that status to an error.
+    ///
+    /// Exists because some reads carry DATA on a non-success status: the three-state
+    /// block read answers `410 Gone` with a parseable `BlockRead::Folded` body, which
+    /// `send`'s status mapping would discard. Everything else keeps `send`'s contract
+    /// exactly — retries on transient failures, other non-success statuses mapped to
+    /// [`ClientError`] at the same log levels — so a caller that admits one status has
+    /// not weakened any error handling.
+    pub async fn send_admitting(
+        &self,
+        method: &reqwest::Method,
+        path: &str,
+        req: RequestBuilder,
+        token: Option<&str>,
+        admitted: StatusCode,
+    ) -> Result<Response> {
+        self.send_inner(method, path, req, token, false, Some(admitted))
+            .await
     }
 
     /// Send a keyed, idempotent write, retrying transient failures as if it were
@@ -324,12 +345,14 @@ impl HttpClient {
         req: RequestBuilder,
         token: Option<&str>,
     ) -> Result<Response> {
-        self.send_inner(method, path, req, token, true).await
+        self.send_inner(method, path, req, token, true, None).await
     }
 
     /// Core send + retry loop shared by [`HttpClient::send`] (safe-method retry
     /// only) and [`HttpClient::send_idempotent`] (keyed-write retry). `idempotent`
-    /// is the only difference: it lifts the retry ban for the write.
+    /// is the only difference: it lifts the retry ban for the write. `admitted`
+    /// admits one non-success status as a raw response instead of an error —
+    /// see [`HttpClient::send_admitting`].
     async fn send_inner(
         &self,
         method: &reqwest::Method,
@@ -337,6 +360,7 @@ impl HttpClient {
         req: RequestBuilder,
         token: Option<&str>,
         idempotent: bool,
+        admitted: Option<StatusCode>,
     ) -> Result<Response> {
         // `base_url` emptiness and scheme are refused at construction — see
         // `HttpClient::new`. Nothing about the URL is re-checked per request.
@@ -404,9 +428,9 @@ impl HttpClient {
                 // (streaming) body can't be replayed — send it directly; such
                 // bodies only occur on non-safe methods, which never retry.
                 let Some(this_attempt) = req.try_clone() else {
-                    return send_once(req).await;
+                    return send_once(req, admitted).await;
                 };
-                match send_once(this_attempt).await {
+                match send_once(this_attempt, admitted).await {
                     Ok(resp) => return Ok(resp),
                     Err(err) => {
                         if attempt < MAX_ATTEMPTS && should_retry(method, &err, idempotent) {
@@ -465,7 +489,7 @@ impl HttpClient {
 /// Records status/latency on the current tracing span and returns the mapped
 /// [`ClientError`] for any non-success status. The retry loop in
 /// [`HttpClient::send`] calls this once per attempt.
-async fn send_once(req: RequestBuilder) -> Result<Response> {
+async fn send_once(req: RequestBuilder, admitted: Option<StatusCode>) -> Result<Response> {
     let start = Instant::now();
     let resp = req.send().await?;
     let status = resp.status();
@@ -475,6 +499,12 @@ async fn send_once(req: RequestBuilder) -> Result<Response> {
     tracing::Span::current().record("latency_ms", latency_ms);
 
     if status.is_success() {
+        return Ok(resp);
+    }
+
+    // An admitted status is DATA, not an error (see [`HttpClient::send_admitting`]) —
+    // returned before the body is consumed, so the caller can parse it.
+    if Some(status) == admitted {
         return Ok(resp);
     }
 
@@ -562,6 +592,10 @@ pub fn map_status_to_error(status: StatusCode, body: &str) -> ClientError {
             let message =
                 parse_error_field(body, "message").unwrap_or_else(|| "not found".to_owned());
             ClientError::NotFound { message }
+        }
+        410 => {
+            let message = parse_error_field(body, "message").unwrap_or_else(|| "gone".to_owned());
+            ClientError::Gone { message }
         }
         409 => {
             let message =

@@ -6725,6 +6725,101 @@
         "x-apidog-folder": "Reference/API Reference/Ingest"
       }
     },
+    "/api/resources/{id}/blocks/{block_id}": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Resources"
+        ],
+        "summary": "Read one content block by address (the three-state resolution)",
+        "description": "The defined-dangling-state design: `200` the block is live (identity, chunk identities,\nprovenance), `410 Gone` the block is folded (the envelope carries its attribution history\nand its gated successor dispositions), `404` absent. No redirect — successor names ride as\ndata inside the gated envelope, never as a Location the caller may not be authorized to\nfollow.",
+        "operationId": "read_block",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Resource ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "block_id",
+            "in": "path",
+            "description": "Content block ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The block resolves and is live",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such block (or not visible — indistinguishable, denying existence)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The block is folded: state envelope with disposition and successors",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockRead"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Resources"
+      }
+    },
     "/api/resources/{id}/citation-audits": {
       "parameters": [
         {
@@ -10491,6 +10586,92 @@
           }
         }
       },
+      "BlockChunkRef": {
+        "type": "object",
+        "description": "One chunk's IDENTITY within a live block — structure and hash, never prose (the CAS rule:\ncontent rides the body/content reads). The born block read's chunk listing.",
+        "required": [
+          "chunk_id",
+          "chunk_index",
+          "content_hash"
+        ],
+        "properties": {
+          "chunk_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "chunk_index": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "content_hash": {
+            "type": "string"
+          }
+        }
+      },
+      "BlockFoldDisposition": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Content locatable: `absorbers` are the surviving blocks whose section holds the\nincumbent's full chunk-hash multiset (kept AND created — on whole-body rewrites a\nfreshly minted section is the common absorber); `carried` are the blocks holding a\nstrict subset. Empty absorbers with content in carries is legitimate (a split with no\nwhole home); both empty is `content_gone`, never an empty located.",
+            "required": [
+              "absorbers",
+              "carried",
+              "disposition"
+            ],
+            "properties": {
+              "absorbers": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/BlockSuccessor"
+                }
+              },
+              "carried": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/BlockSuccessor"
+                }
+              },
+              "disposition": {
+                "type": "string",
+                "enum": [
+                  "located"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Nothing locatable: the incumbent had no current chunks, or its chunk hashes appear in\nno section of the new partition. No successor is named.",
+            "required": [
+              "disposition"
+            ],
+            "properties": {
+              "disposition": {
+                "type": "string",
+                "enum": [
+                  "content_gone"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The ledger does not carry the mapping for this fold — a defined, distinguishable\ndisposition, never a guessed one.",
+            "required": [
+              "disposition"
+            ],
+            "properties": {
+              "disposition": {
+                "type": "string",
+                "enum": [
+                  "unrecorded"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Where a folded block's content went, as the read surface states it (the defined-dangling-state\ndesign, D-D2). `located`/`content_gone` carry the fold event's disposition map; `unrecorded`\nis the defined arm for folds the ledger does not map — `charter_set`, historical\n`block_mutated` replaces-body folds, and any event predating the map. It states \"the ledger\ndoes not carry where this content went\", which is honest and never reads as a live citation —\na different true statement from \"gone\", never an approximation of it."
+      },
       "BlockId": {
         "type": "string",
         "format": "uuid",
@@ -10552,6 +10733,132 @@
               "null"
             ],
             "description": "For a `\"remote\"` source, the external URL as supplied; `None` for resource/event sources."
+          }
+        }
+      },
+      "BlockRead": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "The block resolves and is live: identity, its chunks' identity, its provenance rows —\na born assembly no earlier read returned.",
+            "required": [
+              "block_id",
+              "seq",
+              "chunks",
+              "provenance",
+              "state"
+            ],
+            "properties": {
+              "block_body_hash": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The derived block merkle (kept-identity currency), `None` for derived-era rows."
+              },
+              "block_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "chunks": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/BlockChunkRef"
+                },
+                "description": "The block's current chunks, in chunk order — identity, never prose."
+              },
+              "provenance": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/BlockProvenanceRow"
+                },
+                "description": "The block's provenance rows, the same shape and posture as the resource-grain\nprovenance read."
+              },
+              "seq": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Position within the resource's live partition."
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "live"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The row persists, folded away by a re-partition: the already-persisted attribution\nhistory stays on the folded row (never reconstructed), and the disposition states where\nthe content went — or that it is gone, or that the ledger does not record it. Successor\nrelationships resolve from the fold event via the folded row's `last_event_id` (read-path\nonly, O(1) per hop; no successor pointer is born on block rows — the ledger stays the\nauthority). A named successor that is itself folded resolves by addressing it: each hop\nis one O(1) `last_event_id` walk, no ledger scan.",
+            "required": [
+              "block_id",
+              "folded_by_event_id",
+              "disposition",
+              "attribution_history",
+              "state"
+            ],
+            "properties": {
+              "attribution_history": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/BlockProvenanceRow"
+                },
+                "description": "The folded block's attribution history, gated by the home resource's read."
+              },
+              "block_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "disposition": {
+                "$ref": "#/components/schemas/BlockFoldDisposition"
+              },
+              "folded_by_event_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "The fold event the resolution walked — the folded row's own `last_event_id`\n(NOT NULL; every fold face stamps it)."
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "folded"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "No such row under this resource. Never serialized on HTTP — `absent` renders as the\nordinary 404 face; the arm exists so every surface names the state instead of an\nundifferentiated error.",
+            "required": [
+              "block_id",
+              "state"
+            ],
+            "properties": {
+              "block_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "absent"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "The three-state resolution of a block-addressed read (D-D1): every read surface states\n`live`, `folded`, or `absent` BY NAME. On HTTP these map 200 / 410 Gone / 404 Not Found —\nno redirect (D-D3): a Location would hand the caller a successor they may not be authorized\nto follow, so successor-naming rides as data inside the gated envelope instead."
+      },
+      "BlockSuccessor": {
+        "type": "object",
+        "description": "One named successor of a folded block's content. The disposition map's absorbers/carried\nblock ids, each surfaced only when the caller passes that successor's own canonical read\npredicate — invisible successors are omitted ENTIRELY (no id, no count: aggregate existence\nis still an existence leak).",
+        "required": [
+          "block_id"
+        ],
+        "properties": {
+          "block_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The surviving block (kept or created) holding the folded incumbent's content."
           }
         }
       },

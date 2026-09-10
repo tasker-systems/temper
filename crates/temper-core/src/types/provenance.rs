@@ -48,6 +48,7 @@ pub enum ProvenanceSource {
 /// tool, the CLI `--provenance` view, and the HTTP provenance endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct BlockProvenanceRow {
     /// The content block this source contributed to.
     pub block_id: Uuid,
@@ -72,6 +73,113 @@ pub struct BlockProvenanceRow {
     /// is exactly what they were.
     #[serde(default)]
     pub is_carried: bool,
+}
+
+/// One chunk's IDENTITY within a live block — structure and hash, never prose (the CAS rule:
+/// content rides the body/content reads). The born block read's chunk listing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct BlockChunkRef {
+    pub chunk_id: Uuid,
+    pub chunk_index: i32,
+    pub content_hash: String,
+}
+
+/// One named successor of a folded block's content. The disposition map's absorbers/carried
+/// block ids, each surfaced only when the caller passes that successor's own canonical read
+/// predicate — invisible successors are omitted ENTIRELY (no id, no count: aggregate existence
+/// is still an existence leak).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(
+    any(feature = "mcp", feature = "scenario-schema"),
+    derive(schemars::JsonSchema)
+)]
+#[cfg_attr(feature = "mcp", schemars(inline))]
+pub struct BlockSuccessor {
+    /// The surviving block (kept or created) holding the folded incumbent's content.
+    pub block_id: Uuid,
+}
+
+/// Where a folded block's content went, as the read surface states it (the defined-dangling-state
+/// design, D-D2). `located`/`content_gone` carry the fold event's disposition map; `unrecorded`
+/// is the defined arm for folds the ledger does not map — `charter_set`, historical
+/// `block_mutated` replaces-body folds, and any event predating the map. It states "the ledger
+/// does not carry where this content went", which is honest and never reads as a live citation —
+/// a different true statement from "gone", never an approximation of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(
+    any(feature = "mcp", feature = "scenario-schema"),
+    derive(schemars::JsonSchema)
+)]
+#[cfg_attr(feature = "mcp", schemars(inline))]
+#[serde(tag = "disposition", rename_all = "snake_case")]
+pub enum BlockFoldDisposition {
+    /// Content locatable: `absorbers` are the surviving blocks whose section holds the
+    /// incumbent's full chunk-hash multiset (kept AND created — on whole-body rewrites a
+    /// freshly minted section is the common absorber); `carried` are the blocks holding a
+    /// strict subset. Empty absorbers with content in carries is legitimate (a split with no
+    /// whole home); both empty is `content_gone`, never an empty located.
+    Located {
+        absorbers: Vec<BlockSuccessor>,
+        carried: Vec<BlockSuccessor>,
+    },
+    /// Nothing locatable: the incumbent had no current chunks, or its chunk hashes appear in
+    /// no section of the new partition. No successor is named.
+    ContentGone,
+    /// The ledger does not carry the mapping for this fold — a defined, distinguishable
+    /// disposition, never a guessed one.
+    Unrecorded,
+}
+
+/// The three-state resolution of a block-addressed read (D-D1): every read surface states
+/// `live`, `folded`, or `absent` BY NAME. On HTTP these map 200 / 410 Gone / 404 Not Found —
+/// no redirect (D-D3): a Location would hand the caller a successor they may not be authorized
+/// to follow, so successor-naming rides as data inside the gated envelope instead.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "block_read.ts"))]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum BlockRead {
+    /// The block resolves and is live: identity, its chunks' identity, its provenance rows —
+    /// a born assembly no earlier read returned.
+    Live {
+        block_id: Uuid,
+        /// Position within the resource's live partition.
+        seq: i32,
+        /// The derived block merkle (kept-identity currency), `None` for derived-era rows.
+        block_body_hash: Option<String>,
+        /// The block's current chunks, in chunk order — identity, never prose.
+        chunks: Vec<BlockChunkRef>,
+        /// The block's provenance rows, the same shape and posture as the resource-grain
+        /// provenance read.
+        provenance: Vec<BlockProvenanceRow>,
+    },
+    /// The row persists, folded away by a re-partition: the already-persisted attribution
+    /// history stays on the folded row (never reconstructed), and the disposition states where
+    /// the content went — or that it is gone, or that the ledger does not record it. Successor
+    /// relationships resolve from the fold event via the folded row's `last_event_id` (read-path
+    /// only, O(1) per hop; no successor pointer is born on block rows — the ledger stays the
+    /// authority). A named successor that is itself folded resolves by addressing it: each hop
+    /// is one O(1) `last_event_id` walk, no ledger scan.
+    Folded {
+        block_id: Uuid,
+        /// The fold event the resolution walked — the folded row's own `last_event_id`
+        /// (NOT NULL; every fold face stamps it).
+        folded_by_event_id: Uuid,
+        disposition: BlockFoldDisposition,
+        /// The folded block's attribution history, gated by the home resource's read.
+        attribution_history: Vec<BlockProvenanceRow>,
+    },
+    /// No such row under this resource. Never serialized on HTTP — `absent` renders as the
+    /// ordinary 404 face; the arm exists so every surface names the state instead of an
+    /// undifferentiated error.
+    Absent { block_id: Uuid },
 }
 
 #[cfg(test)]

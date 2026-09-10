@@ -276,3 +276,14 @@ UPDATE kb_event_types SET payload_schema = $JS${
 }
 $JS$::jsonb
 WHERE name = 'resource_reblocked';
+
+SELECT declare_migration(
+    20260909000010,
+    'additive',
+    'the per-folded-id disposition map on resource_reblocked: the payload gains dispositions '
+    '(serde(default), absent key = pre-map event, replayed byte-identically), so the ledger '
+    'carries where each folded incumbent''s content went — absorbers (full chunk-hash multiset, '
+    'kept AND created), carried copies, or the named content-gone arm. No projector change '
+    '(the map is read-path only); registry re-stamped from the regenerated fixture, additive '
+    'posture, schema_version stays 1.'
+);

@@ -146,6 +146,16 @@ pub struct GetBlockProvenanceInput {
     pub resource: Uuid,
 }
 
+/// MCP input for get_block — the three-state block read.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetBlockInput {
+    /// The resource the block belongs to (UUID).
+    pub resource: Uuid,
+    /// The content block to read (a block UUID). May address a folded block or a
+    /// named successor.
+    pub block_id: Uuid,
+}
+
 /// MCP input for resource_lineage (Ledger L2).
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ResourceLineageInput {
@@ -815,6 +825,36 @@ pub async fn get_block_provenance(
     )]))
 }
 
+/// Read one content block by address — the three-state resolution (D-D1). Service-direct
+/// read (reads bypass the Backend trait); the access gate lives in the substrate readback,
+/// and an absent OR not-visible block arrives as `ApiError::NotFound`, denying existence.
+/// All three states render as data with `state` named — MCP has no status codes, so the
+/// state tag (`live` / `folded`) is what a caller branches on, and a folded successor is
+/// addressed by calling this again with its own block id.
+pub async fn get_block(
+    svc: &TemperMcpService,
+    input: GetBlockInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let profile = svc.require_profile().await?;
+    let pool = &svc.api_state.pool;
+
+    let read = substrate_read::block_read_select(
+        pool,
+        ProfileId::from(profile.id),
+        input.resource,
+        input.block_id,
+    )
+    .await
+    .map_err(|e| match e {
+        ApiError::NotFound(msg) => rmcp::ErrorData::invalid_params(msg, None),
+        other => rmcp::ErrorData::internal_error(format!("block read failed: {other}"), None),
+    })?;
+
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        to_text(&read),
+    )]))
+}
+
 /// Ledger L2 — a resource's bidirectional `derived_from` lineage: what it derives
 /// from (ancestors) and what derives from it (descendants), access-gated.
 /// Service-direct read; the walk + gate live in the `resource_lineage` SQL
@@ -1040,6 +1080,9 @@ pub async fn update_resource(
         TemperError::NotFound(msg) => {
             rmcp::ErrorData::invalid_params(format!("Resource not found: {msg}"), None)
         }
+        // A folded content block under write addressing: the defined gone state, not a
+        // server fault — the row persists as history, the address is not writable.
+        TemperError::Gone(msg) => rmcp::ErrorData::invalid_params(msg, None),
         TemperError::BadRequest(msg) => rmcp::ErrorData::invalid_params(msg, None),
         other => {
             rmcp::ErrorData::internal_error(format!("Failed to update resource: {other}"), None)
@@ -1094,6 +1137,9 @@ pub async fn annotate_resource(
         TemperError::NotFound(msg) => {
             rmcp::ErrorData::invalid_params(format!("Resource not found: {msg}"), None)
         }
+        // A folded content block under write addressing: the defined gone state, not a
+        // server fault — the row persists as history, the address is not writable.
+        TemperError::Gone(msg) => rmcp::ErrorData::invalid_params(msg, None),
         TemperError::BadRequest(msg) => rmcp::ErrorData::invalid_params(msg, None),
         other => {
             rmcp::ErrorData::internal_error(format!("Failed to annotate resource: {other}"), None)

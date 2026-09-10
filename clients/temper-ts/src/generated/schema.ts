@@ -1642,6 +1642,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/resources/{id}/blocks/{block_id}": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one content block by address (the three-state resolution)
+         * @description The defined-dangling-state design: `200` the block is live (identity, chunk identities,
+         *     provenance), `410 Gone` the block is folded (the envelope carries its attribution history
+         *     and its gated successor dispositions), `404` absent. No redirect — successor names ride as
+         *     data inside the gated envelope, never as a Location the caller may not be authorized to
+         *     follow.
+         */
+        get: operations["read_block"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/resources/{id}/citation-audits": {
         parameters: {
             query?: never;
@@ -3041,6 +3068,37 @@ export interface components {
             seq: number;
         };
         /**
+         * @description One chunk's IDENTITY within a live block — structure and hash, never prose (the CAS rule:
+         *     content rides the body/content reads). The born block read's chunk listing.
+         */
+        BlockChunkRef: {
+            /** Format: uuid */
+            chunk_id: string;
+            /** Format: int32 */
+            chunk_index: number;
+            content_hash: string;
+        };
+        /**
+         * @description Where a folded block's content went, as the read surface states it (the defined-dangling-state
+         *     design, D-D2). `located`/`content_gone` carry the fold event's disposition map; `unrecorded`
+         *     is the defined arm for folds the ledger does not map — `charter_set`, historical
+         *     `block_mutated` replaces-body folds, and any event predating the map. It states "the ledger
+         *     does not carry where this content went", which is honest and never reads as a live citation —
+         *     a different true statement from "gone", never an approximation of it.
+         */
+        BlockFoldDisposition: {
+            absorbers: components["schemas"]["BlockSuccessor"][];
+            carried: components["schemas"]["BlockSuccessor"][];
+            /** @enum {string} */
+            disposition: "located";
+        } | {
+            /** @enum {string} */
+            disposition: "content_gone";
+        } | {
+            /** @enum {string} */
+            disposition: "unrecorded";
+        };
+        /**
          * Format: uuid
          * @description A `kb_content_blocks.id` value — a resource's addressable interior unit.
          */
@@ -3094,6 +3152,64 @@ export interface components {
             source_kind: string;
             /** @description For a `"remote"` source, the external URL as supplied; `None` for resource/event sources. */
             source_uri?: string | null;
+        };
+        /**
+         * @description The three-state resolution of a block-addressed read (D-D1): every read surface states
+         *     `live`, `folded`, or `absent` BY NAME. On HTTP these map 200 / 410 Gone / 404 Not Found —
+         *     no redirect (D-D3): a Location would hand the caller a successor they may not be authorized
+         *     to follow, so successor-naming rides as data inside the gated envelope instead.
+         */
+        BlockRead: {
+            /** @description The derived block merkle (kept-identity currency), `None` for derived-era rows. */
+            block_body_hash?: string | null;
+            /** Format: uuid */
+            block_id: string;
+            /** @description The block's current chunks, in chunk order — identity, never prose. */
+            chunks: components["schemas"]["BlockChunkRef"][];
+            /**
+             * @description The block's provenance rows, the same shape and posture as the resource-grain
+             *     provenance read.
+             */
+            provenance: components["schemas"]["BlockProvenanceRow"][];
+            /**
+             * Format: int32
+             * @description Position within the resource's live partition.
+             */
+            seq: number;
+            /** @enum {string} */
+            state: "live";
+        } | {
+            /** @description The folded block's attribution history, gated by the home resource's read. */
+            attribution_history: components["schemas"]["BlockProvenanceRow"][];
+            /** Format: uuid */
+            block_id: string;
+            disposition: components["schemas"]["BlockFoldDisposition"];
+            /**
+             * Format: uuid
+             * @description The fold event the resolution walked — the folded row's own `last_event_id`
+             *     (NOT NULL; every fold face stamps it).
+             */
+            folded_by_event_id: string;
+            /** @enum {string} */
+            state: "folded";
+        } | {
+            /** Format: uuid */
+            block_id: string;
+            /** @enum {string} */
+            state: "absent";
+        };
+        /**
+         * @description One named successor of a folded block's content. The disposition map's absorbers/carried
+         *     block ids, each surfaced only when the caller passes that successor's own canonical read
+         *     predicate — invisible successors are omitted ENTIRELY (no id, no count: aggregate existence
+         *     is still an existence leak).
+         */
+        BlockSuccessor: {
+            /**
+             * Format: uuid
+             * @description The surviving block (kept or created) holding the folded incumbent's content.
+             */
+            block_id: string;
         };
         /** @description Response to append / `GET /api/resources/{id}/blocks`: the currently landed segment set. */
         BlocksResponse: {
@@ -12075,6 +12191,61 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    read_block: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Resource ID */
+                id: string;
+                /** @description Content block ID */
+                block_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The block resolves and is live */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlockRead"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such block (or not visible — indistinguishable, denying existence) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The block is folded: state envelope with disposition and successors */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlockRead"];
+                };
             };
         };
     };

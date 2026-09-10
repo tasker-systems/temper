@@ -43,6 +43,7 @@ pub fn client_err_to_temper(e: ClientError) -> TemperError {
     match e {
         ClientError::SystemAccessRequired(details) => TemperError::SystemAccessRequired(details),
         e if e.is_network() => TemperError::Network(e.to_string()),
+        ClientError::Gone { message } => TemperError::Gone(message),
         e => TemperError::Api(e.to_string()),
     }
 }

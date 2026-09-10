@@ -1772,6 +1772,47 @@ pub fn evidence(_config: &Config, r#ref: &str, format: crate::format::OutputForm
     Ok(())
 }
 
+/// Read one content block by address — the three-state resolution (D-D1).
+///
+/// Cloud-only and context-free: the resource ref resolves trailing-UUID-only via
+/// `parse_ref` (exactly as `show` does), the block is fetched from
+/// `GET /api/resources/{id}/blocks/{block_id}`, and the `BlockRead` envelope renders
+/// through the shared `format`/`output` helpers with its `state` named — `live` or
+/// `folded` as data. The `absent` arm (a block that does not exist OR is not visible,
+/// indistinguishable by design) is a not-found error, the same face `show` gives a
+/// missing resource.
+pub fn read_block(
+    _config: &Config,
+    resource_ref: &str,
+    block_id: uuid::Uuid,
+    format: crate::format::OutputFormat,
+) -> Result<()> {
+    use crate::actions::runtime;
+
+    let id = temper_workflow::operations::parse_ref(resource_ref)?;
+
+    let read = runtime::with_client(|client| {
+        Box::pin(async move {
+            client
+                .resources()
+                .read_block(uuid::Uuid::from(id), block_id)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)
+        })
+    })?;
+
+    match read {
+        temper_core::types::provenance::BlockRead::Absent { block_id } => Err(
+            TemperError::NotFound(format!("block {block_id} not found or not visible")),
+        ),
+        read => {
+            let rendered = crate::format::render(&read, format)?;
+            crate::output::plain(rendered);
+            Ok(())
+        }
+    }
+}
+
 fn map_projection_error(err: temper_core::projection::ProjectionError) -> TemperError {
     use temper_core::projection::ProjectionError;
     match err {

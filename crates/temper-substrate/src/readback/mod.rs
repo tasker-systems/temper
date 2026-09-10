@@ -740,6 +740,234 @@ pub async fn body(
     Ok(crate::content::reconstruct_body(&chunks))
 }
 
+// ── the block-addressed resolution (the defined-dangling-state design, D-D1..D-D4) ──────────
+
+/// Resolve ONE block address against its home resource — the read contract every surface
+/// shares: `live` (200) / `folded` (410, the envelope) / `absent` (404). The caller passes the
+/// home resource's full canonical read predicate first (`ensure_visible`; the same predicate
+/// `resources_readable_by('profile', …)` delegates to) — an address is not a visibility grant,
+/// and both not-visible and no-such-row render as `absent`/404: denying existence, never 403.
+///
+/// The folded arm walks the folded row's own `last_event_id` (every fold face sets it —
+/// O(1), no `kb_events` scan) and reads the event's disposition map. A fold the ledger does
+/// not map — `charter_set`, historical `block_mutated` replaces-body folds, pre-map events,
+/// a NULL pointer — resolves to the defined `unrecorded` arm, never a guess. Successors are
+/// gated PER SUCCESSOR: a named successor survives only if the caller reads its home resource;
+/// invisible successors are omitted entirely (no id, no count). History content rides the
+/// already-persisted provenance rows of the folded block — gated by the home predicate,
+/// never reconstructed.
+///
+/// Read-path only; the ledger stays the authority (no successor pointer is born on rows).
+#[allow(clippy::too_many_lines)]
+pub async fn block_read(
+    pool: &PgPool,
+    principal: ProfileId,
+    resource: ResourceId,
+    block_id: crate::ids::BlockId,
+) -> std::result::Result<temper_core::types::provenance::BlockRead, ReadbackError> {
+    use temper_core::types::provenance::{BlockChunkRef, BlockFoldDisposition, BlockRead};
+
+    ensure_visible(pool, principal, resource).await?;
+
+    // The three-way fork: absent (no row under THIS resource) / folded / live. Keyed by
+    // (block id, resource id) — a block address is only meaningful inside its home resource.
+    let row = sqlx::query!(
+        r#"SELECT b.seq,
+                  b.is_folded,
+                  b.last_event_id,
+                  rev.block_body_hash AS "block_body_hash: Option<String>"
+             FROM kb_content_blocks b
+             LEFT JOIN kb_block_revisions rev ON rev.id = b.current_revision_id
+            WHERE b.id = $1 AND b.resource_id = $2"#,
+        block_id.uuid(),
+        resource.uuid(),
+    )
+    .fetch_optional(pool)
+    .await?;
+    let Some(row) = row else {
+        return Ok(BlockRead::Absent {
+            block_id: block_id.uuid(),
+        });
+    };
+
+    if !row.is_folded {
+        // ── LIVE: the born assembly — identity, chunk identities, provenance rows. ──
+        let chunks = sqlx::query!(
+            r#"SELECT id, chunk_index, content_hash
+                 FROM kb_chunks
+                WHERE block_id = $1 AND is_current
+                ORDER BY chunk_index"#,
+            block_id.uuid(),
+        )
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(|c| BlockChunkRef {
+            chunk_id: c.id,
+            chunk_index: c.chunk_index,
+            content_hash: c.content_hash,
+        })
+        .collect();
+        let provenance = block_provenance_rows(pool, principal, resource, block_id).await?;
+        return Ok(BlockRead::Live {
+            block_id: block_id.uuid(),
+            seq: row.seq,
+            block_body_hash: row.block_body_hash,
+            chunks,
+            provenance,
+        });
+    }
+
+    // ── FOLDED: walk the row's own fold pointer (NOT NULL — every fold face stamps it),
+    // read the map, gate successors. ──
+    let disposition = {
+        let event: Option<(String, serde_json::Value)> = {
+            let row = sqlx::query!(
+                r#"SELECT t.name AS "name!", e.payload AS "payload: serde_json::Value"
+                     FROM kb_events e
+                     JOIN kb_event_types t ON t.id = e.event_type_id
+                    WHERE e.id = $1"#,
+                row.last_event_id,
+            )
+            .fetch_optional(pool)
+            .await?;
+            row.map(|r| (r.name, r.payload))
+        };
+        match event {
+            Some((name, payload)) if name == "resource_reblocked" => {
+                let manifest: crate::payloads::ResourceReblocked =
+                    serde_json::from_value(payload).map_err(|e| ReadbackError::Fault(e.into()))?;
+                match manifest.dispositions.get(&block_id) {
+                    Some(crate::payloads::FoldDisposition::Located { absorbers, carried }) => {
+                        BlockFoldDisposition::Located {
+                            absorbers: gate_successors(pool, principal, absorbers).await?,
+                            carried: gate_successors(pool, principal, carried).await?,
+                        }
+                    }
+                    Some(crate::payloads::FoldDisposition::ContentGone) => {
+                        BlockFoldDisposition::ContentGone
+                    }
+                    // A folded id the map does not name: pre-map events replay with an
+                    // empty map — the ledger does not carry where this content went.
+                    None => BlockFoldDisposition::Unrecorded,
+                }
+            }
+            // charter_set folds, historical block_mutated folds, anything else: no map.
+            _ => BlockFoldDisposition::Unrecorded,
+        }
+    };
+    let attribution_history = folded_history_rows(pool, block_id).await?;
+    Ok(BlockRead::Folded {
+        block_id: block_id.uuid(),
+        folded_by_event_id: row.last_event_id,
+        disposition,
+        attribution_history,
+    })
+}
+
+/// The block's provenance rows via the one gated SQL read — the same function, shape, and
+/// posture as the resource-grain provenance surface, filtered to this block. Read-only.
+async fn block_provenance_rows(
+    pool: &PgPool,
+    principal: ProfileId,
+    resource: ResourceId,
+    block_id: crate::ids::BlockId,
+) -> std::result::Result<Vec<temper_core::types::provenance::BlockProvenanceRow>, ReadbackError> {
+    use temper_core::types::provenance::BlockProvenanceRow;
+    Ok(sqlx::query_as!(
+        BlockProvenanceRow,
+        r#"SELECT block_id            AS "block_id!",
+                  block_seq           AS "block_seq!",
+                  source_kind         AS "source_kind!",
+                  source_id           AS "source_id!",
+                  source_uri,
+                  accretion_seq       AS "accretion_seq!",
+                  contributed_by_event_id AS "contributed_by_event_id!",
+                  created             AS "created!",
+                  is_carried          AS "is_carried!"
+             FROM resource_block_provenance($1, 'profile', $2)
+            WHERE block_id = $3"#,
+        resource.uuid(),
+        principal.uuid(),
+        block_id.uuid(),
+    )
+    .fetch_all(pool)
+    .await?)
+}
+
+/// The FOLDED block's attribution history — history-rides-the-folded-row: the
+/// already-persisted rows of the folded block itself, never reconstructed. This is the one
+/// read that must SEE the folded row, so it cannot go through
+/// `resource_block_provenance` (whose `NOT b.is_folded` filter — the availability gate —
+/// excludes exactly the row whose history the envelope carries). The home gate has already
+/// run in [`block_read`]; the row shape mirrors that function's (same columns, uncorrected
+/// rows only, accretion order) with its visibility clause replaced by the block id.
+async fn folded_history_rows(
+    pool: &PgPool,
+    block_id: crate::ids::BlockId,
+) -> std::result::Result<Vec<temper_core::types::provenance::BlockProvenanceRow>, ReadbackError> {
+    use temper_core::types::provenance::BlockProvenanceRow;
+    Ok(sqlx::query_as!(
+        BlockProvenanceRow,
+        r#"SELECT p.block_id            AS "block_id!",
+                  b.seq                 AS "block_seq!",
+                  p.source_kind::text   AS "source_kind!",
+                  p.source_id           AS "source_id!",
+                  r.uri                 AS source_uri,
+                  p.accretion_seq       AS "accretion_seq!",
+                  p.contributed_by_event_id AS "contributed_by_event_id!",
+                  p.created             AS "created!",
+                  p.is_carried          AS "is_carried!"
+             FROM kb_block_provenance p
+             JOIN kb_content_blocks b ON b.id = p.block_id
+             LEFT JOIN kb_remote_sources r ON p.source_kind = 'remote' AND r.id = p.source_id
+            WHERE p.block_id = $1 AND NOT p.is_corrected
+            ORDER BY p.accretion_seq"#,
+        block_id.uuid(),
+    )
+    .fetch_all(pool)
+    .await?)
+}
+
+/// Per-successor gate: keep only successors the caller can read. Each successor's home
+/// resource is resolved and probed under the same canonical predicate — a fold within one
+/// resource passes trivially today (visibility is resource-grain; the caller already read the
+/// home), which makes this defense-in-depth and the forward bound for span addressing, not a
+/// live gate. Omitted successors leave no trace: no id, no count, no existence hint.
+async fn gate_successors(
+    pool: &PgPool,
+    principal: ProfileId,
+    successors: &[crate::ids::BlockId],
+) -> std::result::Result<Vec<temper_core::types::provenance::BlockSuccessor>, ReadbackError> {
+    use temper_core::types::provenance::BlockSuccessor;
+    if successors.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query!(
+        r#"SELECT id, resource_id FROM kb_content_blocks WHERE id = ANY($1)"#,
+        &successors.iter().map(|b| b.uuid()).collect::<Vec<_>>()[..],
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut readable: std::collections::HashMap<Uuid, bool> = std::collections::HashMap::new();
+    let mut out = Vec::new();
+    for row in rows {
+        let visible = match readable.get(&row.resource_id) {
+            Some(v) => *v,
+            None => {
+                let v =
+                    is_resource_visible(pool, principal, ResourceId::from(row.resource_id)).await?;
+                readable.insert(row.resource_id, v);
+                v
+            }
+        };
+        if visible {
+            out.push(BlockSuccessor { block_id: row.id });
+        }
+    }
+    Ok(out)
+}
+
 /// The telos resource id + its current body merkle for a cogmap — the charter reconcile diff source.
 /// `body_hash` is `sha256_hex("")` for a fresh genesis telos (empty block set, the SQL's empty-aggregate
 /// coalesce) — never SQL-NULL once the resource exists — or the structural merkle of the current charter.

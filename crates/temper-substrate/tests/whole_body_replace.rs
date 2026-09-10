@@ -494,7 +494,7 @@ async fn content_gone_rows_stay_history_on_the_folded_block(pool: sqlx::PgPool) 
         2,
         "every folded incumbent is mapped"
     );
-    for (_, disposition) in &manifest.dispositions {
+    for disposition in manifest.dispositions.values() {
         assert!(
             matches!(disposition, payloads::FoldDisposition::ContentGone),
             "content deleted outright maps to content-gone, never Located"
