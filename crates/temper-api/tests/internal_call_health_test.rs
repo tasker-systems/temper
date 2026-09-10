@@ -26,9 +26,12 @@ use temper_services::services::internal_call_health_service::{
 async fn a_channel_that_has_never_been_attempted_is_reported_not_omitted(pool: PgPool) {
     let summary = check_internal_call_health(&pool).await.expect("check runs");
 
+    // Every watched channel is reported, whether or not it has a row — plus the erasure
+    // byte-delete fence, appended after the row-derived channels (its facts are derived from
+    // the fence's own table, not `kb_internal_call_health`; see `erasure_fence_service`).
     assert_eq!(
         summary.channels.len(),
-        WATCHED_CHANNELS.len(),
+        WATCHED_CHANNELS.len() + 1,
         "every watched channel is reported, whether or not it has a row"
     );
     let reconcile = &summary.channels[0];

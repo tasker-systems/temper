@@ -86,6 +86,8 @@ ALLOWLIST='/api/access/admin/requests
 /api/as/reap
 /api/internal-calls/health
 /api/region/dispatch
+/api/admin/erasure
+/api/erasure/drain
 /api/intake/webhook'
 
 if [ ! -f "$ROUTES_FILE" ]; then

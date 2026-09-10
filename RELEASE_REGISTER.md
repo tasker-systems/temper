@@ -184,6 +184,30 @@ classes: additive
 surfaces: http, clients
 status: signal-only
 
+- **The erasure act — operator doors: `POST /api/admin/erasure` and the fence tick `/api/erasure/drain`**
+  Born HTTP routes; no existing request class changes shape. The execute door takes the
+  operator erasure request (subject profile + opaque request reference; authorization lives in
+  `erasure_service::execute_erasure`, so the route is deliberately gate-free) and answers the
+  per-target completion/refusal outcomes; the drain endpoint is the byte-delete fence's
+  scheduler tick, deriving pending blob deletes from the `principal_erased` payload verdicts,
+  batched and retried. Existing clients observe nothing — the paths did not exist before.
+pr: self
+classes: additive
+surfaces: http
+status: signal-only
+
+- **The erasure act — the `request` reference rel (`RefRel::Request` + its `LedgerRefRel` mirror)**
+  The ledger reference vocabulary (the `kb_events."references"` apparatus the act owns) gains a
+  `request` arm naming the erasure request an event fulfils; the temper-core mirror gains the
+  matching arm and the parity test compiles the two together. Nothing emits the arm yet — the
+  request reference rides references, not payloads, and no ledger row carries it — so no
+  existing read or write changes; the arm is forward vocabulary rendered by the admin-ledger
+  read once rows exist.
+pr: self
+classes: additive
+surfaces: http, internal
+status: signal-only
+
 ## Pre-policy (classified retroactively)
 
 - **PR #858 — wire half: graph-edge listing DTO reshaped (`peer_resource_id!` → `peer_id!`)**

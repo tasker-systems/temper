@@ -212,6 +212,27 @@ if [ "$rc" -eq 0 ] && ! printf '%s' "$out" | grep -qi 'shape (openapi.json'; the
   ok "non-openapi wire path: presence-only, no shape ruling invented"
 else bad "non-openapi wire path: presence-only, no shape ruling invented" "exit=$rc" "$out"; fi
 
+# ── 14. FIELD OF VIEW — the crates/temper-api/ prefix family carries the same gate ──────────────
+# PR #871's CI failure was exactly this shape: routes + handlers under crates/temper-api/
+# (born doors, openapi.json untouched) with no register row. The failure output names the
+# prefix's files, and the row that names the PR turns the same diff green.
+reset_fixtures
+printf '%s\n' "crates/temper-api/src/routes.rs" "crates/temper-api/src/handlers/erasure.rs" > "$WIRE"
+out="$(run_check unchanged)"; rc=$?
+if [ "$rc" -ne 0 ] \
+    && printf '%s' "$out" | grep -q 'adds no register row for this PR' \
+    && printf '%s' "$out" | grep -q 'crates/temper-api/'; then
+  ok "temper-api wire paths with no own row: fails, naming them (the #871 class)"
+else bad "temper-api wire paths with no own row: fails, naming them (the #871 class)" "exit=$rc" "$out"; fi
+
+reset_fixtures
+printf '%s\n' "crates/temper-api/src/routes.rs" > "$WIRE"
+add_own_row self additive
+out="$(run_check unchanged)"; rc=$?
+if [ "$rc" -eq 0 ] && ! printf '%s' "$out" | grep -qi 'shape (openapi.json'; then
+  ok "temper-api wire paths + own row: passes, presence-only, no shape ruling invented"
+else bad "temper-api wire paths + own row: passes, presence-only, no shape ruling invented" "exit=$rc" "$out"; fi
+
 echo
 echo "  ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

@@ -270,6 +270,13 @@ fn gated_routes() -> OpenApiRouter<AppState> {
         // `admin_ledger_service`, which gates per act family rather than with a prelude, and
         // denies with 404 so a refusal discloses nothing about the subject.
         .route("/api/admin/ledger", get(handlers::admin_ledger::list))
+        // The erasure act's execute door (task 01a0577c Beat 4). Same operator-only posture as
+        // `/api/admin/ledger`: plain `.route()`, out of the contract, allowlisted. The handler
+        // is deliberately GATE-FREE — authorization is `erasure_service::execute_erasure`'s
+        // `is_system_admin` gate (it records the `unauthorized` refusal before anything else
+        // happens), and the door's only job is the posture: map that refusal to a 404, never a
+        // 403, so the door's existence is not disclosed to a caller it has declined.
+        .route("/api/admin/erasure", post(handlers::erasure::execute))
         // Machine-principal registration (G3 Phase A). Mounted with plain `.route()`, like
         // `/api/access/admin/*` above, so it stays OUT of the OpenAPI contract. Its paths are
         // allowlisted in `.github/scripts/check-openapi-routes.sh`.
@@ -496,6 +503,16 @@ fn embed_internal_routes() -> Router<AppState> {
         .route(
             "/api/region/dispatch",
             get(handlers::region::dispatch).post(handlers::region::dispatch),
+        )
+        // The erasure byte-delete fence's tick (task 01a0577c Beat 4): derives pending deletes
+        // from the `principal_erased` payloads, reaps expired leases, and drains due deletes
+        // through one batched `BlobStore::delete`. Same self-gated posture and GET+POST shape
+        // as `dispatch`/`warm`; it belongs in this group because the substrate contract's fence
+        // ("retry plus age alerting") is only as real as the cron that drives it — vercel.json
+        // runs it every minute, the same cadence the retry ladder's backoff curve assumes.
+        .route(
+            "/api/erasure/drain",
+            get(handlers::erasure::drain).post(handlers::erasure::drain),
         )
 }
 

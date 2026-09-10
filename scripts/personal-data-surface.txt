@@ -65,10 +65,11 @@ kb_profiles.handle                        | identifier    | full      | also den
 kb_profiles.display_name                  | identifier    | full      | also denormalized into kb_teams.name — see below
 kb_profiles.preferences                   | incidental    | full      | open jsonb, user-controlled
 kb_profiles.created                       | none          | n-a       |
+kb_profiles.tombstoned_at                 | none          | n-a       | the erasure act's own marker (D5): WHEN the pseudonym broke — act metadata, not an identifier; the identifier nulling happens in the same act
 kb_profile_auth_links.id                  | none          | n-a       | surrogate
 kb_profile_auth_links.profile_id          | reference     | pseudonym |
-kb_profile_auth_links.email               | identifier    | full      |
-kb_profile_auth_links.auth_provider_user_id | identifier  | full      | the IdP's subject identifier for this person
+kb_profile_auth_links.email               | identifier    | full      | REACHED at erase time: NULLed in _erasure_apply_redaction (20260909000025) — every provider's rows
+kb_profile_auth_links.auth_provider_user_id | identifier  | full      | the IdP's subject identifier for this person; REACHED at erase time: sentineled to 'erased-' || the row's own id (the UNIQUE (auth_provider, auth_provider_user_id) grain) AFTER the Slack stores resolve their principals through it — the order is load-bearing (20260909000025)
 kb_profile_auth_links.auth_provider       | none          | n-a       |
 kb_profile_auth_links.email_verified      | none          | n-a       |
 kb_profile_auth_links.is_default          | none          | n-a       |
@@ -77,7 +78,7 @@ kb_profile_auth_links.linked_at           | none          | n-a       |
 # ── the actor layer: one indirection between the ledger and a person ─────────────────────────
 kb_entities.id                            | reference     | pseudonym | what kb_events points at; undeletable once any event exists
 kb_entities.profile_id                    | reference     | pseudonym | the link erasure breaks
-kb_entities.name                          | identifier    | full      | agent-instance name; may embed a person's name
+kb_entities.name                          | identifier    | full      | agent-instance name; may embed a person's name; REACHED at erase time: sentineled to 'erased-' || the entity's own id (the (profile_id, name) UNIQUE grain forbids one shared sentinel), the entity UUID kept as the pseudonym (20260909000025)
 kb_entities.metadata                      | incidental    | full      | launch metadata (model, platform, persona)
 kb_entities.created                       | none          | n-a       |
 
@@ -132,7 +133,7 @@ kb_invocations.outcome                    | incidental    | full      |
 kb_connections.credential                 | incidental    | full      | an external account binding
 kb_connections.observed_reach             | incidental    | full      |
 kb_connections.tool_manifest              | none          | n-a       | the provider's tool schema
-kb_data_artifact_content.content          | content       | full      |
+kb_data_artifact_content.content          | content       | full      | REACHED at erase time for the subject's OWN kind namespace: emptied ('{}') where the resource is homed in the subject's personal contexts and kind_owner IS the subject's profile — artifact id and both content_hash columns kept (D3's retention shape). The kind namespace is frozen at commit (identity-as-input), so a RESOURCE REHOMED into the subject's context pulls another principal's namespace inside a governed home: that content is the disposition-iii remainder, named in the act's targets, never struck. Not admitted to kb_erased_content: no artifact consult site exists — the tombstone keeps the subject from re-committing (20260909000025)
 kb_blob_upload_segments.bytes             | content       | full      | raw staged bytes (D7 transport state); pre-ledger, no event/replay copy; segments cascade when the session row goes
 kb_data_artifact_shapes.schema            | none          | n-a       | a JSON schema
 kb_data_artifact_verdicts.detail          | incidental    | full      |
@@ -142,7 +143,7 @@ kb_oauth_refresh_tokens.claims            | identifier    | full      | IdP clai
 
 # ── pseudonymous references; each ceases to identify when the profile is tombstoned ──────────
 kb_access_grants.granted_by_profile_id    | reference     | pseudonym |
-kb_blobs.owner_profile_id                 | reference     | pseudonym | bytes live in object storage; erasure empties the row; the BYTES are NOT yet erasure-reachable — no reconciler exists, BlobStore has no delete verb; D5 (spec 2026-09-01) is the designed end state, unbuilt, owned by the erasure composition build (01a05d01); home folded into the row (20260903000060)
+kb_blobs.owner_profile_id                 | reference     | pseudonym | bytes live in object storage; erasure empties the row; the delete verb landed (BlobStore::delete, 2026-09-06) and the erasure fence now drains the strike's byte fate — derived from the principal_erased payload verdicts, one batched delete, retried with backoff, age-alerted past a day (20260909000040); home folded into the row (20260903000060)
 kb_blobs.originator_profile_id            | reference     | pseudonym |
 kb_blob_uploads.owner_profile_id          | reference     | pseudonym | staged-upload transport state (D7); pre-ledger, no event/replay copy; segments cascade when the session row goes
 kb_citation_audits.audited_by_profile_id  | reference     | pseudonym |

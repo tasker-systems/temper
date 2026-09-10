@@ -90,6 +90,53 @@ async fn begin_scoped(pool: &PgPool) -> Result<sqlx::Transaction<'_, sqlx::Postg
 
 // ── resource writes ────────────────────────────────────────────────────────────
 
+/// The create-door erased-content consult (erasure spec 2026-08-31, D4's general clause —
+/// "EVERY content-admitting path consults it before writing prose or re-embedding"). The
+/// refusal idiom is `block_mutate`'s (20260909000030: the refusal RAISES before anything is
+/// appended or projected) — mirrored Rust-side, not SQL-side, because the create path chunks
+/// in Rust and there is no mutation function whose gate could run first: by the time SQL
+/// sees the create, `resource_created` is already being appended. Refuses when ANY incoming
+/// hash is in `kb_erased_content`, checking BOTH halves the revise-path refusal checks: the
+/// chunk hashes (the chunker's own on the server-embed arm, client-declared on the chunks
+/// arm) and the verbatim body bytes' hash (`sha256_hex`, the same function the projector
+/// stamps the `__blocks` entry with). One erased hash refuses the WHOLE create — refusal,
+/// never partial admission; a body with one erased and one fresh chunk writes nothing.
+///
+/// The whole create is ONE transaction, so a refusal here leaves nothing behind — not even
+/// an idempotency-key claim minted earlier in the same transaction (it rolls back with the
+/// error). Erasure is a refusal, not an absence.
+async fn refuse_erased_content(
+    conn: &mut sqlx::PgConnection,
+    op: &str,
+    mut hashes: Vec<String>,
+    raw_body_hash: Option<String>,
+) -> Result<()> {
+    if let Some(h) = raw_body_hash {
+        hashes.push(h);
+    }
+    if hashes.is_empty() {
+        return Ok(());
+    }
+    let hits: Vec<String> = sqlx::query!(
+        "SELECT content_hash FROM kb_erased_content WHERE content_hash = ANY($1)",
+        &hashes[..]
+    )
+    .fetch_all(&mut *conn)
+    .await?
+    .into_iter()
+    .map(|r| r.content_hash)
+    .collect();
+    if !hits.is_empty() {
+        anyhow::bail!(
+            "{op}: carries ERASED content — hash(s) {} are in kb_erased_content; the write \
+             refuses (erasure is a refusal, not an absence; re-sync the emptied state, then \
+             write new text)",
+            hits.join(", ")
+        );
+    }
+    Ok(())
+}
+
 /// Create a resource: one body block (chunked + embedded inline) homed in `home`, then one property
 /// per `(key, value)` pair. Returns the new resource id.
 #[derive(Debug)]
@@ -283,6 +330,17 @@ async fn create_resource_impl(
     // in the prepare helpers, because the chunks arm (every CLI create) never sees prose. Same pattern
     // as `incorporated` one line up. `raw_body` maps an empty body ⇒ `None` (see its doc).
     block.raw_text = raw_body(p.body);
+    // The create-door erased-content consult (D4's general clause — see `refuse_erased_content`),
+    // grounded HERE: after the chunker/client has spoken (every hash computable) and BEFORE the
+    // `resource_created` event, any chunk prose, or any derived row — a stale client POSTing erased
+    // text as a NEW resource is refused, never re-admitted. One erased hash refuses the whole create.
+    let raw_hash = block.raw_text.as_deref().map(crate::content::sha256_hex);
+    let chunk_hashes: Vec<String> = block
+        .chunks
+        .iter()
+        .map(|c| c.content_hash.clone())
+        .collect();
+    refuse_erased_content(&mut tx, "create_resource", chunk_hashes, raw_hash).await?;
     let blocks = [block];
     let new_id = fire_with(
         &mut tx,
@@ -2196,6 +2254,16 @@ pub async fn create_kernel_resource_in_tx(
     // Reconcile creates kernel resources with `body: ""` (content rides in `chunks`) — that empty
     // sentinel must NOT store an empty verbatim row. See `raw_body`.
     block.raw_text = raw_body(p.body);
+    // The create-door erased-content consult (D4's general clause — see `refuse_erased_content`),
+    // same as `create_resource_impl`'s: the reconcile CREATE arm is a content-admitting path too,
+    // and a hash already held by the erased-content set must never be re-admitted as a new node.
+    let raw_hash = block.raw_text.as_deref().map(crate::content::sha256_hex);
+    let chunk_hashes: Vec<String> = block
+        .chunks
+        .iter()
+        .map(|c| c.content_hash.clone())
+        .collect();
+    refuse_erased_content(conn, "create_kernel_resource", chunk_hashes, raw_hash).await?;
     let blocks = [block];
     let new_id = fire_with(
         conn,

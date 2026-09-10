@@ -672,3 +672,237 @@ async fn reconcile_acts_correlate_to_the_runs_minted_envelope(pool: PgPool) {
         );
     }
 }
+
+// ── the erased-content set (erasure spec D4, arm 3 — sync apply) ──────────────────────────────
+//
+// A hash in `kb_erased_content` applies EMPTY on the sync arm — and because the reconcile UPDATE
+// arm routes through `block_mutate` (whose own D4 arm-1 gate REFUSES erased hashes), "applies
+// empty" here means the erased-hash chunk is dropped from the incoming set BEFORE the merkle is
+// computed: the write never carries the hash, the sync converges, and re-delivery of the same
+// request stays `unchanged` (the sanitize is inside the hash, so idempotency survives the
+// erasure).
+
+/// A two-chunk entry — the minimal shape where one chunk's hash can be erased while the
+/// entry's other content is lawful.
+fn two_chunk_entry(
+    id: Uuid,
+    origin_uri: &str,
+    hash_a: &str,
+    content_b: &str,
+    hash_b: &str,
+) -> ReconcileEntry {
+    let mk = |idx: u32, hash_seed: &str, body: &str| PackedChunk {
+        chunk_index: idx,
+        header_path: String::new(),
+        heading_depth: 0,
+        content: body.to_string(),
+        content_hash: format!("{hash_seed:0>64}"),
+        embedding: vec![0.1; 768],
+        embedded_with: None,
+    };
+    let chunks = vec![
+        mk(
+            0,
+            hash_a,
+            "A cognitive map: a bounded, telos-governed view.",
+        ),
+        mk(1, hash_b, content_b),
+    ];
+    let content_hash = temper_substrate::content::body_hash_from_chunk_hashes(
+        &chunks
+            .iter()
+            .map(|c| c.content_hash.clone())
+            .collect::<Vec<_>>(),
+    );
+    let chunks_packed = pack_chunks(&chunks).expect("pack");
+    ReconcileEntry {
+        id,
+        origin_uri: origin_uri.to_string(),
+        title: title_of(origin_uri),
+        doc_type: "kernel_landmark".to_string(),
+        content_hash,
+        chunks_packed,
+        facets: serde_json::json!({ "layer": "concept" }),
+        edges: vec![],
+    }
+}
+
+fn title_of(origin_uri: &str) -> String {
+    origin_uri
+        .rsplit('/')
+        .next()
+        .unwrap_or(origin_uri)
+        .to_string()
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_erased_hash_applies_empty_on_the_sync_arm(pool: PgPool) {
+    let be = backend(&pool).await;
+    let id = Uuid::now_v7();
+    let h_erased = format!("{:0>64}", "aa");
+    let h_fresh = format!("{:0>64}", "dd");
+
+    // First delivery: the entry lands normally, with its (not-yet-erased) single chunk.
+    let first = entry(
+        id,
+        "temper://kernel/concept/sync-erased",
+        "sync-erased",
+        "A cognitive map: a bounded, telos-governed view.",
+        "aa",
+        serde_json::json!({ "layer": "concept" }),
+        vec![],
+    );
+    let out1 = be
+        .reconcile_cognitive_map(cmd(L0_COGMAP, request(vec![first])))
+        .await
+        .expect("first reconcile")
+        .value;
+    assert_eq!(out1.created, 1);
+
+    // The erasure: the hash enters the set (the projector-maintained table D4 names).
+    sqlx::query(
+        "INSERT INTO kb_erased_content (content_hash, erased_by_event_id) \
+         VALUES ($1, (SELECT id FROM kb_events ORDER BY id LIMIT 1))",
+    )
+    .bind(&h_erased)
+    .execute(&pool)
+    .await
+    .expect("register the erased hash");
+
+    // The edited re-delivery: the client's new doc keeps the unchanged section under its OLD
+    // (now erased) hash and adds a new one — the stale-laptop shape D4 exists for.
+    let edited = two_chunk_entry(
+        id,
+        "temper://kernel/concept/sync-erased",
+        "aa",
+        "a wholly new and lawful section",
+        "dd",
+    );
+    let out2 = be
+        .reconcile_cognitive_map(cmd(L0_COGMAP, request(vec![edited.clone()])))
+        .await
+        .expect(
+            "the sync CONVERGES: the erased chunk is emptied out of what applies, never \
+             refused out of the whole run (the block_mutate refusal beneath would fire on it)",
+        )
+        .value;
+    assert_eq!(
+        (out2.created, out2.updated, out2.unchanged),
+        (0, 1, 0),
+        "the edited entry re-blocks"
+    );
+
+    // The new generation carries ONLY the fresh hash, with its prose; the erased hash applied
+    // empty — it is in no current chunk of this resource.
+    let current: Vec<String> = sqlx::query_scalar(
+        "SELECT content_hash FROM kb_chunks WHERE resource_id = $1 AND is_current ORDER BY chunk_index",
+    )
+    .bind(id)
+    .fetch_all(&pool)
+    .await
+    .expect("current chunks");
+    assert_eq!(
+        current,
+        vec![h_fresh.clone()],
+        "the erased hash is not in the applied generation — it applied empty"
+    );
+    let prose: String = sqlx::query_scalar(
+        "SELECT cc.content FROM kb_chunk_content cc \
+           JOIN kb_chunks c ON c.id = cc.chunk_id \
+          WHERE c.resource_id = $1 AND c.is_current",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .expect("current prose");
+    assert_eq!(prose, "a wholly new and lawful section");
+    // The old generation was superseded, not deleted (normal re-block mechanics).
+    let superseded: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_chunks WHERE resource_id = $1 AND NOT is_current",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .expect("superseded chunks");
+    assert_eq!(superseded, 1);
+
+    // Idempotency survives the erasure: the sanitize is INSIDE the merkle, so re-delivering the
+    // same edited request is a pure no-op — the sync never re-blocks the erased hash.
+    let mut_before = mutation_event_count(&pool).await;
+    let out3 = be
+        .reconcile_cognitive_map(cmd(L0_COGMAP, request(vec![edited])))
+        .await
+        .expect("re-delivery of the edited request")
+        .value;
+    assert_eq!(
+        (out3.created, out3.updated, out3.unchanged),
+        (0, 0, 1),
+        "the sanitized request re-hashes to the stored merkle — unchanged"
+    );
+    let mut_after = mutation_event_count(&pool).await;
+    assert_eq!(
+        mut_after, mut_before,
+        "zero mutation events on the re-delivery"
+    );
+}
+
+/// FAILS IF a fully-erased re-delivery is a hard error: when EVERY incoming chunk is erased the
+/// sanitized set empties, and re-blocking THROUGH `block_mutate` would RAISE ("a revise must
+/// carry content") — the stale laptop whose whole document was erased would diverge forever.
+/// The server state IS the erased state (D4 arm 3), so the entry converges as `unchanged`:
+/// no error, zero new events. (The partial-erased case is the test above and stays green.)
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_fully_erased_re_delivery_converges_as_unchanged(pool: PgPool) {
+    let be = backend(&pool).await;
+    let id = Uuid::now_v7();
+
+    let first = entry(
+        id,
+        "temper://kernel/concept/sync-all-erased",
+        "sync-all-erased",
+        "A cognitive map: a bounded, telos-governed view.",
+        "aa",
+        serde_json::json!({ "layer": "concept" }),
+        vec![],
+    );
+    let out1 = be
+        .reconcile_cognitive_map(cmd(L0_COGMAP, request(vec![first.clone()])))
+        .await
+        .expect("first reconcile")
+        .value;
+    assert_eq!(out1.created, 1);
+
+    // The erasure: the entry's ONLY chunk hash enters the set, so the next delivery's
+    // sanitized set is empty.
+    let h_erased = format!("{:0>64}", "aa");
+    sqlx::query(
+        "INSERT INTO kb_erased_content (content_hash, erased_by_event_id) \
+         VALUES ($1, (SELECT id FROM kb_events ORDER BY id LIMIT 1))",
+    )
+    .bind(&h_erased)
+    .execute(&pool)
+    .await
+    .expect("register the erased hash");
+
+    // The same request re-delivered: nothing lawful remains to apply, and the sync must
+    // CONVERGE — `unchanged`, not the "empty chunk set" raise from block_mutate.
+    let mut_before = mutation_event_count(&pool).await;
+    let out2 = be
+        .reconcile_cognitive_map(cmd(L0_COGMAP, request(vec![first])))
+        .await
+        .expect(
+            "a fully-erased re-delivery converges — the server state IS the erased state, \
+             never a hard error",
+        )
+        .value;
+    assert_eq!(
+        (out2.created, out2.updated, out2.unchanged),
+        (0, 0, 1),
+        "the all-erased re-delivery is a no-op completion"
+    );
+    let mut_after = mutation_event_count(&pool).await;
+    assert_eq!(
+        mut_after, mut_before,
+        "zero new events: the convergence writes nothing"
+    );
+}
