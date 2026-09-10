@@ -3204,11 +3204,15 @@ export interface components {
          *     predicate — invisible successors are omitted ENTIRELY (no id, no count: aggregate existence
          *     is still an existence leak).
          *
-         *     WIRE DECISION, ON THE RECORD: a successor carries only its block id — addressable today
-         *     because every fold producer folds within one resource, so the successor shares the folded
-         *     block's home. When span addressing (register clause 2) lets a successor cross a resource
-         *     boundary, this shape must grow a home-resource field (or the map must) — a deliberate
-         *     change then, not an accident discovered by a client that cannot construct an address.
+         *     The single-resource wire decision recorded here was retired deliberately by the
+         *     span-address-form design (register clause 2, 2026-09-10): the shape grew its home field.
+         *     The home is ROW-RESOLVED — the `resource_id` the gate's own batch lookup selects from
+         *     `kb_content_blocks` and probes visibility against — never a ledger-claimed value: a claim
+         *     about where a block lives must never gate a read or render an address (the unvalidated
+         *     `_event_append` seam would let a claimed home name a visible decoy while the row sits
+         *     behind an invisible one). `None` only under new-reader/old-writer skew — a pre-field
+         *     server emits `{block_id}` alone, and the client then states the successor without a
+         *     constructible address, the pre-field world declared (same skew pattern as `is_carried`).
          */
         BlockSuccessor: {
             /**
@@ -3216,6 +3220,20 @@ export interface components {
              * @description The surviving block (kept or created) holding the folded incumbent's content.
              */
             block_id: string;
+            /**
+             * Format: uuid
+             * @description The resource the successor's row lives on — the same value the pair-keyed read fork
+             *     keys on, so the gated envelope alone constructs the successor's `<home>#<block>`
+             *     address.
+             *
+             *     CONSTRUCTION RULE, load-bearing: the only writer of this type is the per-successor
+             *     gate (`gate_successors` in temper-substrate's readback), populating from the same
+             *     row lookup that probes visibility. Never build one from ledger payload data — a
+             *     claimed home is the authz-on-claim defect the span-address-form design's review
+             *     refuted; a future fold producer needing successors in the LEDGER's disposition map
+             *     keeps the bare-id shape the payloads carry today.
+             */
+            home_resource_id?: string | null;
         };
         /** @description Response to append / `GET /api/resources/{id}/blocks`: the currently landed segment set. */
         BlocksResponse: {

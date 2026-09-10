@@ -510,6 +510,208 @@ async fn a_bogus_address_resolves_absent_and_a_not_visible_home_denies_existence
     );
 }
 
+// ── the cross-resource fold fixture (the span-address-form spec §4) ─────────────────────────
+
+/// Author a `resource_reblocked` event DIRECTLY through `_event_append` — the ledger is the
+/// authority and ledger rows are data: a map naming a successor whose row lives on ANOTHER
+/// resource is a real state the resolution must answer correctly, whichever writer (producer,
+/// operator repair, future adoption op) produced it. Returns the event id; the caller stamps
+/// the folded row's `last_event_id` at it, mirroring every fold face. Anchor mirrors the real
+/// `resource_reblock` function (home-anchored, payload passthrough).
+async fn author_cross_resource_fold(
+    pool: &sqlx::PgPool,
+    emitter: Uuid,
+    home_resource: temper_substrate::ids::ResourceId,
+    folded: Uuid,
+    absorbers: &[Uuid],
+) -> Uuid {
+    let payload = serde_json::json!({
+        "resource_id": home_resource.uuid(),
+        "folded": [folded],
+        "dispositions": {
+            folded.to_string(): {
+                "state": "located",
+                "absorbers": absorbers,
+            }
+        }
+    });
+    // Anchor at the resource's HOME, exactly as the real `resource_reblock` function does
+    // (`kb_events.producing_anchor_table_check` admits home anchors, not `kb_resources`).
+    let (anchor_table, anchor_id): (String, Uuid) = sqlx::query_as(
+        "SELECT anchor_table, anchor_id FROM kb_resource_homes \
+         WHERE resource_id = $1 ORDER BY (anchor_table = 'kb_cogmaps') DESC LIMIT 1",
+    )
+    .bind(home_resource.uuid())
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    sqlx::query_scalar("SELECT _event_append('resource_reblocked', $1, $2, $3, $4)")
+        .bind(emitter)
+        .bind(&anchor_table)
+        .bind(anchor_id)
+        .bind(payload)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// Stamp the hand-fold: `is_folded` plus the fold pointer the envelope's resolution walks
+/// (the content_mutation.rs hand-fold pattern, plus the `last_event_id` every real fold face
+/// stamps).
+async fn stamp_fold(pool: &sqlx::PgPool, folded: Uuid, event_id: Uuid) {
+    sqlx::query("UPDATE kb_content_blocks SET is_folded = true, last_event_id = $2 WHERE id = $1")
+        .bind(folded)
+        .bind(event_id)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+/// CLAUSE: the per-successor gate holds against a cross-resource successor — a folded block's
+/// map names TWO absorbers, one on the home resource (readable) and one whose row lives on a
+/// resource the caller cannot read. The envelope keeps the readable one (named WITH its row
+/// home) and omits the invisible one ENTIRELY: no id, no home, no count — the serialized
+/// disposition carries no trace of the foreign block's existence. All-omitted would render
+/// `content_gone`; here one name survives, proving omission is per-successor, not
+/// map-granular.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_invisible_cross_resource_successor_is_omitted_with_no_trace(pool: sqlx::PgPool) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "br-xres-invisible").await;
+    let resource =
+        create_two_block(&pool, owner, emitter, &home, SECTION_A, SECTION_B, vec![]).await;
+    let before = blocks_of(&pool, resource).await;
+    let folded_a = before[0].0;
+    let kept_b = before[1].0;
+
+    // The foreign resource: another profile's, so `owner` cannot read it.
+    let (other, other_emitter) = insert_actor(&pool, "xres-invisible-foreign").await;
+    let other_home = make_home(&pool, other, "br-xres-invisible-f").await;
+    let foreign = create_two_block(
+        &pool,
+        other,
+        other_emitter,
+        &other_home,
+        SECTION_A,
+        SECTION_B,
+        vec![],
+    )
+    .await;
+    let (foreign_block, _) = blocks_of(&pool, foreign).await[0];
+
+    let ev = author_cross_resource_fold(
+        &pool,
+        emitter.uuid(),
+        resource,
+        folded_a,
+        &[kept_b, foreign_block],
+    )
+    .await;
+    stamp_fold(&pool, folded_a, ev).await;
+
+    let read = readback::block_read(&pool, owner, resource, BlockId::from(folded_a))
+        .await
+        .unwrap();
+    let BlockRead::Folded { disposition, .. } = read else {
+        panic!("the hand-folded incumbent must resolve Folded, got {read:?}")
+    };
+    let BlockFoldDisposition::Located { absorbers, carried } = &disposition else {
+        panic!(
+            "one readable successor survives, so the envelope must stay Located, got {disposition:?}"
+        )
+    };
+    assert_eq!(
+        absorbers.len(),
+        1,
+        "exactly the readable successor is named, got {absorbers:?}"
+    );
+    assert_eq!(
+        absorbers[0].block_id, kept_b,
+        "the survivor is the home-resource block"
+    );
+    assert_eq!(
+        absorbers[0].home_resource_id,
+        Some(resource.uuid()),
+        "the survivor's home is its ROW's resource, resolved by the gate"
+    );
+    assert!(carried.is_empty(), "the map named no carries");
+    let rendered = serde_json::to_string(&disposition).unwrap();
+    assert!(
+        !rendered.contains(&foreign_block.to_string()),
+        "no trace of the invisible successor may survive the envelope, got {rendered}"
+    );
+}
+
+/// CLAUSE: a VISIBLE cross-resource successor is named with its row home — the gated envelope
+/// alone constructs the successor's `<home>#<block>` address, and addressing it lands in the
+/// foreign resource's own three-state contract (its own visibility gate, its own fork).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_visible_cross_resource_successor_names_its_home_and_the_address_resolves(
+    pool: sqlx::PgPool,
+) {
+    bootseed::seed_system(&pool).await.unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "br-xres-visible").await;
+    let resource =
+        create_two_block(&pool, owner, emitter, &home, SECTION_A, SECTION_B, vec![]).await;
+    let folded_a = blocks_of(&pool, resource).await[0].0;
+
+    // A second resource the SAME owner reads — cross-resource, not cross-visibility.
+    let second_home = make_home(&pool, owner, "br-xres-visible-f").await;
+    let foreign = create_two_block(
+        &pool,
+        owner,
+        emitter,
+        &second_home,
+        SECTION_A,
+        SECTION_B,
+        vec![],
+    )
+    .await;
+    let (foreign_block, _) = blocks_of(&pool, foreign).await[0];
+    assert_ne!(
+        resource.uuid(),
+        foreign.uuid(),
+        "fixture: the successor's row lives on a different resource than the folded block"
+    );
+
+    let ev =
+        author_cross_resource_fold(&pool, emitter.uuid(), resource, folded_a, &[foreign_block])
+            .await;
+    stamp_fold(&pool, folded_a, ev).await;
+
+    let read = readback::block_read(&pool, owner, resource, BlockId::from(folded_a))
+        .await
+        .unwrap();
+    let BlockRead::Folded { disposition, .. } = read else {
+        panic!("the hand-folded incumbent must resolve Folded, got {read:?}")
+    };
+    let BlockFoldDisposition::Located { absorbers, .. } = disposition else {
+        panic!("a readable successor must be named, got {disposition:?}")
+    };
+    assert_eq!(
+        absorbers.len(),
+        1,
+        "the one named successor, got {absorbers:?}"
+    );
+    assert_eq!(
+        absorbers[0].home_resource_id,
+        Some(foreign.uuid()),
+        "the envelope names the successor's ROW home — the address is constructible from the response alone"
+    );
+
+    // The constructed address resolves through the foreign resource's own contract.
+    let follow_up =
+        readback::block_read(&pool, owner, foreign, BlockId::from(absorbers[0].block_id))
+            .await
+            .unwrap();
+    assert!(
+        matches!(follow_up, BlockRead::Live { .. }),
+        "the constructed <home>#<block> address resolves live on the foreign resource, got {follow_up:?}"
+    );
+}
+
 /// CLAUSE: a fold the ledger does not map resolves to the DEFINED `unrecorded` arm — never a
 /// guessed successor. The canonical map-less producer is `charter_set`: it folds the telos's
 /// prior blocks with no disposition map, so the envelope states "the ledger does not carry

@@ -968,13 +968,19 @@ async fn folded_history_rows(
 /// home), which makes this defense-in-depth and the forward bound for span addressing, not a
 /// live gate. Omitted successors leave no trace: no id, no count, no existence hint.
 ///
+/// The ROW's `resource_id` is the only authority — it is both what the probe gates on and
+/// what a surviving successor publishes as `home_resource_id` (the span-address-form design's
+/// review repair: a ledger-claimed home would gate on a writer-controlled value through the
+/// unvalidated `_event_append` seam). One source, already selected by the batch lookup below;
+/// a surviving successor therefore always carries `Some` home from a same-build server.
+///
 /// Two deliberate postures recorded here so the next reader doesn't have to re-derive them:
 /// (1) when the gate omits EVERY name, the caller of this fn renders `content_gone`, never an
 /// empty `located` — see the call site; (2) the LEDGER's other map reader, the element trail,
 /// serves raw event payloads under the trail's home-grain gating posture and does NOT run
 /// this gate — correct today (every fold is within one resource, so a home-read caller can
-/// read every successor), and a decision to revisit the moment span addressing (register
-/// clause 2) lets a successor cross a resource boundary.
+/// read every successor), and a decision to revisit the moment a foreign-home-capable fold
+/// producer lands, whose PR carries the one-gate mechanism (the span-address-form spec §4).
 async fn gate_successors(
     pool: &PgPool,
     principal: ProfileId,
@@ -994,8 +1000,10 @@ async fn gate_successors(
     // emits successors in section order (the partition's own geometry), and the envelope
     // should carry that order, not `ANY($1)`'s unspecified row order.
     let mut readable: std::collections::HashMap<Uuid, bool> = std::collections::HashMap::new();
+    let mut home_of: std::collections::HashMap<Uuid, Uuid> = std::collections::HashMap::new();
     let mut surviving: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
     for row in &rows {
+        home_of.insert(row.id, row.resource_id);
         let visible = match readable.get(&row.resource_id) {
             Some(v) => *v,
             None => {
@@ -1012,7 +1020,10 @@ async fn gate_successors(
     Ok(successors
         .iter()
         .filter(|b| surviving.contains(&b.uuid()))
-        .map(|b| BlockSuccessor { block_id: b.uuid() })
+        .map(|b| BlockSuccessor {
+            block_id: b.uuid(),
+            home_resource_id: home_of.get(&b.uuid()).copied(),
+        })
         .collect())
 }
 

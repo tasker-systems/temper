@@ -149,7 +149,8 @@ pub struct GetBlockProvenanceInput {
 /// MCP input for get_block — the three-state block read.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetBlockInput {
-    /// The resource the block belongs to (UUID).
+    /// The resource the block belongs to (UUID). A named successor of a folded block
+    /// carries its own home as `home_resource_id` — pass THAT resource to address it.
     pub resource: Uuid,
     /// The content block to read (a block UUID). May address a folded block or a
     /// named successor.
