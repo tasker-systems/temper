@@ -11,6 +11,7 @@ pub mod data_artifact_shapes;
 pub mod data_artifacts;
 pub mod edges;
 pub mod embed;
+pub mod erasure;
 pub mod events;
 pub mod evidence;
 pub mod facets;

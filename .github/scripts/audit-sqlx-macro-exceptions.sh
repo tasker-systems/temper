@@ -102,6 +102,7 @@ ENUMERATOR="scripts/classify-sqlx-calls.py"
 #   reasoning is internal/development/sqlx-macro-exception-classification.md.
 read -r -d '' BASELINE <<'EOF' || true
 dynamic-order-by 1 crates/temper-services/src/backend/substrate_read.rs
+dynamic-sql 2 crates/temper-services/src/services/embed_service.rs
 dynamic-sql 2 crates/temper-substrate/src/embed.rs
 dynamic-sql 1 crates/temper-substrate/src/readback/query_exec.rs
 dynamic-table 37 crates/temper-substrate/src/replay.rs

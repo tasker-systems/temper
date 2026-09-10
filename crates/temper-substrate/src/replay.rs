@@ -100,6 +100,15 @@ const PROJECTION_DUMPS: &[(&str, &str)] = &[
         "kb_invocations",
         "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.id), '[]'::jsonb) FROM kb_invocations t",
     ),
+    // The erased-content set (D4, 20260909000015) diffs in FULL: content_hash is the primary key
+    // and erased_by_event_id is payload-derivable (the admitting principal_erased event's own id,
+    // restored verbatim), so there is nothing to mask. First-admit attribution (`ON CONFLICT DO
+    // NOTHING`) makes the ledger-order rebuild byte-identical to the live set — this row is what
+    // turns that claim into a checked one. (The walk arm refills it — `PrincipalErased` above.)
+    (
+        "kb_erased_content",
+        "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.content_hash), '[]'::jsonb) FROM kb_erased_content t",
+    ),
 ];
 
 /// Non-projected input tables, copied verbatim into the replay namespace. Restore order respects FK
@@ -259,6 +268,17 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             // NULL-anchored, content-free shape as the ledger events above.
             | EventKind::PrincipalStandingChanged
             | EventKind::PrincipalGovernanceChanged
+            // The erasure act's admin pair (spec 2026-08-31): authority acts about a PERSON,
+            // never knowledge. Same NULL-anchored, content-free shape. The snapshot side of the
+            // replay redaction needs NOTHING more than this posture, and that is the point:
+            // the sidecars are read from the LIVE post-erasure CAS, so a pre-erasure event's
+            // sidecar already carries the emptied bytes/redacted vector the walk arm
+            // (`PrincipalErased`, below) would apply — the redacted rows reproduce through the
+            // sidecars, not through a snapshot-side scan of the erased set. `principal_erased`
+            // itself carries no content and so no sidecar; the set it admits is rebuilt by the
+            // walk arm at the event's position.
+            | EventKind::PrincipalErased
+            | EventKind::PrincipalErasureRefused
             // A delivery disposition (S2 chunk C) carries reasoning and confidence, not content:
             // no blocks, no chunks, no sidecar. A received webhook (S2 chunk B) carries the
             // remote's verbatim body — foreign content temper did not author and does not chunk.
@@ -277,8 +297,11 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             // output. A blob strike (20260906000010) is the same shape: identity-only payload,
             // the bytes are external and were released (or not) by the live-row refcount —
             // replay re-empties the row via the idempotent projector, it never touches bytes.
+            // The ERASURE arm (`blob_erased`) is the identical shape through the same
+            // projector — the vocabulary differs, the sidecar posture does not.
             | EventKind::BlobCommitted
             | EventKind::BlobDeleted
+            | EventKind::BlobErased
             | EventKind::WebhookReceived => None,
         }
         .context("content-bearing payload missing blocks")?;
@@ -550,6 +573,15 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     .fetch_one(pool)
                     .await?;
             }
+            EventKind::BlobErased => {
+                // The erasure arm of the same act: the SAME idempotent projector re-empties
+                // the row into the identical D5.2 shape — replay reproduces the emptied state
+                // without knowing or caring which act struck the row, because no row-shape
+                // marker of the act exists. No sidecar, macro form, same reasons as above.
+                sqlx::query!("SELECT _project_blob_deleted($1,$2)", id, payload)
+                    .fetch_one(pool)
+                    .await?;
+            }
             EventKind::BlockMutated => {
                 let side = snap.sidecars.get(&id).context("missing sidecar")?;
                 sqlx::query("SELECT _project_block_mutated($1,$2,$3)")
@@ -757,6 +789,63 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     .execute(pool)
                     .await?;
             }
+            // The erasure act's completion (spec 2026-08-31, D1): the one admin event the walk
+            // is not silent on. THE RECONCILIATION, stated once here because two authorities
+            // pull in words and only one of them survives contact with the falsifiable form:
+            // the spec's Replay reader row says "the redaction pre-pass reads `principal_erased`
+            // events BEFORE the walk and supplies the sentinel", while the substrate's re-commit
+            // rule (20260906000010 — a struck (home, hash) slot vacates; a re-commit of
+            // identical bytes mints a FRESH live row, never refused or deduplicated against the
+            // struck one) and the spec's own §5 form (replay a ledger containing an erasure
+            // into a clean namespace and the projection is byte-identical INCLUDING the
+            // redacted rows; erase again, re-run, still passes) both require that the
+            // emptiness be applied AT THE EVENT'S LEDGER POSITION — this walk is `ORDER BY
+            // e.id`, so a trailing pass over the walked state would wrongly redact what later
+            // events lawfully put (the post-erasure re-committed blob row beside the emptied
+            // one; the formation watermark a post-erasure `region_materialized` re-set), and
+            // "the ledger totally determines the projection" would rot into "the final state is
+            // post-processed by a rule outside the walk". Resolved as: READ AHEAD TO KNOW THE
+            // SET, APPLY AT THE EVENT'S POSITION — and the first half is free, because the set
+            // rides the event itself (`redacted_hashes`, D2): the payload IS the pre-pass; no
+            // separate scan exists to drift from it. The sentinel the spec speaks of is the
+            // snapshot's sidecar treatment (see `snapshot`): it reads the post-erasure CAS, so
+            // pre-erasure events replay with the emptied bytes this function would write —
+            // which is why the content-empties below are belt-and-braces (idempotent no-ops
+            // against the sidecars) while the arm's LOAD-BEARING effects are the ones nothing
+            // else reproduces: the erased-content set refill (first-admit attribution,
+            // `ON CONFLICT DO NOTHING` — 20260909000025's step 6, the refusal set a rebuild
+            // derives) and the formation-watermark nulls, both in ledger order. It calls THE
+            // ONE redaction definition — the Beat 2 migration header's demand ("the replay
+            // pre-pass (Beat 3) must call the same function, never a second body"); re-implementing
+            // any of it here would be two definitions of erasure that drift.
+            EventKind::PrincipalErased => {
+                let subject: Uuid = payload["subject_id"]
+                    .as_str()
+                    .context("principal_erased payload missing subject_id")?
+                    .parse()
+                    .context("principal_erased subject_id is not a uuid")?;
+                let hashes: Vec<String> = payload["redacted_hashes"]
+                    .as_array()
+                    .context("principal_erased payload missing redacted_hashes")?
+                    .iter()
+                    .map(|h| {
+                        h.as_str()
+                            .map(str::to_owned)
+                            .context("redacted_hashes must carry hash strings")
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                // Macro form, like the ContextRetired/Restored/ResourceReblocked arms: a fixed
+                // function call with bound parameters — the audit's `dynamic-table` reason does
+                // not cover it, so it converts and gains a `.sqlx` entry.
+                sqlx::query!(
+                    "SELECT _erasure_apply_redaction($1,$2,$3)",
+                    subject,
+                    &hashes,
+                    id
+                )
+                .fetch_one(pool)
+                .await?;
+            }
             // Admin-ledger events are NULL-anchored (the cognition firewall, spec 2026-07-16): they
             // ride kb_events but touch no _project_* cognition half, so the walk is a no-op. The
             // event rows themselves survive replay via the kb_events input table; grant STATE is
@@ -771,6 +860,10 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // kb_principal_governance input tables, not rebuilt from these events.
             | EventKind::PrincipalStandingChanged
             | EventKind::PrincipalGovernanceChanged
+            // The erasure act's refusal face (spec 2026-08-31, D6): NULL-anchored, mutates
+            // NOTHING by design — one reason-code event, and the refusal set must not admit
+            // it. The walk stays a no-op; `PrincipalErased` graduated above.
+            | EventKind::PrincipalErasureRefused
             // A received webhook (S2 chunk B) touches no _project_* cognition half: intake appends
             // the event and projects delivery rows in Rust, in the same transaction. Without this
             // arm `replay()` errored with "no projector for event type webhook_received" against

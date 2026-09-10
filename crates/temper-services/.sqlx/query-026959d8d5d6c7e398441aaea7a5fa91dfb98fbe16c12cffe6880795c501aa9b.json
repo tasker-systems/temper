@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT tg->>'outcome' AS \"outcome!\"\n          FROM kb_events e\n          JOIN kb_event_types t ON t.id = e.event_type_id AND t.name = 'principal_erased',\n               jsonb_array_elements(e.payload->'targets') AS tg\n         WHERE tg->>'target' = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "outcome!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "026959d8d5d6c7e398441aaea7a5fa91dfb98fbe16c12cffe6880795c501aa9b"
+}

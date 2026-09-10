@@ -24,7 +24,7 @@
 //! 2. **`ALL_RELS`/`ALL_KINDS` below are hand-maintained.** Nothing derives them from the enums (no
 //!    `strum` in this workspace), so a variant that is added to the exhaustive `match` but forgotten
 //!    here is mirrored yet never *serialized* by any assertion. Both lists are complete today
-//!    (5 rels, 9 kinds); if that stops being cheap to eyeball, derive them rather than trusting the
+//!    (6 rels, 11 kinds); if that stops being cheap to eyeball, derive them rather than trusting the
 //!    eyeball.
 //!
 //! The stakes for a rename specifically: renames are per-variant `#[serde(rename)]` on both sides,
@@ -46,6 +46,7 @@ fn mirror_rel(r: RefRel) -> LedgerRefRel {
         RefRel::Touches => LedgerRefRel::Touches,
         RefRel::Subject => LedgerRefRel::Subject,
         RefRel::Principal => LedgerRefRel::Principal,
+        RefRel::Request => LedgerRefRel::Request,
     }
 }
 
@@ -72,6 +73,7 @@ const ALL_RELS: &[RefRel] = &[
     RefRel::Touches,
     RefRel::Subject,
     RefRel::Principal,
+    RefRel::Request,
 ];
 
 const ALL_KINDS: &[AnchorTable] = &[

@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PrincipalErased",
+  "description": "`principal_erased` — the ONE admin event of a completed erasure (erasure spec D1).\n\nONE TYPE for identity erasure and content erasure: the distinction rides the per-target\noutcomes as data, never the type boundary — two types would cost the pairing (one request,\none operator, one reference) and double registration for no additional guarantee. The\nsubject is the PSEUDONYM the act itself broke; the event never re-identifies — no name, no\nemail, no case description. The request reference does not ride here: it lives on\n`kb_events.\"references\"`, the apparatus this act owns.\n\nThe redacted set is keyed on CONTENT HASH (D2) — never row ids, which would collide with\nthe trail functions' join-key shapes. The erased-content set (D4) rebuilds from these\npayloads alone.",
+  "type": "object",
+  "properties": {
+    "actor": {
+      "description": "The acting operator, distinguishable from the subject — self-serve vs administrative\nis a comparison the auditor needs. `None` only where no actor exists to name; inventing\none would put a fabricated attribution on the ledger (the standing-event precedent).",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProfileId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "propagated_to_clients": {
+      "description": "The propagation fact, DISTINCT from the server fact (erasure spec, payload\nrequirements): this event records \"gone from the server\"; `false` must never read as\n\"gone from the clients\". `false` until the propagation protocol exists (D3) — the\nfield reserves the fact; the wire task specifies its vocabulary.",
+      "type": "boolean",
+      "default": false
+    },
+    "redacted_hashes": {
+      "description": "The redacted set (D2): bare sha256 hex, exactly as `content_hash` carries it — the key\nevery reader already shares and no trail join-key shape can match.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "subject_id": {
+      "description": "The pseudonym — `kb_profiles.id`. It survives; its identifying power does not (D5).",
+      "type": "string",
+      "format": "uuid"
+    },
+    "subject_table": {
+      "$ref": "#/$defs/AnchorTable"
+    },
+    "targets": {
+      "description": "Per-target outcomes and the named remainder (D6's accepted-in-part arm): anything\nunhonourable is named here. Partial completion is data, never a silent success.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ErasureTargetOutcome"
+      }
+    }
+  },
+  "required": [
+    "subject_table",
+    "subject_id"
+  ],
+  "$defs": {
+    "AnchorTable": {
+      "description": "A polymorphic anchor/endpoint reference. Serializes table names exactly as the DDL spells them.",
+      "type": "string",
+      "enum": [
+        "kb_contexts",
+        "kb_cogmaps",
+        "kb_resources",
+        "kb_edges",
+        "kb_content_blocks",
+        "kb_teams",
+        "kb_profiles",
+        "kb_connections",
+        "kb_machine_clients",
+        "kb_blobs",
+        "kb_events"
+      ]
+    },
+    "ErasureTargetOutcome": {
+      "description": "One target of a completed erasure and what happened to it (erasure spec, \"per-target\noutcomes\"). The target names itself the way the personal-data manifest does — `table` or\n`table.column`; the outcome is the act's own record of what redaction applied. Deliberately\nopen-textured in v1: ceilings are DATA, not types (D1), and the per-target vocabulary is the\nexecution build's to pin. `unhonourable_scope` outcomes land here, never silent.",
+      "type": "object",
+      "properties": {
+        "outcome": {
+          "description": "What the act did to it (erased / sentinel-scrubbed / accepted-in-part / …).",
+          "type": "string"
+        },
+        "target": {
+          "description": "Manifest identity of the target (`kb_profiles.display_name`, `kb_teams.slug`, …).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target",
+        "outcome"
+      ]
+    },
+    "ProfileId": {
+      "description": "A `kb_profiles.id` value.",
+      "type": "string",
+      "format": "uuid"
+    }
+  }
+}

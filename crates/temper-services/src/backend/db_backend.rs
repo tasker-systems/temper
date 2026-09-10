@@ -1361,6 +1361,41 @@ impl DbBackend {
             // differently (whole-body `sha256:`-prefixed hash, not the chunk-merkle) and which the
             // server therefore does not trust. Trusting it would make every re-run re-block every entry.
             let incoming_chunks = unpack_incoming_chunks(&entry.chunks_packed)?;
+
+            // The erased-content set (erasure spec 2026-08-31, D4 arm 3 — sync apply): a hash in
+            // the set applies EMPTY. Because this arm's re-block fires THROUGH `block_mutate` —
+            // whose own arm-1 gate REFUSES any payload carrying an erased hash
+            // (20260909000030) — "applies empty" here means the chunk is emptied OUT of what
+            // applies: dropped from the incoming set BEFORE the merkle is computed, so the write
+            // never carries the hash and a re-delivery of the same request hashes to the stored
+            // merkle (idempotency survives the erasure; the sync converges instead of erroring
+            // forever). Prose and the client's vector go together — an erased hash is never
+            // re-embedded (arm 2). Dropped-before-merkle is the whole trick: a post-merkle scrub
+            // would store a body_hash the next re-delivery can never match.
+            let chunk_hashes: Vec<String> = incoming_chunks
+                .iter()
+                .map(|c| c.content_hash.clone())
+                .collect();
+            let erased: Vec<String> = sqlx::query!(
+                "SELECT content_hash FROM kb_erased_content WHERE content_hash = ANY($1)",
+                &chunk_hashes,
+            )
+            .fetch_all(&mut *conn)
+            .await
+            .map_err(api_err)?
+            .into_iter()
+            .map(|r| r.content_hash)
+            .collect();
+            let incoming_chunks: Vec<temper_substrate::content::IncomingChunk> =
+                if erased.is_empty() {
+                    incoming_chunks
+                } else {
+                    incoming_chunks
+                        .into_iter()
+                        .filter(|c| !erased.contains(&c.content_hash))
+                        .collect()
+                };
+
             let chunk_hashes: Vec<String> = incoming_chunks
                 .iter()
                 .map(|c| c.content_hash.clone())
@@ -1376,6 +1411,14 @@ impl DbBackend {
                     // the chunks and ignores `body` (the `body` param is only the no-chunks server-embed
                     // fallback, never taken here). `origin_uri` is still set on the resource as
                     // attribution.
+                    //
+                    // The CREATE arm never sees an all-erased set from a lawful sync: erasure keeps
+                    // the resource row live with its `body_hash` untouched (D3 — the hash never
+                    // changes), so a re-delivery of an erased document resolves to the EXISTING
+                    // landmark id and converges as `unchanged` in the UPDATE arm below. A fresh
+                    // landmark whose raw payload is wholly erased hashes is the stale-client
+                    // re-admission D4 forbids, and that is the create door's refusal to make
+                    // (`writes::refuse_erased_content`), not this arm's.
                     let chunks = Some(incoming_chunks);
                     let rid = writes::create_kernel_resource_in_tx(
                         &mut *conn,
@@ -1430,6 +1473,20 @@ impl DbBackend {
                     outcome.created += 1;
                 }
                 Some(row) if row.body_hash.as_deref() != Some(incoming_body_hash.as_str()) => {
+                    // ALL-ERASED re-delivery converges, it does not error. When the sanitize above
+                    // dropped EVERY incoming chunk, there is nothing lawful left to apply: the
+                    // server state IS the erased state (D4 arm 3 — the erasure emptied the content
+                    // and never moved the stored `body_hash`, which is why the merkle compare even
+                    // fired on the sanitized re-delivery). Re-blocking THROUGH `block_mutate` with
+                    // an empty chunk set would RAISE ("a revise must carry content") and turn the
+                    // stale laptop's convergence into a hard error — so count the no-op with the
+                    // reconcile's own `unchanged` idiom and move on. The merkle mismatch here is
+                    // expected and innocent: the incoming merkle hashes the sanitized set, the
+                    // stored one predates the erasure.
+                    if incoming_chunks.is_empty() {
+                        outcome.unchanged += 1;
+                        continue;
+                    }
                     // UPDATE — body changed (the stored merkle differs from the incoming chunks'
                     // merkle). Re-block from the supplied chunks. (Facet/edge deltas on an existing
                     // entry are DEFERRED v1 — see the method doc.)

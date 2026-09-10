@@ -156,6 +156,14 @@ pub enum RefRel {
     /// WHO the act was performed FOR (the team granted, the profile promoted).
     #[serde(rename = "principal")]
     Principal,
+    /// The erasure act's opaque request reference (erasure spec D1: one request, one
+    /// operator, one reference; ruled 2026-09-09 that the reference is `references`
+    /// apparatus, never payload). The target's `id` IS the reference — a token the
+    /// operator's DSAR records mint. It addresses no row in any table: `kb_events` is
+    /// spelled because the vocabulary demands a kind and the token's only ledger life is
+    /// ON these events — match it, never resolve it.
+    #[serde(rename = "request")]
+    Request,
 }
 
 /// `AnchorRef`'s wire shape inside `references`: `{kind, id}` rather than `{table, id}`.
@@ -722,6 +730,23 @@ pub struct BlobCommitted {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct BlobDeleted {
+    pub blob_id: BlobId,
+}
+
+/// Erase one blob — the erasure act's OWN strike vocabulary, fired through the SAME
+/// `blob_delete` wrapper and `_project_blob_deleted` projector as [`BlobDeleted`] (ruled
+/// 2026-09-06: the emptying shape and the byte fate are shared, the vocabulary never is).
+/// Identity-only, the exact `BlobDeleted` shape: the envelope carries the home (producing
+/// anchor), the actor (`emitter_entity_id`), and the time (`occurred_at`).
+///
+/// The row empties into the IDENTICAL D5.2 shape — there is deliberately no row-shape marker
+/// of which act emptied it, and the ledger alone tells delete from erasure. Attribution dies
+/// here (never at a delete): the pseudonym break is the erasure act's work, not this event's
+/// row write. The hash stays — it is the erased-content set's key (D4), which refuses
+/// re-admission of the erased bytes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct BlobErased {
     pub blob_id: BlobId,
 }
 
@@ -1454,6 +1479,96 @@ pub struct PrincipalGovernanceChanged {
     pub reason: Option<String>,
 }
 
+// ── the erasure act (spec 2026-08-31, D1/D6) ─────────────────────────────────
+
+/// One target of a completed erasure and what happened to it (erasure spec, "per-target
+/// outcomes"). The target names itself the way the personal-data manifest does — `table` or
+/// `table.column`; the outcome is the act's own record of what redaction applied. Deliberately
+/// open-textured in v1: ceilings are DATA, not types (D1), and the per-target vocabulary is the
+/// execution build's to pin. `unhonourable_scope` outcomes land here, never silent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct ErasureTargetOutcome {
+    /// Manifest identity of the target (`kb_profiles.display_name`, `kb_teams.slug`, …).
+    pub target: String,
+    /// What the act did to it (erased / sentinel-scrubbed / accepted-in-part / …).
+    pub outcome: String,
+}
+
+/// `principal_erased` — the ONE admin event of a completed erasure (erasure spec D1).
+///
+/// ONE TYPE for identity erasure and content erasure: the distinction rides the per-target
+/// outcomes as data, never the type boundary — two types would cost the pairing (one request,
+/// one operator, one reference) and double registration for no additional guarantee. The
+/// subject is the PSEUDONYM the act itself broke; the event never re-identifies — no name, no
+/// email, no case description. The request reference does not ride here: it lives on
+/// `kb_events."references"`, the apparatus this act owns.
+///
+/// The redacted set is keyed on CONTENT HASH (D2) — never row ids, which would collide with
+/// the trail functions' join-key shapes. The erased-content set (D4) rebuilds from these
+/// payloads alone.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct PrincipalErased {
+    pub subject_table: AnchorTable,
+    /// The pseudonym — `kb_profiles.id`. It survives; its identifying power does not (D5).
+    pub subject_id: Uuid,
+    /// The acting operator, distinguishable from the subject — self-serve vs administrative
+    /// is a comparison the auditor needs. `None` only where no actor exists to name; inventing
+    /// one would put a fabricated attribution on the ledger (the standing-event precedent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<ProfileId>,
+    /// The redacted set (D2): bare sha256 hex, exactly as `content_hash` carries it — the key
+    /// every reader already shares and no trail join-key shape can match.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub redacted_hashes: Vec<String>,
+    /// Per-target outcomes and the named remainder (D6's accepted-in-part arm): anything
+    /// unhonourable is named here. Partial completion is data, never a silent success.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub targets: Vec<ErasureTargetOutcome>,
+    /// The propagation fact, DISTINCT from the server fact (erasure spec, payload
+    /// requirements): this event records "gone from the server"; `false` must never read as
+    /// "gone from the clients". `false` until the propagation protocol exists (D3) — the
+    /// field reserves the fact; the wire task specifies its vocabulary.
+    #[serde(default)]
+    pub propagated_to_clients: bool,
+}
+
+/// The closed refusal vocabulary for `principal_erasure_refused` (erasure spec D6). A refused
+/// attempt to erase a person is exactly the event an operator later needs, and the reason code
+/// is the WHY the subject receives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ErasureRefusalReason {
+    /// The caller lacks erasure standing.
+    Unauthorized,
+    /// The scope cannot be honoured in full; the unhonourable part is named in `detail`
+    /// (accepted-in-part lands here, never silent).
+    UnhonourableScope,
+    /// The system holds the data under an obligation, named in `detail`.
+    IndependentObligation,
+}
+
+/// `principal_erasure_refused` — the negative face of the erasure act (erasure spec D6).
+///
+/// Same subject spelling as [`PrincipalErased`] (`subject_table` / `subject_id`, never the
+/// trail's join-key shapes); the operator is distinguishable from the subject exactly as
+/// there. One type with a reason code — three outcomes, not three types.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct PrincipalErasureRefused {
+    pub subject_table: AnchorTable,
+    pub subject_id: Uuid,
+    /// Who ATTEMPTED the erasure — an attempt leaves a trail too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<ProfileId>,
+    pub reason: ErasureRefusalReason,
+    /// The named unhonourable part, or the obligation held — the reason's evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
 /// `subscription_delivery_disposed` — a steward's judgment on one routed event (S2 chunk C).
 ///
 /// The disposition is an **act**, not a column write. `acted` cites what was authored; `declined`
@@ -1639,8 +1754,8 @@ impl FoldDisposition {
     }
 }
 
-/// The 26 typed event names — the registry-stamping and snapshot surfaces iterate this.
-pub const TYPED_EVENT_NAMES: [&str; 27] = [
+/// The 30 typed event names — the registry-stamping and snapshot surfaces iterate this.
+pub const TYPED_EVENT_NAMES: [&str; 30] = [
     "cogmap_seeded",
     "resource_created",
     "relationship_asserted",
@@ -1668,6 +1783,9 @@ pub const TYPED_EVENT_NAMES: [&str; 27] = [
     "blob_committed",
     "resource_reblocked",
     "blob_deleted",
+    "blob_erased",
+    "principal_erased",
+    "principal_erasure_refused",
 ];
 
 /// FOREIGN event names — registered permissive (NULL `payload_schema`) because their body is a
@@ -1687,13 +1805,15 @@ pub const FOREIGN_EVENT_NAMES: [&str; 1] = ["webhook_received"];
 /// `20260718000020`). The migration stamps these on an existing registry; this const is what
 /// re-stamps them on a path that rebuilds the registry from scratch (`bootseed::seed_system` after
 /// a `reset_schema` truncate), so the classification cannot be lost to a reseed.
-pub const ADMIN_EVENT_NAMES: [&str; 6] = [
+pub const ADMIN_EVENT_NAMES: [&str; 8] = [
     "admin_ledger_opened",
     "grant_created",
     "grant_revoked",
     "slack_principal_disconnected",
     "principal_standing_changed",
     "principal_governance_changed",
+    "principal_erased",
+    "principal_erasure_refused",
 ];
 
 /// The event names classified `kb_event_types.category = 'system'` — configuration acts, which are
@@ -1787,6 +1907,22 @@ pub async fn verify_ledger_roundtrip(pool: &sqlx::PgPool) -> anyhow::Result<()> 
                 "resource_reblocked" => {
                     serde_json::from_value::<ResourceReblocked>(r.payload.clone())?;
                 }
+                // The erasure act's strike (2026-09): fired through the same `blob_delete`
+                // wrapper as blob_deleted, so it gets an arm for the same reason — this is
+                // where the typed contract meets a really-emitted payload.
+                "blob_erased" => {
+                    serde_json::from_value::<BlobErased>(r.payload.clone())?;
+                }
+                // The erasure act's admin pair (20260909000025): `principal_erasure_execute` /
+                // `principal_erasure_refuse` emit these, so per the rule below they get arms —
+                // this is where the typed contract meets a really-emitted payload (the
+                // erasure_replay corpus carries real ones).
+                "principal_erased" => {
+                    serde_json::from_value::<PrincipalErased>(r.payload.clone())?;
+                }
+                "principal_erasure_refused" => {
+                    serde_json::from_value::<PrincipalErasureRefused>(r.payload.clone())?;
+                }
                 // Unlisted types (e.g. taxonomy entries no write path emits yet) are intentionally
                 // not roundtripped here; add an arm when a write path begins emitting one.
                 _ => {}
@@ -1873,6 +2009,68 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<RelationshipAsserted>(v).unwrap(),
             p
+        );
+    }
+
+    /// The erasure act's admin pair (spec 2026-08-31, D1/D6): the subject is the pseudonym,
+    /// the operator is distinguishable from it, the redacted set is hash-keyed (D2), and the
+    /// refusal's reason code is the closed three-vocabulary. The request reference rides
+    /// `kb_events."references"` — asserted ABSENT here, so it can never quietly move into the
+    /// payload and become the re-identification vector the spec forbids.
+    #[test]
+    fn principal_erasure_payloads_roundtrip_serde() {
+        let erased = PrincipalErased {
+            subject_table: AnchorTable::Profiles,
+            subject_id: Uuid::now_v7(),
+            actor: Some(ProfileId::from(Uuid::now_v7())),
+            redacted_hashes: vec!["ab".repeat(32)],
+            targets: vec![ErasureTargetOutcome {
+                target: "kb_profiles.email".into(),
+                outcome: "erased".into(),
+            }],
+            propagated_to_clients: false,
+        };
+        let v = serde_json::to_value(&erased).unwrap();
+        assert_eq!(v["subject_table"], "kb_profiles");
+        assert_eq!(
+            v["propagated_to_clients"], false,
+            "the server fact must never read as the client fact"
+        );
+        assert!(
+            v.get("request_reference").is_none() && !v.to_string().contains("reference"),
+            "the request reference rides kb_events.\"references\", never the payload"
+        );
+        assert_eq!(
+            serde_json::from_value::<PrincipalErased>(v).unwrap(),
+            erased
+        );
+
+        let refused = PrincipalErasureRefused {
+            subject_table: AnchorTable::Profiles,
+            subject_id: Uuid::now_v7(),
+            actor: Some(ProfileId::from(Uuid::now_v7())),
+            reason: ErasureRefusalReason::IndependentObligation,
+            detail: Some("legal-hold case 41".into()),
+        };
+        let v = serde_json::to_value(&refused).unwrap();
+        assert_eq!(v["reason"], "independent_obligation");
+        assert_eq!(
+            serde_json::from_value::<PrincipalErasureRefused>(v).unwrap(),
+            refused
+        );
+    }
+
+    /// The erasure strike's payload is the exact `BlobDeleted` shape (ruled): identity-only —
+    /// the ledger carries WHICH row, never which act's story; the wrapper and projector are
+    /// shared and the row shape must stay identical.
+    #[test]
+    fn blob_erased_is_identity_only_like_blob_deleted() {
+        let blob = BlobId::from(Uuid::now_v7());
+        let erased = serde_json::to_value(BlobErased { blob_id: blob }).unwrap();
+        let deleted = serde_json::to_value(BlobDeleted { blob_id: blob }).unwrap();
+        assert_eq!(
+            erased, deleted,
+            "blob_erased carries the exact BlobDeleted shape"
         );
     }
 
