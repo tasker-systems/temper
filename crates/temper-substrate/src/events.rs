@@ -57,6 +57,13 @@ pub enum EventKind {
     RelationshipReweighted,
     PropertyAsserted,
     PropertySet,
+    /// Retract one property row (`property_retracted`) — the correction verb for edge-owned
+    /// rows (the `anchored-at` span qualifications). Registered since the canonical seed
+    /// (`20260624000003`) with no write path until now; permissive (NULL `payload_schema`), the
+    /// `property_set` precedent. Fires from `SeedAction::PropertyRetract`; projected by the
+    /// edge-bound fold in `project_property_retracted`, which replay re-runs (the payload
+    /// carries the row id, so every replay retracts the same row).
+    PropertyRetracted,
     /// One data artifact committed to a resource (spec 2026-08-20). The payload carries the
     /// content HASH; the bytes ride a sidecar into `kb_data_artifact_content`.
     DataArtifactCommitted,
@@ -194,6 +201,7 @@ impl EventKind {
             EventKind::RelationshipReweighted => "relationship_reweighted",
             EventKind::PropertyAsserted => "property_asserted",
             EventKind::PropertySet => "property_set",
+            EventKind::PropertyRetracted => "property_retracted",
             EventKind::DataArtifactCommitted => "data_artifact_committed",
             EventKind::ShapeDeclared => "shape_declared",
             EventKind::LensCreated => "lens_created",
@@ -248,6 +256,7 @@ impl EventKind {
             "relationship_reweighted" => EventKind::RelationshipReweighted,
             "property_asserted" => EventKind::PropertyAsserted,
             "property_set" => EventKind::PropertySet,
+            "property_retracted" => EventKind::PropertyRetracted,
             "data_artifact_committed" => EventKind::DataArtifactCommitted,
             "shape_declared" => EventKind::ShapeDeclared,
             "lens_created" => EventKind::LensCreated,
@@ -379,6 +388,32 @@ pub enum SeedAction<'a> {
         key: &'a str,
         value: &'a serde_json::Value,
         weight: f64,
+        emitter: EntityId,
+    },
+    /// Assert one keyed property row on any owner with an anchor — the key-carrying, edge-owner
+    /// write behind the edge facet surface's keyed mode (`anchored-at` span qualifications).
+    /// Unlike [`SeedAction::FacetSet`] the key is carried, not hardcoded to `"facet"`; unlike
+    /// [`SeedAction::PropertySet`] there is no fold — exactly one row is appended, the value
+    /// whole, under the payload's own `property_id` (identity-as-input, so a replay reproduces
+    /// the row id). Fires the SAME key-agnostic `facet_set` SQL function, so the owner's anchor
+    /// resolves per kind via `_property_owner_anchor`.
+    KeyedPropertyAssert {
+        owner: PropertyOwner,
+        key: &'a str,
+        value: &'a serde_json::Value,
+        weight: f64,
+        emitter: EntityId,
+    },
+    /// Retract one property row bound to its owning edge — the correction verb for the
+    /// `anchored-at` span qualifications. No SQL mutation function: the event appends through
+    /// the shared `_event_append` chokepoint and the projection runs in Rust
+    /// (`project_property_retracted`), the same reconciliation shape `Materialize` uses for
+    /// its function-less event. The projector's edge-bound predicate renders the caller's
+    /// refusal: zero rows folded (foreign owner, missing id, already retracted) is
+    /// [`crate::writes::PropertyRetractError`], one shape for all three.
+    PropertyRetract {
+        edge: EdgeId,
+        property_id: PropertyId,
         emitter: EntityId,
     },
     /// Set a SINGLE-valued property: folds prior active `(owner, key)` rows then asserts this value, so
@@ -655,6 +690,8 @@ impl SeedAction<'_> {
             SeedAction::RelationshipAssert { .. } => EventKind::RelationshipAsserted,
             SeedAction::FacetSet { .. } => EventKind::PropertyAsserted,
             SeedAction::PropertyAssert { .. } => EventKind::PropertyAsserted,
+            SeedAction::KeyedPropertyAssert { .. } => EventKind::PropertyAsserted,
+            SeedAction::PropertyRetract { .. } => EventKind::PropertyRetracted,
             SeedAction::PropertySet { .. } => EventKind::PropertySet,
             SeedAction::DataArtifactCommit { .. } => EventKind::DataArtifactCommitted,
             SeedAction::ShapeDeclare { .. } => EventKind::ShapeDeclared,
@@ -742,6 +779,9 @@ pub enum Fired {
     /// event id is the only new identity — the created block ids were minted by the op and
     /// carried in).
     ResourceReblock(EventId),
+    /// The row a `PropertyRetract` fire folded — the caller's own property id, echoed. A fold
+    /// mints nothing: zero rows folded is a refusal, never an empty success.
+    PropertyRetract(PropertyId),
 }
 
 impl Fired {
@@ -862,6 +902,14 @@ impl Fired {
         }
     }
 
+    /// Extract the retracted row id a `PropertyRetract` fire folded.
+    pub fn property_retract(self) -> Result<PropertyId> {
+        match self {
+            Fired::PropertyRetract(id) => Ok(id),
+            other => anyhow::bail!("expected Fired::PropertyRetract, got {other:?}"),
+        }
+    }
+
     /// Extract the telos resource id a `CharterSet` fire produced.
     pub fn charter(self) -> Result<ResourceId> {
         match self {
@@ -909,6 +957,37 @@ impl EventContext {
     }
 }
 
+/// The projection half of `property_retracted` — the property family's one event with no SQL
+/// mutation function, so fire and replay share THIS body instead of a `_project_*` function (the
+/// reconciliation shape `Materialize` set for function-less events). Folds the one live row the
+/// payload names, edge-bound: `id`, `owner_table = 'kb_edges'`, `owner_id` from the payload's
+/// owner, and the `NOT is_folded` floor — the row persists, the partial unique index sees it as
+/// gone, and the address becomes re-assertable. Idempotent by payload under replay: an
+/// already-folded (or foreign, or missing) row folds zero rows — replay-normal, where the fire
+/// path refuses.
+pub(crate) async fn project_property_retracted<'e, E>(
+    executor: E,
+    event_id: Uuid,
+    payload: &serde_json::Value,
+) -> Result<u64>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    let res = sqlx::query!(
+        "UPDATE kb_properties \
+         SET is_folded = true, last_event_id = $1 \
+         WHERE id = ($2::jsonb->>'property_id')::uuid \
+           AND owner_table = 'kb_edges' \
+           AND owner_id = ($2::jsonb->'owner'->>'id')::uuid \
+           AND NOT is_folded",
+        event_id,
+        payload,
+    )
+    .execute(executor)
+    .await?;
+    Ok(res.rows_affected())
+}
+
 /// Fire one seeding action: dispatch it to its SQL function (event + projection, one txn) and return the
 /// produced ids. The caller threads a transaction (`&mut *tx`) so a run of fires commits atomically.
 pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Result<Fired> {
@@ -920,7 +999,8 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
 /// `kb_events.metadata`/`invocation_id`/`correlation_id`): the authored-4
 /// (`ResourceCreate`/`RelationshipAssert`/`FacetSet`/`RelationshipFold`) plus the non-authored writes
 /// (`ResourceUpdate`/`ResourceDelete`/`ResourceRehome`/`ResourceReassign`/`PropertySet`/`BlockMutate`/
-/// `BlockAnnotate`/`BlockAppend`/`CharterSet`/`RelationshipRetype`/`RelationshipReweight`). The pure-seed/lens/
+/// `BlockAnnotate`/`BlockAppend`/`CharterSet`/`RelationshipRetype`/`RelationshipReweight`), and the
+/// keyed edge-owner write (`KeyedPropertyAssert`). The pure-seed/lens/
 /// materialize arms (and the legacy 2-arg `PropertyAssert`) ignore it. [`fire`] is the
 /// `EventContext::default()` delegate.
 pub async fn fire_with(
@@ -1076,6 +1156,38 @@ pub async fn fire_with(
             ))
         }
 
+        SeedAction::KeyedPropertyAssert {
+            owner,
+            key,
+            value,
+            weight,
+            emitter,
+        } => {
+            let payload = payloads::PropertyAsserted {
+                property_id: PropertyId::from(Uuid::now_v7()),
+                owner: payloads::AnchorRef::from(owner),
+                property_key: key.to_owned(),
+                value: value.clone(),
+                weight,
+            };
+            // The same 5-arg `facet_set` call the `FacetSet` arm makes: the keyed write is a
+            // correlated authored act, so its events carry the caller's invocation + authorship.
+            let ids = sqlx::query_scalar!(
+                "SELECT facet_set($1,$2,$3,$4,$5)",
+                serde_json::to_value(&payload)?,
+                emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
+                ctx_corr,
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .context("facet_set returned null")?;
+            Ok(Fired::Facet(
+                ids.into_iter().map(PropertyId::from).collect(),
+            ))
+        }
+
         SeedAction::PropertyAssert {
             resource,
             key,
@@ -1132,6 +1244,56 @@ pub async fn fire_with(
             Ok(Fired::Facet(
                 ids.into_iter().map(PropertyId::from).collect(),
             ))
+        }
+
+        SeedAction::PropertyRetract {
+            edge,
+            property_id,
+            emitter,
+        } => {
+            let payload = payloads::PropertyRetracted {
+                owner: payloads::AnchorRef::edge(edge),
+                property_id,
+            };
+            let payload_value = serde_json::to_value(&payload)?;
+            // The event anchors the edge's own home — the resolution the facet_set/property_set
+            // wrappers get from `_property_owner_anchor`, asked directly here because this event
+            // has no SQL mutation wrapper to resolve it.
+            let anchor = sqlx::query!(
+                "SELECT a.anchor_table, a.anchor_id FROM _property_owner_anchor($1, $2) a",
+                "kb_edges",
+                edge.uuid(),
+            )
+            .fetch_one(&mut *conn)
+            .await?;
+            let anchor_table = anchor
+                .anchor_table
+                .context("_property_owner_anchor returned null anchor_table")?;
+            let anchor_id = anchor
+                .anchor_id
+                .context("_property_owner_anchor returned null anchor_id")?;
+            let event_id = sqlx::query_scalar!(
+                "SELECT _event_append('property_retracted', $1, $2, $3, $4, \
+                    p_metadata => $5, p_invocation => $6, p_correlation => $7)",
+                emitter.uuid(),
+                anchor_table,
+                anchor_id,
+                payload_value,
+                ctx_meta,
+                ctx_inv,
+                ctx_corr,
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .context("property_retracted append returned null")?;
+            let folded = project_property_retracted(&mut *conn, event_id, &payload_value).await?;
+            if folded == 0 {
+                return Err(anyhow::Error::new(crate::writes::PropertyRetractError {
+                    property_id: property_id.uuid(),
+                    edge_id: edge.uuid(),
+                }));
+            }
+            Ok(Fired::PropertyRetract(property_id))
         }
 
         SeedAction::DataArtifactCommit {

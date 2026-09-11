@@ -47,8 +47,8 @@ use temper_workflow::operations::{
     BodyUpdate, CloseInvocation, CommandOutput, CommitDataArtifact, CompleteAuditorJob,
     CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship, GoalPatch,
     MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit,
-    RetypeRelationship, ReweightRelationship, SetFacet, ShowResource, StewardDispatchTick, Surface,
-    UpdateResource,
+    RetractFacet, RetypeRelationship, ReweightRelationship, SetFacet, ShowResource,
+    StewardDispatchTick, Surface, UpdateResource,
 };
 
 use temper_substrate::content::PreparedBlock;
@@ -63,9 +63,9 @@ fn api_err(e: impl std::fmt::Display) -> TemperError {
     TemperError::Api(e.to_string())
 }
 
-/// Map a substrate write error, TYPING the block-addressing refusals before the generic
-/// Display bridge (the defined-dangling-state design): a folded target is `Gone` (410 — the
-/// row persists as history), an absent one `NotFound` (404) — never the 500-class `Api` the
+/// Map a substrate write error, TYPING the addressable refusals before the generic
+/// Display bridge: a folded target is `Gone` (410 — the row persists as history), an absent
+/// block or a refused facet retraction `NotFound` (404) — never the 500-class `Api` the
 /// plain bridge produced. Every other substrate error is unchanged.
 fn write_err(e: anyhow::Error) -> TemperError {
     match e.downcast_ref::<writes::BlockAddressError>() {
@@ -73,7 +73,10 @@ fn write_err(e: anyhow::Error) -> TemperError {
         Some(writes::BlockAddressError::NotInResource { .. }) => {
             TemperError::NotFound(e.to_string())
         }
-        None => api_err(e),
+        None => match e.downcast_ref::<writes::PropertyRetractError>() {
+            Some(_) => TemperError::NotFound(e.to_string()),
+            None => api_err(e),
+        },
     }
 }
 
@@ -2871,6 +2874,11 @@ impl Backend for DbBackend {
     /// key** of `values`, folding the prior row for each key named and leaving unnamed marks untouched.
     /// Mirrors `assert_relationship`/`fold_relationship`'s auth + owner/emitter resolution, gated on
     /// the TARGET resource directly (facets have no source/target split).
+    ///
+    /// When the command carries a `property_key`, the write is instead a keyed single-row assert of
+    /// `values` under that key — the edge span qualification's write action (`anchored-at`) — and is
+    /// edge-owned only. Both modes answer to the gates and the validation HERE, in the shared
+    /// dispatch every skin (HTTP, MCP, CLI) reaches, so no surface can bypass them.
     #[act_span]
     async fn set_facet(
         &self,
@@ -2887,9 +2895,24 @@ impl Backend for DbBackend {
         // definition — otherwise a caller could facet an edge they may not otherwise touch.
         match cmd.owner {
             PropertyOwner::Resource { id } => {
+                if cmd.property_key.is_some() {
+                    return Err(TemperError::BadRequest(
+                        "a keyed property write qualifies a relationship, not a resource; \
+                         address the edge's facet surface"
+                            .to_string(),
+                    ));
+                }
                 self.check_can_modify_next(uuid::Uuid::from(id)).await?
             }
-            PropertyOwner::Edge { id } => self.check_edge_mutable(uuid::Uuid::from(id)).await?,
+            PropertyOwner::Edge { id } => {
+                self.check_edge_mutable(uuid::Uuid::from(id)).await?;
+                self.validate_keyed_edge_write(
+                    uuid::Uuid::from(id),
+                    cmd.property_key.as_deref(),
+                    &cmd.values,
+                )
+                .await?;
+            }
         }
         // Correlation-integrity gate — additive to the modify authz above, before the write.
         self.check_act_invocation(cmd.act.invocation).await?;
@@ -2901,17 +2924,75 @@ impl Backend for DbBackend {
             .await
             .map_err(api_err)?;
         let act_ctx = act_context(&cmd.act);
-        let property_ids = writes::set_facet_with(
+        let property_ids = match cmd.property_key {
+            None => writes::set_facet_with(
+                &self.pool,
+                cmd.owner,
+                &cmd.values,
+                cmd.weight,
+                emitter,
+                act_ctx,
+            )
+            .await
+            .map_err(map_facet_write_err)?,
+            Some(key) => {
+                let id = writes::assert_keyed_property_with(
+                    &self.pool,
+                    cmd.owner,
+                    &key,
+                    &cmd.values,
+                    cmd.weight,
+                    emitter,
+                    act_ctx,
+                )
+                .await
+                .map_err(map_keyed_facet_write_err)?;
+                vec![id]
+            }
+        };
+        Ok(CommandOutput::new(property_ids))
+    }
+
+    /// Retract one facet row owned by an edge — the row-grain correction affordance for the
+    /// `anchored-at` span qualifications. The write side of `DELETE
+    /// /api/relationships/{edge_handle}/facets/{property_id}`, the `facet_retract` tool, and
+    /// `temper edge facet-retract`.
+    ///
+    /// The gate is the same authority the edge facet write asks — `check_edge_mutable`, the
+    /// retype/reweight/fold gate, which strictly implies read. Authority is caller-derived,
+    /// never author-vested: a demoted former member loses this verb with every other verb.
+    ///
+    /// The refusal for a foreign, missing, or already-retracted `property_id` is ONE shape —
+    /// the projector's own zero-rows outcome rendered `NotFound` — so the error never acts as
+    /// an existence oracle over property rows.
+    #[act_span]
+    async fn retract_facet(
+        &self,
+        cmd: RetractFacet,
+    ) -> Result<CommandOutput<temper_core::types::ids::PropertyId>, TemperError> {
+        let handle = uuid::Uuid::from(cmd.edge_handle);
+        // Auth before any write (WS2) — the same clauses that governed asserting the row
+        // (F-1). See `check_edge_mutable`.
+        self.check_edge_mutable(handle).await?;
+        // Correlation-integrity gate — additive to the modify authz above, before the write.
+        self.check_act_invocation(cmd.act.invocation).await?;
+        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
+            .await
+            .map_err(api_err)?;
+        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
+            .await
+            .map_err(api_err)?;
+        let act_ctx = act_context(&cmd.act);
+        let retracted = writes::retract_property_with(
             &self.pool,
-            cmd.owner,
-            &cmd.values,
-            cmd.weight,
+            temper_core::types::ids::EdgeId::from(handle),
+            cmd.property_id,
             emitter,
             act_ctx,
         )
         .await
-        .map_err(map_facet_write_err)?;
-        Ok(CommandOutput::new(property_ids))
+        .map_err(write_err)?;
+        Ok(CommandOutput::new(retracted))
     }
 
     /// One idempotent desired-state reconcile run as a SINGLE `SERIALIZABLE` transaction: the
@@ -3952,6 +4033,115 @@ impl Backend for DbBackend {
     }
 }
 
+impl DbBackend {
+    /// Structural validation for a keyed edge-owner write, applied BEFORE any fire so a refusal
+    /// appends no ledger event — the error body is the record.
+    ///
+    /// The keyed write admits exactly one key — `anchored-at` (the span qualification's
+    /// vocabulary) — and its rows carry declared structure: the value must be exactly
+    /// `{"endpoint": "source"|"target", "address": "<resource-uuid>#<block-uuid>"}`, the named
+    /// endpoint's side must be a resource (blocks live on `kb_resources` only — a cogmap or blob
+    /// side carries nothing to anchor), and the address's resource half must BE that endpoint.
+    ///
+    /// The validation probes STRUCTURE only. It never asks whether the addressed block row
+    /// exists, is live, or is visible: a write-time existence probe would be an existence
+    /// oracle, and would fail writes whose target folds later anyway. Resolution is the read
+    /// contract's to state. The value is stored verbatim — nothing here normalizes a spelling.
+    ///
+    /// A keyed write under the clustering `facet` key is refused outright: the facet verb owns
+    /// that key and writes one row per inner key; a keyed single-row write under it would land
+    /// the whole-object pre-grain shape the projector layer retired.
+    async fn validate_keyed_edge_write(
+        &self,
+        edge_id: uuid::Uuid,
+        property_key: Option<&str>,
+        value: &serde_json::Value,
+    ) -> Result<(), TemperError> {
+        use temper_core::types::facet_requests::{
+            AnchorAddress, AnchoredAtEndpoint, ANCHORED_AT_PROPERTY_KEY,
+        };
+        let Some(key) = property_key else {
+            return Ok(());
+        };
+        if key == "facet" {
+            return Err(TemperError::BadRequest(
+                "the clustering facet key rides the facet verb, which writes one row per \
+                 inner key of the object"
+                    .to_string(),
+            ));
+        }
+        if key != ANCHORED_AT_PROPERTY_KEY {
+            return Err(TemperError::BadRequest(format!(
+                "the keyed edge write admits only \"{ANCHORED_AT_PROPERTY_KEY}\"; got \
+                 \"{key}\" — ordinary edge facets ride the clustering facet verb"
+            )));
+        }
+
+        let declared = format!(
+            "an {ANCHORED_AT_PROPERTY_KEY} value must be exactly \
+             {{\"endpoint\": \"source\"|\"target\", \"address\": \"<resource-uuid>#<block-uuid>\"}}"
+        );
+        let Some(obj) = value.as_object() else {
+            return Err(TemperError::BadRequest(declared));
+        };
+        if obj.len() != 2 || !obj.contains_key("endpoint") || !obj.contains_key("address") {
+            return Err(TemperError::BadRequest(declared));
+        }
+        let endpoint = obj["endpoint"]
+            .as_str()
+            .and_then(AnchoredAtEndpoint::parse)
+            .ok_or_else(|| {
+                TemperError::BadRequest(format!(
+                    "an {ANCHORED_AT_PROPERTY_KEY} endpoint must be \"source\" or \"target\""
+                ))
+            })?;
+        let address = obj["address"].as_str().ok_or_else(|| {
+            TemperError::BadRequest(format!(
+                "an {ANCHORED_AT_PROPERTY_KEY} address must be a \
+                 \"<resource-uuid>#<block-uuid>\" string"
+            ))
+        })?;
+        let Some(addr) = AnchorAddress::parse(address) else {
+            return Err(TemperError::BadRequest(format!(
+                "an {ANCHORED_AT_PROPERTY_KEY} address must be one canonical \
+                 \"<resource-uuid>#<block-uuid>\" pair — exactly one '#', both halves bare \
+                 lowercase uuids — got {address:?}"
+            )));
+        };
+
+        // The named endpoint's own columns decide the side. `check_edge_mutable` has already
+        // refused a missing or folded edge; the arm below keeps this sound standalone.
+        let row = sqlx::query!(
+            "SELECT source_table, source_id, target_table, target_id \
+               FROM kb_edges WHERE id = $1",
+            edge_id
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(api_err)?
+        .ok_or_else(|| TemperError::NotFound(format!("edge {edge_id} not found")))?;
+        let (side_table, side_id) = match endpoint {
+            AnchoredAtEndpoint::Source => (row.source_table.as_str(), row.source_id),
+            AnchoredAtEndpoint::Target => (row.target_table.as_str(), row.target_id),
+        };
+        if side_table != "kb_resources" {
+            return Err(TemperError::BadRequest(format!(
+                "the {} endpoint is a {side_table} row; blocks live on kb_resources only, so \
+                 only a resource side is anchorable",
+                endpoint.as_str()
+            )));
+        }
+        if side_id != addr.resource {
+            return Err(TemperError::BadRequest(format!(
+                "the address's resource half must be the edge's {} endpoint id, got {}",
+                endpoint.as_str(),
+                addr.resource
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// Pre-flight validation (FIX #3): every reconcile edge target must resolve to a kernel resource that
 /// either already exists (the live slice) or is being created/kept this run (`request.entries`).
 impl DbBackend {
@@ -4023,13 +4213,27 @@ fn map_commit_err(e: sqlx::Error) -> TemperError {
 /// ([`api_err`]). The substrate write returns `anyhow::Error`, so the sqlx error is found by
 /// walking the source chain rather than a single downcast.
 fn map_facet_write_err(e: anyhow::Error) -> TemperError {
+    conflict_if_unique_violation(
+        e,
+        "a facet with this key is already set on the resource; fold it before re-setting",
+    )
+}
+
+/// The keyed verb's race arm: the unique-active index fired on a concurrently-asserted
+/// identical row. A bare retry acks the surviving row (insert-if-not-live) — folding is
+/// never part of this verb's remediation.
+fn map_keyed_facet_write_err(e: anyhow::Error) -> TemperError {
+    conflict_if_unique_violation(
+        e,
+        "an identical row was asserted concurrently; retry the write — it acks the existing row",
+    )
+}
+
+fn conflict_if_unique_violation(e: anyhow::Error, conflict: &str) -> TemperError {
     for cause in e.chain() {
         if let Some(sqlx::Error::Database(db)) = cause.downcast_ref::<sqlx::Error>() {
             if db.code().as_deref() == Some("23505") {
-                return TemperError::Conflict(
-                    "a facet with this key is already set on the resource; fold it before re-setting"
-                        .to_string(),
-                );
+                return TemperError::Conflict(conflict.to_string());
             }
         }
     }

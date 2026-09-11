@@ -5,7 +5,8 @@ use reqwest::Method;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::facet_requests::{
-    EdgeFacetSetRequest, EdgeFacetsResponse, FacetAck, FacetSetRequest, ResourceFacetsResponse,
+    EdgeFacetSetRequest, EdgeFacetsResponse, FacetAck, FacetRetractAck, FacetSetRequest,
+    ResourceFacetsResponse,
 };
 use uuid::Uuid;
 
@@ -60,6 +61,25 @@ impl<'a> FacetClient<'a> {
         let req = self.http.get(&path);
         self.http
             .send_json(&Method::GET, &path, req, Some(&token))
+            .await
+    }
+
+    /// DELETE /api/relationships/{edge_handle}/facets/{property_id} — retract one facet row
+    /// owned by the edge, addressed by the id `list_for_edge` returned.
+    ///
+    /// DELETE has no body, so per-act authorship (`act`) rides query params; an empty
+    /// `ActInput` serializes to nothing and appends no query string.
+    pub async fn retract_on_edge(
+        &self,
+        edge_handle: Uuid,
+        property_id: Uuid,
+        act: &temper_core::types::authorship::ActInput,
+    ) -> Result<FacetRetractAck> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/relationships/{edge_handle}/facets/{property_id}");
+        let req = self.http.delete(&path).query(act);
+        self.http
+            .send_json(&Method::DELETE, &path, req, Some(&token))
             .await
     }
 

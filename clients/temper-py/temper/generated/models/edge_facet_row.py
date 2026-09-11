@@ -20,6 +20,8 @@ import json
 from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, StrictStr
 from typing import Any, ClassVar, Dict, List, Optional, Union
 from uuid import UUID
+from temper.generated.models.anchor_address_resolution import AnchorAddressResolution
+from temper.generated.models.anchor_verdict import AnchorVerdict
 from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
@@ -28,6 +30,7 @@ class EdgeFacetRow(BaseModel):
     """
     One property row owned by an edge, as read back by `GET /api/relationships/{edge_handle}/facets`.  **Carries its author, because an edge facet is an evidential claim.** The use case this exists for is *\"this task witnesses clause X of goal G\"* on an `advances` edge — a statement a later reader weighs. Anyone with source-write and container-write on the edge may write one, which is not the same set as the edge's asserter, so an unattributed row would let a planted claim read identically to a steward's.  Attribution follows the precedent [`crate::types::citation_audit::CitationAuditRow`] set: identity travels on the emitting event (`kb_events.emitter_entity_id → kb_entities.profile_id`), and the row carries the profile **plus** its two human-readable `kb_profiles` columns so a caller never needs a second round trip to name an author.  **`authored_by_event_id` is the replay-stable identity**, not `property_id` — a property row is a masked surrogate whose id a replay re-mints, exactly as an audit's is.
     """ # noqa: E501
+    address_resolution: Optional[AnchorAddressResolution] = Field(default=None, description="For an `anchored-at` row: how the row's address resolved — `live`, `folded` (with the gated disposition), or `absent`. `null` for every other facet row.")
     authored_by_display_name: Optional[StrictStr] = None
     authored_by_event_id: UUID = Field(description="`kb_properties.asserted_by_event_id` — the act that wrote this facet, and the row's replay-stable identity.")
     authored_by_handle: Optional[StrictStr] = None
@@ -35,8 +38,9 @@ class EdgeFacetRow(BaseModel):
     property_id: UUID
     property_key: StrictStr = Field(description="`kb_properties.property_key`. `\"facet\"` for a clustering facet written by `facet_set`; an arbitrary key for a single-valued property written by `property_set`.")
     value: Optional[Any]
+    verdict: Optional[AnchorVerdict] = Field(default=None, description="For an `anchored-at` row resolving `live`: whether the anchored block's own live attribution corroborates the qualification (`corroborated`), disagrees with it (`divergent`), or is absent (`unattributed`). `null` when the row is not `anchored-at`, its address did not resolve `live`, or the edge declares no verdict direction for the row's anchored side.")
     weight: Union[StrictFloat, StrictInt]
-    __properties: ClassVar[List[str]] = ["authored_by_display_name", "authored_by_event_id", "authored_by_handle", "authored_by_profile_id", "property_id", "property_key", "value", "weight"]
+    __properties: ClassVar[List[str]] = ["address_resolution", "authored_by_display_name", "authored_by_event_id", "authored_by_handle", "authored_by_profile_id", "property_id", "property_key", "value", "verdict", "weight"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -77,6 +81,14 @@ class EdgeFacetRow(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # override the default output from pydantic by calling `to_dict()` of address_resolution
+        if self.address_resolution:
+            _dict['address_resolution'] = self.address_resolution.to_dict()
+        # set to None if address_resolution (nullable) is None
+        # and model_fields_set contains the field
+        if self.address_resolution is None and "address_resolution" in self.model_fields_set:
+            _dict['address_resolution'] = None
+
         # set to None if authored_by_display_name (nullable) is None
         # and model_fields_set contains the field
         if self.authored_by_display_name is None and "authored_by_display_name" in self.model_fields_set:
@@ -97,6 +109,11 @@ class EdgeFacetRow(BaseModel):
         if self.value is None and "value" in self.model_fields_set:
             _dict['value'] = None
 
+        # set to None if verdict (nullable) is None
+        # and model_fields_set contains the field
+        if self.verdict is None and "verdict" in self.model_fields_set:
+            _dict['verdict'] = None
+
         return _dict
 
     @classmethod
@@ -109,6 +126,7 @@ class EdgeFacetRow(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
+            "address_resolution": AnchorAddressResolution.from_dict(obj["address_resolution"]) if obj.get("address_resolution") is not None else None,
             "authored_by_display_name": obj.get("authored_by_display_name"),
             "authored_by_event_id": obj.get("authored_by_event_id"),
             "authored_by_handle": obj.get("authored_by_handle"),
@@ -116,6 +134,7 @@ class EdgeFacetRow(BaseModel):
             "property_id": obj.get("property_id"),
             "property_key": obj.get("property_key"),
             "value": obj.get("value"),
+            "verdict": obj.get("verdict"),
             "weight": obj.get("weight")
         })
         return _obj

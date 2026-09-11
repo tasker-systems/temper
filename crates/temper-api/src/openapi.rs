@@ -93,6 +93,7 @@ const API_VERSION: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../
         temper_core::types::relationship_requests::RelationshipAck,
         temper_core::types::facet_requests::FacetSetRequest,
         temper_core::types::facet_requests::FacetAck,
+        temper_core::types::facet_requests::FacetRetractAck,
         temper_core::types::reconcile::ReconcileCogmapRequest,
         temper_core::types::reconcile::ReconcileEntry,
         temper_core::types::reconcile::ReconcileEdge,

@@ -11,11 +11,13 @@ use serde::Deserialize;
 
 use temper_core::error::TemperError;
 use temper_core::types::authorship::ActInput;
-use temper_core::types::facet_requests::{EdgeFacetsResponse, FacetAck, ResourceFacetsResponse};
-use temper_core::types::ids::{EdgeId, ProfileId};
+use temper_core::types::facet_requests::{
+    EdgeFacetsResponse, FacetAck, FacetRetractAck, ResourceFacetsResponse,
+};
+use temper_core::types::ids::{EdgeId, ProfileId, PropertyId};
 use temper_core::types::property_owner::PropertyOwner;
 use temper_services::backend::DbBackend;
-use temper_workflow::operations::{Backend, SetFacet, Surface};
+use temper_workflow::operations::{Backend, RetractFacet, SetFacet, Surface};
 use uuid::Uuid;
 
 use crate::service::TemperMcpService;
@@ -91,6 +93,7 @@ pub async fn facet_set(
 
     let cmd = SetFacet {
         owner: PropertyOwner::resource(resource),
+        property_key: None,
         values: serde_json::Value::Object(input.values),
         weight: input.weight.unwrap_or(1.0),
         act,
@@ -117,8 +120,15 @@ pub struct EdgeFacetSetInput {
     /// The relationship's edge handle (the UUID `edge_assert` returned).
     pub edge_handle: Uuid,
     /// The facet's typed value payload — an **object** of `key` → value marks; same constraint as
-    /// [`FacetSetInput::values`].
+    /// [`FacetSetInput::values`]. With `property_key` set, this is instead the ONE row's value
+    /// under that key (e.g. `{"endpoint": "target", "address": "<resource-uuid>#<block-uuid>"}`
+    /// for `anchored-at`).
     pub values: serde_json::Map<String, serde_json::Value>,
+    /// Optional property key for a keyed single-row write (e.g. `anchored-at`): asserts `values`
+    /// as ONE row under this key instead of the clustering `facet` verb. Omitted, the write is
+    /// an ordinary facet.
+    #[serde(default)]
+    pub property_key: Option<String>,
     /// Facet salience/confidence weight (0.0-1.0 by convention). Defaults to 1.0.
     pub weight: Option<f64>,
     /// Per-act correlation (`invocation_id`) + discrete agent authorship. Flattened top-level
@@ -163,6 +173,7 @@ pub async fn edge_facet_set(
 
     let cmd = SetFacet {
         owner: PropertyOwner::edge(EdgeId::from(input.edge_handle)),
+        property_key: input.property_key,
         values: serde_json::Value::Object(input.values),
         weight: input.weight.unwrap_or(1.0),
         act,
@@ -265,8 +276,14 @@ pub struct FacetSetUnifiedInput {
     #[serde(default)]
     pub edge_handle: Option<Uuid>,
     /// The facet's typed value payload — an **object** of `key` → value marks; same constraint as
-    /// [`FacetSetInput::values`].
+    /// [`FacetSetInput::values`]. With `property_key` set, this is instead the ONE row's value
+    /// under that key.
     pub values: serde_json::Map<String, serde_json::Value>,
+    /// Optional property key for a keyed single-row write (e.g. `anchored-at`); `target=edge`
+    /// only — a keyed property row qualifies a relationship. Omitted, the write is an ordinary
+    /// facet.
+    #[serde(default)]
+    pub property_key: Option<String>,
     /// Facet salience/confidence weight (0.0-1.0 by convention). Defaults to 1.0.
     #[serde(default)]
     pub weight: Option<f64>,
@@ -283,6 +300,14 @@ pub async fn facet_set_unified(
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     match input.target {
         FacetTarget::Resource => {
+            if input.property_key.is_some() {
+                return Err(rmcp::ErrorData::invalid_params(
+                    "property_key applies to target=edge only — a keyed property row \
+                     qualifies a relationship"
+                        .to_string(),
+                    None,
+                ));
+            }
             let resource = input.resource.ok_or_else(|| {
                 rmcp::ErrorData::invalid_params(
                     "target=resource requires `resource`".to_string(),
@@ -312,6 +337,7 @@ pub async fn facet_set_unified(
                 EdgeFacetSetInput {
                     edge_handle,
                     values: input.values,
+                    property_key: input.property_key,
                     weight: input.weight,
                     act: input.act,
                 },
@@ -375,6 +401,89 @@ pub async fn facets_read(
     }
 }
 
+// ── Consolidated retract tool ──────────────────────────────────────────────────
+
+/// The facet-retract target — a resource or a relationship (edge).
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FacetRetractTarget {
+    /// Retract a facet from a resource — not supported; refused with the reason.
+    Resource,
+    /// Retract a facet from a relationship (edge).
+    Edge,
+}
+
+/// Consolidated facet-retract tool — the correction verb, with the same `target`
+/// discriminator as the set/read tools.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FacetRetractInput {
+    /// Whether to retract a facet from a resource or a relationship.
+    pub target: FacetRetractTarget,
+    /// Resource ref (UUID or `slug-<uuid>`). `target=resource` is refused — see the tool description.
+    #[serde(default)]
+    pub resource: Option<String>,
+    /// The relationship's edge handle (UUID from `assert_relationship`). Required when `target` is `edge`.
+    #[serde(default)]
+    pub edge_handle: Option<Uuid>,
+    /// The facet row's id, as `facets_read` returned it. Required.
+    pub property_id: Uuid,
+    /// Per-act correlation (`invocation_id`) + discrete agent authorship. Flattened top-level
+    /// keys; all optional. `confidence` required when any other authorship field is supplied.
+    #[serde(flatten)]
+    pub act: ActInput,
+}
+
+/// Retract one facet row owned by an edge.
+///
+/// Mirrors `DELETE /api/relationships/{edge_handle}/facets/{property_id}`. The retraction is
+/// row-grain: one act per row, addressed by the id the facets read carries.
+pub async fn facet_retract(
+    svc: &TemperMcpService,
+    input: FacetRetractInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    match input.target {
+        FacetRetractTarget::Resource => Err(rmcp::ErrorData::invalid_params(
+            "facet_retract applies to target=edge only: a resource's facet rows are \
+             projector-minted surrogates whose ids are not stable identities, so they have no \
+             retract-by-id. Use facet_set to overwrite a resource facet instead."
+                .to_string(),
+            None,
+        )),
+        FacetRetractTarget::Edge => {
+            let edge_handle = input.edge_handle.ok_or_else(|| {
+                rmcp::ErrorData::invalid_params(
+                    "target=edge requires `edge_handle`".to_string(),
+                    None,
+                )
+            })?;
+            let profile = svc.require_profile().await?;
+            let act = input
+                .act
+                .into_act_context()
+                .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
+
+            let cmd = RetractFacet {
+                edge_handle: EdgeId::from(edge_handle),
+                property_id: PropertyId::from(input.property_id),
+                act,
+                origin: Surface::Mcp,
+            };
+            let backend = DbBackend::new(svc.api_state.pool.clone(), ProfileId::from(profile.id));
+            let out = backend
+                .retract_facet(cmd)
+                .await
+                .map_err(|e| map_err(e, "facet_retract"))?;
+
+            let ack = FacetRetractAck {
+                property_id: Uuid::from(out.value),
+            };
+            Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+                to_text(&ack),
+            )]))
+        }
+    }
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -417,5 +526,44 @@ mod tests {
         assert!(input.act.invocation_id.is_some());
         let ctx = input.act.into_act_context().expect("assembles");
         assert!(!ctx.is_empty());
+    }
+
+    /// The retract input parses the unified shape: `target=edge` + `edge_handle` +
+    /// `property_id`, with the act fields flattened.
+    #[test]
+    fn facet_retract_input_deserializes_the_edge_target() {
+        let json = serde_json::json!({
+            "target": "edge",
+            "edge_handle": "019e84ab-26ba-7560-9d34-c60d74a9fbe2",
+            "property_id": "019e84ab-26ba-7560-9d34-c60d74a9fbe3",
+            "invocation_id": "019f0e28-1750-7490-919f-5e51c92c8391",
+        });
+        let input: FacetRetractInput = serde_json::from_value(json).unwrap();
+        assert!(matches!(input.target, FacetRetractTarget::Edge));
+        assert_eq!(
+            input.edge_handle,
+            Some("019e84ab-26ba-7560-9d34-c60d74a9fbe2".parse().unwrap())
+        );
+        assert_eq!(
+            input.property_id,
+            "019e84ab-26ba-7560-9d34-c60d74a9fbe3"
+                .parse::<Uuid>()
+                .unwrap()
+        );
+        assert!(input.act.invocation_id.is_some());
+    }
+
+    /// `target=resource` parses (the schema admits it) — the refusal is the handler's naming
+    /// refusal, not a deserialization failure, so an agent caller gets the reason rather than
+    /// a schema error.
+    #[test]
+    fn facet_retract_input_admits_target_resource_for_the_handler_to_refuse() {
+        let json = serde_json::json!({
+            "target": "resource",
+            "resource": "019e84ab-26ba-7560-9d34-c60d74a9fbe2",
+            "property_id": "019e84ab-26ba-7560-9d34-c60d74a9fbe3",
+        });
+        let input: FacetRetractInput = serde_json::from_value(json).unwrap();
+        assert!(matches!(input.target, FacetRetractTarget::Resource));
     }
 }

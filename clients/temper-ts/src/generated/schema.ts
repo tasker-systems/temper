@@ -1470,6 +1470,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/relationships/{edge_handle}/facets/{property_id}": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Retract one facet of a relationship
+         * @description Folds one facet row owned by the edge, addressed by the `property_id` the facets read
+         *     returned. The row persists as history and the read stops returning it; asserting the same
+         *     address again mints a fresh row. Authorizes through the same clauses as the other edge
+         *     writes. A property id naming another edge, an unknown one, and an already-retracted one all
+         *     answer the same 404.
+         */
+        delete: operations["retract_edge_facet"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/relationships/{edge_handle}/fold": {
         parameters: {
             query?: never;
@@ -2530,6 +2557,29 @@ export interface components {
             reasoning?: string | null;
         };
         /**
+         * @description How one `anchored-at` row's address resolved — the block read's own three-state contract,
+         *     stated per row. `live`, `folded`, and `absent` are the block read's own state names,
+         *     serialized under `"state"` the same way its answer is.
+         *
+         *     Carried only on `anchored-at` rows; every other facet row states `null` for this field.
+         */
+        AnchorAddressResolution: {
+            /** @enum {string} */
+            state: "live";
+        } | {
+            disposition: components["schemas"]["BlockFoldDisposition"];
+            /**
+             * Format: uuid
+             * @description The fold act the resolution walked.
+             */
+            folded_by_event_id: string;
+            /** @enum {string} */
+            state: "folded";
+        } | {
+            /** @enum {string} */
+            state: "absent";
+        };
+        /**
          * @description An anchor's materialized regions, with the anchor-level facts that let an empty answer say why
          *     it is empty. Returned by `anchor_shape` for EITHER anchor kind.
          *
@@ -2555,6 +2605,18 @@ export interface components {
             /** @description The regions themselves, most salient first — narrowed by `lens` when one was supplied. */
             regions: components["schemas"]["CogmapRegionRow"][];
         };
+        /**
+         * @description Whether an `anchored-at` row agrees with the anchored block's own attribution, stated
+         *     where an edge declares a direction and the row anchors the declared side. The comparison
+         *     runs against the block's live attribution only — a corrected (retracted) attribution row
+         *     never corroborates — and carried rows corroborate like direct ones.
+         *
+         *     `null` is rendered, never a computed negative: a row whose edge declares no direction, a
+         *     row anchored off the declared side, and a row whose address did not resolve `live` all
+         *     state `null`, so an edge kind can gain its direction additively and old readers survive.
+         * @enum {string}
+         */
+        AnchorVerdict: "corroborated" | "divergent" | "unattributed";
         /**
          * @description Append one segment to an in-progress (segmented-begin'd) resource —
          *     `POST /api/resources/{id}/blocks`.
@@ -4165,6 +4227,7 @@ export interface components {
          *     a masked surrogate whose id a replay re-mints, exactly as an audit's is.
          */
         EdgeFacetRow: {
+            address_resolution?: null | components["schemas"]["AnchorAddressResolution"];
             authored_by_display_name?: string | null;
             /**
              * Format: uuid
@@ -4187,6 +4250,7 @@ export interface components {
              */
             property_key: string;
             value: unknown;
+            verdict?: null | components["schemas"]["AnchorVerdict"];
             /** Format: double */
             weight: number;
         };
@@ -4201,6 +4265,12 @@ export interface components {
          *     validated into exactly one.
          */
         EdgeFacetSetRequest: components["schemas"]["ActInput"] & {
+            /**
+             * @description Optional property key for a keyed single-row write (e.g. `anchored-at`): asserts `values`
+             *     as ONE row under this key instead of the clustering `facet` verb. Omitted, the write is
+             *     an ordinary facet.
+             */
+            property_key?: string | null;
             /**
              * @description The facet's typed value payload — an **object** of `key` → value marks; same constraint as
              *     [`FacetSetRequest::values`].
@@ -4566,6 +4636,17 @@ export interface components {
         FacetPredicate: {
             key: string;
             value: string;
+        };
+        /**
+         * @description Acknowledgement returned by the facet retraction endpoint — `DELETE
+         *     /api/relationships/{edge_handle}/facets/{property_id}`.
+         *
+         *     The retracted row's id, echoed. The row itself persists folded away and is never reused: a
+         *     re-assertion of the same address mints a fresh row with a fresh id.
+         */
+        FacetRetractAck: {
+            /** Format: uuid */
+            property_id: string;
         };
         /** @description Request body for `POST /api/facets`. */
         FacetSetRequest: components["schemas"]["ActInput"] & {
@@ -11495,6 +11576,81 @@ export interface operations {
                 };
             };
             /** @description Relationship not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    retract_edge_facet: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Relationship edge handle */
+                edge_handle: string;
+                /** @description Facet row id to retract */
+                property_id: string;
+                /**
+                 * @description The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a
+                 *     correlation aid, never a substitute for authn/authz.
+                 */
+                invocation_id: null | components["schemas"]["InvocationId"];
+                /**
+                 * @description The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-
+                 *     minted, provenance-only. Rides independently of `invocation_id` and of authorship.
+                 */
+                correlation_id: null | components["schemas"]["CorrelationId"];
+                /** @description Free-text reasoning for the act. Authorship field — requires `confidence`. */
+                reasoning: string | null;
+                /** @description Graded self-assessed confidence band. Required whenever any other authorship field is set. */
+                confidence: null | components["schemas"]["ConfidenceBand"];
+                /** @description Structured rationale for the act. Authorship field — requires `confidence`. */
+                rationale: string | null;
+                /** @description The persona/role the author acted as. Authorship field — requires `confidence`. */
+                persona: string | null;
+                /** @description The model that authored the act. Authorship field — requires `confidence`. */
+                model: string | null;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Facet retracted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacetRetractAck"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Cannot modify this relationship */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No live facet row with that id on this relationship */
             404: {
                 headers: {
                     [name: string]: unknown;

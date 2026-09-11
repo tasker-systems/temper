@@ -62,7 +62,12 @@ __all__ = [
     "AdvanceWatermarkAck",
     "AdvanceWatermarkRequest",
     "AgentAuthorship",
+    "AnchorAddressResolution",
+    "AnchorAddressResolutionOneOf",
+    "AnchorAddressResolutionOneOf1",
+    "AnchorAddressResolutionOneOf2",
     "AnchorShape",
+    "AnchorVerdict",
     "AppendBlockPayload",
     "ArtifactCommitRequest",
     "ArtifactCommitResponse",
@@ -180,6 +185,7 @@ __all__ = [
     "ExtentOneOf2",
     "FacetAck",
     "FacetPredicate",
+    "FacetRetractAck",
     "FacetSetRequest",
     "FinalizePayload",
     "FoldRelationshipRequest",
@@ -417,7 +423,12 @@ from temper.generated.models.add_member_request import AddMemberRequest as AddMe
 from temper.generated.models.advance_watermark_ack import AdvanceWatermarkAck as AdvanceWatermarkAck
 from temper.generated.models.advance_watermark_request import AdvanceWatermarkRequest as AdvanceWatermarkRequest
 from temper.generated.models.agent_authorship import AgentAuthorship as AgentAuthorship
+from temper.generated.models.anchor_address_resolution import AnchorAddressResolution as AnchorAddressResolution
+from temper.generated.models.anchor_address_resolution_one_of import AnchorAddressResolutionOneOf as AnchorAddressResolutionOneOf
+from temper.generated.models.anchor_address_resolution_one_of1 import AnchorAddressResolutionOneOf1 as AnchorAddressResolutionOneOf1
+from temper.generated.models.anchor_address_resolution_one_of2 import AnchorAddressResolutionOneOf2 as AnchorAddressResolutionOneOf2
 from temper.generated.models.anchor_shape import AnchorShape as AnchorShape
+from temper.generated.models.anchor_verdict import AnchorVerdict as AnchorVerdict
 from temper.generated.models.append_block_payload import AppendBlockPayload as AppendBlockPayload
 from temper.generated.models.artifact_commit_request import ArtifactCommitRequest as ArtifactCommitRequest
 from temper.generated.models.artifact_commit_response import ArtifactCommitResponse as ArtifactCommitResponse
@@ -535,6 +546,7 @@ from temper.generated.models.extent_one_of1 import ExtentOneOf1 as ExtentOneOf1
 from temper.generated.models.extent_one_of2 import ExtentOneOf2 as ExtentOneOf2
 from temper.generated.models.facet_ack import FacetAck as FacetAck
 from temper.generated.models.facet_predicate import FacetPredicate as FacetPredicate
+from temper.generated.models.facet_retract_ack import FacetRetractAck as FacetRetractAck
 from temper.generated.models.facet_set_request import FacetSetRequest as FacetSetRequest
 from temper.generated.models.finalize_payload import FinalizePayload as FinalizePayload
 from temper.generated.models.fold_relationship_request import FoldRelationshipRequest as FoldRelationshipRequest

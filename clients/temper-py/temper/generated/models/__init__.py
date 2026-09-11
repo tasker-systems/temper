@@ -24,7 +24,12 @@ from temper.generated.models.add_member_request import AddMemberRequest
 from temper.generated.models.advance_watermark_ack import AdvanceWatermarkAck
 from temper.generated.models.advance_watermark_request import AdvanceWatermarkRequest
 from temper.generated.models.agent_authorship import AgentAuthorship
+from temper.generated.models.anchor_address_resolution import AnchorAddressResolution
+from temper.generated.models.anchor_address_resolution_one_of import AnchorAddressResolutionOneOf
+from temper.generated.models.anchor_address_resolution_one_of1 import AnchorAddressResolutionOneOf1
+from temper.generated.models.anchor_address_resolution_one_of2 import AnchorAddressResolutionOneOf2
 from temper.generated.models.anchor_shape import AnchorShape
+from temper.generated.models.anchor_verdict import AnchorVerdict
 from temper.generated.models.append_block_payload import AppendBlockPayload
 from temper.generated.models.artifact_commit_request import ArtifactCommitRequest
 from temper.generated.models.artifact_commit_response import ArtifactCommitResponse
@@ -142,6 +147,7 @@ from temper.generated.models.extent_one_of1 import ExtentOneOf1
 from temper.generated.models.extent_one_of2 import ExtentOneOf2
 from temper.generated.models.facet_ack import FacetAck
 from temper.generated.models.facet_predicate import FacetPredicate
+from temper.generated.models.facet_retract_ack import FacetRetractAck
 from temper.generated.models.facet_set_request import FacetSetRequest
 from temper.generated.models.finalize_payload import FinalizePayload
 from temper.generated.models.fold_relationship_request import FoldRelationshipRequest

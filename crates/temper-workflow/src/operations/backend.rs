@@ -26,8 +26,8 @@ use super::commands::{
     AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick,
     CloseInvocation, CommitDataArtifact, CompleteAuditorJob, CreateCognitiveMap, CreateResource,
     DeleteResource, FoldRelationship, MaterializeOnThreshold, OpenInvocation,
-    ReconcileCognitiveMap, RecordCitationAudit, RetypeRelationship, ReweightRelationship, SetFacet,
-    ShowResource, StewardDispatchTick, UpdateResource,
+    ReconcileCognitiveMap, RecordCitationAudit, RetractFacet, RetypeRelationship,
+    ReweightRelationship, SetFacet, ShowResource, StewardDispatchTick, UpdateResource,
 };
 use super::output::CommandOutput;
 use super::surface::Surface;
@@ -136,6 +136,15 @@ pub trait Backend: Send + Sync {
 
     async fn set_facet(&self, cmd: SetFacet)
         -> Result<CommandOutput<Vec<PropertyId>>, TemperError>;
+
+    /// Retract one facet row owned by an edge — the row-grain correction affordance for the
+    /// `anchored-at` span qualifications. Same authority as [`Backend::set_facet`]'s edge arm
+    /// (`check_edge_mutable`, which strictly implies read); the row is addressed by its
+    /// `property_id` and bound to the owning edge. Returns the retracted row's id.
+    async fn retract_facet(
+        &self,
+        cmd: RetractFacet,
+    ) -> Result<CommandOutput<PropertyId>, TemperError>;
 
     // ── L0 cognitive-map content reconcile (L0 delivery & lifecycle, Task 4) ──
     // Idempotent, additive-only, provenance-scoped desired-state reconcile of a cognitive map's

@@ -2471,9 +2471,14 @@ pub enum EdgeAction {
     Facet {
         /// Correlation ID of the relationship to set the facet on
         edge_handle: uuid::Uuid,
-        /// The facet's typed value payload, as a JSON string
+        /// The facet's typed value payload, as a JSON string. With --key set, this is instead
+        /// the ONE row's value under that key.
         #[arg(long)]
         values: String,
+        /// Optional property key for a keyed single-row write (e.g. `anchored-at`): asserts
+        /// --values as ONE row under this key instead of the clustering facet verb.
+        #[arg(long)]
+        key: Option<String>,
         /// Facet weight (default: 1.0)
         #[arg(long, default_value = "1.0")]
         weight: f64,
@@ -2488,6 +2493,20 @@ pub enum EdgeAction {
     Facets {
         /// Correlation ID of the relationship to read
         edge_handle: uuid::Uuid,
+    },
+    /// Retract one facet row of a relationship.
+    ///
+    /// Sends `DELETE /api/relationships/{edge_handle}/facets/{property_id}`. The row id comes
+    /// from `edge facets`. The row persists folded away — the read stops returning it — and
+    /// the same address is free to re-assert, which mints a fresh row.
+    FacetRetract {
+        /// Correlation ID of the relationship whose facet is retracted
+        edge_handle: uuid::Uuid,
+        /// The facet row's id, as `edge facets` returned it
+        property_id: uuid::Uuid,
+        /// Per-act authorship + invocation-correlation flags.
+        #[command(flatten)]
+        act: ActArgs,
     },
 }
 

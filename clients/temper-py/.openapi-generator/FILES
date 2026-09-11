@@ -40,7 +40,12 @@ temper/generated/models/add_member_request.py
 temper/generated/models/advance_watermark_ack.py
 temper/generated/models/advance_watermark_request.py
 temper/generated/models/agent_authorship.py
+temper/generated/models/anchor_address_resolution.py
+temper/generated/models/anchor_address_resolution_one_of.py
+temper/generated/models/anchor_address_resolution_one_of1.py
+temper/generated/models/anchor_address_resolution_one_of2.py
 temper/generated/models/anchor_shape.py
+temper/generated/models/anchor_verdict.py
 temper/generated/models/append_block_payload.py
 temper/generated/models/artifact_commit_request.py
 temper/generated/models/artifact_commit_response.py
@@ -158,6 +163,7 @@ temper/generated/models/extent_one_of1.py
 temper/generated/models/extent_one_of2.py
 temper/generated/models/facet_ack.py
 temper/generated/models/facet_predicate.py
+temper/generated/models/facet_retract_ack.py
 temper/generated/models/facet_set_request.py
 temper/generated/models/finalize_payload.py
 temper/generated/models/fold_relationship_request.py

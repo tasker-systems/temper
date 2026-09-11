@@ -14,6 +14,93 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.4.0 — unreleased
 
+- **`create --sources-as-edges` qualifies each asserted edge at attribution grain**
+  The authoring loop now also writes one `anchored-at` row per asserted `derived_from`
+  edge per block of the created resource whose attribution names that source — carried
+  (`is_carried`) rows included: exactly the grain the write surface can state, never less.
+  Rows ride the edge asserts' non-atomic, warn-not-fatal posture: a failed anchor warns
+  with remediation text and the committed create stands, and a retried create's anchors
+  ack instead of erroring (insert-if-not-live). The flag's meaning grows; no flag is added
+  and update gains none.
+pr: self
+classes: behavioral, additive
+surfaces: cli-stdout
+status: signal-only
+
+- **`property_retracted` wired — the row-grain correction verb for edge-owned facet rows**
+  A registered-since-seed event type gains its write path: HTTP
+  `DELETE /api/relationships/{edge_handle}/facets/{property_id}` (act context as query
+  parameters), MCP `facet_retract` (the unified `target` discriminator; `target=resource`
+  refused — resource facet rows have no payload-stable ids), CLI
+  `temper edge facet-retract <edge> <property-id>` (a sibling subcommand; the `edge facet`
+  leaf invocation is untouched), and temper-client `FacetRetractOnEdge`. The projector is
+  edge-bound (`id` + `owner` + `NOT is_folded`): a foreign, missing, or already-retracted
+  id renders one indistinguishable 404 — no existence oracle over property rows. The row
+  persists folded; the address is re-assertable as a fresh row. Payload is owner-shaped
+  and ships permissive (no migration, no registry stamp, no schema snapshot), the
+  `property_set` precedent; the element trail stays blind to property lifecycle.
+  Replay re-folds the same row every time. Read shapes are unchanged.
+pr: self
+classes: additive
+surfaces: http, mcp, cli-stdout, clients
+status: signal-only
+
+- **The edge facets read resolves `anchored-at` addresses and states the verdict**
+  Every facet row now carries `address_resolution` and `verdict`; on `anchored-at` rows
+  they state how the row's address resolved (the block read's own three-state contract —
+  `live`, `folded` with its gated disposition envelope, `absent`) and, where the edge
+  declares a direction (`derived_from` under both of its kind-shapes, source-side anchors)
+  whether the anchored block's live, uncorrected attribution corroborates the
+  qualification (`corroborated` / `divergent` / `unattributed`). On every other row — and
+  on anchored rows outside a declared direction — both fields serialize null, never
+  absent, and a payload without them parses: new readers read old writers, old readers
+  read new writers. The computation runs only at this read; traversal and event surfaces
+  never compute it. No existing request or response class changes shape — fields are
+  added.
+pr: self
+classes: additive
+surfaces: http, mcp, cli-stdout, clients
+status: signal-only
+
+- **The facet tools teach the `anchored-at` vocabulary — agent-caller meaning changes**
+  The `facet_set` / `facets_read` MCP tool descriptions document the keyed mode and the
+  resolution/verdict fields; the agent-skills `knowledge-base.md` documents the
+  `facet_set` / `facets_read` / `facet_retract` set and the correction loop
+  (`facet_retract` joins the writes census). Wire shapes are unchanged — what the
+  descriptions MEAN for an agent caller is new.
+pr: self
+classes: behavioral
+surfaces: mcp
+status: signal-only
+
+- **The keyed edge-owner facet write — `property_key` on the edge facet surfaces**
+  `POST /api/relationships/{edge_handle}/facets`, MCP `facet_set` (`target: edge`), and
+  `temper edge facet --key` grow an optional `property_key`: when set, `values` is asserted
+  as ONE row under that key through the shipped `property_asserted` event, instead of the
+  clustering `facet` verb (whose hardcode is untouched). Assertion is insert-if-not-live: a
+  repeated assert of a live (owner, key, value) acks the existing row id instead of
+  erroring. Omitted, every existing request behaves exactly as before; no existing request
+  class changes shape. First consumer is the `anchored-at` span qualification.
+pr: self
+classes: additive
+surfaces: http, mcp, cli-stdout, clients
+status: signal-only
+
+- **Structural validation for `anchored-at` writes (shared dispatch)**
+  A keyed write under `anchored-at` refuses unless the value is exactly
+  `{"endpoint": "source"|"target", "address": "<resource-uuid>#<block-uuid>"}` in the one
+  canonical form, the named endpoint's side is a resource, and the address's resource half
+  is that endpoint's id. Validation sits in the backend dispatch every surface reaches, so
+  no skin bypasses it; it probes structure only — never whether the addressed block exists,
+  is live, or is visible (no existence oracle; resolution is the read contract's to state).
+  A keyed write under any key other than the one declared key — `facet`, a resource
+  owner, a misspelling — refuses outright. Previously no
+  surface could write a keyed row at all, so nothing accepted-then-written changes.
+pr: self
+classes: behavioral
+surfaces: http, mcp, cli-stdout
+status: signal-only
+
 - **The hash-global erasure refusal grain retired (offboarding ruling)**
   The erasure act's write-path refusals are removed: a create or revise carrying a hash in
   `kb_erased_content` now lands where it previously refused, and the reconcile arm no longer
