@@ -14,6 +14,19 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.4.0 — unreleased
 
+- **The erasure record names guest-committed blob rows homed in governed homes**
+  The blob arm's second pass enumerates the governed homes BY HOME: every live row whose
+  actor halves are not the subject's is named in the `principal_erased` targets and the
+  erasure door's response — blob id + content hash, independent_obligation-shaped, the same
+  reporting team-held rows get — where the actor-keyed sweep reported nothing for them. The
+  subject's own strike outcomes and the strike template the fence parses are byte-unchanged;
+  named hashes never enter `kb_erased_content` (only strikes do). Ruled 2026-09-11: guest
+  rows are accepted as surviving, never silent.
+pr: self
+classes: behavioral
+surfaces: http, mcp, cli-stdout
+status: signal-only
+
 - **The hash-global erasure refusal grain retired (offboarding ruling)**
   The erasure act's write-path refusals are removed: a create or revise carrying a hash in
   `kb_erased_content` now lands where it previously refused, and the reconcile arm no longer
