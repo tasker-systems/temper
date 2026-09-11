@@ -47,9 +47,10 @@ principle, never the scope of it.
 One file per mode/effort combination. Read only the one that matches the current task.
 
 ### Extension Files (`guidance/`)
-The project's own rules — `guidance/fundamentals.md` holds its conventions if it exists. Read
-them before substantive work in a project; if missing, `/temper init` offers to create them
-(read `project-setup.md` for that flow).
+`guidance/fundamentals.md` is a **pointer file**: one entry per project, naming where that
+project's own fundamentals live (usually the repo's `AGENTS.md`). Read through it before
+substantive work in a project; no entry for the current project, or the file itself missing,
+and `/temper init` offers to set it up (read `project-setup.md` for that flow).
 
 ## Outcome Discipline — applies to every task, whether or not you author a goal
 
@@ -79,8 +80,9 @@ There is no `task start` CLI command; the sequence is:
 1. Resolve the task's ref: `temper resource list --type task --context @me/<ctx>`, find the row matching `<slug>`, copy its `ref`. Read it via `temper resource show <ref>` — extract mode and effort
 2. Move the task to in-progress: `temper resource update <ref> --stage in-progress`
 3. If mode or effort is missing, ask: "What mode (plan/build) and effort (small/medium/large)?"
-4. Apply *Outcome Discipline* above. Check `guidance/fundamentals.md`: apply it if present; if
-   not, offer "This context has no project fundamentals. Want to set them up? (`/temper init`)".
+4. Apply *Outcome Discipline* above. Check `guidance/fundamentals.md` — a pointer file; read
+   through it to the current project's fundamentals and apply them; no entry for this project,
+   offer "This project has no fundamentals entry. Want to set it up? (`/temper init`)".
    If this task authors or amends a goal, read `outcome-registers.md` first
 5. Read `workflows/{mode}-{effort}.md` and follow it
 
@@ -254,7 +256,8 @@ own discipline: **read `cognitive-maps.md`**, don't reconstruct the model from s
 Before dispatching any subagent:
 1. Read `subagent-guidance.md`
 2. Include all applicable principles in the subagent prompt (verbatim, not summarized)
-3. Include project fundamentals from `guidance/fundamentals.md` if available
+3. Include the current project's fundamentals — read through the `guidance/fundamentals.md`
+   pointer if available
 4. **If the subagent will write a plan, or write code from one, inject
    `implementation-grounding.md` verbatim.** That is what it exists for, and it is the
    guidance most often skipped.
