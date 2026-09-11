@@ -497,6 +497,25 @@ pub struct MaterializeOnThreshold {
     pub origin: Surface,
 }
 
+/// One bounded, resumable step of the corpus-adoption walk: per candidate in `scope`'s bounded
+/// window — gated by the acting principal's existing write predicates, per row — either survey
+/// (`dry_run`: the read-only classification) or act (the shipped re-block op, operator as
+/// emitter, one batch correlation id stamped on every fired event). Returns the receipt: the
+/// per-resource outcomes, per-class counts, the batch correlation id, and the continuation
+/// cursor. The operator is the loop — nothing runs between invocations.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AdoptResources {
+    pub scope: temper_core::types::adoption::AdoptScope,
+    /// Survey instead of act: classify every candidate without touching anything.
+    pub dry_run: bool,
+    /// The candidate-window bound. Every invocation is bounded; there is no unbounded pass.
+    pub limit: i64,
+    /// Resume key from the previous receipt — only candidates with `id > after_id` are
+    /// considered. `None` starts from the top of the scope.
+    pub after_id: Option<uuid::Uuid>,
+    pub origin: Surface,
+}
+
 /// Reconcile the L0-style kernel slice of a cognitive map to a pre-embedded
 /// desired-state manifest. Idempotent + additive-only + provenance-scoped: the
 /// `request` is the contract, the fired events are its consequence. `cogmap_id`

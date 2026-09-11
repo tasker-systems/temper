@@ -48,12 +48,12 @@ mod embed_impl {
     use async_trait::async_trait;
     use temper_core::types::resource_view::ResourceView;
     use temper_workflow::operations::{
-        AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick,
-        Backend, CloseInvocation, CommandOutput, CommitDataArtifact, CompleteAuditorJob,
-        CreateCognitiveMap, CreateResource, DeleteResource, DomainEvent, FoldRelationship,
-        MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit,
-        RetypeRelationship, ReweightRelationship, ShowResource, StewardDispatchTick,
-        UpdateResource,
+        AdoptResources, AdvanceStewardWatermark, AnnotateResource, AssertRelationship,
+        AuditorDispatchTick, Backend, CloseInvocation, CommandOutput, CommitDataArtifact,
+        CompleteAuditorJob, CreateCognitiveMap, CreateResource, DeleteResource, DomainEvent,
+        FoldRelationship, MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap,
+        RecordCitationAudit, RetypeRelationship, ReweightRelationship, ShowResource,
+        StewardDispatchTick, UpdateResource,
     };
 
     use super::super::translators::{
@@ -346,6 +346,16 @@ mod embed_impl {
             ))
         }
 
+        async fn adopt_resources(
+            &self,
+            _cmd: AdoptResources,
+        ) -> Result<CommandOutput<temper_core::types::adoption::AdoptReceipt>, TemperError>
+        {
+            Err(TemperError::Project(
+                "CloudBackend::adopt_resources not wired until cutover".to_string(),
+            ))
+        }
+
         // Segmented (multi-block) ingest is on the trait (Beat 2); the CLI's own streaming
         // begin/append/finalize orchestration (Beat 3, `actions::ingest::run_segmented_create`)
         // dispatches segment 0 straight through `IngestClient::begin_segmented` (the
@@ -519,9 +529,9 @@ mod non_embed_impl {
     use async_trait::async_trait;
     use temper_core::types::resource_view::ResourceView;
     use temper_workflow::operations::{
-        AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick,
-        Backend, CloseInvocation, CommandOutput, CommitDataArtifact, CompleteAuditorJob,
-        CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship,
+        AdoptResources, AdvanceStewardWatermark, AnnotateResource, AssertRelationship,
+        AuditorDispatchTick, Backend, CloseInvocation, CommandOutput, CommitDataArtifact,
+        CompleteAuditorJob, CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship,
         MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit,
         RetypeRelationship, ReweightRelationship, ShowResource, StewardDispatchTick,
         UpdateResource,

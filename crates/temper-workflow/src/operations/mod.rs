@@ -23,12 +23,12 @@ pub use actions::{
 };
 pub use backend::Backend;
 pub use commands::{
-    AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick,
-    CloseInvocation, CommitDataArtifact, CompleteAuditorJob, CreateCognitiveMap, CreateResource,
-    DeleteResource, FoldRelationship, GoalPatch, ListResources, MaterializeOnThreshold, MoveSpec,
-    OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit, RetractFacet, RetypeRelationship,
-    ReweightRelationship, SearchResources, SetFacet, ShowResource, StewardDispatchTick,
-    UpdateResource,
+    AdoptResources, AdvanceStewardWatermark, AnnotateResource, AssertRelationship,
+    AuditorDispatchTick, CloseInvocation, CommitDataArtifact, CompleteAuditorJob,
+    CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship, GoalPatch, ListResources,
+    MaterializeOnThreshold, MoveSpec, OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit,
+    RetractFacet, RetypeRelationship, ReweightRelationship, SearchResources, SetFacet,
+    ShowResource, StewardDispatchTick, UpdateResource,
 };
 pub use events::{DomainEvent, PushDeferReason};
 pub use inputs::{BodyUpdate, ListFilter, SearchQuery};

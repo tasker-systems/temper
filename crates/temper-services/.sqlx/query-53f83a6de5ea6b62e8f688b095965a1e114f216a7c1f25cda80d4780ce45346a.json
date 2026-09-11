@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT r.id FROM kb_resources r\n                         WHERE r.is_active\n                           AND r.ingest_state = 'complete'\n                           AND ($1::uuid IS NULL OR r.id > $1)\n                         ORDER BY r.id\n                         LIMIT $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "53f83a6de5ea6b62e8f688b095965a1e114f216a7c1f25cda80d4780ce45346a"
+}
