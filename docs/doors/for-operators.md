@@ -34,6 +34,10 @@ auth-identity contract — whose tokens this instance trusts and which it accept
 - **[Offboarding a departure](../playbooks/offboard-a-departure.md)** — ending a departing
   person's admission, handing off the work they owned, and the bound to quote when nobody
   acts. Includes why the revoke, and not an IdP-side group removal, is the acting control.
+- **[Erasure and the terms of use](../concepts/erasure-and-terms-of-use.md)** — the destructive
+  compliance act that sits outside the departure runbook: what an erasure wipes (including
+  guests' content in the subject's own contexts), what stays in shared contexts, and what the
+  record only reports.
 
 ## Connecting the rest of your world
 

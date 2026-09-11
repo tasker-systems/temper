@@ -24,7 +24,10 @@ Delete standing is **custody**, resolved inside the delete's own transaction:
   standing over **every** resource it relates to. Today that means you own the home each
   related resource lives in (or hold an explicit delete grant on it).
 - **An unattached blob**: you need custody of its **home**. A personal context — its owner.
-  A team context — a direct **owner role** in the owning team.
+  A team context — a direct **owner role** in the owning team. A blob homed in a cognitive
+  map has no custodian at all: the delete refuses rather than guess, and the erasure's
+  sweep names such rows as held rather than striking them — today, nothing empties a
+  map-homed blob's record.
 
 What never confers delete standing:
 
@@ -56,7 +59,12 @@ Erasure — a subject's right to be forgotten — is bounded where the team's co
 erasure never strikes bytes a team context holds and never empties team-homed blob rows. In
 team contexts the erasure breaks *attribution* (the pseudonym break), not the bytes. The
 delete act above is the ordinary, custodian-driven counterpart: it operates wherever custody
-resolves, including team homes through the owner role.
+resolves, including team homes through the owner role. The bound has a mirror side: content
+homed in the subject's *own* personal contexts wipes with the erasure whoever authored it —
+including content guests wrote there under a grant — with one named exception: file rows a
+guest *uploaded* there are not picked up by today's erasure sweep. Both lines, and the terms
+of use they carry, are in
+[Erasure and the terms of use](./erasure-and-terms-of-use.md).
 
 ## The bytes
 
