@@ -14,6 +14,19 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.4.0 — unreleased
 
+- **`create --sources-as-edges` qualifies each asserted edge at attribution grain**
+  The authoring loop now also writes one `anchored-at` row per asserted `derived_from`
+  edge per block of the created resource whose attribution names that source — carried
+  (`is_carried`) rows included: exactly the grain the write surface can state, never less.
+  Rows ride the edge asserts' non-atomic, warn-not-fatal posture: a failed anchor warns
+  with remediation text and the committed create stands, and a retried create's anchors
+  ack instead of erroring (insert-if-not-live). The flag's meaning grows; no flag is added
+  and update gains none.
+pr: self
+classes: behavioral, additive
+surfaces: cli-stdout
+status: signal-only
+
 - **`property_retracted` wired — the row-grain correction verb for edge-owned facet rows**
   A registered-since-seed event type gains its write path: HTTP
   `DELETE /api/relationships/{edge_handle}/facets/{property_id}` (act context as query
