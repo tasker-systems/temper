@@ -22,6 +22,9 @@ If you are standing the deployment up yourself, start at
   what membership actually grants.
 - **[Teams and roles](../concepts/teams-and-roles.md)** — what a team is, the role ladder, and
   why membership grants read but not write.
+- **[Erasure and the terms of use](../concepts/erasure-and-terms-of-use.md)** — the two lines
+  you cross by writing into a shared context or someone else's personal context, and what an
+  erasure wipes, keeps, and only reports.
 
 ## Cognitive maps
 
