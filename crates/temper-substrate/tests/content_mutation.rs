@@ -1444,15 +1444,14 @@ async fn an_out_of_order_chunk_array_derives_and_suppresses_in_array_order(pool:
     );
 }
 
-// ── The erased-hash refusal (erasure spec D4, arm 1 — the projection write-back) ──────────────
+// ── The erased-hash write-back, RETIRED (the offboarding ruling — 20260911000000) ────────────
 //
-// D4's exact undo scenario: erasure nulls the chunk embeddings; the no-op suppression then
-// SKIPS on check 3 (`AND NOT v_unembedded` — never swallow an embed repair); `block_mutated`
-// fires; and the projector writes the stale client's copy back in — prose re-admitted under a
-// hash the erased-content set holds. The refusal (20260909000030) sits BESIDE the five checks,
-// BEFORE suppression, so the write refuses even when it would otherwise have been suppressed —
-// and the differential arm proves check 3 is UNTOUCHED: a genuinely unembedded NON-erased
-// block still falls through to the embed-repair write.
+// D4 arm 1 refused any write-back carrying a hash in kb_erased_content, before no-op
+// suppression. The refusal keyed on byte identity, across every home and every actor: a
+// lawful revise of a same-hash document elsewhere refused too, and byte identity was
+// one-character evadable anyway — it never carried the weight. 20260911000000 removes the
+// check (migration) and these witnesses pin what holds now: the write lands, and check 3
+// (never swallow an embed repair) is untouched.
 
 /// sha256(content.trim()) — the chunker's own content_hash derivation
 /// (temper-ingest/src/chunk.rs), so the fixture hash is exactly what `block_mutate` receives.
@@ -1473,7 +1472,7 @@ async fn null_embeddings(pool: &sqlx::PgPool, block: uuid::Uuid) {
 }
 
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn an_erased_hash_refuses_the_write_back_while_a_non_erased_one_still_repairs(
+async fn an_erased_hash_no_longer_refuses_the_write_back_and_repair_still_fires(
     pool: sqlx::PgPool,
 ) {
     use temper_substrate::content;
@@ -1488,7 +1487,7 @@ async fn an_erased_hash_refuses_the_write_back_while_a_non_erased_one_still_repa
     let (_, cursor, revisions) = mutation_state(&pool, block).await;
 
     // ── the differential arm: unembedded + NON-erased + byte-identical ⇒ the embed-repair
-    //    write still fires (check 3 unharmed — the refusal must sit beside it, not replace it).
+    //    write still fires (check 3 unharmed by the refusal's removal).
     null_embeddings(&pool, block).await;
     revise_block(&pool, block, emitter, PROSE, &[]).await;
     let (events_after_repair, cursor_after_repair, revisions_after_repair) =
@@ -1500,8 +1499,10 @@ async fn an_erased_hash_refuses_the_write_back_while_a_non_erased_one_still_repa
     assert_ne!(cursor_after_repair, cursor);
     assert_eq!(revisions_after_repair, revisions + 1);
 
-    // ── the refusal arm: register the hash in the erased-content set (the projector-maintained
-    //    table D4 names; the refusal reads the set, not the event), re-null, re-send.
+    // ── the retired-refusal arm: register the hash in the erased-content set (the set is
+    //    now the RECORD — no write path consults it), re-null, re-send: the write LANDS.
+    //    A hash in the set is a fact about some erasure somewhere, never a bar on this
+    //    block's lawful revise (the offboarding ruling).
     let erased_hash = prose_hash(PROSE);
     sqlx::query(
         "INSERT INTO kb_erased_content (content_hash, erased_by_event_id) \
@@ -1515,7 +1516,7 @@ async fn an_erased_hash_refuses_the_write_back_while_a_non_erased_one_still_repa
 
     let prepared = content::prepare_block(0, None, PROSE).unwrap();
     let mut tx = pool.begin().await.unwrap();
-    let err = fire(
+    fire(
         &mut tx,
         SeedAction::BlockMutate {
             block: BlockId::from(block),
@@ -1527,29 +1528,20 @@ async fn an_erased_hash_refuses_the_write_back_while_a_non_erased_one_still_repa
         },
     )
     .await
-    .expect_err(
-        "a write-back carrying an ERASED hash must refuse — erasure is a refusal, not an absence",
-    );
-    let chain = err.to_string();
-    assert!(
-        chain.contains("erased"),
-        "the refusal names what it refuses, got: {chain}"
-    );
-    drop(tx); // rolled back — the failed fire must have left nothing behind
+    .expect("an erased hash is no longer a bar on the write — the refusal is retired");
+    tx.commit().await.unwrap();
 
-    let (events, cursor, revisions) = mutation_state(&pool, block).await;
+    let (events, _, rev) = mutation_state(&pool, block).await;
     assert_eq!(
-        (events, cursor, revisions),
-        (
-            events_after_repair,
-            cursor_after_repair,
-            revisions_after_repair
-        ),
-        "the refused write appended nothing, moved no cursor, minted no revision — and was NOT \
-         silently suppressed (the caller got the error)"
+        events,
+        events_after_repair + 1,
+        "the write-back appended its event — not refused, not silently suppressed"
     );
-    // The prose was not re-admitted under the erased hash: the current generation's content
-    // stays exactly what the last lawful write stored.
+    assert_eq!(
+        rev,
+        revisions_after_repair + 1,
+        "the revise minted a revision"
+    );
     let stored: String = sqlx::query_scalar(
         "SELECT bc.content FROM kb_content_blocks b \
          JOIN kb_block_content bc ON bc.block_revision_id = b.current_revision_id \
@@ -1559,19 +1551,17 @@ async fn an_erased_hash_refuses_the_write_back_while_a_non_erased_one_still_repa
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(
-        stored, PROSE,
-        "no second copy, no resurrection — state is unchanged"
-    );
+    assert_eq!(stored, PROSE, "the prose is stored under its erased hash");
 }
 
-// ── The create door (erasure spec D4's general clause — every content-admitting path) ─────────
+// ── The create door, RETIRED (the offboarding ruling — 20260911000000) ───────────────────────
 //
-// D4's general clause binds the create path too: a stale client POSTing erased text as a NEW
-// resource must be refused at the door, before `resource_created` fires or any chunk prose is
-// written — otherwise the erased-content set would refuse the revise and then watch the same
-// bytes walk back in under a fresh resource id. The refusal is Rust-side (`writes::refuse_
-// erased_content`) because the create chunks in Rust, before any SQL mutation exists to gate.
+// D4's general clause bound the create path too: `writes::refuse_erased_content` refused a
+// create whose chunk hashes or raw body hash appeared in kb_erased_content — one hash refused
+// the whole create. Byte identity is not authority: the same template ingested by two profiles
+// made the survivor's lawful re-ingest impossible after one erasure. Retired in the same
+// change that removes the Rust consult; these witnesses pin that a create carrying an erased
+// hash — wholly or partly — now lands like any other create.
 
 /// Chunks for `body` carrying the REAL chunker's content hashes, ONNX-free — the same fixture
 /// shape block_content.rs uses (a chunks-arm create with synthetic hashes is a chunker-drift
@@ -1656,11 +1646,11 @@ async fn create_via_door(
     .await
 }
 
-/// FAILS IF the create door re-admits erased text: a body reproducing an erased hash must be
-/// REFUSED with nothing written (no resource_created event, no chunk rows, no verbatim prose,
-/// no search_vector), while a non-erased body still creates.
+/// FAILS IF the create door still consults the erased-content set: a body reproducing an
+/// erased hash must CREATE like any other body — full prose, chunks, event, search_vector
+/// (the refusal is retired; the set is the record, never a bar).
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn an_erased_hash_refuses_the_create_and_a_fresh_body_still_creates(pool: sqlx::PgPool) {
+async fn an_erased_hash_no_longer_refuses_the_create(pool: sqlx::PgPool) {
     let (owner, emitter, home) = create_door_fixture(&pool).await;
 
     const PROSE: &str = "the deployment cadence section the operator erased";
@@ -1675,43 +1665,25 @@ async fn an_erased_hash_refuses_the_create_and_a_fresh_body_still_creates(pool: 
     .unwrap();
 
     let before = create_surface_counts(&pool).await;
-    let err = create_via_door(&pool, owner, emitter, home, PROSE)
+    let created = create_via_door(&pool, owner, emitter, home, PROSE)
         .await
-        .expect_err(
-            "a create whose body reproduces an ERASED hash must refuse — erasure is a \
-             refusal, not an absence",
+        .expect(
+            "a create whose body reproduces an ERASED hash must land — the hash was some other \
+             erasure's record, never a bar on this home's lawful write",
         );
-    let chain = err.to_string();
-    assert!(
-        chain.contains("ERASED"),
-        "the refusal names what it refuses, got: {chain}"
-    );
-    assert_eq!(
-        before,
-        create_surface_counts(&pool).await,
-        "the refused create wrote NOTHING — no event, no chunks, no prose, no search_vector"
-    );
 
-    // The door is not a wedge: a body with no erased hash still creates.
-    let fresh = create_via_door(
-        &pool,
-        owner,
-        emitter,
-        home,
-        "a wholly fresh and lawful body",
-    )
-    .await
-    .expect("a non-erased body still creates");
-    let (events, _, _, _): (i64, i64, i64, i64) = create_surface_counts(&pool).await;
-    assert_eq!(events, before.0 + 1, "the fresh create fired its event");
-    let _: temper_substrate::ids::ResourceId = fresh;
+    let (events, chunks, prose, fts) = create_surface_counts(&pool).await;
+    assert_eq!(events, before.0 + 1, "the create fired its event");
+    assert!(chunks > before.1, "chunk rows written");
+    assert!(prose > before.2, "verbatim prose written");
+    assert!(fts > before.3, "search_vector written");
+    let _: temper_substrate::ids::ResourceId = created;
 }
 
-/// FAILS IF a create carrying ONE erased hash beside fresh ones is admitted in part: D4's
-/// refusal clause refuses the WHOLE create (refusal, not partial admission) — one erased chunk
-/// means no resource, no event, no rows.
+/// FAILS IF a create carrying ONE erased hash beside fresh ones is refused or admitted in
+/// part: the door is retired — the WHOLE create lands, every chunk stored.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn a_create_with_one_erased_and_one_fresh_chunk_refuses_whole(pool: sqlx::PgPool) {
+async fn a_create_with_one_erased_and_one_fresh_chunk_lands_whole(pool: sqlx::PgPool) {
     let (owner, emitter, home) = create_door_fixture(&pool).await;
 
     // A two-section body long enough that the chunker actually splits it (~1428-char budget):
@@ -1743,19 +1715,32 @@ async fn a_create_with_one_erased_and_one_fresh_chunk_refuses_whole(pool: sqlx::
     .unwrap();
 
     let before = create_surface_counts(&pool).await;
-    let err = create_via_door(&pool, owner, emitter, home, &body)
+    create_via_door(&pool, owner, emitter, home, &body)
         .await
-        .expect_err(
-            "one erased + one fresh hash must refuse the WHOLE create — D4's refusal clause: \
-             refusal, not partial admission",
+        .expect(
+            "one erased + one fresh hash lands WHOLE — the refusal is retired; the fresh chunk \
+             rides in beside the erased one like any other chunk",
         );
-    assert!(
-        err.to_string().contains("ERASED"),
-        "the refusal names the erased hash, got: {err:#}"
-    );
+    let (events, _, prose, _) = create_surface_counts(&pool).await;
+    assert_eq!(events, before.0 + 1, "the mixed create fired its event");
+    assert!(prose > before.2, "the verbatim body was stored whole");
+    // Wholeness at the CHUNK grain: BOTH hashes exist as current chunks of the created
+    // resource — a partial-admission regression that stored the body but dropped one chunk
+    // row fails here. Set equality (the wire's chunk order need not survive the projector).
+    let mut stored: Vec<String> = sqlx::query_scalar(
+        "SELECT c.content_hash FROM kb_chunks c \
+          JOIN kb_resource_homes h ON h.resource_id = c.resource_id \
+         WHERE h.anchor_table = 'kb_contexts' AND h.anchor_id = $1 AND c.is_current",
+    )
+    .bind(home)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    stored.sort();
+    let mut expected: Vec<String> = chunks.into_iter().map(|c| c.content_hash).collect();
+    expected.sort();
     assert_eq!(
-        before,
-        create_surface_counts(&pool).await,
-        "the mixed create wrote nothing — the fresh chunk does not ride in behind the erased one"
+        stored, expected,
+        "every chunk of the body landed — nothing was admitted in part"
     );
 }

@@ -47,16 +47,23 @@ pub async fn embed_chunks(pool: &PgPool) -> Result<()> {
     Ok(())
 }
 
-/// The erased-hash exclusion, ONCE (erasure spec 2026-08-31, D4 arm 2 — 20260909000015's
-/// `kb_erased_content`): a hash in the set is not embed work. The erasure nulled its vector
-/// and provenance together, and "never re-embedded" must hold whatever the chunk's prose says
-/// (emptiness must not be the gate; the set is). As a loop skip it would be the wedge this
-/// file's no-disjunct warning describes, with the polarity flipped: the chunk would stay
-/// stale forever, `remaining` would never reach zero, and the resource would be re-enqueued
-/// every minute embedding nothing. As a predicate exclusion it means an erased hash is not
-/// WORK: the chunk stops being stale, the resource converges with the vector NULL, and
-/// `count_stale_chunks` — which MUST select exactly what [`STALE_CHUNK_PREDICATE`] selects —
-/// stays in lockstep for free.
+/// The erased-chunk exclusion, ONCE (D4 arm 2; re-keyed to the ROW by the offboarding
+/// ruling, 20260911000000 — decision 01a08dc2: the hash is the record key, never the
+/// reach). A chunk is excluded from embed work when IT is the wiped row: its own content
+/// is empty AND its hash is in `kb_erased_content`. The erasure nulled its vector and
+/// provenance together, and the chunk must stop being stale work or the wedge this file's
+/// no-disjunct warning describes returns with the polarity flipped: the chunk would stay
+/// stale forever, `remaining` would never reach zero, and the resource would be
+/// re-enqueued every minute embedding nothing. As a predicate exclusion the wiped chunk
+/// stops being stale, the resource converges with the vector NULL, and
+/// `count_stale_chunks` — which MUST select exactly what [`STALE_CHUNK_PREDICATE`]
+/// selects — stays in lockstep for free.
+///
+/// The row anchor is what the ruling adds. The 2026-08-31 spelling excluded by hash
+/// membership alone — "emptiness must not be the gate; the set is" — which excluded
+/// another principal's live, identical-prose chunk from embed work forever: an erasure
+/// elsewhere made this chunk unsearchable. Only the wiped row's own emptiness, joined to
+/// the set, excludes; a same-hash chunk with intact content embeds normally.
 ///
 /// This const is the single spelling every consumer interpolates: [`STALE_CHUNK_PREDICATE`]
 /// below (pinned to it by `stale_chunk_predicate_carries_the_erased_hash_exclusion`), and the
@@ -67,6 +74,8 @@ pub async fn embed_chunks(pool: &PgPool) -> Result<()> {
 /// and four sites moved apart before it.
 pub const ERASED_HASH_EXCLUSION: &str = "NOT EXISTS ( \
          SELECT 1 FROM kb_erased_content ec \
+          JOIN kb_chunk_content cc ON cc.chunk_id = ch.id \
+           AND cc.content = '' \
           WHERE ec.content_hash = ch.content_hash)";
 
 /// A chunk is **stale** when its vector was not produced by the model this build embeds with.
@@ -101,6 +110,8 @@ pub const STALE_CHUNK_PREDICATE: &str = "ch.is_current \
      AND ch.embedded_with IS DISTINCT FROM $2 \
      AND NOT EXISTS ( \
          SELECT 1 FROM kb_erased_content ec \
+          JOIN kb_chunk_content cc ON cc.chunk_id = ch.id \
+           AND cc.content = '' \
           WHERE ec.content_hash = ch.content_hash)";
 
 // STALE_CHUNK_PREDICATE cannot itself interpolate the exclusion const (`const &str` has no

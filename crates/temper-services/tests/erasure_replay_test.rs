@@ -661,9 +661,11 @@ async fn replay_of_an_erasure_is_byte_identical_and_a_replayed_re_erase_is_a_no_
     .unwrap();
     assert_eq!(
         distinct,
-        (2, 1),
-        "the set holds both hashes, attributed to the ONE first-admitting event — the re-erase's \
-         own new completion did not steal attribution (ON CONFLICT DO NOTHING)"
+        (3, 1),
+        "the set holds the subject's hashes PLUS the other principal's resource homed into the \
+         governed context (home-pure scope, the 2026-09-11 scope-of-engagement ruling: content \
+         inside a private context dies with that estate), all attributed to the ONE first-admitting \
+         event — the re-erase's own new completion did not steal attribution (ON CONFLICT DO NOTHING)"
     );
 
     // ── replay #2 (of the ledger extended by the re-erase): still byte-identical ──
@@ -679,8 +681,9 @@ async fn replay_of_an_erasure_is_byte_identical_and_a_replayed_re_erase_is_a_no_
         .await
         .unwrap();
     assert_eq!(
-        admits, 2,
-        "the second replay's redaction arm re-fires idempotently: still exactly two admits"
+        admits, 3,
+        "the second replay's redaction arm re-fires idempotently: still exactly three admits \
+         (home-pure scope, the 2026-09-11 ruling)"
     );
 
     // The typed contract meets REALLY-EMITTED erasure payloads: every principal_erased /

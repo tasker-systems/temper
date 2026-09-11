@@ -673,14 +673,14 @@ async fn reconcile_acts_correlate_to_the_runs_minted_envelope(pool: PgPool) {
     }
 }
 
-// ── the erased-content set (erasure spec D4, arm 3 — sync apply) ──────────────────────────────
+// ── the erased-content sync-arm drop, RETIRED (the offboarding ruling — 20260911000000) ──────
 //
-// A hash in `kb_erased_content` applies EMPTY on the sync arm — and because the reconcile UPDATE
-// arm routes through `block_mutate` (whose own D4 arm-1 gate REFUSES erased hashes), "applies
-// empty" here means the erased-hash chunk is dropped from the incoming set BEFORE the merkle is
-// computed: the write never carries the hash, the sync converges, and re-delivery of the same
-// request stays `unchanged` (the sanitize is inside the hash, so idempotency survives the
-// erasure).
+// The reconcile once dropped chunks whose hash sat in `kb_erased_content` before the merkle
+// ("applies empty"). The drop keyed on byte identity across every home: a lawful reconcile of
+// a document sharing a chunk with some erasure elsewhere lost that chunk silently, no error.
+// Retired — the sync is erasure-blind, and convergence is ordinary idempotency. The wiped
+// estate itself is custody-closed: it sits in the tombstoned subject's contexts, and no live
+// principal holds standing to reconcile into them.
 
 /// A two-chunk entry — the minimal shape where one chunk's hash can be erased while the
 /// entry's other content is lawful.
@@ -736,7 +736,7 @@ fn title_of(origin_uri: &str) -> String {
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn an_erased_hash_applies_empty_on_the_sync_arm(pool: PgPool) {
+async fn a_sync_re_delivery_is_erasure_blind(pool: PgPool) {
     let be = backend(&pool).await;
     let id = Uuid::now_v7();
     let h_erased = format!("{:0>64}", "aa");
@@ -759,7 +759,8 @@ async fn an_erased_hash_applies_empty_on_the_sync_arm(pool: PgPool) {
         .value;
     assert_eq!(out1.created, 1);
 
-    // The erasure: the hash enters the set (the projector-maintained table D4 names).
+    // The erasure: the hash enters the set. The set is the RECORD of some erasure — the
+    // sync consults it nowhere (the drop is retired).
     sqlx::query(
         "INSERT INTO kb_erased_content (content_hash, erased_by_event_id) \
          VALUES ($1, (SELECT id FROM kb_events ORDER BY id LIMIT 1))",
@@ -769,8 +770,9 @@ async fn an_erased_hash_applies_empty_on_the_sync_arm(pool: PgPool) {
     .await
     .expect("register the erased hash");
 
-    // The edited re-delivery: the client's new doc keeps the unchanged section under its OLD
-    // (now erased) hash and adds a new one — the stale-laptop shape D4 exists for.
+    // The edited re-delivery keeps the unchanged section under its OLD (now erased) hash
+    // and adds a new one. Before the retirement this chunk was silently dropped from the
+    // sync; now the entry re-blocks WHOLE — both chunks current, both with prose.
     let edited = two_chunk_entry(
         id,
         "temper://kernel/concept/sync-erased",
@@ -782,8 +784,8 @@ async fn an_erased_hash_applies_empty_on_the_sync_arm(pool: PgPool) {
         .reconcile_cognitive_map(cmd(L0_COGMAP, request(vec![edited.clone()])))
         .await
         .expect(
-            "the sync CONVERGES: the erased chunk is emptied out of what applies, never \
-             refused out of the whole run (the block_mutate refusal beneath would fire on it)",
+            "the sync converges with zero erasure-awareness — nothing is dropped, nothing \
+             refused",
         )
         .value;
     assert_eq!(
@@ -792,8 +794,8 @@ async fn an_erased_hash_applies_empty_on_the_sync_arm(pool: PgPool) {
         "the edited entry re-blocks"
     );
 
-    // The new generation carries ONLY the fresh hash, with its prose; the erased hash applied
-    // empty — it is in no current chunk of this resource.
+    // The new generation carries BOTH hashes with their prose — the erased hash applied
+    // exactly like the fresh one.
     let current: Vec<String> = sqlx::query_scalar(
         "SELECT content_hash FROM kb_chunks WHERE resource_id = $1 AND is_current ORDER BY chunk_index",
     )
@@ -803,19 +805,26 @@ async fn an_erased_hash_applies_empty_on_the_sync_arm(pool: PgPool) {
     .expect("current chunks");
     assert_eq!(
         current,
-        vec![h_fresh.clone()],
-        "the erased hash is not in the applied generation — it applied empty"
+        vec![h_erased.clone(), h_fresh.clone()],
+        "both chunks applied — the erased hash was never the sync's business"
     );
-    let prose: String = sqlx::query_scalar(
+    let prose: Vec<String> = sqlx::query_scalar(
         "SELECT cc.content FROM kb_chunk_content cc \
            JOIN kb_chunks c ON c.id = cc.chunk_id \
-          WHERE c.resource_id = $1 AND c.is_current",
+          WHERE c.resource_id = $1 AND c.is_current ORDER BY c.chunk_index",
     )
     .bind(id)
-    .fetch_one(&pool)
+    .fetch_all(&pool)
     .await
     .expect("current prose");
-    assert_eq!(prose, "a wholly new and lawful section");
+    assert_eq!(
+        prose,
+        vec![
+            "A cognitive map: a bounded, telos-governed view.".to_string(),
+            "a wholly new and lawful section".to_string()
+        ],
+        "both sections carry prose"
+    );
     // The old generation was superseded, not deleted (normal re-block mechanics).
     let superseded: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM kb_chunks WHERE resource_id = $1 AND NOT is_current",
@@ -826,8 +835,8 @@ async fn an_erased_hash_applies_empty_on_the_sync_arm(pool: PgPool) {
     .expect("superseded chunks");
     assert_eq!(superseded, 1);
 
-    // Idempotency survives the erasure: the sanitize is INSIDE the merkle, so re-delivering the
-    // same edited request is a pure no-op — the sync never re-blocks the erased hash.
+    // Ordinary idempotency: re-delivering the same edited request is a pure no-op — the
+    // incoming merkle re-hashes to the stored merkle, no sanitize involved.
     let mut_before = mutation_event_count(&pool).await;
     let out3 = be
         .reconcile_cognitive_map(cmd(L0_COGMAP, request(vec![edited])))
@@ -837,7 +846,7 @@ async fn an_erased_hash_applies_empty_on_the_sync_arm(pool: PgPool) {
     assert_eq!(
         (out3.created, out3.updated, out3.unchanged),
         (0, 0, 1),
-        "the sanitized request re-hashes to the stored merkle — unchanged"
+        "the request re-hashes to the stored merkle — unchanged"
     );
     let mut_after = mutation_event_count(&pool).await;
     assert_eq!(
@@ -846,11 +855,12 @@ async fn an_erased_hash_applies_empty_on_the_sync_arm(pool: PgPool) {
     );
 }
 
-/// FAILS IF a fully-erased re-delivery is a hard error: when EVERY incoming chunk is erased the
-/// sanitized set empties, and re-blocking THROUGH `block_mutate` would RAISE ("a revise must
-/// carry content") — the stale laptop whose whole document was erased would diverge forever.
-/// The server state IS the erased state (D4 arm 3), so the entry converges as `unchanged`:
-/// no error, zero new events. (The partial-erased case is the test above and stays green.)
+/// Pins the fully-erased shape: a re-delivery whose every chunk hash sits in the set
+/// converges as `unchanged` through the ORDINARY diff — same request, same stored merkle —
+/// with zero new events. The bite for "no consult in any form" is the partial sibling above
+/// (a fully-erased delivery was also a no-op under the retired drop, so this shape alone
+/// cannot distinguish); this test pins that the degenerate case still converges and never
+/// errors.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_fully_erased_re_delivery_converges_as_unchanged(pool: PgPool) {
     let be = backend(&pool).await;
@@ -872,8 +882,7 @@ async fn a_fully_erased_re_delivery_converges_as_unchanged(pool: PgPool) {
         .value;
     assert_eq!(out1.created, 1);
 
-    // The erasure: the entry's ONLY chunk hash enters the set, so the next delivery's
-    // sanitized set is empty.
+    // The erasure: the entry's ONLY chunk hash enters the set.
     let h_erased = format!("{:0>64}", "aa");
     sqlx::query(
         "INSERT INTO kb_erased_content (content_hash, erased_by_event_id) \
@@ -884,14 +893,14 @@ async fn a_fully_erased_re_delivery_converges_as_unchanged(pool: PgPool) {
     .await
     .expect("register the erased hash");
 
-    // The same request re-delivered: nothing lawful remains to apply, and the sync must
-    // CONVERGE — `unchanged`, not the "empty chunk set" raise from block_mutate.
+    // The same request re-delivered: the incoming merkle matches the stored merkle, so the
+    // CONVERGE — `unchanged` — exactly as it would with no erasure anywhere in the instance.
     let mut_before = mutation_event_count(&pool).await;
     let out2 = be
         .reconcile_cognitive_map(cmd(L0_COGMAP, request(vec![first])))
         .await
         .expect(
-            "a fully-erased re-delivery converges — the server state IS the erased state, \
+            "a fully-erased re-delivery converges through the ordinary diff — never a drop, \
              never a hard error",
         )
         .value;
