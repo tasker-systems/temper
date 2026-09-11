@@ -1782,60 +1782,7 @@ pub async fn reblock_resource_in_tx(
     p: ReblockParams,
     ctx: EventContext,
 ) -> Result<ReblockOutcome> {
-    // A partition decision over a still-arriving body is a guess.
-    let ingest_state: String = sqlx::query_scalar!(
-        "SELECT ingest_state FROM kb_resources WHERE id = $1",
-        p.resource.uuid()
-    )
-    .fetch_one(&mut *conn)
-    .await
-    .with_context(|| format!("reblock_resource: resource {} not found", p.resource))?;
-    if ingest_state == "in_progress" {
-        return Ok(ReblockOutcome::Declined {
-            reason: format!(
-                "resource {} is mid-ingest (in_progress) — a partition decision over a \
-                 still-arriving body would be a guess",
-                p.resource
-            ),
-        });
-    }
-
-    let live_blocks: Vec<LiveBlock> = read_live_blocks(&mut *conn, p.resource).await?;
-    if live_blocks.is_empty() {
-        return Ok(ReblockOutcome::Declined {
-            reason: format!("resource {} has no live blocks to partition", p.resource),
-        });
-    }
-    // The design slices STORED block content and never mutates text — a block whose bytes were
-    // never stored (a derived charter/scenario shape) would force the body to be re-derived
-    // from chunks, fabricating bytes the ledger never carried.
-    if let Some(missing) = live_blocks.iter().find(|b| b.bytes.is_none()) {
-        return Ok(ReblockOutcome::Declined {
-            reason: format!(
-                "block {} (seq {}) of resource {} stores no verbatim bytes (a derived shape) — \
-                 re-blocking composes the body from stored bytes only",
-                missing.id, missing.seq, p.resource
-            ),
-        });
-    }
-
-    let live_chunks: Vec<LiveChunk> = read_live_chunks(&mut *conn, p.resource).await?;
-
-    let attributions: Vec<AttributionRow> = read_attributions(&mut *conn, p.resource).await?;
-
-    // The body composes from verbatim block bytes only — never from chunk reconstruction.
-    let mut body = String::new();
-    for b in &live_blocks {
-        body.push_str(b.bytes.as_deref().expect("refused above"));
-    }
-
-    let plan = match compute_reblock_partition(
-        p.resource,
-        &body,
-        &live_blocks,
-        &live_chunks,
-        &attributions,
-    )? {
+    let plan = match reblock_partition_in_tx(conn, p.resource).await? {
         Partition::NoOp => return Ok(ReblockOutcome::NoOp),
         Partition::Declined(reason) => return Ok(ReblockOutcome::Declined { reason }),
         Partition::Plan(plan) => plan,
@@ -1856,6 +1803,90 @@ pub async fn reblock_resource_in_tx(
     .await?
     .reblocked_event()?;
     Ok(ReblockOutcome::Reblocked { event })
+}
+
+/// The act's classification half, read-only: everything [`reblock_resource_in_tx`] does up to
+/// the fire — the `in_progress` state read, the live blocks/chunks/attributions, the body
+/// composed from stored verbatim bytes, and the partition computation. The survey
+/// ([`survey_reblock_resource`]) and the act share THIS one computation so they cannot drift:
+/// a survey class and the act's outcome for the same row come from the same code path by
+/// construction, never from a copy.
+async fn reblock_partition_in_tx(
+    conn: &mut sqlx::PgConnection,
+    resource: ResourceId,
+) -> Result<Partition> {
+    // A partition decision over a still-arriving body is a guess.
+    let ingest_state: String = sqlx::query_scalar!(
+        "SELECT ingest_state FROM kb_resources WHERE id = $1",
+        resource.uuid()
+    )
+    .fetch_one(&mut *conn)
+    .await
+    .with_context(|| format!("reblock_resource: resource {} not found", resource))?;
+    if ingest_state == "in_progress" {
+        return Ok(Partition::Declined(format!(
+            "resource {resource} is mid-ingest (in_progress) — a partition decision over a \
+             still-arriving body would be a guess"
+        )));
+    }
+
+    let live_blocks: Vec<LiveBlock> = read_live_blocks(&mut *conn, resource).await?;
+    if live_blocks.is_empty() {
+        return Ok(Partition::Declined(format!(
+            "resource {resource} has no live blocks to partition"
+        )));
+    }
+    // The design slices STORED block content and never mutates text — a block whose bytes were
+    // never stored (a derived charter/scenario shape) would force the body to be re-derived
+    // from chunks, fabricating bytes the ledger never carried.
+    if let Some(missing) = live_blocks.iter().find(|b| b.bytes.is_none()) {
+        return Ok(Partition::Declined(format!(
+            "block {} (seq {}) of resource {} stores no verbatim bytes (a derived shape) — \
+             re-blocking composes the body from stored bytes only",
+            missing.id, missing.seq, resource
+        )));
+    }
+
+    let live_chunks: Vec<LiveChunk> = read_live_chunks(&mut *conn, resource).await?;
+
+    let attributions: Vec<AttributionRow> = read_attributions(&mut *conn, resource).await?;
+
+    // The body composes from verbatim block bytes only — never from chunk reconstruction.
+    let mut body = String::new();
+    for b in &live_blocks {
+        body.push_str(b.bytes.as_deref().expect("refused above"));
+    }
+
+    compute_reblock_partition(resource, &body, &live_blocks, &live_chunks, &attributions)
+}
+
+/// How a re-block WOULD classify a resource, read-only — [`ReblockOutcome`] minus the event.
+///
+/// - [`ReblockSurvey::NoOp`] — the partition already matches; the act, run now, would fire
+///   nothing and leave the ledger indistinguishable from never having run.
+/// - [`ReblockSurvey::WouldChange`] — the partition would move; the act, run now, would fire
+///   `resource_reblocked` (the survey fires nothing and so carries no event id).
+/// - [`ReblockSurvey::Declined`] — the same typed precondition failure the act would return,
+///   with the same reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReblockSurvey {
+    NoOp,
+    WouldChange,
+    Declined { reason: String },
+}
+
+/// Classify a resource's re-block partition WITHOUT writing: the act's machinery, read-only.
+/// The operator's verification instrument — survey → act → re-survey — and the only authority
+/// on remaining adoption scope, since no-op acts are ledger-silent by design. Shares the
+/// computation with the act (`reblock_partition_in_tx`, this module's private classification
+/// half); it cannot drift from what the act would then do.
+pub async fn survey_reblock_resource(pool: &PgPool, resource: ResourceId) -> Result<ReblockSurvey> {
+    let mut conn = pool.acquire().await?;
+    Ok(match reblock_partition_in_tx(&mut conn, resource).await? {
+        Partition::NoOp => ReblockSurvey::NoOp,
+        Partition::Declined(reason) => ReblockSurvey::Declined { reason },
+        Partition::Plan(_) => ReblockSurvey::WouldChange,
+    })
 }
 
 /// The write-path policy application point: re-partition a just-written body to the blocking
