@@ -24,10 +24,11 @@ Delete standing is **custody**, resolved inside the delete's own transaction:
   standing over **every** resource it relates to. Today that means you own the home each
   related resource lives in (or hold an explicit delete grant on it).
 - **An unattached blob**: you need custody of its **home**. A personal context — its owner.
-  A team context — a direct **owner role** in the owning team. A blob homed in a cognitive
-  map has no custodian at all: the delete refuses rather than guess, and the erasure's
-  sweep names such rows as held rather than striking them — today, nothing empties a
-  map-homed blob's record.
+  A team context — a direct **owner role** in the owning team. Blobs home in contexts
+  only: a commit naming a cognitive map as its home is refused, because a map is a
+  distilled view over resources, not a data store. The erasure sweep's naming arm for
+  map-homed rows stays as defense-in-depth; the schema refuses such rows at birth, so no
+  act ever meets one.
 
 What never confers delete standing:
 
