@@ -9849,6 +9849,66 @@
           }
         }
       },
+      "AnchorAddressResolution": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "The addressed block resolves and is current.",
+            "required": [
+              "state"
+            ],
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": [
+                  "live"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The addressed block's row persists, folded away. The disposition is the block read's\nown gated envelope: every named successor already passed the caller's own read gate,\nand successors the caller cannot read are omitted entirely (no id, no count). The\nqualification is never re-pointed by the fold — a dangling anchor states where its\ncontent went rather than silently following it.",
+            "required": [
+              "folded_by_event_id",
+              "disposition",
+              "state"
+            ],
+            "properties": {
+              "disposition": {
+                "$ref": "#/components/schemas/BlockFoldDisposition"
+              },
+              "folded_by_event_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "The fold act the resolution walked."
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "folded"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "No block answers under the addressed resource, or the addressed resource is not\nreadable — stated identically either way, exactly as the block read itself answers\nan unresolvable address. Never a computed negative: an address you cannot read tells\nyou nothing about what it would have corroborated.",
+            "required": [
+              "state"
+            ],
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": [
+                  "absent"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "How one `anchored-at` row's address resolved — the block read's own three-state contract,\nstated per row. `live`, `folded`, and `absent` are the block read's own state names,\nserialized under `\"state\"` the same way its answer is.\n\nCarried only on `anchored-at` rows; every other facet row states `null` for this field."
+      },
       "AnchorShape": {
         "type": "object",
         "description": "An anchor's materialized regions, with the anchor-level facts that let an empty answer say why\nit is empty. Returned by `anchor_shape` for EITHER anchor kind.\n\n`population` is the region count this principal can see across **all** lenses, member-gated, so\nit is always **`>= regions.len()`**. It is equal when no `lens` was supplied — and equally when\none was, if every region this caller can see already sits under that lens, which is the ordinary\ncase for an anchor that materializes a single lens. A `population` strictly above\n`regions.len()` is the lens-narrowed fraction: regions exist here that this read did not return.\nIt is a denominator, not a restatement of the row count.",
@@ -9889,6 +9949,15 @@
             "description": "The regions themselves, most salient first — narrowed by `lens` when one was supplied."
           }
         }
+      },
+      "AnchorVerdict": {
+        "type": "string",
+        "description": "Whether an `anchored-at` row agrees with the anchored block's own attribution, stated\nwhere an edge declares a direction and the row anchors the declared side. The comparison\nruns against the block's live attribution only — a corrected (retracted) attribution row\nnever corroborates — and carried rows corroborate like direct ones.\n\n`null` is rendered, never a computed negative: a row whose edge declares no direction, a\nrow anchored off the declared side, and a row whose address did not resolve `live` all\nstate `null`, so an edge kind can gain its direction additively and old readers survive.",
+        "enum": [
+          "corroborated",
+          "divergent",
+          "unattributed"
+        ]
       },
       "AppendBlockPayload": {
         "type": "object",
@@ -12353,6 +12422,17 @@
           "authored_by_event_id"
         ],
         "properties": {
+          "address_resolution": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AnchorAddressResolution",
+                "description": "For an `anchored-at` row: how the row's address resolved — `live`, `folded` (with the\ngated disposition), or `absent`. `null` for every other facet row."
+              }
+            ]
+          },
           "authored_by_display_name": {
             "type": [
               "string",
@@ -12387,6 +12467,17 @@
             "description": "`kb_properties.property_key`. `\"facet\"` for a clustering facet written by `facet_set`; an\narbitrary key for a single-valued property written by `property_set`."
           },
           "value": {},
+          "verdict": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AnchorVerdict",
+                "description": "For an `anchored-at` row resolving `live`: whether the anchored block's own live\nattribution corroborates the qualification (`corroborated`), disagrees with it\n(`divergent`), or is absent (`unattributed`). `null` when the row is not\n`anchored-at`, its address did not resolve `live`, or the edge declares no verdict\ndirection for the row's anchored side."
+              }
+            ]
+          },
           "weight": {
             "type": "number",
             "format": "double"

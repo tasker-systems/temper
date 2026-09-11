@@ -38,7 +38,12 @@ lib/temper/generated/models/add_member_request.rb
 lib/temper/generated/models/advance_watermark_ack.rb
 lib/temper/generated/models/advance_watermark_request.rb
 lib/temper/generated/models/agent_authorship.rb
+lib/temper/generated/models/anchor_address_resolution.rb
+lib/temper/generated/models/anchor_address_resolution_one_of.rb
+lib/temper/generated/models/anchor_address_resolution_one_of1.rb
+lib/temper/generated/models/anchor_address_resolution_one_of2.rb
 lib/temper/generated/models/anchor_shape.rb
+lib/temper/generated/models/anchor_verdict.rb
 lib/temper/generated/models/append_block_payload.rb
 lib/temper/generated/models/artifact_commit_request.rb
 lib/temper/generated/models/artifact_commit_response.rb

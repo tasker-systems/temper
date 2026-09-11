@@ -2530,6 +2530,29 @@ export interface components {
             reasoning?: string | null;
         };
         /**
+         * @description How one `anchored-at` row's address resolved — the block read's own three-state contract,
+         *     stated per row. `live`, `folded`, and `absent` are the block read's own state names,
+         *     serialized under `"state"` the same way its answer is.
+         *
+         *     Carried only on `anchored-at` rows; every other facet row states `null` for this field.
+         */
+        AnchorAddressResolution: {
+            /** @enum {string} */
+            state: "live";
+        } | {
+            disposition: components["schemas"]["BlockFoldDisposition"];
+            /**
+             * Format: uuid
+             * @description The fold act the resolution walked.
+             */
+            folded_by_event_id: string;
+            /** @enum {string} */
+            state: "folded";
+        } | {
+            /** @enum {string} */
+            state: "absent";
+        };
+        /**
          * @description An anchor's materialized regions, with the anchor-level facts that let an empty answer say why
          *     it is empty. Returned by `anchor_shape` for EITHER anchor kind.
          *
@@ -2555,6 +2578,18 @@ export interface components {
             /** @description The regions themselves, most salient first — narrowed by `lens` when one was supplied. */
             regions: components["schemas"]["CogmapRegionRow"][];
         };
+        /**
+         * @description Whether an `anchored-at` row agrees with the anchored block's own attribution, stated
+         *     where an edge declares a direction and the row anchors the declared side. The comparison
+         *     runs against the block's live attribution only — a corrected (retracted) attribution row
+         *     never corroborates — and carried rows corroborate like direct ones.
+         *
+         *     `null` is rendered, never a computed negative: a row whose edge declares no direction, a
+         *     row anchored off the declared side, and a row whose address did not resolve `live` all
+         *     state `null`, so an edge kind can gain its direction additively and old readers survive.
+         * @enum {string}
+         */
+        AnchorVerdict: "corroborated" | "divergent" | "unattributed";
         /**
          * @description Append one segment to an in-progress (segmented-begin'd) resource —
          *     `POST /api/resources/{id}/blocks`.
@@ -4165,6 +4200,7 @@ export interface components {
          *     a masked surrogate whose id a replay re-mints, exactly as an audit's is.
          */
         EdgeFacetRow: {
+            address_resolution?: null | components["schemas"]["AnchorAddressResolution"];
             authored_by_display_name?: string | null;
             /**
              * Format: uuid
@@ -4187,6 +4223,7 @@ export interface components {
              */
             property_key: string;
             value: unknown;
+            verdict?: null | components["schemas"]["AnchorVerdict"];
             /** Format: double */
             weight: number;
         };

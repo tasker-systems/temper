@@ -16,6 +16,9 @@ require 'time'
 module Temper::Generated
   # One property row owned by an edge, as read back by `GET /api/relationships/{edge_handle}/facets`.  **Carries its author, because an edge facet is an evidential claim.** The use case this exists for is *\"this task witnesses clause X of goal G\"* on an `advances` edge — a statement a later reader weighs. Anyone with source-write and container-write on the edge may write one, which is not the same set as the edge's asserter, so an unattributed row would let a planted claim read identically to a steward's.  Attribution follows the precedent [`crate::types::citation_audit::CitationAuditRow`] set: identity travels on the emitting event (`kb_events.emitter_entity_id → kb_entities.profile_id`), and the row carries the profile **plus** its two human-readable `kb_profiles` columns so a caller never needs a second round trip to name an author.  **`authored_by_event_id` is the replay-stable identity**, not `property_id` — a property row is a masked surrogate whose id a replay re-mints, exactly as an audit's is.
   class EdgeFacetRow < ApiModelBase
+    # For an `anchored-at` row: how the row's address resolved — `live`, `folded` (with the gated disposition), or `absent`. `null` for every other facet row.
+    attr_accessor :address_resolution
+
     attr_accessor :authored_by_display_name
 
     # `kb_properties.asserted_by_event_id` — the act that wrote this facet, and the row's replay-stable identity.
@@ -33,11 +36,37 @@ module Temper::Generated
 
     attr_accessor :value
 
+    # For an `anchored-at` row resolving `live`: whether the anchored block's own live attribution corroborates the qualification (`corroborated`), disagrees with it (`divergent`), or is absent (`unattributed`). `null` when the row is not `anchored-at`, its address did not resolve `live`, or the edge declares no verdict direction for the row's anchored side.
+    attr_accessor :verdict
+
     attr_accessor :weight
+
+    class EnumAttributeValidator
+      attr_reader :datatype
+      attr_reader :allowable_values
+
+      def initialize(datatype, allowable_values)
+        @allowable_values = allowable_values.map do |value|
+          case datatype.to_s
+          when /Integer/i
+            value.to_i
+          when /Float/i
+            value.to_f
+          else
+            value
+          end
+        end
+      end
+
+      def valid?(value)
+        !value || allowable_values.include?(value)
+      end
+    end
 
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
+        :'address_resolution' => :'address_resolution',
         :'authored_by_display_name' => :'authored_by_display_name',
         :'authored_by_event_id' => :'authored_by_event_id',
         :'authored_by_handle' => :'authored_by_handle',
@@ -45,6 +74,7 @@ module Temper::Generated
         :'property_id' => :'property_id',
         :'property_key' => :'property_key',
         :'value' => :'value',
+        :'verdict' => :'verdict',
         :'weight' => :'weight'
       }
     end
@@ -62,6 +92,7 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
+        :'address_resolution' => :'AnchorAddressResolution',
         :'authored_by_display_name' => :'String',
         :'authored_by_event_id' => :'String',
         :'authored_by_handle' => :'String',
@@ -69,6 +100,7 @@ module Temper::Generated
         :'property_id' => :'String',
         :'property_key' => :'String',
         :'value' => :'Object',
+        :'verdict' => :'AnchorVerdict',
         :'weight' => :'Float'
       }
     end
@@ -76,10 +108,12 @@ module Temper::Generated
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
+        :'address_resolution',
         :'authored_by_display_name',
         :'authored_by_handle',
         :'authored_by_profile_id',
         :'value',
+        :'verdict',
       ])
     end
 
@@ -98,6 +132,10 @@ module Temper::Generated
         end
         h[k.to_sym] = v
       }
+
+      if attributes.key?(:'address_resolution')
+        self.address_resolution = attributes[:'address_resolution']
+      end
 
       if attributes.key?(:'authored_by_display_name')
         self.authored_by_display_name = attributes[:'authored_by_display_name']
@@ -133,6 +171,10 @@ module Temper::Generated
         self.value = attributes[:'value']
       else
         self.value = nil
+      end
+
+      if attributes.key?(:'verdict')
+        self.verdict = attributes[:'verdict']
       end
 
       if attributes.key?(:'weight')
@@ -222,6 +264,7 @@ module Temper::Generated
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
+          address_resolution == o.address_resolution &&
           authored_by_display_name == o.authored_by_display_name &&
           authored_by_event_id == o.authored_by_event_id &&
           authored_by_handle == o.authored_by_handle &&
@@ -229,6 +272,7 @@ module Temper::Generated
           property_id == o.property_id &&
           property_key == o.property_key &&
           value == o.value &&
+          verdict == o.verdict &&
           weight == o.weight
     end
 
@@ -241,7 +285,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [authored_by_display_name, authored_by_event_id, authored_by_handle, authored_by_profile_id, property_id, property_key, value, weight].hash
+      [address_resolution, authored_by_display_name, authored_by_event_id, authored_by_handle, authored_by_profile_id, property_id, property_key, value, verdict, weight].hash
     end
 
     # Builds the object from hash

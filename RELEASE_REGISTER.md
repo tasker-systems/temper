@@ -14,6 +14,23 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.4.0 — unreleased
 
+- **The edge facets read resolves `anchored-at` addresses and states the verdict**
+  Every facet row now carries `address_resolution` and `verdict`; on `anchored-at` rows
+  they state how the row's address resolved (the block read's own three-state contract —
+  `live`, `folded` with its gated disposition envelope, `absent`) and, where the edge
+  declares a direction (`derived_from` under both of its kind-shapes, source-side anchors)
+  whether the anchored block's live, uncorrected attribution corroborates the
+  qualification (`corroborated` / `divergent` / `unattributed`). On every other row — and
+  on anchored rows outside a declared direction — both fields serialize null, never
+  absent, and a payload without them parses: new readers read old writers, old readers
+  read new writers. The computation runs only at this read; traversal and event surfaces
+  never compute it. No existing request or response class changes shape — fields are
+  added.
+pr: self
+classes: additive
+surfaces: http, mcp, cli-stdout, clients
+status: signal-only
+
 - **The keyed edge-owner facet write — `property_key` on the edge facet surfaces**
   `POST /api/relationships/{edge_handle}/facets`, MCP `facet_set` (`target: edge`), and
   `temper edge facet --key` grow an optional `property_key`: when set, `values` is asserted
