@@ -1470,6 +1470,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/relationships/{edge_handle}/facets/{property_id}": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Retract one facet of a relationship
+         * @description Folds one facet row owned by the edge, addressed by the `property_id` the facets read
+         *     returned. The row persists as history and the read stops returning it; asserting the same
+         *     address again mints a fresh row. Authorizes through the same clauses as the other edge
+         *     writes. A property id naming another edge, an unknown one, and an already-retracted one all
+         *     answer the same 404.
+         */
+        delete: operations["retract_edge_facet"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/relationships/{edge_handle}/fold": {
         parameters: {
             query?: never;
@@ -4609,6 +4636,17 @@ export interface components {
         FacetPredicate: {
             key: string;
             value: string;
+        };
+        /**
+         * @description Acknowledgement returned by the facet retraction endpoint — `DELETE
+         *     /api/relationships/{edge_handle}/facets/{property_id}`.
+         *
+         *     The retracted row's id, echoed. The row itself persists folded away and is never reused: a
+         *     re-assertion of the same address mints a fresh row with a fresh id.
+         */
+        FacetRetractAck: {
+            /** Format: uuid */
+            property_id: string;
         };
         /** @description Request body for `POST /api/facets`. */
         FacetSetRequest: components["schemas"]["ActInput"] & {
@@ -11538,6 +11576,81 @@ export interface operations {
                 };
             };
             /** @description Relationship not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    retract_edge_facet: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Relationship edge handle */
+                edge_handle: string;
+                /** @description Facet row id to retract */
+                property_id: string;
+                /**
+                 * @description The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a
+                 *     correlation aid, never a substitute for authn/authz.
+                 */
+                invocation_id: null | components["schemas"]["InvocationId"];
+                /**
+                 * @description The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-
+                 *     minted, provenance-only. Rides independently of `invocation_id` and of authorship.
+                 */
+                correlation_id: null | components["schemas"]["CorrelationId"];
+                /** @description Free-text reasoning for the act. Authorship field — requires `confidence`. */
+                reasoning: string | null;
+                /** @description Graded self-assessed confidence band. Required whenever any other authorship field is set. */
+                confidence: null | components["schemas"]["ConfidenceBand"];
+                /** @description Structured rationale for the act. Authorship field — requires `confidence`. */
+                rationale: string | null;
+                /** @description The persona/role the author acted as. Authorship field — requires `confidence`. */
+                persona: string | null;
+                /** @description The model that authored the act. Authorship field — requires `confidence`. */
+                model: string | null;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Facet retracted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacetRetractAck"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Cannot modify this relationship */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No live facet row with that id on this relationship */
             404: {
                 headers: {
                     [name: string]: unknown;

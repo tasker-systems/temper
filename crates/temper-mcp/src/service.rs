@@ -365,6 +365,18 @@ impl TemperMcpService {
         tools::facets::facet_set_unified(self, input).await
     }
 
+    #[tool(
+        description = "Retract one facet row of a relationship (edge) by id — the correction verb when an assertion named the wrong span. Set `target` to `edge` (requires `edge_handle` and the `property_id` that facets_read returned). For an `anchored-at` row the retract frees its address: re-assert the same address with facet_set to mint a fresh row. A property_id naming another edge, an unknown one, and an already-retracted one answer identically — not found. `target=resource` is refused: a resource's facet rows have no stable ids, so overwrite them with facet_set instead."
+    )]
+    async fn facet_retract(
+        &self,
+        Parameters(input): Parameters<tools::facets::FacetRetractInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::facets::facet_retract(self, input).await
+    }
+
     // ── Cogmap reads (consolidated 6→1) + list + create + materialize ─
 
     #[tool(
@@ -987,6 +999,28 @@ mod tests {
                 names.iter().any(|n| n == peer),
                 "{peer} is not advertised, so one anchor kind cannot be materialized from MCP \
                  while the other can; router has {names:?}"
+            );
+        }
+    }
+
+    /// The facet tools answer as a set — set, read, retract. The retract door is the
+    /// correction verb: without it an agent can assert an anchored-at row it later reads as
+    /// divergent but can never correct, so its absence would strand the disagreement state
+    /// with no action at the agent's own door (the same shape the anchor-materialize test
+    /// above exists for).
+    #[test]
+    fn facet_retract_is_advertised_beside_the_other_facet_doors() {
+        let names: Vec<String> = TemperMcpService::tool_router()
+            .list_all()
+            .into_iter()
+            .map(|t| t.name.to_string())
+            .collect();
+
+        for peer in ["facet_set", "facets_read", "facet_retract"] {
+            assert!(
+                names.iter().any(|n| n == peer),
+                "{peer} is not advertised, so the facet doors are incomplete; router has \
+                 {names:?}"
             );
         }
     }

@@ -5528,6 +5528,197 @@
         "x-apidog-folder": "Reference/API Reference/Facets"
       }
     },
+    "/api/relationships/{edge_handle}/facets/{property_id}": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "delete": {
+        "tags": [
+          "Facets"
+        ],
+        "summary": "Retract one facet of a relationship",
+        "description": "Folds one facet row owned by the edge, addressed by the `property_id` the facets read\nreturned. The row persists as history and the read stops returning it; asserting the same\naddress again mints a fresh row. Authorizes through the same clauses as the other edge\nwrites. A property id naming another edge, an unknown one, and an already-retracted one all\nanswer the same 404.",
+        "operationId": "retract_edge_facet",
+        "parameters": [
+          {
+            "name": "edge_handle",
+            "in": "path",
+            "description": "Relationship edge handle",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "property_id",
+            "in": "path",
+            "description": "Facet row id to retract",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "invocation_id",
+            "in": "path",
+            "description": "The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a\ncorrelation aid, never a substitute for authn/authz.",
+            "required": true,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/InvocationId"
+                }
+              ]
+            }
+          },
+          {
+            "name": "correlation_id",
+            "in": "path",
+            "description": "The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-\nminted, provenance-only. Rides independently of `invocation_id` and of authorship.",
+            "required": true,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/CorrelationId"
+                }
+              ]
+            }
+          },
+          {
+            "name": "reasoning",
+            "in": "path",
+            "description": "Free-text reasoning for the act. Authorship field — requires `confidence`.",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "confidence",
+            "in": "path",
+            "description": "Graded self-assessed confidence band. Required whenever any other authorship field is set.",
+            "required": true,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/ConfidenceBand"
+                }
+              ]
+            }
+          },
+          {
+            "name": "rationale",
+            "in": "path",
+            "description": "Structured rationale for the act. Authorship field — requires `confidence`.",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "persona",
+            "in": "path",
+            "description": "The persona/role the author acted as. Authorship field — requires `confidence`.",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "model",
+            "in": "path",
+            "description": "The model that authored the act. Authorship field — requires `confidence`.",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Facet retracted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacetRetractAck"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cannot modify this relationship",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No live facet row with that id on this relationship",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Facets"
+      }
+    },
     "/api/relationships/{edge_handle}/fold": {
       "parameters": [
         {
@@ -12976,6 +13167,19 @@
           },
           "value": {
             "type": "string"
+          }
+        }
+      },
+      "FacetRetractAck": {
+        "type": "object",
+        "description": "Acknowledgement returned by the facet retraction endpoint — `DELETE\n/api/relationships/{edge_handle}/facets/{property_id}`.\n\nThe retracted row's id, echoed. The row itself persists folded away and is never reused: a\nre-assertion of the same address mints a fresh row with a fresh id.",
+        "required": [
+          "property_id"
+        ],
+        "properties": {
+          "property_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },

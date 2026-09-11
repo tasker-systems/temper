@@ -1,18 +1,20 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::Json;
 use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
 use crate::middleware::surface::RequestSurface;
+use temper_core::types::authorship::ActInput;
 use temper_core::types::facet_requests::{
-    EdgeFacetSetRequest, EdgeFacetsResponse, FacetAck, FacetSetRequest, ResourceFacetsResponse,
+    EdgeFacetSetRequest, EdgeFacetsResponse, FacetAck, FacetRetractAck, FacetSetRequest,
+    ResourceFacetsResponse,
 };
-use temper_core::types::ids::{EdgeId, ProfileId, ResourceId};
+use temper_core::types::ids::{EdgeId, ProfileId, PropertyId, ResourceId};
 use temper_core::types::property_owner::PropertyOwner;
 use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::state::AppState;
-use temper_workflow::operations::{Backend, SetFacet};
+use temper_workflow::operations::{Backend, RetractFacet, SetFacet};
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
@@ -111,6 +113,57 @@ pub async fn set_edge_facet(
     Ok(Json(FacetAck {
         property_ids: out.value.into_iter().map(Uuid::from).collect(),
     }))
+}
+
+// The correction verb for the edge's facet rows — the retract counterpart of `set_edge_facet`
+// above, answering to the same gate (`check_edge_mutable`). The row is addressed by its id in
+// the path, and DELETE carries no body: the act context rides query params, exactly as
+// `resources::delete` does. A foreign, missing, or already-retracted id renders one
+// indistinguishable 404 — the refusal names only what the caller sent, so it is never an
+// existence oracle over property rows.
+/// Retract one facet of a relationship
+///
+/// Folds one facet row owned by the edge, addressed by the `property_id` the facets read
+/// returned. The row persists as history and the read stops returning it; asserting the same
+/// address again mints a fresh row. Authorizes through the same clauses as the other edge
+/// writes. A property id naming another edge, an unknown one, and an already-retracted one all
+/// answer the same 404.
+#[utoipa::path(
+    delete,
+    path = "/api/relationships/{edge_handle}/facets/{property_id}",
+    tag = "Facets",
+    params(
+        ("edge_handle" = Uuid, Path, description = "Relationship edge handle"),
+        ("property_id" = Uuid, Path, description = "Facet row id to retract"),
+        temper_core::types::authorship::ActInput
+    ),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Facet retracted", body = FacetRetractAck),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Cannot modify this relationship", body = ErrorBody),
+        (status = 404, description = "No live facet row with that id on this relationship", body = ErrorBody),
+    )
+)]
+pub async fn retract_edge_facet(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    RequestSurface(surface): RequestSurface,
+    Path((edge_handle, property_id)): Path<(Uuid, Uuid)>,
+    Query(act_in): Query<ActInput>,
+) -> ApiResult<Json<FacetRetractAck>> {
+    // DELETE carries no body — authorship rides query params
+    // (`?invocation_id=…&reasoning=…&confidence=…`), deserialized flat via serde_urlencoded.
+    let act = act_in.into_act_context().map_err(ApiError::from)?;
+    let cmd = RetractFacet {
+        edge_handle: EdgeId::from(edge_handle),
+        property_id: PropertyId::from(property_id),
+        act,
+        origin: surface,
+    };
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
+    backend.retract_facet(cmd).await.map_err(ApiError::from)?;
+    Ok(Json(FacetRetractAck { property_id }))
 }
 
 // Read-side gate is `edges_visible_to` — see `edge_service::list_edge_facets`. Reads stay

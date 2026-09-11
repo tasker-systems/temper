@@ -185,6 +185,7 @@ __all__ = [
     "ExtentOneOf2",
     "FacetAck",
     "FacetPredicate",
+    "FacetRetractAck",
     "FacetSetRequest",
     "FinalizePayload",
     "FoldRelationshipRequest",
@@ -545,6 +546,7 @@ from temper.generated.models.extent_one_of1 import ExtentOneOf1 as ExtentOneOf1
 from temper.generated.models.extent_one_of2 import ExtentOneOf2 as ExtentOneOf2
 from temper.generated.models.facet_ack import FacetAck as FacetAck
 from temper.generated.models.facet_predicate import FacetPredicate as FacetPredicate
+from temper.generated.models.facet_retract_ack import FacetRetractAck as FacetRetractAck
 from temper.generated.models.facet_set_request import FacetSetRequest as FacetSetRequest
 from temper.generated.models.finalize_payload import FinalizePayload as FinalizePayload
 from temper.generated.models.fold_relationship_request import FoldRelationshipRequest as FoldRelationshipRequest

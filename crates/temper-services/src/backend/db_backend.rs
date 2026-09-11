@@ -47,8 +47,8 @@ use temper_workflow::operations::{
     BodyUpdate, CloseInvocation, CommandOutput, CommitDataArtifact, CompleteAuditorJob,
     CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship, GoalPatch,
     MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit,
-    RetypeRelationship, ReweightRelationship, SetFacet, ShowResource, StewardDispatchTick, Surface,
-    UpdateResource,
+    RetractFacet, RetypeRelationship, ReweightRelationship, SetFacet, ShowResource,
+    StewardDispatchTick, Surface, UpdateResource,
 };
 
 use temper_substrate::content::PreparedBlock;
@@ -63,9 +63,9 @@ fn api_err(e: impl std::fmt::Display) -> TemperError {
     TemperError::Api(e.to_string())
 }
 
-/// Map a substrate write error, TYPING the block-addressing refusals before the generic
-/// Display bridge (the defined-dangling-state design): a folded target is `Gone` (410 — the
-/// row persists as history), an absent one `NotFound` (404) — never the 500-class `Api` the
+/// Map a substrate write error, TYPING the addressable refusals before the generic
+/// Display bridge: a folded target is `Gone` (410 — the row persists as history), an absent
+/// block or a refused facet retraction `NotFound` (404) — never the 500-class `Api` the
 /// plain bridge produced. Every other substrate error is unchanged.
 fn write_err(e: anyhow::Error) -> TemperError {
     match e.downcast_ref::<writes::BlockAddressError>() {
@@ -73,7 +73,10 @@ fn write_err(e: anyhow::Error) -> TemperError {
         Some(writes::BlockAddressError::NotInResource { .. }) => {
             TemperError::NotFound(e.to_string())
         }
-        None => api_err(e),
+        None => match e.downcast_ref::<writes::PropertyRetractError>() {
+            Some(_) => TemperError::NotFound(e.to_string()),
+            None => api_err(e),
+        },
     }
 }
 
@@ -2948,6 +2951,48 @@ impl Backend for DbBackend {
             }
         };
         Ok(CommandOutput::new(property_ids))
+    }
+
+    /// Retract one facet row owned by an edge — the row-grain correction affordance for the
+    /// `anchored-at` span qualifications. The write side of `DELETE
+    /// /api/relationships/{edge_handle}/facets/{property_id}`, the `facet_retract` tool, and
+    /// `temper edge facet-retract`.
+    ///
+    /// The gate is the same authority the edge facet write asks — `check_edge_mutable`, the
+    /// retype/reweight/fold gate, which strictly implies read. Authority is caller-derived,
+    /// never author-vested: a demoted former member loses this verb with every other verb.
+    ///
+    /// The refusal for a foreign, missing, or already-retracted `property_id` is ONE shape —
+    /// the projector's own zero-rows outcome rendered `NotFound` — so the error never acts as
+    /// an existence oracle over property rows.
+    #[act_span]
+    async fn retract_facet(
+        &self,
+        cmd: RetractFacet,
+    ) -> Result<CommandOutput<temper_core::types::ids::PropertyId>, TemperError> {
+        let handle = uuid::Uuid::from(cmd.edge_handle);
+        // Auth before any write (WS2) — the same clauses that governed asserting the row
+        // (F-1). See `check_edge_mutable`.
+        self.check_edge_mutable(handle).await?;
+        // Correlation-integrity gate — additive to the modify authz above, before the write.
+        self.check_act_invocation(cmd.act.invocation).await?;
+        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
+            .await
+            .map_err(api_err)?;
+        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
+            .await
+            .map_err(api_err)?;
+        let act_ctx = act_context(&cmd.act);
+        let retracted = writes::retract_property_with(
+            &self.pool,
+            temper_core::types::ids::EdgeId::from(handle),
+            cmd.property_id,
+            emitter,
+            act_ctx,
+        )
+        .await
+        .map_err(write_err)?;
+        Ok(CommandOutput::new(retracted))
     }
 
     /// One idempotent desired-state reconcile run as a SINGLE `SERIALIZABLE` transaction: the

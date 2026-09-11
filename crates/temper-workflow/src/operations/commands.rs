@@ -16,7 +16,7 @@ use temper_core::types::authorship::ActContext;
 use temper_core::types::data_artifact::KindOwnerInput;
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{
-    BlockId, CogmapId, ContextId, CorrelationId, DataArtifactId, EdgeId, ResourceId,
+    BlockId, CogmapId, ContextId, CorrelationId, DataArtifactId, EdgeId, PropertyId, ResourceId,
 };
 use temper_core::types::property_owner::PropertyOwner;
 use temper_core::types::provenance::ProvenanceSource;
@@ -352,6 +352,21 @@ pub struct SetFacet {
     pub values: serde_json::Value,
     pub weight: f64,
     /// Per-act correlation + authorship — stamps the authored `facet_set` act. Empty by
+    /// default; correlation never authorizes the write.
+    #[serde(default, skip_serializing_if = "ActContext::is_empty")]
+    pub act: ActContext,
+    pub origin: Surface,
+}
+
+/// Retract one facet row owned by an edge — the row-grain correction for the `anchored-at`
+/// span qualifications. The row is addressed by its `property_id` (what the edge facets read
+/// returns) and bound to the owning edge: a foreign, missing, or already-retracted id answers
+/// one indistinguishable not-found. The row persists folded; the same address is re-assertable.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RetractFacet {
+    pub edge_handle: EdgeId,
+    pub property_id: PropertyId,
+    /// Per-act correlation + authorship — stamps the `property_retracted` act. Empty by
     /// default; correlation never authorizes the write.
     #[serde(default, skip_serializing_if = "ActContext::is_empty")]
     pub act: ActContext,

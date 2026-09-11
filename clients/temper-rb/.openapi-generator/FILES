@@ -161,6 +161,7 @@ lib/temper/generated/models/extent_one_of1.rb
 lib/temper/generated/models/extent_one_of2.rb
 lib/temper/generated/models/facet_ack.rb
 lib/temper/generated/models/facet_predicate.rb
+lib/temper/generated/models/facet_retract_ack.rb
 lib/temper/generated/models/facet_set_request.rb
 lib/temper/generated/models/finalize_payload.rb
 lib/temper/generated/models/fold_relationship_request.rb

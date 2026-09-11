@@ -14,6 +14,24 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.4.0 — unreleased
 
+- **`property_retracted` wired — the row-grain correction verb for edge-owned facet rows**
+  A registered-since-seed event type gains its write path: HTTP
+  `DELETE /api/relationships/{edge_handle}/facets/{property_id}` (act context as query
+  parameters), MCP `facet_retract` (the unified `target` discriminator; `target=resource`
+  refused — resource facet rows have no payload-stable ids), CLI
+  `temper edge facet-retract <edge> <property-id>` (a sibling subcommand; the `edge facet`
+  leaf invocation is untouched), and temper-client `FacetRetractOnEdge`. The projector is
+  edge-bound (`id` + `owner` + `NOT is_folded`): a foreign, missing, or already-retracted
+  id renders one indistinguishable 404 — no existence oracle over property rows. The row
+  persists folded; the address is re-assertable as a fresh row. Payload is owner-shaped
+  and ships permissive (no migration, no registry stamp, no schema snapshot), the
+  `property_set` precedent; the element trail stays blind to property lifecycle.
+  Replay re-folds the same row every time. Read shapes are unchanged.
+pr: self
+classes: additive
+surfaces: http, mcp, cli-stdout, clients
+status: signal-only
+
 - **The edge facets read resolves `anchored-at` addresses and states the verdict**
   Every facet row now carries `address_resolution` and `verdict`; on `anchored-at` rows
   they state how the row's address resolved (the block read's own three-state contract —

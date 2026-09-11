@@ -846,6 +846,26 @@ pub struct PropertySet {
     pub weight: f64,
 }
 
+/// Retract one property row — the correction verb for edge-owned rows (`property_retracted`).
+/// The payload is **owner-shaped**, never `edge_id`-spelled: the element trail matches
+/// `edge_id`-carrying payloads and stays blind to property lifecycle exactly as it is for
+/// `property_asserted`.
+///
+/// The row's id rides the payload (identity-as-input — the same id the assert payload carried),
+/// so a replay retracts the same row every time. Ships permissive (no registry stamp, no schema
+/// snapshot), the `property_set` precedent: typed struct, NULL `payload_schema`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct PropertyRetracted {
+    /// The owner the retraction is bound to — the retracting edge for this build. The
+    /// projector's predicate is edge-bound to this owner; a foreign owner is indistinguishable
+    /// from a missing row.
+    pub owner: AnchorRef,
+    /// The retracted row's id — the assert payload's own id, carried again so replay reproduces
+    /// the fold exactly.
+    pub property_id: PropertyId,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct LensWeights {

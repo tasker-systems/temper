@@ -10,13 +10,14 @@ Assert or mutate a relationship between resources (writes go through the cloud A
 Usage: temper edge [OPTIONS] <COMMAND>
 
 Commands:
-  assert    Assert a new relationship between two resources
-  retype    Change the kind and polarity of an existing relationship
-  reweight  Adjust the weight of an existing relationship
-  fold      Retract (soft-delete) an existing relationship
-  facet     Set a facet (typed property) on a relationship
-  facets    List the live facets of a relationship
-  help      Print this message or the help of the given subcommand(s)
+  assert         Assert a new relationship between two resources
+  retype         Change the kind and polarity of an existing relationship
+  reweight       Adjust the weight of an existing relationship
+  fold           Retract (soft-delete) an existing relationship
+  facet          Set a facet (typed property) on a relationship
+  facets         List the live facets of a relationship
+  facet-retract  Retract one facet row of a relationship
+  help           Print this message or the help of the given subcommand(s)
 
 Options:
       --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
@@ -364,6 +365,62 @@ Options:
 
       --color <COLOR>
           Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### `temper edge facet-retract`
+
+```text
+Retract one facet row of a relationship.
+
+Sends `DELETE /api/relationships/{edge_handle}/facets/{property_id}`. The row id comes from `edge facets`. The row persists folded away — the read stops returning it — and the same address is free to re-assert, which mints a fresh row.
+
+Usage: temper edge facet-retract [OPTIONS] <EDGE_HANDLE> <PROPERTY_ID>
+
+Arguments:
+  <EDGE_HANDLE>
+          Correlation ID of the relationship whose facet is retracted
+
+  <PROPERTY_ID>
+          The facet row's id, as `edge facets` returned it
+
+Options:
+      --invocation <INVOCATION>
+          Correlate this act with an open invocation envelope (its ref/UUID from `invocation open`)
+
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --correlation <CORRELATION>
+          Stitch this write into an act-grain thread shared with other writes (a bare UUID you mint). Provenance only — it never authorizes. Omit and the event self-roots
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --confidence <CONFIDENCE>
+          Graded authorship confidence: tentative, probable, or confident
+          
+          [possible values: tentative, probable, confident]
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+      --reasoning <REASONING>
+          Free-text reasoning for the act (authorship; requires --confidence)
+
+      --rationale <RATIONALE>
+          Structured rationale for the act (authorship; requires --confidence)
+
+      --persona <PERSONA>
+          Persona/role the author acted as (authorship; requires --confidence)
+
+      --model <MODEL>
+          Model that authored the act (authorship; requires --confidence)
 
   -h, --help
           Print help (see a summary with '-h')

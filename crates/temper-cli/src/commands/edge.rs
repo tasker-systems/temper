@@ -193,6 +193,25 @@ pub fn run(action: EdgeAction, fmt: OutputFormat) -> Result<()> {
                 Ok(())
             })
         }),
+        EdgeAction::FacetRetract {
+            edge_handle,
+            property_id,
+            act,
+        } => {
+            let act = act.into_act_input()?;
+            crate::actions::runtime::with_client(|client| {
+                Box::pin(async move {
+                    let ack = client
+                        .facets()
+                        .retract_on_edge(edge_handle, property_id, &act)
+                        .await
+                        .map_err(crate::actions::runtime::client_err_to_temper)?;
+                    let rendered = crate::format::render(&ack, fmt)?;
+                    output::plain(rendered);
+                    Ok(())
+                })
+            })
+        }
     }
 }
 
@@ -379,6 +398,38 @@ mod tests {
                 assert_eq!(reason, None);
             }
             _ => panic!("expected Commands::Edge / EdgeAction::Fold"),
+        }
+    }
+
+    /// The retract subcommand parses as a SIBLING of `facet`/`facets` — and the leaf
+    /// `edge facet <handle> --values` invocation above stays byte-identical, which its own
+    /// sibling tests keep pinning.
+    #[test]
+    fn edge_facet_retract_parses() {
+        let edge_handle = uuid::Uuid::nil();
+        let property_id = uuid::Uuid::from_u128(7);
+        let cli = Cli::try_parse_from([
+            "temper",
+            "edge",
+            "facet-retract",
+            &edge_handle.to_string(),
+            &property_id.to_string(),
+        ])
+        .expect("parse should succeed");
+
+        match cli.command {
+            Commands::Edge {
+                action:
+                    EdgeAction::FacetRetract {
+                        edge_handle: eh,
+                        property_id: pid,
+                        ..
+                    },
+            } => {
+                assert_eq!(eh, edge_handle);
+                assert_eq!(pid, property_id);
+            }
+            _ => panic!("expected Commands::Edge / EdgeAction::FacetRetract"),
         }
     }
 }

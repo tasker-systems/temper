@@ -147,6 +147,7 @@ from temper.generated.models.extent_one_of1 import ExtentOneOf1
 from temper.generated.models.extent_one_of2 import ExtentOneOf2
 from temper.generated.models.facet_ack import FacetAck
 from temper.generated.models.facet_predicate import FacetPredicate
+from temper.generated.models.facet_retract_ack import FacetRetractAck
 from temper.generated.models.facet_set_request import FacetSetRequest
 from temper.generated.models.finalize_payload import FinalizePayload
 from temper.generated.models.fold_relationship_request import FoldRelationshipRequest

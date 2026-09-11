@@ -163,6 +163,7 @@ temper/generated/models/extent_one_of1.py
 temper/generated/models/extent_one_of2.py
 temper/generated/models/facet_ack.py
 temper/generated/models/facet_predicate.py
+temper/generated/models/facet_retract_ack.py
 temper/generated/models/facet_set_request.py
 temper/generated/models/finalize_payload.py
 temper/generated/models/fold_relationship_request.py

@@ -321,6 +321,17 @@ pub struct FacetAck {
     pub property_ids: Vec<Uuid>,
 }
 
+/// Acknowledgement returned by the facet retraction endpoint — `DELETE
+/// /api/relationships/{edge_handle}/facets/{property_id}`.
+///
+/// The retracted row's id, echoed. The row itself persists folded away and is never reused: a
+/// re-assertion of the same address mints a fresh row with a fresh id.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct FacetRetractAck {
+    pub property_id: Uuid,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -416,6 +427,16 @@ mod tests {
         let v = serde_json::to_value(&ack).unwrap();
         let back: FacetAck = serde_json::from_value(v).unwrap();
         assert_eq!(back.property_ids, ack.property_ids);
+    }
+
+    #[test]
+    fn facet_retract_ack_round_trips() {
+        let ack = FacetRetractAck {
+            property_id: Uuid::nil(),
+        };
+        let v = serde_json::to_value(&ack).unwrap();
+        let back: FacetRetractAck = serde_json::from_value(v).unwrap();
+        assert_eq!(back.property_id, ack.property_id);
     }
 
     /// The reason this type is plural. A two-key assert writes two rows, and the ack has to be able

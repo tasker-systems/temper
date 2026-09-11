@@ -2494,6 +2494,20 @@ pub enum EdgeAction {
         /// Correlation ID of the relationship to read
         edge_handle: uuid::Uuid,
     },
+    /// Retract one facet row of a relationship.
+    ///
+    /// Sends `DELETE /api/relationships/{edge_handle}/facets/{property_id}`. The row id comes
+    /// from `edge facets`. The row persists folded away — the read stops returning it — and
+    /// the same address is free to re-assert, which mints a fresh row.
+    FacetRetract {
+        /// Correlation ID of the relationship whose facet is retracted
+        edge_handle: uuid::Uuid,
+        /// The facet row's id, as `edge facets` returned it
+        property_id: uuid::Uuid,
+        /// Per-act authorship + invocation-correlation flags.
+        #[command(flatten)]
+        act: ActArgs,
+    },
 }
 
 /// `temper graph <cmd>` — the graph read surface.
