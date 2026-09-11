@@ -364,28 +364,22 @@ BEGIN
      WHERE owner_table = 'kb_profiles'
        AND owner_id = p_subject;
 
-    -- ── Scope, the two indexed halves (spec §2), FILTERED to governed homes ──────────────
-    -- own half: kb_resource_homes.owner_profile_id / originator_profile_id
-    -- emitted half: content blocks whose genesis event the subject's entities emitted
-    --               (idx_kb_events_emitter). Third-party mentions are not computed here.
-    WITH scope AS (
-        SELECT h.resource_id
-          FROM kb_resource_homes h
-         WHERE h.anchor_table = 'kb_contexts'
-           AND h.anchor_id = ANY(v_governed)
-           AND (h.owner_profile_id = p_subject OR h.originator_profile_id = p_subject)
-        UNION
-        SELECT b.resource_id
-          FROM kb_content_blocks b
-          JOIN kb_events e ON e.id = b.genesis_event_id
-          JOIN kb_entities en ON en.id = e.emitter_entity_id
-         WHERE en.profile_id = p_subject
-           AND EXISTS (SELECT 1 FROM kb_resource_homes h
-                        WHERE h.resource_id = b.resource_id
-                          AND h.anchor_table = 'kb_contexts'
-                          AND h.anchor_id = ANY(v_governed))
-    )
-    SELECT coalesce(array_agg(DISTINCT resource_id), '{}') INTO v_resources FROM scope;
+    -- ── Scope: the estate, HOME-PURE (ruled 2026-09-11 with Pete — the "scope of
+    -- engagement" ruling) ─────────────────────────────────────────────────────────────
+    -- Everything homed in a governed context wipes with the estate, whoever authored,
+    -- owns or emitted it: writing into someone's PRIVATE context under a grant declares
+    -- the content's scope of engagement — it lives and dies with that estate (the
+    -- terms-of-use documentation states this). The 20260909000025 actor halves are
+    -- dissolved: the owner/originator OR kept reassigned-in-place authorship in reach
+    -- (20260703140000 moves owner_profile_id in place), and the emitted half was already
+    -- subsumed by the governed-home EXISTS it carried. Erasure keeps the resource rows
+    -- live (D3), so a grantee whose prose dies with the estate holds their remaining
+    -- access only against a retired context (arm 13), and their attribution dies by the
+    -- pseudonym break, never by edits.
+    SELECT coalesce(array_agg(DISTINCT h.resource_id), '{}') INTO v_resources
+      FROM kb_resource_homes h
+     WHERE h.anchor_table = 'kb_contexts'
+       AND h.anchor_id = ANY(v_governed);
 
     -- The text hashes: chunk content hashes + verbatim block content hashes.
     SELECT coalesce(array_agg(DISTINCT h), '{}') INTO v_hashes FROM (
@@ -861,5 +855,5 @@ COMMENT ON FUNCTION block_mutate(jsonb, jsonb, uuid, jsonb, uuid, uuid) IS
 SELECT declare_migration(
     20260911000000,
     'additive',
-    'The hash-global erasure grain is retired (ruled 2026-09-10 with Pete — decision 01a08dc2-684c-7f20-aeac-b1895f57831b, erasure is offboarding, the authority line is custody never bytes; task 01a08dc4). _erasure_apply_redaction''s text arms (chunk prose, block bytes, embeddings+provenance, search vectors, formation watermarks) scope to the subject''s governed homes with the scope computation''s own owner arm — 20260909000025''s claim that governed-scope set admission kept the wipe bounded was backwards: the wipe re-expanded hashes across every home, emptying a second principal''s identical template prose and vectors; the set''s admission stays governed-scope and the redaction now is too, and the replay pre-pass resolves the same predicate identically because contexts are replay INPUT tables. The redaction also RETIRES the governed contexts (is_active=false) — closing custody over the estate, so grants into it die with the activation floor and no live principal can re-admit content into the wiped homes; un-evented per the profile-tombstone''s own INPUT-table precedent, is_active being non-identity-bearing. block_mutate loses the erased-content refusal (20260909000030), restoring the five suppression checks byte-identical — no content-admitting path consults kb_erased_content as an instance-wide oracle any more; the set remains the ledger-derived projection the replay diffs in full. principal_erasure_execute''s per-target outcome reads scope to governed homes with the same predicate, and the retirement rides the record as its own per-target outcome. propagated_to_clients stays false permanently — client propagation is out of enforcement scope, never "not yet". Additive: CREATE OR REPLACE only, signatures unchanged.'
+    'The hash-global erasure grain is retired (ruled 2026-09-10 with Pete — decision 01a08dc2-684c-7f20-aeac-b1895f57831b, erasure is offboarding, the authority line is custody never bytes; task 01a08dc4). _erasure_apply_redaction''s text arms (chunk prose, block bytes, embeddings+provenance, search vectors, formation watermarks) scope to the subject''s governed homes with the scope computation''s own owner arm — 20260909000025''s claim that governed-scope set admission kept the wipe bounded was backwards: the wipe re-expanded hashes across every home, emptying a second principal''s identical template prose and vectors; the set''s admission stays governed-scope and the redaction now is too, and the replay pre-pass resolves the same predicate identically because contexts are replay INPUT tables. The redaction also RETIRES the governed contexts (is_active=false) — closing custody over the estate, so grants into it die with the activation floor and no live principal can re-admit content into the wiped homes; un-evented per the profile-tombstone''s own INPUT-table precedent, is_active being non-identity-bearing. block_mutate loses the erased-content refusal (20260909000030), restoring the five suppression checks byte-identical — no content-admitting path consults kb_erased_content as an instance-wide oracle any more; the set remains the ledger-derived projection the replay diffs in full. principal_erasure_execute''s scope is HOME-PURE (ruled 2026-09-11 with Pete, the scope-of-engagement ruling: content created under grant inside a private context dies with that estate) — every resource homed in a governed context, the 20260909000025 actor halves dissolved; per-target outcome reads scope to governed homes with the same predicate, and the retirement rides the record as its own per-target outcome. propagated_to_clients stays false permanently — client propagation is out of enforcement scope, never "not yet". Additive: CREATE OR REPLACE only, signatures unchanged.'
 );
