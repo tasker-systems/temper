@@ -16,10 +16,12 @@
 -- 'independent_obligation: ' known non-delete-target prefix. Named hashes never enter
 -- kb_erased_content — only strikes do.
 --
--- The record stays honest about the two accepted remainders: an UNATTACHED guest row has no
--- custodian once the home owner is the tombstoned subject, so its provider bytes are
--- retained with no release path (its outcome says so); an ATTACHED one (a live relation to
--- a resource) remains strikable by a guest holding delete standing (its outcome says that).
+-- The record stays honest about the retention: the act retires the governed contexts, and
+-- the context floor (contexts_readable_by's is_active arms) closes the delete door's gate
+-- read for every caller, guest included — custody is never consulted post-act. BOTH
+-- classes are therefore named as retained with no release path; the arms differ only in
+-- provenance (ATTACHED: a live relation to an estate resource outlives the act; UNATTACHED:
+-- no relation, and the home owner is the tombstoned subject).
 --
 -- Additive: CREATE OR REPLACE only, signature unchanged (the 20260804000020 class).
 CREATE OR REPLACE FUNCTION principal_erasure_execute(
@@ -134,17 +136,23 @@ BEGIN
     -- silent. These are enumerated BY HOME — every live governed-home row whose actor
     -- halves are not the subject's — and named independent_obligation-shaped with blob id
     -- + content hash, exactly as team-held rows are named (the prefix is the fence's known
-    -- non-delete-target shape; never prose the fence cannot parse). Custody is the delete
-    -- act's own shape: ATTACHED — a live relation to a resource — a guest holding delete
-    -- standing may still strike it after the act; UNATTACHED, the custodian is the home's
-    -- owner and the home owner is the tombstoned subject, so the retention is named with
-    -- no release path. Not admitted to kb_erased_content: only strikes enter the set.
+    -- non-delete-target shape; never prose the fence cannot parse). The retention is named
+    -- WITHOUT a release path for BOTH arms: the act itself retires the governed contexts,
+    -- and the context floor (contexts_readable_by's is_active arms) closes the delete
+    -- door's gate read for every caller, guest included — custody is never consulted
+    -- post-act. The arms differ only in provenance: ATTACHED — a live relation to an
+    -- ESTATE RESOURCE (the delete act's own attached shape; non-resource peers fail its
+    -- custody closed) — the relation outlives the act; UNATTACHED, there is no relation
+    -- and the home owner is the tombstoned subject. Not admitted to kb_erased_content:
+    -- only strikes enter the set.
     FOR v_row IN
         SELECT b.id, b.content_hash,
                EXISTS (SELECT 1 FROM kb_edges e
                         WHERE NOT e.is_folded
-                          AND ((e.source_table = 'kb_blobs' AND e.source_id = b.id)
-                            OR (e.target_table = 'kb_blobs' AND e.target_id = b.id))) AS attached
+                          AND ((e.source_table = 'kb_blobs' AND e.source_id = b.id
+                                 AND e.target_table = 'kb_resources')
+                            OR (e.target_table = 'kb_blobs' AND e.target_id = b.id
+                                 AND e.source_table = 'kb_resources'))) AS attached
           FROM kb_blobs b
          WHERE b.home_table = 'kb_contexts'
            AND b.home_id = ANY(v_governed)
@@ -161,12 +169,13 @@ BEGIN
             'target',  'kb_blobs',
             'outcome', 'independent_obligation: committed by a guest of the erased principal; '
                        || 'blob ' || v_row.id::text || '; hash ' || v_row.content_hash
+                       || '; retained with no release path — '
                        || CASE WHEN v_row.attached
-                               THEN '; retained — a guest holding delete standing over it '
-                                    || 'may still strike it'
-                               ELSE '; retained with no release path — unattached, and the '
-                                    || 'home''s owner is the erased subject, so no custodian '
-                                    || 'resolves'
+                               THEN 'a live relation to an estate resource outlives the act, '
+                                    || 'but the context floor closes every read into the '
+                                    || 'retired home, so no custodian resolves'
+                               ELSE 'unattached, and the home''s owner is the erased '
+                                    || 'subject, so no custodian resolves'
                           END));
     END LOOP;
 
@@ -472,17 +481,19 @@ the 2026-09-11 scope-of-engagement ruling): scope (every resource homed in a gov
 personal context), per-row governed-home blob strikes of the SUBJECT''S OWN rows through
 blob_delete(''blob_erased'', …), every LIVE guest-committed row homed in a governed context
 named in the targets independent_obligation-shaped (blob id + content hash — never struck,
-never silent; the unattached outcome names that no custodian resolves), the ONE
+never silent; both outcomes name the retention with no release path, the act''s context
+retirement closing the delete gate''s read for every caller, guest included), the ONE
 NULL-anchored principal_erased event with the request reference on kb_events."references"
 + correlation, then _erasure_apply_redaction — all one transaction. The per-target outcome
 reads scope to governed homes with the redaction''s own predicate, so the record never
-reports "erased" for a row the act deliberately leaves standing, and names every blob row
-it does not strike. Does NOT decide legality (is_system_admin is the Rust caller''s gate,
-resolved before any mutation); the unauthorized refusal face is principal_erasure_refuse.';
+reports "erased" for a row the act deliberately leaves standing, and names every
+governed-home blob row it does not strike. Does NOT decide legality (is_system_admin is
+the Rust caller''s gate, resolved before any mutation); the unauthorized refusal face is
+principal_erasure_refuse.';
 
 SELECT declare_migration(
     20260911000010,
     'additive',
-    'The blob arm names, never strikes (the blob-arm ruling, ruled 2026-09-11 with Pete — the resolution of the named-open on 20260911000000''s home-pure block; task 01a090b8-0af3-7c91-8bcd-2d2364174d7d). principal_erasure_execute''s blob pre-pass enumerated by actor halves only, so a guest-committed blob row homed in a governed context was neither struck nor named — the act''s only un-named class. The act now enumerates its governed homes BY HOME: every live row whose actor halves are not the subject''s is named in the targets, independent_obligation-shaped with blob id + content hash, exactly as team-held rows are named; the unattached outcome names that no custodian resolves (the home owner is the tombstoned subject — provider bytes retained with no release path), the attached one that a guest holding delete standing may still strike. The subject''s own strikes and the strike-outcome template are byte-unchanged (the fence parses that template by exact prefix); named hashes never enter kb_erased_content. Additive: CREATE OR REPLACE only, signatures unchanged.'
+    'The blob arm names, never strikes (the blob-arm ruling, ruled 2026-09-11 with Pete — the resolution of the named-open on 20260911000000''s home-pure block; task 01a090b8-0af3-7c91-8bcd-2d2364174d7d). principal_erasure_execute''s blob pre-pass enumerated by actor halves only, so a guest-committed blob row homed in a governed context was neither struck nor named — the act''s only un-named class. The act now enumerates its governed homes BY HOME: every live row whose actor halves are not the subject''s is named in the targets, independent_obligation-shaped with blob id + content hash, exactly as team-held rows are named. Both outcomes name the retention with NO release path — the act retires the governed contexts, and the context floor (contexts_readable_by''s is_active arms) closes the delete gate''s read for every caller, guest included, so custody never resolves post-act; the arms differ only in provenance (attached names the live relation to an estate resource that outlives the act, scoped to resource peers — the delete act''s own attached shape). The subject''s own strikes and the strike-outcome template are byte-unchanged (the fence parses that template by exact prefix); named hashes never enter kb_erased_content. Additive: CREATE OR REPLACE only, signatures unchanged.'
 );
 

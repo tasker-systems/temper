@@ -1093,10 +1093,12 @@ mod tests {
     }
 
     // ── WITNESS: the prose interface fails loud ──────────────────────────────────────────
-    /// FAILS IF the migration's strike-outcome template can drift from what the fence parses:
-    /// the pin asserts the SQL literal in 20260909000025 composes to exactly the Rust
-    /// constants — the released prefix the seed parses through, the held prefix it skips, and
-    /// the two non-strike shapes. (Mirrors
+    /// FAILS IF the strike-outcome template can drift from what the fence parses: the pin
+    /// asserts the SQL literal composes to exactly the Rust constants — the released prefix
+    /// the seed parses through, the held prefix it skips, and the non-strike shapes — in
+    /// BOTH the minting migration (20260909000025) and the LIVE carrier of the template and
+    /// the guest-naming outcomes (20260911000010): every `kb_blobs` outcome the act can
+    /// emit must start with a prefix this file pins. (Mirrors
     /// `payload_schema::the_migration_literal_matches_the_committed_fixture`.)
     #[test]
     fn the_migration_strike_template_matches_the_pinned_constants() {
@@ -1131,6 +1133,29 @@ mod tests {
         assert!(
             migration.contains(&format!("'outcome', '{OBLIGATION_OUTCOME_PREFIX}")),
             "the independent_obligation remainder shape is pinned"
+        );
+
+        // The LIVE carrier (20260911000000's home-pure rewrite moved the walk; 20260911000010
+        // carries it today and minted the guest-naming outcomes). A future rewrite that
+        // moves the template or rewords the guest prefix away from a pinned shape fails
+        // HERE, not in a fence drain.
+        let carrier_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../migrations/20260911000010_blob_arm_names_guest_rows.sql"
+        );
+        let carrier =
+            std::fs::read_to_string(carrier_path).expect("the live carrier migration exists");
+        assert!(
+            carrier.contains(template),
+            "the strike-outcome template drifted in the live carrier — the fence parses by \
+             exact prefix, so the Rust constants and this literal MUST move together"
+        );
+        assert!(
+            carrier.contains(&format!(
+                "'outcome', '{OBLIGATION_OUTCOME_PREFIX}committed by a guest of the erased principal"
+            )),
+            "the guest-naming outcomes must carry the independent_obligation prefix the \
+             fence classifies as a known non-delete-target"
         );
     }
 

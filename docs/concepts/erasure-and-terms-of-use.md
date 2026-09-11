@@ -81,11 +81,13 @@ keeps it afterward:
   strikes uploaded files by who owns, originates, or uploaded them *as the subject*. A
   file a guest uploaded into the subject's context is the guest's own content, so the act
   leaves it standing — and names it in the record with its blob id and content hash, the
-  same reporting a team-held file gets. The record is honest about the two remainders that
-  survive with it: an unattached guest file has no custodian once the home's owner is
-  erased, so its bytes are retained with no release path and the record says so; a guest
-  holding delete standing over an attached file may still strike it after the act.
-  Structured-data artifacts a guest's kind owns on those resources are named the same way.
+  same reporting a team-held file gets. The record is honest that the retention has no
+  release path: the act retires the home's context, and the context floor closes the
+  delete gate for every caller afterward — guest files included — so no custodian
+  resolves. What the record distinguishes is provenance, not fate: an attached file's live
+  relation to the estate outlives the act; an unattached one has no relation at all.
+  Structured-data artifacts a guest's kind owns on those resources are named as un-struck
+  in the record as well.
 
 ## Where the act lives
 

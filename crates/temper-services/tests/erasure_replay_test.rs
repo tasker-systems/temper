@@ -894,7 +894,10 @@ async fn world_shape(pool: &PgPool, chunk_hash: &str) -> (String, String) {
 /// same state change so the witness cannot pass by regression. The guest's rows must NOT
 /// strike and MUST be named in the record — blob id + content hash, independent_obligation-
 /// shaped like the team remainder — with the unattached row honest that no custodian resolves
-/// (its home owner is the erased subject) and the attached row still strikable by the guest.
+/// (its home owner is the erased subject) and the attached row naming the live relation
+/// that outlives the act as provenance. BOTH arms name the retention with no release path:
+/// the act's own context retirement closes the delete gate's read for every caller, guest
+/// included — custody never resolves post-act (the 2026-09-11 correction of record).
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn a_guest_committed_blob_in_a_governed_home_is_named_by_the_record(pool: sqlx::PgPool) {
     let (subject, _) = insert_profile(&pool).await;
@@ -1042,15 +1045,26 @@ async fn a_guest_committed_blob_in_a_governed_home_is_named_by_the_record(pool: 
             .iter()
             .any(|o| o.contains(&guest_unattached.to_string())
                 && o.contains(&guest_unattached_hash)
+                && o.contains("unattached")
                 && o.contains("no custodian resolves")),
         "the unattached row names the retention: its home owner is the erased subject, so \
          its provider bytes have no release path — got {named:?}"
     );
     assert!(
+        named.iter().any(|o| o.contains(&guest_attached.to_string())
+            && o.contains(&guest_attached_hash)
+            && o.contains("a live relation to an estate resource")),
+        "the attached row is named with its blob id and hash and the surviving relation as \
+         PROVENANCE — got {named:?}"
+    );
+    assert!(
         named
             .iter()
-            .any(|o| o.contains(&guest_attached.to_string()) && o.contains(&guest_attached_hash)),
-        "the attached row is named with its blob id and hash — got {named:?}"
+            .all(|o| o.contains("retained with no release path")
+                && o.contains("no custodian resolves")),
+        "BOTH arms name the retention honestly — the act's own context retirement closes \
+         the delete gate's read for every caller, so neither class has a release path; \
+         got {named:?}"
     );
 
     // Named, not struck: both guest rows stay live (pathname + media type intact) and their
