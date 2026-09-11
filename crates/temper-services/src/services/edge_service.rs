@@ -328,9 +328,13 @@ fn parse_anchor(value: &serde_json::Value) -> Option<(AnchoredAtEndpoint, Anchor
 /// The verdict direction, as declared per label: `derived_from` — under BOTH kind-shapes that
 /// carry it — declares peer = target, checked on source-side anchors only (the lineage
 /// convention is uniform across the shapes). Everything else renders resolution-only, never a
-/// computed negative: an unlabeled edge declares nothing; the `express` direction is
-/// undeclared for non-`derived_from` labels; and a row anchored off the declared side
-/// (cross-side) cannot be corroborated by the attribution direction.
+/// computed negative: an unlabeled edge declares nothing; a row anchored off the declared side
+/// (cross-side) cannot be corroborated by the attribution direction; and the `express`
+/// direction for non-`derived_from` labels is RULED EXAMINED-AND-EXCLUDED (2026-09-11, spec
+/// D-B7): the bulk label `evidences` measured zero cross-endpoint attribution in either
+/// direction and the small-label tail none consistently, so no arm is declared. Revisit when
+/// the first anchored-at row lands on that population or a label in it shows systematic
+/// cross-citation — the declaration is then one additive constant here.
 fn declared_peer(label: &str, endpoint: AnchoredAtEndpoint, target_id: Uuid) -> Option<Uuid> {
     if label == "derived_from" && endpoint == AnchoredAtEndpoint::Source {
         Some(target_id)
@@ -363,6 +367,8 @@ mod tests {
 
     /// The direction declaration, pinned arm by arm: `derived_from` fires source-side only,
     /// under any kind-shape carrying the label; every other combination is resolution-only.
+    /// The express exclusion is a ruling (spec D-B7, measured 2026-09-11), not an oversight —
+    /// a direction declared for its labels would state one no evidence supports.
     #[test]
     fn declared_peer_fires_only_for_derived_from_source_side() {
         let target = Uuid::nil();
