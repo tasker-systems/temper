@@ -810,6 +810,203 @@ mod tests {
         let _ = world;
     }
 
+    /// ── WITNESS: the erasure never reaches beyond the subject's governed homes ──────────
+    /// FAILS IF the text redaction expands by hash across homes: a second principal ingested
+    /// the SAME bytes (identical chunk + block hashes) into their OWN governed context.
+    /// Erasing the subject empties the subject's prose, vector and search vector — and
+    /// leaves the other principal's byte-identical copy untouched (the offboarding ruling,
+    /// 20260911000000; the register's negative face: another principal's lawful content is
+    /// never an erasure violation). The 20260909000025 shape failed exactly here: its text
+    /// arms keyed on hash membership alone, so this witness could not have passed.
+    #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+    async fn a_same_hash_resource_in_another_governed_home_survives_the_erasure(
+        pool: sqlx::PgPool,
+    ) {
+        let (subject, _) = insert_profile(&pool).await;
+        let (other, _) = insert_profile(&pool).await;
+        let (operator, _) = insert_profile(&pool).await;
+        test_support::grant_governance(&pool, operator).await;
+        let world = seed_content(&pool, subject).await;
+
+        // The other principal's resource: byte-identical content stack, own governed home,
+        // the SAME hashes — the shared-template shape. Seeded with this file's own row
+        // shapes (not through create_resource) so the hash identity is exact.
+        let other_context = Uuid::now_v7();
+        let other_resource = Uuid::now_v7();
+        let other_block = Uuid::now_v7();
+        let other_chunk = Uuid::now_v7();
+        let other_revision = Uuid::now_v7();
+        let other_event: Uuid = sqlx::query_scalar(
+            "SELECT _event_append('resource_created', $1, 'kb_contexts', $2, \
+                jsonb_build_object('resource_id', $3))",
+        )
+        .bind(emitter_of(&pool, other).await)
+        .bind(other_context)
+        .bind(other_resource)
+        .fetch_one(&pool)
+        .await
+        .expect("seed other genesis event");
+        sqlx::query(
+            "INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name, \
+                     shape_materialized_event_id) \
+                     VALUES ($1, 'kb_profiles', $2, 'notes', 'Notes', $3)",
+        )
+        .bind(other_context)
+        .bind(other)
+        .bind(other_event)
+        .execute(&pool)
+        .await
+        .expect("seed other personal context");
+        sqlx::query(
+            "INSERT INTO kb_resources (id, title, origin_uri) \
+                     VALUES ($1, 'Shared template', 'test://template')",
+        )
+        .bind(other_resource)
+        .execute(&pool)
+        .await
+        .expect("seed other resource");
+        sqlx::query(
+            "INSERT INTO kb_resource_homes (resource_id, anchor_table, anchor_id, \
+                     originator_profile_id, owner_profile_id) \
+                     VALUES ($1, 'kb_contexts', $2, $3, $3)",
+        )
+        .bind(other_resource)
+        .bind(other_context)
+        .bind(other)
+        .execute(&pool)
+        .await
+        .expect("seed other home");
+        sqlx::query(
+            "INSERT INTO kb_content_blocks (id, resource_id, seq, genesis_event_id, \
+                     last_event_id) VALUES ($1, $2, 0, $3, $3)",
+        )
+        .bind(other_block)
+        .bind(other_resource)
+        .bind(other_event)
+        .execute(&pool)
+        .await
+        .expect("seed other block");
+        sqlx::query(
+            "INSERT INTO kb_block_revisions (id, block_id, block_body_hash, chunk_count) \
+                     VALUES ($1, $2, $3, 1)",
+        )
+        .bind(other_revision)
+        .bind(other_block)
+        .bind(&world.block_hash)
+        .execute(&pool)
+        .await
+        .expect("seed other revision");
+        sqlx::query(
+            "INSERT INTO kb_block_content (block_revision_id, content, content_hash) \
+                     VALUES ($1, $2, $3)",
+        )
+        .bind(other_revision)
+        .bind("the secret plan bytes")
+        .bind(&world.block_hash)
+        .execute(&pool)
+        .await
+        .expect("seed other verbatim bytes");
+        sqlx::query(
+            "INSERT INTO kb_chunks (id, block_id, resource_id, chunk_index, version, \
+                     content_hash, embedding, embedded_with) \
+                     VALUES ($1, $2, $3, 0, 1, $4, $5::vector, 'model-sha')",
+        )
+        .bind(other_chunk)
+        .bind(other_block)
+        .bind(other_resource)
+        .bind(&world.chunk_hash)
+        .bind(embedding_literal())
+        .execute(&pool)
+        .await
+        .expect("seed other chunk");
+        sqlx::query(
+            "INSERT INTO kb_chunk_content (chunk_id, content) VALUES ($1, 'the secret plan prose')",
+        )
+        .bind(other_chunk)
+        .execute(&pool)
+        .await
+        .expect("seed other chunk prose");
+        sqlx::query(
+            "INSERT INTO kb_resource_search_index (resource_id, search_vector) \
+                     VALUES ($1, to_tsvector('english', 'secret plans prose'))",
+        )
+        .bind(other_resource)
+        .execute(&pool)
+        .await
+        .expect("seed other search index");
+
+        let outcome = execute_erasure(
+            &pool,
+            ProfileId::from(operator),
+            ProfileId::from(subject),
+            Uuid::now_v7(),
+        )
+        .await
+        .expect("completes");
+        let ErasureOutcome::Completed(completion) = outcome else {
+            panic!("must complete, got {outcome:?}");
+        };
+        assert!(
+            completion.redacted_hashes.contains(&world.chunk_hash),
+            "the shared hash is redacted — the subject's own copy is in scope"
+        );
+
+        // The subject's copy: emptied.
+        let subject_prose: String =
+            sqlx::query_scalar("SELECT cc.content FROM kb_chunk_content cc WHERE cc.chunk_id = $1")
+                .bind(world.chunk)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(subject_prose, "", "the subject's prose is emptied");
+
+        // THE WITNESS: the other principal's byte-identical copy is untouched — prose,
+        // vector, provenance, block bytes, search vector.
+        let other_prose: String =
+            sqlx::query_scalar("SELECT cc.content FROM kb_chunk_content cc WHERE cc.chunk_id = $1")
+                .bind(other_chunk)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            other_prose, "the secret plan prose",
+            "a same-hash chunk in another governed home keeps its prose — the erasure never \
+             reached beyond the subject's estate"
+        );
+        let (other_embedding, other_embedded_with): (Option<String>, Option<String>) =
+            sqlx::query_as("SELECT embedding::text, embedded_with FROM kb_chunks WHERE id = $1")
+                .bind(other_chunk)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(
+            other_embedding.is_some() && other_embedded_with.as_deref() == Some("model-sha"),
+            "the other home's chunk keeps its vector and provenance"
+        );
+        let other_bytes: String =
+            sqlx::query_scalar("SELECT content FROM kb_block_content WHERE block_revision_id = $1")
+                .bind(other_revision)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            other_bytes, "the secret plan bytes",
+            "the other home's block bytes survive"
+        );
+        let other_fts: String = sqlx::query_scalar(
+            "SELECT search_vector::text FROM kb_resource_search_index WHERE resource_id = $1",
+        )
+        .bind(other_resource)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            !other_fts.is_empty(),
+            "the other home's search vector survives"
+        );
+        let _ = world.event;
+    }
+
     /// ── WITNESS: the text content ───────────────────────────────────────────────────────
     /// FAILS IF the emptied shape is incomplete: chunk AND block prose emptied with hashes
     /// retained, embedding AND provenance nulled together, the search vector emptied, the

@@ -1526,6 +1526,18 @@ pub struct PrincipalErased {
     /// unhonourable is named here. Partial completion is data, never a silent success.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub targets: Vec<ErasureTargetOutcome>,
+    // The propagation fact, DISTINCT from the server fact: this event records "gone from
+    // the server". Always `false`, permanently — client propagation is OUT OF ENFORCEMENT
+    // SCOPE (ruled 2026-09-10, decision 01a08dc2-684c-7f20-aeac-b1895f57831b: erasure is
+    // offboarding of the solely-owned estate; the only vault holding erased bytes is the
+    // erased subject's own, and shared-context copies are a documented terms-of-use
+    // matter). `false` must never read as "gone from the clients", and — the ruling's
+    // sharper edge — never as "not yet": there is no protocol pending, by decision.
+    //
+    // NOTE: this meaning is deliberately NOT in the doc comment below. A doc comment feeds
+    // the schemars description, and the committed fixture must stay byte-identical to the
+    // shipped migration's registered literal (payload_schema's pin test) — a wire-contract
+    // re-stamp is its own task, not a doc edit riding this one.
     /// The propagation fact, DISTINCT from the server fact (erasure spec, payload
     /// requirements): this event records "gone from the server"; `false` must never read as
     /// "gone from the clients". `false` until the propagation protocol exists (D3) — the

@@ -14,6 +14,21 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.4.0 — unreleased
 
+- **The hash-global erasure refusal grain retired (offboarding ruling)**
+  The erasure act's write-path refusals are removed: a create or revise carrying a hash in
+  `kb_erased_content` now lands where it previously refused, and the reconcile arm no longer
+  drops erased-hash chunks before the merkle — same request/response shapes, different
+  outcomes. The text redaction itself scopes to the erased subject's governed homes (a
+  same-hash resource in another home keeps prose, vectors and search vectors, where the
+  prior shape emptied them). `kb_erased_content` remains as the ledger-derived record; the
+  embed exclusion re-keys to the wiped row (empty content + set membership). Ruled with
+  Pete 2026-09-10: erasure is offboarding — the authority line is custody, never byte
+  identity.
+pr: self
+classes: behavioral
+surfaces: http, schema
+status: signal-only
+
 - **The delete act's ruled door — `DELETE /api/blobs/{id}` (+ temper-client/SDK `delete_blob`)**
   A born route and verb: a custodian strikes one blob under the ruled two-arm custody gate
   (relation arm: delete standing over every live relation's resource peer; home arm: the

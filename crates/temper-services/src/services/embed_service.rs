@@ -1206,23 +1206,30 @@ mod tests {
         assert_eq!(again.claimed, 0);
     }
 
-    // ── the embed-repair gate (erasure spec D4, arm 2) ──────────────────────────────────────
+    // ── the embed-repair gate (D4 arm 2; re-keyed to the ROW by the offboarding ruling,
+    // 20260911000000) ────────────────────────────────────────────────────────────────────
     //
-    // A hash in `kb_erased_content` is dead on the embed side: the erasure nulled its vector and
-    // provenance, and the drain must never re-embed it. The gate is an exclusion in the STALE
-    // predicate (temper_substrate::embed::STALE_CHUNK_PREDICATE and this file's two copies of
-    // the same query), NOT a skip in the loop — a skip would leave the chunk stale forever, and
+    // A WIPED chunk — its own content empty AND its hash in `kb_erased_content` — is dead on
+    // the embed side: the erasure nulled its vector and provenance, and the drain must never
+    // re-embed it. The gate is an exclusion in the STALE predicate
+    // (temper_substrate::embed::STALE_CHUNK_PREDICATE and this file's two copies of the same
+    // query), NOT a skip in the loop — a skip would leave the chunk stale forever, and
     // `remaining` would never reach zero (the wedge the predicate's doc warns about). Excluded
     // chunks are not work; the resource converges with the vector NULL.
+    //
+    // The row anchor is the ruling: the 2026-08-31 gate keyed on hash membership alone, which
+    // excluded another principal's LIVE same-hash chunk from embed work forever. Only the
+    // chunk's own wiped state excludes now.
 
-    /// A current chunk carrying real prose (so the drain would embed it — the gate must do the
-    /// work, not emptiness), optionally registered in the erased-content set.
+    /// A current chunk carrying exactly the content given (so the drain would embed it when
+    /// the content is non-empty), optionally registered in the erased-content set.
     async fn a_prose_chunk(
         pool: &PgPool,
         block: Uuid,
         resource: Uuid,
         idx: i32,
         hash: &str,
+        content: &str,
     ) -> Uuid {
         let id: Uuid = sqlx::query_scalar(
             "INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash, is_current) \
@@ -1237,7 +1244,7 @@ mod tests {
         .unwrap();
         sqlx::query("INSERT INTO kb_chunk_content (chunk_id, content) VALUES ($1, $2)")
             .bind(id)
-            .bind("prose the drain must never embed under an erased hash")
+            .bind(content)
             .execute(pool)
             .await
             .unwrap();
@@ -1255,17 +1262,28 @@ mod tests {
         .unwrap();
     }
 
-    /// FAILS IF the drain re-embeds (or even re-stamps provenance on) a tombstoned hash: the
-    /// chunk is stale-shaped (NULL vector + NULL provenance) and its content is NON-empty, so
-    /// emptiness does not protect it — only the gate does. The resource must CONVERGE
-    /// (`remaining` reaches zero, the drain's own wedge invariant) with the vector still NULL.
+    /// FAILS IF the drain re-embeds (or even re-stamps provenance on) a WIPED chunk: the
+    /// chunk carries the erasure's own emptied shape (content '', vector + provenance NULL,
+    /// hash in the set), and the row-anchored gate must exclude it from work. The resource
+    /// must CONVERGE (`remaining` reaches zero, the drain's own wedge invariant) with the
+    /// vector still NULL. The differential half is the retirement's bite: a chunk with LIVE
+    /// prose under the SAME hash is ordinary work — the gate is the row, never the bytes.
     #[sqlx::test(migrations = "../../migrations")]
-    async fn a_tombstoned_hash_is_never_re_embedded(pool: PgPool) {
+    async fn a_wiped_chunk_is_never_re_embedded_and_a_same_hash_live_chunk_embeds(pool: PgPool) {
         let r = a_named_resource(&pool, "tombstoned").await;
         let b = a_block(&pool, r, 0, false).await;
         let hash = "aa0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        let chunk = a_prose_chunk(&pool, b, r, 0, hash).await;
+        let wiped = a_prose_chunk(&pool, b, r, 0, hash, "").await;
         erase_hash(&pool, hash).await;
+        let live = a_prose_chunk(
+            &pool,
+            b,
+            r,
+            1,
+            "bb0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "prose under a hash some other erasure recorded — this chunk is not that erasure's",
+        )
+        .await;
 
         let progress = temper_substrate::embed::embed_resource_chunks(
             &pool,
@@ -1275,50 +1293,61 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            progress.embedded, 0,
-            "an erased hash is never re-embedded — no inference, no vector"
+            progress.embedded, 1,
+            "the live-prose chunk embeds — hash membership alone excludes nothing"
         );
         assert_eq!(
             progress.remaining, 0,
-            "and the resource CONVERGES: an excluded chunk is not work, so the drain does not \
+            "and the resource CONVERGES: the wiped chunk is not work, so the drain does not \
              re-enqueue it every minute forever (the wedge)"
         );
         let (emb, prov): (Option<String>, Option<String>) =
             sqlx::query_as("SELECT embedding::text, embedded_with FROM kb_chunks WHERE id = $1")
-                .bind(chunk)
+                .bind(wiped)
                 .fetch_one(&pool)
                 .await
                 .unwrap();
         assert_eq!(
             (emb, prov),
             (None, None),
-            "not even the blank-path provenance stamp may land on a redacted row"
+            "the wiped chunk keeps the erasure's emptied shape — no inference, no vector, not \
+             even the blank-path provenance stamp may land on a redacted row"
+        );
+        let (live_emb, _): (Option<String>, Option<String>) =
+            sqlx::query_as("SELECT embedding::text, embedded_with FROM kb_chunks WHERE id = $1")
+                .bind(live)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(
+            live_emb.is_some(),
+            "the same-resource live chunk got its vector"
         );
     }
 
-    /// The differential half, on both copies of the stale predicate: a NON-erased stale chunk on
-    /// the same resource is still drain work (counted, enqueued), and a resource whose ONLY
-    /// staleness is an erased hash drops out of the enqueue sweep entirely.
+    /// The differential half, on both copies of the stale predicate: a live same-hash chunk is
+    /// still drain work (counted, enqueued), and a resource whose ONLY chunk is wiped drops out
+    /// of the enqueue sweep entirely.
     #[sqlx::test(migrations = "../../migrations")]
-    async fn a_non_erased_stale_chunk_is_still_work_and_a_fully_erased_one_is_not(pool: PgPool) {
-        // r_mixed: one erased-hash chunk + one fresh-hash chunk, both stale-shaped.
+    async fn a_wiped_chunk_is_not_work_and_a_live_same_hash_chunk_is(pool: PgPool) {
+        // r_mixed: one WIPED chunk (emptied shape, hash in set) + one fresh chunk.
         let r_mixed = a_named_resource(&pool, "mixed").await;
         let b_mixed = a_block(&pool, r_mixed, 0, false).await;
         let erased = "bb0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        a_prose_chunk(&pool, b_mixed, r_mixed, 0, erased).await;
-        a_prose_chunk(&pool, b_mixed, r_mixed, 1, "fresh").await;
+        a_prose_chunk(&pool, b_mixed, r_mixed, 0, erased, "").await;
+        a_prose_chunk(&pool, b_mixed, r_mixed, 1, "fresh", "live prose").await;
         erase_hash(&pool, erased).await;
 
-        // r_erased_only: the erased hash is its ONLY staleness.
-        let r_only = a_named_resource(&pool, "erased-only").await;
+        // r_wiped_only: a wiped chunk is the ONLY content.
+        let r_only = a_named_resource(&pool, "wiped-only").await;
         let b_only = a_block(&pool, r_only, 0, false).await;
-        a_prose_chunk(&pool, b_only, r_only, 0, erased).await;
+        a_prose_chunk(&pool, b_only, r_only, 0, erased, "").await;
 
         let (mixed_stale, chunk_stale) = stale_summary(&pool, ReembedScope::All).await.unwrap();
         assert_eq!(
             (mixed_stale, chunk_stale),
             (1, 1),
-            "the mixed resource is still work — and ONLY on its fresh chunk: the erased hash is \
+            "the mixed resource is still work — and ONLY on its fresh chunk: the wiped chunk is \
              out of the stale predicate, so count and embed stay in lockstep"
         );
 
@@ -1333,11 +1362,11 @@ mod tests {
         assert_eq!(
             enqueued,
             vec![r_mixed],
-            "the mixed resource is enqueued for its fresh chunk; the fully-erased resource is \
-             not enqueued at all — there is nothing the drain may lawfully do for it"
+            "the mixed resource is enqueued for its fresh chunk; the wiped-only resource is not \
+             enqueued at all — there is nothing the drain may lawfully do for it"
         );
 
-        // And the drain of the mixed resource leaves the erased chunk exactly as erasure left it.
+        // And the drain of the mixed resource leaves the wiped chunk exactly as erasure left it.
         let progress = temper_substrate::embed::embed_resource_chunks(
             &pool,
             r_mixed,
@@ -1357,6 +1386,6 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(stamped, 0, "the erased hash stays vectorless and unstamped");
+        assert_eq!(stamped, 0, "the wiped chunk stays vectorless and unstamped");
     }
 }
