@@ -30,8 +30,9 @@ afterwards is the team's act, not yours, and your erasure never performs it for 
 the owner of a personal context grants you authorship into it, everything you write there
 lives and dies with that context: if that profile is later erased, your content there is
 erased with it. You tied its lifetime to theirs by writing into their context — being its
-author does not hold it back. One current exception is named where the code's reach is
-described below: binary files a guest uploaded there are not picked up by the erasure.
+author does not hold it back. One exception is named where the code's reach is described
+below: binary files a guest uploaded there survive the erasure — the act's record names
+each one rather than striking it.
 
 **The local-copy remainder.** Neither line reaches a contributor's own machine. If you
 synced content to your laptop, that copy is yours and Temper has no enforcement over it —
@@ -76,14 +77,17 @@ keeps it afterward:
   one is named in the record with its content hash as held by the team or map that homes
   it. The team keeps the bytes; the record is what proves the erasure was not silent about
   them.
-- **A known remainder on guest files, stated plainly.** The erasure sweep finds uploaded
-  files by who owns, originates, or uploaded them *as the subject*. A file a guest
-  uploaded into the subject's context is therefore neither wiped nor named in the record
-  by today's sweep — its fate is an open question, not a settled guarantee. Do not assume
-  those bytes die with the context; do not assume they survive it either. Structured-data
-  artifacts a guest's kind owns on those resources *are* named in the record as un-struck;
-  guest files are not, which is what makes this a remainder rather than a reported
-  outcome.
+- **Files a guest uploaded into the subject's contexts are named as surviving.** The sweep
+  strikes uploaded files by who owns, originates, or uploaded them *as the subject*. A
+  file a guest uploaded into the subject's context is the guest's own content, so the act
+  leaves it standing — and names it in the record with its blob id and content hash, the
+  same reporting a team-held file gets. The record is honest that the retention has no
+  release path: the act retires the home's context, and the context floor closes the
+  delete gate for every caller afterward — guest files included — so no custodian
+  resolves. What the record distinguishes is provenance, not fate: an attached file's live
+  relation to the estate outlives the act; an unattached one has no relation at all.
+  Structured-data artifacts a guest's kind owns on those resources are named as un-struck
+  in the record as well.
 
 ## Where the act lives
 
