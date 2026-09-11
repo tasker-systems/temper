@@ -97,7 +97,8 @@ fn gated_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::facets::list_resource_facets))
         .routes(routes!(
             handlers::facets::set_edge_facet,
-            handlers::facets::list_edge_facets
+            handlers::facets::list_edge_facets,
+            handlers::facets::retract_edge_facet
         ))
         .routes(routes!(handlers::graph::cogmap_neighborhood_slice))
         .routes(routes!(handlers::graph::region_composition))

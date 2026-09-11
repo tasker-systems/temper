@@ -25,8 +25,8 @@ drilling into action parameters.
 `list_data_artifacts`, `get_data_artifact`, `list_data_artifact_shapes`,
 `get_data_artifact_shape`
 
-**Writes (17):** `create_resource`, `update_resource`, `update_resource_meta`,
-`delete_resource`, `annotate_resource`, `relationship`, `facet_set`,
+**Writes (18):** `create_resource`, `update_resource`, `update_resource_meta`,
+`delete_resource`, `annotate_resource`, `relationship`, `facet_set`, `facet_retract`,
 `record_citation_audit`, `invocation_manage`, `segmented_ingest`,
 `cogmap_create`, `cogmap_materialize`, `context_materialize`, `context_manage`,
 `steward_advance_watermark`, `commit_data_artifact`,
@@ -39,6 +39,8 @@ drilling into action parameters.
 > that gap is covered only by tests in temper-mcp.
 > `[2026-09-09]` `get_block` joined the reads (36 tools, 19 reads / 17 writes) — the
 > three-state block read.
+> `[2026-09-11]` `facet_retract` joined the writes (37 tools, 19 reads / 18 writes) — the
+> row-grain correction verb for edge-owned facet rows.
 
 **Declared off-MCP (CLI door):** grants (`resource_grant`/`revoke`,
 `cogmap_grant`/`revoke`), `admin_ledger`, cogmap bind/unbind, team invitations,
@@ -440,13 +442,29 @@ One tool with an `action` discriminator, collapsing assert/retype/reweight/fold:
 The `edge_handle` comes from the `assert` response. Per-act authorship fields (`confidence`,
 `reasoning`, `invocation_id`, etc.) are accepted on all actions.
 
-### `facet_set` / `facets_read` — typed properties on resources and edges
+### `facet_set` / `facets_read` / `facet_retract` — typed properties on resources and edges
 
 `facet_set` sets a facet on a resource or a relationship (edge) via a `target` discriminator:
 `resource` (requires `resource` ref) or `edge` (requires `edge_handle`). `facets_read` reads
 the live facets with the same `target` discriminator — use it to confirm a `facet_set` landed,
 since `get_resource` collapses facets into a single newest-wins value in `open_meta` and drops
 the weight.
+
+On `target=edge`, `facet_set` takes an optional `property_key` that asserts `values` as ONE row
+under that key instead of the clustering facet verb. The one declared key is **`anchored-at`**
+— the span qualification: the value is exactly
+`{"endpoint": "source"|"target", "address": "<resource-uuid>#<block-uuid>"}`, one row per
+(endpoint, block). The address is validated structurally (one canonical `<resource>#<block>`
+pair naming the named endpoint's own resource side) and never probed for existence at write
+time; a repeated assert of a live address acks the existing row.
+
+`facet_retract` retracts one edge facet row by id (`target=edge`, the `property_id`
+`facets_read` returned) — the correction verb when an assertion named the wrong span. A
+foreign, unknown, or already-retracted id answers identically (not found); a retracted row's
+address is free for a fresh `facet_set` assert. On `facets_read`, `anchored-at` rows state how
+their address resolved (`live`, `folded` with the gated disposition, `absent`) and — for a
+live address on a `derived_from` edge anchored source-side — whether the anchored block's own
+attribution `corroborated`, is `divergent`, or is `unattributed`.
 
 ### `invocation_manage` / `invocation_read` — agent-run envelopes
 

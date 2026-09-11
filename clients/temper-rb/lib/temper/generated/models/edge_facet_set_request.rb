@@ -37,6 +37,9 @@ module Temper::Generated
     # Free-text reasoning for the act. Authorship field — requires `confidence`.
     attr_accessor :reasoning
 
+    # Optional property key for a keyed single-row write (e.g. `anchored-at`): asserts `values` as ONE row under this key instead of the clustering `facet` verb. Omitted, the write is an ordinary facet.
+    attr_accessor :property_key
+
     # The facet's typed value payload — an **object** of `key` → value marks; same constraint as [`FacetSetRequest::values`].
     attr_accessor :values
 
@@ -75,6 +78,7 @@ module Temper::Generated
         :'persona' => :'persona',
         :'rationale' => :'rationale',
         :'reasoning' => :'reasoning',
+        :'property_key' => :'property_key',
         :'values' => :'values',
         :'weight' => :'weight'
       }
@@ -100,6 +104,7 @@ module Temper::Generated
         :'persona' => :'String',
         :'rationale' => :'String',
         :'reasoning' => :'String',
+        :'property_key' => :'String',
         :'values' => :'Hash<String, Object>',
         :'weight' => :'Float'
       }
@@ -115,6 +120,7 @@ module Temper::Generated
         :'persona',
         :'rationale',
         :'reasoning',
+        :'property_key',
       ])
     end
 
@@ -160,6 +166,10 @@ module Temper::Generated
 
       if attributes.key?(:'reasoning')
         self.reasoning = attributes[:'reasoning']
+      end
+
+      if attributes.key?(:'property_key')
+        self.property_key = attributes[:'property_key']
       end
 
       if attributes.key?(:'values')
@@ -217,6 +227,7 @@ module Temper::Generated
           persona == o.persona &&
           rationale == o.rationale &&
           reasoning == o.reasoning &&
+          property_key == o.property_key &&
           values == o.values &&
           weight == o.weight
     end
@@ -230,7 +241,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [confidence, correlation_id, invocation_id, model, persona, rationale, reasoning, values, weight].hash
+      [confidence, correlation_id, invocation_id, model, persona, rationale, reasoning, property_key, values, weight].hash
     end
 
     # Builds the object from hash

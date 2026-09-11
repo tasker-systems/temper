@@ -8,11 +8,16 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::backend::substrate_read::block_read_select;
 use crate::error::{ApiError, ApiResult};
 use crate::services::blob_service::parse_wire_relation_direction;
-use temper_core::types::facet_requests::EdgeFacetRow;
+use temper_core::types::facet_requests::{
+    AnchorAddress, AnchorAddressResolution, AnchorVerdict, AnchoredAtEndpoint, EdgeFacetRow,
+    ANCHORED_AT_PROPERTY_KEY,
+};
 use temper_core::types::graph::{EdgeKind, Polarity};
-use temper_core::types::ids::EdgeId;
+use temper_core::types::ids::{EdgeId, ProfileId};
+use temper_core::types::provenance::{BlockProvenanceRow, BlockRead};
 use temper_workflow::types::graph::GraphEdgeRow;
 
 /// List the edges incident to a resource, scoped to profile visibility.
@@ -158,6 +163,20 @@ pub async fn list_resource_edges(
 /// Recorded rather than quietly corrected because the shape is worth recognising: an exemption
 /// stated once at function scope silently covers every query added to that function afterwards, and
 /// an unverified one spreads by citation — `lineage_service` adopted this exact claim by reference.
+///
+/// **Each live `anchored-at` row additionally resolves its address** through the block read's
+/// three-state contract — one gated block read per anchored-at row (`block_read_select`, the
+/// landed block-addressed service, whose envelope already carries the block's own attribution;
+/// this read performed no block read before 2026-09) — and, where the edge declares a direction
+/// and the row anchors the declared side, states the verdict against that attribution. The walk
+/// never computes any of this: traversal answers *which edges are qualified*, this read answers
+/// *what the qualification states and whether it agrees*.
+///
+/// **Disclosure rests on the gate invariant**: `edges_visible_to` requires the edge's home AND
+/// both endpoints readable, and any well-formed anchor's addressed resource IS one of those
+/// endpoints — so the block read's refused face (its `Absent` arm, or its not-found error for a
+/// home the caller cannot read) collapses no-such-block and unreadable-home into one arm that
+/// discloses nothing the address value did not already carry.
 pub async fn list_edge_facets(
     pool: &PgPool,
     profile_id: Uuid,
@@ -186,15 +205,16 @@ pub async fn list_edge_facets(
     // answer "what happened to this edge" is structurally blind to its facets. Until that is
     // reconciled, this read is the only place an author is recoverable, which is why it is not
     // optional here.
-    // Selected straight into the wire type: the aliases ARE the mapping, so there is no positional
-    // hand-off between an eight-slot tuple and an eight-field struct to get wrong. The three author
-    // columns take `?` because they arrive through a LEFT JOIN, and sqlx infers nullability from the
-    // column definition — `kb_profiles.handle` is NOT NULL, so without the annotation the macro would
-    // type an absent author as a non-optional String.
+    //
+    // The row is constructed explicitly rather than decoded by `FromRow` (the incumbent shape
+    // `list_resource_edges` uses): two of the wire fields — `address_resolution` and `verdict` —
+    // are computed after the query, not selected, so the aliases can no longer BE the mapping.
+    // The three author columns take `?` because they arrive through a LEFT JOIN, and sqlx infers
+    // nullability from the column definition — `kb_profiles.handle` is NOT NULL, so without the
+    // annotation the macro would type an absent author as a non-optional String.
     //
     // ORDER BY is unchanged from the runtime version. This is a form change, not a behaviour change.
-    let rows = sqlx::query_as!(
-        EdgeFacetRow,
+    let mut rows = sqlx::query!(
         r#"
         SELECT p.id                    AS property_id,
                p.property_key          AS property_key,
@@ -214,7 +234,247 @@ pub async fn list_edge_facets(
         edge_id,
     )
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|r| EdgeFacetRow {
+        property_id: r.property_id,
+        property_key: r.property_key,
+        value: r.value,
+        weight: r.weight,
+        authored_by_event_id: r.authored_by_event_id,
+        authored_by_profile_id: r.authored_by_profile_id,
+        authored_by_handle: r.authored_by_handle,
+        authored_by_display_name: r.authored_by_display_name,
+        address_resolution: None,
+        verdict: None,
+    })
+    .collect::<Vec<_>>();
+
+    // The anchored-at pass: resolve each row's address and, where a direction is declared for
+    // the row's side, compute the verdict from the block read's own `Live` provenance. The edge
+    // row is fetched only when an anchored-at row is present — the common no-anchor read pays
+    // for none of this.
+    if rows
+        .iter()
+        .any(|r| r.property_key == ANCHORED_AT_PROPERTY_KEY)
+    {
+        let edge = sqlx::query!(
+            r#"SELECT label, source_id, target_id FROM kb_edges WHERE id = $1"#,
+            edge_id,
+        )
+        .fetch_one(pool)
+        .await?;
+        // `label` is nullable; an unlabeled edge declares no direction.
+        let label = edge.label.as_deref().unwrap_or("");
+        for row in &mut rows {
+            if row.property_key != ANCHORED_AT_PROPERTY_KEY {
+                continue;
+            }
+            // A structurally skewed stored value degrades to resolution-only rather than
+            // failing the whole read — this is not a validation pass (validation lives at the
+            // write; every row the keyed action landed parses). The row still renders, with
+            // its value verbatim.
+            let Some((endpoint, address)) = parse_anchor(&row.value) else {
+                continue;
+            };
+            let resolution = match block_read_select(
+                pool,
+                ProfileId::from(profile_id),
+                address.resource,
+                address.block,
+            )
+            .await
+            {
+                Ok(BlockRead::Live { provenance, .. }) => {
+                    row.verdict = declared_peer(label, endpoint, edge.target_id)
+                        .map(|peer| anchor_verdict(&provenance, peer));
+                    AnchorAddressResolution::Live
+                }
+                Ok(BlockRead::Folded {
+                    folded_by_event_id,
+                    disposition,
+                    ..
+                }) => AnchorAddressResolution::Folded {
+                    folded_by_event_id,
+                    disposition,
+                },
+                // The collapsed arm: no block under the addressed resource, or the addressed
+                // resource not readable — the block read's own refused face, stated
+                // identically either way. Under the gate invariant above the unreadable-home
+                // half is unreachable today (the address names one of the edge's own
+                // endpoints); the arm is still correct and stays.
+                Ok(BlockRead::Absent { .. }) | Err(ApiError::NotFound(_)) => {
+                    AnchorAddressResolution::Absent
+                }
+                // A fault in the block read is a fault of this read — it never masquerades
+                // as an anchor state.
+                Err(e) => return Err(e),
+            };
+            row.address_resolution = Some(resolution);
+        }
+    }
 
     Ok(rows)
+}
+
+/// The anchored-at value's two halves, parsed. `None` for any value that does not carry the
+/// declared shape — the degrade-to-resolution-only arm, never a re-validation of stored data.
+fn parse_anchor(value: &serde_json::Value) -> Option<(AnchoredAtEndpoint, AnchorAddress)> {
+    let endpoint = AnchoredAtEndpoint::parse(value.get("endpoint")?.as_str()?)?;
+    let address = AnchorAddress::parse(value.get("address")?.as_str()?)?;
+    Some((endpoint, address))
+}
+
+/// The verdict direction, as declared per label: `derived_from` — under BOTH kind-shapes that
+/// carry it — declares peer = target, checked on source-side anchors only (the lineage
+/// convention is uniform across the shapes). Everything else renders resolution-only, never a
+/// computed negative: an unlabeled edge declares nothing; the `express` direction is
+/// undeclared for non-`derived_from` labels; and a row anchored off the declared side
+/// (cross-side) cannot be corroborated by the attribution direction.
+fn declared_peer(label: &str, endpoint: AnchoredAtEndpoint, target_id: Uuid) -> Option<Uuid> {
+    if label == "derived_from" && endpoint == AnchoredAtEndpoint::Source {
+        Some(target_id)
+    } else {
+        None
+    }
+}
+
+/// The directional verdict from the anchored block's own attribution — the rows the block
+/// read's `Live` arm already returned, which are the live, uncorrected rows (corrected rows
+/// are excluded upstream by the same `NOT is_corrected` predicate every incumbent reader
+/// selects through). Carried rows corroborate: `is_carried` marks partial coverage, not
+/// false testimony.
+fn anchor_verdict(provenance: &[BlockProvenanceRow], peer_id: Uuid) -> AnchorVerdict {
+    if provenance.is_empty() {
+        AnchorVerdict::Unattributed
+    } else if provenance
+        .iter()
+        .any(|r| r.source_kind == "resource" && r.source_id == peer_id)
+    {
+        AnchorVerdict::Corroborated
+    } else {
+        AnchorVerdict::Divergent
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The direction declaration, pinned arm by arm: `derived_from` fires source-side only,
+    /// under any kind-shape carrying the label; every other combination is resolution-only.
+    #[test]
+    fn declared_peer_fires_only_for_derived_from_source_side() {
+        let target = Uuid::nil();
+        for label in ["derived_from", "derivation_source", ""] {
+            let source_side = declared_peer(label, AnchoredAtEndpoint::Source, target);
+            let target_side = declared_peer(label, AnchoredAtEndpoint::Target, target);
+            if label == "derived_from" {
+                assert_eq!(source_side, Some(target), "the declared direction fires");
+                assert!(
+                    target_side.is_none(),
+                    "the cross-side row is resolution-only, never a computed negative"
+                );
+            } else {
+                assert!(
+                    source_side.is_none() && target_side.is_none(),
+                    "label {label:?} declares no direction"
+                );
+            }
+        }
+    }
+
+    /// The verdict's three arms over the block's live attribution rows, peer-naming
+    /// decisive: carried rows corroborate like direct ones, and empty is an absence, never
+    /// agreement.
+    #[test]
+    fn anchor_verdict_names_the_peer_among_live_rows() {
+        let peer = Uuid::nil();
+        let row = |source_id: Uuid, is_carried: bool| BlockProvenanceRow {
+            block_id: Uuid::nil(),
+            block_seq: 0,
+            source_kind: "resource".to_string(),
+            source_id,
+            source_uri: None,
+            accretion_seq: 0,
+            contributed_by_event_id: Uuid::nil(),
+            created: chrono::Utc::now(),
+            is_carried,
+        };
+
+        assert_eq!(
+            anchor_verdict(&[], peer),
+            AnchorVerdict::Unattributed,
+            "no testimony is not agreement"
+        );
+        assert_eq!(
+            anchor_verdict(&[row(peer, false)], peer),
+            AnchorVerdict::Corroborated
+        );
+        assert_eq!(
+            anchor_verdict(&[row(peer, true)], peer),
+            AnchorVerdict::Corroborated,
+            "a carried row corroborates"
+        );
+        let other = Uuid::now_v7();
+        assert_eq!(
+            anchor_verdict(&[row(other, false)], peer),
+            AnchorVerdict::Divergent
+        );
+        assert_eq!(
+            anchor_verdict(&[row(other, true), row(peer, true)], peer),
+            AnchorVerdict::Corroborated,
+            "the peer named among several rows decides"
+        );
+    }
+
+    /// The value parser takes exactly the declared shape; every skew degrades to
+    /// resolution-only instead of erroring the read.
+    #[test]
+    fn parse_anchor_takes_only_the_declared_shape() {
+        let resource = Uuid::now_v7();
+        let block = Uuid::now_v7();
+        let good = serde_json::json!({
+            "endpoint": "source",
+            "address": format!("{resource}#{block}"),
+        });
+        let (endpoint, address) = parse_anchor(&good).expect("the declared shape parses");
+        assert_eq!(endpoint, AnchoredAtEndpoint::Source);
+        assert_eq!(address.resource, resource);
+        assert_eq!(address.block, block);
+
+        for bad in [
+            serde_json::json!("not an object"),
+            serde_json::json!({"endpoint": "source"}),
+            serde_json::json!({"address": format!("{resource}#{block}")}),
+            serde_json::json!({"endpoint": "middle", "address": format!("{resource}#{block}")}),
+            serde_json::json!({"endpoint": "source", "address": "not-an-address"}),
+        ] {
+            assert!(
+                parse_anchor(&bad).is_none(),
+                "a skewed value must degrade, not parse: {bad}"
+            );
+        }
+    }
+
+    /// The two anchored-at fields ride the row as `null` when unset — never absent — the
+    /// every-other-row rendering the read states for plain facets.
+    #[test]
+    fn a_row_without_resolution_renders_both_fields_null() {
+        let row = EdgeFacetRow {
+            property_id: Uuid::nil(),
+            property_key: "facet".to_string(),
+            value: serde_json::json!({"k": "v"}),
+            weight: 1.0,
+            authored_by_event_id: Uuid::nil(),
+            authored_by_profile_id: None,
+            authored_by_handle: None,
+            authored_by_display_name: None,
+            address_resolution: None,
+            verdict: None,
+        };
+        let v = serde_json::to_value(&row).unwrap();
+        assert_eq!(v["address_resolution"], serde_json::Value::Null);
+        assert_eq!(v["verdict"], serde_json::Value::Null);
+    }
 }

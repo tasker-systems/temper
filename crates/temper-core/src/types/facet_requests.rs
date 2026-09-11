@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::types::authorship::ActInput;
+use crate::types::provenance::BlockFoldDisposition;
 
 /// Default facet weight when a request omits it (matches the MCP/CLI default).
 fn default_facet_weight() -> f64 {
@@ -37,6 +38,122 @@ pub struct FacetSetRequest {
     pub act: ActInput,
 }
 
+/// The property key that carries an edge's span qualification: one `kb_properties` row owned
+/// by the edge per (endpoint, block), valued `{"endpoint": ..., "address": ...}`. Written
+/// through the edge facet surfaces' keyed mode ([`EdgeFacetSetRequest::property_key`]); read
+/// back like any facet.
+pub const ANCHORED_AT_PROPERTY_KEY: &str = "anchored-at";
+
+/// Which end of a relationship an `anchored-at` row qualifies — the value's `endpoint` half.
+/// Source and target mean the stored columns; the row never re-points when presentation
+/// around the edge changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnchoredAtEndpoint {
+    Source,
+    Target,
+}
+
+impl AnchoredAtEndpoint {
+    /// Parse the value's `endpoint` string. Anything else is refused, never guessed.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "source" => Some(Self::Source),
+            "target" => Some(Self::Target),
+            _ => None,
+        }
+    }
+
+    /// The canonical spelling, as stored in the value.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Source => "source",
+            Self::Target => "target",
+        }
+    }
+}
+
+/// One parsed `<resource-uuid>#<block-uuid>` anchor address — the one declared form: exactly
+/// one `#`, both halves bare UUIDs already in canonical (lowercase, hyphenated) form.
+///
+/// A non-canonical spelling is refused rather than normalized: the row stores what the caller
+/// sent, so an accepted-but-rewritten spelling would store a value the caller cannot query
+/// back, and two spellings of one address would become two rows where the unique-active index
+/// could have seen them as one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AnchorAddress {
+    pub resource: Uuid,
+    pub block: Uuid,
+}
+
+impl AnchorAddress {
+    /// Parse an address in the one declared form. Returns `None` for any other spelling —
+    /// a missing or repeated `#`, a non-UUID half, or a UUID not already canonical.
+    pub fn parse(address: &str) -> Option<Self> {
+        let (resource_half, block_half) = address.split_once('#')?;
+        if block_half.contains('#') {
+            return None;
+        }
+        let resource = resource_half.parse::<Uuid>().ok()?;
+        let block = block_half.parse::<Uuid>().ok()?;
+        if resource.to_string() != resource_half || block.to_string() != block_half {
+            return None;
+        }
+        Some(Self { resource, block })
+    }
+}
+
+/// How one `anchored-at` row's address resolved — the block read's own three-state contract,
+/// stated per row. `live`, `folded`, and `absent` are the block read's own state names,
+/// serialized under `"state"` the same way its answer is.
+///
+/// Carried only on `anchored-at` rows; every other facet row states `null` for this field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum AnchorAddressResolution {
+    /// The addressed block resolves and is current.
+    Live,
+    /// The addressed block's row persists, folded away. The disposition is the block read's
+    /// own gated envelope: every named successor already passed the caller's own read gate,
+    /// and successors the caller cannot read are omitted entirely (no id, no count). The
+    /// qualification is never re-pointed by the fold — a dangling anchor states where its
+    /// content went rather than silently following it.
+    Folded {
+        /// The fold act the resolution walked.
+        folded_by_event_id: Uuid,
+        disposition: BlockFoldDisposition,
+    },
+    /// No block answers under the addressed resource, or the addressed resource is not
+    /// readable — stated identically either way, exactly as the block read itself answers
+    /// an unresolvable address. Never a computed negative: an address you cannot read tells
+    /// you nothing about what it would have corroborated.
+    Absent,
+}
+
+/// Whether an `anchored-at` row agrees with the anchored block's own attribution, stated
+/// where an edge declares a direction and the row anchors the declared side. The comparison
+/// runs against the block's live attribution only — a corrected (retracted) attribution row
+/// never corroborates — and carried rows corroborate like direct ones.
+///
+/// `null` is rendered, never a computed negative: a row whose edge declares no direction, a
+/// row anchored off the declared side, and a row whose address did not resolve `live` all
+/// state `null`, so an edge kind can gain its direction additively and old readers survive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum AnchorVerdict {
+    /// The block's live attribution is non-empty and names the edge's peer — the two
+    /// records agree.
+    Corroborated,
+    /// The block's live attribution is non-empty and does not name the edge's peer — the
+    /// two records disagree about where this relationship manifests. Rendered by name,
+    /// never smoothed: nothing on either side is rewritten or dropped.
+    Divergent,
+    /// The block carries no live attribution rows — an absence of testimony, never
+    /// readable as agreement or disagreement.
+    Unattributed,
+}
+
 /// Request body for `POST /api/relationships/{edge_handle}/facets` — a facet whose owner is an
 /// **edge**.
 ///
@@ -51,6 +168,11 @@ pub struct EdgeFacetSetRequest {
     /// The facet's typed value payload — an **object** of `key` → value marks; same constraint as
     /// [`FacetSetRequest::values`].
     pub values: serde_json::Map<String, serde_json::Value>,
+    /// Optional property key for a keyed single-row write (e.g. `anchored-at`): asserts `values`
+    /// as ONE row under this key instead of the clustering `facet` verb. Omitted, the write is
+    /// an ordinary facet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub property_key: Option<String>,
     /// Relative weight of the facet; defaults to `1.0` when omitted, matching [`FacetSetRequest`].
     #[serde(default = "default_facet_weight")]
     pub weight: f64,
@@ -92,6 +214,17 @@ pub struct EdgeFacetRow {
     pub authored_by_profile_id: Option<Uuid>,
     pub authored_by_handle: Option<String>,
     pub authored_by_display_name: Option<String>,
+    /// For an `anchored-at` row: how the row's address resolved — `live`, `folded` (with the
+    /// gated disposition), or `absent`. `null` for every other facet row.
+    #[serde(default)]
+    pub address_resolution: Option<AnchorAddressResolution>,
+    /// For an `anchored-at` row resolving `live`: whether the anchored block's own live
+    /// attribution corroborates the qualification (`corroborated`), disagrees with it
+    /// (`divergent`), or is absent (`unattributed`). `null` when the row is not
+    /// `anchored-at`, its address did not resolve `live`, or the edge declares no verdict
+    /// direction for the row's anchored side.
+    #[serde(default)]
+    pub verdict: Option<AnchorVerdict>,
 }
 
 /// The live facets of one edge. Folded rows are excluded: folding an edge cascades to the
@@ -186,6 +319,17 @@ pub struct FacetAck {
     /// The rows written. Never empty: an assert that names no mark is refused upstream rather than
     /// acknowledged with nothing (`facet_object_has_keys` in `db_backend`).
     pub property_ids: Vec<Uuid>,
+}
+
+/// Acknowledgement returned by the facet retraction endpoint — `DELETE
+/// /api/relationships/{edge_handle}/facets/{property_id}`.
+///
+/// The retracted row's id, echoed. The row itself persists folded away and is never reused: a
+/// re-assertion of the same address mints a fresh row with a fresh id.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct FacetRetractAck {
+    pub property_id: Uuid,
 }
 
 #[cfg(test)]
@@ -285,6 +429,16 @@ mod tests {
         assert_eq!(back.property_ids, ack.property_ids);
     }
 
+    #[test]
+    fn facet_retract_ack_round_trips() {
+        let ack = FacetRetractAck {
+            property_id: Uuid::nil(),
+        };
+        let v = serde_json::to_value(&ack).unwrap();
+        let back: FacetRetractAck = serde_json::from_value(v).unwrap();
+        assert_eq!(back.property_id, ack.property_id);
+    }
+
     /// The reason this type is plural. A two-key assert writes two rows, and the ack has to be able
     /// to say so — under the old singular shape this information had nowhere to go, so the caller
     /// received one id and no indication that a second row existed.
@@ -304,5 +458,79 @@ mod tests {
         );
         let back: FacetAck = serde_json::from_value(v).unwrap();
         assert_eq!(back.property_ids, ack.property_ids, "order is as written");
+    }
+
+    fn plain_facet_row() -> EdgeFacetRow {
+        EdgeFacetRow {
+            property_id: Uuid::nil(),
+            property_key: "facet".to_string(),
+            value: serde_json::json!({"status": "open"}),
+            weight: 1.0,
+            authored_by_event_id: Uuid::nil(),
+            authored_by_profile_id: None,
+            authored_by_handle: None,
+            authored_by_display_name: None,
+            address_resolution: None,
+            verdict: None,
+        }
+    }
+
+    /// The row's own wire contract for the two anchored-at fields: they serialize as
+    /// PRESENT-but-null (matching the sibling author fields — no skip-serializing), and a
+    /// payload that omits them deserializes to `None`, so a new reader reading an old
+    /// writer's wire parses.
+    #[test]
+    fn edge_facet_row_states_resolution_and_verdict_null_never_absent() {
+        let v = serde_json::to_value(plain_facet_row()).unwrap();
+        assert!(
+            v.get("address_resolution").is_some(),
+            "the field must be present, never absent: {v}"
+        );
+        assert_eq!(v["address_resolution"], serde_json::Value::Null);
+        assert!(v.get("verdict").is_some(), "present, never absent: {v}");
+        assert_eq!(v["verdict"], serde_json::Value::Null);
+
+        let mut wire = v.clone();
+        wire.as_object_mut().unwrap().remove("address_resolution");
+        wire.as_object_mut().unwrap().remove("verdict");
+        let back: EdgeFacetRow = serde_json::from_value(wire).unwrap();
+        assert_eq!(back.address_resolution, None);
+        assert_eq!(back.verdict, None);
+    }
+
+    /// The resolution states the block read's own state names under `"state"`, and the
+    /// folded arm carries the gated disposition envelope verbatim.
+    #[test]
+    fn anchor_resolution_round_trips_the_block_read_state_names() {
+        let live = serde_json::to_value(AnchorAddressResolution::Live).unwrap();
+        assert_eq!(live["state"], "live");
+
+        let absent = serde_json::to_value(AnchorAddressResolution::Absent).unwrap();
+        assert_eq!(absent["state"], "absent");
+
+        let folded = AnchorAddressResolution::Folded {
+            folded_by_event_id: Uuid::nil(),
+            disposition: BlockFoldDisposition::Unrecorded,
+        };
+        let v = serde_json::to_value(&folded).unwrap();
+        assert_eq!(v["state"], "folded");
+        assert_eq!(v["disposition"]["disposition"], "unrecorded");
+        let back: AnchorAddressResolution = serde_json::from_value(v).unwrap();
+        assert_eq!(back, folded);
+    }
+
+    /// The verdict is a plain name on the wire — no payload to misread as a computation.
+    #[test]
+    fn anchor_verdict_round_trips_by_name() {
+        for (verdict, word) in [
+            (AnchorVerdict::Corroborated, "corroborated"),
+            (AnchorVerdict::Divergent, "divergent"),
+            (AnchorVerdict::Unattributed, "unattributed"),
+        ] {
+            let v = serde_json::to_value(verdict).unwrap();
+            assert_eq!(v, serde_json::json!(word));
+            let back: AnchorVerdict = serde_json::from_value(v).unwrap();
+            assert_eq!(back, verdict);
+        }
     }
 }

@@ -111,6 +111,7 @@ async fn a_clause_citation_rides_the_advances_edge_and_dies_with_it(pool: sqlx::
         .set_on_edge(
             edge,
             &EdgeFacetSetRequest {
+                property_key: None,
                 values: clause_map,
                 weight: 1.0,
                 act: Default::default(),
@@ -236,6 +237,7 @@ async fn a_non_owner_cannot_facet_someone_elses_edge(pool: sqlx::PgPool) {
         .post(app.url(&format!("/api/relationships/{edge}/facets")))
         .bearer_auth(&stranger_token)
         .json(&EdgeFacetSetRequest {
+            property_key: None,
             values: serde_json::json!({ "clause": "not-yours" })
                 .as_object()
                 .expect("facet payload is an object")

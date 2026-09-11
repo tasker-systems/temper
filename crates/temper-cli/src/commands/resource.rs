@@ -370,6 +370,99 @@ fn source_edge_targets(
         .collect()
 }
 
+/// The anchor set for one asserted edge (D-B4, coarse): every block of the created resource
+/// whose attribution names that edge's source — `is_carried` rows included, no cap, no
+/// primary-block heuristic. Never computed from parsed bodies; the attribution rows ARE the
+/// set. Rows arrive ordered `(block_seq, accretion_seq)`; the anchor address is per BLOCK (one
+/// row per (endpoint, block), D-B1), so multiple accretion rows for one (block, source) dedupe
+/// to one anchor.
+fn anchor_blocks_for_target(
+    provenance: &[temper_core::types::provenance::BlockProvenanceRow],
+    target: uuid::Uuid,
+) -> Vec<uuid::Uuid> {
+    let mut blocks = Vec::new();
+    for row in provenance {
+        if row.source_kind == "resource"
+            && row.source_id == target
+            && !blocks.contains(&row.block_id)
+        {
+            blocks.push(row.block_id);
+        }
+    }
+    blocks
+}
+
+/// The keyed write's value object — exactly the declared shape
+/// `{"endpoint": "source", "address": "<resource-uuid>#<block-uuid>"}`, the created resource
+/// being the asserted edge's source side. The shared dispatch's structural validation refuses
+/// anything else, so the loop can only author what the write surface admits.
+fn anchored_at_values(
+    created: uuid::Uuid,
+    block: uuid::Uuid,
+) -> serde_json::Map<String, serde_json::Value> {
+    use temper_core::types::facet_requests::AnchoredAtEndpoint;
+
+    serde_json::json!({
+        "endpoint": AnchoredAtEndpoint::Source.as_str(),
+        "address": format!("{created}#{block}"),
+    })
+    .as_object()
+    .cloned()
+    .expect("a literal object")
+}
+
+/// The authoring loop's coarse anchors: for each asserted `derived_from` edge, one `anchored-at`
+/// row per block of the created resource whose attribution names that edge's source (`is_carried`
+/// included — D-B4). Computed from ONE gated follow-up read of the created resource's per-block
+/// provenance (the create response itself carries no block data). Rides the same non-atomic,
+/// warn-not-fatal posture as the edge asserts above: every failure warns here and the committed
+/// create stands; with the write surface's insert-if-not-live, a retried create's
+/// already-asserted anchors ack instead of erroring.
+fn write_source_edge_anchors(
+    runtime: &tokio::runtime::Runtime,
+    client: &temper_client::TemperClient,
+    created: uuid::Uuid,
+    asserted_edges: &[(uuid::Uuid, uuid::Uuid)],
+    act: &temper_core::types::authorship::ActInput,
+) {
+    use temper_core::types::facet_requests::{EdgeFacetSetRequest, ANCHORED_AT_PROPERTY_KEY};
+
+    if asserted_edges.is_empty() {
+        return;
+    }
+    let provenance = match runtime.block_on(client.resources().provenance(created)) {
+        Ok(rows) => rows,
+        Err(e) => {
+            output::warning(format!(
+                "could not read block provenance to anchor the derived_from edges: {e} \
+                 (resource created; the edges stand unanchored — add an anchor with \
+                 `temper edge facet <edge-handle> --key anchored-at --values <JSON>`)"
+            ));
+            return;
+        }
+    };
+
+    for (target, edge_handle) in asserted_edges {
+        for block in anchor_blocks_for_target(&provenance, *target) {
+            let address = format!("{created}#{block}");
+            let req = EdgeFacetSetRequest {
+                values: anchored_at_values(created, block),
+                property_key: Some(ANCHORED_AT_PROPERTY_KEY.to_string()),
+                weight: 1.0,
+                act: act.clone(),
+            };
+            if let Err(e) = runtime.block_on(client.facets().set_on_edge(*edge_handle, &req)) {
+                output::warning(format!(
+                    "could not anchor derived_from edge to {target} at {address}: {e} \
+                     (resource created; the edge stands — re-assert the anchor with \
+                     `temper edge facet {edge_handle} --key anchored-at --values \
+                     '{{\"endpoint\":\"source\",\"address\":\"{address}\"}}'`)"
+                ));
+            }
+        }
+    }
+}
+
 /// Derive the created resource's `origin_uri` from `--from` (issue #352). A remote (http/https)
 /// `--from` URL becomes the resource's origin — server-side this seeds a Remote block-provenance
 /// record when no explicit `--sources` are given, making `create --from <url>` citation-grade by
@@ -657,6 +750,8 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
             temper_workflow::types::graph::EdgeType::DerivedFrom.legacy_mapping();
 
         let targets = source_edge_targets(&sources_for_edges);
+        // (target, edge handle) — the handle feeds the anchor phase below.
+        let mut asserted_edges = Vec::new();
         let mut asserted = Vec::new();
         let mut failed = Vec::new();
 
@@ -673,7 +768,10 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
             };
             let outcome = runtime.block_on(client.relationships().assert(&req));
             match outcome {
-                Ok(_) => asserted.push(target),
+                Ok(ack) => {
+                    asserted_edges.push((target, ack.edge_handle));
+                    asserted.push(target);
+                }
                 Err(e) => {
                     output::warning(format!(
                         "could not assert derived_from edge to {target}: {e} \
@@ -683,6 +781,18 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
                 }
             }
         }
+
+        // The loop's coarse anchors (one `anchored-at` row per asserted edge per block
+        // carrying that source's attribution) — same posture, computed below from one gated
+        // follow-up read.
+        write_source_edge_anchors(
+            &runtime,
+            &client,
+            created_resource.id.0,
+            &asserted_edges,
+            &act_for_edges,
+        );
+
         (asserted, failed)
     } else {
         (Vec::new(), Vec::new())
@@ -4261,6 +4371,90 @@ mod source_edge_targets_tests {
         use temper_core::types::provenance::ProvenanceSource;
         let sources = vec![ProvenanceSource::Remote("https://x.test".to_string())];
         assert!(source_edge_targets(&sources).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod anchor_set_tests {
+    use super::{anchor_blocks_for_target, anchored_at_values};
+    use temper_core::types::facet_requests::AnchorAddress;
+    use temper_core::types::provenance::BlockProvenanceRow;
+
+    fn row(block: u128, kind: &str, source: u128, is_carried: bool) -> BlockProvenanceRow {
+        BlockProvenanceRow {
+            block_id: uuid::Uuid::from_u128(block),
+            block_seq: 0,
+            source_kind: kind.to_string(),
+            source_id: uuid::Uuid::from_u128(source),
+            source_uri: None,
+            accretion_seq: 0,
+            contributed_by_event_id: uuid::Uuid::from_u128(999),
+            created: chrono::Utc::now(),
+            is_carried,
+        }
+    }
+
+    /// The anchor set is exactly the target's `resource`-kind rows: remote and event rows are
+    /// not edge targets, and an event row whose id happens to equal the target's id does not
+    /// count — the kind guard states the intent, never a bare id match.
+    #[test]
+    fn the_anchor_set_is_exactly_the_targets_resource_rows() {
+        let target = uuid::Uuid::from_u128(1);
+        let rows = vec![
+            row(10, "resource", 1, false),
+            row(11, "remote", 77, false),
+            row(12, "resource", 2, false),
+            row(13, "event", 1, false),
+        ];
+
+        let blocks = anchor_blocks_for_target(&rows, target);
+
+        assert_eq!(blocks, vec![uuid::Uuid::from_u128(10)]);
+    }
+
+    /// D-B4's bite: `is_carried` marks partial coverage, not exclusion. A loop that skipped
+    /// carried rows would silently qualify less than the edge asserts.
+    #[test]
+    fn carried_rows_are_anchored_like_direct_ones() {
+        let target = uuid::Uuid::from_u128(1);
+        let rows = vec![row(10, "resource", 1, true), row(11, "resource", 1, true)];
+
+        let blocks = anchor_blocks_for_target(&rows, target);
+
+        assert_eq!(
+            blocks,
+            vec![uuid::Uuid::from_u128(10), uuid::Uuid::from_u128(11)]
+        );
+    }
+
+    /// One address per block (D-B1): a block carrying the source's attribution at two
+    /// accretion rows anchors once.
+    #[test]
+    fn one_anchor_per_block_even_when_accretion_names_the_source_twice() {
+        let target = uuid::Uuid::from_u128(1);
+        let rows = vec![row(10, "resource", 1, false), row(10, "resource", 1, true)];
+
+        let blocks = anchor_blocks_for_target(&rows, target);
+
+        assert_eq!(blocks, vec![uuid::Uuid::from_u128(10)]);
+    }
+
+    /// The keyed write's value object is the one declared shape — exactly two keys, the
+    /// source endpoint, and a canonical `<resource>#<block>` address that parses back to the
+    /// halves it was built from. Anything else the shared dispatch refuses.
+    #[test]
+    fn the_loops_value_object_is_the_declared_anchor_shape() {
+        let created = uuid::Uuid::from_u128(5);
+        let block = uuid::Uuid::from_u128(6);
+
+        let values = anchored_at_values(created, block);
+
+        assert_eq!(values.len(), 2, "exactly endpoint + address: {values:?}");
+        assert_eq!(values["endpoint"], "source");
+        let address = values["address"].as_str().expect("an address string");
+        let parsed = AnchorAddress::parse(address).expect("the canonical form parses");
+        assert_eq!(parsed.resource, created);
+        assert_eq!(parsed.block, block);
     }
 }
 

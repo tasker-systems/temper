@@ -430,6 +430,7 @@ async fn faceting_an_edge_requires_reading_its_target(pool: PgPool) {
     let denied = DbBackend::new(pool.clone(), ProfileId::from(delegate))
         .set_facet(SetFacet {
             owner: PropertyOwner::edge(hidden_edge),
+            property_key: None,
             values: serde_json::json!({"clause": "planted"}),
             weight: 1.0,
             act: Default::default(),
@@ -452,6 +453,7 @@ async fn faceting_an_edge_requires_reading_its_target(pool: PgPool) {
     DbBackend::new(pool.clone(), ProfileId::from(delegate))
         .set_facet(SetFacet {
             owner: PropertyOwner::edge(open_edge),
+            property_key: None,
             values: serde_json::json!({"clause": "legitimate"}),
             weight: 1.0,
             act: Default::default(),
@@ -534,6 +536,7 @@ async fn a_folded_edge_is_unmutable(pool: PgPool) {
     backend
         .set_facet(SetFacet {
             owner: PropertyOwner::edge(edge),
+            property_key: None,
             values: serde_json::json!({"clause": "while-live"}),
             weight: 1.0,
             act: Default::default(),
@@ -556,6 +559,7 @@ async fn a_folded_edge_is_unmutable(pool: PgPool) {
     let denied = backend
         .set_facet(SetFacet {
             owner: PropertyOwner::edge(edge),
+            property_key: None,
             values: serde_json::json!({"clause": "after-the-fold"}),
             weight: 1.0,
             act: Default::default(),

@@ -26,7 +26,7 @@ pub use commands::{
     AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick,
     CloseInvocation, CommitDataArtifact, CompleteAuditorJob, CreateCognitiveMap, CreateResource,
     DeleteResource, FoldRelationship, GoalPatch, ListResources, MaterializeOnThreshold, MoveSpec,
-    OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit, RetypeRelationship,
+    OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit, RetractFacet, RetypeRelationship,
     ReweightRelationship, SearchResources, SetFacet, ShowResource, StewardDispatchTick,
     UpdateResource,
 };

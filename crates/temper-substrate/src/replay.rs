@@ -241,6 +241,9 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             | EventKind::RelationshipReweighted
             | EventKind::PropertyAsserted
             | EventKind::PropertySet
+            // The row-grain correction: payload-only (the row id rides the payload), no chunk
+            // content — never selected by the content-bearing filter above.
+            | EventKind::PropertyRetracted
             | EventKind::LensCreated
             | EventKind::RegionMaterialized
             | EventKind::RelationshipFolded
@@ -639,6 +642,14 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     .bind(&payload)
                     .execute(pool)
                     .await?;
+            }
+            // property_retracted (the row-grain correction): payload-only projector, no sidecar.
+            // The body is the shared `project_property_retracted` — fire and replay run ONE
+            // implementation, since this event has no `_project_*` SQL function. The payload
+            // carries the row id (identity-as-input), so replay re-folds the SAME row; the
+            // `NOT is_folded` floor makes a re-application a zero-row no-op, never a resurrection.
+            EventKind::PropertyRetracted => {
+                crate::events::project_property_retracted(pool, id, &payload).await?;
             }
             EventKind::LensCreated => {
                 sqlx::query("SELECT _project_lens_created($1,$2)")

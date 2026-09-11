@@ -159,6 +159,96 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Retract one facet of a relationship
+    # Folds one facet row owned by the edge, addressed by the `property_id` the facets read returned. The row persists as history and the read stops returning it; asserting the same address again mints a fresh row. Authorizes through the same clauses as the other edge writes. A property id naming another edge, an unknown one, and an already-retracted one all answer the same 404.
+    # @param edge_handle [String] Relationship edge handle
+    # @param property_id [String] Facet row id to retract
+    # @param invocation_id [String] The invocation this act is correlated under (&#x60;kb_events.invocation_id&#x60;). Optional — a correlation aid, never a substitute for authn/authz.
+    # @param correlation_id [String] The act-grain thread this write belongs to (&#x60;kb_events.correlation_id&#x60;). Optional, caller- minted, provenance-only. Rides independently of &#x60;invocation_id&#x60; and of authorship.
+    # @param reasoning [String] Free-text reasoning for the act. Authorship field — requires &#x60;confidence&#x60;.
+    # @param confidence [ConfidenceBand] Graded self-assessed confidence band. Required whenever any other authorship field is set.
+    # @param rationale [String] Structured rationale for the act. Authorship field — requires &#x60;confidence&#x60;.
+    # @param persona [String] The persona/role the author acted as. Authorship field — requires &#x60;confidence&#x60;.
+    # @param model [String] The model that authored the act. Authorship field — requires &#x60;confidence&#x60;.
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [FacetRetractAck]
+    def retract_edge_facet(edge_handle, property_id, invocation_id, correlation_id, reasoning, confidence, rationale, persona, model, opts = {})
+      data, _status_code, _headers = retract_edge_facet_with_http_info(edge_handle, property_id, invocation_id, correlation_id, reasoning, confidence, rationale, persona, model, opts)
+      data
+    end
+
+    # Retract one facet of a relationship
+    # Folds one facet row owned by the edge, addressed by the &#x60;property_id&#x60; the facets read returned. The row persists as history and the read stops returning it; asserting the same address again mints a fresh row. Authorizes through the same clauses as the other edge writes. A property id naming another edge, an unknown one, and an already-retracted one all answer the same 404.
+    # @param edge_handle [String] Relationship edge handle
+    # @param property_id [String] Facet row id to retract
+    # @param invocation_id [String] The invocation this act is correlated under (&#x60;kb_events.invocation_id&#x60;). Optional — a correlation aid, never a substitute for authn/authz.
+    # @param correlation_id [String] The act-grain thread this write belongs to (&#x60;kb_events.correlation_id&#x60;). Optional, caller- minted, provenance-only. Rides independently of &#x60;invocation_id&#x60; and of authorship.
+    # @param reasoning [String] Free-text reasoning for the act. Authorship field — requires &#x60;confidence&#x60;.
+    # @param confidence [ConfidenceBand] Graded self-assessed confidence band. Required whenever any other authorship field is set.
+    # @param rationale [String] Structured rationale for the act. Authorship field — requires &#x60;confidence&#x60;.
+    # @param persona [String] The persona/role the author acted as. Authorship field — requires &#x60;confidence&#x60;.
+    # @param model [String] The model that authored the act. Authorship field — requires &#x60;confidence&#x60;.
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(FacetRetractAck, Integer, Hash)>] FacetRetractAck data, response status code and response headers
+    def retract_edge_facet_with_http_info(edge_handle, property_id, invocation_id, correlation_id, reasoning, confidence, rationale, persona, model, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: FacetsApi.retract_edge_facet ...'
+      end
+      # verify the required parameter 'edge_handle' is set
+      if @api_client.config.client_side_validation && edge_handle.nil?
+        fail ArgumentError, "Missing the required parameter 'edge_handle' when calling FacetsApi.retract_edge_facet"
+      end
+      # verify the required parameter 'property_id' is set
+      if @api_client.config.client_side_validation && property_id.nil?
+        fail ArgumentError, "Missing the required parameter 'property_id' when calling FacetsApi.retract_edge_facet"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/relationships/{edge_handle}/facets/{property_id}'.sub('{edge_handle}', CGI.escape(edge_handle.to_s)).sub('{property_id}', CGI.escape(property_id.to_s)).sub('{invocation_id}', CGI.escape(invocation_id.to_s)).sub('{correlation_id}', CGI.escape(correlation_id.to_s)).sub('{reasoning}', CGI.escape(reasoning.to_s)).sub('{confidence}', CGI.escape(confidence.to_s)).sub('{rationale}', CGI.escape(rationale.to_s)).sub('{persona}', CGI.escape(persona.to_s)).sub('{model}', CGI.escape(model.to_s))
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body]
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'FacetRetractAck'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"FacetsApi.retract_edge_facet",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:DELETE, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: FacetsApi#retract_edge_facet\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
     # Set a facet on a relationship
     # Sets a facet whose owner is an edge rather than a resource. The edge is addressed in the path, matching the other edge writes (`retype`, `reweight`, `fold`).  Answers 404 when the edge does not exist, is folded, or has a target you cannot read. That last case answers 404 rather than 403 on purpose, so a refusal never confirms the existence of something you are not allowed to see.
     # @param edge_handle [String] Relationship edge handle

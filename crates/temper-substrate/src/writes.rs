@@ -443,6 +443,29 @@ impl std::fmt::Display for BlockAddressError {
 
 impl std::error::Error for BlockAddressError {}
 
+/// The retraction's refusal: the addressed property id is not a live row owned by the addressed
+/// edge. A missing id, a foreign owner, and an already-retracted one are ONE error — the message
+/// names only what the caller already sent, so no arm of the refusal discloses more than another
+/// (no existence oracle over property rows). The projector's own zero-rows outcome, typed so the
+/// backend can render it `NotFound` instead of the generic bridge.
+#[derive(Debug)]
+pub struct PropertyRetractError {
+    pub property_id: uuid::Uuid,
+    pub edge_id: uuid::Uuid,
+}
+
+impl std::fmt::Display for PropertyRetractError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "facet_retract: property {} is not a live facet of edge {}",
+            self.property_id, self.edge_id
+        )
+    }
+}
+
+impl std::error::Error for PropertyRetractError {}
+
 /// Resolve which content block a body revise / annotate targets: an explicitly-addressed
 /// `content_block` (validated to belong to `resource` and be non-folded), or — when `None` — the
 /// resource's single non-folded body block. Shared by the update (revise) and annotate paths so both
@@ -2317,6 +2340,91 @@ pub async fn set_facet_in_tx(
     )
     .await?
     .facet()
+}
+
+/// Assert one keyed property row on a [`PropertyOwner`] — the write behind the edge facet
+/// surface's keyed mode (the `anchored-at` span qualification). **Insert-if-not-live**: a live
+/// row for the exact (owner, key, value) acks its own id and appends no event; otherwise one
+/// row fires through [`SeedAction::KeyedPropertyAssert`] and its id is returned. Never a
+/// fold-then-reinsert — a second address appends a second row, and a re-assert after the row
+/// is folded mints a fresh one, because the partial unique index (`uq_kb_properties_active`)
+/// sees live rows only.
+///
+/// The liveness pre-check shares the fire's transaction: a row that commits between the check
+/// and the insert still collides on `uq_kb_properties_active`, aborting the transaction with
+/// no event appended — the caller's conflict to retry, which then acks.
+pub async fn assert_keyed_property_with(
+    pool: &PgPool,
+    owner: PropertyOwner,
+    key: &str,
+    value: &serde_json::Value,
+    weight: f64,
+    emitter: EntityId,
+    ctx: EventContext,
+) -> Result<PropertyId> {
+    let mut tx = begin_scoped(pool).await?;
+    let acked: Option<Uuid> = sqlx::query_scalar!(
+        "SELECT id FROM kb_properties \
+          WHERE owner_table = $1 AND owner_id = $2 AND property_key = $3 \
+            AND property_value = $4 AND NOT is_folded",
+        owner.owner_table(),
+        owner.uuid(),
+        key,
+        value,
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+    if let Some(existing) = acked {
+        tx.commit().await?;
+        return Ok(PropertyId::from(existing));
+    }
+    let ids = fire_with(
+        &mut tx,
+        SeedAction::KeyedPropertyAssert {
+            owner,
+            key,
+            value,
+            weight,
+            emitter,
+        },
+        ctx,
+    )
+    .await?
+    .facet()?;
+    let id = ids
+        .into_iter()
+        .next()
+        .context("keyed property assert returned no row id")?;
+    tx.commit().await?;
+    Ok(id)
+}
+
+/// Retract one property row bound to its owning edge — the correction verb for the `anchored-at`
+/// span qualifications. The edge-bound fold runs inside the fire's transaction, so a refusal
+/// (foreign owner, missing id, already retracted — one indistinguishable error,
+/// [`PropertyRetractError`]) appends no ledger event. Success folds the row and stamps the
+/// retraction event; the row persists, and the address is re-assertable.
+pub async fn retract_property_with(
+    pool: &PgPool,
+    edge: EdgeId,
+    property_id: PropertyId,
+    emitter: EntityId,
+    ctx: EventContext,
+) -> Result<PropertyId> {
+    let mut tx = begin_scoped(pool).await?;
+    let retracted = fire_with(
+        &mut tx,
+        SeedAction::PropertyRetract {
+            edge,
+            property_id,
+            emitter,
+        },
+        ctx,
+    )
+    .await?
+    .property_retract()?;
+    tx.commit().await?;
+    Ok(retracted)
 }
 
 /// Set a single-valued **per-key** property — folds prior active `(owner, key)` rows then asserts the
