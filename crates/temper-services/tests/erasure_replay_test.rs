@@ -884,3 +884,201 @@ async fn world_shape(pool: &PgPool, chunk_hash: &str) -> (String, String) {
     .await
     .expect("the pre-erasure chunk row survives (D3: emptied, not deleted)")
 }
+
+// ── the blob-arm ruling's witness (2026-09-11): a guest-committed row is NAMED, never silent ──
+
+/// FAILS IF the blob pre-pass reports nothing for a guest-committed row homed in a governed
+/// context: the only novelty in this world is the guest's files (committed through the REAL
+/// commit path, owner = the guest, home = the subject's governed context) beside the subject's
+/// own. The subject's row must strike exactly as always — the unchanged arm, asserted in the
+/// same state change so the witness cannot pass by regression. The guest's rows must NOT
+/// strike and MUST be named in the record — blob id + content hash, independent_obligation-
+/// shaped like the team remainder — with the unattached row honest that no custodian resolves
+/// (its home owner is the erased subject) and the attached row still strikable by the guest.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_guest_committed_blob_in_a_governed_home_is_named_by_the_record(pool: sqlx::PgPool) {
+    let (subject, _) = insert_profile(&pool).await;
+    let (operator, _) = insert_profile(&pool).await;
+    temper_services::test_support::grant_governance(&pool, operator).await;
+    let (guest, _) = insert_profile(&pool).await;
+    let home = insert_personal_context(&pool, subject, "notes").await;
+    let subject_emitter: Uuid = sqlx::query_scalar(
+        "SELECT id FROM kb_entities WHERE profile_id = $1 AND name LIKE '%@web'",
+    )
+    .bind(subject)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let guest_emitter: Uuid = sqlx::query_scalar(
+        "SELECT id FROM kb_entities WHERE profile_id = $1 AND name LIKE '%@web'",
+    )
+    .bind(guest)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let store = InMemoryBlobStore::default();
+    // The subject's own blob in the governed home — the UNCHANGED strike arm.
+    let (own_blob, own_hash) = seed_blob(
+        &pool,
+        &store,
+        home,
+        subject,
+        subject_emitter,
+        b"\x89PNG-subject-bytes",
+    )
+    .await;
+    // The novelty: two guest-committed rows in the SAME governed home — one unattached, one
+    // attached (a live relation to an estate resource, the delete-act's attached shape).
+    let (guest_unattached, guest_unattached_hash) = seed_blob(
+        &pool,
+        &store,
+        home,
+        guest,
+        guest_emitter,
+        b"\x89PNG-guest-unattached",
+    )
+    .await;
+    let (resource, _) = seed_resource(
+        &pool,
+        subject,
+        subject_emitter,
+        home,
+        "estate figure sheet",
+        "prose the guest's figure sits beside",
+    )
+    .await;
+    let (guest_attached, guest_attached_hash) = seed_blob(
+        &pool,
+        &store,
+        home,
+        guest,
+        guest_emitter,
+        b"\x89PNG-guest-attached",
+    )
+    .await;
+    writes::assert_anchored_edge(
+        &pool,
+        writes::AssertAnchoredEdgeParams {
+            source: AnchorRef::blob(BlobId::from(guest_attached)),
+            target: AnchorRef::resource(temper_substrate::ids::ResourceId::from(resource)),
+            kind: temper_substrate::affinity::EdgeKind::Express,
+            polarity: temper_substrate::payloads::EdgePolarity::Forward,
+            label: Some("figure_of"),
+            weight: 1.0,
+            home: temper_substrate::events::EdgeHome::Context(home),
+            emitter: EntityId::from(guest_emitter),
+        },
+    )
+    .await
+    .expect("the guest relates their blob to the estate resource");
+
+    let outcome = execute_erasure(
+        &pool,
+        ProfileId::from(operator),
+        ProfileId::from(subject),
+        Uuid::now_v7(),
+    )
+    .await
+    .expect("the operator's act completes");
+    let ErasureOutcome::Completed(completion) = outcome else {
+        panic!("must complete, got {outcome:?}");
+    };
+
+    // The unchanged arm: the subject's own row strikes, exactly one blob_erased event — the
+    // guest rows produced none.
+    let (own_type, own_kept): (Option<String>, String) =
+        sqlx::query_as("SELECT content_type, content_hash FROM kb_blobs WHERE id = $1")
+            .bind(own_blob)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        own_type, None,
+        "the subject's own blob still strikes (the unchanged arm)"
+    );
+    assert_eq!(
+        own_kept, own_hash,
+        "the struck row's hash is retained (D5.2)"
+    );
+    assert_eq!(
+        completion.blob_strikes.len(),
+        1,
+        "exactly one blob_erased event — the subject's own; got {:?}",
+        completion.blob_strikes
+    );
+    assert_eq!(
+        completion.blob_strikes[0].blob_id, own_blob,
+        "the strike is the subject's row, released={:?}",
+        completion.blob_strikes[0].released
+    );
+    assert!(
+        completion.blob_strikes[0].released,
+        "the subject's row is the only live row carrying its hash"
+    );
+
+    // The novelty: BOTH guest rows are named — independent_obligation-shaped like the team
+    // remainder, each carrying its blob id and content hash.
+    let named: Vec<&str> = completion
+        .targets
+        .iter()
+        .filter(|t| {
+            t.target == "kb_blobs"
+                && t.outcome.starts_with(
+                    "independent_obligation: committed by a guest of the erased principal",
+                )
+        })
+        .map(|t| t.outcome.as_str())
+        .collect();
+    assert_eq!(
+        named.len(),
+        2,
+        "both guest-committed rows are named by the record — the act's only un-named class \
+         is closed; got {named:?} against targets {:?}",
+        completion.targets
+    );
+    assert!(
+        named
+            .iter()
+            .any(|o| o.contains(&guest_unattached.to_string())
+                && o.contains(&guest_unattached_hash)
+                && o.contains("no custodian resolves")),
+        "the unattached row names the retention: its home owner is the erased subject, so \
+         its provider bytes have no release path — got {named:?}"
+    );
+    assert!(
+        named
+            .iter()
+            .any(|o| o.contains(&guest_attached.to_string()) && o.contains(&guest_attached_hash)),
+        "the attached row is named with its blob id and hash — got {named:?}"
+    );
+
+    // Named, not struck: both guest rows stay live (pathname + media type intact) and their
+    // hashes never enter the erased-content set.
+    for (id, hash) in [
+        (guest_unattached, &guest_unattached_hash),
+        (guest_attached, &guest_attached_hash),
+    ] {
+        let (ctype, pathname): (Option<String>, Option<String>) =
+            sqlx::query_as("SELECT content_type, blob_pathname FROM kb_blobs WHERE id = $1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            (ctype.as_deref(), pathname.as_deref()),
+            (Some("image/png"), Some(blob_pathname(hash).as_str())),
+            "the named row is retained live, not struck"
+        );
+    }
+    let in_set: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_erased_content WHERE content_hash = ANY($1)")
+            .bind(&[guest_unattached_hash.clone(), guest_attached_hash.clone()])
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        in_set, 0,
+        "a named-not-struck hash never enters the erased-content set"
+    );
+}
