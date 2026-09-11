@@ -2946,7 +2946,7 @@ impl Backend for DbBackend {
                     act_ctx,
                 )
                 .await
-                .map_err(map_facet_write_err)?;
+                .map_err(map_keyed_facet_write_err)?;
                 vec![id]
             }
         };
@@ -4213,13 +4213,27 @@ fn map_commit_err(e: sqlx::Error) -> TemperError {
 /// ([`api_err`]). The substrate write returns `anyhow::Error`, so the sqlx error is found by
 /// walking the source chain rather than a single downcast.
 fn map_facet_write_err(e: anyhow::Error) -> TemperError {
+    conflict_if_unique_violation(
+        e,
+        "a facet with this key is already set on the resource; fold it before re-setting",
+    )
+}
+
+/// The keyed verb's race arm: the unique-active index fired on a concurrently-asserted
+/// identical row. A bare retry acks the surviving row (insert-if-not-live) — folding is
+/// never part of this verb's remediation.
+fn map_keyed_facet_write_err(e: anyhow::Error) -> TemperError {
+    conflict_if_unique_violation(
+        e,
+        "an identical row was asserted concurrently; retry the write — it acks the existing row",
+    )
+}
+
+fn conflict_if_unique_violation(e: anyhow::Error, conflict: &str) -> TemperError {
     for cause in e.chain() {
         if let Some(sqlx::Error::Database(db)) = cause.downcast_ref::<sqlx::Error>() {
             if db.code().as_deref() == Some("23505") {
-                return TemperError::Conflict(
-                    "a facet with this key is already set on the resource; fold it before re-setting"
-                        .to_string(),
-                );
+                return TemperError::Conflict(conflict.to_string());
             }
         }
     }

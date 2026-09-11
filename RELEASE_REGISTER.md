@@ -62,6 +62,17 @@ classes: additive
 surfaces: http, mcp, cli-stdout, clients
 status: signal-only
 
+- **The facet tools teach the `anchored-at` vocabulary — agent-caller meaning changes**
+  The `facet_set` / `facets_read` MCP tool descriptions document the keyed mode and the
+  resolution/verdict fields; the agent-skills `knowledge-base.md` documents the
+  `facet_set` / `facets_read` / `facet_retract` set and the correction loop
+  (`facet_retract` joins the writes census). Wire shapes are unchanged — what the
+  descriptions MEAN for an agent caller is new.
+pr: self
+classes: behavioral
+surfaces: mcp
+status: signal-only
+
 - **The keyed edge-owner facet write — `property_key` on the edge facet surfaces**
   `POST /api/relationships/{edge_handle}/facets`, MCP `facet_set` (`target: edge`), and
   `temper edge facet --key` grow an optional `property_key`: when set, `values` is asserted
