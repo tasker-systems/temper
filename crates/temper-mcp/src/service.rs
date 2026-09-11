@@ -342,7 +342,7 @@ impl TemperMcpService {
     // ── Facets (consolidated: 2→1 read, 2→1 write) ─────────────────────
 
     #[tool(
-        description = "Read the live facets of a resource or a relationship (edge) — one entry per assert, each with its weight and author. Set `target` to `resource` (requires `resource` ref) or `edge` (requires `edge_handle`). Use this to confirm a facet_set landed: get_resource collapses facets into a single newest-wins value in open_meta and drops the weight."
+        description = "Read the live facets of a resource or a relationship (edge) — one entry per assert, each with its weight and author. Set `target` to `resource` (requires `resource` ref) or `edge` (requires `edge_handle`). Use this to confirm a facet_set landed: get_resource collapses facets into a single newest-wins value in open_meta and drops the weight. Rows keyed `anchored-at` additionally state how their address resolved (`live`, `folded` with the block read's gated disposition, or `absent`) and — for a live address on a `derived_from` edge, anchored source-side — whether the anchored block's own attribution `corroborated`, is `divergent`, or is `unattributed`."
     )]
     async fn facets_read(
         &self,
@@ -354,7 +354,7 @@ impl TemperMcpService {
     }
 
     #[tool(
-        description = "Set a facet (typed property) on a resource or a relationship (edge). Set `target` to `resource` (requires `resource` ref) or `edge` (requires `edge_handle`). The facet's typed value payload goes in `values`; optional `weight` (0.0-1.0, defaults to 1.0). Per-act authorship fields accepted."
+        description = "Set a facet (typed property) on a resource or a relationship (edge). Set `target` to `resource` (requires `resource` ref) or `edge` (requires `edge_handle`). The facet's typed value payload goes in `values`; optional `weight` (0.0-1.0, defaults to 1.0). Per-act authorship fields accepted. On `target=edge`, optional `property_key` asserts `values` as ONE row under that key instead of the clustering facet verb — for `anchored-at` (the span qualification) the value is exactly `{\"endpoint\": \"source\"|\"target\", \"address\": \"<resource-uuid>#<block-uuid>\"}`: the address must be one canonical `<resource>#<block>` pair naming the named endpoint's own resource side; the row lands per (endpoint, block), a repeated assert of a live address acks the existing row, and the address is never probed for existence at write time. Other keys are refused."
     )]
     async fn facet_set(
         &self,

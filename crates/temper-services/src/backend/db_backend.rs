@@ -4037,7 +4037,8 @@ impl DbBackend {
     /// Structural validation for a keyed edge-owner write, applied BEFORE any fire so a refusal
     /// appends no ledger event — the error body is the record.
     ///
-    /// Only `anchored-at` rows carry declared structure today: the value must be exactly
+    /// The keyed write admits exactly one key — `anchored-at` (the span qualification's
+    /// vocabulary) — and its rows carry declared structure: the value must be exactly
     /// `{"endpoint": "source"|"target", "address": "<resource-uuid>#<block-uuid>"}`, the named
     /// endpoint's side must be a resource (blocks live on `kb_resources` only — a cogmap or blob
     /// side carries nothing to anchor), and the address's resource half must BE that endpoint.
@@ -4070,7 +4071,10 @@ impl DbBackend {
             ));
         }
         if key != ANCHORED_AT_PROPERTY_KEY {
-            return Ok(());
+            return Err(TemperError::BadRequest(format!(
+                "the keyed edge write admits only \"{ANCHORED_AT_PROPERTY_KEY}\"; got \
+                 \"{key}\" — ordinary edge facets ride the clustering facet verb"
+            )));
         }
 
         let declared = format!(

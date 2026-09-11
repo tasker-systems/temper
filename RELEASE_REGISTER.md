@@ -82,7 +82,8 @@ status: signal-only
   is that endpoint's id. Validation sits in the backend dispatch every surface reaches, so
   no skin bypasses it; it probes structure only — never whether the addressed block exists,
   is live, or is visible (no existence oracle; resolution is the read contract's to state).
-  A keyed write under `facet`, or on a resource owner, refuses outright. Previously no
+  A keyed write under any key other than the one declared key — `facet`, a resource
+  owner, a misspelling — refuses outright. Previously no
   surface could write a keyed row at all, so nothing accepted-then-written changes.
 pr: self
 classes: behavioral

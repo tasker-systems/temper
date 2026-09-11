@@ -598,3 +598,50 @@ async fn a_keyed_write_cannot_ride_the_clustering_facet_key(pool: PgPool) {
     .expect("row count for the edge");
     assert_eq!(any_rows, 0, "nothing written under any key");
 }
+
+/// The keyed write admits exactly the declared key: a key-carrying edge write under any
+/// OTHER key is refused — the vocabulary is one key (`anchored-at`), and an arbitrary
+/// edge-owned row would mint vocabulary the read side never declared.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_keyed_write_under_any_other_key_is_refused(pool: PgPool) {
+    use temper_core::types::facet_requests::ANCHORED_AT_PROPERTY_KEY as ANCHORED;
+
+    let (backend, source, _target, edge) = edge_fixture(&pool).await;
+
+    for key in ["anchored at", "anchored_at", "span", "ANCHORED-AT"] {
+        let refused = backend
+            .set_facet(SetFacet {
+                owner: PropertyOwner::edge(EdgeId::from(edge)),
+                property_key: Some(key.to_string()),
+                values: serde_json::json!({"status": "open"}),
+                weight: 1.0,
+                act: Default::default(),
+                origin: Surface::ApiHttp,
+            })
+            .await
+            .expect_err(&format!(
+                "key {key:?} must be refused — the vocabulary is one key"
+            ));
+        assert!(
+            matches!(refused, TemperError::BadRequest(_)),
+            "key {key:?} must be refused: {refused:?}"
+        );
+    }
+
+    // The one admitted key still lands — the vocabulary is closed, not the write.
+    let landed = backend
+        .set_facet(SetFacet {
+            owner: PropertyOwner::edge(EdgeId::from(edge)),
+            property_key: Some(ANCHORED.to_string()),
+            values: serde_json::json!({
+                "endpoint": "source",
+                "address": format!("{source}#{}", Uuid::now_v7()),
+            }),
+            weight: 1.0,
+            act: Default::default(),
+            origin: Surface::ApiHttp,
+        })
+        .await
+        .expect("the declared key still writes");
+    assert!(!landed.value.is_empty(), "the keyed write lands its row id");
+}
