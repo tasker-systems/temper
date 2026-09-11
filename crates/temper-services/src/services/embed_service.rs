@@ -212,10 +212,11 @@ pub async fn stale_summary(pool: &PgPool, scope: ReembedScope) -> ApiResult<(u64
     // Both counts take their columns positionally: `count()` over an empty grouping set still
     // returns 0 — it is never NULL.
     //
-    // The erased-content exclusion is ERASED_HASH_EXCLUSION, interpolated (D4 arm 2): the
-    // operator's convergence readout must count what the drain may lawfully embed — an erased
-    // hash is never that, and counting it would read as a wedge that cannot converge. Same
-    // runtime-SQL reason as `enqueue_stale` above.
+    // The erased-content exclusion is ERASED_HASH_EXCLUSION, interpolated (D4 arm 2, re-keyed
+    // to the row by 20260911000000): the operator's convergence readout must count what the
+    // drain may lawfully embed — a WIPED chunk (own content empty + set membership) is never
+    // that, and counting it would read as a wedge that cannot converge; a same-hash chunk
+    // with live prose IS work and counts. Same runtime-SQL reason as `enqueue_stale` above.
     let (resources, chunks): (i64, i64) = sqlx::query_as(&format!(
         r#"SELECT count(DISTINCT r.id), count(*)
             FROM kb_resources r
@@ -1262,12 +1263,14 @@ mod tests {
         .unwrap();
     }
 
-    /// FAILS IF the drain re-embeds (or even re-stamps provenance on) a WIPED chunk: the
-    /// chunk carries the erasure's own emptied shape (content '', vector + provenance NULL,
-    /// hash in the set), and the row-anchored gate must exclude it from work. The resource
+    /// FAILS IF the drain re-embeds (or even re-stamps provenance on) a WIPED chunk, or if
+    /// hash membership alone still excludes: the resource carries BOTH shapes under the SAME
+    /// erased hash — the wiped chunk (content '', vector + provenance NULL, hash in the set)
+    /// and a live chunk (real prose, SAME hash). The row-anchored gate excludes only the
+    /// wiped one; the live one embeds. Under the retired hash-only gate BOTH were excluded
+    /// and `embedded` would be 0 — this differential is the retirement's bite. The resource
     /// must CONVERGE (`remaining` reaches zero, the drain's own wedge invariant) with the
-    /// vector still NULL. The differential half is the retirement's bite: a chunk with LIVE
-    /// prose under the SAME hash is ordinary work — the gate is the row, never the bytes.
+    /// wiped chunk's vector still NULL.
     #[sqlx::test(migrations = "../../migrations")]
     async fn a_wiped_chunk_is_never_re_embedded_and_a_same_hash_live_chunk_embeds(pool: PgPool) {
         let r = a_named_resource(&pool, "tombstoned").await;
@@ -1280,8 +1283,8 @@ mod tests {
             b,
             r,
             1,
-            "bb0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-            "prose under a hash some other erasure recorded — this chunk is not that erasure's",
+            hash,
+            "live prose under a hash some erasure recorded — THIS row is not that erasure's",
         )
         .await;
 
@@ -1294,7 +1297,8 @@ mod tests {
         .unwrap();
         assert_eq!(
             progress.embedded, 1,
-            "the live-prose chunk embeds — hash membership alone excludes nothing"
+            "the live same-hash chunk embeds — under the retired hash-only gate this would be \
+             0: membership alone excluded every chunk carrying the hash"
         );
         assert_eq!(
             progress.remaining, 0,
@@ -1321,21 +1325,31 @@ mod tests {
                 .unwrap();
         assert!(
             live_emb.is_some(),
-            "the same-resource live chunk got its vector"
+            "the live same-hash chunk got its vector"
         );
     }
 
     /// The differential half, on both copies of the stale predicate: a live same-hash chunk is
     /// still drain work (counted, enqueued), and a resource whose ONLY chunk is wiped drops out
-    /// of the enqueue sweep entirely.
+    /// of the enqueue sweep entirely. Both mixed-resource chunks carry the SAME erased hash —
+    /// the bite: under the retired hash-only gate the stale summary would count (0, 0) and
+    /// enqueue nothing.
     #[sqlx::test(migrations = "../../migrations")]
     async fn a_wiped_chunk_is_not_work_and_a_live_same_hash_chunk_is(pool: PgPool) {
-        // r_mixed: one WIPED chunk (emptied shape, hash in set) + one fresh chunk.
+        // r_mixed: one WIPED chunk (emptied shape) + one LIVE chunk — SAME hash, both shapes.
         let r_mixed = a_named_resource(&pool, "mixed").await;
         let b_mixed = a_block(&pool, r_mixed, 0, false).await;
         let erased = "bb0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         a_prose_chunk(&pool, b_mixed, r_mixed, 0, erased, "").await;
-        a_prose_chunk(&pool, b_mixed, r_mixed, 1, "fresh", "live prose").await;
+        a_prose_chunk(
+            &pool,
+            b_mixed,
+            r_mixed,
+            1,
+            erased,
+            "live prose under the erased hash",
+        )
+        .await;
         erase_hash(&pool, erased).await;
 
         // r_wiped_only: a wiped chunk is the ONLY content.
@@ -1347,8 +1361,9 @@ mod tests {
         assert_eq!(
             (mixed_stale, chunk_stale),
             (1, 1),
-            "the mixed resource is still work — and ONLY on its fresh chunk: the wiped chunk is \
-             out of the stale predicate, so count and embed stay in lockstep"
+            "the mixed resource is still work — and ONLY on its live same-hash chunk: the wiped \
+             chunk is out of the stale predicate, so count and embed stay in lockstep (under \
+             the retired hash-only gate this would be (0, 0))"
         );
 
         let enqueued = enqueue_stale(
@@ -1362,11 +1377,12 @@ mod tests {
         assert_eq!(
             enqueued,
             vec![r_mixed],
-            "the mixed resource is enqueued for its fresh chunk; the wiped-only resource is not \
+            "the mixed resource is enqueued for its live chunk; the wiped-only resource is not \
              enqueued at all — there is nothing the drain may lawfully do for it"
         );
 
-        // And the drain of the mixed resource leaves the wiped chunk exactly as erasure left it.
+        // And the drain of the mixed resource lands the live chunk's vector while the wiped
+        // chunk stays exactly as erasure left it.
         let progress = temper_substrate::embed::embed_resource_chunks(
             &pool,
             r_mixed,
@@ -1376,16 +1392,27 @@ mod tests {
         .unwrap();
         assert_eq!(
             progress.remaining, 0,
-            "the mixed resource converges on its fresh chunk's completion"
+            "the mixed resource converges on its live chunk's completion"
         );
-        let stamped: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM kb_chunks WHERE content_hash = $1 \
-               AND (embedding IS NOT NULL OR embedded_with IS NOT NULL)",
+        let (wiped_stamped, live_stamped): (i64, i64) = sqlx::query_as(
+            "SELECT count(*) FILTER (WHERE cc.content = ''), \
+                    count(*) FILTER (WHERE cc.content <> '') \
+               FROM kb_chunks ch \
+               JOIN kb_chunk_content cc ON cc.chunk_id = ch.id \
+              WHERE ch.content_hash = $1 \
+                AND (ch.embedding IS NOT NULL OR ch.embedded_with IS NOT NULL)",
         )
         .bind(erased)
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(stamped, 0, "the wiped chunk stays vectorless and unstamped");
+        assert_eq!(
+            wiped_stamped, 0,
+            "the wiped chunk stays vectorless and unstamped"
+        );
+        assert_eq!(
+            live_stamped, 1,
+            "the live same-hash chunk is stamped — membership alone never blocked it"
+        );
     }
 }

@@ -1724,4 +1724,23 @@ async fn a_create_with_one_erased_and_one_fresh_chunk_lands_whole(pool: sqlx::Pg
     let (events, _, prose, _) = create_surface_counts(&pool).await;
     assert_eq!(events, before.0 + 1, "the mixed create fired its event");
     assert!(prose > before.2, "the verbatim body was stored whole");
+    // Wholeness at the CHUNK grain: BOTH hashes exist as current chunks of the created
+    // resource — a partial-admission regression that stored the body but dropped one chunk
+    // row fails here. Set equality (the wire's chunk order need not survive the projector).
+    let mut stored: Vec<String> = sqlx::query_scalar(
+        "SELECT c.content_hash FROM kb_chunks c \
+          JOIN kb_resource_homes h ON h.resource_id = c.resource_id \
+         WHERE h.anchor_table = 'kb_contexts' AND h.anchor_id = $1 AND c.is_current",
+    )
+    .bind(home)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    stored.sort();
+    let mut expected: Vec<String> = chunks.into_iter().map(|c| c.content_hash).collect();
+    expected.sort();
+    assert_eq!(
+        stored, expected,
+        "every chunk of the body landed — nothing was admitted in part"
+    );
 }

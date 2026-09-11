@@ -60,7 +60,11 @@ BEGIN
     --     retention rule never fires) — GOVERNED HOMES ONLY (ruled 2026-09-10, decision
     --     01a08dc2): the hash is the record key, never the reach. A same-hash chunk in a
     --     home the subject does not govern keeps its prose; erasure never reaches beyond
-    --     the estate its subject governs.
+    --     the estate its subject governs. The predicate is HOME-CUSTODY shaped, not
+    --     authorship shaped: a resource homed in the subject's governed context but owned
+    --     by a grantee is IN the estate (the ruling — the context wipes with the estate)
+    --     and its content redacts; a same-hash row in a home the subject does not govern
+    --     is never the subject's to erase.
     UPDATE kb_chunk_content cc
        SET content = ''
       FROM kb_chunks c
@@ -272,6 +276,24 @@ BEGIN
             -- (contexts_readable_by arm 1, 20260712000010:96-97): the subject's own contexts
             -- only; team arms are a different read and a different governance.
             OR (c.owner_table = 'kb_profiles' AND c.owner_id = p_subject) );
+
+    -- (13) CUSTODY CLOSURE (the offboarding ruling: grantees lose access to a dead
+    --     principal's context). Retiring the governed contexts floors every access
+    --     predicate that touches the estate — `can()`'s subject-liveness arm
+    --     (20260902000010) checks kb_contexts.is_active, and context_authorable_by_
+    --     profile / can_modify_resource consult it — so grants INTO the estate die with
+    --     the context's activation, and no live principal can re-admit content into the
+    --     wiped homes. UN-EVENTED BY THE SAME PRECEDENT AS ARM (7): kb_contexts is a
+    --     replay INPUT table restored verbatim (replay.rs INPUT_TABLES), like kb_profiles;
+    --     is_active is not identity-bearing (the 20260826000120 evented-retire defect is
+    --     slug-specific — the walk's context_renamed never touches is_active), so the
+    --     verbatim restore carries the retired state and the diff stays byte-identical.
+    --     Idempotent: replay re-runs this arm against already-retired input rows.
+    UPDATE kb_contexts g
+       SET is_active = false
+      WHERE g.is_active
+        AND g.owner_table = 'kb_profiles'
+        AND g.owner_id = p_subject;
 END;
 $$;
 
@@ -333,7 +355,10 @@ BEGIN
     -- Governed (personal) contexts — the schema's own owner arm, exactly as the read model
     -- spells it (contexts_readable_by arm 1, 20260712000010:96-97): owner_table =
     -- 'kb_profiles' AND owner_id = subject. Team-owned and team-shared contexts (arms 2-3)
-    -- are NOT governed — disposition iii.
+    -- are NOT governed — disposition iii. SNAPSHOT INVARIANT: nothing between this read and
+    -- the redaction may mutate kb_contexts or kb_resource_homes — verified for this
+    -- transaction's other bodies (blob_delete, _event_append touch neither) — so the
+    -- redaction's per-arm re-derivation of the same predicate always agrees with it.
     SELECT coalesce(array_agg(id), '{}') INTO v_governed
       FROM kb_contexts
      WHERE owner_table = 'kb_profiles'
@@ -645,6 +670,14 @@ BEGIN
             jsonb_build_object('target','kb_cogmaps.shape_materialized_event_id',
                 'outcome','recompute-marked'));
     END IF;
+    SELECT count(*) INTO v_n FROM kb_contexts g
+      WHERE g.is_active
+        AND g.owner_table = 'kb_profiles'
+        AND g.owner_id = p_subject;
+    IF v_n > 0 THEN
+        v_targets := v_targets || jsonb_build_array(
+            jsonb_build_object('target','kb_contexts.is_active','outcome','retired'));
+    END IF;
     SELECT count(*) INTO v_n FROM kb_contexts c
      WHERE c.shape_materialized_event_id IS NOT NULL
        AND ( c.id IN (
@@ -820,12 +853,13 @@ COMMENT ON FUNCTION block_mutate(jsonb, jsonb, uuid, jsonb, uuid, uuid) IS
     'Suppresses only when the projector would write nothing new: same merkle, same stored bytes, '
     'no chunk awaiting a vector, no new embedding model, nothing incorporated. The erased-content '
     'refusal that sat before the suppression (20260909000030) is RETIRED (20260911000000, the '
-    'offboarding ruling): no write path consults kb_erased_content any more — another principal''s '
-    'lawful write of identical bytes is never an erasure violation, and the wiped estate is '
-    'custody-closed. See 20260726000030''s header for the two suppression traps.';
+    'offboarding ruling): no content-admitting path consults kb_erased_content as an '
+    'instance-wide oracle any more (the embed drain keeps its row-anchored exclusion) — another '
+    'principal''s lawful write of identical bytes is never an erasure violation, and the wiped '
+    'estate is custody-closed. See 20260726000030''s header for the two suppression traps.';
 
 SELECT declare_migration(
     20260911000000,
     'additive',
-    'The hash-global erasure grain is retired (ruled 2026-09-10 with Pete — decision 01a08dc2-684c-7f20-aeac-b1895f57831b, erasure is offboarding, the authority line is custody never bytes; task 01a08dc4). _erasure_apply_redaction''s text arms (chunk prose, block bytes, embeddings+provenance, search vectors, formation watermarks) scope to the subject''s governed homes with the scope computation''s own owner arm — 20260909000025''s claim that governed-scope set admission kept the wipe bounded was backwards: the wipe re-expanded hashes across every home, emptying a second principal''s identical template prose and vectors; the set''s admission stays governed-scope and the redaction now is too, and the replay pre-pass resolves the same predicate identically because contexts are replay INPUT tables. block_mutate loses the erased-content refusal (20260909000030), restoring the five suppression checks byte-identical — no content-admitting path consults kb_erased_content as an instance-wide oracle any more; the set remains the ledger-derived projection the replay diffs in full. principal_erasure_execute''s per-target outcome reads scope to governed homes with the same predicate, so the record never reports erased for rows the act deliberately leaves standing. propagated_to_clients stays false permanently — client propagation is out of enforcement scope, never "not yet". Additive: CREATE OR REPLACE only, signatures unchanged.'
+    'The hash-global erasure grain is retired (ruled 2026-09-10 with Pete — decision 01a08dc2-684c-7f20-aeac-b1895f57831b, erasure is offboarding, the authority line is custody never bytes; task 01a08dc4). _erasure_apply_redaction''s text arms (chunk prose, block bytes, embeddings+provenance, search vectors, formation watermarks) scope to the subject''s governed homes with the scope computation''s own owner arm — 20260909000025''s claim that governed-scope set admission kept the wipe bounded was backwards: the wipe re-expanded hashes across every home, emptying a second principal''s identical template prose and vectors; the set''s admission stays governed-scope and the redaction now is too, and the replay pre-pass resolves the same predicate identically because contexts are replay INPUT tables. The redaction also RETIRES the governed contexts (is_active=false) — closing custody over the estate, so grants into it die with the activation floor and no live principal can re-admit content into the wiped homes; un-evented per the profile-tombstone''s own INPUT-table precedent, is_active being non-identity-bearing. block_mutate loses the erased-content refusal (20260909000030), restoring the five suppression checks byte-identical — no content-admitting path consults kb_erased_content as an instance-wide oracle any more; the set remains the ledger-derived projection the replay diffs in full. principal_erasure_execute''s per-target outcome reads scope to governed homes with the same predicate, and the retirement rides the record as its own per-target outcome. propagated_to_clients stays false permanently — client propagation is out of enforcement scope, never "not yet". Additive: CREATE OR REPLACE only, signatures unchanged.'
 );

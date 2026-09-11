@@ -855,11 +855,12 @@ async fn a_sync_re_delivery_is_erasure_blind(pool: PgPool) {
     );
 }
 
-/// FAILS IF the reconcile still consults the erased-content set in any form: a re-delivery
-/// whose every chunk hash sits in the set converges as `unchanged` through the ORDINARY
-/// diff — same request, same stored merkle — with zero new events. Erasure-awareness would
-/// show up here as a drop, a refuse, or an error; none is permitted (the offboarding
-/// ruling).
+/// Pins the fully-erased shape: a re-delivery whose every chunk hash sits in the set
+/// converges as `unchanged` through the ORDINARY diff — same request, same stored merkle —
+/// with zero new events. The bite for "no consult in any form" is the partial sibling above
+/// (a fully-erased delivery was also a no-op under the retired drop, so this shape alone
+/// cannot distinguish); this test pins that the degenerate case still converges and never
+/// errors.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_fully_erased_re_delivery_converges_as_unchanged(pool: PgPool) {
     let be = backend(&pool).await;

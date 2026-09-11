@@ -1004,6 +1004,43 @@ mod tests {
             !other_fts.is_empty(),
             "the other home's search vector survives"
         );
+
+        // CUSTODY CLOSURE (arm 13): the subject's governed context is retired — the
+        // subject-liveness floor (20260902000010) then denies every live principal's access
+        // into the estate, grants and all — while the other principal's context stays live.
+        let (subject_ctx_active,): (bool,) =
+            sqlx::query_as("SELECT is_active FROM kb_contexts WHERE id = $1")
+                .bind(world.context)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(
+            !subject_ctx_active,
+            "the wiped estate's context is retired — custody over it is closed"
+        );
+        let (other_ctx_active,): (bool,) =
+            sqlx::query_as("SELECT is_active FROM kb_contexts WHERE id = $1")
+                .bind(other_context)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(
+            other_ctx_active,
+            "an ungoverned context is nobody's retirement target"
+        );
+        let retirement: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM kb_events e \
+               JOIN kb_event_types t ON t.id = e.event_type_id \
+              WHERE t.name = 'principal_erased' \
+                AND e.payload->'targets' @> '[{\"target\": \"kb_contexts.is_active\"}]'::jsonb",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            retirement, 1,
+            "the retirement rides the record as a per-target outcome"
+        );
         let _ = world.event;
     }
 

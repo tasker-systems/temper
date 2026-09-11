@@ -26,7 +26,7 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
   identity.
 pr: self
 classes: behavioral
-surfaces: http, schema
+surfaces: http, mcp, cli-stdout, schema
 status: signal-only
 
 - **The delete act's ruled door — `DELETE /api/blobs/{id}` (+ temper-client/SDK `delete_blob`)**

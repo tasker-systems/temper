@@ -1385,13 +1385,11 @@ impl DbBackend {
                     // fallback, never taken here). `origin_uri` is still set on the resource as
                     // attribution.
                     //
-                    // The CREATE arm never sees an all-erased set from a lawful sync: erasure keeps
-                    // the resource row live with its `body_hash` untouched (D3 — the hash never
-                    // changes), so a re-delivery of an erased document resolves to the EXISTING
-                    // landmark id and converges as `unchanged` in the UPDATE arm below. A fresh
-                    // landmark whose raw payload is wholly erased hashes is the stale-client
-                    // re-admission D4 forbids, and that is the create door's refusal to make
-                    // (`writes::refuse_erased_content`), not this arm's.
+                    // Erasure plays no part here: erasure keeps the resource row live with its
+                    // `body_hash` untouched (D3), so a re-delivery of an erased document resolves to the
+                    // EXISTING landmark id and converges in the UPDATE arm below — and a fresh landmark
+                    // carrying erased hashes creates like any other (no write path consults the set,
+                    // 20260911000000).
                     let chunks = Some(incoming_chunks);
                     let rid = writes::create_kernel_resource_in_tx(
                         &mut *conn,
@@ -1446,16 +1444,11 @@ impl DbBackend {
                     outcome.created += 1;
                 }
                 Some(row) if row.body_hash.as_deref() != Some(incoming_body_hash.as_str()) => {
-                    // ALL-ERASED re-delivery converges, it does not error. When the sanitize above
-                    // dropped EVERY incoming chunk, there is nothing lawful left to apply: the
-                    // server state IS the erased state (D4 arm 3 — the erasure emptied the content
-                    // and never moved the stored `body_hash`, which is why the merkle compare even
-                    // fired on the sanitized re-delivery). Re-blocking THROUGH `block_mutate` with
-                    // an empty chunk set would RAISE ("a revise must carry content") and turn the
-                    // stale laptop's convergence into a hard error — so count the no-op with the
-                    // reconcile's own `unchanged` idiom and move on. The merkle mismatch here is
-                    // expected and innocent: the incoming merkle hashes the sanitized set, the
-                    // stored one predates the erasure.
+                    // An entry delivered with NO chunks at all converges as `unchanged`:
+                    // re-blocking through `block_mutate` would RAISE ("a revise must carry
+                    // content"), turning a degenerate delivery into a hard error. Erasure plays
+                    // no part — the pre-20260911000000 sanitize that emptied incoming sets is
+                    // retired; this arm is only the empty-payload guard.
                     if incoming_chunks.is_empty() {
                         outcome.unchanged += 1;
                         continue;
