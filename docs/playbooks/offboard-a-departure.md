@@ -5,6 +5,8 @@ person who has left.
 
 By the end you will have ended a departing person's admission and the credentials behind it,
 handed off the work they owned, and know the figure to quote when nobody acts at all.
+Nothing here deletes content: a normal departure erases nothing, and every act in this
+runbook is reversible by design (see [What this does not cover](#what-this-does-not-cover)).
 
 ## Prerequisites
 
@@ -174,7 +176,18 @@ in the SAML playbook's [Limitations](./self-host-with-saml.md#limitations).
   from what its admission permits; note that reconcile never deactivates a profile.
 - **Deleting anything.** Every act here is reversible and preserves history:
   `temper admin access reactivate` restores a deactivated principal's prior standing, and
-  `temper admin access approve` readmits a revoked one.
+  `temper admin access approve` readmits a revoked one. A normal departure erases nothing,
+  by design. The organization owns the workspace the way it owns its mail or chat tenancy:
+  a "personal" context is personal to the worker *inside the organization's estate* — the
+  way a work mailbox is yours as a worker, not your property — and content in every
+  context survives the departure.
+- **Erasure.** The one destructive act, and it is a compliance arm rather than an
+  offboarding step: it runs when the organization determines erasure is necessary or
+  warranted — a data-protection request it must honor, a regulator's order — never as part
+  of this sequence, and never at a departing person's request (the door is operator-only,
+  and a subject's own attempt is recorded as a refusal). What it wipes, what it keeps, and
+  what it only reports is in
+  [Erasure and the terms of use](../concepts/erasure-and-terms-of-use.md).
 
 ## Further reading
 
