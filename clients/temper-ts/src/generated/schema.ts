@@ -4202,6 +4202,12 @@ export interface components {
          */
         EdgeFacetSetRequest: components["schemas"]["ActInput"] & {
             /**
+             * @description Optional property key for a keyed single-row write (e.g. `anchored-at`): asserts `values`
+             *     as ONE row under this key instead of the clustering `facet` verb. Omitted, the write is
+             *     an ordinary facet.
+             */
+            property_key?: string | null;
+            /**
              * @description The facet's typed value payload — an **object** of `key` → value marks; same constraint as
              *     [`FacetSetRequest::values`].
              */

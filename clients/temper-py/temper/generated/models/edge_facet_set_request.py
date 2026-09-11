@@ -36,9 +36,10 @@ class EdgeFacetSetRequest(BaseModel):
     persona: Optional[StrictStr] = Field(default=None, description="The persona/role the author acted as. Authorship field — requires `confidence`.")
     rationale: Optional[StrictStr] = Field(default=None, description="Structured rationale for the act. Authorship field — requires `confidence`.")
     reasoning: Optional[StrictStr] = Field(default=None, description="Free-text reasoning for the act. Authorship field — requires `confidence`.")
+    property_key: Optional[StrictStr] = Field(default=None, description="Optional property key for a keyed single-row write (e.g. `anchored-at`): asserts `values` as ONE row under this key instead of the clustering `facet` verb. Omitted, the write is an ordinary facet.")
     values: Dict[str, Any] = Field(description="The facet's typed value payload — an **object** of `key` → value marks; same constraint as [`FacetSetRequest::values`].")
     weight: Optional[Union[StrictFloat, StrictInt]] = Field(default=None, description="Relative weight of the facet; defaults to `1.0` when omitted, matching [`FacetSetRequest`].")
-    __properties: ClassVar[List[str]] = ["confidence", "correlation_id", "invocation_id", "model", "persona", "rationale", "reasoning", "values", "weight"]
+    __properties: ClassVar[List[str]] = ["confidence", "correlation_id", "invocation_id", "model", "persona", "rationale", "reasoning", "property_key", "values", "weight"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -114,6 +115,11 @@ class EdgeFacetSetRequest(BaseModel):
         if self.reasoning is None and "reasoning" in self.model_fields_set:
             _dict['reasoning'] = None
 
+        # set to None if property_key (nullable) is None
+        # and model_fields_set contains the field
+        if self.property_key is None and "property_key" in self.model_fields_set:
+            _dict['property_key'] = None
+
         return _dict
 
     @classmethod
@@ -133,6 +139,7 @@ class EdgeFacetSetRequest(BaseModel):
             "persona": obj.get("persona"),
             "rationale": obj.get("rationale"),
             "reasoning": obj.get("reasoning"),
+            "property_key": obj.get("property_key"),
             "values": obj.get("values"),
             "weight": obj.get("weight")
         })

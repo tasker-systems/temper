@@ -344,6 +344,11 @@ pub struct SetFacet {
     /// a resource-owned facet gates on `can_modify_resource`, an edge-owned one on the edge's own
     /// mutability clauses. Keeping the owner typed is what makes that dispatch exhaustive.
     pub owner: PropertyOwner,
+    /// When set, the write is a keyed single-row assert of `values` under this property key —
+    /// the edge span qualification's write action (`anchored-at`) — instead of the clustering
+    /// `facet` verb. Edge-owned only: a resource-owner write carrying a key is refused.
+    #[serde(default)]
+    pub property_key: Option<String>,
     pub values: serde_json::Value,
     pub weight: f64,
     /// Per-act correlation + authorship — stamps the authored `facet_set` act. Empty by

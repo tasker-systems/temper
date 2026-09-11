@@ -290,7 +290,7 @@ Arguments:
 
 Options:
       --values <VALUES>
-          The facet's typed value payload, as a JSON string
+          The facet's typed value payload, as a JSON string. With --key set, this is instead the ONE row's value under that key
 
       --vault <VAULT>
           Path to vault (overrides TEMPER_VAULT and auto-detection)
@@ -298,19 +298,22 @@ Options:
       --format <FORMAT>
           Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
 
+      --key <KEY>
+          Optional property key for a keyed single-row write (e.g. `anchored-at`): asserts --values as ONE row under this key instead of the clustering facet verb
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
       --weight <WEIGHT>
           Facet weight (default: 1.0)
           
           [default: 1.0]
 
-      --embed-threads <N>
-          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
 
       --invocation <INVOCATION>
           Correlate this act with an open invocation envelope (its ref/UUID from `invocation open`)
-
-      --color <COLOR>
-          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
 
       --correlation <CORRELATION>
           Stitch this write into an act-grain thread shared with other writes (a bare UUID you mint). Provenance only — it never authorizes. Omit and the event self-roots

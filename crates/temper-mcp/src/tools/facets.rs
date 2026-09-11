@@ -91,6 +91,7 @@ pub async fn facet_set(
 
     let cmd = SetFacet {
         owner: PropertyOwner::resource(resource),
+        property_key: None,
         values: serde_json::Value::Object(input.values),
         weight: input.weight.unwrap_or(1.0),
         act,
@@ -117,8 +118,15 @@ pub struct EdgeFacetSetInput {
     /// The relationship's edge handle (the UUID `edge_assert` returned).
     pub edge_handle: Uuid,
     /// The facet's typed value payload — an **object** of `key` → value marks; same constraint as
-    /// [`FacetSetInput::values`].
+    /// [`FacetSetInput::values`]. With `property_key` set, this is instead the ONE row's value
+    /// under that key (e.g. `{"endpoint": "target", "address": "<resource-uuid>#<block-uuid>"}`
+    /// for `anchored-at`).
     pub values: serde_json::Map<String, serde_json::Value>,
+    /// Optional property key for a keyed single-row write (e.g. `anchored-at`): asserts `values`
+    /// as ONE row under this key instead of the clustering `facet` verb. Omitted, the write is
+    /// an ordinary facet.
+    #[serde(default)]
+    pub property_key: Option<String>,
     /// Facet salience/confidence weight (0.0-1.0 by convention). Defaults to 1.0.
     pub weight: Option<f64>,
     /// Per-act correlation (`invocation_id`) + discrete agent authorship. Flattened top-level
@@ -163,6 +171,7 @@ pub async fn edge_facet_set(
 
     let cmd = SetFacet {
         owner: PropertyOwner::edge(EdgeId::from(input.edge_handle)),
+        property_key: input.property_key,
         values: serde_json::Value::Object(input.values),
         weight: input.weight.unwrap_or(1.0),
         act,
@@ -265,8 +274,14 @@ pub struct FacetSetUnifiedInput {
     #[serde(default)]
     pub edge_handle: Option<Uuid>,
     /// The facet's typed value payload — an **object** of `key` → value marks; same constraint as
-    /// [`FacetSetInput::values`].
+    /// [`FacetSetInput::values`]. With `property_key` set, this is instead the ONE row's value
+    /// under that key.
     pub values: serde_json::Map<String, serde_json::Value>,
+    /// Optional property key for a keyed single-row write (e.g. `anchored-at`); `target=edge`
+    /// only — a keyed property row qualifies a relationship. Omitted, the write is an ordinary
+    /// facet.
+    #[serde(default)]
+    pub property_key: Option<String>,
     /// Facet salience/confidence weight (0.0-1.0 by convention). Defaults to 1.0.
     #[serde(default)]
     pub weight: Option<f64>,
@@ -283,6 +298,14 @@ pub async fn facet_set_unified(
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     match input.target {
         FacetTarget::Resource => {
+            if input.property_key.is_some() {
+                return Err(rmcp::ErrorData::invalid_params(
+                    "property_key applies to target=edge only — a keyed property row \
+                     qualifies a relationship"
+                        .to_string(),
+                    None,
+                ));
+            }
             let resource = input.resource.ok_or_else(|| {
                 rmcp::ErrorData::invalid_params(
                     "target=resource requires `resource`".to_string(),
@@ -312,6 +335,7 @@ pub async fn facet_set_unified(
                 EdgeFacetSetInput {
                     edge_handle,
                     values: input.values,
+                    property_key: input.property_key,
                     weight: input.weight,
                     act: input.act,
                 },

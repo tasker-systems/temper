@@ -40,6 +40,7 @@ pub async fn set_facet(
     let act = req.act.into_act_context().map_err(ApiError::from)?;
     let cmd = SetFacet {
         owner: PropertyOwner::resource(ResourceId::from(req.resource)),
+        property_key: None,
         values: serde_json::Value::Object(req.values),
         weight: req.weight,
         act,
@@ -99,6 +100,7 @@ pub async fn set_edge_facet(
     let act = req.act.into_act_context().map_err(ApiError::from)?;
     let cmd = SetFacet {
         owner: PropertyOwner::edge(EdgeId::from(edge_handle)),
+        property_key: req.property_key,
         values: serde_json::Value::Object(req.values),
         weight: req.weight,
         act,

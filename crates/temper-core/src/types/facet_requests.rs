@@ -37,6 +37,70 @@ pub struct FacetSetRequest {
     pub act: ActInput,
 }
 
+/// The property key that carries an edge's span qualification: one `kb_properties` row owned
+/// by the edge per (endpoint, block), valued `{"endpoint": ..., "address": ...}`. Written
+/// through the edge facet surfaces' keyed mode ([`EdgeFacetSetRequest::property_key`]); read
+/// back like any facet.
+pub const ANCHORED_AT_PROPERTY_KEY: &str = "anchored-at";
+
+/// Which end of a relationship an `anchored-at` row qualifies — the value's `endpoint` half.
+/// Source and target mean the stored columns; the row never re-points when presentation
+/// around the edge changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnchoredAtEndpoint {
+    Source,
+    Target,
+}
+
+impl AnchoredAtEndpoint {
+    /// Parse the value's `endpoint` string. Anything else is refused, never guessed.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "source" => Some(Self::Source),
+            "target" => Some(Self::Target),
+            _ => None,
+        }
+    }
+
+    /// The canonical spelling, as stored in the value.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Source => "source",
+            Self::Target => "target",
+        }
+    }
+}
+
+/// One parsed `<resource-uuid>#<block-uuid>` anchor address — the one declared form: exactly
+/// one `#`, both halves bare UUIDs already in canonical (lowercase, hyphenated) form.
+///
+/// A non-canonical spelling is refused rather than normalized: the row stores what the caller
+/// sent, so an accepted-but-rewritten spelling would store a value the caller cannot query
+/// back, and two spellings of one address would become two rows where the unique-active index
+/// could have seen them as one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AnchorAddress {
+    pub resource: Uuid,
+    pub block: Uuid,
+}
+
+impl AnchorAddress {
+    /// Parse an address in the one declared form. Returns `None` for any other spelling —
+    /// a missing or repeated `#`, a non-UUID half, or a UUID not already canonical.
+    pub fn parse(address: &str) -> Option<Self> {
+        let (resource_half, block_half) = address.split_once('#')?;
+        if block_half.contains('#') {
+            return None;
+        }
+        let resource = resource_half.parse::<Uuid>().ok()?;
+        let block = block_half.parse::<Uuid>().ok()?;
+        if resource.to_string() != resource_half || block.to_string() != block_half {
+            return None;
+        }
+        Some(Self { resource, block })
+    }
+}
+
 /// Request body for `POST /api/relationships/{edge_handle}/facets` — a facet whose owner is an
 /// **edge**.
 ///
@@ -51,6 +115,11 @@ pub struct EdgeFacetSetRequest {
     /// The facet's typed value payload — an **object** of `key` → value marks; same constraint as
     /// [`FacetSetRequest::values`].
     pub values: serde_json::Map<String, serde_json::Value>,
+    /// Optional property key for a keyed single-row write (e.g. `anchored-at`): asserts `values`
+    /// as ONE row under this key instead of the clustering `facet` verb. Omitted, the write is
+    /// an ordinary facet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub property_key: Option<String>,
     /// Relative weight of the facet; defaults to `1.0` when omitted, matching [`FacetSetRequest`].
     #[serde(default = "default_facet_weight")]
     pub weight: f64,

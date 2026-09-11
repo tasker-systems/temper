@@ -2471,9 +2471,14 @@ pub enum EdgeAction {
     Facet {
         /// Correlation ID of the relationship to set the facet on
         edge_handle: uuid::Uuid,
-        /// The facet's typed value payload, as a JSON string
+        /// The facet's typed value payload, as a JSON string. With --key set, this is instead
+        /// the ONE row's value under that key.
         #[arg(long)]
         values: String,
+        /// Optional property key for a keyed single-row write (e.g. `anchored-at`): asserts
+        /// --values as ONE row under this key instead of the clustering facet verb.
+        #[arg(long)]
+        key: Option<String>,
         /// Facet weight (default: 1.0)
         #[arg(long, default_value = "1.0")]
         weight: f64,

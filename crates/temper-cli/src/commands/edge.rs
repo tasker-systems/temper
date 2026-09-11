@@ -155,6 +155,7 @@ pub fn run(action: EdgeAction, fmt: OutputFormat) -> Result<()> {
         EdgeAction::Facet {
             edge_handle,
             values,
+            key,
             weight,
             act,
         } => {
@@ -163,6 +164,7 @@ pub fn run(action: EdgeAction, fmt: OutputFormat) -> Result<()> {
             let values = crate::commands::facet::parse_values_object(&values)?;
             let req = EdgeFacetSetRequest {
                 values,
+                property_key: key,
                 weight,
                 act: act.into_act_input()?,
             };

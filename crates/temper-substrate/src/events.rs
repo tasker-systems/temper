@@ -381,6 +381,20 @@ pub enum SeedAction<'a> {
         weight: f64,
         emitter: EntityId,
     },
+    /// Assert one keyed property row on any owner with an anchor — the key-carrying, edge-owner
+    /// write behind the edge facet surface's keyed mode (`anchored-at` span qualifications).
+    /// Unlike [`SeedAction::FacetSet`] the key is carried, not hardcoded to `"facet"`; unlike
+    /// [`SeedAction::PropertySet`] there is no fold — exactly one row is appended, the value
+    /// whole, under the payload's own `property_id` (identity-as-input, so a replay reproduces
+    /// the row id). Fires the SAME key-agnostic `facet_set` SQL function, so the owner's anchor
+    /// resolves per kind via `_property_owner_anchor`.
+    KeyedPropertyAssert {
+        owner: PropertyOwner,
+        key: &'a str,
+        value: &'a serde_json::Value,
+        weight: f64,
+        emitter: EntityId,
+    },
     /// Set a SINGLE-valued property: folds prior active `(owner, key)` rows then asserts this value, so
     /// the key holds one current value (the resource-frontmatter shape). Multi-valued facets use
     /// [`SeedAction::FacetSet`] / [`SeedAction::PropertyAssert`] (append).
@@ -655,6 +669,7 @@ impl SeedAction<'_> {
             SeedAction::RelationshipAssert { .. } => EventKind::RelationshipAsserted,
             SeedAction::FacetSet { .. } => EventKind::PropertyAsserted,
             SeedAction::PropertyAssert { .. } => EventKind::PropertyAsserted,
+            SeedAction::KeyedPropertyAssert { .. } => EventKind::PropertyAsserted,
             SeedAction::PropertySet { .. } => EventKind::PropertySet,
             SeedAction::DataArtifactCommit { .. } => EventKind::DataArtifactCommitted,
             SeedAction::ShapeDeclare { .. } => EventKind::ShapeDeclared,
@@ -920,7 +935,8 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
 /// `kb_events.metadata`/`invocation_id`/`correlation_id`): the authored-4
 /// (`ResourceCreate`/`RelationshipAssert`/`FacetSet`/`RelationshipFold`) plus the non-authored writes
 /// (`ResourceUpdate`/`ResourceDelete`/`ResourceRehome`/`ResourceReassign`/`PropertySet`/`BlockMutate`/
-/// `BlockAnnotate`/`BlockAppend`/`CharterSet`/`RelationshipRetype`/`RelationshipReweight`). The pure-seed/lens/
+/// `BlockAnnotate`/`BlockAppend`/`CharterSet`/`RelationshipRetype`/`RelationshipReweight`), and the
+/// keyed edge-owner write (`KeyedPropertyAssert`). The pure-seed/lens/
 /// materialize arms (and the legacy 2-arg `PropertyAssert`) ignore it. [`fire`] is the
 /// `EventContext::default()` delegate.
 pub async fn fire_with(
@@ -1060,6 +1076,38 @@ pub async fn fire_with(
                 value: values.clone(),
                 weight,
             };
+            let ids = sqlx::query_scalar!(
+                "SELECT facet_set($1,$2,$3,$4,$5)",
+                serde_json::to_value(&payload)?,
+                emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
+                ctx_corr,
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .context("facet_set returned null")?;
+            Ok(Fired::Facet(
+                ids.into_iter().map(PropertyId::from).collect(),
+            ))
+        }
+
+        SeedAction::KeyedPropertyAssert {
+            owner,
+            key,
+            value,
+            weight,
+            emitter,
+        } => {
+            let payload = payloads::PropertyAsserted {
+                property_id: PropertyId::from(Uuid::now_v7()),
+                owner: payloads::AnchorRef::from(owner),
+                property_key: key.to_owned(),
+                value: value.clone(),
+                weight,
+            };
+            // The same 5-arg `facet_set` call the `FacetSet` arm makes: the keyed write is a
+            // correlated authored act, so its events carry the caller's invocation + authorship.
             let ids = sqlx::query_scalar!(
                 "SELECT facet_set($1,$2,$3,$4,$5)",
                 serde_json::to_value(&payload)?,

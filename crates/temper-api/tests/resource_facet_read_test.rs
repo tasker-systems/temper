@@ -69,6 +69,7 @@ async fn assert_facet(
     backend
         .set_facet(SetFacet {
             owner: PropertyOwner::resource(resource),
+            property_key: None,
             values,
             weight,
             act: ActContext::default(),
@@ -339,6 +340,7 @@ async fn a_read_grant_reads_facets_and_still_cannot_assert_one(pool: PgPool) {
     let denied = reader_backend
         .set_facet(SetFacet {
             owner: PropertyOwner::resource(resource),
+            property_key: None,
             values: serde_json::json!({"node_label": "planted"}),
             weight: 1.0,
             act: ActContext::default(),

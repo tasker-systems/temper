@@ -14,6 +14,33 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.4.0 — unreleased
 
+- **The keyed edge-owner facet write — `property_key` on the edge facet surfaces**
+  `POST /api/relationships/{edge_handle}/facets`, MCP `facet_set` (`target: edge`), and
+  `temper edge facet --key` grow an optional `property_key`: when set, `values` is asserted
+  as ONE row under that key through the shipped `property_asserted` event, instead of the
+  clustering `facet` verb (whose hardcode is untouched). Assertion is insert-if-not-live: a
+  repeated assert of a live (owner, key, value) acks the existing row id instead of
+  erroring. Omitted, every existing request behaves exactly as before; no existing request
+  class changes shape. First consumer is the `anchored-at` span qualification.
+pr: self
+classes: additive
+surfaces: http, mcp, cli-stdout, clients
+status: signal-only
+
+- **Structural validation for `anchored-at` writes (shared dispatch)**
+  A keyed write under `anchored-at` refuses unless the value is exactly
+  `{"endpoint": "source"|"target", "address": "<resource-uuid>#<block-uuid>"}` in the one
+  canonical form, the named endpoint's side is a resource, and the address's resource half
+  is that endpoint's id. Validation sits in the backend dispatch every surface reaches, so
+  no skin bypasses it; it probes structure only — never whether the addressed block exists,
+  is live, or is visible (no existence oracle; resolution is the read contract's to state).
+  A keyed write under `facet`, or on a resource owner, refuses outright. Previously no
+  surface could write a keyed row at all, so nothing accepted-then-written changes.
+pr: self
+classes: behavioral
+surfaces: http, mcp, cli-stdout
+status: signal-only
+
 - **The hash-global erasure refusal grain retired (offboarding ruling)**
   The erasure act's write-path refusals are removed: a create or revise carrying a hash in
   `kb_erased_content` now lands where it previously refused, and the reconcile arm no longer

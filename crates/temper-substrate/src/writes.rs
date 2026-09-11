@@ -2319,6 +2319,63 @@ pub async fn set_facet_in_tx(
     .facet()
 }
 
+/// Assert one keyed property row on a [`PropertyOwner`] — the write behind the edge facet
+/// surface's keyed mode (the `anchored-at` span qualification). **Insert-if-not-live**: a live
+/// row for the exact (owner, key, value) acks its own id and appends no event; otherwise one
+/// row fires through [`SeedAction::KeyedPropertyAssert`] and its id is returned. Never a
+/// fold-then-reinsert — a second address appends a second row, and a re-assert after the row
+/// is folded mints a fresh one, because the partial unique index (`uq_kb_properties_active`)
+/// sees live rows only.
+///
+/// The liveness pre-check shares the fire's transaction: a row that commits between the check
+/// and the insert still collides on `uq_kb_properties_active`, aborting the transaction with
+/// no event appended — the caller's conflict to retry, which then acks.
+pub async fn assert_keyed_property_with(
+    pool: &PgPool,
+    owner: PropertyOwner,
+    key: &str,
+    value: &serde_json::Value,
+    weight: f64,
+    emitter: EntityId,
+    ctx: EventContext,
+) -> Result<PropertyId> {
+    let mut tx = begin_scoped(pool).await?;
+    let acked: Option<Uuid> = sqlx::query_scalar!(
+        "SELECT id FROM kb_properties \
+          WHERE owner_table = $1 AND owner_id = $2 AND property_key = $3 \
+            AND property_value = $4 AND NOT is_folded",
+        owner.owner_table(),
+        owner.uuid(),
+        key,
+        value,
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+    if let Some(existing) = acked {
+        tx.commit().await?;
+        return Ok(PropertyId::from(existing));
+    }
+    let ids = fire_with(
+        &mut tx,
+        SeedAction::KeyedPropertyAssert {
+            owner,
+            key,
+            value,
+            weight,
+            emitter,
+        },
+        ctx,
+    )
+    .await?
+    .facet()?;
+    let id = ids
+        .into_iter()
+        .next()
+        .context("keyed property assert returned no row id")?;
+    tx.commit().await?;
+    Ok(id)
+}
+
 /// Set a single-valued **per-key** property — folds prior active `(owner, key)` rows then asserts the
 /// new value, so the key holds one current value (`property_key=<key>`). This is the shape
 /// `readback::kernel_slice` reads; the reconciler stamps `provenance: kernel` through it.

@@ -76,6 +76,7 @@ async fn set_facet_returns_property_id_and_gates_auth(pool: PgPool) {
     let denied = other_backend
         .set_facet(SetFacet {
             owner: PropertyOwner::resource(resource),
+            property_key: None,
             values: serde_json::json!({"k": "v"}),
             weight: 1.0,
             act: ActContext::default(),
@@ -103,6 +104,7 @@ async fn set_facet_returns_property_id_and_gates_auth(pool: PgPool) {
     } = owner_backend
         .set_facet(SetFacet {
             owner: PropertyOwner::resource(resource),
+            property_key: None,
             values: serde_json::json!({"k": "v"}),
             weight: 1.0,
             act: ActContext::default(),
@@ -148,6 +150,7 @@ async fn set_facet_multi_key_writes_and_acks_one_row_per_inner_key(pool: PgPool)
     } = owner_backend
         .set_facet(SetFacet {
             owner: PropertyOwner::resource(resource),
+            property_key: None,
             values: serde_json::json!({"status": "open", "as_of": "2026-07-30"}),
             weight: 0.85,
             act: ActContext::default(),
@@ -197,6 +200,7 @@ async fn re_asserting_one_facet_key_leaves_the_others_untouched(pool: PgPool) {
             backend
                 .set_facet(SetFacet {
                     owner: PropertyOwner::resource(resource),
+                    property_key: None,
                     values,
                     weight,
                     act: ActContext::default(),
@@ -253,6 +257,7 @@ async fn a_double_encoded_facet_value_is_refused_at_the_door(pool: PgPool) {
     let refused = owner_backend
         .set_facet(SetFacet {
             owner: PropertyOwner::resource(resource),
+            property_key: None,
             // a STRING holding a serialized object, not an object
             values: serde_json::json!(r#"{"node_label": "domain"}"#),
             weight: 1.0,
@@ -295,6 +300,7 @@ async fn the_backfill_rebuilds_old_grain_rows_from_their_events(pool: PgPool) {
     owner_backend
         .set_facet(SetFacet {
             owner: PropertyOwner::resource(resource),
+            property_key: None,
             values: serde_json::json!({"node_label": "fact", "status": "open"}),
             weight: 0.9,
             act: ActContext::default(),

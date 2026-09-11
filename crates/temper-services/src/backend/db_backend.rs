@@ -2871,6 +2871,11 @@ impl Backend for DbBackend {
     /// key** of `values`, folding the prior row for each key named and leaving unnamed marks untouched.
     /// Mirrors `assert_relationship`/`fold_relationship`'s auth + owner/emitter resolution, gated on
     /// the TARGET resource directly (facets have no source/target split).
+    ///
+    /// When the command carries a `property_key`, the write is instead a keyed single-row assert of
+    /// `values` under that key — the edge span qualification's write action (`anchored-at`) — and is
+    /// edge-owned only. Both modes answer to the gates and the validation HERE, in the shared
+    /// dispatch every skin (HTTP, MCP, CLI) reaches, so no surface can bypass them.
     #[act_span]
     async fn set_facet(
         &self,
@@ -2887,9 +2892,24 @@ impl Backend for DbBackend {
         // definition — otherwise a caller could facet an edge they may not otherwise touch.
         match cmd.owner {
             PropertyOwner::Resource { id } => {
+                if cmd.property_key.is_some() {
+                    return Err(TemperError::BadRequest(
+                        "a keyed property write qualifies a relationship, not a resource; \
+                         address the edge's facet surface"
+                            .to_string(),
+                    ));
+                }
                 self.check_can_modify_next(uuid::Uuid::from(id)).await?
             }
-            PropertyOwner::Edge { id } => self.check_edge_mutable(uuid::Uuid::from(id)).await?,
+            PropertyOwner::Edge { id } => {
+                self.check_edge_mutable(uuid::Uuid::from(id)).await?;
+                self.validate_keyed_edge_write(
+                    uuid::Uuid::from(id),
+                    cmd.property_key.as_deref(),
+                    &cmd.values,
+                )
+                .await?;
+            }
         }
         // Correlation-integrity gate — additive to the modify authz above, before the write.
         self.check_act_invocation(cmd.act.invocation).await?;
@@ -2901,16 +2921,32 @@ impl Backend for DbBackend {
             .await
             .map_err(api_err)?;
         let act_ctx = act_context(&cmd.act);
-        let property_ids = writes::set_facet_with(
-            &self.pool,
-            cmd.owner,
-            &cmd.values,
-            cmd.weight,
-            emitter,
-            act_ctx,
-        )
-        .await
-        .map_err(map_facet_write_err)?;
+        let property_ids = match cmd.property_key {
+            None => writes::set_facet_with(
+                &self.pool,
+                cmd.owner,
+                &cmd.values,
+                cmd.weight,
+                emitter,
+                act_ctx,
+            )
+            .await
+            .map_err(map_facet_write_err)?,
+            Some(key) => {
+                let id = writes::assert_keyed_property_with(
+                    &self.pool,
+                    cmd.owner,
+                    &key,
+                    &cmd.values,
+                    cmd.weight,
+                    emitter,
+                    act_ctx,
+                )
+                .await
+                .map_err(map_facet_write_err)?;
+                vec![id]
+            }
+        };
         Ok(CommandOutput::new(property_ids))
     }
 
@@ -3949,6 +3985,111 @@ impl Backend for DbBackend {
         self.check_can_modify_next(resource.uuid()).await?;
         let landed = Self::landed_blocks(&self.pool, resource).await?;
         Ok(CommandOutput::new(landed))
+    }
+}
+
+impl DbBackend {
+    /// Structural validation for a keyed edge-owner write, applied BEFORE any fire so a refusal
+    /// appends no ledger event — the error body is the record.
+    ///
+    /// Only `anchored-at` rows carry declared structure today: the value must be exactly
+    /// `{"endpoint": "source"|"target", "address": "<resource-uuid>#<block-uuid>"}`, the named
+    /// endpoint's side must be a resource (blocks live on `kb_resources` only — a cogmap or blob
+    /// side carries nothing to anchor), and the address's resource half must BE that endpoint.
+    ///
+    /// The validation probes STRUCTURE only. It never asks whether the addressed block row
+    /// exists, is live, or is visible: a write-time existence probe would be an existence
+    /// oracle, and would fail writes whose target folds later anyway. Resolution is the read
+    /// contract's to state. The value is stored verbatim — nothing here normalizes a spelling.
+    ///
+    /// A keyed write under the clustering `facet` key is refused outright: the facet verb owns
+    /// that key and writes one row per inner key; a keyed single-row write under it would land
+    /// the whole-object pre-grain shape the projector layer retired.
+    async fn validate_keyed_edge_write(
+        &self,
+        edge_id: uuid::Uuid,
+        property_key: Option<&str>,
+        value: &serde_json::Value,
+    ) -> Result<(), TemperError> {
+        use temper_core::types::facet_requests::{
+            AnchorAddress, AnchoredAtEndpoint, ANCHORED_AT_PROPERTY_KEY,
+        };
+        let Some(key) = property_key else {
+            return Ok(());
+        };
+        if key == "facet" {
+            return Err(TemperError::BadRequest(
+                "the clustering facet key rides the facet verb, which writes one row per \
+                 inner key of the object"
+                    .to_string(),
+            ));
+        }
+        if key != ANCHORED_AT_PROPERTY_KEY {
+            return Ok(());
+        }
+
+        let declared = format!(
+            "an {ANCHORED_AT_PROPERTY_KEY} value must be exactly \
+             {{\"endpoint\": \"source\"|\"target\", \"address\": \"<resource-uuid>#<block-uuid>\"}}"
+        );
+        let Some(obj) = value.as_object() else {
+            return Err(TemperError::BadRequest(declared));
+        };
+        if obj.len() != 2 || !obj.contains_key("endpoint") || !obj.contains_key("address") {
+            return Err(TemperError::BadRequest(declared));
+        }
+        let endpoint = obj["endpoint"]
+            .as_str()
+            .and_then(AnchoredAtEndpoint::parse)
+            .ok_or_else(|| {
+                TemperError::BadRequest(format!(
+                    "an {ANCHORED_AT_PROPERTY_KEY} endpoint must be \"source\" or \"target\""
+                ))
+            })?;
+        let address = obj["address"].as_str().ok_or_else(|| {
+            TemperError::BadRequest(format!(
+                "an {ANCHORED_AT_PROPERTY_KEY} address must be a \
+                 \"<resource-uuid>#<block-uuid>\" string"
+            ))
+        })?;
+        let Some(addr) = AnchorAddress::parse(address) else {
+            return Err(TemperError::BadRequest(format!(
+                "an {ANCHORED_AT_PROPERTY_KEY} address must be one canonical \
+                 \"<resource-uuid>#<block-uuid>\" pair — exactly one '#', both halves bare \
+                 lowercase uuids — got {address:?}"
+            )));
+        };
+
+        // The named endpoint's own columns decide the side. `check_edge_mutable` has already
+        // refused a missing or folded edge; the arm below keeps this sound standalone.
+        let row = sqlx::query!(
+            "SELECT source_table, source_id, target_table, target_id \
+               FROM kb_edges WHERE id = $1",
+            edge_id
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(api_err)?
+        .ok_or_else(|| TemperError::NotFound(format!("edge {edge_id} not found")))?;
+        let (side_table, side_id) = match endpoint {
+            AnchoredAtEndpoint::Source => (row.source_table.as_str(), row.source_id),
+            AnchoredAtEndpoint::Target => (row.target_table.as_str(), row.target_id),
+        };
+        if side_table != "kb_resources" {
+            return Err(TemperError::BadRequest(format!(
+                "the {} endpoint is a {side_table} row; blocks live on kb_resources only, so \
+                 only a resource side is anchorable",
+                endpoint.as_str()
+            )));
+        }
+        if side_id != addr.resource {
+            return Err(TemperError::BadRequest(format!(
+                "the address's resource half must be the edge's {} endpoint id, got {}",
+                endpoint.as_str(),
+                addr.resource
+            )));
+        }
+        Ok(())
     }
 }
 

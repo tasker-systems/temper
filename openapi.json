@@ -12405,6 +12405,13 @@
               "values"
             ],
             "properties": {
+              "property_key": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Optional property key for a keyed single-row write (e.g. `anchored-at`): asserts `values`\nas ONE row under this key instead of the clustering `facet` verb. Omitted, the write is\nan ordinary facet."
+              },
               "values": {
                 "type": "object",
                 "description": "The facet's typed value payload — an **object** of `key` → value marks; same constraint as\n[`FacetSetRequest::values`].",
