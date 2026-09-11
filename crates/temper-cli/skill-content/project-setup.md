@@ -12,17 +12,30 @@ If `temper` is not installed, not on PATH, or `temper check` fails, the machine 
 configured yet — point the operator at the CLI wizard (`temper init`) and stop there. Everything
 below needs a working connection; none of it changes one.
 
-## 2. Fundamentals — the project's own rules
+## 2. Fundamentals — the project's own rules, in the project
 
-`guidance/fundamentals.md` in the skill directory holds the project's conventions. Read the
-project's own material first — its `AGENTS.md`/`CLAUDE.md`, its `docs/`, its README — and
-distill what an agent must know before substantive work here: build and test commands, branch
-and commit conventions, the patterns one must not break. Then create the file and show it to
-the operator. A fundamentals file is the project speaking to every future session — write it
-from the project's evidence, never from your assumptions about it.
+Fundamentals live **in the repo they describe** — the project's `AGENTS.md`/`CLAUDE.md`, or a
+dedicated file the repo already carries. The skill directory's `guidance/fundamentals.md` is a
+**pointer file**, not the fundamentals themselves: one entry per project, naming where that
+project's fundamentals live. A global copy of per-repo rules goes stale the day the repo moves;
+a pointer cannot.
 
-If fundamentals already exist, read them before any substantive work in this project, and
-offer to update them when you find they have drifted from the project's reality.
+Setting a project up, then:
+
+1. Read the project's own material — its `AGENTS.md`/`CLAUDE.md`, its `docs/`, its README.
+   If the repo already carries agent fundamentals, that file **is** its fundamentals; do not
+   duplicate it.
+2. If the repo carries its rules only in scattered prose, distill them into a fundamentals file
+   **in the repo**, beside the material it distilled (the repo decides where — match its own
+   conventions). Write from the project's evidence, never from your assumptions about it, and
+   show the result to the operator.
+3. Add or refresh the pointer entry in the skill directory's `guidance/fundamentals.md`:
+   project path → fundamentals location. Keep the file a bare index — if an entry grows
+   beyond one line, the content belongs in the repo it describes.
+
+Reading fundamentals before substantive work in a project goes through the pointer: no entry
+for the current project is exactly the `/temper init` offer. An entry whose target has moved
+or rotted is updated — the pointer is refreshed, never the copy rebuilt.
 
 ## 3. The arc
 
