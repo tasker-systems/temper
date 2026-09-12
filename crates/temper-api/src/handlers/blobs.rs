@@ -252,7 +252,7 @@ fn parse_home_table(table: &str) -> ApiResult<AnchorTable> {
         "kb_contexts" => Ok(AnchorTable::Contexts),
         "kb_cogmaps" => Ok(AnchorTable::Cogmaps),
         other => Err(ApiError::BadRequest(format!(
-            "blob_commit: a blob needs a home (a kb_contexts or kb_cogmaps anchor) — got home \
+            "blob_commit: a blob needs a home (a kb_contexts anchor) — got home \
              table {other}"
         ))),
     }

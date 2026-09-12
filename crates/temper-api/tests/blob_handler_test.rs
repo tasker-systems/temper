@@ -273,8 +273,8 @@ async fn refusals_name_their_vocabulary(pool: PgPool) {
     assert_eq!(resp.status().as_u16(), 400);
     let text = resp.text().await.unwrap_or_default();
     assert!(
-        text.contains("kb_contexts") && text.contains("kb_cogmaps"),
-        "refusal must name the home vocabulary: {text}"
+        text.contains("kb_contexts") && !text.contains("kb_cogmaps"),
+        "refusal must name the home vocabulary — contexts only, the exclusion's voice: {text}"
     );
 
     // Unconfigured instance — absent, not broken, and the refusal says what enables the door.
@@ -959,8 +959,8 @@ async fn begin_refuses_an_unknown_home_table(pool: PgPool) {
     assert_eq!(resp.status().as_u16(), 400);
     let text = resp.text().await.unwrap_or_default();
     assert!(
-        text.contains("kb_contexts") && text.contains("kb_cogmaps"),
-        "refusal must name the home vocabulary: {text}"
+        text.contains("kb_contexts") && !text.contains("kb_cogmaps"),
+        "refusal must name the home vocabulary — contexts only, the exclusion's voice: {text}"
     );
 }
 

@@ -343,8 +343,10 @@ async fn edges_visible_to_matches_per_row_oracle(pool: PgPool) {
     let blob_teamowned = mk_blob(&pool, event, "kb_contexts", c_teamowned, other).await;
     let blob_ancestor_owned = mk_blob(&pool, event, "kb_contexts", c_ancestor_owned, other).await;
     let blob_shared_ancestor = mk_blob(&pool, event, "kb_contexts", c_shared_ancestor, other).await;
-    let blob_map = mk_blob(&pool, event, "kb_cogmaps", m1, other).await;
-    let blob_bad_map = mk_blob(&pool, event, "kb_cogmaps", m2, other).await;
+    // Map-homed blob endpoints (the readable_blobs cogmap arm) have no fixture and no
+    // case: the blob-home exclusion (20260911000020) makes a cogmap-homed blob row
+    // unwritable, so that arm is dead vocabulary — kept in the gate as
+    // defense-in-depth, unexercisable by any legal row.
 
     // Edges, one per branch class. Expected visibility (for viewer) in the comments.
     let e_ok_cogmap = mk_edge(
@@ -595,31 +597,6 @@ async fn edges_visible_to_matches_per_row_oracle(pool: PgPool) {
         false,
     )
     .await; // visible (blob homed in a context shared to the ANCESTOR team)
-    let e_ok_blob_map = mk_edge(
-        &pool,
-        event,
-        "kb_blobs",
-        blob_map,
-        "kb_resources",
-        r_granted,
-        "kb_cogmaps",
-        m1,
-        false,
-    )
-    .await; // visible (blob homed in a readable COGMAP)
-    let e_bad_blob_map = mk_edge(
-        &pool,
-        event,
-        "kb_blobs",
-        blob_bad_map,
-        "kb_resources",
-        r_granted,
-        "kb_cogmaps",
-        m1,
-        false,
-    )
-    .await; // invisible (blob homed in an unreadable COGMAP)
-
     let fixture: HashSet<Uuid> = [
         e_ok_cogmap,
         e_bad_target,
@@ -641,8 +618,6 @@ async fn edges_visible_to_matches_per_row_oracle(pool: PgPool) {
         e_ok_blob_target,
         e_ok_blob_ancestor,
         e_ok_blob_shared_ancestor,
-        e_ok_blob_map,
-        e_bad_blob_map,
     ]
     .into_iter()
     .collect();
@@ -660,7 +635,6 @@ async fn edges_visible_to_matches_per_row_oracle(pool: PgPool) {
         e_ok_blob_target,
         e_ok_blob_ancestor,
         e_ok_blob_shared_ancestor,
-        e_ok_blob_map,
     ]
     .into_iter()
     .collect();

@@ -48,7 +48,8 @@ pub struct BlobCommitResponse {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct BlobUploadBeginRequest {
-    /// `kb_contexts` or `kb_cogmaps` — a blob needs a home (D2), and so does its upload.
+    /// `kb_contexts` — a blob homes in a context (the blob-home exclusion, 2026-09-11);
+    /// a cogmap is never a blob home.
     pub home_table: String,
     pub home_id: uuid::Uuid,
     /// The media type the assembled blob will commit under.

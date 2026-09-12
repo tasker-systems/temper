@@ -30,7 +30,7 @@ class BlobUploadBeginRequest(BaseModel):
     """ # noqa: E501
     content_type: StrictStr = Field(description="The media type the assembled blob will commit under.")
     home_id: UUID
-    home_table: StrictStr = Field(description="`kb_contexts` or `kb_cogmaps` — a blob needs a home (D2), and so does its upload.")
+    home_table: StrictStr = Field(description="`kb_contexts` — a blob homes in a context (the blob-home exclusion, 2026-09-11); a cogmap is never a blob home.")
     __properties: ClassVar[List[str]] = ["content_type", "home_id", "home_table"]
 
     model_config = ConfigDict(

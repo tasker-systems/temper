@@ -3114,7 +3114,10 @@ export interface components {
             content_type: string;
             /** Format: uuid */
             home_id: string;
-            /** @description `kb_contexts` or `kb_cogmaps` — a blob needs a home (D2), and so does its upload. */
+            /**
+             * @description `kb_contexts` — a blob homes in a context (the blob-home exclusion, 2026-09-11);
+             *     a cogmap is never a blob home.
+             */
             home_table: string;
         };
         /**
