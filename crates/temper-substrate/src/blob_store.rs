@@ -40,6 +40,12 @@ pub fn blob_pathname(content_hash: &str) -> String {
     format!("{}/{}", &content_hash[..2], content_hash)
 }
 
+/// The provider CDN's cache window for committed blob objects — one year, immutable. One
+/// definition, here beside `put`'s signature: the commit path (including the under-lock
+/// restore, task `01a09360-e00a-7d90-858d-f4998dd70b6c`) and the read-through response
+/// headers must not be able to drift apart.
+pub const IMMUTABLE_CACHE_MAX_AGE: u32 = 365 * 24 * 60 * 60;
+
 /// External object storage, as far as the substrate's commit path is concerned.
 ///
 /// Landed as RPITIT (`impl Future + Send` desugaring) when the only method was `exists`;

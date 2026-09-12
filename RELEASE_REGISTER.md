@@ -30,6 +30,23 @@ classes: additive
 surfaces: http, clients
 status: signal-only
 
+- **The post-commit blob byte window closes — serialized releases, under-lock presence restore**
+  Byte releases (the delete door's post-commit release and the fence drain's batched delete)
+  re-derive released-ness under the hash advisory lock and hold it across the provider call,
+  and the commit path's transaction re-derives byte presence under the same lock — restoring
+  a missing object from the caller's own bytes before the row can go live. A commit racing a
+  strike can no longer mint a live row over absent provider bytes: the state was reachable by
+  two interleavings, permanent, and silent (the fence's re-derivation resolved the residue
+  `done` as re-occupied). The two COMMENT statements that recorded the window as "healed on
+  re-upload, watched by the fence" are re-stamped by migration `20260912000010`. No shape
+  changes — openapi and client skins untouched; the presence-gate refusal now surfaces as
+  `400` (was a scrubbed `500`), and a commit whose deduped row is struck mid-commit reports
+  its declared content type instead of erroring.
+pr: self
+classes: behavioral
+surfaces: http
+status: signal-only
+
 - **The blob-home exclusion — a blob homes in a context, never in a map**
   The blob home's vocabulary narrows to `kb_contexts`: a commit or segmented upload naming
   a cogmap as home is refused at the door, and the schema's `kb_blobs_home_context_only`
