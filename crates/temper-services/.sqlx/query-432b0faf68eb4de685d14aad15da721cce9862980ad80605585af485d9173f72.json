@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT bool_and(\n                   coalesce(can('kb_profiles', $1, 'delete', 'kb_resources', peers.peer_id),\n                            false)\n               ) AS \"standing!\"\n                 FROM unnest($2::uuid[]) AS peers(peer_id)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "standing!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "432b0faf68eb4de685d14aad15da721cce9862980ad80605585af485d9173f72"
+}

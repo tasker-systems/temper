@@ -776,6 +776,7 @@ mod tests {
             ProfileId::from(operator),
             ProfileId::from(subject),
             Uuid::now_v7(),
+            temper_workflow::operations::Surface::ApiHttp,
         )
         .await
         .expect("the act completes");

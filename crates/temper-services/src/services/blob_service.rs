@@ -585,8 +585,8 @@ pub async fn upload_progress(
 /// provider put unless deduped, then `commit_blob` whose cap refusal surfaces verbatim —
 /// the allowlist refusal now surfaces from the pre-check above the put, in the wrapper's
 /// own words, so a refused finalize never costs a provider object. Staging dies on
-/// success only; every failure keeps it (keep-and-declare — a
-/// TTL reaper is a declared hole, never silently clean).
+/// finalize success; every failure keeps it resumable, and the staging TTL reaper
+/// (`blob_reap_service`) sweeps what stays untouched past the configured TTL.
 pub async fn finalize_upload(
     pool: &PgPool,
     store: &dyn temper_substrate::blob_store::BlobStore,
@@ -711,8 +711,8 @@ pub async fn finalize_upload(
     .await
     .map_err(map_commit_err)?;
 
-    // Success only. A refusal above leaves the staging in place — resumable, and honest
-    // about it (the TTL reaper is the declared hole, not a silent sweep).
+    // Success only. A refusal above leaves the staging in place — resumable; the staging
+    // TTL reaper sweeps what stays untouched past the configured TTL.
     temper_substrate::uploads::delete_session(pool, upload_id)
         .await
         .map_err(|e| ApiError::internal_scrubbed("blob upload cleanup failed", e))?;
@@ -979,11 +979,16 @@ use temper_substrate::blob_store::BlobStore;
 /// The one no-custody refusal, spoken at every arm of the gate: relation peers without
 /// delete standing, non-resource peers (no custody resolves over them — a legacy edge pins
 /// its row until its holder folds it), and homes without a custodial resolver (cogmap-homed
-/// rows — the design's named open). One sentence, so the two arms cannot drift apart.
+/// rows — the design's named open). One sentence, so the two arms cannot drift apart. The
+/// closing clause is the pinned-by-relation case's EXIT — the common refusal has a route
+/// out, and the sentence names it: folding the pinning edge answers to the edge's home
+/// (the blob's home, which the committer could reach). At the home arms no relation pins
+/// the blob and the clause is simply inapplicable, never false.
 fn custody_refusal() -> ApiError {
     ApiError::ForbiddenDetail(
         "blob_delete: the caller holds no delete standing over this blob — custody over \
-         every live relation's resource peer, or over the blob's home when it has none"
+         every live relation's resource peer, or over the blob's home when it has none; \
+         where a relation pins it, folding that edge releases the pin"
             .to_string(),
     )
 }
@@ -1064,6 +1069,11 @@ pub async fn delete_blob(
     .await
     .map_err(|e| ApiError::internal_scrubbed("blob delete relation scan failed", e))?;
 
+    // Relation arm: every LIVE relation (no fold filter drift — `NOT is_folded` is the
+    // substrate's own liveness vocabulary) needs delete standing over its RESOURCE peer.
+    // The enumeration is gate work in the strike's transaction — the no-pre-count clause
+    // bounds the byte fate, never the gate.
+    let mut resource_peers: Vec<Uuid> = Vec::with_capacity(relations.len());
     for edge in &relations {
         let resource_peer = if edge.source_table == "kb_blobs" {
             (edge.target_table.as_str(), edge.target_id)
@@ -1076,18 +1086,30 @@ pub async fn delete_blob(
         if resource_peer.0 != "kb_resources" {
             return Err(custody_refusal());
         }
+        resource_peers.push(resource_peer.1);
+    }
+    // Standing resolves in ONE query over the peer set: a serial `can()` per relation ran
+    // inside the transaction holding the struck row's lock, so lock duration scaled
+    // linearly with the relation count and the round trips were serial. The gate's
+    // decision is unchanged — refuse when ANY resource peer lacks it — witnessed by the
+    // existing custody tests staying green.
+    if !resource_peers.is_empty() {
         // sqlx cannot see through the function's nullability — a NULL standing can only
-        // mean "no", so the unwrap defaults closed.
-        let standing = sqlx::query_scalar!(
-            r#"SELECT can('kb_profiles', $1, 'delete', 'kb_resources', $2)"#,
+        // mean "no", so the coalesce defaults closed; over the non-empty set bool_and is
+        // then never NULL.
+        let all_standing = sqlx::query_scalar!(
+            r#"SELECT bool_and(
+                   coalesce(can('kb_profiles', $1, 'delete', 'kb_resources', peers.peer_id),
+                            false)
+               ) AS "standing!"
+                 FROM unnest($2::uuid[]) AS peers(peer_id)"#,
             caller.uuid(),
-            resource_peer.1,
+            &resource_peers,
         )
         .fetch_one(&mut *tx)
         .await
-        .map_err(|e| ApiError::internal_scrubbed("blob delete standing check failed", e))?
-        .unwrap_or(false);
-        if !standing {
+        .map_err(|e| ApiError::internal_scrubbed("blob delete standing check failed", e))?;
+        if !all_standing {
             return Err(custody_refusal());
         }
     }

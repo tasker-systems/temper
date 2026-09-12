@@ -30,6 +30,7 @@ use temper_services::state::AppState;
 use temper_substrate::payloads::{ErasureRefusalReason, ErasureTargetOutcome};
 
 use crate::middleware::auth::AuthUser;
+use crate::middleware::surface::RequestSurface;
 
 /// The execute door's request: the subject as the pseudonym UUID, plus the opaque request
 /// reference (UUID — the `RefRel::Request` apparatus Beat 2 pinned). No name, no email, no case
@@ -90,6 +91,7 @@ pub enum ErasureExecuteResponse {
 pub async fn execute(
     State(state): State<AppState>,
     auth: AuthUser,
+    RequestSurface(surface): RequestSurface,
     Json(body): Json<ErasureExecuteRequest>,
 ) -> ApiResult<Json<ErasureExecuteResponse>> {
     let caller = ProfileId::from(auth.0.profile().id);
@@ -98,6 +100,7 @@ pub async fn execute(
         caller,
         ProfileId::from(body.subject),
         body.request_reference,
+        surface,
     )
     .await?;
 

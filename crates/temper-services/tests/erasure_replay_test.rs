@@ -28,6 +28,7 @@ use temper_substrate::ids::{BlockId, ContextId, EntityId};
 use temper_substrate::payloads::{AnchorRef, ArtifactIntent, KindOwner};
 use temper_substrate::replay;
 use temper_substrate::writes::{self, CommitBlobParams, CommitDataArtifactParams, CreateParams};
+use temper_workflow::operations::Surface;
 
 const ALLOWLIST: [&str; 1] = ["image/png"];
 const CAP: i64 = 10 * 1024 * 1024;
@@ -550,6 +551,7 @@ async fn replay_of_an_erasure_is_byte_identical_and_a_replayed_re_erase_is_a_no_
         ProfileId::from(subject),
         ProfileId::from(subject),
         Uuid::now_v7(),
+        Surface::ApiHttp,
     )
     .await
     .expect("the attempt is answered");
@@ -563,6 +565,7 @@ async fn replay_of_an_erasure_is_byte_identical_and_a_replayed_re_erase_is_a_no_
         ProfileId::from(operator),
         ProfileId::from(subject),
         Uuid::now_v7(),
+        Surface::ApiHttp,
     )
     .await
     .expect("the operator's act completes");
@@ -634,6 +637,7 @@ async fn replay_of_an_erasure_is_byte_identical_and_a_replayed_re_erase_is_a_no_
         ProfileId::from(operator),
         ProfileId::from(subject),
         Uuid::now_v7(),
+        Surface::ApiHttp,
     )
     .await
     .expect("the re-erase on the replayed namespace completes");
@@ -741,6 +745,7 @@ async fn post_erasure_recommits_survive_replay(pool: sqlx::PgPool) {
         ProfileId::from(operator),
         ProfileId::from(subject),
         Uuid::now_v7(),
+        Surface::ApiHttp,
     )
     .await
     .expect("completes");
@@ -981,6 +986,7 @@ async fn a_guest_committed_blob_in_a_governed_home_is_named_by_the_record(pool: 
         ProfileId::from(operator),
         ProfileId::from(subject),
         Uuid::now_v7(),
+        Surface::ApiHttp,
     )
     .await
     .expect("the operator's act completes");

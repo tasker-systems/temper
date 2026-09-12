@@ -14,6 +14,23 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.4.0 — unreleased
 
+- **The erasure door attributes to the caller's claimed surface**
+  `execute_erasure` and the refusal recorder take the door's `Surface` and resolve the
+  `<handle>@<marker>` emitter from it, instead of hard-wiring `web` at both attributed
+  sites — the shape `blob_service` was corrected out of once already. The HTTP door is the
+  only caller today, so `web` was accurate; the day the act gains a second surface the
+  ledger would have mis-attributed it silently, on the one act an auditor most needs to
+  trust. Both arms move together: a completion and a recorded refusal each name the surface
+  the call arrived on. Behind unchanged shapes — the route is out of the OpenAPI contract,
+  so no schema restales. Also in the same PR, no wire relevance: the blob delete gate's
+  relation-arm standing checks collapse to one query (same decision, fewer round trips
+  inside the strike's lock), the custody refusal names the fold-the-edge exit, and three
+  comments that called the staging reaper a hole now describe the shipped lifecycle.
+pr: self
+classes: behavioral
+surfaces: http
+status: signal-only
+
 - **Corpus adoption's HTTP surface — `POST /api/resources/reblock`**
   One bounded, resumable re-blocking step per call: the body names a scope (one resource by id,
   one context by id, or the explicitly-named deployment-wide `all`), `dry_run`, an optional

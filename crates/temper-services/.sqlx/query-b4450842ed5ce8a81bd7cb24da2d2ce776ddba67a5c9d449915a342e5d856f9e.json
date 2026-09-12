@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, member_ids, fingerprint FROM kb_cogmap_components WHERE home_anchor_table=$1 AND home_anchor_id=$2 AND lens_id=$3 AND NOT is_folded",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "member_ids",
+        "type_info": "UuidArray"
+      },
+      {
+        "ordinal": 2,
+        "name": "fingerprint",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "b4450842ed5ce8a81bd7cb24da2d2ce776ddba67a5c9d449915a342e5d856f9e"
+}
