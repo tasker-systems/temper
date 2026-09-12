@@ -50,6 +50,7 @@ fn receipt() -> ReblockReceipt {
             no_op: 0,
             declined: 1,
             error: 0,
+            in_progress: 0,
         },
         after_id: Some(Uuid::now_v7()),
     }

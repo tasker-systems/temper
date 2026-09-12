@@ -6172,6 +6172,13 @@ export interface components {
             declined: number;
             /** Format: int64 */
             error: number;
+            /**
+             * Format: int64
+             * @description Candidates homed in the scope that are still arriving (`in_progress`) — not considered
+             *     by this invocation. They are partitioned when their upload finalizes; address one
+             *     directly (resource scope) to act on it now.
+             */
+            in_progress: number;
             /** Format: int64 */
             no_op: number;
             /** Format: int64 */

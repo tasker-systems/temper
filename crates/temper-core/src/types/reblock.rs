@@ -101,6 +101,10 @@ pub struct ReblockSummary {
     pub no_op: u64,
     pub declined: u64,
     pub error: u64,
+    /// Candidates homed in the scope that are still arriving (`in_progress`) — not considered
+    /// by this invocation. They are partitioned when their upload finalizes; address one
+    /// directly (resource scope) to act on it now.
+    pub in_progress: u64,
 }
 
 /// The invocation response — the receipt. No durable receipt table exists: the ledger holds

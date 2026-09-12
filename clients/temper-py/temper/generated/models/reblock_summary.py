@@ -30,10 +30,11 @@ class ReblockSummary(BaseModel):
     """ # noqa: E501
     declined: Annotated[int, Field(strict=True, ge=0)]
     error: Annotated[int, Field(strict=True, ge=0)]
+    in_progress: Annotated[int, Field(strict=True, ge=0)] = Field(description="Candidates homed in the scope that are still arriving (`in_progress`) — not considered by this invocation. They are partitioned when their upload finalizes; address one directly (resource scope) to act on it now.")
     no_op: Annotated[int, Field(strict=True, ge=0)]
     reblocked: Annotated[int, Field(strict=True, ge=0)]
     would_change: Annotated[int, Field(strict=True, ge=0)]
-    __properties: ClassVar[List[str]] = ["declined", "error", "no_op", "reblocked", "would_change"]
+    __properties: ClassVar[List[str]] = ["declined", "error", "in_progress", "no_op", "reblocked", "would_change"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -88,6 +89,7 @@ class ReblockSummary(BaseModel):
         _obj = cls.model_validate({
             "declined": obj.get("declined"),
             "error": obj.get("error"),
+            "in_progress": obj.get("in_progress"),
             "no_op": obj.get("no_op"),
             "reblocked": obj.get("reblocked"),
             "would_change": obj.get("would_change")

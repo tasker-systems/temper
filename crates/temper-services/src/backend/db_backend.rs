@@ -3915,7 +3915,12 @@ impl Backend for DbBackend {
     ///
     /// Enumeration is one bounded candidate query per invocation — `is_active AND
     /// ingest_state = 'complete'` (+ context join), `ORDER BY id`, keyed on `after_id` — and
-    /// the cursor rides the receipt. `dry_run` routes every candidate to the read-only survey
+    /// the cursor rides the receipt. Complete-only enumeration is deliberate: the op refuses
+    /// still-arriving rows, so enumerating them would burn the window on guaranteed declines.
+    /// Because of it, one additional count per invocation reports the scope's still-arriving
+    /// (`in_progress`) population in the summary — the receipt names the population, it never
+    /// hides behind the gate; the addressed-resource arm needs no count, its own state refusal
+    /// reaching the receipt per row. `dry_run` routes every candidate to the read-only survey
     /// (the same machinery the act runs, minus the write); the act is `reblock_resource_with`
     /// under the invoking operator's emitter with a batch correlation id in the `EventContext`.
     /// Per-resource declines are typed per class — the gate's refusal is `denied`; the op's own
@@ -4027,6 +4032,39 @@ impl Backend for DbBackend {
             .collect(),
         };
 
+        // Enumeration is complete-only, so the scope's still-arriving (`in_progress`) uploads
+        // would otherwise be invisible to the operator. One bounded count per invocation —
+        // mirroring its arm's candidate shape (same scope WHERE, same visibility predicate, no
+        // candidate window; the count describes the scope, not the page) — names that
+        // population in the summary. The resource arm counts none: an addressed row is gated,
+        // not enumerated, and the op's own state refusal reaches the receipt per row.
+        let in_progress: u64 = match &cmd.scope {
+            ReblockScope::Resource(_) => 0,
+            ReblockScope::Context(context) => sqlx::query_scalar!(
+                r#"SELECT count(*) AS "count!" FROM kb_resources r
+                            JOIN kb_resource_homes h ON h.resource_id = r.id
+                           WHERE r.is_active
+                             AND r.ingest_state = 'in_progress'
+                             AND h.anchor_table = 'kb_contexts'
+                             AND h.anchor_id = $1
+                             AND EXISTS (SELECT 1 FROM resources_visible_to($2) v
+                                          WHERE v.resource_id = r.id)"#,
+                context,
+                *self.profile_id,
+            )
+            .fetch_one(&self.pool)
+            .await
+            .map_err(api_err)? as u64,
+            ReblockScope::All => sqlx::query_scalar!(
+                r#"SELECT count(*) AS "count!" FROM kb_resources r
+                         WHERE r.is_active
+                           AND r.ingest_state = 'in_progress'"#,
+            )
+            .fetch_one(&self.pool)
+            .await
+            .map_err(api_err)? as u64,
+        };
+
         let mut outcomes: Vec<ReblockCandidate> = Vec::with_capacity(candidates.len());
         for id in candidates {
             let outcome = match self.check_can_modify_next(id).await {
@@ -4106,6 +4144,7 @@ impl Backend for DbBackend {
                 .iter()
                 .filter(|o| matches!(o.outcome, ReblockOutcome::Error { .. }))
                 .count() as u64,
+            in_progress,
         };
         let after_id = outcomes.last().map(|o| o.resource);
 

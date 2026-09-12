@@ -2,8 +2,9 @@
 //! One behavior per witness: a full pass over a conformed context is ledger-silent at batch
 //! grain (w3's shape, scaled); the cursor resumes without overlap or gaps; an out-of-grant row
 //! declines `denied` while the rest of the batch completes and fires nothing; every event the
-//! batch fires carries the batch correlation id; and the dry run routes candidates to the
-//! survey arm — the same classes, zero events.
+//! batch fires carries the batch correlation id; the dry run routes candidates to the
+//! survey arm — the same classes, zero events; and the receipt counts the scope's
+//! still-arriving (`in_progress`) population that the complete-only enumeration skips.
 //!
 //! Resources are seeded through substrate `fire` directly (real chunk rows + verbatim bytes,
 //! ONNX-free — caller-supplied embeddings are never read by the op), because the write path
@@ -505,6 +506,57 @@ async fn the_dry_run_surveys_without_touching(pool: PgPool) {
             );
         }
     }
+}
+
+/// The receipt names the scope's still-arriving population: enumeration is complete-only (the
+/// op refuses `in_progress` rows, so the window is never spent on guaranteed declines), so a
+/// still-arriving sibling homed in the same context produces no outcome row — the summary's
+/// `in_progress` count keeps it visible to the operator, and the cursor stays on the last
+/// candidate actually considered.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_context_receipt_counts_its_still_arriving_uploads(pool: PgPool) {
+    let (owner, context, entity) = seed_profile_with_context(&pool, "owner@example.com").await;
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(owner));
+    let complete = fire_block_resource(&pool, owner, entity, context, "complete", BODY_A_B).await;
+    let arriving = fire_shaped_block_resource(
+        &pool,
+        ShapedBlockResource {
+            owner,
+            emitter: entity,
+            context,
+            title: "arriving",
+            raw_text: Some(SECTION_A),
+            chunks: incoming_of(SECTION_A),
+            segmented: true,
+        },
+    )
+    .await;
+
+    let receipt = backend
+        .reblock_resources(reblock_cmd(ReblockScope::Context(context), false, 10, None))
+        .await
+        .unwrap()
+        .value;
+
+    assert_eq!(
+        receipt.outcomes.len(),
+        1,
+        "only the complete row is a candidate"
+    );
+    assert_eq!(receipt.outcomes[0].resource, complete);
+    assert!(
+        !receipt.outcomes.iter().any(|row| row.resource == arriving),
+        "the still-arriving sibling appears in no outcome row"
+    );
+    assert_eq!(
+        receipt.summary.in_progress, 1,
+        "the receipt names the still-arriving sibling the outcomes omit"
+    );
+    assert_eq!(
+        receipt.after_id,
+        Some(complete),
+        "the cursor is the last candidate id considered"
+    );
 }
 
 // ── error-row witnesses (receipt grain — the bounded-sentence disclosure invariant) ──────────

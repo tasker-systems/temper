@@ -20,6 +20,9 @@ module Temper::Generated
 
     attr_accessor :error
 
+    # Candidates homed in the scope that are still arriving (`in_progress`) — not considered by this invocation. They are partitioned when their upload finalizes; address one directly (resource scope) to act on it now.
+    attr_accessor :in_progress
+
     attr_accessor :no_op
 
     attr_accessor :reblocked
@@ -31,6 +34,7 @@ module Temper::Generated
       {
         :'declined' => :'declined',
         :'error' => :'error',
+        :'in_progress' => :'in_progress',
         :'no_op' => :'no_op',
         :'reblocked' => :'reblocked',
         :'would_change' => :'would_change'
@@ -52,6 +56,7 @@ module Temper::Generated
       {
         :'declined' => :'Integer',
         :'error' => :'Integer',
+        :'in_progress' => :'Integer',
         :'no_op' => :'Integer',
         :'reblocked' => :'Integer',
         :'would_change' => :'Integer'
@@ -90,6 +95,12 @@ module Temper::Generated
         self.error = attributes[:'error']
       else
         self.error = nil
+      end
+
+      if attributes.key?(:'in_progress')
+        self.in_progress = attributes[:'in_progress']
+      else
+        self.in_progress = nil
       end
 
       if attributes.key?(:'no_op')
@@ -132,6 +143,14 @@ module Temper::Generated
         invalid_properties.push('invalid value for "error", must be greater than or equal to 0.')
       end
 
+      if @in_progress.nil?
+        invalid_properties.push('invalid value for "in_progress", in_progress cannot be nil.')
+      end
+
+      if @in_progress < 0
+        invalid_properties.push('invalid value for "in_progress", must be greater than or equal to 0.')
+      end
+
       if @no_op.nil?
         invalid_properties.push('invalid value for "no_op", no_op cannot be nil.')
       end
@@ -167,6 +186,8 @@ module Temper::Generated
       return false if @declined < 0
       return false if @error.nil?
       return false if @error < 0
+      return false if @in_progress.nil?
+      return false if @in_progress < 0
       return false if @no_op.nil?
       return false if @no_op < 0
       return false if @reblocked.nil?
@@ -202,6 +223,20 @@ module Temper::Generated
       end
 
       @error = error
+    end
+
+    # Custom attribute writer method with validation
+    # @param [Object] in_progress Value to be assigned
+    def in_progress=(in_progress)
+      if in_progress.nil?
+        fail ArgumentError, 'in_progress cannot be nil'
+      end
+
+      if in_progress < 0
+        fail ArgumentError, 'invalid value for "in_progress", must be greater than or equal to 0.'
+      end
+
+      @in_progress = in_progress
     end
 
     # Custom attribute writer method with validation
@@ -253,6 +288,7 @@ module Temper::Generated
       self.class == o.class &&
           declined == o.declined &&
           error == o.error &&
+          in_progress == o.in_progress &&
           no_op == o.no_op &&
           reblocked == o.reblocked &&
           would_change == o.would_change
@@ -267,7 +303,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [declined, error, no_op, reblocked, would_change].hash
+      [declined, error, in_progress, no_op, reblocked, would_change].hash
     end
 
     # Builds the object from hash

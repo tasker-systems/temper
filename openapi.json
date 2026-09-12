@@ -15701,7 +15701,8 @@
           "would_change",
           "no_op",
           "declined",
-          "error"
+          "error",
+          "in_progress"
         ],
         "properties": {
           "declined": {
@@ -15712,6 +15713,12 @@
           "error": {
             "type": "integer",
             "format": "int64",
+            "minimum": 0
+          },
+          "in_progress": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Candidates homed in the scope that are still arriving (`in_progress`) — not considered\nby this invocation. They are partitioned when their upload finalizes; address one\ndirectly (resource scope) to act on it now.",
             "minimum": 0
           },
           "no_op": {
