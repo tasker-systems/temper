@@ -28,8 +28,9 @@ registered DOMAIN type — refused here otherwise, in this wrapper''s voice, lik
 already-struck blob. Serializes against commits and sibling strikes on the hash (advisory
 lock, taken before the row lock); the refcount is same-transaction and live-rows-only, so
 released is exact as of this transaction''s commit. The caller releases the provider bytes
-AFTER the commit through writes::release_blob_bytes, which re-derives released-ness under
-the same advisory lock and holds it across the provider delete — while the commit path
+AFTER the commit — the delete door through writes::release_blob_bytes, the erasure arm
+through the byte-delete fence''s drain — both re-deriving released-ness under the same
+advisory lock and holding it across the provider delete — while the commit path
 re-derives, and RESTORES from the caller''s own bytes, presence under that lock before any
 row goes live. A live row over absent provider bytes is unconstructible (20260912000010;
 task 01a09360-e00a-7d90-858d-f4998dd70b6c). The strike folds no edges.';
@@ -39,7 +40,9 @@ COMMENT ON FUNCTION erasure_delete_complete(uuid[], text) IS
 hash a live row re-holds at drain time is NOT deleted — under the drain''s advisory locks
 the re-derivation is exact, and a live row''s bytes are present, because the commit path
 restores presence under the same lock before the row can go live (20260912000010; task
-01a09360-e00a-7d90-858d-f4998dd70b6c).';
+01a09360-e00a-7d90-858d-f4998dd70b6c). A re-holding hash in kb_erased_content is the ruled
+custody-never-bytes posture (20260911000000 retired the re-admission refusal): the skip
+records the erasure byte obligation''s lawful end.';
 
 SELECT declare_migration(
     20260912000010,

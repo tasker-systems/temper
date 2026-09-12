@@ -3207,7 +3207,18 @@ pub async fn commit_blob_with(
 /// transaction, so byte-presence decisions (a commit's restore, a release's re-derivation)
 /// serialize against strikes and sibling commits exactly as row state does. Re-entrant
 /// with the in-SQL take within one transaction.
-async fn take_hash_lock(conn: &mut sqlx::PgConnection, content_hash: &str) -> Result<()> {
+/// Take the hash-keyed advisory lock the strike wrapper and the commit projector take in
+/// SQL (`hashtextextended(hash, 0)`, 20260906000010) — Rust-side, inside the caller's
+/// transaction, so byte-presence decisions (a commit's restore, a release's re-derivation,
+/// the fence drain's batched delete) serialize against strikes and sibling commits exactly
+/// as row state does. Re-entrant with the in-SQL take within one transaction. The ONE Rust
+/// definition of the key — every Rust-side taker goes through this helper; the SQL sites
+/// are the strike wrapper and the commit projector, and a change to the SQL formula must
+/// land here in the same build.
+pub async fn take_hash_lock(
+    conn: &mut sqlx::PgConnection,
+    content_hash: &str,
+) -> Result<(), sqlx::Error> {
     sqlx::query!(
         "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
         content_hash

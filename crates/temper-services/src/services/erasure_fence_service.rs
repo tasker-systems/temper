@@ -63,8 +63,12 @@ const LEASE_SECONDS: i32 = 600;
 /// The completion resolution for a hash a live row re-holds at drain time. Under the
 /// drain's advisory locks the re-derivation is EXACT: a live row's bytes are present —
 /// the commit path restores byte presence under the same lock before the row can go live
-/// (task 01a09360-e00a-7d90-858d-f4998dd70b6c) — so the skip records a real re-occupation,
-/// never a laundered absence.
+/// (task 01a09360-e00a-7d90-858d-f4998dd70b6c) — so the skip records a real
+/// re-occupation. When the re-holding hash is in `kb_erased_content`, that re-occupation
+/// is the ruled custody-never-bytes posture, not a laundering: 20260911000000 retired the
+/// re-admission refusal deliberately (erasure is offboarding; a third party lawfully
+/// holding the same bytes re-commits them like any content), and this resolution records
+/// the erasure byte obligation's lawful end rather than hiding it.
 const SKIPPED_REOCCUPIED: &str = "skipped-reoccupied";
 
 /// The completion resolution for bytes the provider actually struck.
@@ -287,27 +291,125 @@ pub async fn drain(pool: &PgPool, store: &dyn BlobStore) -> ApiResult<DrainSumma
         return Ok(summary);
     }
 
-    // ONE critical section (task 01a09360-e00a-7d90-858d-f4998dd70b6c): the advisory locks
-    // for every claimed hash — acquired in sorted order, the deadlock-free discipline for a
-    // multi-key take — the released-ness re-derivation, the batched provider delete, and
-    // the completions share ONE transaction, so a commit can neither interleave a live row
-    // inside the re-derivation nor restore-and-live behind a delete that targeted it. The
-    // provider call inside a transaction is deliberate and bounded: this transaction
-    // touches only the already-claimed queue rows and the locks — no blob rows, no events
-    // (the reasoning `writes::release_blob_bytes` carries for the door's release). What the
-    // re-derivation sees under the lock is the truth the delete acts on.
+    // ONE critical section (task 01a09360-e00a-7d90-858d-f4998dd70b6c), run through a
+    // bounded deadlock retry: the advisory locks for every claimed hash — acquired through
+    // the substrate's ONE Rust definition of the key, in sorted order — the released-ness
+    // re-derivation, the batched provider delete, and the completions share ONE
+    // transaction, so a commit can neither interleave a live row inside the re-derivation
+    // nor restore-and-live behind a delete that targeted it. The provider call inside a
+    // transaction is deliberate and bounded: this transaction touches only the
+    // already-claimed queue rows and the locks — no blob rows, no events (the reasoning
+    // `writes::release_blob_bytes` carries for the door's release). What the re-derivation
+    // sees under the lock is the truth the delete acts on.
     let hashes: Vec<String> = claimed.iter().map(|c| c.content_hash.clone()).collect();
-    let mut locked_hashes = hashes.clone();
+    let mut deadlock_retries = 0;
+    let outcome = loop {
+        match run_critical_section(pool, store, &claimed, &hashes).await? {
+            CriticalSection::Resolved(outcome) => break outcome,
+            CriticalSection::Deadlocked if deadlock_retries < 2 => {
+                // Postgres resolved a multi-taker cycle by aborting this transaction (the
+                // erasure act takes its hashes in unordered cursor order and is the other
+                // multi-lock taker in this lock space). The abort releases everything and
+                // recorded nothing; an immediate retry re-derives against the post-cycle
+                // world. Bounded: after three, the batch goes to the ladder below.
+                deadlock_retries += 1;
+            }
+            CriticalSection::Deadlocked => {
+                // Out of retries: nothing was recorded, the claims keep their lease, and
+                // the reaper hands them back through the normal ladder. The next tick
+                // re-derives against whatever the concurrent multi-key taker did.
+                return Ok(summary);
+            }
+        }
+    };
+
+    match outcome {
+        CriticalOutcome::SkippedOnly { skipped } => {
+            summary.skipped_reoccupied = skipped;
+        }
+        CriticalOutcome::Deleted { skipped, deleted } => {
+            summary.skipped_reoccupied = skipped;
+            summary.deleted = deleted;
+        }
+        CriticalOutcome::ProviderFailed {
+            skipped,
+            ids,
+            error,
+        } => {
+            // The provider said no — but the critical section COMMITTED: the skips are
+            // resolved same-tick (a re-occupied hash's bytes were never at risk, and
+            // stranding them on the lease ladder burned real retries toward a false dead
+            // and raised false age alerts). Only the unreleasable batch hands back to the
+            // retry ladder (attempts were already incremented at claim; the fail arms the
+            // bounded backoff).
+            summary.skipped_reoccupied = skipped;
+            summary.failed = ids.len();
+            sqlx::query_scalar!(
+                r#"SELECT erasure_delete_fail($1, $2) AS "n!: i32""#,
+                &ids[..],
+                error,
+            )
+            .fetch_one(pool)
+            .await?;
+        }
+    }
+
+    Ok(summary)
+}
+
+/// What one pass of the drain's critical section resolved.
+enum CriticalOutcome {
+    /// Every claim re-derived to a live row re-holding its hash.
+    SkippedOnly { skipped: usize },
+    /// The skips plus a provider delete that landed.
+    Deleted { skipped: usize, deleted: usize },
+    /// The provider refused the delete; the skips are committed, the failed batch's ids
+    /// ride back to the retry ladder.
+    ProviderFailed {
+        skipped: usize,
+        ids: Vec<Uuid>,
+        error: String,
+    },
+}
+
+/// The resolved-or-deadlocked verdict of one critical-section pass.
+enum CriticalSection {
+    Resolved(CriticalOutcome),
+    Deadlocked,
+}
+
+/// One pass: sorted advisory takes (the substrate's one Rust key), the occupied
+/// re-derivation UNDER them, the batched delete, the completions — one transaction. A
+/// `40P01` (deadlock resolved by abort) leaves nothing recorded and reports
+/// [`CriticalSection::Deadlocked`]; the skips resolve in the same transaction as the
+/// delete when it lands, and survive a provider failure.
+async fn run_critical_section(
+    pool: &PgPool,
+    store: &dyn BlobStore,
+    claimed: &[ClaimedDelete],
+    hashes: &[String],
+) -> ApiResult<CriticalSection> {
+    let mut locked_hashes = hashes.to_vec();
     locked_hashes.sort();
     locked_hashes.dedup();
-    let mut tx = pool.begin().await?;
+    let deadlock = |e: &sqlx::Error| {
+        e.as_database_error()
+            .is_some_and(|d| d.code().as_deref() == Some("40P01"))
+    };
+
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) if deadlock(&e) => return Ok(CriticalSection::Deadlocked),
+        Err(e) => return Err(e.into()),
+    };
     for hash in &locked_hashes {
-        sqlx::query!(
-            "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-            hash
-        )
-        .execute(&mut *tx)
-        .await?;
+        if let Err(e) = temper_substrate::writes::take_hash_lock(&mut tx, hash).await {
+            return if deadlock(&e) {
+                Ok(CriticalSection::Deadlocked)
+            } else {
+                Err(e.into())
+            };
+        }
     }
     let occupied: Vec<String> = sqlx::query!(
         r#"
@@ -315,7 +417,7 @@ pub async fn drain(pool: &PgPool, store: &dyn BlobStore) -> ApiResult<DrainSumma
           FROM kb_blobs
          WHERE content_hash = ANY($1) AND content_type IS NOT NULL
         "#,
-        &hashes,
+        hashes,
     )
     .fetch_all(&mut *tx)
     .await?
@@ -327,14 +429,12 @@ pub async fn drain(pool: &PgPool, store: &dyn BlobStore) -> ApiResult<DrainSumma
         .iter()
         .partition(|c| occupied.iter().any(|h| h == &c.content_hash));
 
-    summary.skipped_reoccupied = skipped.len();
     let skipped_ids: Vec<Uuid> = skipped.iter().map(|c| c.id).collect();
-    let pathnames: Vec<&str> = releasable.iter().map(|c| c.pathname.as_str()).collect();
     let ids: Vec<Uuid> = releasable.iter().map(|c| c.id).collect();
 
     if releasable.is_empty() {
         // Nothing to strike; record the skips and release the locks.
-        if !skipped.is_empty() {
+        if !skipped_ids.is_empty() {
             sqlx::query_scalar!(
                 r#"SELECT erasure_delete_complete($1, $2) AS "n!: i32""#,
                 &skipped_ids[..],
@@ -344,7 +444,9 @@ pub async fn drain(pool: &PgPool, store: &dyn BlobStore) -> ApiResult<DrainSumma
             .await?;
         }
         tx.commit().await?;
-        return Ok(summary);
+        return Ok(CriticalSection::Resolved(CriticalOutcome::SkippedOnly {
+            skipped: skipped.len(),
+        }));
     }
 
     // ONE batched call for the whole due set — the verb is array-shaped and idempotent (a
@@ -352,10 +454,9 @@ pub async fn drain(pool: &PgPool, store: &dyn BlobStore) -> ApiResult<DrainSumma
     // carries no existence guard. The locks stay held across it: a commit concurrent with
     // this delete waits, then finds the bytes absent and restores them under the lock it
     // finally takes.
-    match store.delete(&pathnames).await {
+    match store.delete(&pathnames_of(&releasable)).await {
         Ok(()) => {
-            summary.deleted = releasable.len();
-            if !skipped.is_empty() {
+            if !skipped_ids.is_empty() {
                 sqlx::query_scalar!(
                     r#"SELECT erasure_delete_complete($1, $2) AS "n!: i32""#,
                     &skipped_ids[..],
@@ -372,24 +473,36 @@ pub async fn drain(pool: &PgPool, store: &dyn BlobStore) -> ApiResult<DrainSumma
             .fetch_one(&mut *tx)
             .await?;
             tx.commit().await?;
+            Ok(CriticalSection::Resolved(CriticalOutcome::Deleted {
+                skipped: skipped.len(),
+                deleted: releasable.len(),
+            }))
         }
         Err(e) => {
-            // The provider said no: nothing reads done. Roll the critical section back and
-            // hand the batch to the retry ladder outside it (attempts were already
-            // incremented at claim; the fail arms the bounded backoff).
-            tx.rollback().await?;
-            summary.failed = releasable.len();
-            sqlx::query_scalar!(
-                r#"SELECT erasure_delete_fail($1, $2) AS "n!: i32""#,
-                &ids[..],
-                e.to_string(),
-            )
-            .fetch_one(pool)
-            .await?;
+            // The provider said no: the releasable rows read nothing-done, but the skips
+            // still commit — they never depended on the delete's outcome. The failed batch
+            // is failed OUTSIDE the (now committed) critical section.
+            if !skipped_ids.is_empty() {
+                sqlx::query_scalar!(
+                    r#"SELECT erasure_delete_complete($1, $2) AS "n!: i32""#,
+                    &skipped_ids[..],
+                    SKIPPED_REOCCUPIED,
+                )
+                .fetch_one(&mut *tx)
+                .await?;
+            }
+            tx.commit().await?;
+            Ok(CriticalSection::Resolved(CriticalOutcome::ProviderFailed {
+                skipped: skipped.len(),
+                ids,
+                error: e.to_string(),
+            }))
         }
     }
+}
 
-    Ok(summary)
+fn pathnames_of<'a>(releasable: &'a [&'a ClaimedDelete]) -> Vec<&'a str> {
+    releasable.iter().map(|c| c.pathname.as_str()).collect()
 }
 
 /// What the fence's durable state amounts to, in the `internal_call_health` vocabulary.
