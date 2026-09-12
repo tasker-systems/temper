@@ -67,8 +67,9 @@ temper admin reblock --all --dry-run
 ```
 
 Start small: one resource, then a low-stakes context, `all` last. Omitting `--limit` applies a
-conservative default; the `after_id` cursor resumes exactly where the previous receipt stopped,
-and re-running from the top is always safe — every already-conformed resource classifies as a
+default of 500 — sized so a window of changing resources completes comfortably in one
+invocation; the `after_id` cursor resumes exactly where the previous receipt stopped, and
+re-running from the top is always safe — every already-conformed resource classifies as a
 no-op and is left untouched.
 
 The same operation is reachable as the MCP tool `resource_reblock` (scope `resource`, `context`,
