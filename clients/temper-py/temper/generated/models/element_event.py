@@ -31,11 +31,12 @@ class ElementEvent(BaseModel):
     actor_entity_id: UUID = Field(description="The authoring agent entity (kb_events.emitter_entity_id).")
     actor_name: StrictStr = Field(description="Humanized actor name (kb_entities.name for the emitter entity).")
     confidence: Optional[StrictStr] = Field(default=None, description="ConfidenceBand from event metadata, when present.")
+    correlation_id: Optional[UUID] = Field(default=None, description="The batch/act correlation id the event ran under (`kb_events.correlation_id`) — the key that pairs a receipt with the trail events it named. A batch act carries the batch's id; an act that threaded no correlation self-roots and carries its OWN event id. NULL only on rows predating correlation threading.")
     event_id: UUID
     kind: StrictStr = Field(description="Canonical event-type name (kb_event_types.name), e.g. \"relationship_asserted\".")
     occurred_at: StrictStr = Field(description="ISO-8601 emission time (kb_events.occurred_at).")
     payload: Optional[Any]
-    __properties: ClassVar[List[str]] = ["actor_entity_id", "actor_name", "confidence", "event_id", "kind", "occurred_at", "payload"]
+    __properties: ClassVar[List[str]] = ["actor_entity_id", "actor_name", "confidence", "correlation_id", "event_id", "kind", "occurred_at", "payload"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -81,6 +82,11 @@ class ElementEvent(BaseModel):
         if self.confidence is None and "confidence" in self.model_fields_set:
             _dict['confidence'] = None
 
+        # set to None if correlation_id (nullable) is None
+        # and model_fields_set contains the field
+        if self.correlation_id is None and "correlation_id" in self.model_fields_set:
+            _dict['correlation_id'] = None
+
         # set to None if payload (nullable) is None
         # and model_fields_set contains the field
         if self.payload is None and "payload" in self.model_fields_set:
@@ -101,6 +107,7 @@ class ElementEvent(BaseModel):
             "actor_entity_id": obj.get("actor_entity_id"),
             "actor_name": obj.get("actor_name"),
             "confidence": obj.get("confidence"),
+            "correlation_id": obj.get("correlation_id"),
             "event_id": obj.get("event_id"),
             "kind": obj.get("kind"),
             "occurred_at": obj.get("occurred_at"),
