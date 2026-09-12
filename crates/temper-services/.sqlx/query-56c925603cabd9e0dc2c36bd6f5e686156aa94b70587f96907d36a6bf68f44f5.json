@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT r.id FROM kb_resources r\n                         WHERE r.id = $1 AND r.is_active\n                           AND EXISTS (SELECT 1 FROM resources_visible_to($2) v\n                                        WHERE v.resource_id = r.id)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "56c925603cabd9e0dc2c36bd6f5e686156aa94b70587f96907d36a6bf68f44f5"
+}
