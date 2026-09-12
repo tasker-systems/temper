@@ -46,7 +46,6 @@ describe('trailModel', () => {
 			kind: 'Asserted',
 			rawKind: 'relationship.asserted',
 			confidence: null,
-			correlation_id: null,
 		});
 	});
 	it('passes through rawKind, actorName, and payload untouched', () => {
