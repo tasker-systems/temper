@@ -249,6 +249,20 @@ pub async fn reembed_remote(
     dry_run: bool,
     fmt: crate::format::OutputFormat,
 ) -> Result<()> {
+    // Exactly one scope — refuse to guess, BEFORE any ref resolution: an ambiguous invocation
+    // must not spend authenticated round-trips learning it is ambiguous, and a resolution
+    // failure must not mask the refusal (the family pattern, same as `reblock_remote`).
+    // "All" must be asked for by name.
+    let scopes = [resource.is_some(), context.is_some(), all]
+        .iter()
+        .filter(|x| **x)
+        .count();
+    if scopes != 1 {
+        return Err(TemperError::BadRequest(
+            "specify exactly one of --resource, --context, or --all".to_string(),
+        ));
+    }
+
     let resource_id = match resource.as_deref() {
         Some(r) => Some(
             temper_workflow::operations::parse_ref(r)
@@ -262,17 +276,6 @@ pub async fn reembed_remote(
         }
         None => None,
     };
-
-    // Exactly one scope — refuse to guess. "All" must be asked for by name.
-    let scopes = [resource_id.is_some(), context_id.is_some(), all]
-        .iter()
-        .filter(|x| **x)
-        .count();
-    if scopes != 1 {
-        return Err(TemperError::BadRequest(
-            "specify exactly one of --resource, --context, or --all".to_string(),
-        ));
-    }
 
     let body = temper_core::types::admin::ReembedRequest {
         resource_id: resource_id.map(|r| *r),
@@ -314,6 +317,19 @@ pub async fn reblock_remote(
     after_id: Option<uuid::Uuid>,
     fmt: crate::format::OutputFormat,
 ) -> Result<()> {
+    // Exactly one scope — refuse to guess, BEFORE any ref resolution: an ambiguous invocation
+    // must not spend authenticated round-trips learning it is ambiguous, and a resolution
+    // failure must not mask the refusal. "All" must be asked for by name.
+    let scopes = [resource.is_some(), context.is_some(), all]
+        .iter()
+        .filter(|x| **x)
+        .count();
+    if scopes != 1 {
+        return Err(TemperError::BadRequest(
+            "specify exactly one of --resource, --context, or --all".to_string(),
+        ));
+    }
+
     let resource_id = match resource.as_deref() {
         Some(r) => Some(
             temper_workflow::operations::parse_ref(r)
@@ -327,17 +343,6 @@ pub async fn reblock_remote(
         }
         None => None,
     };
-
-    // Exactly one scope — refuse to guess. "All" must be asked for by name.
-    let scopes = [resource_id.is_some(), context_id.is_some(), all]
-        .iter()
-        .filter(|x| **x)
-        .count();
-    if scopes != 1 {
-        return Err(TemperError::BadRequest(
-            "specify exactly one of --resource, --context, or --all".to_string(),
-        ));
-    }
 
     let scope = if let Some(r) = resource_id {
         temper_core::types::reblock::ReblockScope::Resource(*r)
@@ -466,14 +471,19 @@ mod tests {
         assert!(matches!(err, TemperError::BadRequest(ref m) if m == SCOPE_MESSAGE));
     }
 
-    /// Two scopes at once is ambiguous — refused, not resolved by precedence.
+    /// Two scopes at once is ambiguous — refused, not resolved by precedence. The refusal must
+    /// come BEFORE any ref resolution: an ambiguous invocation must not spend authenticated
+    /// round-trips learning it is ambiguous, and a resolution failure must not mask it. Against
+    /// the dead client, a pre-check resolution of the context ref surfaces as a Network error —
+    /// exactly what this witness bites on.
+    /// FAILS IF: the exclusivity check moves back below the ref resolutions.
     #[tokio::test]
     async fn reblock_with_two_scope_flags_errors() {
         let err = reblock_remote(
             &dead_client(),
             Some("019e84ab-26ba-7560-9d34-c60d74a9fbe2".to_string()),
-            None,
-            true,
+            Some("@me/temper".to_string()),
+            false,
             false,
             None,
             None,
@@ -481,12 +491,17 @@ mod tests {
         )
         .await
         .expect_err("two scope flags must error");
-        assert!(matches!(err, TemperError::BadRequest(ref m) if m == SCOPE_MESSAGE));
+        assert!(
+            matches!(err, TemperError::BadRequest(ref m) if m == SCOPE_MESSAGE),
+            "the scope refusal must win over any resolution failure, got: {err}"
+        );
     }
 
     /// Exactly one scope passes validation and proceeds to dispatch. Against the dead
-    /// endpoint the dispatch itself fails at transport — a different error class than the
-    /// scope refusal, which is what distinguishes "validated, then sent" from "refused".
+    /// endpoint the dispatch itself fails at transport — asserted POSITIVELY on the
+    /// Network error class, which is what distinguishes "validated, then sent" from
+    /// "refused" (a negative on the scope message is satisfied vacuously by any future
+    /// pre-dispatch refusal).
     #[tokio::test]
     async fn reblock_with_exactly_one_scope_flag_reaches_dispatch() {
         let err = reblock_remote(
@@ -502,8 +517,8 @@ mod tests {
         .await
         .expect_err("dead endpoint must fail at transport");
         assert!(
-            !err.to_string().contains(SCOPE_MESSAGE),
-            "a single scope must pass validation and fail at transport instead, got: {err}"
+            matches!(err, TemperError::Network(_)),
+            "a single scope must pass validation and fail at transport (Network), got: {err}"
         );
     }
 }

@@ -80,9 +80,19 @@ fn map_err(e: TemperError, action: &str) -> rmcp::ErrorData {
             format!("{action}: {msg}"),
             None,
         ),
+        // The bare `Forbidden` that escapes the backend command is ONLY the deployment-wide
+        // `all` arm's system-admin gate (`reblock_resources`'s scope seam) — per-row gate
+        // refusals arrive as `Denied` receipt rows inside the batch (`map_decline`), never as
+        // this error. Name the actual gate: the sibling text ("cannot modify this resource")
+        // names a resource no scope addressed and sends the agent on a false single-resource
+        // repair path.
         TemperError::Forbidden => rmcp::ErrorData::new(
             rmcp::model::ErrorCode::INVALID_REQUEST,
-            format!("{action}: cannot modify this resource"),
+            format!(
+                "{action}: the deployment-wide `all` scope requires system-administrator \
+                 standing — the `resource` and `context` scopes ride ordinary visibility \
+                 instead and never refuse on reach alone"
+            ),
             None,
         ),
         other => rmcp::ErrorData::internal_error(format!("{action}: {other}"), None),
@@ -264,6 +274,27 @@ mod tests {
         assert_inline_string_enum(
             &schema["properties"]["scope"],
             &["resource", "context", "all"],
+        );
+    }
+
+    /// The only bare `Forbidden` that escapes the backend command is the deployment-wide `all`
+    /// arm's `is_system_admin` gate (per-row gate refusals arrive as `Denied` receipt rows
+    /// inside the batch — see `map_decline`) — so the mapper must name THAT gate. The borrowed
+    /// sibling text ("cannot modify this resource") names a resource no scope addressed and
+    /// sends the agent on a false single-resource repair path.
+    /// FAILS IF: the `Forbidden` arm drifts back to the generic resource-modification wording.
+    #[test]
+    fn the_forbidden_mapper_names_the_system_administrator_gate() {
+        let err = map_err(TemperError::Forbidden, "resource_reblock");
+        assert!(
+            err.message.contains("system-administrator"),
+            "the refusal must name system-administrator standing, got: {}",
+            err.message
+        );
+        assert!(
+            !err.message.contains("cannot modify this resource"),
+            "the refusal must not name a resource no scope addressed: {}",
+            err.message
         );
     }
 }

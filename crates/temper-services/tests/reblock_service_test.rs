@@ -507,6 +507,145 @@ async fn the_dry_run_surveys_without_touching(pool: PgPool) {
     }
 }
 
+// ── error-row witnesses (receipt grain — the bounded-sentence disclosure invariant) ──────────
+
+/// The one bounded row-error sentence the receipt ships (`DbBackend::reblock_resources`'s row
+/// helper). Asserted verbatim: the receipt is client-facing contract text, so the oracle here is
+/// the sentence itself, never a substring of whatever the internal error displayed.
+const ROW_ERROR_MESSAGE: &str = "internal error while processing this candidate; retry it alone";
+
+/// Corrupt one live block's provenance: extend the closed `provenance_source_kind` enum with a
+/// value the Rust reader does not map, and attach a provenance row carrying it. The reblock
+/// op's shared classification half (`read_attributions`) bails on the unmapped kind — the
+/// canonical row-error the receipt arms must survive without leaking. Runs in this test's own
+/// database (`sqlx::test`), so the type extension cannot leak past the witness.
+async fn poison_attributions(pool: &PgPool, resource: Uuid) {
+    sqlx::query("ALTER TYPE provenance_source_kind ADD VALUE IF NOT EXISTS 'probe_unknown'")
+        .execute(pool)
+        .await
+        .expect("extend the enum with a value the reader does not map");
+    let (block, event): (Uuid, Uuid) = sqlx::query_as(
+        "SELECT b.id, \
+            (SELECT e.id FROM kb_events e ORDER BY e.id DESC LIMIT 1) \
+           FROM kb_content_blocks b \
+          WHERE b.resource_id = $1 AND NOT b.is_folded \
+          ORDER BY b.seq, b.id LIMIT 1",
+    )
+    .bind(resource)
+    .fetch_one(pool)
+    .await
+    .expect("a live block to poison");
+    sqlx::query(
+        "INSERT INTO kb_block_provenance \
+           (block_id, source_kind, source_id, contributed_by_event_id, accretion_seq, is_corrected) \
+         VALUES ($1, $2::text::provenance_source_kind, $3, $4, 99, false)",
+    )
+    .bind(block)
+    .bind("probe_unknown")
+    .bind(Uuid::now_v7())
+    .bind(event)
+    .execute(pool)
+    .await
+    .expect("seed the unmapped provenance row");
+}
+
+/// (g) A candidate whose data poisons the op itself (a provenance row carrying a source kind the
+/// reader does not map) errors as a RECEIPT ROW carrying exactly the bounded sentence — never
+/// the raw internal text (SQL/PG/provenance internals) — while the batch declines-and-continues:
+/// the healthy sibling still reblocks and reaches the ledger. Per-row diagnostics are log-only,
+/// joinable by the correlation id the receipt already carries.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_poisoned_candidate_errors_as_a_bounded_row_while_the_batch_completes(pool: PgPool) {
+    let (owner, context, entity) = seed_profile_with_context(&pool, "owner@example.com").await;
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(owner));
+    let poisoned = fire_block_resource(&pool, owner, entity, context, "poisoned", SECTION_A).await;
+    let healthy = fire_block_resource(&pool, owner, entity, context, "healthy", BODY_A_B).await;
+    poison_attributions(&pool, poisoned).await;
+
+    let receipt = backend
+        .reblock_resources(reblock_cmd(ReblockScope::Context(context), false, 10, None))
+        .await
+        .expect("an errored row never aborts the batch")
+        .value;
+
+    assert_eq!(receipt.outcomes.len(), 2, "both candidates produced a row");
+    for row in &receipt.outcomes {
+        if row.resource == poisoned {
+            assert_eq!(
+                row.outcome,
+                ReblockOutcome::Error {
+                    message: ROW_ERROR_MESSAGE.to_owned()
+                },
+                "the poisoned row errors with the bounded sentence, got {:?}",
+                row.outcome
+            );
+        } else if row.resource == healthy {
+            assert!(
+                matches!(row.outcome, ReblockOutcome::Reblocked { .. }),
+                "the healthy row completes, got {:?}",
+                row.outcome
+            );
+        }
+    }
+    assert_eq!(receipt.summary.error, 1);
+    assert_eq!(receipt.summary.reblocked, 1);
+    assert_eq!(
+        reblocked_event_count(&pool).await,
+        1,
+        "the batch declined-and-continued: the healthy act reached the ledger"
+    );
+}
+
+/// (h) The same poison under `dry_run`: the survey arm takes the SAME bounded row-error path —
+/// the invocation answers with a 200-shaped receipt carrying the error row, never an aborted
+/// invocation, and the dry pass stays read-only. One poisoned candidate must not make every
+/// survey of its context fail wholesale while the act on the same context proceeds.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_poisoned_candidate_errors_in_the_survey_instead_of_aborting_the_invocation(
+    pool: PgPool,
+) {
+    let (owner, context, entity) = seed_profile_with_context(&pool, "owner@example.com").await;
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(owner));
+    let poisoned = fire_block_resource(&pool, owner, entity, context, "poisoned", SECTION_A).await;
+    let healthy = fire_block_resource(&pool, owner, entity, context, "healthy", BODY_A_B).await;
+    poison_attributions(&pool, poisoned).await;
+
+    let events_before = event_count(&pool).await;
+    let receipt = backend
+        .reblock_resources(reblock_cmd(ReblockScope::Context(context), true, 10, None))
+        .await
+        .expect("an errored survey row is a receipt row, not an aborted invocation")
+        .value;
+
+    assert!(receipt.dry_run);
+    assert_eq!(receipt.outcomes.len(), 2, "both candidates produced a row");
+    for row in &receipt.outcomes {
+        if row.resource == poisoned {
+            assert_eq!(
+                row.outcome,
+                ReblockOutcome::Error {
+                    message: ROW_ERROR_MESSAGE.to_owned()
+                },
+                "the poisoned row errors with the bounded sentence, got {:?}",
+                row.outcome
+            );
+        } else if row.resource == healthy {
+            assert!(
+                matches!(row.outcome, ReblockOutcome::WouldChange),
+                "the healthy row still surveys, got {:?}",
+                row.outcome
+            );
+        }
+    }
+    assert_eq!(receipt.summary.error, 1);
+    assert_eq!(receipt.summary.would_change, 1);
+    assert_eq!(
+        event_count(&pool).await,
+        events_before,
+        "the dry run stays read-only"
+    );
+}
+
 // ── decline witnesses (per class, receipt grain) ─────────────────────────────────────────────
 
 /// A still-arriving candidate (`in_progress` — a segmented begin whose finalize never came)

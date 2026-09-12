@@ -128,3 +128,37 @@ async fn reblock_all_scope_serializes_as_the_bare_string_and_receipt_round_trips
         .expect("reblock should succeed");
     assert_eq!(got, expected_receipt);
 }
+
+/// The context arm names its target as a single-key object — the third scope shape on the
+/// wire, sibling to the resource and `all` witnesses above.
+#[tokio::test]
+async fn reblock_posts_the_context_scope_body_to_resources_reblock() {
+    let server = MockServer::start().await;
+    let context_id = Uuid::now_v7();
+    let expected_receipt = receipt();
+
+    Mock::given(method("POST"))
+        .and(path("/api/resources/reblock"))
+        .and(body_json(serde_json::json!({
+            "scope": {"context": context_id},
+            "dry_run": false,
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&expected_receipt))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server.uri());
+    let body = ReblockRequest {
+        scope: temper_core::types::reblock::ReblockScope::Context(context_id),
+        dry_run: false,
+        limit: None,
+        after_id: None,
+    };
+    let got = client
+        .admin()
+        .reblock(&body)
+        .await
+        .expect("reblock should succeed");
+    assert_eq!(got, expected_receipt);
+}

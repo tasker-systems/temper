@@ -12251,7 +12251,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The receipt for this step: one outcome row per candidate, per-class counts, the batch correlation id, and the continuation cursor to resume with */
+            /** @description The receipt for this step: one outcome row per candidate, per-class counts, the batch correlation id, and the continuation cursor to resume with. An invisible or absent context is never a 404: context scope enumerates no candidates and answers 200 with an empty `outcomes` array */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -12287,7 +12287,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The addressed resource or context does not exist or is not visible to the caller */
+            /** @description The addressed resource does not exist or is not visible to the caller (resource scope only — context scope never answers 404; see the 200 description) */
             404: {
                 headers: {
                     [name: string]: unknown;

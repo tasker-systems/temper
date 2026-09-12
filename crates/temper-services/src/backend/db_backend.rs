@@ -195,6 +195,34 @@ fn map_decline(r: writes::ReblockDecline) -> ReblockOutcome {
     }
 }
 
+/// The one bounded sentence a receipt row carries when the op itself errors on a candidate.
+/// Client-facing receipt text — the house disclosure invariant (`TemperError::internal_scrubbed`
+/// holds the same posture for the 500 path): a 200 body never carries raw internal error text
+/// (SQL/PG messages, upstream detail). The real diagnostic is log-only, joinable by the batch
+/// correlation id the receipt already echoes.
+const ROW_ERROR_MESSAGE: &str = "internal error while processing this candidate; retry it alone";
+
+/// One candidate's op error → a bounded receipt row, with the real error logged at warn under
+/// the batch correlation id and the resource id. Deliberately NOT a decline classification —
+/// data-state errors are not typed here (a future pass may); the batch declines-and-continues
+/// either way. Both receipt arms (survey and act) route through this one helper so the two
+/// cannot drift.
+fn row_error(
+    correlation: temper_core::types::ids::CorrelationId,
+    resource: uuid::Uuid,
+    e: impl std::fmt::Display,
+) -> ReblockOutcome {
+    tracing::warn!(
+        correlation = %correlation,
+        resource = %resource,
+        error = %e,
+        "reblock row errored; the receipt carries a bounded sentence — join this log by the correlation id"
+    );
+    ReblockOutcome::Error {
+        message: ROW_ERROR_MESSAGE.to_owned(),
+    }
+}
+
 /// Map a wire [`PackedChunk`](temper_core::types::ingest::PackedChunk) — the client's
 /// extract→chunk→embed output — to the substrate-native `IncomingChunk` the no-embed block constructor
 /// consumes. Field-for-field; the only widening is `u32`/`u8` → `i32`/`i16` (the substrate column types).
@@ -3893,7 +3921,9 @@ impl Backend for DbBackend {
     /// Per-resource declines are typed per class — the gate's refusal is `denied`; the op's own
     /// refusals arrive as `in_progress`, `byteless`, or `drift`, each with the human remediation
     /// in the row's detail. An errored row declines-and-continues — a batch never rolls back
-    /// over one bad row.
+    /// over one bad row, in either arm; the row ships one bounded static sentence
+    /// (`ROW_ERROR_MESSAGE`) and the real diagnostic is log-only under the batch correlation id,
+    /// never raw internal error text in a 200 body.
     async fn reblock_resources(
         &self,
         cmd: ReblockResources,
@@ -4001,22 +4031,21 @@ impl Backend for DbBackend {
         for id in candidates {
             let outcome = match self.check_can_modify_next(id).await {
                 Err(TemperError::Forbidden) => ReblockOutcome::Denied,
-                Err(e) => ReblockOutcome::Error {
-                    message: e.to_string(),
-                },
+                Err(e) => row_error(correlation, id, e),
                 Ok(()) if cmd.dry_run => {
-                    // The survey arm: the act's machinery, read-only.
-                    match writes::survey_reblock_resource(&self.pool, ResourceId::from(id))
-                        .await
-                        .map_err(api_err)?
-                    {
-                        temper_substrate::writes::ReblockSurvey::NoOp => ReblockOutcome::NoOp,
-                        temper_substrate::writes::ReblockSurvey::WouldChange => {
+                    // The survey arm: the act's machinery, read-only. A per-row error takes the
+                    // SAME bounded row-error path as the act — one poisoned candidate is a
+                    // receipt row, never an aborted invocation, so the declines-and-continues
+                    // sentence above holds for both arms.
+                    match writes::survey_reblock_resource(&self.pool, ResourceId::from(id)).await {
+                        Ok(temper_substrate::writes::ReblockSurvey::NoOp) => ReblockOutcome::NoOp,
+                        Ok(temper_substrate::writes::ReblockSurvey::WouldChange) => {
                             ReblockOutcome::WouldChange
                         }
-                        temper_substrate::writes::ReblockSurvey::Declined { reason } => {
+                        Ok(temper_substrate::writes::ReblockSurvey::Declined { reason }) => {
                             map_decline(reason)
                         }
+                        Err(e) => row_error(correlation, id, e),
                     }
                 }
                 Ok(()) => {
@@ -4038,9 +4067,7 @@ impl Backend for DbBackend {
                         }
                         Ok(writes::ReblockOutcome::NoOp) => ReblockOutcome::NoOp,
                         Ok(writes::ReblockOutcome::Declined { reason }) => map_decline(reason),
-                        Err(e) => ReblockOutcome::Error {
-                            message: e.to_string(),
-                        },
+                        Err(e) => row_error(correlation, id, e),
                     }
                 }
             };
