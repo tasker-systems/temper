@@ -1899,8 +1899,14 @@ pub async fn survey_reblock_resource(pool: &PgPool, resource: ResourceId) -> Res
 /// policy. Authorization is never re-checked here: the caller has already run the standard gate
 /// train (DbBackend gates before dispatching), and the re-block fires on-behalf-of the write's
 /// acting principal — `ctx` carries the authorship/correlation into `kb_events` (the authored-4
-/// pattern), keeping the substrate principal-free by architecture. The op is reachable ONLY
-/// through these gated write paths (enforced by the `reblock_scope_fence` tripwire).
+/// pattern), keeping the substrate principal-free by architecture.
+///
+/// What actually enforces the op's reachability — there is no tripwire, and this comment once
+/// falsely claimed one ("reblock_scope_fence"): this gated hook (the only in-crate caller), the
+/// per-resource-gated adoption Backend command in temper-services
+/// (`DbBackend::adopt_resources`, the op's one direct production caller), and the caller-sweep
+/// guard `.github/scripts/check-reblock-callers.sh`, which pins the op's reachable-from set to
+/// an explicit allowlist and fails on any new caller that does not join it deliberately.
 ///
 /// `NoOp` is silence by design: a write that does not change the effective partition must be
 /// indistinguishable in the ledger from one that never happened (the op fires nothing). The op's
