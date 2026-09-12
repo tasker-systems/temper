@@ -11,6 +11,7 @@
 
 use anyhow::{Context, Result};
 use sqlx::PgPool;
+use std::fmt;
 use uuid::Uuid;
 
 use crate::affinity::EdgeKind;
@@ -830,21 +831,55 @@ pub struct ReblockParams {
     pub emitter: EntityId,
 }
 
+/// Why the re-block op declined to partition a resource: the refusal CLASS — the machine-usable
+/// taxonomy adoption tooling publishes per receipt row — plus the human `detail`, which names
+/// the resource and its remediation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReblockDecline {
+    /// The refusal class.
+    pub kind: ReblockDeclineKind,
+    /// The human remediation text, naming the resource and what to do about it.
+    pub detail: String,
+}
+
+impl fmt::Display for ReblockDecline {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.detail)
+    }
+}
+
+/// The re-block op's refusal classes. The gate's refusal (the caller not being allowed to write
+/// the resource at all) is deliberately absent: it is authorization failing, not the op
+/// declining, and it is classified separately upstream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReblockDeclineKind {
+    /// The body is still arriving (`ingest_state = 'in_progress'`) — a partition decision over
+    /// it would be a guess.
+    InProgress,
+    /// The resource stores no verbatim bytes to compose a body from: no live blocks at all, or
+    /// a live block in a derived shape whose bytes were never stored. Both are the same
+    /// judgment — there are no stored bytes to re-block.
+    Byteless,
+    /// A fresh chunking of the body does not reproduce the stored chunking — the stored
+    /// partition cannot serve as the re-block's baseline.
+    Drift,
+}
+
 /// What a re-block did.
 ///
 /// - [`ReblockOutcome::NoOp`] — the partition already matches; the ledger is indistinguishable
 ///   from the operation never having run.
 /// - [`ReblockOutcome::Declined`] — a precondition for a trustworthy partition decision did not
-///   hold (mid-ingest, no live blocks, a block without stored bytes, or a stored chunking that a
-///   fresh chunking of the body does not reproduce). Returned as a VALUE, not an error, because
-///   the right handling is the CALLER's: the write-path hook declines silently on finalize
-///   (stranding an upload forever is worse than an unpartitioned commit) and treats a decline as
-///   fatal elsewhere; a direct caller (adoption tooling) gets the typed reason to surface.
+///   hold (mid-ingest, no stored bytes, or a stored chunking that a fresh chunking of the body
+///   does not reproduce). Returned as a VALUE, not an error, because the right handling is the
+///   CALLER's: the write-path hook declines silently on finalize (stranding an upload forever is
+///   worse than an unpartitioned commit) and treats a decline as fatal elsewhere; a direct
+///   caller (adoption tooling) gets the typed class and detail to surface.
 /// - [`ReblockOutcome::Reblocked`] — the manifest fired; the ledger carries the act.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReblockOutcome {
     NoOp,
-    Declined { reason: String },
+    Declined { reason: ReblockDecline },
     Reblocked { event: EventId },
 }
 
@@ -987,7 +1022,7 @@ struct ReblockPlan {
 #[derive(Debug)]
 enum Partition {
     NoOp,
-    Declined(String),
+    Declined(ReblockDecline),
     Plan(ReblockPlan),
 }
 
@@ -1078,21 +1113,27 @@ fn compute_reblock_partition(
     };
 
     if expected.len() != live_chunks.len() {
-        return Ok(Partition::Declined(format!(
-            "resource {resource} has {live} live chunk(s) but its body now chunks to {fresh} — \
-             the stored chunking does not reproduce",
-            live = live_chunks.len(),
-            fresh = expected.len(),
-        )));
+        return Ok(Partition::Declined(ReblockDecline {
+            kind: ReblockDeclineKind::Drift,
+            detail: format!(
+                "resource {resource} has {live} live chunk(s) but its body now chunks to {fresh} — \
+                 the stored chunking does not reproduce",
+                live = live_chunks.len(),
+                fresh = expected.len(),
+            ),
+        }));
     }
     for (i, (e, l)) in expected.iter().zip(live_chunks).enumerate() {
         if e.content_hash != l.content_hash {
-            return Ok(Partition::Declined(format!(
-                "resource {resource} live chunk #{i} does not match a fresh chunking of its body \
-                 (hash {live_hash} vs expected {fresh_hash})",
-                live_hash = l.content_hash,
-                fresh_hash = e.content_hash,
-            )));
+            return Ok(Partition::Declined(ReblockDecline {
+                kind: ReblockDeclineKind::Drift,
+                detail: format!(
+                    "resource {resource} live chunk #{i} does not match a fresh chunking of its body \
+                     (hash {live_hash} vs expected {fresh_hash})",
+                    live_hash = l.content_hash,
+                    fresh_hash = e.content_hash,
+                ),
+            }));
         }
     }
 
@@ -1824,27 +1865,36 @@ async fn reblock_partition_in_tx(
     .await
     .with_context(|| format!("reblock_resource: resource {} not found", resource))?;
     if ingest_state == "in_progress" {
-        return Ok(Partition::Declined(format!(
-            "resource {resource} is mid-ingest (in_progress) — a partition decision over a \
-             still-arriving body would be a guess"
-        )));
+        return Ok(Partition::Declined(ReblockDecline {
+            kind: ReblockDeclineKind::InProgress,
+            detail: format!(
+                "resource {resource} is mid-ingest (in_progress) — a partition decision over a \
+                 still-arriving body would be a guess"
+            ),
+        }));
     }
 
     let live_blocks: Vec<LiveBlock> = read_live_blocks(&mut *conn, resource).await?;
     if live_blocks.is_empty() {
-        return Ok(Partition::Declined(format!(
-            "resource {resource} has no live blocks to partition"
-        )));
+        // No live blocks at all is the same Byteless judgment as a block without stored bytes:
+        // there is nothing stored to compose a body from.
+        return Ok(Partition::Declined(ReblockDecline {
+            kind: ReblockDeclineKind::Byteless,
+            detail: format!("resource {resource} has no live blocks to partition"),
+        }));
     }
     // The design slices STORED block content and never mutates text — a block whose bytes were
     // never stored (a derived charter/scenario shape) would force the body to be re-derived
     // from chunks, fabricating bytes the ledger never carried.
     if let Some(missing) = live_blocks.iter().find(|b| b.bytes.is_none()) {
-        return Ok(Partition::Declined(format!(
-            "block {} (seq {}) of resource {} stores no verbatim bytes (a derived shape) — \
-             re-blocking composes the body from stored bytes only",
-            missing.id, missing.seq, resource
-        )));
+        return Ok(Partition::Declined(ReblockDecline {
+            kind: ReblockDeclineKind::Byteless,
+            detail: format!(
+                "block {} (seq {}) of resource {} stores no verbatim bytes (a derived shape) — \
+                 re-blocking composes the body from stored bytes only",
+                missing.id, missing.seq, resource
+            ),
+        }));
     }
 
     let live_chunks: Vec<LiveChunk> = read_live_chunks(&mut *conn, resource).await?;
@@ -1867,12 +1917,12 @@ async fn reblock_partition_in_tx(
 /// - [`ReblockSurvey::WouldChange`] — the partition would move; the act, run now, would fire
 ///   `resource_reblocked` (the survey fires nothing and so carries no event id).
 /// - [`ReblockSurvey::Declined`] — the same typed precondition failure the act would return,
-///   with the same reason.
+///   the same [`ReblockDecline`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReblockSurvey {
     NoOp,
     WouldChange,
-    Declined { reason: String },
+    Declined { reason: ReblockDecline },
 }
 
 /// Classify a resource's re-block partition WITHOUT writing: the act's machinery, read-only.
@@ -3453,7 +3503,7 @@ mod reblock_tests {
             other => panic!("expected a decline, got {other:?}"),
         };
         assert!(
-            declined.contains("does not match a fresh chunking"),
+            declined.detail.contains("does not match a fresh chunking"),
             "the decline names the refusal: {declined}"
         );
     }

@@ -30,17 +30,32 @@ pub enum AdoptScope {
     All,
 }
 
-/// Why one candidate produced no act.
+/// Why one candidate produced no act. `Denied` is the gate's refusal; the other three are the
+/// op's own, each carrying the human `detail` that names the candidate and its remediation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AdoptDeclined {
     /// The per-resource gate train refused the invoking operator — the grant boundary doing its
-    /// work, visible per row and auditable. The batch never rolls back over it.
+    /// work, visible per row and auditable. The batch never rolls back over it. Deliberately
+    /// carries no detail: the refusal is opaque by design.
     Denied,
-    /// The op's own refusal, rendered verbatim: a still-arriving (`in_progress`) body, a block
-    /// with no stored verbatim bytes (a derived shape), or a stored chunking a fresh chunking
-    /// of the body does not reproduce (chunker drift). Each names its remediation, and none is
-    /// an adoption failure.
-    Op { reason: String },
+    /// The candidate's body is still arriving (`in_progress`): a partition decision over a
+    /// still-arriving body would be a guess. Retry the candidate once its ingest completes.
+    InProgress {
+        /// What happened and what to do about it.
+        detail: String,
+    },
+    /// The candidate has no stored verbatim bytes to compose a body from — no live blocks, or a
+    /// block in a derived shape whose bytes were never stored.
+    Byteless {
+        /// What happened and what to do about it.
+        detail: String,
+    },
+    /// A fresh chunking of the candidate's body does not reproduce its stored chunking, so the
+    /// stored partition cannot serve as the re-block's baseline.
+    Drift {
+        /// What happened and what to do about it.
+        detail: String,
+    },
 }
 
 /// What happened to one candidate. `WouldChange` exists only on the survey arm (`dry_run`); the

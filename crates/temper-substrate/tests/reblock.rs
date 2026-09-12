@@ -18,7 +18,8 @@ use temper_substrate::events::{fire, SeedAction};
 use temper_substrate::ids::{BlockId, EntityId, ProfileId, ResourceId};
 use temper_substrate::payloads::{self, AnchorRef, Incorporation, ProvenanceSource};
 use temper_substrate::writes::{
-    self, AppendParams, CreateMode, CreateParams, FinalizeParams, ReblockOutcome, ReblockParams,
+    self, AppendParams, CreateMode, CreateParams, FinalizeParams, ReblockDeclineKind,
+    ReblockOutcome, ReblockParams,
 };
 use temper_substrate::{replay, scenario::bootseed};
 use uuid::Uuid;
@@ -895,9 +896,13 @@ async fn refusals_decline_without_events(pool: sqlx::PgPool) {
     )
     .await
     .unwrap();
+    let ReblockOutcome::Declined { reason } = declined else {
+        panic!("the derived-shape resource declines, got {declined:?}")
+    };
+    assert_eq!(reason.kind, ReblockDeclineKind::Byteless);
     assert!(
-        matches!(declined, ReblockOutcome::Declined { ref reason } if reason.contains("verbatim bytes")),
-        "the derived-shape decline names its reason: {declined:?}"
+        reason.detail.contains("verbatim bytes"),
+        "the derived-shape decline names its reason: {reason}"
     );
     let _ = cogmap;
 
@@ -935,9 +940,13 @@ async fn refusals_decline_without_events(pool: sqlx::PgPool) {
     )
     .await
     .unwrap();
+    let ReblockOutcome::Declined { reason } = declined else {
+        panic!("the mid-ingest resource declines, got {declined:?}")
+    };
+    assert_eq!(reason.kind, ReblockDeclineKind::InProgress);
     assert!(
-        matches!(declined, ReblockOutcome::Declined { ref reason } if reason.contains("in_progress")),
-        "the mid-ingest decline names its reason: {declined:?}"
+        reason.detail.contains("in_progress"),
+        "the mid-ingest decline names its reason: {reason}"
     );
 
     assert_eq!(

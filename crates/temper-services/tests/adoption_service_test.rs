@@ -25,6 +25,7 @@ use uuid::Uuid;
 
 const SECTION_A: &str = "# Alpha\n\nAlpha body paragraph.\n";
 const BODY_A_B: &str = "# Alpha\n\nAlpha body paragraph.\n## Beta\n\nBeta body paragraph.\n";
+const FOREIGN_BODY: &str = "# Foreign\n\nTotally different prose that chunks elsewhere.\n";
 
 // ── fixtures (duplicated per file, per this suite's convention) ─────────────────────────────
 
@@ -88,10 +89,54 @@ fn incoming_of(text: &str) -> Vec<IncomingChunk> {
         .collect()
 }
 
-/// One block with stored verbatim bytes and real chunk rows, no policy application (the
-/// create-path hook partitions bodies, so this shape is reachable only by direct invocation —
-/// exactly as the adoption tooling faces it). A one-section body is already policy-conformed;
-/// `BODY_A_B` (two sections in one block) would-change.
+/// The shape knobs of a directly-fired block resource (see `fire_shaped_block_resource`) — a
+/// params struct so the helper stays within the argument-count budget.
+struct ShapedBlockResource<'a> {
+    owner: Uuid,
+    emitter: Uuid,
+    context: Uuid,
+    title: &'a str,
+    /// The block's stored verbatim bytes (`None` = a derived shape storing no bytes).
+    raw_text: Option<&'a str>,
+    /// The chunk rows the block carries.
+    chunks: Vec<IncomingChunk>,
+    /// Birth the resource `in_progress` (a segmented begin whose finalize never came).
+    segmented: bool,
+}
+
+/// One block with real chunk rows, fired directly (no policy application — the create-path hook
+/// partitions bodies at create, so these shapes are reachable only by direct invocation, exactly
+/// as the adoption tooling faces them).
+async fn fire_shaped_block_resource(pool: &PgPool, shape: ShapedBlockResource<'_>) -> Uuid {
+    let mut block = prepare_block_from_chunks(0, None, shape.chunks);
+    block.raw_text = shape.raw_text.map(str::to_string);
+    let blocks = [block];
+    let mut conn = pool.acquire().await.unwrap();
+    fire(
+        &mut conn,
+        SeedAction::ResourceCreate {
+            title: shape.title,
+            origin_uri: &format!("temper://adoption/{}", shape.title),
+            resource_id: None,
+            home: AnchorRef::context(temper_substrate::ids::ContextId::from(shape.context)),
+            owner: SubstrateProfileId::from(shape.owner),
+            originator: Some(SubstrateProfileId::from(shape.owner)),
+            blocks: &blocks,
+            doc_type: Some("concept"),
+            emitter: EntityId::from(shape.emitter),
+            segmented: shape.segmented,
+        },
+    )
+    .await
+    .unwrap()
+    .resource()
+    .unwrap()
+    .uuid()
+}
+
+/// One block with stored verbatim bytes and real chunk rows, no policy application. A
+/// one-section body is already policy-conformed; `BODY_A_B` (two sections in one block)
+/// would-change.
 async fn fire_block_resource(
     pool: &PgPool,
     owner: Uuid,
@@ -100,30 +145,19 @@ async fn fire_block_resource(
     title: &str,
     body: &str,
 ) -> Uuid {
-    let mut block = prepare_block_from_chunks(0, None, incoming_of(body));
-    block.raw_text = Some(body.to_string());
-    let blocks = [block];
-    let mut conn = pool.acquire().await.unwrap();
-    fire(
-        &mut conn,
-        SeedAction::ResourceCreate {
+    fire_shaped_block_resource(
+        pool,
+        ShapedBlockResource {
+            owner,
+            emitter,
+            context,
             title,
-            origin_uri: &format!("temper://adoption/{title}"),
-            resource_id: None,
-            home: AnchorRef::context(temper_substrate::ids::ContextId::from(context)),
-            owner: SubstrateProfileId::from(owner),
-            originator: Some(SubstrateProfileId::from(owner)),
-            blocks: &blocks,
-            doc_type: Some("concept"),
-            emitter: EntityId::from(emitter),
+            raw_text: Some(body),
+            chunks: incoming_of(body),
             segmented: false,
         },
     )
     .await
-    .unwrap()
-    .resource()
-    .unwrap()
-    .uuid()
 }
 
 async fn grant_resource(
@@ -470,4 +504,124 @@ async fn the_dry_run_surveys_without_touching(pool: PgPool) {
             );
         }
     }
+}
+
+// ── decline witnesses (per class, receipt grain) ─────────────────────────────────────────────
+
+/// A still-arriving candidate (`in_progress` — a segmented begin whose finalize never came)
+/// declines `InProgress` with its human remediation riding along. The addressed-scope arm has no
+/// ingest-state filter, so the op's own state-column refusal reaches the receipt.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_in_progress_candidate_declines_in_progress(pool: PgPool) {
+    let (owner, context, entity) = seed_profile_with_context(&pool, "owner@example.com").await;
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(owner));
+    let arriving = fire_shaped_block_resource(
+        &pool,
+        ShapedBlockResource {
+            owner,
+            emitter: entity,
+            context,
+            title: "arriving",
+            raw_text: Some(SECTION_A),
+            chunks: incoming_of(SECTION_A),
+            segmented: true,
+        },
+    )
+    .await;
+
+    let receipt = backend
+        .adopt_resources(adopt_cmd(AdoptScope::Resource(arriving), false, 1, None))
+        .await
+        .unwrap()
+        .value;
+
+    assert_eq!(receipt.outcomes.len(), 1, "the candidate produced a row");
+    assert!(
+        matches!(
+            &receipt.outcomes[0].outcome,
+            AdoptOutcome::Declined(AdoptDeclined::InProgress { detail })
+                if detail.contains("mid-ingest")
+        ),
+        "the still-arriving row declines in_progress, got {:?}",
+        receipt.outcomes[0].outcome
+    );
+    assert_eq!(receipt.summary.declined, 1);
+}
+
+/// A derived-shape candidate (chunk rows but no stored verbatim bytes) declines `Byteless` —
+/// there are no stored bytes to compose a body from.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_derived_shape_candidate_declines_byteless(pool: PgPool) {
+    let (owner, context, entity) = seed_profile_with_context(&pool, "owner@example.com").await;
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(owner));
+    let byteless = fire_shaped_block_resource(
+        &pool,
+        ShapedBlockResource {
+            owner,
+            emitter: entity,
+            context,
+            title: "byteless",
+            raw_text: None,
+            chunks: incoming_of(SECTION_A),
+            segmented: false,
+        },
+    )
+    .await;
+
+    let receipt = backend
+        .adopt_resources(adopt_cmd(AdoptScope::Resource(byteless), false, 1, None))
+        .await
+        .unwrap()
+        .value;
+
+    assert_eq!(receipt.outcomes.len(), 1, "the candidate produced a row");
+    assert!(
+        matches!(
+            &receipt.outcomes[0].outcome,
+            AdoptOutcome::Declined(AdoptDeclined::Byteless { detail })
+                if detail.contains("verbatim bytes")
+        ),
+        "the derived-shape row declines byteless, got {:?}",
+        receipt.outcomes[0].outcome
+    );
+    assert_eq!(receipt.summary.declined, 1);
+}
+
+/// A drifted candidate (chunks cut from different text than the stored verbatim bytes) declines
+/// `Drift` — a fresh chunking of the body does not reproduce the stored chunking.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_drifted_candidate_declines_drift(pool: PgPool) {
+    let (owner, context, entity) = seed_profile_with_context(&pool, "owner@example.com").await;
+    let backend = DbBackend::new(pool.clone(), ProfileId::from(owner));
+    let drifted = fire_shaped_block_resource(
+        &pool,
+        ShapedBlockResource {
+            owner,
+            emitter: entity,
+            context,
+            title: "drifted",
+            raw_text: Some(BODY_A_B),
+            chunks: incoming_of(FOREIGN_BODY),
+            segmented: false,
+        },
+    )
+    .await;
+
+    let receipt = backend
+        .adopt_resources(adopt_cmd(AdoptScope::Resource(drifted), false, 1, None))
+        .await
+        .unwrap()
+        .value;
+
+    assert_eq!(receipt.outcomes.len(), 1, "the candidate produced a row");
+    assert!(
+        matches!(
+            &receipt.outcomes[0].outcome,
+            AdoptOutcome::Declined(AdoptDeclined::Drift { detail })
+                if detail.contains("does not reproduce")
+        ),
+        "the drifted row declines drift, got {:?}",
+        receipt.outcomes[0].outcome
+    );
+    assert_eq!(receipt.summary.declined, 1);
 }

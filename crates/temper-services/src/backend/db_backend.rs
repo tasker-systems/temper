@@ -180,6 +180,21 @@ fn map_disposition(
     }
 }
 
+/// temper-substrate's `ReblockDecline` → temper-core's wire `AdoptDeclined` (identical 3-variant
+/// op-refusal taxonomy). Exhaustive match (the `map_disposition` pattern), NOT a stringly
+/// conversion: the class translates one-to-one by construction and the human detail rides along.
+/// `AdoptDeclined::Denied` is never produced here — a gate refusal is authorization failing, not
+/// the op declining.
+fn map_decline(r: writes::ReblockDecline) -> AdoptDeclined {
+    use temper_substrate::writes::ReblockDeclineKind as K;
+    let writes::ReblockDecline { kind, detail } = r;
+    match kind {
+        K::InProgress => AdoptDeclined::InProgress { detail },
+        K::Byteless => AdoptDeclined::Byteless { detail },
+        K::Drift => AdoptDeclined::Drift { detail },
+    }
+}
+
 /// Map a wire [`PackedChunk`](temper_core::types::ingest::PackedChunk) — the client's
 /// extract→chunk→embed output — to the substrate-native `IncomingChunk` the no-embed block constructor
 /// consumes. Field-for-field; the only widening is `u32`/`u8` → `i32`/`i16` (the substrate column types).
@@ -3875,8 +3890,10 @@ impl Backend for DbBackend {
     /// the cursor rides the receipt. `dry_run` routes every candidate to the read-only survey
     /// (the same machinery the act runs, minus the write); the act is `reblock_resource_with`
     /// under the invoking operator's emitter with a batch correlation id in the `EventContext`.
-    /// Per-resource declines are the op's own, rendered verbatim per row; an errored row
-    /// declines-and-continues — a batch never rolls back over one bad row.
+    /// Per-resource declines are typed per class — the gate's refusal is `denied`; the op's own
+    /// refusals arrive as `in_progress`, `byteless`, or `drift`, each with the human remediation
+    /// in the row's detail. An errored row declines-and-continues — a batch never rolls back
+    /// over one bad row.
     async fn adopt_resources(
         &self,
         cmd: AdoptResources,
@@ -3997,7 +4014,7 @@ impl Backend for DbBackend {
                             AdoptOutcome::WouldChange
                         }
                         temper_substrate::writes::ReblockSurvey::Declined { reason } => {
-                            AdoptOutcome::Declined(AdoptDeclined::Op { reason })
+                            AdoptOutcome::Declined(map_decline(reason))
                         }
                     }
                 }
@@ -4020,7 +4037,7 @@ impl Backend for DbBackend {
                         }
                         Ok(writes::ReblockOutcome::NoOp) => AdoptOutcome::NoOp,
                         Ok(writes::ReblockOutcome::Declined { reason }) => {
-                            AdoptOutcome::Declined(AdoptDeclined::Op { reason })
+                            AdoptOutcome::Declined(map_decline(reason))
                         }
                         Err(e) => AdoptOutcome::Error {
                             message: e.to_string(),
