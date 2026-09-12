@@ -14,6 +14,19 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.4.0 — unreleased
 
+- **The element trail carries the act correlation id**
+  Every event on a trail read (`temper trail`, MCP `element_trail`,
+  `GET /api/graph/elements/{kind}/{id}/trail`) now projects `correlation_id` — the
+  batch/act id the event ran under, stored since correlation threading but until now absent
+  from every read surface, which left the reblock playbook's receipt-to-ledger validation
+  step undeliverable. A batch act carries the batch id the receipt echoed; a self-rooted
+  act carries its own event id; rows predating the column carry NULL and the field is
+  absent from those responses. No existing request or response class changes shape.
+pr: self
+classes: additive
+surfaces: http, mcp, cli-stdout, clients
+status: signal-only
+
 - **Corpus adoption's HTTP surface — `POST /api/resources/reblock`**
   One bounded, resumable re-blocking step per call: the body names a scope (one resource by id,
   one context by id, or the explicitly-named deployment-wide `all`), `dry_run`, an optional

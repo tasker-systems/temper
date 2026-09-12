@@ -4384,6 +4384,14 @@ export interface components {
             actor_name: string;
             /** @description ConfidenceBand from event metadata, when present. */
             confidence?: string | null;
+            /**
+             * Format: uuid
+             * @description The batch/act correlation id the event ran under (`kb_events.correlation_id`) — the
+             *     key that pairs a receipt with the trail events it named. A batch act carries the
+             *     batch's id; an act that threaded no correlation self-roots and carries its OWN event
+             *     id. NULL only on rows predating correlation threading.
+             */
+            correlation_id?: string | null;
             /** Format: uuid */
             event_id: string;
             /** @description Canonical event-type name (kb_event_types.name), e.g. "relationship_asserted". */

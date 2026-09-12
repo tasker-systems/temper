@@ -102,7 +102,9 @@ invocation did not consider — the population stays visible instead of being si
   `would_change` count should have dropped by the `reblocked` count, and the remainder tells you
   exactly what is left.
 - **The ledger holds every real act.** All `reblocked` acts in a batch share one correlation id,
-  which pairs the receipt with the ledger's record of the batch. No-ops are deliberately absent
+  which pairs the receipt with the ledger's record of the batch: the act's event on the
+  resource's trail (`temper trail node <resource>`) carries that same `correlation_id`.
+  No-ops are deliberately absent
   from the ledger — the receipt is their only record, and absence of events is never read as
   completion.
 - **The survey is the authority on remaining scope.** Because no-ops leave no ledger trace,
