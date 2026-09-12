@@ -13,10 +13,13 @@
 //!   EVENT's `occurred_at`. Every tick re-derives from the ledger; the seed's
 //!   `(erasure_event_id, pathname)` key makes re-derivation free.
 //! * **Drain** — one tick reaps expired leases, claims due deletes in one bounded batch,
-//!   RE-DERIVES released-ness at drain time (a hash a live row re-holds is NOT deleted — the
-//!   re-commit re-put those bytes; striking them would delete a live row's object), and issues
-//!   ONE idempotent `BlobStore::delete(&[&str])` for everything still released. Failure hands
-//!   the batch back through the 20260828000030 backoff curve; the max-attempts arm goes `dead`.
+//!   then — inside ONE critical section over the hashes' advisory locks — RE-DERIVES
+//!   released-ness at drain time, issues ONE idempotent `BlobStore::delete(&[&str])` for
+//!   everything still released, and records the completions. A hash a live row re-holds is
+//!   NOT deleted: the commit path restores byte presence under the same lock before a row
+//!   can go live (task 01a09360-e00a-7d90-858d-f4998dd70b6c), so the skip records a real
+//!   re-occupation. Failure hands the batch back through the 20260828000030 backoff curve;
+//!   the max-attempts arm goes `dead`.
 //! * **Age alerting** — [`fence_channel_report`] renders the fence's durable state into the
 //!   `internal_call_health_service` vocabulary: the same `ChannelState` enum whose `Sustained`
 //!   is the alertable state an alert rule matches, the same span fields. A pending delete older
@@ -57,7 +60,11 @@ pub const DRAIN_BATCH: i32 = 100;
 /// single provider call; the lease exists for the crash the drain does not return from.
 const LEASE_SECONDS: i32 = 600;
 
-/// The completion resolution for a hash a live row re-holds at drain time.
+/// The completion resolution for a hash a live row re-holds at drain time. Under the
+/// drain's advisory locks the re-derivation is EXACT: a live row's bytes are present —
+/// the commit path restores byte presence under the same lock before the row can go live
+/// (task 01a09360-e00a-7d90-858d-f4998dd70b6c) — so the skip records a real re-occupation,
+/// never a laundered absence.
 const SKIPPED_REOCCUPIED: &str = "skipped-reoccupied";
 
 /// The completion resolution for bytes the provider actually struck.
@@ -246,7 +253,9 @@ pub async fn drain_without_store(pool: &PgPool) -> ApiResult<DrainSummary> {
     })
 }
 
-/// One fence tick: derive → reap → claim → re-derive released-ness → one batched delete.
+/// One fence tick: derive → reap → claim → re-derive released-ness UNDER the hash
+/// advisory locks → one batched delete → completions, all inside that one critical
+/// section.
 pub async fn drain(pool: &PgPool, store: &dyn BlobStore) -> ApiResult<DrainSummary> {
     let scan = seed_from_ledger(pool).await?;
     let mut summary = DrainSummary {
@@ -278,13 +287,28 @@ pub async fn drain(pool: &PgPool, store: &dyn BlobStore) -> ApiResult<DrainSumma
         return Ok(summary);
     }
 
-    // Re-derive released-ness AT DRAIN TIME — the `strike_verdicts` predicate
-    // (erasure_service.rs: NOT EXISTS a live row with the hash, live = `content_type IS NOT
-    // NULL`). The seed-time verdict is stale exactly when the declared-open window healed
-    // itself: a re-commit re-put the bytes and minted a live row. Deleting then would strike a
-    // LIVE row's object, so the honest tick skips — and records the skip, so the ledger's
-    // strike and the fence's refusal to strike it stay reconcilable.
+    // ONE critical section (task 01a09360-e00a-7d90-858d-f4998dd70b6c): the advisory locks
+    // for every claimed hash — acquired in sorted order, the deadlock-free discipline for a
+    // multi-key take — the released-ness re-derivation, the batched provider delete, and
+    // the completions share ONE transaction, so a commit can neither interleave a live row
+    // inside the re-derivation nor restore-and-live behind a delete that targeted it. The
+    // provider call inside a transaction is deliberate and bounded: this transaction
+    // touches only the already-claimed queue rows and the locks — no blob rows, no events
+    // (the reasoning `writes::release_blob_bytes` carries for the door's release). What the
+    // re-derivation sees under the lock is the truth the delete acts on.
     let hashes: Vec<String> = claimed.iter().map(|c| c.content_hash.clone()).collect();
+    let mut locked_hashes = hashes.clone();
+    locked_hashes.sort();
+    locked_hashes.dedup();
+    let mut tx = pool.begin().await?;
+    for hash in &locked_hashes {
+        sqlx::query!(
+            "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+            hash
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
     let occupied: Vec<String> = sqlx::query!(
         r#"
         SELECT DISTINCT content_hash AS "content_hash!"
@@ -293,7 +317,7 @@ pub async fn drain(pool: &PgPool, store: &dyn BlobStore) -> ApiResult<DrainSumma
         "#,
         &hashes,
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?
     .into_iter()
     .map(|r| r.content_hash)
@@ -304,38 +328,56 @@ pub async fn drain(pool: &PgPool, store: &dyn BlobStore) -> ApiResult<DrainSumma
         .partition(|c| occupied.iter().any(|h| h == &c.content_hash));
 
     summary.skipped_reoccupied = skipped.len();
-    if !skipped.is_empty() {
-        let skipped_ids: Vec<Uuid> = skipped.iter().map(|c| c.id).collect();
-        sqlx::query_scalar!(
-            r#"SELECT erasure_delete_complete($1, $2) AS "n!: i32""#,
-            &skipped_ids[..],
-            SKIPPED_REOCCUPIED,
-        )
-        .fetch_one(pool)
-        .await?;
-    }
+    let skipped_ids: Vec<Uuid> = skipped.iter().map(|c| c.id).collect();
+    let pathnames: Vec<&str> = releasable.iter().map(|c| c.pathname.as_str()).collect();
+    let ids: Vec<Uuid> = releasable.iter().map(|c| c.id).collect();
 
     if releasable.is_empty() {
+        // Nothing to strike; record the skips and release the locks.
+        if !skipped.is_empty() {
+            sqlx::query_scalar!(
+                r#"SELECT erasure_delete_complete($1, $2) AS "n!: i32""#,
+                &skipped_ids[..],
+                SKIPPED_REOCCUPIED,
+            )
+            .fetch_one(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
         return Ok(summary);
     }
 
     // ONE batched call for the whole due set — the verb is array-shaped and idempotent (a
     // pathname the provider no longer holds deletes as a no-op), so the at-least-once fence
-    // carries no existence guard.
-    let pathnames: Vec<&str> = releasable.iter().map(|c| c.pathname.as_str()).collect();
-    let ids: Vec<Uuid> = releasable.iter().map(|c| c.id).collect();
+    // carries no existence guard. The locks stay held across it: a commit concurrent with
+    // this delete waits, then finds the bytes absent and restores them under the lock it
+    // finally takes.
     match store.delete(&pathnames).await {
         Ok(()) => {
             summary.deleted = releasable.len();
+            if !skipped.is_empty() {
+                sqlx::query_scalar!(
+                    r#"SELECT erasure_delete_complete($1, $2) AS "n!: i32""#,
+                    &skipped_ids[..],
+                    SKIPPED_REOCCUPIED,
+                )
+                .fetch_one(&mut *tx)
+                .await?;
+            }
             sqlx::query_scalar!(
                 r#"SELECT erasure_delete_complete($1, $2) AS "n!: i32""#,
                 &ids[..],
                 RESOLUTION_DELETED,
             )
-            .fetch_one(pool)
+            .fetch_one(&mut *tx)
             .await?;
+            tx.commit().await?;
         }
         Err(e) => {
+            // The provider said no: nothing reads done. Roll the critical section back and
+            // hand the batch to the retry ladder outside it (attempts were already
+            // incremented at claim; the fail arms the bounded backoff).
+            tx.rollback().await?;
             summary.failed = releasable.len();
             sqlx::query_scalar!(
                 r#"SELECT erasure_delete_fail($1, $2) AS "n!: i32""#,

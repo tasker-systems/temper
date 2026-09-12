@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT can('kb_profiles', $1, 'delete', 'kb_resources', $2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "can",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "68f67f8097e0c8f9959191d555266fe4e61e5c81f7b02eb51925361303bdf1ff"
+}

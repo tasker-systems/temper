@@ -10,6 +10,7 @@
 //! entry — the macro cache is reserved for the substrate read/mutation queries.
 
 use anyhow::{Context, Result};
+use bytes::Bytes;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -3130,37 +3131,55 @@ pub struct CommitBlobParams<'a> {
     pub emitter: EntityId,
 }
 
-/// [`commit_blob_with`] under the default (un-attributed) context. The store is `&dyn` —
-/// the surfaces hold an `Arc<dyn BlobStore>` (AppState), and the `&impl` spelling refused
-/// that coercion, so the fire path takes the trait object its only surface caller has.
+/// [`commit_blob_with`] under the default (un-attributed) context and the D4 refusal arm —
+/// no bytes to restore with. The store is `&dyn` — the surfaces hold an `Arc<dyn
+/// BlobStore>` (AppState), and the `&impl` spelling refused that coercion, so the fire path
+/// takes the trait object its only surface caller has.
 pub async fn commit_blob(
     pool: &PgPool,
     store: &dyn crate::blob_store::BlobStore,
     p: CommitBlobParams<'_>,
 ) -> Result<BlobId> {
-    commit_blob_with(pool, store, p, EventContext::default()).await
+    commit_blob_with(pool, store, p, EventContext::default(), None).await
 }
 
-/// Commit one blob under an explicit [`EventContext`]. Verifies the provider object exists at
-/// the content-addressed pathname FIRST (D4's gate — a commit whose bytes are absent from the
-/// provider is refused before the ledger sees it), then opens one transaction, fires the
-/// `BlobCommit` seed action (which derives the pathname, calls `blob_commit()` SQL, and returns
-/// the row id — the EXISTING id on a dedup hit within the commit's own home, D2 as amended),
-/// and commits.
+/// Commit one blob under an explicit [`EventContext`]. The transaction takes the hash
+/// advisory lock FIRST (the same key the strike wrapper and the commit projector take —
+/// re-entrant here), and byte presence is decided UNDER it: with `bytes` supplied, a
+/// missing object is RESTORED before the row can go live (a concurrent strike may have
+/// released the bytes between the caller's pre-check and this transaction — the caller
+/// still holds the bytes it meant to commit); with `None`, the D4 gate refuses. The lock
+/// comes before the verdict, so nothing can release the object between it and the row's
+/// commit (task `01a09360-e00a-7d90-858d-f4998dd70b6c`).
 pub async fn commit_blob_with(
     pool: &PgPool,
     store: &dyn crate::blob_store::BlobStore,
     p: CommitBlobParams<'_>,
     ctx: EventContext,
+    bytes: Option<&Bytes>,
 ) -> Result<BlobId> {
     let pathname = crate::blob_store::blob_pathname(&p.content_hash);
-    anyhow::ensure!(
-        store.exists(&pathname).await?,
-        "blob_commit: the provider holds no object at {pathname} — upload the bytes before \
-         committing the event; the ledger verifies presence, it does not take it on faith"
-    );
-
     let mut tx = begin_scoped(pool).await?;
+    take_hash_lock(&mut tx, &p.content_hash).await?;
+    match bytes {
+        Some(bytes) => {
+            if !store.exists(&pathname).await? {
+                store
+                    .put(
+                        &pathname,
+                        &p.content_type,
+                        bytes.clone(),
+                        crate::blob_store::IMMUTABLE_CACHE_MAX_AGE,
+                    )
+                    .await?;
+            }
+        }
+        None => anyhow::ensure!(
+            store.exists(&pathname).await?,
+            "blob_commit: the provider holds no object at {pathname} — upload the bytes before \
+             committing the event; the ledger verifies presence, it does not take it on faith"
+        ),
+    }
     let id = fire_with(
         &mut tx,
         SeedAction::BlobCommit {
@@ -3183,25 +3202,81 @@ pub async fn commit_blob_with(
     Ok(id)
 }
 
+/// Take the hash-keyed advisory lock the strike wrapper and the commit projector take in
+/// SQL (`hashtextextended(hash, 0)`, 20260906000010) — Rust-side, inside the caller's
+/// transaction, so byte-presence decisions (a commit's restore, a release's re-derivation)
+/// serialize against strikes and sibling commits exactly as row state does. Re-entrant
+/// with the in-SQL take within one transaction.
+async fn take_hash_lock(conn: &mut sqlx::PgConnection, content_hash: &str) -> Result<()> {
+    sqlx::query!(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+        content_hash
+    )
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
+/// Release a struck row's provider bytes under the hash advisory lock — the post-commit
+/// window's delete-side half (task `01a09360-e00a-7d90-858d-f4998dd70b6c`). One short
+/// transaction that holds ONLY the advisory lock: released-ness is re-derived AT RELEASE
+/// time (a commit may have minted a new live row for the hash after the strike's
+/// same-transaction refcount — its bytes are not this release's to take), and the lock is
+/// held ACROSS the provider delete, so no commit can restore-and-live behind it. The
+/// provider call inside a transaction is deliberate and bounded: this transaction touches
+/// no rows and appends no events — the constraint "a provider call cannot join the
+/// transaction" (20260906000010) refuses it in the STRIKE's own transaction, which empties
+/// rows and appends events. Crash-safety rides the fence: the strike's queue row retries,
+/// and the re-derivation is exact under the lock. Returns whether the bytes were this
+/// release's to take — `false` means a live row re-holds the hash, and the fence resolves
+/// its seeded row `skipped-reoccupied`.
+pub async fn release_blob_bytes(
+    pool: &PgPool,
+    content_hash: &str,
+    pathname: &str,
+    store: &dyn crate::blob_store::BlobStore,
+) -> Result<bool> {
+    let mut tx = begin_scoped(pool).await?;
+    take_hash_lock(&mut tx, content_hash).await?;
+    let live = sqlx::query_scalar!(
+        r#"SELECT count(*) AS "n!: i64" FROM kb_blobs
+           WHERE content_hash = $1 AND content_type IS NOT NULL"#,
+        content_hash
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if live > 0 {
+        // A live row re-holds the hash — the bytes belong to it now. Nothing is deleted,
+        // and the caller (or the fence, on its own re-derivation) records the skip.
+        tx.commit().await?;
+        return Ok(false);
+    }
+    store.delete(&[pathname]).await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
 /// What a [`delete_blob_with`] strike did: the struck row, whether the provider bytes at
-/// the pathname are releasable, and the pathname to delete them at when they are.
+/// the pathname are releasable, and the pathname to release them at when they are.
 #[derive(Debug)]
 pub struct StruckBlob {
     pub blob: BlobId,
     /// The same-transaction live-row refcount's verdict: `true` when the struck row was the
-    /// LAST live row carrying its content hash — delete the provider bytes after the commit.
-    /// `false` means another live home still references them; the row empties, the bytes stay.
+    /// LAST live row carrying its content hash — the provider bytes at `pathname` are this
+    /// act's to release, and the CALLER releases them post-commit through
+    /// [`release_blob_bytes`]. `false` means another live home still references them; the
+    /// row empties, the bytes stay.
     ///
-    /// **The concurrency contract, stated honestly.** Strikes and commits on one hash
-    /// serialize on a hash-keyed transaction advisory lock, so the refcount's snapshot is
-    /// never stale against a concurrent strike or a concurrent commit's get-or-create —
-    /// `released` is exact as of the strike's commit. What NO transaction can close is the
-    /// window AFTER that commit: the caller's provider delete lands when it lands, and a
-    /// commit whose own presence check ran earlier can insert a live row in between. That
-    /// window is the register's declared-open rate axis, and it heals on re-upload (the
-    /// re-commit re-puts the bytes at the same content-addressed pathname); the erasure
-    /// build's queue fence (retry + age alerting) is what watches the residue. A build that
-    /// deletes bytes MUST run that fence or its equivalent.
+    /// **The concurrency contract.** Strikes and commits on one hash serialize on the
+    /// hash-keyed advisory lock, so `released` is exact as of the strike's commit — and the
+    /// window AFTER that commit is closed on both sides: the release re-derives
+    /// released-ness under the lock and holds it across the provider delete (a commit that
+    /// minted a live row after the refcount keeps its bytes), and a commit re-derives — and
+    /// RESTORES — byte presence under the same lock (a strike that released before the
+    /// commit's transaction cannot leave the new row over absent bytes; the caller's own
+    /// bytes top the provider back up). A live row over absent provider bytes is
+    /// unconstructible. The fence remains the retry-plus-age-alerting backstop for provider
+    /// failures, per the substrate contract (task `01a09360-e00a-7d90-858d-f4998dd70b6c`).
     pub released: bool,
     /// The content-addressed pathname the bytes live at — always present: an already-struck
     /// row is refused by the wrapper, never returned as a no-op.
