@@ -90,3 +90,9 @@ CREATE OR REPLACE FUNCTION element_trail_edge(
       AND endpoint_readable_by_profile(p_profile, edg.target_table, edg.target_id)
     ORDER BY ev.id;
 $$;
+
+SELECT declare_migration(
+    20260912000020,
+    'additive',
+    'Both element-trail readers gain the act correlation id column (kb_events.correlation_id), stored since correlation threading but projected by no read surface — leaving the reblock playbook receipt-to-ledger validation undeliverable. The return type changes, so the readers are dropped and recreated inside this one migration transaction; they are read-only SQL functions serving no write path, so the window carries no write traffic. Nullable on rows predating threading; no table shape changes.'
+);
