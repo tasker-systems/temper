@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT _event_append('property_retracted', $1, $2, $3, $4, p_metadata => $5, p_invocation => $6, p_correlation => $7)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "_event_append",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Jsonb",
+        "Jsonb",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "3db7e13bd8820253f00b08aa4d78bebab09c290f9f5a6d23318f49ad7696e296"
+}

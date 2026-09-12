@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_blob_upload_segments (upload_id, seq, bytes, segment_hash)\n           VALUES ($1, $2, $3, $4)\n           ON CONFLICT (upload_id, seq) DO NOTHING\n           RETURNING seq",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "seq",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4",
+        "Bytea",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "7f8a4f7568e84ff6e90bb8c561c82b87059ede12e76e9634b748d527f4de24e5"
+}

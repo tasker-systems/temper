@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT kind_owner_table   AS \"kind_owner_table!\",\n                  kind_owner_id      AS \"kind_owner_id!\",\n                  artifact_kind      AS \"artifact_kind!\",\n                  count              AS \"count!\",\n                  total_bytes        AS \"total_bytes!\"\n             FROM artifact_counts_for_resource($1, $2, $3)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "kind_owner_table!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "kind_owner_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "artifact_kind!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "count!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "total_bytes!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "ef7390bc1f2b9e635da8081c4df44e3f3c7e3192eed1c27951e07cc079766046"
+}

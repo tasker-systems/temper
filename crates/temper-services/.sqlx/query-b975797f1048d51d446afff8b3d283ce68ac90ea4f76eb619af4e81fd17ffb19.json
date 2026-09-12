@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT relationship_reweight($1,$2,$3,$4,$5)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "relationship_reweight",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Jsonb",
+        "Uuid",
+        "Jsonb",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "b975797f1048d51d446afff8b3d283ce68ac90ea4f76eb619af4e81fd17ffb19"
+}

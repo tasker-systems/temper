@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kb_blob_uploads SET updated = now() WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "73e2f103a2bde588cb24c64780a0e41f51737b60e68e2d0ddce7943b446cab85"
+}

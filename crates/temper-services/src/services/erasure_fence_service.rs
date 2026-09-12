@@ -683,6 +683,7 @@ mod tests {
     use temper_substrate::ids::{BlobId, ContextId, EntityId, ProfileId};
     use temper_substrate::payloads::AnchorRef;
     use temper_substrate::writes::{self, CommitBlobParams};
+    use temper_workflow::operations::Surface;
     use uuid::Uuid;
 
     use super::*;
@@ -776,6 +777,7 @@ mod tests {
             ProfileId::from(operator),
             ProfileId::from(subject),
             Uuid::now_v7(),
+            Surface::ApiHttp,
         )
         .await
         .expect("the act completes");

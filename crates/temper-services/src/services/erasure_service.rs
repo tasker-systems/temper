@@ -23,6 +23,7 @@ use uuid::Uuid;
 use temper_core::types::ids::ProfileId;
 use temper_substrate::payloads::{ErasureRefusalReason, ErasureTargetOutcome};
 use temper_substrate::writes::resolve_emitter;
+use temper_workflow::operations::Surface;
 
 use crate::error::{ApiError, ApiResult};
 use crate::services::access_service;
@@ -93,13 +94,16 @@ pub async fn execute_erasure(
     caller: ProfileId,
     subject: ProfileId,
     request_reference: Uuid,
+    surface: Surface,
 ) -> ApiResult<ErasureOutcome> {
     // The emitter resolves on the pool, before the transaction opens (a read, not part of the
     // mutation) — and it is the CALLER's entity on both arms: an authorized act attributes to
     // the operator, a refused attempt attributes to whoever attempted it. Hard precondition,
     // the `slack_disconnect_service` shape: an unattributable authority act is worse than a
-    // failed one.
-    let emitter = resolve_emitter(pool, caller, "web")
+    // failed one. The surface rides from the door (`Surface::ApiHttp` from the HTTP door, the
+    // one that exists today) so the ledger says where the act came from, never a hard-wired
+    // guess that outlives its accuracy — the blob commit's S5 correction.
+    let emitter = resolve_emitter(pool, caller, surface.marker())
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
@@ -113,6 +117,7 @@ pub async fn execute_erasure(
             request_reference,
             ErasureRefusalReason::Unauthorized,
             None,
+            surface,
         )
         .await?;
         return Ok(ErasureOutcome::Refused(refusal));
@@ -212,7 +217,9 @@ async fn strike_verdicts(
 /// recorded refusal, not a separate check. `pub(crate)` until a second door exists to call it;
 /// widening it before then would invite a refusal path that bypasses the gate. `detail` carries
 /// the reason's evidence — the named unhonourable part, or the obligation held — and must
-/// never name a person (D6: the record never re-identifies).
+/// never name a person (D6: the record never re-identifies). The refusal is attributed through
+/// the caller's `surface`, the same provenance the execute arm rides — a refusal is an event
+/// on the ledger too, and it names where the attempt came from.
 pub(crate) async fn refuse_erasure(
     pool: &PgPool,
     subject: ProfileId,
@@ -220,8 +227,9 @@ pub(crate) async fn refuse_erasure(
     request_reference: Uuid,
     reason: ErasureRefusalReason,
     detail: Option<String>,
+    surface: Surface,
 ) -> ApiResult<ErasureRefusal> {
-    let emitter = resolve_emitter(pool, attempted_by, "web")
+    let emitter = resolve_emitter(pool, attempted_by, surface.marker())
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
@@ -575,6 +583,7 @@ mod tests {
             ProfileId::from(caller),
             ProfileId::from(subject),
             request,
+            Surface::ApiHttp,
         )
         .await
         .expect("the door answers");
@@ -657,6 +666,106 @@ mod tests {
         let _ = (world, blob);
     }
 
+    /// ── WITNESS: the surface flows ──────────────────────────────────────────────────────
+    /// FAILS WHILE the door hard-wires the `web` emitter: an authorized act executed
+    /// through a named surface must be attributed to THAT surface's emitter entity —
+    /// `execute_erasure` rides the door's `Surface`, and a parameter that cannot vary
+    /// cannot be said to flow (the blob S5 rule). `Surface::CliCloud` is ridden because
+    /// the HTTP door answers as `web` today; the second value is the proof the parameter
+    /// moves.
+    #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+    async fn an_authorized_act_is_attributed_to_the_surface_it_ran_on(pool: sqlx::PgPool) {
+        let (subject, _) = insert_profile(&pool).await;
+        let (operator, handle) = insert_profile(&pool).await;
+        // The `@cli` emitter the call names — `resolve_emitter` resolves against the
+        // profile's `<handle>@<marker>` entity, which the fixture does not mint.
+        sqlx::query("INSERT INTO kb_entities (profile_id, name) VALUES ($1, $2)")
+            .bind(operator)
+            .bind(format!("{handle}@cli"))
+            .execute(&pool)
+            .await
+            .expect("seed cli emitter entity");
+        test_support::grant_governance(&pool, operator).await;
+        let world = seed_content(&pool, subject).await;
+
+        let outcome = execute_erasure(
+            &pool,
+            ProfileId::from(operator),
+            ProfileId::from(subject),
+            Uuid::now_v7(),
+            Surface::CliCloud,
+        )
+        .await
+        .expect("the operator's act completes");
+        let ErasureOutcome::Completed(_) = outcome else {
+            panic!("an operator's act must complete, got {outcome:?}");
+        };
+
+        let emitter: String = sqlx::query_scalar(
+            "SELECT ent.name \
+               FROM kb_events e \
+               JOIN kb_event_types t ON t.id = e.event_type_id \
+               JOIN kb_entities ent ON ent.id = e.emitter_entity_id \
+              WHERE t.name = 'principal_erased'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("the completion event with its emitter");
+        assert_eq!(
+            emitter,
+            format!("{handle}@cli"),
+            "the act is attributed to the surface it ran on, not a hard-wired web"
+        );
+        let _ = world;
+    }
+
+    /// ── WITNESS: the refusal arm rides the surface too ──────────────────────────────────
+    /// FAILS WHILE the refusal emitter is hard-wired: a refused attempt is a RECORDED
+    /// event (D6), and its emitter names where the attempt came from. A non-operator
+    /// arriving over MCP gets the refusal attributed to `<handle>@mcp`, not to the web
+    /// entity that used to take every erasure event.
+    #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+    async fn a_refused_attempt_is_attributed_to_the_surface_it_came_from(pool: sqlx::PgPool) {
+        let (subject, _) = insert_profile(&pool).await;
+        let (attempter, handle) = insert_profile(&pool).await;
+        sqlx::query("INSERT INTO kb_entities (profile_id, name) VALUES ($1, $2)")
+            .bind(attempter)
+            .bind(format!("{handle}@mcp"))
+            .execute(&pool)
+            .await
+            .expect("seed mcp emitter entity");
+
+        let outcome = execute_erasure(
+            &pool,
+            ProfileId::from(attempter),
+            ProfileId::from(subject),
+            Uuid::now_v7(),
+            Surface::Mcp,
+        )
+        .await
+        .expect("the door answers");
+        let ErasureOutcome::Refused(r) = outcome else {
+            panic!("a non-operator attempt must be refused, got {outcome:?}");
+        };
+        assert_eq!(r.reason, ErasureRefusalReason::Unauthorized);
+
+        let emitter: String = sqlx::query_scalar(
+            "SELECT ent.name \
+               FROM kb_events e \
+               JOIN kb_event_types t ON t.id = e.event_type_id \
+               JOIN kb_entities ent ON ent.id = e.emitter_entity_id \
+              WHERE t.name = 'principal_erasure_refused'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("the refusal event with its emitter");
+        assert_eq!(
+            emitter,
+            format!("{handle}@mcp"),
+            "the recorded refusal names the surface the attempt came from"
+        );
+    }
+
     /// ── WITNESS: the personal-homed blob strike ─────────────────────────────────────────
     /// FAILS IF the strike does not go through the wrapper as a per-row `blob_erased` event:
     /// the row lands in the D5.2 shape, the verdict rides the payload's per-target outcomes,
@@ -675,6 +784,7 @@ mod tests {
             ProfileId::from(operator),
             ProfileId::from(subject),
             Uuid::now_v7(),
+            Surface::ApiHttp,
         )
         .await
         .expect("the operator's act completes");
@@ -762,6 +872,7 @@ mod tests {
             ProfileId::from(operator),
             ProfileId::from(subject),
             Uuid::now_v7(),
+            Surface::ApiHttp,
         )
         .await
         .expect("completes");
@@ -940,6 +1051,7 @@ mod tests {
             ProfileId::from(operator),
             ProfileId::from(subject),
             Uuid::now_v7(),
+            Surface::ApiHttp,
         )
         .await
         .expect("completes");
@@ -1061,6 +1173,7 @@ mod tests {
             ProfileId::from(operator),
             ProfileId::from(subject),
             Uuid::now_v7(),
+            Surface::ApiHttp,
         )
         .await
         .expect("completes");
@@ -1211,6 +1324,7 @@ mod tests {
             ProfileId::from(operator),
             ProfileId::from(subject),
             Uuid::now_v7(),
+            Surface::ApiHttp,
         )
         .await
         .expect("completes");
@@ -1264,6 +1378,7 @@ mod tests {
             ProfileId::from(operator),
             ProfileId::from(subject),
             Uuid::now_v7(),
+            Surface::ApiHttp,
         )
         .await
         .expect("completes");
@@ -1368,6 +1483,7 @@ mod tests {
             ProfileId::from(operator),
             ProfileId::from(subject),
             Uuid::now_v7(),
+            Surface::ApiHttp,
         )
         .await
         .expect("first act completes");
@@ -1380,6 +1496,7 @@ mod tests {
             ProfileId::from(operator),
             ProfileId::from(subject),
             Uuid::now_v7(),
+            Surface::ApiHttp,
         )
         .await
         .expect("re-erase completes");
@@ -1458,6 +1575,7 @@ mod tests {
                 Uuid::now_v7(),
                 reason,
                 detail.clone(),
+                Surface::ApiHttp,
             )
             .await
             .expect("the refusal records");
@@ -1530,6 +1648,7 @@ mod tests {
             ProfileId::from(operator),
             ProfileId::from(subject),
             Uuid::now_v7(),
+            Surface::ApiHttp,
         )
         .await
         .expect("completes");
