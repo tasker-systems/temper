@@ -25,6 +25,9 @@ module Temper::Generated
     # ConfidenceBand from event metadata, when present.
     attr_accessor :confidence
 
+    # The batch/act correlation id the event ran under (`kb_events.correlation_id`) — the key that pairs a receipt with the trail events it named. A batch act carries the batch's id; an act that threaded no correlation self-roots and carries its OWN event id. NULL only on rows predating correlation threading.
+    attr_accessor :correlation_id
+
     attr_accessor :event_id
 
     # Canonical event-type name (kb_event_types.name), e.g. \"relationship_asserted\".
@@ -41,6 +44,7 @@ module Temper::Generated
         :'actor_entity_id' => :'actor_entity_id',
         :'actor_name' => :'actor_name',
         :'confidence' => :'confidence',
+        :'correlation_id' => :'correlation_id',
         :'event_id' => :'event_id',
         :'kind' => :'kind',
         :'occurred_at' => :'occurred_at',
@@ -64,6 +68,7 @@ module Temper::Generated
         :'actor_entity_id' => :'String',
         :'actor_name' => :'String',
         :'confidence' => :'String',
+        :'correlation_id' => :'String',
         :'event_id' => :'String',
         :'kind' => :'String',
         :'occurred_at' => :'String',
@@ -75,6 +80,7 @@ module Temper::Generated
     def self.openapi_nullable
       Set.new([
         :'confidence',
+        :'correlation_id',
         :'payload'
       ])
     end
@@ -109,6 +115,10 @@ module Temper::Generated
 
       if attributes.key?(:'confidence')
         self.confidence = attributes[:'confidence']
+      end
+
+      if attributes.key?(:'correlation_id')
+        self.correlation_id = attributes[:'correlation_id']
       end
 
       if attributes.key?(:'event_id')
@@ -234,6 +244,7 @@ module Temper::Generated
           actor_entity_id == o.actor_entity_id &&
           actor_name == o.actor_name &&
           confidence == o.confidence &&
+          correlation_id == o.correlation_id &&
           event_id == o.event_id &&
           kind == o.kind &&
           occurred_at == o.occurred_at &&
@@ -249,7 +260,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [actor_entity_id, actor_name, confidence, event_id, kind, occurred_at, payload].hash
+      [actor_entity_id, actor_name, confidence, correlation_id, event_id, kind, occurred_at, payload].hash
     end
 
     # Builds the object from hash

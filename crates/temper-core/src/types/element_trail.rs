@@ -38,6 +38,12 @@ pub struct ElementEvent {
     /// ConfidenceBand from event metadata, when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confidence: Option<String>,
+    /// The batch/act correlation id the event ran under (`kb_events.correlation_id`) — the
+    /// key that pairs a receipt with the trail events it named. A batch act carries the
+    /// batch's id; an act that threaded no correlation self-roots and carries its OWN event
+    /// id. NULL only on rows predating correlation threading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlation_id: Option<Uuid>,
     /// The event's replay-sufficient payload (kb_events.payload). Schemaless per
     /// event-type; the UI renders it as an expandable key/value block. `resource_created`
     /// has its heavy inline `blocks` array stripped server-side.

@@ -58,6 +58,7 @@ const event = (n: number): ElementEvent => ({
 	actor_name: 'Pete',
 	occurred_at: '2026-08-20T10:00:00Z',
 	confidence: null,
+	correlation_id: null,
 	payload: {},
 });
 

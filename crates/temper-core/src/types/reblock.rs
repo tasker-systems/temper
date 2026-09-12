@@ -16,11 +16,13 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// The candidate-window bound applied when an invocation omits one. Conservative on purpose —
-/// it is a convenience, never a correctness bound: the receipt's continuation cursor, not the
-/// number, is what keeps a walk resumable and complete. A later measurement of the
-/// public-function envelope may redeclare it.
-pub const DEFAULT_REBLOCK_LIMIT: i64 = 100;
+/// The candidate-window bound applied when an invocation omits one. Measured, not guessed: a
+/// 2026-09 corpus pass timed the survey arm at ~14 ms per candidate and the act arm at ~2.5×
+/// that over a worst-case all-changing window, so 500 keeps one invocation near 20s —
+/// comfortably inside the public function envelope. Still a convenience, never a correctness
+/// bound: the receipt's continuation cursor, not the number, is what keeps a walk resumable
+/// and complete.
+pub const DEFAULT_REBLOCK_LIMIT: i64 = 500;
 
 /// What one invocation covers. On the wire the one-target arms are single-key objects and the
 /// deployment-wide arm is the bare string, so exactly one target is structural — there is no

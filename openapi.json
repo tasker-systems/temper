@@ -12893,6 +12893,14 @@
             ],
             "description": "ConfidenceBand from event metadata, when present."
           },
+          "correlation_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The batch/act correlation id the event ran under (`kb_events.correlation_id`) — the\nkey that pairs a receipt with the trail events it named. A batch act carries the\nbatch's id; an act that threaded no correlation self-roots and carries its OWN event\nid. NULL only on rows predating correlation threading."
+          },
           "event_id": {
             "type": "string",
             "format": "uuid"

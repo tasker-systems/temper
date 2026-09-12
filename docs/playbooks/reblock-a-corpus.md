@@ -67,8 +67,9 @@ temper admin reblock --all --dry-run
 ```
 
 Start small: one resource, then a low-stakes context, `all` last. Omitting `--limit` applies a
-conservative default; the `after_id` cursor resumes exactly where the previous receipt stopped,
-and re-running from the top is always safe — every already-conformed resource classifies as a
+default of 500 — sized so a window of changing resources completes comfortably in one
+invocation; the `after_id` cursor resumes exactly where the previous receipt stopped, and
+re-running from the top is always safe — every already-conformed resource classifies as a
 no-op and is left untouched.
 
 The same operation is reachable as the MCP tool `resource_reblock` (scope `resource`, `context`,
@@ -101,7 +102,9 @@ invocation did not consider — the population stays visible instead of being si
   `would_change` count should have dropped by the `reblocked` count, and the remainder tells you
   exactly what is left.
 - **The ledger holds every real act.** All `reblocked` acts in a batch share one correlation id,
-  which pairs the receipt with the ledger's record of the batch. No-ops are deliberately absent
+  which pairs the receipt with the ledger's record of the batch: the act's event on the
+  resource's trail (`temper trail node <resource>`) carries that same `correlation_id`.
+  No-ops are deliberately absent
   from the ledger — the receipt is their only record, and absence of events is never read as
   completion.
 - **The survey is the authority on remaining scope.** Because no-ops leave no ledger trace,

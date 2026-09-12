@@ -46,6 +46,7 @@ struct ElementEventRow {
     occurred_at: chrono::DateTime<chrono::Utc>,
     metadata: serde_json::Value,
     payload: serde_json::Value,
+    correlation_id: Option<Uuid>,
 }
 
 /// Strip heavy inline fields from a payload before it rides in the trail response.
@@ -83,7 +84,7 @@ pub async fn element_trail(
                 r#"SELECT event_id AS "event_id!", kind AS "kind!",
                           actor_entity_id AS "actor_entity_id!", actor_name AS "actor_name!",
                           occurred_at AS "occurred_at!", metadata AS "metadata!",
-                          payload AS "payload!"
+                          payload AS "payload!", correlation_id
                      FROM element_trail_edge($1, $2)"#,
                 *profile_id,
                 element_id,
@@ -97,7 +98,7 @@ pub async fn element_trail(
                 r#"SELECT event_id AS "event_id!", kind AS "kind!",
                           actor_entity_id AS "actor_entity_id!", actor_name AS "actor_name!",
                           occurred_at AS "occurred_at!", metadata AS "metadata!",
-                          payload AS "payload!"
+                          payload AS "payload!", correlation_id
                      FROM element_trail_node($1, $2)"#,
                 *profile_id,
                 element_id,
@@ -123,6 +124,7 @@ pub async fn element_trail(
                 actor_name: row.actor_name,
                 occurred_at: row.occurred_at.to_rfc3339(),
                 confidence,
+                correlation_id: row.correlation_id,
                 payload: trim_payload(&row.kind, row.payload),
                 kind: row.kind,
             }
