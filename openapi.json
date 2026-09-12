@@ -6367,6 +6367,98 @@
         "x-apidog-folder": "Reference/API Reference/Resources"
       }
     },
+    "/api/resources/adopt": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Adoption"
+        ],
+        "summary": "Run one corpus-adoption step",
+        "operationId": "adopt_resources",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdoptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The receipt for this step: one outcome row per candidate, per-class counts, the batch correlation id, and the continuation cursor to resume with",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdoptReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request violates the bounded-invocation contract (e.g. a non-positive limit)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The deployment-wide `all` scope was requested by a caller who is not a system administrator (the resource and context scopes ride ordinary visibility instead and never refuse on reach alone)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The addressed resource or context does not exist or is not visible to the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Adoption"
+      }
+    },
     "/api/resources/{id}": {
       "parameters": [
         {
@@ -9951,6 +10043,328 @@
           },
           "role": {
             "$ref": "#/components/schemas/TeamRole"
+          }
+        }
+      },
+      "AdoptDeclined": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "The per-resource gate train refused the invoking operator — the grant boundary doing its\nwork, visible per row and auditable. The batch never rolls back over it. Deliberately\ncarries no detail: the refusal is opaque by design.",
+            "enum": [
+              "Denied"
+            ]
+          },
+          {
+            "type": "object",
+            "description": "The candidate's body is still arriving (`in_progress`): a partition decision over a\nstill-arriving body would be a guess. Retry the candidate once its ingest completes.",
+            "required": [
+              "InProgress"
+            ],
+            "properties": {
+              "InProgress": {
+                "type": "object",
+                "description": "The candidate's body is still arriving (`in_progress`): a partition decision over a\nstill-arriving body would be a guess. Retry the candidate once its ingest completes.",
+                "required": [
+                  "detail"
+                ],
+                "properties": {
+                  "detail": {
+                    "type": "string",
+                    "description": "What happened and what to do about it."
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The candidate has no stored verbatim bytes to compose a body from — no live blocks, or a\nblock in a derived shape whose bytes were never stored.",
+            "required": [
+              "Byteless"
+            ],
+            "properties": {
+              "Byteless": {
+                "type": "object",
+                "description": "The candidate has no stored verbatim bytes to compose a body from — no live blocks, or a\nblock in a derived shape whose bytes were never stored.",
+                "required": [
+                  "detail"
+                ],
+                "properties": {
+                  "detail": {
+                    "type": "string",
+                    "description": "What happened and what to do about it."
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A fresh chunking of the candidate's body does not reproduce its stored chunking, so the\nstored partition cannot serve as the re-block's baseline.",
+            "required": [
+              "Drift"
+            ],
+            "properties": {
+              "Drift": {
+                "type": "object",
+                "description": "A fresh chunking of the candidate's body does not reproduce its stored chunking, so the\nstored partition cannot serve as the re-block's baseline.",
+                "required": [
+                  "detail"
+                ],
+                "properties": {
+                  "detail": {
+                    "type": "string",
+                    "description": "What happened and what to do about it."
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "description": "Why one candidate produced no act. `Denied` is the gate's refusal; the other three are the\nop's own, each carrying the human `detail` that names the candidate and its remediation."
+      },
+      "AdoptOutcome": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "The act fired `resource_reblocked` — the ledger carries the act under the batch\ncorrelation id.",
+            "required": [
+              "Reblocked"
+            ],
+            "properties": {
+              "Reblocked": {
+                "type": "object",
+                "description": "The act fired `resource_reblocked` — the ledger carries the act under the batch\ncorrelation id.",
+                "required": [
+                  "event"
+                ],
+                "properties": {
+                  "event": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "string",
+            "description": "The partition already matched; the act fired nothing (the ledger is indistinguishable\nfrom never having run — a receipt fact, not a ledger one).",
+            "enum": [
+              "NoOp"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "Survey only: the partition would move — the act, run now, would re-block.",
+            "enum": [
+              "WouldChange"
+            ]
+          },
+          {
+            "type": "object",
+            "description": "No act, for a typed reason.",
+            "required": [
+              "Declined"
+            ],
+            "properties": {
+              "Declined": {
+                "$ref": "#/components/schemas/AdoptDeclined",
+                "description": "No act, for a typed reason."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The act errored; the batch declined-and-continued. The row names what happened so the\noperator can retry it alone.",
+            "required": [
+              "Error"
+            ],
+            "properties": {
+              "Error": {
+                "type": "object",
+                "description": "The act errored; the batch declined-and-continued. The row names what happened so the\noperator can retry it alone.",
+                "required": [
+                  "message"
+                ],
+                "properties": {
+                  "message": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "description": "What happened to one candidate. `WouldChange` exists only on the survey arm (`dry_run`); the\nact's counterpart is `Reblocked`."
+      },
+      "AdoptReceipt": {
+        "type": "object",
+        "description": "The invocation response — the receipt. No durable receipt table exists: the ledger holds\nevery real act, this holds the batch's truth, and the batch correlation id pairs them.",
+        "required": [
+          "dry_run",
+          "correlation_id",
+          "outcomes",
+          "summary"
+        ],
+        "properties": {
+          "after_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The last candidate id considered — pass it back as the next invocation's `after_id` to\nresume. `None` when nothing was considered. Stateless: it rides the receipt, and a\nre-run from the top is always safe anyway."
+          },
+          "correlation_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The batch correlation id stamped on every ledger act this invocation fired. A grouping\nkey, never a capability."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "Whether this receipt came from the survey arm (`dry_run`) — outcomes classify without\ntouching anything."
+          },
+          "outcomes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdoptResourceOutcome"
+            },
+            "description": "One row per candidate considered."
+          },
+          "summary": {
+            "$ref": "#/components/schemas/AdoptSummary"
+          }
+        }
+      },
+      "AdoptRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/resources/adopt` — one bounded, resumable adoption step.\n\nThe `scope` names what this invocation covers; exactly one target, with the deployment-wide\narm named explicitly. `dry_run` selects the read-only survey; `limit` bounds the candidate\nwindow (the conservative default applies when omitted); `after_id` resumes a walk from the\nprevious receipt's cursor. The response is the receipt: per-candidate outcomes, per-class\ncounts, the batch correlation id, and the continuation cursor.",
+        "required": [
+          "scope",
+          "dry_run"
+        ],
+        "properties": {
+          "after_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Resume key from the previous receipt — only candidates after it are considered."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "Survey instead of act: classify every candidate without touching anything. Survey first,\nthen run with `false`, then survey again to verify."
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The candidate-window bound; the conservative default applies when omitted. A convenience,\nnever a correctness bound — the cursor keeps the walk resumable."
+          },
+          "scope": {
+            "$ref": "#/components/schemas/AdoptScope",
+            "description": "What this invocation covers."
+          }
+        }
+      },
+      "AdoptResourceOutcome": {
+        "type": "object",
+        "description": "One candidate's receipt row.",
+        "required": [
+          "resource",
+          "outcome"
+        ],
+        "properties": {
+          "outcome": {
+            "$ref": "#/components/schemas/AdoptOutcome"
+          },
+          "resource": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The candidate the row is about."
+          }
+        }
+      },
+      "AdoptScope": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Exactly one resource, by id.",
+            "required": [
+              "resource"
+            ],
+            "properties": {
+              "resource": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Exactly one resource, by id."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Every live, complete candidate homed in one context, enumerated through the caller's own\nvisibility.",
+            "required": [
+              "context"
+            ],
+            "properties": {
+              "context": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Every live, complete candidate homed in one context, enumerated through the caller's own\nvisibility."
+              }
+            }
+          },
+          {
+            "type": "string",
+            "description": "Deployment-wide. Claims a reach ordinary visibility does not yield, so it is\nSystemAdmin-gated and must be asked for by name — never the default.",
+            "enum": [
+              "all"
+            ]
+          }
+        ],
+        "description": "What one invocation covers. On the wire the one-target arms are single-key objects and the\ndeployment-wide arm is the bare string, so exactly one target is structural — there is no\nshape that means \"whichever\" — and `all` must be spelled out to be meant."
+      },
+      "AdoptSummary": {
+        "type": "object",
+        "description": "Per-class counts over the invocation's candidates.",
+        "required": [
+          "reblocked",
+          "would_change",
+          "no_op",
+          "declined",
+          "error"
+        ],
+        "properties": {
+          "declined": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "error": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "no_op": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "reblocked": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "would_change": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -18737,6 +19151,10 @@
     {
       "name": "Auditor",
       "description": "Citation auditor dispatch — coverage sweep + per-cogmap job fan-out"
+    },
+    {
+      "name": "Adoption",
+      "description": "Corpus adoption — bounded, resumable, per-row-gated re-block steps (survey, act, re-survey)"
     },
     {
       "name": "Slack Link",

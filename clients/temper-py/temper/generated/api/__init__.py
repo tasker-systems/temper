@@ -2,6 +2,7 @@
 
 # import apis into api package
 from temper.generated.api.access_api import AccessApi
+from temper.generated.api.adoption_api import AdoptionApi
 from temper.generated.api.auditor_api import AuditorApi
 from temper.generated.api.blobs_api import BlobsApi
 from temper.generated.api.cognitive_maps_api import CognitiveMapsApi

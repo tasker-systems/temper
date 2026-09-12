@@ -14,6 +14,22 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.4.0 — unreleased
 
+- **Corpus adoption's HTTP surface — `POST /api/resources/adopt`**
+  One bounded, resumable adoption step per call: the body names a scope (one resource by id,
+  one context by id, or the explicitly-named deployment-wide `all`), `dry_run`, an optional
+  `limit` (a declared conservative default applies), and the `after_id` resume cursor; the
+  response is the adoption receipt — one outcome row per candidate, per-class counts, the
+  batch correlation id, and the continuation cursor. The route is documented in the OpenAPI
+  contract (the deliberate contrast with the admin-enclosed re-embed trigger), and the three
+  generated client skins gain the operation and its models. Dispatch goes to the existing
+  backend command; the deployment-wide arm is SystemAdmin-gated at that seam, the
+  resource/context arms ride the caller's own visibility. No existing request or response
+  class changes shape — the route and its schemas are new.
+pr: self
+classes: additive
+surfaces: http, clients
+status: signal-only
+
 - **The erasure record names guest-committed blob rows homed in governed homes**
   The blob arm's second pass enumerates the governed homes BY HOME: every live row whose
   actor halves are not the subject's is named in the `principal_erased` targets and the

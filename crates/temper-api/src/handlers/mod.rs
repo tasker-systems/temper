@@ -1,5 +1,6 @@
 pub mod access;
 pub mod admin_ledger;
+pub mod adopt;
 pub mod as_reap;
 pub mod auditor;
 pub mod blobs;

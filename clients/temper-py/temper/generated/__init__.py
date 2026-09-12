@@ -19,6 +19,7 @@ __version__ = "0.4.0"
 # Define package exports
 __all__ = [
     "AccessApi",
+    "AdoptionApi",
     "AuditorApi",
     "BlobsApi",
     "CognitiveMapsApi",
@@ -59,6 +60,24 @@ __all__ = [
     "ActRefusal",
     "ActorAuthority",
     "AddMemberRequest",
+    "AdoptDeclined",
+    "AdoptDeclinedOneOf",
+    "AdoptDeclinedOneOf1",
+    "AdoptDeclinedOneOf2",
+    "AdoptDeclinedOneOfInProgress",
+    "AdoptOutcome",
+    "AdoptOutcomeOneOf",
+    "AdoptOutcomeOneOf1",
+    "AdoptOutcomeOneOf2",
+    "AdoptOutcomeOneOf2Error",
+    "AdoptOutcomeOneOfReblocked",
+    "AdoptReceipt",
+    "AdoptRequest",
+    "AdoptResourceOutcome",
+    "AdoptScope",
+    "AdoptScopeOneOf",
+    "AdoptScopeOneOf1",
+    "AdoptSummary",
     "AdvanceWatermarkAck",
     "AdvanceWatermarkRequest",
     "AgentAuthorship",
@@ -376,6 +395,7 @@ __all__ = [
 
 # import apis into sdk package
 from temper.generated.api.access_api import AccessApi as AccessApi
+from temper.generated.api.adoption_api import AdoptionApi as AdoptionApi
 from temper.generated.api.auditor_api import AuditorApi as AuditorApi
 from temper.generated.api.blobs_api import BlobsApi as BlobsApi
 from temper.generated.api.cognitive_maps_api import CognitiveMapsApi as CognitiveMapsApi
@@ -420,6 +440,24 @@ from temper.generated.models.act_quantity import ActQuantity as ActQuantity
 from temper.generated.models.act_refusal import ActRefusal as ActRefusal
 from temper.generated.models.actor_authority import ActorAuthority as ActorAuthority
 from temper.generated.models.add_member_request import AddMemberRequest as AddMemberRequest
+from temper.generated.models.adopt_declined import AdoptDeclined as AdoptDeclined
+from temper.generated.models.adopt_declined_one_of import AdoptDeclinedOneOf as AdoptDeclinedOneOf
+from temper.generated.models.adopt_declined_one_of1 import AdoptDeclinedOneOf1 as AdoptDeclinedOneOf1
+from temper.generated.models.adopt_declined_one_of2 import AdoptDeclinedOneOf2 as AdoptDeclinedOneOf2
+from temper.generated.models.adopt_declined_one_of_in_progress import AdoptDeclinedOneOfInProgress as AdoptDeclinedOneOfInProgress
+from temper.generated.models.adopt_outcome import AdoptOutcome as AdoptOutcome
+from temper.generated.models.adopt_outcome_one_of import AdoptOutcomeOneOf as AdoptOutcomeOneOf
+from temper.generated.models.adopt_outcome_one_of1 import AdoptOutcomeOneOf1 as AdoptOutcomeOneOf1
+from temper.generated.models.adopt_outcome_one_of2 import AdoptOutcomeOneOf2 as AdoptOutcomeOneOf2
+from temper.generated.models.adopt_outcome_one_of2_error import AdoptOutcomeOneOf2Error as AdoptOutcomeOneOf2Error
+from temper.generated.models.adopt_outcome_one_of_reblocked import AdoptOutcomeOneOfReblocked as AdoptOutcomeOneOfReblocked
+from temper.generated.models.adopt_receipt import AdoptReceipt as AdoptReceipt
+from temper.generated.models.adopt_request import AdoptRequest as AdoptRequest
+from temper.generated.models.adopt_resource_outcome import AdoptResourceOutcome as AdoptResourceOutcome
+from temper.generated.models.adopt_scope import AdoptScope as AdoptScope
+from temper.generated.models.adopt_scope_one_of import AdoptScopeOneOf as AdoptScopeOneOf
+from temper.generated.models.adopt_scope_one_of1 import AdoptScopeOneOf1 as AdoptScopeOneOf1
+from temper.generated.models.adopt_summary import AdoptSummary as AdoptSummary
 from temper.generated.models.advance_watermark_ack import AdvanceWatermarkAck as AdvanceWatermarkAck
 from temper.generated.models.advance_watermark_request import AdvanceWatermarkRequest as AdvanceWatermarkRequest
 from temper.generated.models.agent_authorship import AgentAuthorship as AgentAuthorship

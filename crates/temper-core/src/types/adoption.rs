@@ -17,8 +17,18 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// What one invocation covers.
+/// The candidate-window bound applied when an invocation omits one. Conservative on purpose —
+/// it is a convenience, never a correctness bound: the receipt's continuation cursor, not the
+/// number, is what keeps a walk resumable and complete. A later measurement of the
+/// public-function envelope may redeclare it.
+pub const DEFAULT_ADOPT_LIMIT: i64 = 100;
+
+/// What one invocation covers. On the wire the one-target arms are single-key objects and the
+/// deployment-wide arm is the bare string, so exactly one target is structural — there is no
+/// shape that means "whichever" — and `all` must be spelled out to be meant.
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum AdoptScope {
     /// Exactly one resource, by id.
     Resource(Uuid),
@@ -32,6 +42,7 @@ pub enum AdoptScope {
 
 /// Why one candidate produced no act. `Denied` is the gate's refusal; the other three are the
 /// op's own, each carrying the human `detail` that names the candidate and its remediation.
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AdoptDeclined {
     /// The per-resource gate train refused the invoking operator — the grant boundary doing its
@@ -60,6 +71,7 @@ pub enum AdoptDeclined {
 
 /// What happened to one candidate. `WouldChange` exists only on the survey arm (`dry_run`); the
 /// act's counterpart is `Reblocked`.
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AdoptOutcome {
     /// The act fired `resource_reblocked` — the ledger carries the act under the batch
@@ -78,6 +90,7 @@ pub enum AdoptOutcome {
 }
 
 /// One candidate's receipt row.
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdoptResourceOutcome {
     /// The candidate the row is about.
@@ -86,6 +99,7 @@ pub struct AdoptResourceOutcome {
 }
 
 /// Per-class counts over the invocation's candidates.
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdoptSummary {
     pub reblocked: u64,
@@ -97,6 +111,7 @@ pub struct AdoptSummary {
 
 /// The invocation response — the receipt. No durable receipt table exists: the ledger holds
 /// every real act, this holds the batch's truth, and the batch correlation id pairs them.
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdoptReceipt {
     /// Whether this receipt came from the survey arm (`dry_run`) — outcomes classify without
@@ -111,5 +126,29 @@ pub struct AdoptReceipt {
     /// The last candidate id considered — pass it back as the next invocation's `after_id` to
     /// resume. `None` when nothing was considered. Stateless: it rides the receipt, and a
     /// re-run from the top is always safe anyway.
+    pub after_id: Option<Uuid>,
+}
+
+/// Request body for `POST /api/resources/adopt` — one bounded, resumable adoption step.
+///
+/// The `scope` names what this invocation covers; exactly one target, with the deployment-wide
+/// arm named explicitly. `dry_run` selects the read-only survey; `limit` bounds the candidate
+/// window (the conservative default applies when omitted); `after_id` resumes a walk from the
+/// previous receipt's cursor. The response is the receipt: per-candidate outcomes, per-class
+/// counts, the batch correlation id, and the continuation cursor.
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdoptRequest {
+    /// What this invocation covers.
+    pub scope: AdoptScope,
+    /// Survey instead of act: classify every candidate without touching anything. Survey first,
+    /// then run with `false`, then survey again to verify.
+    pub dry_run: bool,
+    /// The candidate-window bound; the conservative default applies when omitted. A convenience,
+    /// never a correctness bound — the cursor keeps the walk resumable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<i64>,
+    /// Resume key from the previous receipt — only candidates after it are considered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after_id: Option<Uuid>,
 }
