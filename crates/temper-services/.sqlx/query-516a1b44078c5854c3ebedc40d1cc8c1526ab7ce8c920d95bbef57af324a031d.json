@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n                           SELECT 1 FROM kb_team_members\n                            WHERE team_id = $1 AND profile_id = $2 AND role = 'owner'\n                       )",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "516a1b44078c5854c3ebedc40d1cc8c1526ab7ce8c920d95bbef57af324a031d"
+}

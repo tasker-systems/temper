@@ -33,7 +33,9 @@ use crate::error::{ApiError, ApiResult};
 /// response speaks — ONE number, because both name the same posture: content-addressed bytes
 /// are immutable (D1), so a long window is safe (D6). A year is the convention for immutable
 /// content.
-pub const IMMUTABLE_CACHE_MAX_AGE: u32 = 365 * 24 * 60 * 60;
+/// One definition, beside `BlobStore::put` — the commit path's under-lock restore and the
+/// read-through response headers cannot drift apart.
+pub const IMMUTABLE_CACHE_MAX_AGE: u32 = temper_substrate::blob_store::IMMUTABLE_CACHE_MAX_AGE;
 
 /// The `Cache-Control` header value the read-through response carries, derived from
 /// [`IMMUTABLE_CACHE_MAX_AGE`] so the provider cache window and the client cache window
@@ -271,18 +273,17 @@ pub struct BlobCommitCommand {
 /// strike's own rows are excluded from every read path by the widened floors, and a struck
 /// row cannot be re-committed INTO — the slot is vacated). If a future caller reaches this
 /// with an arbitrary id, THIS read changes shape first.
-async fn stored_content_type(pool: &PgPool, id: uuid::Uuid) -> Result<String, sqlx::Error> {
-    sqlx::query_scalar!(
-        r#"SELECT content_type AS "content_type!" FROM kb_blobs WHERE id = $1"#,
-        id
-    )
-    .fetch_one(pool)
-    .await
+async fn stored_content_type(pool: &PgPool, id: uuid::Uuid) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar!("SELECT content_type FROM kb_blobs WHERE id = $1", id)
+        .fetch_one(pool)
+        .await
 }
 
 /// Commit bytes as a blob: dedup pre-check, provider put at the content-addressed pathname,
-/// then the substrate's attributed write (`commit_blob_with` — provider presence verified
-/// before the ledger ever sees the event, D4). The caller acts as themselves: owner is the
+/// then the substrate's attributed write (`commit_blob_with` — whose transaction takes the
+/// hash advisory lock and re-derives (restoring, from the bytes the caller still holds)
+/// provider presence under it before the row goes live; D4 + task 01a09360-e00a-7d90-858d-
+/// f4998dd70b6c). The caller acts as themselves: owner is the
 /// authenticated profile, the emitter is their entity on the surface the commit arrived on
 /// (`surface.marker()` — the API degrades untrusted claims to `web`, so the emitter is always
 /// a surface the caller actually reached). Home standing is gated before any of it (auth
@@ -347,7 +348,11 @@ pub async fn commit_blob(
         .await
         .map_err(|e| ApiError::internal_scrubbed("blob emitter resolve failed", e))?;
 
-    let id = temper_substrate::writes::commit_blob(
+    // The bytes ride the write: under the hash advisory lock, presence is re-derived and a
+    // strike-released object is RESTORED before the row can go live (task
+    // 01a09360-e00a-7d90-858d-f4998dd70b6c). The pre-put above stays — it keeps the common
+    // (genuinely-absent) commit off the lock while the upload runs.
+    let id = temper_substrate::writes::commit_blob_with(
         pool,
         store,
         temper_substrate::writes::CommitBlobParams {
@@ -356,22 +361,28 @@ pub async fn commit_blob(
             owner: caller,
             originator: None,
             content_hash: content_hash.clone(),
-            content_type,
+            content_type: content_type.clone(),
             content_bytes: bytes.len() as i64,
             max_bytes: config.max_bytes,
             allowlist: &config.allowlist,
             emitter,
         },
+        temper_substrate::events::EventContext::default(),
+        Some(&bytes),
     )
     .await
     .map_err(map_commit_err)?;
 
     // N2 (2026-09-03 review): the outcome reports the row's STORED media type, read
     // back from the committed row — see `stored_content_type`, the single site both
-    // committing doors share.
+    // committing doors share. The one race the read can lose: the row was a DEDUP hit and
+    // a concurrent strike emptied it between this commit's lock release and the read-back
+    // — the ledger is sound (replay order is lock order), and the only type this act can
+    // truthfully report then is its own declaration.
     let stored_type = stored_content_type(pool, id.uuid())
         .await
-        .map_err(|e| ApiError::internal_scrubbed("blob commit read failed", e))?;
+        .map_err(|e| ApiError::internal_scrubbed("blob commit read failed", e))?
+        .unwrap_or(content_type);
 
     Ok(BlobCommitOutcome {
         blob_id: id,
@@ -408,10 +419,11 @@ pub async fn read_through(
     Ok((row, stream))
 }
 
-/// Map a substrate write error. The SQL wrapper's refusals RAISE with a `blob_commit:` prefix
-/// and carry the D9 vocabulary verbatim (cap, allowlist, home, addressing) — those are the
-/// caller's own state, safe and required to surface as `400` (the `finalize_err` precedent of
-/// walking the `anyhow` chain to the sqlx error under it). Anything else is a 500.
+/// Map a substrate write error. The substrate's refusals carry the `blob_commit:`
+/// vocabulary verbatim (cap, allowlist, home, addressing — the SQL wrapper's raises AND
+/// the D4 gate's own message): the caller's own state, safe and required to surface as
+/// `400` (the `finalize_err` precedent of walking the `anyhow` chain). Anything else is a
+/// 500 — a provider failure is nobody's request to fix.
 fn map_commit_err(e: anyhow::Error) -> ApiError {
     for cause in e.chain() {
         if let Some(sqlx::Error::Database(db)) = cause.downcast_ref::<sqlx::Error>() {
@@ -419,6 +431,13 @@ fn map_commit_err(e: anyhow::Error) -> ApiError {
                 return ApiError::BadRequest(db.message().to_string());
             }
         }
+    }
+    // The substrate's own refusal (the D4 gate's ensure!) is a plain message at the head
+    // of the chain — the caller's own state, safe and required to surface as `400`, never
+    // a scrubbed 500.
+    let head = e.to_string();
+    if head.starts_with("blob_commit:") {
+        return ApiError::BadRequest(head);
     }
     ApiError::internal_scrubbed("blob commit failed", e)
 }
@@ -626,9 +645,13 @@ pub async fn finalize_upload(
         return Err(allowlist_refusal(&session.content_type, &config.allowlist));
     }
 
-    let body = temper_substrate::uploads::assemble_body(pool, upload_id)
-        .await
-        .map_err(|e| ApiError::internal_scrubbed("blob upload assemble failed", e))?;
+    // Bytes from the seam forward — one move, no re-copy: the put, the restore parameter,
+    // and the length read all share it.
+    let body = Bytes::from(
+        temper_substrate::uploads::assemble_body(pool, upload_id)
+            .await
+            .map_err(|e| ApiError::internal_scrubbed("blob upload assemble failed", e))?,
+    );
     let content_hash = temper_core::hash::sha256_hex(&body);
     if let Some(expected) = &req.expected_content_hash {
         if expected != &content_hash {
@@ -653,7 +676,7 @@ pub async fn finalize_upload(
             .put(
                 &temper_substrate::blob_store::blob_pathname(&content_hash),
                 &session.content_type,
-                body.clone().into(),
+                body.clone(),
                 IMMUTABLE_CACHE_MAX_AGE,
             )
             .await
@@ -664,7 +687,10 @@ pub async fn finalize_upload(
         .await
         .map_err(|e| ApiError::internal_scrubbed("blob emitter resolve failed", e))?;
 
-    let blob_id = temper_substrate::writes::commit_blob(
+    // The assembled whole rides the write, same as the single-request door: under the
+    // hash advisory lock, presence is re-derived and a strike-released object is RESTORED
+    // before the row can go live (task 01a09360-e00a-7d90-858d-f4998dd70b6c).
+    let blob_id = temper_substrate::writes::commit_blob_with(
         pool,
         store,
         temper_substrate::writes::CommitBlobParams {
@@ -673,12 +699,14 @@ pub async fn finalize_upload(
             owner: caller,
             originator: None,
             content_hash: content_hash.clone(),
-            content_type: session.content_type,
+            content_type: session.content_type.clone(),
             content_bytes: body.len() as i64,
             max_bytes: config.max_bytes,
             allowlist: &config.allowlist,
             emitter,
         },
+        temper_substrate::events::EventContext::default(),
+        Some(&body),
     )
     .await
     .map_err(map_commit_err)?;
@@ -691,10 +719,13 @@ pub async fn finalize_upload(
 
     // N2: the stored media type, read back — on a dedup hit the row is the FIRST
     // committer's, and the response must say what is stored, not what was declared
-    // (`stored_content_type`, the single site both committing doors share).
+    // (`stored_content_type`, the single site both committing doors share). The same
+    // struck-dedup race the single-request door's read documents: the declaration is the
+    // only truthful report once the deduped row is emptied.
     let stored_type = stored_content_type(pool, blob_id.uuid())
         .await
-        .map_err(|e| ApiError::internal_scrubbed("blob commit read failed", e))?;
+        .map_err(|e| ApiError::internal_scrubbed("blob commit read failed", e))?
+        .unwrap_or(session.content_type);
 
     Ok(BlobUploadFinalizeOutcome {
         blob_id,
@@ -975,12 +1006,14 @@ fn map_delete_err(e: anyhow::Error) -> ApiError {
 
 /// Strike one blob through the ruled door. The gate runs inside the strike's transaction
 /// (`delete_blob_in_tx`), so the relation enumeration, the custody verdict, the emptying,
-/// and the same-transaction refcount are one snapshot; the post-commit provider delete is
-/// the CALLER's act at `StruckBlob.pathname` when `released` — and because the ruled
-/// identity-only payload cannot carry the pathname, the door seeds the byte-delete fence's
-/// queue row INSIDE the same transaction (the (event, pathname) seed is idempotent and the
-/// fence's drain is derivation-agnostic), so a crashed or failing provider delete is
-/// retried with age alerting by the same per-minute drain that watches erasure's strikes.
+/// and the same-transaction refcount are one snapshot; the post-commit provider release is
+/// SERIALIZED (task 01a09360-e00a-7d90-858d-f4998dd70b6c) — `release_blob_bytes` holds the
+/// hash advisory lock across the provider delete and re-derives released-ness at release
+/// time — and because the ruled identity-only payload cannot carry the pathname, the door
+/// seeds the byte-delete fence's queue row INSIDE the strike's transaction (the (event,
+/// pathname) seed is idempotent and the fence's drain is derivation-agnostic), so a
+/// crashed or failing provider delete is retried with age alerting by the same per-minute
+/// drain that watches erasure's strikes.
 pub async fn delete_blob(
     pool: &PgPool,
     caller: ProfileId,
@@ -1116,7 +1149,9 @@ pub async fn delete_blob(
     // `last_event_id` (the just-fired `blob_deleted`) with the event's `occurred_at` as
     // first-due (the fence's clock). `released = false` seeds nothing: the bytes were never
     // this act's to remove. Committed or rolled back with the strike — there is no
-    // enqueue-after-commit window to strand a release.
+    // enqueue-after-commit window to strand a release. The hash rides along for the
+    // release's re-derivation.
+    let mut release_hash: Option<String> = None;
     if struck.released {
         let seed = sqlx::query!(
             r#"SELECT b.content_hash, b.last_event_id, e.occurred_at
@@ -1137,23 +1172,36 @@ pub async fn delete_blob(
         .fetch_one(&mut *tx)
         .await
         .map_err(|e| ApiError::internal_scrubbed("blob delete fence seed failed", e))?;
+        release_hash = Some(seed.content_hash);
     }
 
     tx.commit()
         .await
         .map_err(|e| ApiError::internal_scrubbed("blob delete commit failed", e))?;
 
-    // The ruled caller-side release, POST-commit. Failure is never a door refusal — the act
-    // committed (the row reads absent through every read path); the queue row seeded above
-    // hands the release to the drain's retry ladder and the fence's age alert.
-    if struck.released {
-        if let Err(e) = store.delete(&[struck.pathname.as_str()]).await {
-            tracing::warn!(
+    // The ruled caller-side release, POST-commit — SERIALIZED (task
+    // 01a09360-e00a-7d90-858d-f4998dd70b6c): `release_blob_bytes` takes the hash advisory
+    // lock, re-derives released-ness at release time (a commit may have minted a live row
+    // since the refcount — its bytes are not this act's to take), and holds the lock
+    // across the provider delete. Failure is never a door refusal — the act committed (the
+    // row reads absent through every read path); the queue row seeded above hands the
+    // release to the drain's retry ladder and the fence's age alert.
+    if let Some(hash) = release_hash {
+        match temper_substrate::writes::release_blob_bytes(pool, &hash, &struck.pathname, store)
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => tracing::info!(
+                blob = %blob,
+                "post-commit release skipped: a live row re-holds the hash — the fence \
+                 resolves its seeded row re-occupied"
+            ),
+            Err(e) => tracing::warn!(
                 blob = %blob,
                 error = format!("{e:#}"),
                 "post-commit provider delete failed — the byte-delete fence retries with \
                  age alerting"
-            );
+            ),
         }
     }
 
