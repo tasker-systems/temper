@@ -139,7 +139,8 @@ content_type: string | null, content_bytes: bigint, created: string, };
  */
 export type BlobUploadBeginRequest = { 
 /**
- * `kb_contexts` or `kb_cogmaps` — a blob needs a home (D2), and so does its upload.
+ * `kb_contexts` — a blob homes in a context (the blob-home exclusion, 2026-09-11);
+ * a cogmap is never a blob home.
  */
 home_table: string, home_id: string, 
 /**

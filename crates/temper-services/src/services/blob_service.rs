@@ -112,8 +112,11 @@ pub struct BlobCommitOutcome {
     pub deduped: bool,
 }
 
-/// The wire's home anchor restricts to the two kinds a blob can be homed in (D2). Anything
-/// else is refused in the wrapper's own terms.
+/// The wire's home anchor restricts to contexts — the blob-home exclusion (ruled
+/// 2026-09-11; the schema's backstop is `kb_blobs_home_context_only`). A map is a
+/// distilled view over resources, not a data store, so the commit refuses here, in this
+/// door's own terms and BEFORE standing — the one gate every committing surface flows
+/// through (single-request, segmented begin, MCP), so every caller hears one voice.
 fn home_gate_tables(
     home: &temper_substrate::payloads::AnchorRef,
 ) -> ApiResult<(&'static str, &'static str)> {
@@ -121,19 +124,20 @@ fn home_gate_tables(
         temper_substrate::payloads::AnchorTable::Contexts => {
             Ok(("kb_contexts", "context_authorable_by_profile"))
         }
-        temper_substrate::payloads::AnchorTable::Cogmaps => {
-            Ok(("kb_cogmaps", "cogmap_authorable_by_profile"))
-        }
+        temper_substrate::payloads::AnchorTable::Cogmaps => Err(ApiError::BadRequest(
+            "blob_commit: a blob homes in a context — a cogmap is not a blob home".to_string(),
+        )),
         _ => Err(ApiError::BadRequest(
-            "blob_commit: a blob needs a home (a kb_contexts or kb_cogmaps anchor)".to_string(),
+            "blob_commit: a blob needs a home (a kb_contexts anchor)".to_string(),
         )),
     }
 }
 
 /// The home parse for the single-request commit, shared by every committing surface (the
 /// API handler's multipart fields, the MCP tool's input strings) so the vocabulary and the
-/// `AnchorRef` are built in one place. The refusal mirrors the wrapper's terms, and an
-/// absent field is named `<absent>` exactly as the handler-side parse always rendered it.
+/// `AnchorRef` are built in one place. The refusal mirrors the wrapper's terms (a
+/// kb_contexts anchor — the blob-home exclusion), and an absent field is named
+/// `<absent>` exactly as the handler-side parse always rendered it.
 fn parse_home(
     home_table: Option<String>,
     home_id: Option<String>,
@@ -144,7 +148,7 @@ fn parse_home(
         Some("kb_cogmaps") => AnchorTable::Cogmaps,
         other => {
             return Err(ApiError::BadRequest(format!(
-                "blob_commit: a blob needs a home (a kb_contexts or kb_cogmaps anchor) — got \
+                "blob_commit: a blob needs a home (a kb_contexts anchor) — got \
                  home table {}",
                 other.unwrap_or("<absent>")
             )))
@@ -286,7 +290,7 @@ async fn stored_content_type(pool: &PgPool, id: uuid::Uuid) -> Result<String, sq
 ///
 /// The home parse lives here rather than in any handler (the `parse_home` rule — the
 /// peer-table parse's reasoning): the wire type is an enum-shaped string, and the refusal
-/// mirrors the wrapper's terms (a kb_contexts or kb_cogmaps anchor) so every surface hears
+/// mirrors the wrapper's terms (a kb_contexts anchor) so every surface hears
 /// one vocabulary regardless of which gate declined.
 pub async fn commit_blob(
     pool: &PgPool,

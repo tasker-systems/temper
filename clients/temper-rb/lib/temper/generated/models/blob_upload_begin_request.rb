@@ -21,7 +21,7 @@ module Temper::Generated
 
     attr_accessor :home_id
 
-    # `kb_contexts` or `kb_cogmaps` — a blob needs a home (D2), and so does its upload.
+    # `kb_contexts` — a blob homes in a context (the blob-home exclusion, 2026-09-11); a cogmap is never a blob home.
     attr_accessor :home_table
 
     # Attribute mapping from ruby-style variable name to JSON key.

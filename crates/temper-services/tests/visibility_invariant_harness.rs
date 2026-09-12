@@ -779,7 +779,7 @@ fn check_duality(
 async fn i1_read_duality(pool: &PgPool, w: &World) -> sqlx::Result<Vec<Violation>> {
     let mut violations = Vec::new();
 
-    // Fixture blobs: one per generated anchor, both kinds, minted once. The blob invariant
+    // Fixture blobs: one per generated CONTEXT anchor, minted once. The blob invariant
     // below claims the blob contributes NO visibility of its own — `blob_readable_by_profile`
     // is exactly its home anchor's answer (the row IS its home, D2 as amended) — so the
     // fixture needs no blob-specific world content, only rows that exist. The event-id FKs
@@ -787,29 +787,31 @@ async fn i1_read_duality(pool: &PgPool, w: &World) -> sqlx::Result<Vec<Violation
     // no-op. The conflict target carries the partial index's WHERE clause
     // (20260906000010): uniqueness binds LIVE rows only, so the arbiter must be inferred
     // on the same predicate.
+    //
+    // Contexts only, deliberately: the blob-home exclusion (20260911000020) makes a
+    // cogmap-homed row unwritable — `kb_blobs_home_context_only` — so the gate's cogmap
+    // arm is dead vocabulary, kept as defense-in-depth, with no legal fixture for it. The
+    // duality stays fully exercised over the reachable world.
     let fixture_owner = w.profiles[0];
     let fixture_event: Uuid =
         sqlx::query_scalar("SELECT id FROM kb_events ORDER BY occurred_at, id LIMIT 1")
             .fetch_one(pool)
             .await?;
-    for (table, anchors) in [("kb_contexts", &w.contexts), ("kb_cogmaps", &w.cogmaps)] {
-        sqlx::query(
-            "INSERT INTO kb_blobs (id, content_hash, blob_pathname, content_type, content_bytes, \
-                                  home_table, home_id, owner_profile_id, originator_profile_id, \
-                                  asserted_by_event_id, last_event_id) \
-             SELECT gen_random_uuid(), 'harness-' || a.id, 'ha/' || a.id, \
-                    'application/octet-stream', 0, $2, a.id, $1, $1, $3, $3 \
-               FROM unnest($4::uuid[]) AS a(id) \
-             ON CONFLICT (home_table, home_id, content_hash) WHERE content_type IS NOT NULL \
-             DO NOTHING",
-        )
-        .bind(fixture_owner)
-        .bind(table)
-        .bind(fixture_event)
-        .bind(anchors)
-        .execute(pool)
-        .await?;
-    }
+    sqlx::query(
+        "INSERT INTO kb_blobs (id, content_hash, blob_pathname, content_type, content_bytes, \
+                              home_table, home_id, owner_profile_id, originator_profile_id, \
+                              asserted_by_event_id, last_event_id) \
+         SELECT gen_random_uuid(), 'harness-' || a.id, 'ha/' || a.id, \
+                'application/octet-stream', 0, 'kb_contexts', a.id, $1, $1, $2, $2 \
+           FROM unnest($3::uuid[]) AS a(id) \
+         ON CONFLICT (home_table, home_id, content_hash) WHERE content_type IS NOT NULL \
+         DO NOTHING",
+    )
+    .bind(fixture_owner)
+    .bind(fixture_event)
+    .bind(&w.contexts)
+    .execute(pool)
+    .await?;
 
     for (p_idx, &profile) in w.profiles.iter().enumerate() {
         let who = PROFILE_HANDLES[p_idx];

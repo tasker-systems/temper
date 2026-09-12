@@ -14,6 +14,23 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.4.0 — unreleased
 
+- **The blob-home exclusion — a blob homes in a context, never in a map**
+  The blob home's vocabulary narrows to `kb_contexts`: a commit or segmented upload naming
+  a cogmap as home is refused at the door, and the schema's `kb_blobs_home_context_only`
+  CHECK refuses any direct writer — landing the delete-act goal's last named-open as
+  examined-and-deliberately-excluded (a map is a distilled view over resources, not a data
+  store, so no custodian is ever needed because no row can exist; the class is provably
+  empty and the blob feature is pre-enterprise-rollout). `BlobUploadBeginRequest.home_table`'s
+  description names the one home kind; request and response shapes are unchanged — the
+  openapi diff is description text only, restaling the three client packages with it. The
+  read floor's cogmap arm and the erasure sweep's `independent_obligation` outcome stay as
+  defense-in-depth (frozen v1 vocabulary, byte-pinned by the fence's classifier). Ruled
+  2026-09-11 with Pete; the decision lives in temper ("Blobs home in contexts only").
+pr: self
+classes: additive
+surfaces: http, clients
+status: signal-only
+
 - **The erasure record names guest-committed blob rows homed in governed homes**
   The blob arm's second pass enumerates the governed homes BY HOME: every live row whose
   actor halves are not the subject's is named in the `principal_erased` targets and the
