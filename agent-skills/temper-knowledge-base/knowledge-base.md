@@ -25,9 +25,9 @@ drilling into action parameters.
 `list_data_artifacts`, `get_data_artifact`, `list_data_artifact_shapes`,
 `get_data_artifact_shape`
 
-**Writes (18):** `create_resource`, `update_resource`, `update_resource_meta`,
-`delete_resource`, `annotate_resource`, `relationship`, `facet_set`, `facet_retract`,
-`record_citation_audit`, `invocation_manage`, `segmented_ingest`,
+**Writes (19):** `create_resource`, `update_resource`, `update_resource_meta`,
+`delete_resource`, `annotate_resource`, `resource_reblock`, `relationship`, `facet_set`,
+`facet_retract`, `record_citation_audit`, `invocation_manage`, `segmented_ingest`,
 `cogmap_create`, `cogmap_materialize`, `context_materialize`, `context_manage`,
 `steward_advance_watermark`, `commit_data_artifact`,
 `declare_data_artifact_shape`
@@ -41,6 +41,9 @@ drilling into action parameters.
 > three-state block read.
 > `[2026-09-11]` `facet_retract` joined the writes (37 tools, 19 reads / 18 writes) — the
 > row-grain correction verb for edge-owned facet rows.
+> `[2026-09-12]` `resource_reblock` joined the writes (38 tools, 19 reads / 19 writes) — the
+> bounded, survey-first corpus re-block walk; per-row outcomes ride the caller's own write
+> rights, never new authority.
 
 **Declared off-MCP (CLI door):** grants (`resource_grant`/`revoke`,
 `cogmap_grant`/`revoke`), `admin_ledger`, cogmap bind/unbind, team invitations,
@@ -61,6 +64,7 @@ MCP is a declaration, not a gap.
 | Create a new resource (with or without content) | Tool: `create_resource` | Mutation — tools only |
 | Update title/metadata/content | Tool: `update_resource` | Mutation — tools only |
 | Build a large / resumable body as ordered blocks | Tool: `segmented_ingest` (action: begin → append → finalize) | Segmented lifecycle; action: blocks reads landed segments to resume |
+| Bring existing resources under the current blocking policy | Tool: `resource_reblock` | Survey first (`dry_run`), act in bounded windows, resume by cursor — every row gated by your own write rights |
 | Attach provenance sources without rewriting the body | Tool: `annotate_resource` | Provenance-only backfill — body_hash + embeddings unchanged |
 | Read a resource's per-block provenance | Tool: `get_block_provenance` | Which sources each content block was distilled from |
 | Read one content block — is it live, where did folded content go | Tool: `get_block` | Three-state read: `live` (chunks + provenance), `folded` (attribution history + disposition), absent is an error |
