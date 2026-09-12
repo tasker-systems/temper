@@ -1902,11 +1902,12 @@ pub async fn survey_reblock_resource(pool: &PgPool, resource: ResourceId) -> Res
 /// pattern), keeping the substrate principal-free by architecture.
 ///
 /// What actually enforces the op's reachability — there is no tripwire, and this comment once
-/// falsely claimed one ("reblock_scope_fence"): this gated hook (the only in-crate caller), the
-/// per-resource-gated adoption Backend command in temper-services
-/// (`DbBackend::adopt_resources`, the op's one direct production caller), and the caller-sweep
-/// guard `.github/scripts/check-reblock-callers.sh`, which pins the op's reachable-from set to
-/// an explicit allowlist and fails on any new caller that does not join it deliberately.
+/// falsely claimed one ("reblock_scope_fence"): the in-crate unit test
+/// `writes::reblock_tests::reblock_op_is_reachable_only_through_the_gated_write_paths` (below)
+/// greps every crate's `src/` tree and fails on any caller outside its allowlist — the gated
+/// hook (here), the substrate's fire plumbing (`events.rs`), and the per-resource-gated
+/// adoption Backend command (`DbBackend::adopt_resources`, the op's one sanctioned direct
+/// production caller). A new caller must join that allowlist deliberately.
 ///
 /// `NoOp` is silence by design: a write that does not change the effective partition must be
 /// indistinguishable in the ledger from one that never happened (the op fires nothing). The op's
@@ -3571,13 +3572,15 @@ mod reblock_tests {
         );
     }
 
-    /// The reachability AC, made executable: the re-block op must have ZERO production callers
-    /// outside this file — it is reachable only through the gated write paths
-    /// (`create_resource` / `update_resource` / `finalize_ingest`, each dispatched behind the
-    /// DbBackend gate train). Enforced by grep over every crate's `src/` tree rather than by
-    /// trusting a maintained allowlist (the `assert_every_compiled_in_doc_is_vetoed` precedent:
-    /// derive the set, never list it). Test trees are deliberately not scanned — the substrate
-    /// witnesses invoke the op directly.
+    /// The reachability AC, made executable: the re-block op's reachable-from set is exactly
+    /// the gated write-path hook (this file), the substrate's fire plumbing (`events.rs`), and
+    /// the ONE sanctioned direct caller — `DbBackend::adopt_resources`, gated per-resource by
+    /// the same `can_modify` gate train a single body update runs (the adoption spec's D-C1:
+    /// the batch mints no authority). Enforced by grep over every crate's `src/` tree rather
+    /// than by trusting a maintained allowlist beyond these three named homes (the
+    /// `assert_every_compiled_in_doc_is_vetoed` precedent: derive the set, never list it).
+    /// Test trees are deliberately not scanned — the substrate witnesses invoke the op
+    /// directly.
     #[test]
     fn reblock_op_is_reachable_only_through_the_gated_write_paths() {
         let crates_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -3585,11 +3588,13 @@ mod reblock_tests {
             .nth(2)
             .expect("workspace root")
             .join("crates");
-        // The op (writes.rs) and the substrate's own fire plumbing (events.rs, whose
-        // `_event_append` call reaches the SQL wrapper) are the only legitimate homes.
+        // The op (writes.rs), the substrate's own fire plumbing (events.rs, whose
+        // `_event_append` call reaches the SQL wrapper), and the gated adoption caller are the
+        // only legitimate homes.
         let allowed: &[std::path::PathBuf] = &[
             std::path::PathBuf::from("temper-substrate/src/writes.rs"),
             std::path::PathBuf::from("temper-substrate/src/events.rs"),
+            std::path::PathBuf::from("temper-services/src/backend/db_backend.rs"),
         ];
         let mut offenders = Vec::new();
         for crate_dir in std::fs::read_dir(&crates_dir).expect("crates/ must exist") {
@@ -3621,8 +3626,10 @@ mod reblock_tests {
         }
         assert!(
             offenders.is_empty(),
-            "reblock_resource/resource_reblock must stay reachable ONLY through the gated write \
-             paths (temper-substrate/src/writes.rs + events.rs); production callers found: {offenders:?}"
+            "reblock_resource/resource_reblock must stay reachable ONLY through the gated \
+             write paths (temper-substrate/src/writes.rs + events.rs) and the per-resource-\
+             gated adoption command (temper-services/src/backend/db_backend.rs); production \
+             callers found: {offenders:?}"
         );
     }
 }

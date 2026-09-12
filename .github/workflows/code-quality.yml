@@ -366,15 +366,6 @@ jobs:
       - name: Check no process artifacts are tracked here
         run: bash .github/scripts/check-no-process-artifacts.sh
 
-      # Pure bash, one second, same job for the same reason as the docs/ gate above: the change
-      # class it catches — a new direct caller of the re-block op — is an ordinary .rs edit that
-      # rust-quality would only see as a compiling diff. The caller sweep is what actually
-      # enforces the op's reachability (the doc comment once claimed a `reblock_scope_fence`
-      # tripwire that has never existed); a new authority path into the ledger must edit the
-      # allowlist in the same commit, visibly.
-      - name: Check re-block op caller sweep
-        run: bash .github/scripts/check-reblock-callers.sh
-
       - name: Guard test — check-cli-reference-drift
         run: bash .github/scripts/test-check-cli-reference-drift.sh
 
@@ -401,9 +392,6 @@ jobs:
 
       - name: Guard test — check-no-process-artifacts
         run: bash .github/scripts/test-check-no-process-artifacts.sh
-
-      - name: Guard test — check-reblock-callers
-        run: bash .github/scripts/test-check-reblock-callers.sh
 
       - name: Guard test — audit-route-auth (per-builder layer wiring)
         run: bash .github/scripts/test-audit-route-auth.sh
