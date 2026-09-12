@@ -245,6 +245,18 @@ impl TemperMcpService {
         tools::resources::delete_resource(self, input).await
     }
 
+    #[tool(
+        description = "Run one bounded, resumable corpus-adoption step: re-block resources under the current chunking policy — each candidate's stored body is recomposed and the stored chunking replaced. Survey first: call with dry_run true to classify every candidate without changing anything, then run with dry_run false to act, then survey again to verify. Exactly one scope per call: scope `resource` plus a resource ref re-blocks that one resource; scope `context` plus a context ref walks every candidate homed in that context that you can read; scope `all` covers the whole deployment and requires system-administrator standing. limit bounds how many candidates one call considers (a conservative default applies when omitted); after_id resumes a walk from the previous receipt's cursor. The response is the receipt: one outcome row per candidate (reblocked, no-op, would_change on a survey, declined with a typed reason, or error), per-class counts, a batch correlation id, and the continuation cursor. A candidate already conforming to the current policy is a no-op — it fires nothing, so re-running a completed step changes nothing."
+    )]
+    async fn resource_adopt(
+        &self,
+        Parameters(input): Parameters<tools::adoption::ResourceAdoptInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::adoption::resource_adopt(self, input).await
+    }
+
     // ── Search & Query (unchanged) ─────────────────────────────────────
 
     #[tool(

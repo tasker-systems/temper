@@ -291,6 +291,80 @@ pub async fn reembed_remote(
     Ok(())
 }
 
+/// `temper admin adopt` — run one bounded, resumable corpus-adoption step (admin only for the
+/// deployment-wide arm; the resource and context arms ride the caller's own visibility).
+///
+/// Each candidate whose stored body no longer reproduces its stored chunking is re-blocked
+/// under the current chunking policy — ordinary per-resource writes, gated one row at a time
+/// by the invoking operator's own write predicates; the batch mints no authority.
+///
+/// Survey it first: `--dry-run` classifies every candidate without touching anything. Then run
+/// without it, then survey again to verify. Exactly one scope — refuse to guess. "All" must be
+/// asked for by name. `--limit` bounds how many candidates a single call considers, and
+/// `--after-id` resumes a walk from the previous receipt's cursor, so "adopt the corpus" is a
+/// walk, not a leap.
+#[allow(clippy::too_many_arguments)]
+pub async fn adopt_remote(
+    client: &temper_client::TemperClient,
+    resource: Option<String>,
+    context: Option<String>,
+    all: bool,
+    dry_run: bool,
+    limit: Option<i64>,
+    after_id: Option<uuid::Uuid>,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let resource_id = match resource.as_deref() {
+        Some(r) => Some(
+            temper_workflow::operations::parse_ref(r)
+                .map_err(|e| TemperError::BadRequest(format!("invalid resource ref {r:?}: {e}")))?,
+        ),
+        None => None,
+    };
+    let context_id = match context.as_deref() {
+        Some(c) => {
+            Some(crate::commands::context_cmd::resolve_context_id_for_read(client, c).await?)
+        }
+        None => None,
+    };
+
+    // Exactly one scope — refuse to guess. "All" must be asked for by name.
+    let scopes = [resource_id.is_some(), context_id.is_some(), all]
+        .iter()
+        .filter(|x| **x)
+        .count();
+    if scopes != 1 {
+        return Err(TemperError::BadRequest(
+            "specify exactly one of --resource, --context, or --all".to_string(),
+        ));
+    }
+
+    let scope = if let Some(r) = resource_id {
+        temper_core::types::adoption::AdoptScope::Resource(*r)
+    } else if let Some(c) = context_id {
+        temper_core::types::adoption::AdoptScope::Context(c)
+    } else {
+        // The exclusivity check above guarantees `all` — the deployment-wide arm is reached
+        // only by naming it.
+        temper_core::types::adoption::AdoptScope::All
+    };
+
+    let body = temper_core::types::adoption::AdoptRequest {
+        scope,
+        dry_run,
+        limit,
+        after_id,
+    };
+    let receipt = client
+        .admin()
+        .adopt(&body)
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
+    let rendered = crate::format::render(&receipt, fmt)?;
+    println!("{rendered}");
+    Ok(())
+}
+
 /// Read the admin ledger — "who granted what, to whom, when".
 ///
 /// Exactly one axis. `--subject <kind>:<uuid>` asks what was done TO a thing; `--actor <uuid>`
@@ -351,4 +425,85 @@ pub async fn ledger_remote(
     let rendered = crate::format::render(&page, fmt)?;
     println!("{rendered}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A client pointed at a dead loopback port: nothing is listening, so any request that
+    /// actually leaves the process fails at transport — an error class distinct from the
+    /// scope-validation refusals these tests assert on.
+    fn dead_client() -> temper_client::TemperClient {
+        temper_client::TemperClient::with_token(
+            "http://127.0.0.1:9",
+            None,
+            temper_workflow::operations::Surface::CliCloud,
+            "test-token".to_string(),
+            std::sync::Arc::new(temper_client::auth::MemoryTokenStore::empty()),
+        )
+        .expect("loopback URL validates")
+    }
+
+    const SCOPE_MESSAGE: &str = "specify exactly one of --resource, --context, or --all";
+
+    /// No scope flag is no scope at all — the command refuses rather than guessing a default.
+    /// The deployment-wide arm must be asked for by name, never arrived at by omission.
+    #[tokio::test]
+    async fn adopt_with_no_scope_flag_errors() {
+        let err = adopt_remote(
+            &dead_client(),
+            None,
+            None,
+            false,
+            false,
+            None,
+            None,
+            crate::format::OutputFormat::Json,
+        )
+        .await
+        .expect_err("no scope flag must error");
+        assert!(matches!(err, TemperError::BadRequest(ref m) if m == SCOPE_MESSAGE));
+    }
+
+    /// Two scopes at once is ambiguous — refused, not resolved by precedence.
+    #[tokio::test]
+    async fn adopt_with_two_scope_flags_errors() {
+        let err = adopt_remote(
+            &dead_client(),
+            Some("019e84ab-26ba-7560-9d34-c60d74a9fbe2".to_string()),
+            None,
+            true,
+            false,
+            None,
+            None,
+            crate::format::OutputFormat::Json,
+        )
+        .await
+        .expect_err("two scope flags must error");
+        assert!(matches!(err, TemperError::BadRequest(ref m) if m == SCOPE_MESSAGE));
+    }
+
+    /// Exactly one scope passes validation and proceeds to dispatch. Against the dead
+    /// endpoint the dispatch itself fails at transport — a different error class than the
+    /// scope refusal, which is what distinguishes "validated, then sent" from "refused".
+    #[tokio::test]
+    async fn adopt_with_exactly_one_scope_flag_reaches_dispatch() {
+        let err = adopt_remote(
+            &dead_client(),
+            Some("019e84ab-26ba-7560-9d34-c60d74a9fbe2".to_string()),
+            None,
+            false,
+            false,
+            None,
+            None,
+            crate::format::OutputFormat::Json,
+        )
+        .await
+        .expect_err("dead endpoint must fail at transport");
+        assert!(
+            !err.to_string().contains(SCOPE_MESSAGE),
+            "a single scope must pass validation and fail at transport instead, got: {err}"
+        );
+    }
 }

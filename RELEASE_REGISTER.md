@@ -185,7 +185,33 @@ status: signal-only
   envelope as data. No earlier tool addressed a block id for reads.
 pr: self
 classes: additive
+surfaces: http, clients
+status: signal-only
+
+- **Corpus adoption's MCP door — `resource_adopt`**
+  The same bounded, resumable adoption step, one tool with a scope discriminator (the unified
+  `facet_set` naming shape): `scope` names `resource`, `context`, or `all` and carries the
+  per-arm ref, `dry_run` selects the survey, and `limit`/`after_id` bound and resume the walk;
+  the tool result is the receipt the HTTP route returns. Dispatch goes to the existing backend
+  command — the deployment-wide arm's system-admin gate and the per-resource gate train are the
+  backend's, unchanged. The tool description is client-published product: it ships to Anthropic
+  clients verbatim, and the input schema inlines its scope enum (`#[schemars(inline)]` — a
+  `$ref`-ed enum reaches Anthropic tool-use as null).
+pr: self
+classes: additive, behavioral
 surfaces: mcp
+status: signal-only
+
+- **Corpus adoption's CLI door — `temper admin adopt`**
+  The operator walk, beside `admin reembed`: exactly one of `--resource`, `--context`, or
+  `--all` (none is a refusal, not a default — the deployment-wide arm must be asked for by
+  name), `--dry-run`, `--limit`, and `--after-id` resume; the receipt renders to stdout under
+  the agent-first defaults. Ref resolution matches the sibling command (decorated
+  `slug-<uuid>` refs; contexts through the ordinary read resolution). Goes through the typed
+  client's new `adopt` method, not its own HTTP call.
+pr: self
+classes: additive
+surfaces: cli-stdout
 status: signal-only
 
 - **The defined dangling state — temper-client `BlockRead` types + CLI `resource read-block`**
