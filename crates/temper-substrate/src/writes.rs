@@ -1956,7 +1956,7 @@ pub async fn survey_reblock_resource(pool: &PgPool, resource: ResourceId) -> Res
 /// `writes::reblock_tests::reblock_op_is_reachable_only_through_the_gated_write_paths` (below)
 /// greps every crate's `src/` tree and fails on any caller outside its allowlist — the gated
 /// hook (here), the substrate's fire plumbing (`events.rs`), and the per-resource-gated
-/// adoption Backend command (`DbBackend::adopt_resources`, the op's one sanctioned direct
+/// reblock Backend command (`DbBackend::reblock_resources`, the op's one sanctioned direct
 /// production caller). A new caller must join that allowlist deliberately.
 ///
 /// `NoOp` is silence by design: a write that does not change the effective partition must be
@@ -3624,7 +3624,7 @@ mod reblock_tests {
 
     /// The reachability AC, made executable: the re-block op's reachable-from set is exactly
     /// the gated write-path hook (this file), the substrate's fire plumbing (`events.rs`), and
-    /// the ONE sanctioned direct caller — `DbBackend::adopt_resources`, gated per-resource by
+    /// the ONE sanctioned direct caller — `DbBackend::reblock_resources`, gated per-resource by
     /// the same `can_modify` gate train a single body update runs (the adoption spec's D-C1:
     /// the batch mints no authority). Enforced by grep over every crate's `src/` tree rather
     /// than by trusting a maintained allowlist beyond these three named homes (the
@@ -3639,7 +3639,7 @@ mod reblock_tests {
             .expect("workspace root")
             .join("crates");
         // The op (writes.rs), the substrate's own fire plumbing (events.rs, whose
-        // `_event_append` call reaches the SQL wrapper), and the gated adoption caller are the
+        // `_event_append` call reaches the SQL wrapper), and the gated reblock caller are the
         // only legitimate homes.
         let allowed: &[std::path::PathBuf] = &[
             std::path::PathBuf::from("temper-substrate/src/writes.rs"),
@@ -3664,8 +3664,13 @@ mod reblock_tests {
                             .map(|s| {
                                 // The Rust op AND the SQL entry wrapper carrying the same fold
                                 // semantics — either called from outside the substrate's own
-                                // write/fire plumbing is a bypass.
-                                s.contains("reblock_resource") || s.contains("resource_reblock(")
+                                // write/fire plumbing is a bypass. Each half excludes the
+                                // command-family symbol that shares its name: the Backend
+                                // command `reblock_resources` embeds the op's singular symbol,
+                                // and the MCP tool fn `resource_reblock` shares the SQL
+                                // function's — neither is an op caller, so a bare substring
+                                // match would flag every dispatch site as a bypass.
+                                mentions_reblock_op(&s)
                             })
                             .unwrap_or(false)
                     {
@@ -3678,8 +3683,36 @@ mod reblock_tests {
             offenders.is_empty(),
             "reblock_resource/resource_reblock must stay reachable ONLY through the gated \
              write paths (temper-substrate/src/writes.rs + events.rs) and the per-resource-\
-             gated adoption command (temper-services/src/backend/db_backend.rs); production \
+             gated reblock command (temper-services/src/backend/db_backend.rs); production \
              callers found: {offenders:?}"
         );
+    }
+
+    /// The op's two call forms — `reblock_resource` (the Rust op) and `resource_reblock(` (its
+    /// SQL entry wrapper) — matched precisely enough to NOT match the same-named
+    /// command-family symbols the rename introduced: the Backend command `reblock_resources`
+    /// (its plural embeds the op's singular symbol) and the MCP tool fn `resource_reblock`
+    /// (a Rust `fn ` definition or a `::`-qualified call, never how SQL reaches the function).
+    /// The substring forms alone cannot separate them; these two shape rules do, so the fence
+    /// keeps flagging exactly the op's callers and no longer flags command dispatch sites.
+    fn mentions_reblock_op(s: &str) -> bool {
+        let op = "reblock_resource";
+        let mut from = 0;
+        while let Some(i) = s[from..].find(op) {
+            if !s[from + i + op.len()..].starts_with('s') {
+                return true;
+            }
+            from += i + op.len();
+        }
+        let sql_fn = "resource_reblock(";
+        let mut from = 0;
+        while let Some(i) = s[from..].find(sql_fn) {
+            let before = &s[..from + i];
+            if !(before.ends_with("fn ") || before.ends_with("::")) {
+                return true;
+            }
+            from += i + 1;
+        }
+        false
     }
 }

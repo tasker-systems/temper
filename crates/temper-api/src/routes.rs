@@ -80,11 +80,11 @@ fn gated_routes() -> OpenApiRouter<AppState> {
         ))
         .routes(routes!(handlers::resources::read_block))
         // Corpus adoption — one bounded, resumable, per-row-gated re-block step per call,
-        // dispatched to the Backend's `adopt_resources` command. Documented (unlike the
+        // dispatched to the Backend's `reblock_resources` command. Documented (unlike the
         // admin-enclosed `/api/embed/admin/reembed` trigger): the gate is the backend seam —
         // the deployment-wide arm is SystemAdmin-checked there, the resource/context arms ride
         // the caller's own visibility — and the contract is the receipt.
-        .routes(routes!(handlers::adopt::adopt))
+        .routes(routes!(handlers::reblock::reblock))
         .routes(routes!(handlers::reassign::reassign_resource))
         .routes(routes!(handlers::edges::list))
         .routes(routes!(handlers::evidence::evidence))

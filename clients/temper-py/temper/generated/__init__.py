@@ -19,7 +19,6 @@ __version__ = "0.4.0"
 # Define package exports
 __all__ = [
     "AccessApi",
-    "AdoptionApi",
     "AuditorApi",
     "BlobsApi",
     "CognitiveMapsApi",
@@ -36,6 +35,7 @@ __all__ = [
     "MetaApi",
     "ProfileApi",
     "QueryApi",
+    "ReblockingApi",
     "RelationshipsApi",
     "ResourcesApi",
     "SchemaApi",
@@ -60,24 +60,6 @@ __all__ = [
     "ActRefusal",
     "ActorAuthority",
     "AddMemberRequest",
-    "AdoptDeclined",
-    "AdoptDeclinedOneOf",
-    "AdoptDeclinedOneOf1",
-    "AdoptDeclinedOneOf2",
-    "AdoptDeclinedOneOfInProgress",
-    "AdoptOutcome",
-    "AdoptOutcomeOneOf",
-    "AdoptOutcomeOneOf1",
-    "AdoptOutcomeOneOf2",
-    "AdoptOutcomeOneOf2Error",
-    "AdoptOutcomeOneOfReblocked",
-    "AdoptReceipt",
-    "AdoptRequest",
-    "AdoptResourceOutcome",
-    "AdoptScope",
-    "AdoptScopeOneOf",
-    "AdoptScopeOneOf1",
-    "AdoptSummary",
     "AdvanceWatermarkAck",
     "AdvanceWatermarkRequest",
     "AgentAuthorship",
@@ -290,6 +272,22 @@ __all__ = [
     "ReassignContextOutcome",
     "ReassignContextRequest",
     "ReassignResourceRequest",
+    "ReblockCandidate",
+    "ReblockOutcome",
+    "ReblockOutcomeOneOf",
+    "ReblockOutcomeOneOf1",
+    "ReblockOutcomeOneOf1InProgress",
+    "ReblockOutcomeOneOf2",
+    "ReblockOutcomeOneOf3",
+    "ReblockOutcomeOneOf4",
+    "ReblockOutcomeOneOf4Error",
+    "ReblockOutcomeOneOfReblocked",
+    "ReblockReceipt",
+    "ReblockRequest",
+    "ReblockScope",
+    "ReblockScopeOneOf",
+    "ReblockScopeOneOf1",
+    "ReblockSummary",
     "ReconcileCogmapRequest",
     "ReconcileEdge",
     "ReconcileEdgeTombstone",
@@ -395,7 +393,6 @@ __all__ = [
 
 # import apis into sdk package
 from temper.generated.api.access_api import AccessApi as AccessApi
-from temper.generated.api.adoption_api import AdoptionApi as AdoptionApi
 from temper.generated.api.auditor_api import AuditorApi as AuditorApi
 from temper.generated.api.blobs_api import BlobsApi as BlobsApi
 from temper.generated.api.cognitive_maps_api import CognitiveMapsApi as CognitiveMapsApi
@@ -412,6 +409,7 @@ from temper.generated.api.invocations_api import InvocationsApi as InvocationsAp
 from temper.generated.api.meta_api import MetaApi as MetaApi
 from temper.generated.api.profile_api import ProfileApi as ProfileApi
 from temper.generated.api.query_api import QueryApi as QueryApi
+from temper.generated.api.reblocking_api import ReblockingApi as ReblockingApi
 from temper.generated.api.relationships_api import RelationshipsApi as RelationshipsApi
 from temper.generated.api.resources_api import ResourcesApi as ResourcesApi
 from temper.generated.api.schema_api import SchemaApi as SchemaApi
@@ -440,24 +438,6 @@ from temper.generated.models.act_quantity import ActQuantity as ActQuantity
 from temper.generated.models.act_refusal import ActRefusal as ActRefusal
 from temper.generated.models.actor_authority import ActorAuthority as ActorAuthority
 from temper.generated.models.add_member_request import AddMemberRequest as AddMemberRequest
-from temper.generated.models.adopt_declined import AdoptDeclined as AdoptDeclined
-from temper.generated.models.adopt_declined_one_of import AdoptDeclinedOneOf as AdoptDeclinedOneOf
-from temper.generated.models.adopt_declined_one_of1 import AdoptDeclinedOneOf1 as AdoptDeclinedOneOf1
-from temper.generated.models.adopt_declined_one_of2 import AdoptDeclinedOneOf2 as AdoptDeclinedOneOf2
-from temper.generated.models.adopt_declined_one_of_in_progress import AdoptDeclinedOneOfInProgress as AdoptDeclinedOneOfInProgress
-from temper.generated.models.adopt_outcome import AdoptOutcome as AdoptOutcome
-from temper.generated.models.adopt_outcome_one_of import AdoptOutcomeOneOf as AdoptOutcomeOneOf
-from temper.generated.models.adopt_outcome_one_of1 import AdoptOutcomeOneOf1 as AdoptOutcomeOneOf1
-from temper.generated.models.adopt_outcome_one_of2 import AdoptOutcomeOneOf2 as AdoptOutcomeOneOf2
-from temper.generated.models.adopt_outcome_one_of2_error import AdoptOutcomeOneOf2Error as AdoptOutcomeOneOf2Error
-from temper.generated.models.adopt_outcome_one_of_reblocked import AdoptOutcomeOneOfReblocked as AdoptOutcomeOneOfReblocked
-from temper.generated.models.adopt_receipt import AdoptReceipt as AdoptReceipt
-from temper.generated.models.adopt_request import AdoptRequest as AdoptRequest
-from temper.generated.models.adopt_resource_outcome import AdoptResourceOutcome as AdoptResourceOutcome
-from temper.generated.models.adopt_scope import AdoptScope as AdoptScope
-from temper.generated.models.adopt_scope_one_of import AdoptScopeOneOf as AdoptScopeOneOf
-from temper.generated.models.adopt_scope_one_of1 import AdoptScopeOneOf1 as AdoptScopeOneOf1
-from temper.generated.models.adopt_summary import AdoptSummary as AdoptSummary
 from temper.generated.models.advance_watermark_ack import AdvanceWatermarkAck as AdvanceWatermarkAck
 from temper.generated.models.advance_watermark_request import AdvanceWatermarkRequest as AdvanceWatermarkRequest
 from temper.generated.models.agent_authorship import AgentAuthorship as AgentAuthorship
@@ -670,6 +650,22 @@ from temper.generated.models.reassign_ack import ReassignAck as ReassignAck
 from temper.generated.models.reassign_context_outcome import ReassignContextOutcome as ReassignContextOutcome
 from temper.generated.models.reassign_context_request import ReassignContextRequest as ReassignContextRequest
 from temper.generated.models.reassign_resource_request import ReassignResourceRequest as ReassignResourceRequest
+from temper.generated.models.reblock_candidate import ReblockCandidate as ReblockCandidate
+from temper.generated.models.reblock_outcome import ReblockOutcome as ReblockOutcome
+from temper.generated.models.reblock_outcome_one_of import ReblockOutcomeOneOf as ReblockOutcomeOneOf
+from temper.generated.models.reblock_outcome_one_of1 import ReblockOutcomeOneOf1 as ReblockOutcomeOneOf1
+from temper.generated.models.reblock_outcome_one_of1_in_progress import ReblockOutcomeOneOf1InProgress as ReblockOutcomeOneOf1InProgress
+from temper.generated.models.reblock_outcome_one_of2 import ReblockOutcomeOneOf2 as ReblockOutcomeOneOf2
+from temper.generated.models.reblock_outcome_one_of3 import ReblockOutcomeOneOf3 as ReblockOutcomeOneOf3
+from temper.generated.models.reblock_outcome_one_of4 import ReblockOutcomeOneOf4 as ReblockOutcomeOneOf4
+from temper.generated.models.reblock_outcome_one_of4_error import ReblockOutcomeOneOf4Error as ReblockOutcomeOneOf4Error
+from temper.generated.models.reblock_outcome_one_of_reblocked import ReblockOutcomeOneOfReblocked as ReblockOutcomeOneOfReblocked
+from temper.generated.models.reblock_receipt import ReblockReceipt as ReblockReceipt
+from temper.generated.models.reblock_request import ReblockRequest as ReblockRequest
+from temper.generated.models.reblock_scope import ReblockScope as ReblockScope
+from temper.generated.models.reblock_scope_one_of import ReblockScopeOneOf as ReblockScopeOneOf
+from temper.generated.models.reblock_scope_one_of1 import ReblockScopeOneOf1 as ReblockScopeOneOf1
+from temper.generated.models.reblock_summary import ReblockSummary as ReblockSummary
 from temper.generated.models.reconcile_cogmap_request import ReconcileCogmapRequest as ReconcileCogmapRequest
 from temper.generated.models.reconcile_edge import ReconcileEdge as ReconcileEdge
 from temper.generated.models.reconcile_edge_tombstone import ReconcileEdgeTombstone as ReconcileEdgeTombstone

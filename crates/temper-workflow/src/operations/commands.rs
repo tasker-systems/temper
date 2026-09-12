@@ -504,8 +504,8 @@ pub struct MaterializeOnThreshold {
 /// per-resource outcomes, per-class counts, the batch correlation id, and the continuation
 /// cursor. The operator is the loop — nothing runs between invocations.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AdoptResources {
-    pub scope: temper_core::types::adoption::AdoptScope,
+pub struct ReblockResources {
+    pub scope: temper_core::types::reblock::ReblockScope,
     /// Survey instead of act: classify every candidate without touching anything.
     pub dry_run: bool,
     /// The candidate-window bound. Every invocation is bounded; there is no unbounded pass.

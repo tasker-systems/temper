@@ -1489,22 +1489,22 @@ pub enum AdminAction {
         #[arg(long = "dry-run")]
         dry_run: bool,
     },
-    /// Run one bounded, resumable corpus-adoption step: re-block resources under the current
+    /// Run one bounded, resumable corpus re-blocking step: re-block resources under the current
     /// chunking policy
     ///
     /// Survey first with --dry-run, then run without it, then survey again to verify. Exactly one
-    /// scope: --resource adopts one resource, --context every candidate homed in that context you
-    /// can read, --all the whole deployment (requires system-administrator standing, and must be
-    /// asked for by name — never the default). Prints the receipt: one outcome row per candidate,
-    /// per-class counts, the batch correlation id, and the resume cursor.
-    Adopt {
-        /// Adopt just this resource (UUID or decorated ref)
+    /// scope: --resource re-blocks one resource, --context every candidate homed in that context
+    /// you can read, --all the whole deployment (requires system-administrator standing, and must
+    /// be asked for by name — never the default). Prints the receipt: one outcome row per
+    /// candidate, per-class counts, the batch correlation id, and the resume cursor.
+    Reblock {
+        /// Re-block just this resource (UUID or decorated ref)
         #[arg(long)]
         resource: Option<String>,
-        /// Adopt every candidate homed in this context (`@me/slug`, `+team/slug`, or UUID)
+        /// Re-block every candidate homed in this context (`@me/slug`, `+team/slug`, or UUID)
         #[arg(long)]
         context: Option<String>,
-        /// Adopt deployment-wide. Requires system-administrator standing. Must be asked for
+        /// Re-block deployment-wide. Requires system-administrator standing. Must be asked for
         /// by name — never the default.
         #[arg(long)]
         all: bool,

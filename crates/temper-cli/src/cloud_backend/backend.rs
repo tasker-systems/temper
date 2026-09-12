@@ -48,10 +48,10 @@ mod embed_impl {
     use async_trait::async_trait;
     use temper_core::types::resource_view::ResourceView;
     use temper_workflow::operations::{
-        AdoptResources, AdvanceStewardWatermark, AnnotateResource, AssertRelationship,
-        AuditorDispatchTick, Backend, CloseInvocation, CommandOutput, CommitDataArtifact,
-        CompleteAuditorJob, CreateCognitiveMap, CreateResource, DeleteResource, DomainEvent,
-        FoldRelationship, MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap,
+        AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick,
+        Backend, CloseInvocation, CommandOutput, CommitDataArtifact, CompleteAuditorJob,
+        CreateCognitiveMap, CreateResource, DeleteResource, DomainEvent, FoldRelationship,
+        MaterializeOnThreshold, OpenInvocation, ReblockResources, ReconcileCognitiveMap,
         RecordCitationAudit, RetypeRelationship, ReweightRelationship, ShowResource,
         StewardDispatchTick, UpdateResource,
     };
@@ -346,13 +346,13 @@ mod embed_impl {
             ))
         }
 
-        async fn adopt_resources(
+        async fn reblock_resources(
             &self,
-            _cmd: AdoptResources,
-        ) -> Result<CommandOutput<temper_core::types::adoption::AdoptReceipt>, TemperError>
+            _cmd: ReblockResources,
+        ) -> Result<CommandOutput<temper_core::types::reblock::ReblockReceipt>, TemperError>
         {
             Err(TemperError::Project(
-                "CloudBackend::adopt_resources not wired until cutover".to_string(),
+                "CloudBackend::reblock_resources not wired until cutover".to_string(),
             ))
         }
 
@@ -529,12 +529,12 @@ mod non_embed_impl {
     use async_trait::async_trait;
     use temper_core::types::resource_view::ResourceView;
     use temper_workflow::operations::{
-        AdoptResources, AdvanceStewardWatermark, AnnotateResource, AssertRelationship,
-        AuditorDispatchTick, Backend, CloseInvocation, CommandOutput, CommitDataArtifact,
-        CompleteAuditorJob, CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship,
-        MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit,
-        RetypeRelationship, ReweightRelationship, ShowResource, StewardDispatchTick,
-        UpdateResource,
+        AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick,
+        Backend, CloseInvocation, CommandOutput, CommitDataArtifact, CompleteAuditorJob,
+        CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship,
+        MaterializeOnThreshold, OpenInvocation, ReblockResources, ReconcileCognitiveMap,
+        RecordCitationAudit, RetypeRelationship, ReweightRelationship, ShowResource,
+        StewardDispatchTick, UpdateResource,
     };
 
     use super::CloudBackend;

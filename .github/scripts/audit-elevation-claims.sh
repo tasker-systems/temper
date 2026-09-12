@@ -191,7 +191,7 @@ current_gates() {
 # `gate <name> <fingerprint>` — code-only hash; see `fingerprint`.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 13 is_system_admin
-claim crates/temper-api/src/handlers/adopt.rs 2 is_system_admin
+claim crates/temper-api/src/handlers/reblock.rs 2 is_system_admin
 claim crates/temper-api/src/handlers/cognitive_maps.rs 4 require_cogmap_write_admin
 claim crates/temper-api/src/handlers/connections.rs 1 connection
 claim crates/temper-api/src/handlers/slack_disconnect.rs 1 -
@@ -207,7 +207,7 @@ claim crates/temper-cli/src/commands/cogmap.rs 3 require_cogmap_write_admin
 claim crates/temper-cli/src/commands/context_cmd.rs 2 context_admin
 claim crates/temper-cli/src/commands/warmup.rs 1 is_system_admin
 claim crates/temper-mcp/src/service.rs 3 -
-claim crates/temper-mcp/src/tools/adoption.rs 2 -
+claim crates/temper-mcp/src/tools/reblock.rs 2 -
 claim crates/temper-mcp/src/tools/cognitive_maps.rs 1 require_cogmap_write_admin
 claim crates/temper-mcp/src/tools/contexts.rs 2 context_admin,two_sided
 claim crates/temper-services/src/services/access_service.rs 5 is_system_admin

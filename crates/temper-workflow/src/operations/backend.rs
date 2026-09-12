@@ -23,10 +23,10 @@ use temper_core::types::materialize::MaterializeAck;
 use temper_core::types::resource_view::ResourceView;
 
 use super::commands::{
-    AdoptResources, AdvanceStewardWatermark, AnnotateResource, AssertRelationship,
-    AuditorDispatchTick, CloseInvocation, CommitDataArtifact, CompleteAuditorJob,
-    CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship, MaterializeOnThreshold,
-    OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit, RetractFacet, RetypeRelationship,
+    AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick,
+    CloseInvocation, CommitDataArtifact, CompleteAuditorJob, CreateCognitiveMap, CreateResource,
+    DeleteResource, FoldRelationship, MaterializeOnThreshold, OpenInvocation, ReblockResources,
+    ReconcileCognitiveMap, RecordCitationAudit, RetractFacet, RetypeRelationship,
     ReweightRelationship, SetFacet, ShowResource, StewardDispatchTick, UpdateResource,
 };
 use super::output::CommandOutput;
@@ -235,11 +235,11 @@ pub trait Backend: Send + Sync {
     /// acting principal's existing write predicates (a denial is a per-row receipt outcome,
     /// never a batch abort and never a new authority); `dry_run` surveys instead of acting.
     /// The scope's `All` arm is SystemAdmin-gated at the backend seam. See
-    /// [`temper_core::types::adoption::AdoptReceipt`] for the receipt contract.
-    async fn adopt_resources(
+    /// [`temper_core::types::reblock::ReblockReceipt`] for the receipt contract.
+    async fn reblock_resources(
         &self,
-        cmd: AdoptResources,
-    ) -> Result<CommandOutput<temper_core::types::adoption::AdoptReceipt>, TemperError>;
+        cmd: ReblockResources,
+    ) -> Result<CommandOutput<temper_core::types::reblock::ReblockReceipt>, TemperError>;
 
     // ── segmented (multi-block) ingest — streaming/resumable ingestion ──
     // The whole session: `begin_segmented_ingest` creates the resource with block 0 and records the

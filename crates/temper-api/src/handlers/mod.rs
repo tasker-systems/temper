@@ -1,6 +1,5 @@
 pub mod access;
 pub mod admin_ledger;
-pub mod adopt;
 pub mod as_reap;
 pub mod auditor;
 pub mod blobs;
@@ -28,6 +27,7 @@ pub mod meta;
 pub mod profiles;
 pub mod query;
 pub mod reassign;
+pub mod reblock;
 pub mod region;
 pub mod resources;
 pub mod schema;

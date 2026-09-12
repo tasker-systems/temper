@@ -205,7 +205,7 @@ const API_VERSION: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../
         (name = "Invocations", description = "Agent-invocation envelope (accountability)"),
         (name = "Steward", description = "Team-self-cognition steward ingest trigger (delta + watermark)"),
         (name = "Auditor", description = "Citation auditor dispatch — coverage sweep + per-cogmap job fan-out"),
-        (name = "Adoption", description = "Corpus adoption — bounded, resumable, per-row-gated re-block steps (survey, act, re-survey)"),
+        (name = "Reblocking", description = "Corpus re-blocking — bounded, resumable, per-row-gated re-block steps (survey, act, re-survey)"),
         (name = "Slack Link", description = "Slack account-link disconnect — self-serve and admin"),
     ),
     info(

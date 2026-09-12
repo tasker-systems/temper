@@ -291,8 +291,8 @@ pub async fn reembed_remote(
     Ok(())
 }
 
-/// `temper admin adopt` — run one bounded, resumable corpus-adoption step (admin only for the
-/// deployment-wide arm; the resource and context arms ride the caller's own visibility).
+/// `temper admin reblock` — run one bounded, resumable corpus re-blocking step (admin only for
+/// the deployment-wide arm; the resource and context arms ride the caller's own visibility).
 ///
 /// Each candidate whose stored body no longer reproduces its stored chunking is re-blocked
 /// under the current chunking policy — ordinary per-resource writes, gated one row at a time
@@ -301,10 +301,10 @@ pub async fn reembed_remote(
 /// Survey it first: `--dry-run` classifies every candidate without touching anything. Then run
 /// without it, then survey again to verify. Exactly one scope — refuse to guess. "All" must be
 /// asked for by name. `--limit` bounds how many candidates a single call considers, and
-/// `--after-id` resumes a walk from the previous receipt's cursor, so "adopt the corpus" is a
+/// `--after-id` resumes a walk from the previous receipt's cursor, so "reblock the corpus" is a
 /// walk, not a leap.
 #[allow(clippy::too_many_arguments)]
-pub async fn adopt_remote(
+pub async fn reblock_remote(
     client: &temper_client::TemperClient,
     resource: Option<String>,
     context: Option<String>,
@@ -340,16 +340,16 @@ pub async fn adopt_remote(
     }
 
     let scope = if let Some(r) = resource_id {
-        temper_core::types::adoption::AdoptScope::Resource(*r)
+        temper_core::types::reblock::ReblockScope::Resource(*r)
     } else if let Some(c) = context_id {
-        temper_core::types::adoption::AdoptScope::Context(c)
+        temper_core::types::reblock::ReblockScope::Context(c)
     } else {
         // The exclusivity check above guarantees `all` — the deployment-wide arm is reached
         // only by naming it.
-        temper_core::types::adoption::AdoptScope::All
+        temper_core::types::reblock::ReblockScope::All
     };
 
-    let body = temper_core::types::adoption::AdoptRequest {
+    let body = temper_core::types::reblock::ReblockRequest {
         scope,
         dry_run,
         limit,
@@ -357,7 +357,7 @@ pub async fn adopt_remote(
     };
     let receipt = client
         .admin()
-        .adopt(&body)
+        .reblock(&body)
         .await
         .map_err(crate::actions::runtime::client_err_to_temper)?;
     let rendered = crate::format::render(&receipt, fmt)?;
@@ -450,8 +450,8 @@ mod tests {
     /// No scope flag is no scope at all — the command refuses rather than guessing a default.
     /// The deployment-wide arm must be asked for by name, never arrived at by omission.
     #[tokio::test]
-    async fn adopt_with_no_scope_flag_errors() {
-        let err = adopt_remote(
+    async fn reblock_with_no_scope_flag_errors() {
+        let err = reblock_remote(
             &dead_client(),
             None,
             None,
@@ -468,8 +468,8 @@ mod tests {
 
     /// Two scopes at once is ambiguous — refused, not resolved by precedence.
     #[tokio::test]
-    async fn adopt_with_two_scope_flags_errors() {
-        let err = adopt_remote(
+    async fn reblock_with_two_scope_flags_errors() {
+        let err = reblock_remote(
             &dead_client(),
             Some("019e84ab-26ba-7560-9d34-c60d74a9fbe2".to_string()),
             None,
@@ -488,8 +488,8 @@ mod tests {
     /// endpoint the dispatch itself fails at transport — a different error class than the
     /// scope refusal, which is what distinguishes "validated, then sent" from "refused".
     #[tokio::test]
-    async fn adopt_with_exactly_one_scope_flag_reaches_dispatch() {
-        let err = adopt_remote(
+    async fn reblock_with_exactly_one_scope_flag_reaches_dispatch() {
+        let err = reblock_remote(
             &dead_client(),
             Some("019e84ab-26ba-7560-9d34-c60d74a9fbe2".to_string()),
             None,

@@ -1051,7 +1051,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     .await
                 })
             }),
-            AdminAction::Adopt {
+            AdminAction::Reblock {
                 resource,
                 context,
                 all,
@@ -1060,7 +1060,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 after_id,
             } => temper_cli::actions::runtime::with_client(|client| {
                 Box::pin(async move {
-                    temper_cli::commands::admin::adopt_remote(
+                    temper_cli::commands::admin::reblock_remote(
                         client,
                         resource,
                         context,

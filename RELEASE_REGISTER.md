@@ -14,11 +14,11 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.4.0 — unreleased
 
-- **Corpus adoption's HTTP surface — `POST /api/resources/adopt`**
-  One bounded, resumable adoption step per call: the body names a scope (one resource by id,
+- **Corpus adoption's HTTP surface — `POST /api/resources/reblock`**
+  One bounded, resumable re-blocking step per call: the body names a scope (one resource by id,
   one context by id, or the explicitly-named deployment-wide `all`), `dry_run`, an optional
   `limit` (a declared conservative default applies), and the `after_id` resume cursor; the
-  response is the adoption receipt — one outcome row per candidate, per-class counts, the
+  response is the reblock receipt — one outcome row per candidate, per-class counts, the
   batch correlation id, and the continuation cursor. The route is documented in the OpenAPI
   contract (the deliberate contrast with the admin-enclosed re-embed trigger), and the three
   generated client skins gain the operation and its models. Dispatch goes to the existing
@@ -188,8 +188,8 @@ classes: additive
 surfaces: http, clients
 status: signal-only
 
-- **Corpus adoption's MCP door — `resource_adopt`**
-  The same bounded, resumable adoption step, one tool with a scope discriminator (the unified
+- **Corpus adoption's MCP door — `resource_reblock`**
+  The same bounded, resumable re-blocking step, one tool with a scope discriminator (the unified
   `facet_set` naming shape): `scope` names `resource`, `context`, or `all` and carries the
   per-arm ref, `dry_run` selects the survey, and `limit`/`after_id` bound and resume the walk;
   the tool result is the receipt the HTTP route returns. Dispatch goes to the existing backend
@@ -202,13 +202,13 @@ classes: additive, behavioral
 surfaces: mcp
 status: signal-only
 
-- **Corpus adoption's CLI door — `temper admin adopt`**
+- **Corpus adoption's CLI door — `temper admin reblock`**
   The operator walk, beside `admin reembed`: exactly one of `--resource`, `--context`, or
   `--all` (none is a refusal, not a default — the deployment-wide arm must be asked for by
   name), `--dry-run`, `--limit`, and `--after-id` resume; the receipt renders to stdout under
   the agent-first defaults. Ref resolution matches the sibling command (decorated
   `slug-<uuid>` refs; contexts through the ordinary read resolution). Goes through the typed
-  client's new `adopt` method, not its own HTTP call.
+  client's new `reblock` method, not its own HTTP call.
 pr: self
 classes: additive
 surfaces: cli-stdout
