@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT segment_hash FROM kb_blob_upload_segments WHERE upload_id = $1 AND seq = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "segment_hash",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "afcf8b85c8ca7a15cfb987acaa86fdb4402cdb72446f6b57a9d09b4afafc2892"
+}

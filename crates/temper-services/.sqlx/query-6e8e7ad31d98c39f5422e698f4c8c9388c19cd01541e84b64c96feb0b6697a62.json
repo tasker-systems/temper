@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id FROM kb_properties WHERE owner_table = $1 AND owner_id = $2 AND property_key = $3 AND property_value = $4 AND NOT is_folded",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "6e8e7ad31d98c39f5422e698f4c8c9388c19cd01541e84b64c96feb0b6697a62"
+}

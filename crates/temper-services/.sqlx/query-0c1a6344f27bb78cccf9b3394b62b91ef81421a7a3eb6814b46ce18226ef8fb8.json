@@ -1,0 +1,71 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT audit_id             AS \"audit_id!\",\n                  block_id             AS \"block_id!\",\n                  source_id            AS \"source_id!\",\n                  value                AS \"value!\",\n                  reason,\n                  created              AS \"created!\",\n                  auditor_profile_id   AS \"auditor_profile_id!\",\n                  auditor_handle       AS \"auditor_handle!\",\n                  auditor_display_name AS \"auditor_display_name!\"\n             FROM resource_citation_audit_trail($1, 'profile', $2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "audit_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "block_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "source_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "value!",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 4,
+        "name": "reason",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "created!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "auditor_profile_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 7,
+        "name": "auditor_handle!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "auditor_display_name!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "0c1a6344f27bb78cccf9b3394b62b91ef81421a7a3eb6814b46ce18226ef8fb8"
+}

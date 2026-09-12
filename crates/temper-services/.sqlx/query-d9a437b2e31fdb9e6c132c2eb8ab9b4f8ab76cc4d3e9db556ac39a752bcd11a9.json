@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT anchor_telos_embedding($1, $2, $3)::text",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "anchor_telos_embedding",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d9a437b2e31fdb9e6c132c2eb8ab9b4f8ab76cc4d3e9db556ac39a752bcd11a9"
+}

@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_profiles (handle, display_name) VALUES ('system','System') ON CONFLICT (handle) DO UPDATE SET display_name=EXCLUDED.display_name RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "08a22c9092d44962ff3ca0d82c14628b90c241555d7fec04bd5783f24bc062c6"
+}

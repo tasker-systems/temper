@@ -1,0 +1,83 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT i.id, i.status, i.trigger_kind, i.originating_cogmap_id, i.parent_cogmap_id,\n                  i.scoped_entity_id, i.telos_resource_id, i.outcome, i.opened_at, i.closed_at,\n                  i.correlation_id\n             FROM kb_invocations i\n            WHERE i.id = $1\n              AND anchor_readable_by_profile($2, 'kb_cogmaps', i.originating_cogmap_id)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "trigger_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "originating_cogmap_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "parent_cogmap_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "scoped_entity_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 6,
+        "name": "telos_resource_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 7,
+        "name": "outcome",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 8,
+        "name": "opened_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 9,
+        "name": "closed_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 10,
+        "name": "correlation_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "4de5f3101fd019bc002294e9d84d243736b00d4c35033b3aae5c3578599a41ac"
+}

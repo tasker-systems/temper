@@ -1,0 +1,138 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT r.id AS \"id!\",\n                  r.title,\n                  r.origin_uri,\n                  r.is_active,\n                  r.created,\n                  r.updated,\n                  r.body_hash,\n                  r.ingest_state,\n                  r.body_storage,\n                  h.owner_profile_id,\n                  h.originator_profile_id,\n                  p.handle                   AS owner_handle,\n                  dt.property_value #>> '{}' AS \"doc_type_name!\",\n                  c.id                       AS \"kb_context_id?\",\n                  c.name                     AS \"context_name?\",\n                  cm.id                      AS \"cogmap_id?\",\n                  cm.name                    AS \"cogmap_name?\",\n                  c.slug                     AS \"context_slug?\",\n                  CASE c.owner_table\n                    WHEN 'kb_teams' THEN '+' || (SELECT slug   FROM kb_teams    WHERE id = c.owner_id)\n                    WHEN 'kb_profiles' THEN '@' || (SELECT handle FROM kb_profiles WHERE id = c.owner_id)\n                    ELSE NULL\n                  END                        AS \"context_owner_ref?\",\n                  mm.managed                 AS \"managed?\"\n             FROM kb_resources r\n             JOIN kb_resource_homes h ON h.resource_id = r.id\n             -- `AND v.resource_id = ANY($2)` is REDUNDANT AND LOAD-BEARING. Do not delete it.\n             -- See the doc comment's \"the predicate is stated twice\" note: it is implied by\n             -- `v.resource_id = r.id` + the WHERE below, and the planner cannot derive it,\n             -- because `= ANY` forms no equivalence class. Without it the gate builds the\n             -- principal's ENTIRE visible set to answer for these ids.\n             JOIN resources_visible_to($1) v\n               ON v.resource_id = r.id AND v.resource_id = ANY($2)\n             LEFT JOIN kb_contexts c\n               ON c.id = h.anchor_id AND h.anchor_table = 'kb_contexts'\n             LEFT JOIN kb_cogmaps cm\n               ON cm.id = h.anchor_id AND h.anchor_table = 'kb_cogmaps'\n             JOIN kb_profiles p ON p.id = h.owner_profile_id\n             JOIN kb_properties dt\n               ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id\n              AND dt.property_key = 'doc_type' AND NOT dt.is_folded\n             LEFT JOIN LATERAL (\n               SELECT jsonb_object_agg(newest.property_key, newest.property_value) AS managed\n                 FROM (SELECT DISTINCT ON (mp.property_key)\n                              mp.property_key, mp.property_value\n                         FROM kb_properties mp\n                        WHERE mp.owner_table = 'kb_resources' AND mp.owner_id = r.id\n                          AND NOT mp.is_folded AND mp.property_key = ANY($3)\n                        ORDER BY mp.property_key, mp.created DESC, mp.id DESC) newest\n             ) mm ON TRUE\n            WHERE r.id = ANY($2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "origin_uri",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "is_active",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 4,
+        "name": "created",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "updated",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "body_hash",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "ingest_state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "body_storage",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "owner_profile_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 10,
+        "name": "originator_profile_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 11,
+        "name": "owner_handle",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "doc_type_name!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 13,
+        "name": "kb_context_id?",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 14,
+        "name": "context_name?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 15,
+        "name": "cogmap_id?",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 16,
+        "name": "cogmap_name?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 17,
+        "name": "context_slug?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 18,
+        "name": "context_owner_ref?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 19,
+        "name": "managed?",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "6fddb8db8218bcd3ca0fe0c385818f99249fb0dd81d374f7775e8d347f93903c"
+}

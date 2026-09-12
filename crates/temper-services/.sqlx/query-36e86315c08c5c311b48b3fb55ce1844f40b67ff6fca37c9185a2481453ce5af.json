@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT c.chunk_index,\n                  COALESCE(c.header_path, '')            AS \"header_path!\",\n                  COALESCE(c.heading_depth, 0::smallint) AS \"heading_depth!\",\n                  cc.content\n             FROM kb_chunks c\n             JOIN kb_content_blocks b ON b.id = c.block_id\n             JOIN kb_chunk_content cc ON cc.chunk_id = c.id\n            WHERE c.resource_id = $1 AND c.is_current\n            ORDER BY b.seq, c.chunk_index",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "chunk_index",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "header_path!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "heading_depth!",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 3,
+        "name": "content",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null,
+      false
+    ]
+  },
+  "hash": "36e86315c08c5c311b48b3fb55ce1844f40b67ff6fca37c9185a2481453ce5af"
+}

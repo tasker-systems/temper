@@ -1,0 +1,61 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT region_id AS \"region_id!\",\n                  lens_id   AS \"lens_id!\",\n                  centrality, content_cohesion, internal_tension,\n                  reference_standing, telos_alignment\n             FROM anchor_region_metrics($1, $2, 'profile', $3, $4)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "region_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "lens_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "centrality",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 3,
+        "name": "content_cohesion",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 4,
+        "name": "internal_tension",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 5,
+        "name": "reference_standing",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 6,
+        "name": "telos_alignment",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "a1cf6206663a2d3de4227edec190d749e22fa10523429adfedad49334886b015"
+}

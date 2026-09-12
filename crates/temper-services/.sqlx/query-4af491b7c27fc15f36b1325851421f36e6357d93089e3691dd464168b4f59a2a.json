@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT t.name AS \"name!\", e.payload AS \"payload: serde_json::Value\"\n                     FROM kb_events e\n                     JOIN kb_event_types t ON t.id = e.event_type_id\n                    WHERE e.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "payload: serde_json::Value",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "4af491b7c27fc15f36b1325851421f36e6357d93089e3691dd464168b4f59a2a"
+}

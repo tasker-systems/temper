@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT property_key, property_value\n             FROM kb_properties\n            WHERE owner_table = 'kb_resources' AND owner_id = $1 AND NOT is_folded\n            ORDER BY created, id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "property_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "property_value",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "e74d65169ba8fe131d87996565aba14e9e13ffd1ade0222869a2b5cbbd5c106b"
+}

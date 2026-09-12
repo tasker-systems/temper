@@ -286,8 +286,9 @@ pub async fn assemble_body(pool: &PgPool, upload_id: Uuid) -> Result<Vec<u8>> {
 }
 
 /// Delete the session and its segments (the segments row cascades). Called on finalize
-/// success; every finalize failure leaves the staging in place (resumable — the
-/// keep-and-declare posture; a TTL reaper is a declared hole, not silently clean).
+/// success; every finalize failure leaves the staging in place (resumable), and a session
+/// never finalized is swept by the staging TTL reaper (`blob_reap_service`, the
+/// `BLOB_UPLOAD_STAGING_TTL_SECONDS` knob) once it sits untouched past the configured TTL.
 pub async fn delete_session(pool: &PgPool, upload_id: Uuid) -> Result<()> {
     sqlx::query!("DELETE FROM kb_blob_uploads WHERE id = $1", upload_id)
         .execute(pool)

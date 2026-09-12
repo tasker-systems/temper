@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT c.id, c.block_id, c.content_hash\n             FROM kb_chunks c\n             JOIN kb_content_blocks b ON b.id = c.block_id\n            WHERE b.resource_id = $1 AND c.is_current AND NOT b.is_folded\n            ORDER BY b.seq, c.chunk_index",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "block_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "content_hash",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "38d22cb196aa9ae4479aaeaabcf880793333c55893762da130e198c24ffff545"
+}
