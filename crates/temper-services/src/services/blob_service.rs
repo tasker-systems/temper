@@ -1069,10 +1069,9 @@ pub async fn delete_blob(
     .await
     .map_err(|e| ApiError::internal_scrubbed("blob delete relation scan failed", e))?;
 
-    // Relation arm: every LIVE relation (no fold filter drift — `NOT is_folded` is the
-    // substrate's own liveness vocabulary) needs delete standing over its RESOURCE peer.
-    // The enumeration is gate work in the strike's transaction — the no-pre-count clause
-    // bounds the byte fate, never the gate.
+    // The enumeration comment above carries the arm's liveness and gate-work posture;
+    // this loop only COLLECTS the resource peers — the standing resolution follows in
+    // one query below rather than a serial `can()` per relation.
     let mut resource_peers: Vec<Uuid> = Vec::with_capacity(relations.len());
     for edge in &relations {
         let resource_peer = if edge.source_table == "kb_blobs" {
