@@ -1782,60 +1782,7 @@ pub async fn reblock_resource_in_tx(
     p: ReblockParams,
     ctx: EventContext,
 ) -> Result<ReblockOutcome> {
-    // A partition decision over a still-arriving body is a guess.
-    let ingest_state: String = sqlx::query_scalar!(
-        "SELECT ingest_state FROM kb_resources WHERE id = $1",
-        p.resource.uuid()
-    )
-    .fetch_one(&mut *conn)
-    .await
-    .with_context(|| format!("reblock_resource: resource {} not found", p.resource))?;
-    if ingest_state == "in_progress" {
-        return Ok(ReblockOutcome::Declined {
-            reason: format!(
-                "resource {} is mid-ingest (in_progress) — a partition decision over a \
-                 still-arriving body would be a guess",
-                p.resource
-            ),
-        });
-    }
-
-    let live_blocks: Vec<LiveBlock> = read_live_blocks(&mut *conn, p.resource).await?;
-    if live_blocks.is_empty() {
-        return Ok(ReblockOutcome::Declined {
-            reason: format!("resource {} has no live blocks to partition", p.resource),
-        });
-    }
-    // The design slices STORED block content and never mutates text — a block whose bytes were
-    // never stored (a derived charter/scenario shape) would force the body to be re-derived
-    // from chunks, fabricating bytes the ledger never carried.
-    if let Some(missing) = live_blocks.iter().find(|b| b.bytes.is_none()) {
-        return Ok(ReblockOutcome::Declined {
-            reason: format!(
-                "block {} (seq {}) of resource {} stores no verbatim bytes (a derived shape) — \
-                 re-blocking composes the body from stored bytes only",
-                missing.id, missing.seq, p.resource
-            ),
-        });
-    }
-
-    let live_chunks: Vec<LiveChunk> = read_live_chunks(&mut *conn, p.resource).await?;
-
-    let attributions: Vec<AttributionRow> = read_attributions(&mut *conn, p.resource).await?;
-
-    // The body composes from verbatim block bytes only — never from chunk reconstruction.
-    let mut body = String::new();
-    for b in &live_blocks {
-        body.push_str(b.bytes.as_deref().expect("refused above"));
-    }
-
-    let plan = match compute_reblock_partition(
-        p.resource,
-        &body,
-        &live_blocks,
-        &live_chunks,
-        &attributions,
-    )? {
+    let plan = match reblock_partition_in_tx(conn, p.resource).await? {
         Partition::NoOp => return Ok(ReblockOutcome::NoOp),
         Partition::Declined(reason) => return Ok(ReblockOutcome::Declined { reason }),
         Partition::Plan(plan) => plan,
@@ -1858,6 +1805,90 @@ pub async fn reblock_resource_in_tx(
     Ok(ReblockOutcome::Reblocked { event })
 }
 
+/// The act's classification half, read-only: everything [`reblock_resource_in_tx`] does up to
+/// the fire — the `in_progress` state read, the live blocks/chunks/attributions, the body
+/// composed from stored verbatim bytes, and the partition computation. The survey
+/// ([`survey_reblock_resource`]) and the act share THIS one computation so they cannot drift:
+/// a survey class and the act's outcome for the same row come from the same code path by
+/// construction, never from a copy.
+async fn reblock_partition_in_tx(
+    conn: &mut sqlx::PgConnection,
+    resource: ResourceId,
+) -> Result<Partition> {
+    // A partition decision over a still-arriving body is a guess.
+    let ingest_state: String = sqlx::query_scalar!(
+        "SELECT ingest_state FROM kb_resources WHERE id = $1",
+        resource.uuid()
+    )
+    .fetch_one(&mut *conn)
+    .await
+    .with_context(|| format!("reblock_resource: resource {} not found", resource))?;
+    if ingest_state == "in_progress" {
+        return Ok(Partition::Declined(format!(
+            "resource {resource} is mid-ingest (in_progress) — a partition decision over a \
+             still-arriving body would be a guess"
+        )));
+    }
+
+    let live_blocks: Vec<LiveBlock> = read_live_blocks(&mut *conn, resource).await?;
+    if live_blocks.is_empty() {
+        return Ok(Partition::Declined(format!(
+            "resource {resource} has no live blocks to partition"
+        )));
+    }
+    // The design slices STORED block content and never mutates text — a block whose bytes were
+    // never stored (a derived charter/scenario shape) would force the body to be re-derived
+    // from chunks, fabricating bytes the ledger never carried.
+    if let Some(missing) = live_blocks.iter().find(|b| b.bytes.is_none()) {
+        return Ok(Partition::Declined(format!(
+            "block {} (seq {}) of resource {} stores no verbatim bytes (a derived shape) — \
+             re-blocking composes the body from stored bytes only",
+            missing.id, missing.seq, resource
+        )));
+    }
+
+    let live_chunks: Vec<LiveChunk> = read_live_chunks(&mut *conn, resource).await?;
+
+    let attributions: Vec<AttributionRow> = read_attributions(&mut *conn, resource).await?;
+
+    // The body composes from verbatim block bytes only — never from chunk reconstruction.
+    let mut body = String::new();
+    for b in &live_blocks {
+        body.push_str(b.bytes.as_deref().expect("refused above"));
+    }
+
+    compute_reblock_partition(resource, &body, &live_blocks, &live_chunks, &attributions)
+}
+
+/// How a re-block WOULD classify a resource, read-only — [`ReblockOutcome`] minus the event.
+///
+/// - [`ReblockSurvey::NoOp`] — the partition already matches; the act, run now, would fire
+///   nothing and leave the ledger indistinguishable from never having run.
+/// - [`ReblockSurvey::WouldChange`] — the partition would move; the act, run now, would fire
+///   `resource_reblocked` (the survey fires nothing and so carries no event id).
+/// - [`ReblockSurvey::Declined`] — the same typed precondition failure the act would return,
+///   with the same reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReblockSurvey {
+    NoOp,
+    WouldChange,
+    Declined { reason: String },
+}
+
+/// Classify a resource's re-block partition WITHOUT writing: the act's machinery, read-only.
+/// The operator's verification instrument — survey → act → re-survey — and the only authority
+/// on remaining adoption scope, since no-op acts are ledger-silent by design. Shares the
+/// computation with the act (`reblock_partition_in_tx`, this module's private classification
+/// half); it cannot drift from what the act would then do.
+pub async fn survey_reblock_resource(pool: &PgPool, resource: ResourceId) -> Result<ReblockSurvey> {
+    let mut conn = pool.acquire().await?;
+    Ok(match reblock_partition_in_tx(&mut conn, resource).await? {
+        Partition::NoOp => ReblockSurvey::NoOp,
+        Partition::Declined(reason) => ReblockSurvey::Declined { reason },
+        Partition::Plan(_) => ReblockSurvey::WouldChange,
+    })
+}
+
 /// The write-path policy application point: re-partition a just-written body to the blocking
 /// policy (v1: heading-aligned sections) inside the write's own transaction.
 ///
@@ -1868,8 +1899,15 @@ pub async fn reblock_resource_in_tx(
 /// policy. Authorization is never re-checked here: the caller has already run the standard gate
 /// train (DbBackend gates before dispatching), and the re-block fires on-behalf-of the write's
 /// acting principal — `ctx` carries the authorship/correlation into `kb_events` (the authored-4
-/// pattern), keeping the substrate principal-free by architecture. The op is reachable ONLY
-/// through these gated write paths (enforced by the `reblock_scope_fence` tripwire).
+/// pattern), keeping the substrate principal-free by architecture.
+///
+/// What actually enforces the op's reachability — there is no tripwire, and this comment once
+/// falsely claimed one ("reblock_scope_fence"): the in-crate unit test
+/// `writes::reblock_tests::reblock_op_is_reachable_only_through_the_gated_write_paths` (below)
+/// greps every crate's `src/` tree and fails on any caller outside its allowlist — the gated
+/// hook (here), the substrate's fire plumbing (`events.rs`), and the per-resource-gated
+/// adoption Backend command (`DbBackend::adopt_resources`, the op's one sanctioned direct
+/// production caller). A new caller must join that allowlist deliberately.
 ///
 /// `NoOp` is silence by design: a write that does not change the effective partition must be
 /// indistinguishable in the ledger from one that never happened (the op fires nothing). The op's
@@ -3534,13 +3572,15 @@ mod reblock_tests {
         );
     }
 
-    /// The reachability AC, made executable: the re-block op must have ZERO production callers
-    /// outside this file — it is reachable only through the gated write paths
-    /// (`create_resource` / `update_resource` / `finalize_ingest`, each dispatched behind the
-    /// DbBackend gate train). Enforced by grep over every crate's `src/` tree rather than by
-    /// trusting a maintained allowlist (the `assert_every_compiled_in_doc_is_vetoed` precedent:
-    /// derive the set, never list it). Test trees are deliberately not scanned — the substrate
-    /// witnesses invoke the op directly.
+    /// The reachability AC, made executable: the re-block op's reachable-from set is exactly
+    /// the gated write-path hook (this file), the substrate's fire plumbing (`events.rs`), and
+    /// the ONE sanctioned direct caller — `DbBackend::adopt_resources`, gated per-resource by
+    /// the same `can_modify` gate train a single body update runs (the adoption spec's D-C1:
+    /// the batch mints no authority). Enforced by grep over every crate's `src/` tree rather
+    /// than by trusting a maintained allowlist beyond these three named homes (the
+    /// `assert_every_compiled_in_doc_is_vetoed` precedent: derive the set, never list it).
+    /// Test trees are deliberately not scanned — the substrate witnesses invoke the op
+    /// directly.
     #[test]
     fn reblock_op_is_reachable_only_through_the_gated_write_paths() {
         let crates_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -3548,11 +3588,13 @@ mod reblock_tests {
             .nth(2)
             .expect("workspace root")
             .join("crates");
-        // The op (writes.rs) and the substrate's own fire plumbing (events.rs, whose
-        // `_event_append` call reaches the SQL wrapper) are the only legitimate homes.
+        // The op (writes.rs), the substrate's own fire plumbing (events.rs, whose
+        // `_event_append` call reaches the SQL wrapper), and the gated adoption caller are the
+        // only legitimate homes.
         let allowed: &[std::path::PathBuf] = &[
             std::path::PathBuf::from("temper-substrate/src/writes.rs"),
             std::path::PathBuf::from("temper-substrate/src/events.rs"),
+            std::path::PathBuf::from("temper-services/src/backend/db_backend.rs"),
         ];
         let mut offenders = Vec::new();
         for crate_dir in std::fs::read_dir(&crates_dir).expect("crates/ must exist") {
@@ -3584,8 +3626,10 @@ mod reblock_tests {
         }
         assert!(
             offenders.is_empty(),
-            "reblock_resource/resource_reblock must stay reachable ONLY through the gated write \
-             paths (temper-substrate/src/writes.rs + events.rs); production callers found: {offenders:?}"
+            "reblock_resource/resource_reblock must stay reachable ONLY through the gated \
+             write paths (temper-substrate/src/writes.rs + events.rs) and the per-resource-\
+             gated adoption command (temper-services/src/backend/db_backend.rs); production \
+             callers found: {offenders:?}"
         );
     }
 }

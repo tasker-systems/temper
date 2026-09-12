@@ -18,6 +18,9 @@ use sqlx::PgPool;
 use temper_macros::act_span;
 
 use temper_core::error::TemperError;
+use temper_core::types::adoption::{
+    AdoptDeclined, AdoptOutcome, AdoptReceipt, AdoptResourceOutcome, AdoptScope, AdoptSummary,
+};
 use temper_core::types::authorship::ActContext;
 use temper_core::types::data_artifact::{ArtifactView, KindOwnerInput};
 use temper_core::types::graph;
@@ -43,10 +46,10 @@ use temper_core::types::steward::AdvanceWatermarkAck;
 use temper_core::types::workflow_job::{AnchorJobPayload, DispatchType, Persona};
 use temper_substrate::payloads::AnchorRef;
 use temper_workflow::operations::{
-    AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick, Backend,
-    BodyUpdate, CloseInvocation, CommandOutput, CommitDataArtifact, CompleteAuditorJob,
-    CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship, GoalPatch,
-    MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit,
+    AdoptResources, AdvanceStewardWatermark, AnnotateResource, AssertRelationship,
+    AuditorDispatchTick, Backend, BodyUpdate, CloseInvocation, CommandOutput, CommitDataArtifact,
+    CompleteAuditorJob, CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship,
+    GoalPatch, MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit,
     RetractFacet, RetypeRelationship, ReweightRelationship, SetFacet, ShowResource,
     StewardDispatchTick, Surface, UpdateResource,
 };
@@ -3856,6 +3859,212 @@ impl Backend for DbBackend {
             MaterializeAck::new(cmd.anchor, true, formation_events, threshold)
                 .with_outcome(outcome.regions as i64, outcome.membership_fingerprint),
         ))
+    }
+
+    /// One bounded, resumable adoption step. AUTH BEFORE WRITE, per row: every candidate runs
+    /// the same `can_modify_resource` gate train a single body update runs, so the batch mints
+    /// no authority — an out-of-grant row declines `denied` in the receipt while the rest of
+    /// the batch completes. The `All` scope claims a reach ordinary visibility does not yield,
+    /// so it is gated at this seam by `is_system_admin` (the same check `require_system_admin`
+    /// applies at the surface; the backend re-asks because it, not the surface, is the shared
+    /// seam). Resource/Context scopes enumerate through the caller's own visibility
+    /// (`resources_visible_to`), so the candidate set never exceeds what the caller can see.
+    ///
+    /// Enumeration is one bounded candidate query per invocation — `is_active AND
+    /// ingest_state = 'complete'` (+ context join), `ORDER BY id`, keyed on `after_id` — and
+    /// the cursor rides the receipt. `dry_run` routes every candidate to the read-only survey
+    /// (the same machinery the act runs, minus the write); the act is `reblock_resource_with`
+    /// under the invoking operator's emitter with a batch correlation id in the `EventContext`.
+    /// Per-resource declines are the op's own, rendered verbatim per row; an errored row
+    /// declines-and-continues — a batch never rolls back over one bad row.
+    async fn adopt_resources(
+        &self,
+        cmd: AdoptResources,
+    ) -> Result<CommandOutput<AdoptReceipt>, TemperError> {
+        // A non-positive limit would make `LIMIT $n` unbounded (Postgres reads a negative LIMIT
+        // as no limit) — the one direction the bounded-invocation clause cannot bend.
+        if cmd.limit <= 0 {
+            return Err(TemperError::BadRequest(
+                "adopt_resources: limit must be positive — every invocation is bounded".to_owned(),
+            ));
+        }
+
+        // The SystemAdmin gate for the deployment-wide arm, at the shared seam.
+        if matches!(cmd.scope, AdoptScope::All) {
+            let admin =
+                crate::services::access_service::is_system_admin(&self.pool, self.profile_id)
+                    .await?;
+            if !admin {
+                return Err(TemperError::Forbidden);
+            }
+        }
+
+        // The invoking operator is the emitter of every act this batch fires. Resolved once —
+        // these describe the CALLER, not any row, so a failure here is a failed invocation.
+        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
+            .await
+            .map_err(api_err)?;
+        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
+            .await
+            .map_err(api_err)?;
+        // The batch correlation id: minted per invocation, stamped on every fired event, echoed
+        // in the receipt. A grouping key, never a capability.
+        let correlation = temper_core::types::ids::CorrelationId::from(uuid::Uuid::now_v7());
+        let act_ctx = EventContext {
+            correlation: Some(correlation),
+            ..EventContext::default()
+        };
+
+        // One bounded candidate query per scope arm. The scopes' WHERE shapes differ for real
+        // (an addressed resource is not enumerated-and-filtered; the deployment-wide arm rides
+        // no visibility at all), so each arm is its own compile-time-checked statement — the
+        // closed-enum shape `materialize_on_threshold` uses.
+        let candidates: Vec<uuid::Uuid> = match &cmd.scope {
+            AdoptScope::Resource(id) => {
+                // An ADDRESSED resource is gated, not enumerated: no ingest_state filter — the
+                // op's own state-column refusal reaches the receipt. Invisible-or-absent is the
+                // leak-safe NotFound (no existence oracle), exactly as `show` reads.
+                sqlx::query!(
+                    r#"SELECT r.id FROM kb_resources r
+                         WHERE r.id = $1 AND r.is_active
+                           AND EXISTS (SELECT 1 FROM resources_visible_to($2) v
+                                        WHERE v.resource_id = r.id)"#,
+                    id,
+                    *self.profile_id,
+                )
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(api_err)?
+                .map(|row| vec![row.id])
+                .ok_or_else(|| TemperError::NotFound(format!("resource {id} not found")))?
+            }
+            AdoptScope::Context(context) => sqlx::query!(
+                r#"SELECT r.id FROM kb_resources r
+                          JOIN kb_resource_homes h ON h.resource_id = r.id
+                         WHERE r.is_active
+                           AND r.ingest_state = 'complete'
+                           AND h.anchor_table = 'kb_contexts'
+                           AND h.anchor_id = $1
+                           AND EXISTS (SELECT 1 FROM resources_visible_to($2) v
+                                        WHERE v.resource_id = r.id)
+                           AND ($3::uuid IS NULL OR r.id > $3)
+                         ORDER BY r.id
+                         LIMIT $4"#,
+                context,
+                *self.profile_id,
+                cmd.after_id,
+                cmd.limit,
+            )
+            .fetch_all(&self.pool)
+            .await
+            .map_err(api_err)?
+            .into_iter()
+            .map(|row| row.id)
+            .collect(),
+            AdoptScope::All => sqlx::query!(
+                r#"SELECT r.id FROM kb_resources r
+                         WHERE r.is_active
+                           AND r.ingest_state = 'complete'
+                           AND ($1::uuid IS NULL OR r.id > $1)
+                         ORDER BY r.id
+                         LIMIT $2"#,
+                cmd.after_id,
+                cmd.limit,
+            )
+            .fetch_all(&self.pool)
+            .await
+            .map_err(api_err)?
+            .into_iter()
+            .map(|row| row.id)
+            .collect(),
+        };
+
+        let mut outcomes: Vec<AdoptResourceOutcome> = Vec::with_capacity(candidates.len());
+        for id in candidates {
+            let outcome = match self.check_can_modify_next(id).await {
+                Err(TemperError::Forbidden) => AdoptOutcome::Declined(AdoptDeclined::Denied),
+                Err(e) => AdoptOutcome::Error {
+                    message: e.to_string(),
+                },
+                Ok(()) if cmd.dry_run => {
+                    // The survey arm: the act's machinery, read-only.
+                    match writes::survey_reblock_resource(&self.pool, ResourceId::from(id))
+                        .await
+                        .map_err(api_err)?
+                    {
+                        temper_substrate::writes::ReblockSurvey::NoOp => AdoptOutcome::NoOp,
+                        temper_substrate::writes::ReblockSurvey::WouldChange => {
+                            AdoptOutcome::WouldChange
+                        }
+                        temper_substrate::writes::ReblockSurvey::Declined { reason } => {
+                            AdoptOutcome::Declined(AdoptDeclined::Op { reason })
+                        }
+                    }
+                }
+                Ok(()) => {
+                    // The act: the shipped op, per resource, in the resource's own transaction.
+                    match writes::reblock_resource_with(
+                        &self.pool,
+                        writes::ReblockParams {
+                            resource: ResourceId::from(id),
+                            emitter,
+                        },
+                        act_ctx.clone(),
+                    )
+                    .await
+                    {
+                        Ok(writes::ReblockOutcome::Reblocked { event }) => {
+                            AdoptOutcome::Reblocked {
+                                event: event.uuid(),
+                            }
+                        }
+                        Ok(writes::ReblockOutcome::NoOp) => AdoptOutcome::NoOp,
+                        Ok(writes::ReblockOutcome::Declined { reason }) => {
+                            AdoptOutcome::Declined(AdoptDeclined::Op { reason })
+                        }
+                        Err(e) => AdoptOutcome::Error {
+                            message: e.to_string(),
+                        },
+                    }
+                }
+            };
+            outcomes.push(AdoptResourceOutcome {
+                resource: id,
+                outcome,
+            });
+        }
+
+        let summary = AdoptSummary {
+            reblocked: outcomes
+                .iter()
+                .filter(|o| matches!(o.outcome, AdoptOutcome::Reblocked { .. }))
+                .count() as u64,
+            would_change: outcomes
+                .iter()
+                .filter(|o| matches!(o.outcome, AdoptOutcome::WouldChange))
+                .count() as u64,
+            no_op: outcomes
+                .iter()
+                .filter(|o| matches!(o.outcome, AdoptOutcome::NoOp))
+                .count() as u64,
+            declined: outcomes
+                .iter()
+                .filter(|o| matches!(o.outcome, AdoptOutcome::Declined(_)))
+                .count() as u64,
+            error: outcomes
+                .iter()
+                .filter(|o| matches!(o.outcome, AdoptOutcome::Error { .. }))
+                .count() as u64,
+        };
+        let after_id = outcomes.last().map(|o| o.resource);
+
+        Ok(CommandOutput::new(AdoptReceipt {
+            dry_run: cmd.dry_run,
+            correlation_id: correlation.uuid(),
+            outcomes,
+            summary,
+            after_id,
+        }))
     }
 
     async fn begin_segmented_ingest(

@@ -23,10 +23,10 @@ use temper_core::types::materialize::MaterializeAck;
 use temper_core::types::resource_view::ResourceView;
 
 use super::commands::{
-    AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick,
-    CloseInvocation, CommitDataArtifact, CompleteAuditorJob, CreateCognitiveMap, CreateResource,
-    DeleteResource, FoldRelationship, MaterializeOnThreshold, OpenInvocation,
-    ReconcileCognitiveMap, RecordCitationAudit, RetractFacet, RetypeRelationship,
+    AdoptResources, AdvanceStewardWatermark, AnnotateResource, AssertRelationship,
+    AuditorDispatchTick, CloseInvocation, CommitDataArtifact, CompleteAuditorJob,
+    CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship, MaterializeOnThreshold,
+    OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit, RetractFacet, RetypeRelationship,
     ReweightRelationship, SetFacet, ShowResource, StewardDispatchTick, UpdateResource,
 };
 use super::output::CommandOutput;
@@ -230,6 +230,16 @@ pub trait Backend: Send + Sync {
         &self,
         cmd: MaterializeOnThreshold,
     ) -> Result<CommandOutput<MaterializeAck>, TemperError>;
+
+    /// One bounded, resumable step of the corpus-adoption walk. Every candidate is gated by the
+    /// acting principal's existing write predicates (a denial is a per-row receipt outcome,
+    /// never a batch abort and never a new authority); `dry_run` surveys instead of acting.
+    /// The scope's `All` arm is SystemAdmin-gated at the backend seam. See
+    /// [`temper_core::types::adoption::AdoptReceipt`] for the receipt contract.
+    async fn adopt_resources(
+        &self,
+        cmd: AdoptResources,
+    ) -> Result<CommandOutput<temper_core::types::adoption::AdoptReceipt>, TemperError>;
 
     // ── segmented (multi-block) ingest — streaming/resumable ingestion ──
     // The whole session: `begin_segmented_ingest` creates the resource with block 0 and records the
