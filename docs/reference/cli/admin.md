@@ -23,6 +23,7 @@ Commands:
   connection    Provision connections — temper's authed link to a remote system (GitHub, Linear)
   subscription  Manage subscriptions — a team/context/cogmap subscribes to a connection's events
   reembed       Re-embed chunks whose vectors were produced by an older model (the drain does the work)
+  reblock       Run one bounded, resumable corpus re-blocking step: re-block resources under the current chunking policy
   help          Print this message or the help of the given subcommand(s)
 
 Options:
@@ -1065,6 +1066,50 @@ Options:
 
       --dry-run
           Report what is stale without enqueuing anything
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### `temper admin reblock`
+
+```text
+Run one bounded, resumable corpus re-blocking step: re-block resources under the current chunking policy
+
+Survey first with --dry-run, then run without it, then survey again to verify. Exactly one scope: --resource re-blocks one resource, --context every candidate homed in that context you can read, --all the whole deployment (requires system-administrator standing, and must be asked for by name — never the default). Prints the receipt: one outcome row per candidate, per-class counts, the batch correlation id, and the resume cursor.
+
+Usage: temper admin reblock [OPTIONS]
+
+Options:
+      --resource <RESOURCE>
+          Re-block just this resource (UUID or decorated ref)
+
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --context <CONTEXT>
+          Re-block every candidate homed in this context (`@me/slug`, `+team/slug`, or UUID)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --all
+          Re-block deployment-wide. Requires system-administrator standing. Must be asked for by name — never the default
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+      --dry-run
+          Survey what would change without changing anything
+
+      --limit <LIMIT>
+          Max candidates this call considers (a conservative default applies; walk in bounded steps)
+
+      --after-id <AFTER_ID>
+          Resume from the previous receipt's cursor (the candidate id to start after)
 
   -h, --help
           Print help (see a summary with '-h')

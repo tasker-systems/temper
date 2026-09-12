@@ -1581,6 +1581,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/resources/reblock": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run one bounded, resumable re-blocking step */
+        post: operations["reblock_resources"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/resources/{id}": {
         parameters: {
             query?: never;
@@ -6012,6 +6032,162 @@ export interface components {
         ReassignResourceRequest: {
             /** Format: uuid */
             to_profile_id: string;
+        };
+        /** @description One candidate's receipt row. */
+        ReblockCandidate: {
+            outcome: components["schemas"]["ReblockOutcome"];
+            /**
+             * Format: uuid
+             * @description The candidate the row is about.
+             */
+            resource: string;
+        };
+        /**
+         * @description What happened to one candidate. The act's arms are `Reblocked`, `NoOp`, `Denied`, `InProgress`,
+         *     `Byteless`, `Drift`, and `Error`; `WouldChange` exists only on the survey arm (`dry_run`) — the
+         *     act's counterpart there is `Reblocked`. `Denied` is the gate's refusal; the other three op
+         *     refusals are the op's own, each carrying the human `detail` that names the candidate and its
+         *     remediation (declined counts in the summary cover all four).
+         */
+        ReblockOutcome: {
+            /**
+             * @description The act fired `resource_reblocked` — the ledger carries the act under the batch
+             *     correlation id.
+             */
+            reblocked: {
+                /** Format: uuid */
+                event: string;
+            };
+        } | "no_op" | "would_change" | "denied" | {
+            /**
+             * @description The candidate's body is still arriving (`in_progress`): a partition decision over a
+             *     still-arriving body would be a guess. Retry the candidate once its ingest completes.
+             */
+            in_progress: {
+                /** @description What happened and what to do about it. */
+                detail: string;
+            };
+        } | {
+            /**
+             * @description The candidate has no stored verbatim bytes to compose a body from — no live blocks, or a
+             *     block in a derived shape whose bytes were never stored.
+             */
+            byteless: {
+                /** @description What happened and what to do about it. */
+                detail: string;
+            };
+        } | {
+            /**
+             * @description A fresh chunking of the candidate's body does not reproduce its stored chunking, so the
+             *     stored partition cannot serve as the re-block's baseline.
+             */
+            drift: {
+                /** @description What happened and what to do about it. */
+                detail: string;
+            };
+        } | {
+            /**
+             * @description The act errored; the batch declined-and-continued. The row names what happened so the
+             *     operator can retry it alone.
+             */
+            error: {
+                message: string;
+            };
+        };
+        /**
+         * @description The invocation response — the receipt. No durable receipt table exists: the ledger holds
+         *     every real act, this holds the batch's truth, and the batch correlation id pairs them.
+         */
+        ReblockReceipt: {
+            /**
+             * Format: uuid
+             * @description The last candidate id considered — pass it back as the next invocation's `after_id` to
+             *     resume. `None` when nothing was considered. Stateless: it rides the receipt, and a
+             *     re-run from the top is always safe anyway.
+             */
+            after_id?: string | null;
+            /**
+             * Format: uuid
+             * @description The batch correlation id stamped on every ledger act this invocation fired. A grouping
+             *     key, never a capability.
+             */
+            correlation_id: string;
+            /**
+             * @description Whether this receipt came from the survey arm (`dry_run`) — outcomes classify without
+             *     touching anything.
+             */
+            dry_run: boolean;
+            /** @description One row per candidate considered. */
+            outcomes: components["schemas"]["ReblockCandidate"][];
+            summary: components["schemas"]["ReblockSummary"];
+        };
+        /**
+         * @description Request body for `POST /api/resources/reblock` — one bounded, resumable re-blocking step.
+         *
+         *     The `scope` names what this invocation covers; exactly one target, with the deployment-wide
+         *     arm named explicitly. `dry_run` selects the read-only survey; `limit` bounds the candidate
+         *     window (the conservative default applies when omitted); `after_id` resumes a walk from the
+         *     previous receipt's cursor. The response is the receipt: per-candidate outcomes, per-class
+         *     counts, the batch correlation id, and the continuation cursor.
+         */
+        ReblockRequest: {
+            /**
+             * Format: uuid
+             * @description Resume key from the previous receipt — only candidates after it are considered.
+             */
+            after_id?: string | null;
+            /**
+             * @description Survey instead of act: classify every candidate without touching anything. Survey first,
+             *     then run with `false`, then survey again to verify.
+             */
+            dry_run: boolean;
+            /**
+             * Format: int64
+             * @description The candidate-window bound; the conservative default applies when omitted. A convenience,
+             *     never a correctness bound — the cursor keeps the walk resumable.
+             */
+            limit?: number | null;
+            /** @description What this invocation covers. */
+            scope: components["schemas"]["ReblockScope"];
+        };
+        /**
+         * @description What one invocation covers. On the wire the one-target arms are single-key objects and the
+         *     deployment-wide arm is the bare string, so exactly one target is structural — there is no
+         *     shape that means "whichever" — and `all` must be spelled out to be meant.
+         */
+        ReblockScope: {
+            /**
+             * Format: uuid
+             * @description Exactly one resource, by id.
+             */
+            resource: string;
+        } | {
+            /**
+             * Format: uuid
+             * @description Every live, complete candidate homed in one context, enumerated through the caller's own
+             *     visibility.
+             */
+            context: string;
+        } | "all";
+        /** @description Per-class counts over the invocation's candidates. */
+        ReblockSummary: {
+            /** Format: int64 */
+            declined: number;
+            /** Format: int64 */
+            error: number;
+            /**
+             * Format: int64
+             * @description Candidates homed in the scope that are still arriving (`in_progress`) — not considered
+             *     by this invocation. They are partitioned when their upload finalizes; address one
+             *     directly (resource scope) to act on it now.
+             */
+            in_progress: number;
+            /** Format: int64 */
+            no_op: number;
+            /** Format: int64 */
+            reblocked: number;
+            /** Format: int64 */
+            would_change: number;
         };
         /** @description The `PUT /api/cognitive-maps/{id}` request body — a desired-state manifest. */
         ReconcileCogmapRequest: {
@@ -12060,6 +12236,69 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    reblock_resources: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReblockRequest"];
+            };
+        };
+        responses: {
+            /** @description The receipt for this step: one outcome row per candidate, per-class counts, the batch correlation id, and the continuation cursor to resume with. An invisible or absent context is never a 404: context scope enumerates no candidates and answers 200 with an empty `outcomes` array */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReblockReceipt"];
+                };
+            };
+            /** @description The request violates the bounded-invocation contract (e.g. a non-positive limit) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The deployment-wide `all` scope was requested by a caller who is not a system administrator (the resource and context scopes ride ordinary visibility instead and never refuse on reach alone) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The addressed resource does not exist or is not visible to the caller (resource scope only — context scope never answers 404; see the 200 description) */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

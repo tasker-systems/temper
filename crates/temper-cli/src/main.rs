@@ -1051,6 +1051,28 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     .await
                 })
             }),
+            AdminAction::Reblock {
+                resource,
+                context,
+                all,
+                dry_run,
+                limit,
+                after_id,
+            } => temper_cli::actions::runtime::with_client(|client| {
+                Box::pin(async move {
+                    temper_cli::commands::admin::reblock_remote(
+                        client,
+                        resource,
+                        context,
+                        all,
+                        dry_run,
+                        limit,
+                        after_id,
+                        output_format,
+                    )
+                    .await
+                })
+            }),
             AdminAction::Machine { action } => match action {
                 AdminMachineAction::Provision {
                     client_id,

@@ -9,7 +9,6 @@
 
 pub mod access_gate;
 pub mod admin;
-pub mod adoption;
 pub mod api;
 pub mod audit;
 pub mod auditor;
@@ -53,6 +52,7 @@ pub mod property_owner;
 pub mod provenance;
 pub mod query;
 pub mod reassign;
+pub mod reblock;
 pub mod reconcile;
 pub mod relationship_events;
 pub mod relationship_requests;

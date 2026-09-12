@@ -13,6 +13,7 @@ use temper_core::types::admin::{
     AdminLedgerQuery, AdminLedgerResponse, DemoteAdminRequest, PromoteAdminRequest, ReembedRequest,
     ReembedSummary, UpdateSettingsRequest,
 };
+use temper_core::types::reblock::{ReblockReceipt, ReblockRequest};
 use temper_core::types::team::TeamMemberRow;
 
 /// Sub-client for admin / system-settings operations.
@@ -171,6 +172,23 @@ impl<'a> AdminClient<'a> {
     pub async fn reembed(&self, body: &ReembedRequest) -> Result<ReembedSummary> {
         let token = self.http.resolve_token()?;
         let path = "/api/embed/admin/reembed";
+        let req = self.http.post(path).json(body);
+        self.http
+            .send_json(&Method::POST, path, req, Some(&token))
+            .await
+    }
+
+    /// Run one bounded, resumable corpus re-blocking step (`POST /api/resources/reblock`).
+    ///
+    /// Re-blocks resources under the current chunking policy: `dry_run` surveys without
+    /// touching anything (survey → act → re-survey), the scope names what the invocation
+    /// covers (the deployment-wide `all` arm requires system-administrator standing), and
+    /// the response is the receipt — per-candidate outcomes, per-class counts, the batch
+    /// correlation id, and the continuation cursor. Idempotent per candidate: an
+    /// already-conforming resource is a no-op that fires nothing.
+    pub async fn reblock(&self, body: &ReblockRequest) -> Result<ReblockReceipt> {
+        let token = self.http.resolve_token()?;
+        let path = "/api/resources/reblock";
         let req = self.http.post(path).json(body);
         self.http
             .send_json(&Method::POST, path, req, Some(&token))

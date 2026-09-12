@@ -1489,6 +1489,36 @@ pub enum AdminAction {
         #[arg(long = "dry-run")]
         dry_run: bool,
     },
+    /// Run one bounded, resumable corpus re-blocking step: re-block resources under the current
+    /// chunking policy
+    ///
+    /// Survey first with --dry-run, then run without it, then survey again to verify. Exactly one
+    /// scope: --resource re-blocks one resource, --context every candidate homed in that context
+    /// you can read, --all the whole deployment (requires system-administrator standing, and must
+    /// be asked for by name — never the default). Prints the receipt: one outcome row per
+    /// candidate, per-class counts, the batch correlation id, and the resume cursor.
+    Reblock {
+        /// Re-block just this resource (UUID or decorated ref)
+        #[arg(long)]
+        resource: Option<String>,
+        /// Re-block every candidate homed in this context (`@me/slug`, `+team/slug`, or UUID)
+        #[arg(long)]
+        context: Option<String>,
+        /// Re-block deployment-wide. Requires system-administrator standing. Must be asked for
+        /// by name — never the default.
+        #[arg(long)]
+        all: bool,
+        /// Survey what would change without changing anything
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+        /// Max candidates this call considers (a conservative default applies; walk in
+        /// bounded steps)
+        #[arg(long)]
+        limit: Option<i64>,
+        /// Resume from the previous receipt's cursor (the candidate id to start after)
+        #[arg(long)]
+        after_id: Option<uuid::Uuid>,
+    },
 }
 
 #[derive(Debug, clap::Subcommand)]

@@ -27,6 +27,7 @@ pub mod meta;
 pub mod profiles;
 pub mod query;
 pub mod reassign;
+pub mod reblock;
 pub mod region;
 pub mod resources;
 pub mod schema;

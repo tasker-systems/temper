@@ -11,6 +11,7 @@ pub mod ingest;
 pub mod invocations;
 pub mod profiles;
 pub mod query;
+pub mod reblock;
 pub mod relationships;
 pub mod resources;
 pub mod search;

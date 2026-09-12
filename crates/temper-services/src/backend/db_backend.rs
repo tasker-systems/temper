@@ -18,9 +18,6 @@ use sqlx::PgPool;
 use temper_macros::act_span;
 
 use temper_core::error::TemperError;
-use temper_core::types::adoption::{
-    AdoptDeclined, AdoptOutcome, AdoptReceipt, AdoptResourceOutcome, AdoptScope, AdoptSummary,
-};
 use temper_core::types::authorship::ActContext;
 use temper_core::types::data_artifact::{ArtifactView, KindOwnerInput};
 use temper_core::types::graph;
@@ -36,6 +33,9 @@ use temper_core::types::materialize::{
     default_lens_for, MaterializeAck, DEFAULT_MATERIALIZE_THRESHOLD,
 };
 use temper_core::types::property_owner::PropertyOwner;
+use temper_core::types::reblock::{
+    ReblockCandidate, ReblockOutcome, ReblockReceipt, ReblockScope, ReblockSummary,
+};
 use temper_core::types::reconcile::{
     CharterDisposition, CreateCogmapOutcome, ReconcileCogmapRequest, ReconcileOutcome,
     ReconcileTelos,
@@ -46,12 +46,12 @@ use temper_core::types::steward::AdvanceWatermarkAck;
 use temper_core::types::workflow_job::{AnchorJobPayload, DispatchType, Persona};
 use temper_substrate::payloads::AnchorRef;
 use temper_workflow::operations::{
-    AdoptResources, AdvanceStewardWatermark, AnnotateResource, AssertRelationship,
-    AuditorDispatchTick, Backend, BodyUpdate, CloseInvocation, CommandOutput, CommitDataArtifact,
-    CompleteAuditorJob, CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship,
-    GoalPatch, MaterializeOnThreshold, OpenInvocation, ReconcileCognitiveMap, RecordCitationAudit,
-    RetractFacet, RetypeRelationship, ReweightRelationship, SetFacet, ShowResource,
-    StewardDispatchTick, Surface, UpdateResource,
+    AdvanceStewardWatermark, AnnotateResource, AssertRelationship, AuditorDispatchTick, Backend,
+    BodyUpdate, CloseInvocation, CommandOutput, CommitDataArtifact, CompleteAuditorJob,
+    CreateCognitiveMap, CreateResource, DeleteResource, FoldRelationship, GoalPatch,
+    MaterializeOnThreshold, OpenInvocation, ReblockResources, ReconcileCognitiveMap,
+    RecordCitationAudit, RetractFacet, RetypeRelationship, ReweightRelationship, SetFacet,
+    ShowResource, StewardDispatchTick, Surface, UpdateResource,
 };
 
 use temper_substrate::content::PreparedBlock;
@@ -177,6 +177,49 @@ fn map_disposition(
         Core::Completed => Sub::Completed,
         Core::Failed => Sub::Failed,
         Core::Abandoned => Sub::Abandoned,
+    }
+}
+
+/// temper-substrate's `ReblockDecline` → temper-core's wire `ReblockOutcome` (identical 3-variant
+/// op-refusal taxonomy). Exhaustive match (the `map_disposition` pattern), NOT a stringly
+/// conversion: the class translates one-to-one by construction and the human detail rides along.
+/// The wire `Denied` arm is never produced here — a gate refusal is authorization failing, not
+/// the op declining.
+fn map_decline(r: writes::ReblockDecline) -> ReblockOutcome {
+    use temper_substrate::writes::ReblockDeclineKind as K;
+    let writes::ReblockDecline { kind, detail } = r;
+    match kind {
+        K::InProgress => ReblockOutcome::InProgress { detail },
+        K::Byteless => ReblockOutcome::Byteless { detail },
+        K::Drift => ReblockOutcome::Drift { detail },
+    }
+}
+
+/// The one bounded sentence a receipt row carries when the op itself errors on a candidate.
+/// Client-facing receipt text — the house disclosure invariant (`TemperError::internal_scrubbed`
+/// holds the same posture for the 500 path): a 200 body never carries raw internal error text
+/// (SQL/PG messages, upstream detail). The real diagnostic is log-only, joinable by the batch
+/// correlation id the receipt already echoes.
+const ROW_ERROR_MESSAGE: &str = "internal error while processing this candidate; retry it alone";
+
+/// One candidate's op error → a bounded receipt row, with the real error logged at warn under
+/// the batch correlation id and the resource id. Deliberately NOT a decline classification —
+/// data-state errors are not typed here (a future pass may); the batch declines-and-continues
+/// either way. Both receipt arms (survey and act) route through this one helper so the two
+/// cannot drift.
+fn row_error(
+    correlation: temper_core::types::ids::CorrelationId,
+    resource: uuid::Uuid,
+    e: impl std::fmt::Display,
+) -> ReblockOutcome {
+    tracing::warn!(
+        correlation = %correlation,
+        resource = %resource,
+        error = %e,
+        "reblock row errored; the receipt carries a bounded sentence — join this log by the correlation id"
+    );
+    ReblockOutcome::Error {
+        message: ROW_ERROR_MESSAGE.to_owned(),
     }
 }
 
@@ -3861,7 +3904,7 @@ impl Backend for DbBackend {
         ))
     }
 
-    /// One bounded, resumable adoption step. AUTH BEFORE WRITE, per row: every candidate runs
+    /// One bounded, resumable re-blocking step. AUTH BEFORE WRITE, per row: every candidate runs
     /// the same `can_modify_resource` gate train a single body update runs, so the batch mints
     /// no authority — an out-of-grant row declines `denied` in the receipt while the rest of
     /// the batch completes. The `All` scope claims a reach ordinary visibility does not yield,
@@ -3872,25 +3915,35 @@ impl Backend for DbBackend {
     ///
     /// Enumeration is one bounded candidate query per invocation — `is_active AND
     /// ingest_state = 'complete'` (+ context join), `ORDER BY id`, keyed on `after_id` — and
-    /// the cursor rides the receipt. `dry_run` routes every candidate to the read-only survey
+    /// the cursor rides the receipt. Complete-only enumeration is deliberate: the op refuses
+    /// still-arriving rows, so enumerating them would burn the window on guaranteed declines.
+    /// Because of it, one additional count per invocation reports the scope's still-arriving
+    /// (`in_progress`) population in the summary — the receipt names the population, it never
+    /// hides behind the gate; the addressed-resource arm needs no count, its own state refusal
+    /// reaching the receipt per row. `dry_run` routes every candidate to the read-only survey
     /// (the same machinery the act runs, minus the write); the act is `reblock_resource_with`
     /// under the invoking operator's emitter with a batch correlation id in the `EventContext`.
-    /// Per-resource declines are the op's own, rendered verbatim per row; an errored row
-    /// declines-and-continues — a batch never rolls back over one bad row.
-    async fn adopt_resources(
+    /// Per-resource declines are typed per class — the gate's refusal is `denied`; the op's own
+    /// refusals arrive as `in_progress`, `byteless`, or `drift`, each with the human remediation
+    /// in the row's detail. An errored row declines-and-continues — a batch never rolls back
+    /// over one bad row, in either arm; the row ships one bounded static sentence
+    /// (`ROW_ERROR_MESSAGE`) and the real diagnostic is log-only under the batch correlation id,
+    /// never raw internal error text in a 200 body.
+    async fn reblock_resources(
         &self,
-        cmd: AdoptResources,
-    ) -> Result<CommandOutput<AdoptReceipt>, TemperError> {
+        cmd: ReblockResources,
+    ) -> Result<CommandOutput<ReblockReceipt>, TemperError> {
         // A non-positive limit would make `LIMIT $n` unbounded (Postgres reads a negative LIMIT
         // as no limit) — the one direction the bounded-invocation clause cannot bend.
         if cmd.limit <= 0 {
             return Err(TemperError::BadRequest(
-                "adopt_resources: limit must be positive — every invocation is bounded".to_owned(),
+                "reblock_resources: limit must be positive — every invocation is bounded"
+                    .to_owned(),
             ));
         }
 
         // The SystemAdmin gate for the deployment-wide arm, at the shared seam.
-        if matches!(cmd.scope, AdoptScope::All) {
+        if matches!(cmd.scope, ReblockScope::All) {
             let admin =
                 crate::services::access_service::is_system_admin(&self.pool, self.profile_id)
                     .await?;
@@ -3920,7 +3973,7 @@ impl Backend for DbBackend {
         // no visibility at all), so each arm is its own compile-time-checked statement — the
         // closed-enum shape `materialize_on_threshold` uses.
         let candidates: Vec<uuid::Uuid> = match &cmd.scope {
-            AdoptScope::Resource(id) => {
+            ReblockScope::Resource(id) => {
                 // An ADDRESSED resource is gated, not enumerated: no ingest_state filter — the
                 // op's own state-column refusal reaches the receipt. Invisible-or-absent is the
                 // leak-safe NotFound (no existence oracle), exactly as `show` reads.
@@ -3938,7 +3991,7 @@ impl Backend for DbBackend {
                 .map(|row| vec![row.id])
                 .ok_or_else(|| TemperError::NotFound(format!("resource {id} not found")))?
             }
-            AdoptScope::Context(context) => sqlx::query!(
+            ReblockScope::Context(context) => sqlx::query!(
                 r#"SELECT r.id FROM kb_resources r
                           JOIN kb_resource_homes h ON h.resource_id = r.id
                          WHERE r.is_active
@@ -3961,7 +4014,7 @@ impl Backend for DbBackend {
             .into_iter()
             .map(|row| row.id)
             .collect(),
-            AdoptScope::All => sqlx::query!(
+            ReblockScope::All => sqlx::query!(
                 r#"SELECT r.id FROM kb_resources r
                          WHERE r.is_active
                            AND r.ingest_state = 'complete'
@@ -3979,26 +4032,58 @@ impl Backend for DbBackend {
             .collect(),
         };
 
-        let mut outcomes: Vec<AdoptResourceOutcome> = Vec::with_capacity(candidates.len());
+        // Enumeration is complete-only, so the scope's still-arriving (`in_progress`) uploads
+        // would otherwise be invisible to the operator. One bounded count per invocation —
+        // mirroring its arm's candidate shape (same scope WHERE, same visibility predicate, no
+        // candidate window; the count describes the scope, not the page) — names that
+        // population in the summary. The resource arm counts none: an addressed row is gated,
+        // not enumerated, and the op's own state refusal reaches the receipt per row.
+        let in_progress: u64 = match &cmd.scope {
+            ReblockScope::Resource(_) => 0,
+            ReblockScope::Context(context) => sqlx::query_scalar!(
+                r#"SELECT count(*) AS "count!" FROM kb_resources r
+                            JOIN kb_resource_homes h ON h.resource_id = r.id
+                           WHERE r.is_active
+                             AND r.ingest_state = 'in_progress'
+                             AND h.anchor_table = 'kb_contexts'
+                             AND h.anchor_id = $1
+                             AND EXISTS (SELECT 1 FROM resources_visible_to($2) v
+                                          WHERE v.resource_id = r.id)"#,
+                context,
+                *self.profile_id,
+            )
+            .fetch_one(&self.pool)
+            .await
+            .map_err(api_err)? as u64,
+            ReblockScope::All => sqlx::query_scalar!(
+                r#"SELECT count(*) AS "count!" FROM kb_resources r
+                         WHERE r.is_active
+                           AND r.ingest_state = 'in_progress'"#,
+            )
+            .fetch_one(&self.pool)
+            .await
+            .map_err(api_err)? as u64,
+        };
+
+        let mut outcomes: Vec<ReblockCandidate> = Vec::with_capacity(candidates.len());
         for id in candidates {
             let outcome = match self.check_can_modify_next(id).await {
-                Err(TemperError::Forbidden) => AdoptOutcome::Declined(AdoptDeclined::Denied),
-                Err(e) => AdoptOutcome::Error {
-                    message: e.to_string(),
-                },
+                Err(TemperError::Forbidden) => ReblockOutcome::Denied,
+                Err(e) => row_error(correlation, id, e),
                 Ok(()) if cmd.dry_run => {
-                    // The survey arm: the act's machinery, read-only.
-                    match writes::survey_reblock_resource(&self.pool, ResourceId::from(id))
-                        .await
-                        .map_err(api_err)?
-                    {
-                        temper_substrate::writes::ReblockSurvey::NoOp => AdoptOutcome::NoOp,
-                        temper_substrate::writes::ReblockSurvey::WouldChange => {
-                            AdoptOutcome::WouldChange
+                    // The survey arm: the act's machinery, read-only. A per-row error takes the
+                    // SAME bounded row-error path as the act — one poisoned candidate is a
+                    // receipt row, never an aborted invocation, so the declines-and-continues
+                    // sentence above holds for both arms.
+                    match writes::survey_reblock_resource(&self.pool, ResourceId::from(id)).await {
+                        Ok(temper_substrate::writes::ReblockSurvey::NoOp) => ReblockOutcome::NoOp,
+                        Ok(temper_substrate::writes::ReblockSurvey::WouldChange) => {
+                            ReblockOutcome::WouldChange
                         }
-                        temper_substrate::writes::ReblockSurvey::Declined { reason } => {
-                            AdoptOutcome::Declined(AdoptDeclined::Op { reason })
+                        Ok(temper_substrate::writes::ReblockSurvey::Declined { reason }) => {
+                            map_decline(reason)
                         }
+                        Err(e) => row_error(correlation, id, e),
                     }
                 }
                 Ok(()) => {
@@ -4014,51 +4099,56 @@ impl Backend for DbBackend {
                     .await
                     {
                         Ok(writes::ReblockOutcome::Reblocked { event }) => {
-                            AdoptOutcome::Reblocked {
+                            ReblockOutcome::Reblocked {
                                 event: event.uuid(),
                             }
                         }
-                        Ok(writes::ReblockOutcome::NoOp) => AdoptOutcome::NoOp,
-                        Ok(writes::ReblockOutcome::Declined { reason }) => {
-                            AdoptOutcome::Declined(AdoptDeclined::Op { reason })
-                        }
-                        Err(e) => AdoptOutcome::Error {
-                            message: e.to_string(),
-                        },
+                        Ok(writes::ReblockOutcome::NoOp) => ReblockOutcome::NoOp,
+                        Ok(writes::ReblockOutcome::Declined { reason }) => map_decline(reason),
+                        Err(e) => row_error(correlation, id, e),
                     }
                 }
             };
-            outcomes.push(AdoptResourceOutcome {
+            outcomes.push(ReblockCandidate {
                 resource: id,
                 outcome,
             });
         }
 
-        let summary = AdoptSummary {
+        let summary = ReblockSummary {
             reblocked: outcomes
                 .iter()
-                .filter(|o| matches!(o.outcome, AdoptOutcome::Reblocked { .. }))
+                .filter(|o| matches!(o.outcome, ReblockOutcome::Reblocked { .. }))
                 .count() as u64,
             would_change: outcomes
                 .iter()
-                .filter(|o| matches!(o.outcome, AdoptOutcome::WouldChange))
+                .filter(|o| matches!(o.outcome, ReblockOutcome::WouldChange))
                 .count() as u64,
             no_op: outcomes
                 .iter()
-                .filter(|o| matches!(o.outcome, AdoptOutcome::NoOp))
+                .filter(|o| matches!(o.outcome, ReblockOutcome::NoOp))
                 .count() as u64,
             declined: outcomes
                 .iter()
-                .filter(|o| matches!(o.outcome, AdoptOutcome::Declined(_)))
+                .filter(|o| {
+                    matches!(
+                        o.outcome,
+                        ReblockOutcome::Denied
+                            | ReblockOutcome::InProgress { .. }
+                            | ReblockOutcome::Byteless { .. }
+                            | ReblockOutcome::Drift { .. }
+                    )
+                })
                 .count() as u64,
             error: outcomes
                 .iter()
-                .filter(|o| matches!(o.outcome, AdoptOutcome::Error { .. }))
+                .filter(|o| matches!(o.outcome, ReblockOutcome::Error { .. }))
                 .count() as u64,
+            in_progress,
         };
         let after_id = outcomes.last().map(|o| o.resource);
 
-        Ok(CommandOutput::new(AdoptReceipt {
+        Ok(CommandOutput::new(ReblockReceipt {
             dry_run: cmd.dry_run,
             correlation_id: correlation.uuid(),
             outcomes,

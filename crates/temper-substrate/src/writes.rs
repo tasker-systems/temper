@@ -12,6 +12,7 @@
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use sqlx::PgPool;
+use std::fmt;
 use uuid::Uuid;
 
 use crate::affinity::EdgeKind;
@@ -831,21 +832,55 @@ pub struct ReblockParams {
     pub emitter: EntityId,
 }
 
+/// Why the re-block op declined to partition a resource: the refusal CLASS — the machine-usable
+/// taxonomy adoption tooling publishes per receipt row — plus the human `detail`, which names
+/// the resource and its remediation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReblockDecline {
+    /// The refusal class.
+    pub kind: ReblockDeclineKind,
+    /// The human remediation text, naming the resource and what to do about it.
+    pub detail: String,
+}
+
+impl fmt::Display for ReblockDecline {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.detail)
+    }
+}
+
+/// The re-block op's refusal classes. The gate's refusal (the caller not being allowed to write
+/// the resource at all) is deliberately absent: it is authorization failing, not the op
+/// declining, and it is classified separately upstream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReblockDeclineKind {
+    /// The body is still arriving (`ingest_state = 'in_progress'`) — a partition decision over
+    /// it would be a guess.
+    InProgress,
+    /// The resource stores no verbatim bytes to compose a body from: no live blocks at all, or
+    /// a live block in a derived shape whose bytes were never stored. Both are the same
+    /// judgment — there are no stored bytes to re-block.
+    Byteless,
+    /// A fresh chunking of the body does not reproduce the stored chunking — the stored
+    /// partition cannot serve as the re-block's baseline.
+    Drift,
+}
+
 /// What a re-block did.
 ///
 /// - [`ReblockOutcome::NoOp`] — the partition already matches; the ledger is indistinguishable
 ///   from the operation never having run.
 /// - [`ReblockOutcome::Declined`] — a precondition for a trustworthy partition decision did not
-///   hold (mid-ingest, no live blocks, a block without stored bytes, or a stored chunking that a
-///   fresh chunking of the body does not reproduce). Returned as a VALUE, not an error, because
-///   the right handling is the CALLER's: the write-path hook declines silently on finalize
-///   (stranding an upload forever is worse than an unpartitioned commit) and treats a decline as
-///   fatal elsewhere; a direct caller (adoption tooling) gets the typed reason to surface.
+///   hold (mid-ingest, no stored bytes, or a stored chunking that a fresh chunking of the body
+///   does not reproduce). Returned as a VALUE, not an error, because the right handling is the
+///   CALLER's: the write-path hook declines silently on finalize (stranding an upload forever is
+///   worse than an unpartitioned commit) and treats a decline as fatal elsewhere; a direct
+///   caller (adoption tooling) gets the typed class and detail to surface.
 /// - [`ReblockOutcome::Reblocked`] — the manifest fired; the ledger carries the act.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReblockOutcome {
     NoOp,
-    Declined { reason: String },
+    Declined { reason: ReblockDecline },
     Reblocked { event: EventId },
 }
 
@@ -988,7 +1023,7 @@ struct ReblockPlan {
 #[derive(Debug)]
 enum Partition {
     NoOp,
-    Declined(String),
+    Declined(ReblockDecline),
     Plan(ReblockPlan),
 }
 
@@ -1079,21 +1114,27 @@ fn compute_reblock_partition(
     };
 
     if expected.len() != live_chunks.len() {
-        return Ok(Partition::Declined(format!(
-            "resource {resource} has {live} live chunk(s) but its body now chunks to {fresh} — \
-             the stored chunking does not reproduce",
-            live = live_chunks.len(),
-            fresh = expected.len(),
-        )));
+        return Ok(Partition::Declined(ReblockDecline {
+            kind: ReblockDeclineKind::Drift,
+            detail: format!(
+                "resource {resource} has {live} live chunk(s) but its body now chunks to {fresh} — \
+                 the stored chunking does not reproduce",
+                live = live_chunks.len(),
+                fresh = expected.len(),
+            ),
+        }));
     }
     for (i, (e, l)) in expected.iter().zip(live_chunks).enumerate() {
         if e.content_hash != l.content_hash {
-            return Ok(Partition::Declined(format!(
-                "resource {resource} live chunk #{i} does not match a fresh chunking of its body \
-                 (hash {live_hash} vs expected {fresh_hash})",
-                live_hash = l.content_hash,
-                fresh_hash = e.content_hash,
-            )));
+            return Ok(Partition::Declined(ReblockDecline {
+                kind: ReblockDeclineKind::Drift,
+                detail: format!(
+                    "resource {resource} live chunk #{i} does not match a fresh chunking of its body \
+                     (hash {live_hash} vs expected {fresh_hash})",
+                    live_hash = l.content_hash,
+                    fresh_hash = e.content_hash,
+                ),
+            }));
         }
     }
 
@@ -1825,27 +1866,36 @@ async fn reblock_partition_in_tx(
     .await
     .with_context(|| format!("reblock_resource: resource {} not found", resource))?;
     if ingest_state == "in_progress" {
-        return Ok(Partition::Declined(format!(
-            "resource {resource} is mid-ingest (in_progress) — a partition decision over a \
-             still-arriving body would be a guess"
-        )));
+        return Ok(Partition::Declined(ReblockDecline {
+            kind: ReblockDeclineKind::InProgress,
+            detail: format!(
+                "resource {resource} is mid-ingest (in_progress) — a partition decision over a \
+                 still-arriving body would be a guess"
+            ),
+        }));
     }
 
     let live_blocks: Vec<LiveBlock> = read_live_blocks(&mut *conn, resource).await?;
     if live_blocks.is_empty() {
-        return Ok(Partition::Declined(format!(
-            "resource {resource} has no live blocks to partition"
-        )));
+        // No live blocks at all is the same Byteless judgment as a block without stored bytes:
+        // there is nothing stored to compose a body from.
+        return Ok(Partition::Declined(ReblockDecline {
+            kind: ReblockDeclineKind::Byteless,
+            detail: format!("resource {resource} has no live blocks to partition"),
+        }));
     }
     // The design slices STORED block content and never mutates text — a block whose bytes were
     // never stored (a derived charter/scenario shape) would force the body to be re-derived
     // from chunks, fabricating bytes the ledger never carried.
     if let Some(missing) = live_blocks.iter().find(|b| b.bytes.is_none()) {
-        return Ok(Partition::Declined(format!(
-            "block {} (seq {}) of resource {} stores no verbatim bytes (a derived shape) — \
-             re-blocking composes the body from stored bytes only",
-            missing.id, missing.seq, resource
-        )));
+        return Ok(Partition::Declined(ReblockDecline {
+            kind: ReblockDeclineKind::Byteless,
+            detail: format!(
+                "block {} (seq {}) of resource {} stores no verbatim bytes (a derived shape) — \
+                 re-blocking composes the body from stored bytes only",
+                missing.id, missing.seq, resource
+            ),
+        }));
     }
 
     let live_chunks: Vec<LiveChunk> = read_live_chunks(&mut *conn, resource).await?;
@@ -1868,12 +1918,12 @@ async fn reblock_partition_in_tx(
 /// - [`ReblockSurvey::WouldChange`] — the partition would move; the act, run now, would fire
 ///   `resource_reblocked` (the survey fires nothing and so carries no event id).
 /// - [`ReblockSurvey::Declined`] — the same typed precondition failure the act would return,
-///   with the same reason.
+///   the same [`ReblockDecline`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReblockSurvey {
     NoOp,
     WouldChange,
-    Declined { reason: String },
+    Declined { reason: ReblockDecline },
 }
 
 /// Classify a resource's re-block partition WITHOUT writing: the act's machinery, read-only.
@@ -1907,7 +1957,7 @@ pub async fn survey_reblock_resource(pool: &PgPool, resource: ResourceId) -> Res
 /// `writes::reblock_tests::reblock_op_is_reachable_only_through_the_gated_write_paths` (below)
 /// greps every crate's `src/` tree and fails on any caller outside its allowlist — the gated
 /// hook (here), the substrate's fire plumbing (`events.rs`), and the per-resource-gated
-/// adoption Backend command (`DbBackend::adopt_resources`, the op's one sanctioned direct
+/// reblock Backend command (`DbBackend::reblock_resources`, the op's one sanctioned direct
 /// production caller). A new caller must join that allowlist deliberately.
 ///
 /// `NoOp` is silence by design: a write that does not change the effective partition must be
@@ -3539,7 +3589,7 @@ mod reblock_tests {
             other => panic!("expected a decline, got {other:?}"),
         };
         assert!(
-            declined.contains("does not match a fresh chunking"),
+            declined.detail.contains("does not match a fresh chunking"),
             "the decline names the refusal: {declined}"
         );
     }
@@ -3660,7 +3710,7 @@ mod reblock_tests {
 
     /// The reachability AC, made executable: the re-block op's reachable-from set is exactly
     /// the gated write-path hook (this file), the substrate's fire plumbing (`events.rs`), and
-    /// the ONE sanctioned direct caller — `DbBackend::adopt_resources`, gated per-resource by
+    /// the ONE sanctioned direct caller — `DbBackend::reblock_resources`, gated per-resource by
     /// the same `can_modify` gate train a single body update runs (the adoption spec's D-C1:
     /// the batch mints no authority). Enforced by grep over every crate's `src/` tree rather
     /// than by trusting a maintained allowlist beyond these three named homes (the
@@ -3675,7 +3725,7 @@ mod reblock_tests {
             .expect("workspace root")
             .join("crates");
         // The op (writes.rs), the substrate's own fire plumbing (events.rs, whose
-        // `_event_append` call reaches the SQL wrapper), and the gated adoption caller are the
+        // `_event_append` call reaches the SQL wrapper), and the gated reblock caller are the
         // only legitimate homes.
         let allowed: &[std::path::PathBuf] = &[
             std::path::PathBuf::from("temper-substrate/src/writes.rs"),
@@ -3700,8 +3750,13 @@ mod reblock_tests {
                             .map(|s| {
                                 // The Rust op AND the SQL entry wrapper carrying the same fold
                                 // semantics — either called from outside the substrate's own
-                                // write/fire plumbing is a bypass.
-                                s.contains("reblock_resource") || s.contains("resource_reblock(")
+                                // write/fire plumbing is a bypass. Each half excludes the
+                                // command-family symbol that shares its name: the Backend
+                                // command `reblock_resources` embeds the op's singular symbol,
+                                // and the MCP tool fn `resource_reblock` shares the SQL
+                                // function's — neither is an op caller, so a bare substring
+                                // match would flag every dispatch site as a bypass.
+                                mentions_reblock_op(&s)
                             })
                             .unwrap_or(false)
                     {
@@ -3714,8 +3769,36 @@ mod reblock_tests {
             offenders.is_empty(),
             "reblock_resource/resource_reblock must stay reachable ONLY through the gated \
              write paths (temper-substrate/src/writes.rs + events.rs) and the per-resource-\
-             gated adoption command (temper-services/src/backend/db_backend.rs); production \
+             gated reblock command (temper-services/src/backend/db_backend.rs); production \
              callers found: {offenders:?}"
         );
+    }
+
+    /// The op's two call forms — `reblock_resource` (the Rust op) and `resource_reblock(` (its
+    /// SQL entry wrapper) — matched precisely enough to NOT match the same-named
+    /// command-family symbols the rename introduced: the Backend command `reblock_resources`
+    /// (its plural embeds the op's singular symbol) and the MCP tool fn `resource_reblock`
+    /// (a Rust `fn ` definition or a `::`-qualified call, never how SQL reaches the function).
+    /// The substring forms alone cannot separate them; these two shape rules do, so the fence
+    /// keeps flagging exactly the op's callers and no longer flags command dispatch sites.
+    fn mentions_reblock_op(s: &str) -> bool {
+        let op = "reblock_resource";
+        let mut from = 0;
+        while let Some(i) = s[from..].find(op) {
+            if !s[from + i + op.len()..].starts_with('s') {
+                return true;
+            }
+            from += i + op.len();
+        }
+        let sql_fn = "resource_reblock(";
+        let mut from = 0;
+        while let Some(i) = s[from..].find(sql_fn) {
+            let before = &s[..from + i];
+            if !(before.ends_with("fn ") || before.ends_with("::")) {
+                return true;
+            }
+            from += i + 1;
+        }
+        false
     }
 }

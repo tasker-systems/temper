@@ -14,6 +14,22 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.4.0 — unreleased
 
+- **Corpus adoption's HTTP surface — `POST /api/resources/reblock`**
+  One bounded, resumable re-blocking step per call: the body names a scope (one resource by id,
+  one context by id, or the explicitly-named deployment-wide `all`), `dry_run`, an optional
+  `limit` (a declared conservative default applies), and the `after_id` resume cursor; the
+  response is the reblock receipt — one outcome row per candidate, per-class counts, the
+  batch correlation id, and the continuation cursor. The route is documented in the OpenAPI
+  contract (the deliberate contrast with the admin-enclosed re-embed trigger), and the three
+  generated client skins gain the operation and its models. Dispatch goes to the existing
+  backend command; the deployment-wide arm is SystemAdmin-gated at that seam, the
+  resource/context arms ride the caller's own visibility. No existing request or response
+  class changes shape — the route and its schemas are new.
+pr: self
+classes: additive
+surfaces: http, clients
+status: signal-only
+
 - **The post-commit blob byte window closes — serialized releases, under-lock presence restore**
   Byte releases (the delete door's post-commit release and the fence drain's batched delete)
   re-derive released-ness under the hash advisory lock and hold it across the provider call,
@@ -203,7 +219,33 @@ status: signal-only
   envelope as data. No earlier tool addressed a block id for reads.
 pr: self
 classes: additive
+surfaces: http, clients
+status: signal-only
+
+- **Corpus adoption's MCP door — `resource_reblock`**
+  The same bounded, resumable re-blocking step, one tool with a scope discriminator (the unified
+  `facet_set` naming shape): `scope` names `resource`, `context`, or `all` and carries the
+  per-arm ref, `dry_run` selects the survey, and `limit`/`after_id` bound and resume the walk;
+  the tool result is the receipt the HTTP route returns. Dispatch goes to the existing backend
+  command — the deployment-wide arm's system-admin gate and the per-resource gate train are the
+  backend's, unchanged. The tool description is client-published product: it ships to Anthropic
+  clients verbatim, and the input schema inlines its scope enum (`#[schemars(inline)]` — a
+  `$ref`-ed enum reaches Anthropic tool-use as null).
+pr: self
+classes: additive, behavioral
 surfaces: mcp
+status: signal-only
+
+- **Corpus adoption's CLI door — `temper admin reblock`**
+  The operator walk, beside `admin reembed`: exactly one of `--resource`, `--context`, or
+  `--all` (none is a refusal, not a default — the deployment-wide arm must be asked for by
+  name), `--dry-run`, `--limit`, and `--after-id` resume; the receipt renders to stdout under
+  the agent-first defaults. Ref resolution matches the sibling command (decorated
+  `slug-<uuid>` refs; contexts through the ordinary read resolution). Goes through the typed
+  client's new `reblock` method, not its own HTTP call.
+pr: self
+classes: additive
+surfaces: cli-stdout
 status: signal-only
 
 - **The defined dangling state — temper-client `BlockRead` types + CLI `resource read-block`**
