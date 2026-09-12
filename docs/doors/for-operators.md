@@ -39,6 +39,12 @@ auth-identity contract — whose tokens this instance trusts and which it accept
   guests' content in the subject's own contexts), what stays in shared contexts, and what the
   record only reports.
 
+## Keeping the corpus under the blocking policy
+
+- **[Reblocking a corpus](../playbooks/reblock-a-corpus.md)** — bringing existing resources under
+  the current blocking policy in bounded, verified batches: the survey → act → re-survey loop,
+  reading the receipt, and validating each batch against the ledger.
+
 ## Connecting the rest of your world
 
 - **[Slack mentions](../playbooks/slack-mentions.md)** — end-to-end setup.
