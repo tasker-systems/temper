@@ -10816,6 +10816,13 @@
           },
           "deduped": {
             "type": "boolean"
+          },
+          "estate_scope_disclosure": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Present only when the blob homes in a context governed by another profile: the\ncommit-time scope-of-engagement disclosure (ruled 2026-09-12 — decision\n01a097ff). Bytes committed into another's context live and die with that estate;\nan erasure of its owner strikes them. `None` when the caller commits into a\ncontext of their own."
           }
         }
       },

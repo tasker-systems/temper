@@ -439,6 +439,7 @@ async fn commit_blob(
         content_type: outcome.content_type,
         content_bytes,
         deduped: outcome.deduped,
+        estate_scope_disclosure: outcome.estate_scope_disclosure,
     };
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&response),

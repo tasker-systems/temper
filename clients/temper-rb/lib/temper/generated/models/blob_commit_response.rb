@@ -29,6 +29,9 @@ module Temper::Generated
 
     attr_accessor :deduped
 
+    # Present only when the blob homes in a context governed by another profile: the commit-time scope-of-engagement disclosure (ruled 2026-09-12 — decision 01a097ff). Bytes committed into another's context live and die with that estate; an erasure of its owner strikes them. `None` when the caller commits into a context of their own.
+    attr_accessor :estate_scope_disclosure
+
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
@@ -36,7 +39,8 @@ module Temper::Generated
         :'content_bytes' => :'content_bytes',
         :'content_hash' => :'content_hash',
         :'content_type' => :'content_type',
-        :'deduped' => :'deduped'
+        :'deduped' => :'deduped',
+        :'estate_scope_disclosure' => :'estate_scope_disclosure'
       }
     end
 
@@ -57,13 +61,15 @@ module Temper::Generated
         :'content_bytes' => :'Integer',
         :'content_hash' => :'String',
         :'content_type' => :'String',
-        :'deduped' => :'Boolean'
+        :'deduped' => :'Boolean',
+        :'estate_scope_disclosure' => :'String'
       }
     end
 
     # List of attributes with nullable: true
     def self.openapi_nullable
       Set.new([
+        :'estate_scope_disclosure'
       ])
     end
 
@@ -111,6 +117,10 @@ module Temper::Generated
         self.deduped = attributes[:'deduped']
       else
         self.deduped = nil
+      end
+
+      if attributes.key?(:'estate_scope_disclosure')
+        self.estate_scope_disclosure = attributes[:'estate_scope_disclosure']
       end
     end
 
@@ -213,7 +223,8 @@ module Temper::Generated
           content_bytes == o.content_bytes &&
           content_hash == o.content_hash &&
           content_type == o.content_type &&
-          deduped == o.deduped
+          deduped == o.deduped &&
+          estate_scope_disclosure == o.estate_scope_disclosure
     end
 
     # @see the `==` method
@@ -225,7 +236,7 @@ module Temper::Generated
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [blob_id, content_bytes, content_hash, content_type, deduped].hash
+      [blob_id, content_bytes, content_hash, content_type, deduped, estate_scope_disclosure].hash
     end
 
     # Builds the object from hash

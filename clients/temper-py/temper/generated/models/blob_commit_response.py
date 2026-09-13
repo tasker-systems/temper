@@ -18,7 +18,7 @@ import re  # noqa: F401
 import json
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr
-from typing import Any, ClassVar, Dict, List
+from typing import Any, ClassVar, Dict, List, Optional
 from uuid import UUID
 from typing import Optional, Set
 from typing_extensions import Self
@@ -33,7 +33,8 @@ class BlobCommitResponse(BaseModel):
     content_hash: StrictStr = Field(description="Bare sha256 hex — the dedup key, the erasure join key, and the proof the ledger keeps instead of bytes (`ledger-carries-hash-not-bytes`).")
     content_type: StrictStr = Field(description="The row's STORED media type — allowlist-checked at commit (D9). On a dedup hit this is the FIRST committer's type (what read-through serves), never the re-commit's declaration (N2, 2026-09-03 review).")
     deduped: StrictBool
-    __properties: ClassVar[List[str]] = ["blob_id", "content_bytes", "content_hash", "content_type", "deduped"]
+    estate_scope_disclosure: Optional[StrictStr] = Field(default=None, description="Present only when the blob homes in a context governed by another profile: the commit-time scope-of-engagement disclosure (ruled 2026-09-12 — decision 01a097ff). Bytes committed into another's context live and die with that estate; an erasure of its owner strikes them. `None` when the caller commits into a context of their own.")
+    __properties: ClassVar[List[str]] = ["blob_id", "content_bytes", "content_hash", "content_type", "deduped", "estate_scope_disclosure"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -74,6 +75,11 @@ class BlobCommitResponse(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # set to None if estate_scope_disclosure (nullable) is None
+        # and model_fields_set contains the field
+        if self.estate_scope_disclosure is None and "estate_scope_disclosure" in self.model_fields_set:
+            _dict['estate_scope_disclosure'] = None
+
         return _dict
 
     @classmethod
@@ -90,7 +96,8 @@ class BlobCommitResponse(BaseModel):
             "content_bytes": obj.get("content_bytes"),
             "content_hash": obj.get("content_hash"),
             "content_type": obj.get("content_type"),
-            "deduped": obj.get("deduped")
+            "deduped": obj.get("deduped"),
+            "estate_scope_disclosure": obj.get("estate_scope_disclosure")
         })
         return _obj
 

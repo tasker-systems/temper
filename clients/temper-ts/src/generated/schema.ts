@@ -2978,6 +2978,14 @@ export interface components {
              */
             content_type: string;
             deduped: boolean;
+            /**
+             * @description Present only when the blob homes in a context governed by another profile: the
+             *     commit-time scope-of-engagement disclosure (ruled 2026-09-12 — decision
+             *     01a097ff). Bytes committed into another's context live and die with that estate;
+             *     an erasure of its owner strikes them. `None` when the caller commits into a
+             *     context of their own.
+             */
+            estate_scope_disclosure?: string | null;
         };
         /**
          * @description The acknowledgement of `DELETE /api/blobs/{id}` — the strike's own verdict. `released`
