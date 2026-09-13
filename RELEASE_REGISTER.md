@@ -130,19 +130,36 @@ classes: additive
 surfaces: http, clients
 status: signal-only
 
-- **The erasure record names guest-committed blob rows homed in governed homes**
-  The blob arm's second pass enumerates the governed homes BY HOME: every live row whose
-  actor halves are not the subject's is named in the `principal_erased` targets and the
-  erasure door's response — blob id + content hash, independent_obligation-shaped, the same
-  reporting team-held rows get — where the actor-keyed sweep reported nothing for them. Both
-  outcomes name the retention with no release path (the act's own context retirement closes
-  the delete gate's read for every caller, guest included); the subject's own strike
-  outcomes and the strike template the fence parses are byte-unchanged; named hashes never
-  enter `kb_erased_content` (only strikes do). Ruled 2026-09-11: guest rows are accepted as
-  surviving, never silent.
+- **The blob arm goes home-pure — guest-committed blob rows strike with the estate**
+  Every live blob row homed in a governed context of the erased estate strikes with the
+  estate, whoever committed it: the actor-first enumeration and its named guest class
+  retire — the `principal_erased` targets no longer carry `independent_obligation:
+  committed by a guest…` outcomes, and the struck rows land in the ordinary strike shape
+  (per-row `blob_erased` events, hashes admitted to `kb_erased_content`, provider release
+  under the existing refcount) where the actor-keyed sweep previously left them standing
+  and named. Guest rows join the same ordered strike set, so the survey's
+  sequential-refcount predictions cover them through the ONE computation both doors share.
+  Both erasure doors' wire contracts are unchanged — the strike prose template the fence
+  parses stays byte-identical. Ruled 2026-09-12 with Pete, deriving from the 2026-09-11
+  scope-of-engagement ruling; supersedes the unreleased name-not-strike disposition this
+  row's predecessor described (the accepted cost is mitigated by the commit-time
+  disclosure row below, not in the act).
 pr: self
 classes: behavioral
 surfaces: http
+status: signal-only
+
+- **The commit door discloses the estate line — `BlobCommitResponse.estate_scope_disclosure`**
+  When a blob commits into a context governed by another profile, every committing door
+  (`POST /api/blobs`, the segmented finalize, the MCP commit tool) carries a
+  scope-of-engagement note in its response: bytes committed into another's context live
+  and die with that estate — an erasure of its owner erases them. `None` for the caller's
+  own context and for team-owned homes (the team line is the terms' other half). Additive
+  field on one response class; the three generated client skins restale with the
+  contract.
+pr: self
+classes: additive
+surfaces: http, mcp, clients
 status: signal-only
 
 - **`create --sources-as-edges` qualifies each asserted edge at attribution grain**
