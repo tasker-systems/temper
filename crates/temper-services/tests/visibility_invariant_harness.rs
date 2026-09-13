@@ -1849,6 +1849,15 @@ const CONSUMES: &[&str] = &[
     // personal-contexts predicate inline BY RULING (20260909000025). Acknowledged explicitly
     // rather than silently excluded, on the principal_erasure_execute precedent.
     "_erasure_apply_redaction",
+    // principal_erasure_survey_plan — the erasure act's own scope/outcomes computation (20260913000010
+    // moved it out of principal_erasure_execute so the read-only survey door and the act run ONE
+    // computation), so this is the SAME hit as the execute entry above: the scan matches the body
+    // COMMENT ("contexts_readable_by arm 1, 20260712000010") carried over with the governed-home
+    // arms, not a call. It consults no substrate authority — the scope is the two indexed halves
+    // filtered to governed personal contexts BY RULING (the 2026-09-11 scope-of-engagement ruling,
+    // home-pure), byte-identical to the act's own restatement. Acknowledged explicitly rather than
+    // silently excluded, on the principal_erasure_execute precedent.
+    "principal_erasure_survey_plan",
 ];
 
 /// Any function whose body consults the visibility substrate must be enrolled. The vocabulary is
