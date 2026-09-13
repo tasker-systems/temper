@@ -13,9 +13,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use temper_core::types::ids::ProfileId;
-use temper_services::services::erasure_service::{
-    execute_erasure, survey_erasure, ErasureOutcome, ErasureSurvey,
-};
+use temper_services::services::erasure_service::{execute_erasure, survey_erasure, ErasureOutcome};
 use temper_services::test_support;
 use temper_workflow::operations::Surface;
 
@@ -246,8 +244,9 @@ async fn seed_blob(
     seed_blob_with_hash(pool, owner, home_table, home_id, tag, &hash).await
 }
 
-/// A live UNFOLDED edge from a blob to a resource — the guest naming pass's ATTACHED shape
-/// (a live relation to an estate resource outlives the act).
+/// A live UNFOLDED edge from a blob to a resource — the guest strike's ATTACHED shape (a
+/// live relation to an estate resource; under the home-pure rule the row strikes with the
+/// estate regardless).
 async fn attach_blob_to_resource(
     pool: &PgPool,
     emitter: Uuid,
@@ -430,7 +429,9 @@ async fn the_survey_matches_the_subsequent_act_over_every_classification(pool: P
     let team_context = seed_team_context(&pool, &handle).await;
     let (_, team_hash, _) = seed_blob(&pool, subject, "kb_contexts", team_context, "bb").await;
 
-    // A guest-committed governed-home blob, ATTACHED — a live relation to an estate resource.
+    // A guest-committed governed-home blob, ATTACHED — a live relation to an estate
+    // resource. Under the home-pure ruling (2026-09-12) it strikes with the estate,
+    // whoever committed it.
     let (guest_attached, guest_attached_hash, _) =
         seed_blob(&pool, guest, "kb_contexts", world.context, "dd").await;
     attach_blob_to_resource(
@@ -442,7 +443,7 @@ async fn the_survey_matches_the_subsequent_act_over_every_classification(pool: P
     )
     .await;
 
-    // …and UNATTACHED — no relation, the home's owner is the erased subject.
+    // …and UNATTACHED — no relation, the home's owner is the erased subject. Same fate.
     let (guest_unattached, guest_unattached_hash, _) =
         seed_blob(&pool, guest, "kb_contexts", world.context, "ee").await;
 
@@ -477,9 +478,9 @@ async fn the_survey_matches_the_subsequent_act_over_every_classification(pool: P
     assert!(!survey.already_erased);
     assert_eq!(
         survey.blob_strikes.len(),
-        4,
-        "four would-strike predictions: the sole hash, the held hash, and the subject's two \
-         same-hash homes"
+        6,
+        "six would-strike predictions: the sole hash, the held hash, the subject's two \
+         same-hash homes, and the guest's two governed-home rows"
     );
     for predicted in &survey.blob_strikes {
         let actual = completion
@@ -513,14 +514,6 @@ async fn the_survey_matches_the_subsequent_act_over_every_classification(pool: P
 
     // The world covered every classification — the prediction names them all, so the
     // equality above is not vacuous.
-    let outcome_of = |survey: &ErasureSurvey, blob: Uuid| {
-        survey
-            .targets
-            .iter()
-            .find(|t| t.outcome.contains(&blob.to_string()))
-            .map(|t| t.outcome.clone())
-            .unwrap_or_else(|| panic!("no target names {blob}"))
-    };
     assert!(
         survey.targets.iter().any(|t| t.target == "kb_blobs"
             && t.outcome.contains("released=true")
@@ -537,7 +530,27 @@ async fn the_survey_matches_the_subsequent_act_over_every_classification(pool: P
         held_outcome.outcome.contains("released=false"),
         "THE VERDICT BITE: the shared-hash blob must predict released=false, got {held_outcome:?}"
     );
-    assert!(outcome_of(&survey, guest_attached).contains("guest of the erased principal"));
+    // The guest rows strike with the estate (home-pure, 2026-09-12): both shapes predict
+    // the strike prose with released=true — each guest hash is sole in this world — and the
+    // attached/unattached distinction changes no outcome.
+    for (blob, tag) in [(guest_attached, "dd/"), (guest_unattached, "ee/")] {
+        let outcome = survey
+            .targets
+            .iter()
+            .find(|t| t.target == "kb_blobs" && t.outcome.contains(tag))
+            .unwrap_or_else(|| panic!("no strike prediction names the {tag} guest row"));
+        assert!(
+            outcome.outcome.starts_with("erased; released=true; pathname="),
+            "the {tag} guest row predicts a released strike, got {outcome:?}"
+        );
+        assert!(
+            survey
+                .blob_strikes
+                .iter()
+                .any(|s| s.blob_id == blob && s.released),
+            "the {tag} guest row's typed prediction is a released strike"
+        );
+    }
     let team_outcome = survey
         .targets
         .iter()
@@ -546,17 +559,6 @@ async fn the_survey_matches_the_subsequent_act_over_every_classification(pool: P
     assert!(
         team_outcome.outcome.starts_with("independent_obligation"),
         "the team-homed blob is the named remainder: {team_outcome:?}"
-    );
-    let attached_outcome = outcome_of(&survey, guest_attached);
-    assert!(
-        attached_outcome.contains("guest of the erased principal")
-            && attached_outcome.contains("a live relation to an estate resource outlives the act"),
-        "the attached guest blob names its provenance: {attached_outcome}"
-    );
-    let unattached_outcome = outcome_of(&survey, guest_unattached);
-    assert!(
-        unattached_outcome.contains("unattached, and the home's owner is the erased subject"),
-        "the unattached guest blob names its provenance: {unattached_outcome}"
     );
     assert!(survey
         .targets
@@ -582,10 +584,14 @@ async fn the_survey_matches_the_subsequent_act_over_every_classification(pool: P
         "the twin hash IS struck — both subject-owned rows are targets"
     );
     assert!(
-        !survey.redacted_hashes.contains(&team_hash)
-            && !survey.redacted_hashes.contains(&guest_attached_hash)
-            && !survey.redacted_hashes.contains(&guest_unattached_hash),
-        "named remainders never enter the redacted set"
+        !survey.redacted_hashes.contains(&team_hash),
+        "the named remainder never enters the redacted set"
+    );
+    assert!(
+        survey.redacted_hashes.contains(&guest_attached_hash)
+            && survey.redacted_hashes.contains(&guest_unattached_hash),
+        "the guest rows strike with the estate — their hashes ARE struck (home-pure, \
+         2026-09-12)"
     );
 
     // ── The second round: survey the erased subject, execute again — the survey predicts
