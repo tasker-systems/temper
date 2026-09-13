@@ -42,7 +42,9 @@ pub struct BlobStrikeOutcome {
 }
 
 /// A completed erasure — the full act or, on a re-erase, the no-op completion (spec §5:
-/// `already_erased`, every target reporting `already-erased`). Either way ONE
+/// `already_erased`). The no-op's targets are whatever live rows the estate still holds:
+/// post-act re-commits into a retired home report strikes, not `already-erased`, so an
+/// empty target set means an empty estate, not merely a tombstoned subject. Either way ONE
 /// `principal_erased` event stands behind these values.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ErasureCompletion {
