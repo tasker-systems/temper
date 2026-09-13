@@ -1,6 +1,6 @@
 [package]
 name = "temper-telemetry"
-version = "0.1.0"
+version = "0.5.0"
 edition = "2021"
 description = "Shared telemetry seam for temper's deployables: logging init, inbound trace-context extraction, and the root-span field convention"
 
