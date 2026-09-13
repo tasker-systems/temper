@@ -1299,10 +1299,15 @@ mod tests {
     /// This walks `tool_router().list_all()` — the object a connected client actually
     /// receives — so a new tool cannot quietly regress it.
     ///
-    /// **Declared remainder:** only top-level properties are walked. Every enum-typed
-    /// input field today is top-level and non-`Option` (verified by census when this test
-    /// landed); a nested object, or an `Option<Enum>` (which would arrive as `anyOf`),
-    /// would pass unwalked — this paragraph is where that gap is named rather than hidden.
+    /// **Declared remainder:** only top-level `$ref`s are walked, and `Option<Enum>` input
+    /// fields exist today — eight of them (`RelationshipInput`'s target/edge_kind/polarity,
+    /// `blob_manage`'s direction/edge_kind/polarity, `invocation_manage`'s disposition, and
+    /// the flattened `ActInput`'s confidence band) — and pass unwalked: their `$ref` arrives
+    /// inside `anyOf`, not at the property's top level, and they hold inline only because
+    /// each enum separately carries its own `schemars(inline)`. An `Option<NewEnum>` without
+    /// that attribute would land its `$ref` in the advertised schema and pass this test.
+    /// Nested objects inside composed inputs (`run_query`'s stages) are likewise unwalked.
+    /// This paragraph is where that gap is named rather than hidden.
     #[test]
     fn every_advertised_tool_input_inlines_scalar_enums() {
         // A schema is a scalar enum when it enumerates string constants, in either
