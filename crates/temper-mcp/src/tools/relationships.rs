@@ -272,6 +272,7 @@ pub async fn fold_relationship(
 
 /// The relationship action to perform.
 #[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(inline)]
 #[serde(rename_all = "snake_case")]
 pub enum RelationshipAction {
     /// Assert a new directed relationship from source to target.

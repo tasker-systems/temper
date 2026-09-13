@@ -10,7 +10,12 @@ tools for writes and search.
 Trigger when: the user mentions their knowledge base, vault, notes, contexts,
 sessions, research, or wants to look up / store information across conversations.
 
-## The Tool Surface (36 tools, read/write separable)
+## The Tool Surface (read/write separable)
+
+The census: **38 advertised tools — 19 reads, 19 writes — plus a conditional
+blob pair (2)**. The authority is the server's own `tools/list` reply (the
+`tool_router()`); when this file and that list disagree, the list wins and this
+file is wrong.
 
 The MCP surface is consolidated: each tool serves an agent use case, not an
 administrative one. Tools that shared a lifecycle are collapsed into one tool
@@ -32,6 +37,12 @@ drilling into action parameters.
 `steward_advance_watermark`, `commit_data_artifact`,
 `declare_data_artifact_shape`
 
+**Conditional (2):** `blob_read`, `blob_manage` — registered on the router but
+advertised only while the blob door is open (a credential resolves and
+`BLOB_ENABLED` is not `false`). A `tools/call` on a closed door still answers a
+typed refusal naming the knob, so a stale cached tool list degrades to a
+refusal, never to silence.
+
 > `[2026-08-29]` Reconciled against `tool_router()`: 35 tools, 18 reads / 17 writes. The
 > previous census read **28** beside a list that omitted the four data-artifact read tools
 > and the two data-artifact writes. This file is hand-written — `generate_agent_skill_files()`
@@ -44,6 +55,10 @@ drilling into action parameters.
 > `[2026-09-12]` `resource_reblock` joined the writes (38 tools, 19 reads / 19 writes) — the
 > bounded, survey-first corpus re-block walk; per-row outcomes ride the caller's own write
 > rights, never new authority.
+> `[2026-09-12]` Census restated: the header count had drifted two tools behind this ledger
+> (36 vs 38). The blob pair — registered but conditionally advertised — now has its own tier
+> instead of living in nobody's list, and the authority for the count is `tools/list`, not
+> this file.
 
 **Declared off-MCP (CLI door):** grants (`resource_grant`/`revoke`,
 `cogmap_grant`/`revoke`), `admin_ledger`, cogmap bind/unbind, team invitations,
@@ -74,6 +89,7 @@ MCP is a declaration, not a gap.
 | Create a new context | Tool: `context_manage` (action: create) | Mutation — tools only |
 | Discover valid document types | Tool: `describe_schema` (view: doc_types) | Returns id and name for each type |
 | Get schema for a specific type | Tool: `describe_schema` (view: doc_type) | Returns JSON Schema and example_managed_meta |
+| Learn the recognized `open_meta` conventions | Tool: `describe_schema` (view: open_meta) | The keys agents may write and what each means, before inventing metadata |
 
 ## Session Start Pattern
 

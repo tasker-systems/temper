@@ -770,6 +770,7 @@ pub async fn context_materialize(
 
 /// The cogmap-read view to perform.
 #[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(inline)]
 #[serde(rename_all = "snake_case")]
 pub enum CogmapReadView {
     /// Orient on one map: identity, charter, and foundational resources.

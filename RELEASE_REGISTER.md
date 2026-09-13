@@ -14,6 +14,25 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.4.0 — unreleased
 
+- **Eleven MCP tool inputs inline their scalar enums instead of `$ref`ing them**
+  The advertised input schemas of `context_read`, `context_manage`,
+  `segmented_ingest`, `describe_schema`, `facet_set`, `facets_read`,
+  `facet_retract`, `relationship`, `invocation_read`, `invocation_manage` and
+  `cogmap_read` now carry each discriminator enum inline (the `oneOf`-of-string-consts
+  form) rather than as `{"$ref": "#/$defs/…"}` into `$defs`, matching the blob pair and
+  `ReblockTarget`, which already shipped inline. Who observes it: any client that does
+  not resolve `$ref`/`$defs` — the Anthropic tool-use layer among them — previously got
+  no type signal for these fields and could send explicit `null` (`-32602`); the same
+  callers now see the allowed values. No request or response class changes shape: the
+  tools accept and return exactly what they did, and the twelve per-tool schema-witness
+  tests still hold. Release-relevant as a schema-payload change only; a new router-wide
+  witness (`every_advertised_tool_input_inlines_scalar_enums`) keeps the property from
+  regressing tool by tool.
+pr: self
+classes: behavioral
+surfaces: mcp
+status: signal-only
+
 - **The erasure door attributes to the caller's claimed surface**
   `execute_erasure` and the refusal recorder take the door's `Surface` and resolve the
   `<handle>@<marker>` emitter from it, instead of hard-wiring `web` at both attributed
