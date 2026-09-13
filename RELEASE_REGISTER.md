@@ -14,6 +14,21 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.4.0 — unreleased
 
+- **The erasure act gains a read-only survey door: `POST /api/admin/erasure/survey`**
+  An operator can now ask what an erasure WOULD record before running it: the door serves
+  the act's own computation (`principal_erasure_survey_plan`, which `principal_erasure_execute`
+  itself consumes — one computation, so the preview cannot disagree with the act), returning
+  the predicted targets, redacted set and typed strike verdicts. Same operator-only posture
+  as the execute door, mounted plain out of the OpenAPI contract (allowlisted, no schema
+  restales); a non-operator gets the same silent 404 and — by ruling — NO recorded refusal:
+  a survey attempt is not an erasure request. Behind unchanged shapes on the act itself: the
+  refactor to consume the plan leaves the execute door's request/response and the recorded
+  `principal_erased` payload byte-identical (the replay witnesses pass unmodified).
+pr: self
+classes: additive
+surfaces: http
+status: signal-only
+
 - **The erasure door attributes to the caller's claimed surface**
   `execute_erasure` and the refusal recorder take the door's `Surface` and resolve the
   `<handle>@<marker>` emitter from it, instead of hard-wiring `web` at both attributed

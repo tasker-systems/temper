@@ -94,7 +94,10 @@ keeps it afterward:
 The door is the admin API's `POST /api/admin/erasure`, operator-only: a caller without
 system-admin standing gets a recorded refusal (answered as a not-found, so the door's
 existence discloses nothing), and the refusal is itself part of the audit trail. A retried
-request with the same reference completes as a no-op on an already-erased subject.
+request with the same reference completes as a no-op on an already-erased subject. A
+read-only companion, `POST /api/admin/erasure/survey`, predicts what the record would be —
+the act's own computation, so it cannot disagree — and writes nothing: a caller without
+standing gets the same not-found, and no refusal is recorded for a survey.
 Re-committing identical bytes after an erasure is an ordinary write — nothing refuses it,
 and nothing treats it as a violation by whoever wrote it.
 
