@@ -297,15 +297,16 @@ async fn seed_team_context(pool: &PgPool, handle: &str) -> Uuid {
 }
 
 /// A governed (personal) context owned by `owner`, bare — the second live home for a
-/// shared hash.
-async fn seed_bare_personal_context(pool: &PgPool, owner: Uuid) -> Uuid {
+/// shared hash. The slug must be distinct per owner (kb_contexts' owner+slug key).
+async fn seed_bare_personal_context(pool: &PgPool, owner: Uuid, slug: &str) -> Uuid {
     let context = Uuid::now_v7();
     sqlx::query(
         "INSERT INTO kb_contexts (id, owner_table, owner_id, slug, name) \
-                 VALUES ($1, 'kb_profiles', $2, 'theirs', 'Theirs')",
+                 VALUES ($1, 'kb_profiles', $2, $3, 'Theirs')",
     )
     .bind(context)
     .bind(owner)
+    .bind(slug)
     .execute(pool)
     .await
     .expect("seed bare personal context");
@@ -352,8 +353,11 @@ async fn blob_rows(pool: &PgPool) -> BlobRows {
 /// THE DIFFERENTIAL: the survey's prediction IS the act's record, for every classification.
 /// FAILS IF survey and act can diverge — same targets (exact prose, exact order), same
 /// redacted set (ordered), same per-blob verdicts, same already_erased — including THE
-/// VERDICT BITE: a personal-homed blob whose hash has a SECOND live row in another home
-/// must predict released=false, and the act's strike-time refcount must agree.
+/// VERDICT BITE: a hash with a second live row in another home must predict released=false,
+/// and the act's strike-time refcount must agree; and THE SEQUENTIAL-REFCOUNT BITE: the SAME
+/// subject holding the SAME hash in TWO governed homes they own must predict released=false
+/// then released=true, in plan order, because the act strikes sequentially and each
+/// blob_delete counts live rows at ITS moment.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn the_survey_matches_the_subsequent_act_over_every_classification(pool: PgPool) {
     let (subject, handle) = insert_profile(&pool).await;
@@ -382,7 +386,7 @@ async fn the_survey_matches_the_subsequent_act_over_every_classification(pool: P
         &shared_hash,
     )
     .await;
-    let other_context = seed_bare_personal_context(&pool, other).await;
+    let other_context = seed_bare_personal_context(&pool, other, "theirs").await;
     let (_, _, _) = seed_blob_with_hash(
         &pool,
         other,
@@ -390,6 +394,35 @@ async fn the_survey_matches_the_subsequent_act_over_every_classification(pool: P
         other_context,
         "ss",
         &shared_hash,
+    )
+    .await;
+
+    // THE SEQUENTIAL-REFCOUNT BITE: the SAME subject holds the SAME content_hash in TWO
+    // DIFFERENT governed contexts THEY own (the home-scope uniqueness key permits one row
+    // per home-scope, so two homes). The act strikes the plan's would-strike rows IN PLAN
+    // ORDER and each blob_delete counts live rows at ITS moment: strike 1 finds the sibling
+    // still live (released=false), strike 2 finds it already emptied (released=true). A
+    // survey that pre-counts with all rows live predicts false for BOTH and disagrees with
+    // the act — the exact-equality differential below is what bites on a revert.
+    let twin_hash = fake_sha('t');
+    let twin_context_a = seed_bare_personal_context(&pool, subject, "twin-a").await;
+    let twin_context_b = seed_bare_personal_context(&pool, subject, "twin-b").await;
+    let (twin_a, _, _) = seed_blob_with_hash(
+        &pool,
+        subject,
+        "kb_contexts",
+        twin_context_a,
+        "tt",
+        &twin_hash,
+    )
+    .await;
+    let (twin_b, _, _) = seed_blob_with_hash(
+        &pool,
+        subject,
+        "kb_contexts",
+        twin_context_b,
+        "tt",
+        &twin_hash,
     )
     .await;
 
@@ -444,8 +477,9 @@ async fn the_survey_matches_the_subsequent_act_over_every_classification(pool: P
     assert!(!survey.already_erased);
     assert_eq!(
         survey.blob_strikes.len(),
-        2,
-        "two would-strike predictions: the sole hash and the held hash"
+        4,
+        "four would-strike predictions: the sole hash, the held hash, and the subject's two \
+         same-hash homes"
     );
     for predicted in &survey.blob_strikes {
         let actual = completion
@@ -459,6 +493,23 @@ async fn the_survey_matches_the_subsequent_act_over_every_classification(pool: P
             predicted.blob_id
         );
     }
+    // blob_strikes is in plan order, and the act consumes the plan in that order — so the
+    // twins must come back false THEN true: strike 1 finds its sibling live, strike 2 finds
+    // it emptied. This ordering is the bite: a pre-count predicts false for both.
+    let twin_verdicts: Vec<bool> = survey
+        .blob_strikes
+        .iter()
+        .filter(|s| s.blob_id == twin_a || s.blob_id == twin_b)
+        .map(|s| s.released)
+        .collect();
+    assert_eq!(
+        twin_verdicts,
+        vec![false, true],
+        "THE SEQUENTIAL-REFCOUNT BITE: the act's own order strikes the first twin while its \
+         sibling is still live (released=false), then the second alone (released=true) — a \
+         pre-count with all rows live would predict false for both and the differential \
+         above would fail"
+    );
 
     // The world covered every classification — the prediction names them all, so the
     // equality above is not vacuous.
@@ -527,6 +578,10 @@ async fn the_survey_matches_the_subsequent_act_over_every_classification(pool: P
         "the held hash IS struck (its subject-owned row is a target); it is just not released"
     );
     assert!(
+        survey.redacted_hashes.contains(&twin_hash),
+        "the twin hash IS struck — both subject-owned rows are targets"
+    );
+    assert!(
         !survey.redacted_hashes.contains(&team_hash)
             && !survey.redacted_hashes.contains(&guest_attached_hash)
             && !survey.redacted_hashes.contains(&guest_unattached_hash),
@@ -572,7 +627,7 @@ async fn the_survey_matches_the_subsequent_act_over_every_classification(pool: P
 
 /// LEAVES-NO-TRACE: FAILS IF the survey writes ANYTHING — not a ledger row of any kind, not
 /// a blob row, not the erased-content set, not the profile, not the chunk prose, vector,
-/// search vector or context liveness. It reads, it never writes.
+/// search vector, the verbatim block bytes or context liveness. It reads, it never writes.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn the_survey_pass_leaves_no_trace(pool: PgPool) {
     let (subject, handle) = insert_profile(&pool).await;
@@ -613,6 +668,12 @@ async fn the_survey_pass_leaves_no_trace(pool: PgPool) {
     .fetch_one(&pool)
     .await
     .unwrap();
+    let block_bytes_before: String =
+        sqlx::query_scalar("SELECT content FROM kb_block_content WHERE content_hash = $1")
+            .bind(&world.block_hash)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     let (ctx_before, team_ctx_before): (bool, bool) = sqlx::query_as(
         "SELECT is_active, \
                 (SELECT is_active FROM kb_contexts WHERE id = $2) \
@@ -681,6 +742,17 @@ async fn the_survey_pass_leaves_no_trace(pool: PgPool) {
     .await
     .unwrap();
     assert_eq!(fts_after, fts_before, "the search vector is untouched");
+    let block_bytes_after: String =
+        sqlx::query_scalar("SELECT content FROM kb_block_content WHERE content_hash = $1")
+            .bind(&world.block_hash)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        block_bytes_after, block_bytes_before,
+        "the verbatim block bytes are untouched — kb_block_content.content is a projection \
+         the redaction empties, so a survey must leave it alone"
+    );
     let (ctx_after, team_ctx_after): (bool, bool) = sqlx::query_as(
         "SELECT is_active, \
                 (SELECT is_active FROM kb_contexts WHERE id = $2) \
@@ -718,6 +790,22 @@ async fn a_non_operator_survey_records_nothing_until_the_gate_stands_down(pool: 
         matches!(answer, Err(temper_services::error::ApiError::NotFound(_))),
         "a non-operator gets the silent 404 face, got {answer:?}"
     );
+
+    // THE GATE-BEFORE-EXISTENCE ORDER, witnessed by the MESSAGE: a non-operator surveying a
+    // subject that does NOT exist still gets the gate's face — EXACTLY "not found", never
+    // "profile not found". `matches!` above cannot see the message; this can, and it bites
+    // if anyone moves the existence check above the gate, which would leak that semantics to
+    // a caller the gate has already declined.
+    let ghost = Uuid::now_v7();
+    let ghost_answer = survey_erasure(&pool, ProfileId::from(caller), ProfileId::from(ghost)).await;
+    match ghost_answer {
+        Err(temper_services::error::ApiError::NotFound(message)) => assert_eq!(
+            message, "not found",
+            "the gate's silent face is EXACTLY \"not found\" — \"profile not found\" would \
+             betray an existence check running above the gate"
+        ),
+        other => panic!("a non-operator gets the silent 404 face, got {other:?}"),
+    }
 
     assert_eq!(
         event_count(&pool).await,

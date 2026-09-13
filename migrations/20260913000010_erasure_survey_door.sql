@@ -3,14 +3,14 @@
 -- disagree with the act is worse than no preview. The act's scope computation (governed
 -- contexts, home-pure resources, text hashes, the per-target outcome arms reading
 -- PRE-redaction state) leaves `principal_erasure_execute` and moves whole into
--- `principal_erasure_survey_plan`, which the act then CONSUMES: it is computed ONCE per act,
--- the strike loop consumes the plan's rows by id, and nothing re-enumerates — so the act and
--- the survey cannot drift, by construction (the reblock precedent: 8656d533's
--- reblock_partition_in_tx). The subject's-own live governed-home blob rows come out of the
--- plan as STRUCTURED would-strike entries (id, hash, pathname, released_would_be — the
--- blob_delete refcount's own predicate, `count(*) … AND content_type IS NOT NULL` <= 1, run
--- at survey time on the same state); the survey renders them through the ONE prose template
--- so its targets array is exactly the record the act would write. A refused survey records
+-- `principal_erasure_survey_plan`, which the act then CONSUMES: computed ONCE per act, the
+-- strike loop consumes the plan's rows by id in plan order, nothing re-enumerates — the act
+-- and the survey cannot drift, by construction (8656d533's reblock_partition_in_tx). The
+-- subject's-own live governed-home blob rows come out as STRUCTURED would-strike entries
+-- (id, hash, pathname, released_would_be — the survey predicts each strike's verdict under
+-- the act's own sequential refcount: same-hash rows earlier in the strike set are already
+-- emptied when the act reaches this row), rendered through the ONE prose template so its
+-- targets array is exactly the record the act would write. A refused survey records
 -- NOTHING: a non-operator at the survey door gets a silent 404 and no
 -- principal_erasure_refused event — a survey attempt is not an erasure request.
 --
@@ -21,11 +21,6 @@
 -- exact prefix in erasure_fence_service::classify_blob_outcome — is extracted to ONE
 -- definition (blob_strike_outcome_text), byte-unchanged from 20260909000025:367 /
 -- 20260911000010:116-118.
---
--- Verified: no per-target outcome arm reads kb_blobs or blob events, and blob_delete touches
--- only kb_blobs + its own event — computing every outcome arm PRE-strike yields identical
--- values. The plan's already_erased is the profile tombstone state read the same way the act
--- reads it (20260911000010:190-191).
 --
 -- Additive: one new function + CREATE OR REPLACE only, signatures unchanged (the
 -- 20260804000020 class).
@@ -45,12 +40,13 @@ the act would write.';
 
 -- THE shared erasure computation — the act's own scope machinery, read-only (task 01a09628
 -- item 2; body moved whole from principal_erasure_execute, 20260911000010:47-442). The act
--- consumes the plan (computed ONCE per act; strikes consume its rows by id; nothing
--- re-enumerates) and the survey door serves it: the two cannot disagree, by construction.
--- The subject's-own LIVE governed-home blob rows are the only structural difference: the
--- plan reports each as a would_strike object (blob_id, content_hash, pathname,
--- released_would_be — the blob_delete refcount predicate run at survey time, a PREDICTION
--- that speaks for the moment it ran; the wrapper's strike-time verdict is authoritative)
+-- consumes the plan (computed ONCE per act; strikes consume its rows by id, in plan order;
+-- nothing re-enumerates) and the survey door serves the same plan: same-state, the survey
+-- predicts each strike's verdict under the act's own sequential refcount — same-hash rows
+-- earlier in the strike set are already emptied when the act reaches this row — and the
+-- wrapper's strike-time verdict stays authoritative for writers after the survey. The
+-- subject's-own LIVE governed-home blob rows are the only structural difference: the plan
+-- reports each as a would_strike object (blob_id, content_hash, pathname, released_would_be)
 -- where the act puts the struck prose. Already-erased own rows, both guest arms and every
 -- other target keep the act's exact prose, in the act's exact order.
 CREATE FUNCTION principal_erasure_survey_plan(p_subject uuid)
@@ -65,6 +61,7 @@ DECLARE
     v_strikes    jsonb  := '[]'::jsonb;
     v_row        record;
     v_rel        boolean;
+    v_struck     text[] := '{}';
     v_team  record;
     v_n     integer;
     v_prof  kb_profiles%ROWTYPE;
@@ -120,10 +117,14 @@ BEGIN
     -- Scope = the subject's blob rows (own half: owner/originator; emitted half: the commit
     -- event's emitter). Governed-home LIVE rows report would-strike entries; governed-home
     -- struck rows report already-erased; EVERY other home is the named remainder
-    -- (disposition iii). released_would_be is blob_delete's own refcount predicate — live
-    -- rows with the hash, this one included, <= 1 — run at survey time WITHOUT the hash's
-    -- advisory lock: a PREDICTION, honest about the moment it ran; the wrapper's
-    -- strike-time verdict is authoritative in the act.
+    -- (disposition iii). released_would_be SIMULATES the act's own sequential refcount: the
+    -- ONE blob_delete live-row predicate (live rows with the hash, this one included, <= 1)
+    -- minus the same-hash rows EARLIER IN THE PLAN'S OWN STRIKE SET — execute consumes the
+    -- entries in order, so those siblings are already emptied when the act reaches this row.
+    -- Run at survey time WITHOUT the hash's advisory lock: a PREDICTION, honest about the
+    -- moment it ran; the wrapper's strike-time verdict is authoritative in the act. The
+    -- enumeration is ORDERED BY id — the act strikes in plan order and the survey must walk
+    -- the SAME sequence when it simulates it, so the order cannot be left to the scan.
     FOR v_row IN
         SELECT b.id, b.content_hash, b.blob_pathname, b.content_type,
                (b.home_table = 'kb_contexts' AND b.home_id = ANY(v_governed)) AS governed_home
@@ -134,11 +135,22 @@ BEGIN
                SELECT e.id FROM kb_events e
                  JOIN kb_entities en ON en.id = e.emitter_entity_id
                 WHERE en.profile_id = p_subject)
+         ORDER BY b.id
     LOOP
         IF v_row.governed_home AND v_row.content_type IS NOT NULL THEN
-            v_rel := (SELECT count(*) FROM kb_blobs live
-                       WHERE live.content_hash = v_row.content_hash
-                         AND live.content_type IS NOT NULL) <= 1;
+            -- The act's own SEQUENTIAL refcount, simulated: the strike loop consumes the
+            -- plan's rows by id IN ORDER and each blob_delete counts live rows at ITS
+            -- moment, so every same-hash row already in this plan's strike set is emptied
+            -- when the act reaches this row — subtract it (accumulated below, in plan
+            -- order) from the ONE live-row predicate. A subject holding the same hash in
+            -- two of their own governed homes therefore predicts released=false then
+            -- released=true, exactly as the act strikes them.
+            v_rel := ((SELECT count(*) FROM kb_blobs live
+                        WHERE live.content_hash = v_row.content_hash
+                          AND live.content_type IS NOT NULL)
+                      - (SELECT count(*) FROM unnest(v_struck) prior
+                          WHERE prior = v_row.content_hash)) <= 1;
+            v_struck := v_struck || ARRAY[v_row.content_hash];
             v_blob_hash := v_blob_hash || ARRAY[v_row.content_hash];
             v_targets := v_targets || jsonb_build_array(jsonb_build_object(
                 'target',  'kb_blobs',
@@ -487,13 +499,14 @@ COMMENT ON FUNCTION principal_erasure_survey_plan(uuid) IS
 'THE shared erasure computation (task 01a09628 item 2; the act''s scope machinery moved
 whole out of principal_erasure_execute, 20260911000010): governed contexts, home-pure
 resources, text hashes, the subject''s-own blob pass as STRUCTURED would-strike entries
-(id, hash, pathname, released_would_be — blob_delete''s refcount predicate as a prediction),
-the guest naming pass, and every per-target outcome arm reading PRE-redaction state, in the
-act''s exact order. Read-only: it appends no event, mutates no row. principal_erasure_execute
-consumes this plan (computed ONCE per act; strikes by id; nothing re-enumerates) and the
-survey door serves it — the act and the survey cannot disagree, by construction. The
-would-strike verdicts speak for the moment the plan ran; the wrapper''s strike-time verdict
-is authoritative.';
+(id, hash, pathname, released_would_be — the survey predicts each strike''s verdict under
+the act''s own sequential refcount: the blob_delete live-row predicate minus the same-hash
+rows earlier in the strike set, already emptied when the act reaches this row), the guest
+naming pass, and every per-target outcome arm reading PRE-redaction state, in the act''s
+exact order. Read-only: it appends no event, mutates no row. principal_erasure_execute
+consumes this plan (computed ONCE per act; strikes by id, in plan order; nothing
+re-enumerates) and the survey door serves the same plan — the would-strike verdicts speak
+for the moment the plan ran; the wrapper''s strike-time verdict is authoritative.';
 
 -- The survey door's read: the plan + prose — every would-strike entry rendered through the
 -- ONE template, so the targets array is EXACTLY the record the act would write (task
@@ -547,8 +560,11 @@ Rust gate renders, never a principal_erasure_refused event).';
 -- The act, re-expressed as a CONSUMER of the plan (task 01a09628 item 2; body was
 -- 20260911000010:27-475, whose computation moved whole into principal_erasure_survey_plan).
 -- Signature unchanged. THE INVARIANT: the plan is computed ONCE per act; the strike loop
--- consumes the plan's rows by id, in plan order; NOTHING re-enumerates — the survey and the
--- act cannot disagree because there is only one computation.
+-- consumes the plan's rows by id, in plan order; NOTHING re-enumerates. The plan order is
+-- load-bearing for the verdicts too: each blob_delete counts live rows at ITS moment, so
+-- the survey's released_would_be predicts each strike's verdict under the act's own
+-- sequential refcount — same-hash rows earlier in the strike set are already emptied when
+-- the act reaches this row.
 CREATE OR REPLACE FUNCTION principal_erasure_execute(
     p_subject     uuid,
     p_operator    uuid,
@@ -652,5 +668,5 @@ principal_erasure_refuse.';
 SELECT declare_migration(
     20260913000010,
     'additive',
-    'The erasure survey door (task 01a09628 item 2, ruled 2026-09-12 with Pete): a read-only preview beside the execute door that shares the act''s ONE computation — a preview that can disagree with the act is worse than no preview (the reblock precedent, 8656d533). The act''s scope machinery — existence raise, governed contexts, home-pure resources, text hashes, the subject''s-own blob pass, the guest naming pass, and every per-target outcome arm reading PRE-redaction state — moves whole out of principal_erasure_execute into principal_erasure_survey_plan, which the act then CONSUMES: computed ONCE per act, strikes by id, nothing re-enumerates, so the act and the survey cannot drift by construction. The subject''s-own live governed-home blob rows come out of the plan as structured would-strike entries (id, hash, pathname, released_would_be — blob_delete''s own refcount predicate run at survey time, a prediction honest about the moment it ran; the wrapper''s strike-time verdict stays authoritative); principal_erasure_survey renders them through blob_strike_outcome_text so its targets array is exactly the record the act would write. The strike-outcome prose template is extracted to that ONE definition, byte-unchanged (the fence parses it by exact prefix). The act''s observable record is byte-identical: same per-row blob_erased events in the same order, same ONE principal_erased payload, same redaction. A refused survey records NOTHING — a non-operator at the survey door gets the silent 404 the Rust gate renders and no principal_erasure_refused event: a survey attempt is not an erasure request. Additive: CREATE FUNCTION + CREATE OR REPLACE only, signatures unchanged.'
+    'The erasure survey door (task 01a09628 item 2, ruled 2026-09-12 with Pete): a read-only preview beside the execute door that shares the act''s ONE computation — a preview that can disagree with the act is worse than no preview (the reblock precedent, 8656d533). The act''s scope machinery — existence raise, governed contexts, home-pure resources, text hashes, the subject''s-own blob pass, the guest naming pass, and every per-target outcome arm reading PRE-redaction state — moves whole out of principal_erasure_execute into principal_erasure_survey_plan, which the act then CONSUMES: computed ONCE per act, strikes by id, nothing re-enumerates, so the act and the survey cannot drift by construction. The subject''s-own live governed-home blob rows come out of the plan as structured would-strike entries (id, hash, pathname, released_would_be — the survey predicts each strike''s verdict under the act''s own sequential refcount: the blob_delete live-row predicate minus the same-hash rows earlier in the strike set, already emptied when the act reaches this row — a prediction honest about the moment it ran, with the wrapper''s strike-time verdict staying authoritative); principal_erasure_survey renders them through blob_strike_outcome_text so its targets array is exactly the record the act would write. The strike-outcome prose template is extracted to that ONE definition, byte-unchanged (the fence parses it by exact prefix). The act''s observable record is byte-identical: same per-row blob_erased events in the same order, same ONE principal_erased payload, same redaction. A refused survey records NOTHING — a non-operator at the survey door gets the silent 404 the Rust gate renders and no principal_erasure_refused event: a survey attempt is not an erasure request. Verified: no per-target outcome arm reads kb_blobs or blob events, and blob_delete touches only kb_blobs and its own event, so computing every outcome arm PRE-strike yields identical values, and the plan''s already_erased reads the tombstone state the same way the act does. Additive: CREATE FUNCTION + CREATE OR REPLACE only, signatures unchanged.'
 );

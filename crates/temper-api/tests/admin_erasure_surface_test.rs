@@ -385,6 +385,31 @@ async fn a_non_operator_survey_gets_404_and_zero_new_events_until_the_gate_stand
         "a refused survey records NOTHING — no principal_erasure_refused, no event at all"
     );
 
+    // THE GATE-BEFORE-EXISTENCE ORDER, witnessed by the 404 BODY: a non-operator surveying a
+    // subject that does NOT exist still gets the gate's face — a body that says EXACTLY
+    // "not found", never "profile not found". This bites if anyone moves the existence check
+    // above the gate, which would leak that semantics to a caller the gate already declined.
+    let ghost = Uuid::now_v7();
+    let resp = app
+        .client
+        .post(app.url("/api/admin/erasure/survey"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({ "subject": ghost }))
+        .send()
+        .await
+        .expect("the survey door answers");
+    assert_eq!(
+        resp.status().as_u16(),
+        404,
+        "the gate renders ABSENT before existence is ever consulted"
+    );
+    let body: Value = resp.json().await.expect("the 404 body");
+    assert_eq!(
+        body["error"]["message"], "not found",
+        "the gate's silent face is EXACTLY \"not found\" — \"profile not found\" would \
+         betray an existence check running above the gate"
+    );
+
     // THE BITE: the same caller, the gate granted, the same call — the survey answers.
     temper_services::test_support::grant_governance(&app.pool, non_admin).await;
     let resp = app

@@ -202,11 +202,15 @@ pub async fn execute_erasure(
 }
 
 /// The per-row strike verdicts for a completion: every `blob_erased` event sharing the
-/// completion's correlation id, joined to the row it emptied. The wrapper decided the byte
-/// fate inside the act's transaction (live-rows-only refcount under the hash lock); this
-/// re-derives the verdict from the row state the act left behind. The fence derives its own
-/// pathname from the payload's per-target outcome prose — the STRUCK row's `blob_pathname` is
-/// always NULL (the strike emptied it), so it is not read here.
+/// completion's correlation id, joined to the row it emptied, each carrying the verdict the
+/// wrapper decided AT THAT STRIKE'S MOMENT. A later read sees only the end state, so the
+/// moment is reconstructed: live rows when the wrapper counted = live rows now + same-hash
+/// strikes LATER in the same act (each emptied one live row) + the struck row itself, which
+/// was still live under its own refcount — so released ⟺ live-now + later = 0. A subject's
+/// two same-hash homes therefore read false then true, the act's sequential refcount, not a
+/// flat end-state read. The fence derives its own pathname from the payload's per-target
+/// outcome prose — the STRUCK row's `blob_pathname` is always NULL (the strike emptied it),
+/// so it is not read here.
 async fn strike_verdicts(
     pool: &PgPool,
     completion_event: Uuid,
@@ -214,10 +218,18 @@ async fn strike_verdicts(
     let rows = sqlx::query!(
         r#"
         SELECT (e.payload->>'blob_id')::uuid       AS "blob_id: Uuid",
-               NOT EXISTS (
-                   SELECT 1 FROM kb_blobs live
-                    WHERE live.content_hash = b.content_hash
-                      AND live.content_type IS NOT NULL) AS "released: bool"
+               ((SELECT count(*) FROM kb_blobs live
+                  WHERE live.content_hash = b.content_hash
+                    AND live.content_type IS NOT NULL)
+                + (SELECT count(*) FROM kb_events f
+                    JOIN kb_event_types ft ON ft.id = f.event_type_id
+                          AND ft.name = 'blob_erased'
+                   WHERE f.correlation_id = e.correlation_id
+                     AND f.id <> e.id
+                     AND (f.occurred_at, f.id) > (e.occurred_at, e.id)
+                     AND (f.payload->>'blob_id')::uuid IN (
+                         SELECT s.id FROM kb_blobs s
+                          WHERE s.content_hash = b.content_hash))) = 0 AS "released: bool"
           FROM kb_events e
           JOIN kb_event_types t ON t.id = e.event_type_id AND t.name = 'blob_erased'
           JOIN kb_blobs b ON b.id = (e.payload->>'blob_id')::uuid
@@ -234,11 +246,10 @@ async fn strike_verdicts(
         .into_iter()
         .map(|r| BlobStrikeOutcome {
             blob_id: r.blob_id.expect("a blob_erased payload carries blob_id"),
-            // Released ⟺ no live row carries the hash — the refcount's verdict, exact AS OF
-            // THIS READ. The strike-time verdict is the payload's: a re-commit after the act
-            // (the fence's declared-open window) flips this read to `false` while the
-            // strike-time prose still says `released=true` — both are honest about the moment
-            // they speak for, and neither overrules the other.
+            // The wrapper's verdict at ITS moment — the struck row was live under its own
+            // refcount, so live-now + later same-hash strikes = 0 ⟺ it was the last live
+            // row. A re-commit after the act (the fence's declared-open window) drifts this
+            // read from the strike-time prose, and the payload's prose stays authoritative.
             released: r.released.unwrap_or(false),
         })
         .collect())
@@ -246,9 +257,12 @@ async fn strike_verdicts(
 
 /// The read-only survey (task 01a09628 item 2): what [`execute_erasure`] WOULD record if it
 /// ran now. The prediction is the act's OWN computation — `principal_erasure_survey_plan`
-/// (migration 20260913000010), the exact body the act consumes — never a re-derivation, so
-/// a survey cannot disagree with the act it previews (a preview that can disagree is worse
-/// than no preview).
+/// (migration 20260913000010), the exact body the act consumes — never a re-derivation, and
+/// its strike verdicts simulate the act's own sequential refcount (same-hash rows earlier
+/// in the strike set are already emptied when the act reaches this row). In the same state,
+/// the prediction matches the record; the strike-time verdict stays authoritative for a
+/// commit or sibling strike that lands after the survey (a preview that can disagree is
+/// worse than no preview).
 ///
 /// THE GATE IS FIRST AND SILENT (ruled 2026-09-12 with Pete): a non-operator gets
 /// [`ApiError::NotFound`] and NOTHING ELSE — no emitter resolves, no
