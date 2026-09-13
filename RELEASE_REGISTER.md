@@ -14,6 +14,23 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.4.0 — unreleased
 
+- **The erasure act gains a read-only survey door: `POST /api/admin/erasure/survey`**
+  An operator can now ask what an erasure WOULD record before running it: the door serves
+  the act's own computation (`principal_erasure_survey_plan`, which `principal_erasure_execute`
+  itself consumes — one computation, whose would-strike verdicts simulate the act's own
+  sequential refcount, so in the same state the preview matches the act; the strike-time
+  verdict stays authoritative for writers after the survey), returning
+  the predicted targets, redacted set and typed strike verdicts. Same operator-only posture
+  as the execute door, mounted plain out of the OpenAPI contract (allowlisted, no schema
+  restales); a non-operator gets the same silent 404 and — by ruling — NO recorded refusal:
+  a survey attempt is not an erasure request. Behind unchanged shapes on the act itself: the
+  refactor to consume the plan leaves the execute door's request/response and the recorded
+  `principal_erased` payload byte-identical (the replay witnesses pass unmodified).
+pr: self
+classes: additive
+surfaces: http
+status: signal-only
+
 - **Eleven MCP tool inputs inline their scalar enums instead of `$ref`ing them**
   The advertised input schemas of `context_read`, `context_manage`,
   `segmented_ingest`, `describe_schema`, `facet_set`, `facets_read`,

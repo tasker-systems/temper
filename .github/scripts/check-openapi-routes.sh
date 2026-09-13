@@ -87,6 +87,7 @@ ALLOWLIST='/api/access/admin/requests
 /api/internal-calls/health
 /api/region/dispatch
 /api/admin/erasure
+/api/admin/erasure/survey
 /api/erasure/drain
 /api/intake/webhook'
 

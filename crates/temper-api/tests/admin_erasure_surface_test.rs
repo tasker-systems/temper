@@ -7,6 +7,12 @@
 //!   lives in the service, the door renders the posture, deny is 404 never 403); and the bite
 //!   probe — the same caller, the gate granted, the same request completes, proving the
 //!   refusal was the gate's work and not the router's.
+//! * the survey door (`POST /api/admin/erasure/survey`, task 01a09628 item 2) — a read-only
+//!   preview sharing the act's computation: an operator gets the prediction (no `event_id` —
+//!   nothing fired) and the ledger gained nothing; a non-operator gets the same 404 and ZERO
+//!   new events (a survey attempt is not an erasure request — no refusal is recorded, ruled
+//!   2026-09-12), with the same bite probe; and survey-then-execute parity — the act's
+//!   recorded payload targets equal the survey's predicted targets, exactly.
 //! * the audit read (`GET /api/admin/ledger`) — Beat 3 already admitted both erasure families
 //!   to the admin catalogue (`admin_ledger_service::ADMIN_EVENT_TYPES`), so the Operator row's
 //!   requirement ("An admin read surface lists erasures and refusals") is MET by the existing
@@ -274,6 +280,204 @@ async fn a_non_operator_gets_404_and_a_recorded_refusal_until_the_gate_stands_do
     );
     let body: Value = resp.json().await.expect("the tagged outcome");
     assert_eq!(body["status"], "completed", "{body}");
+}
+
+// ── WITNESS: the survey door — the operator's read-only preview ──────────────────────────────
+
+/// FAILS IF the survey door writes anything or pretends to have an event: an operator's
+/// survey answers 200 with the prediction shape (no `event_id`, no `status` tag — nothing
+/// fired) and the LEDGER GAINED NOTHING — not just no erasure events, no events at all.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_operator_surveys_through_the_door_and_the_ledger_gains_nothing(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (token, _) =
+        provision_and_make_operator(&app, "survey-operator", "survey-op@example.com").await;
+    let (subject, _, _) = insert_profile(&app.pool).await;
+
+    let events_before: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_events")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+
+    let resp = app
+        .client
+        .post(app.url("/api/admin/erasure/survey"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({ "subject": subject }))
+        .send()
+        .await
+        .expect("the survey door answers");
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "an operator's survey answers: {}",
+        resp.text().await.unwrap_or_default()
+    );
+    let body: Value = resp.json().await.expect("the prediction body");
+    assert_eq!(body["subject"], Value::String(subject.to_string()));
+    assert_eq!(body["already_erased"], false);
+    assert!(
+        body["targets"].is_array() && !body["targets"].as_array().unwrap().is_empty(),
+        "the prediction carries the per-target outcomes: {body}"
+    );
+    assert!(body["redacted_hashes"].is_array());
+    assert!(body["blob_strikes"].is_array());
+    assert!(
+        body.get("event_id").is_none(),
+        "the survey fired nothing — there is no event id to report: {body}"
+    );
+    assert!(
+        body.get("status").is_none(),
+        "the survey is a plain prediction, not the tagged act outcome: {body}"
+    );
+
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM kb_events")
+            .fetch_one(&app.pool)
+            .await
+            .unwrap(),
+        events_before,
+        "the ledger gained NOTHING from a survey"
+    );
+}
+
+// ── WITNESS: the survey door's SILENT 404 — a refused survey records NOTHING ─────────────────
+
+/// FAILS IF a non-operator's survey mutates the ledger or leaks anything but 404 — and this is
+/// the witness that bites if someone "fixes" the survey to record a refusal: a survey attempt
+/// is NOT an erasure request (ruled 2026-09-12), so there must be ZERO new events of any kind.
+/// The bite probe stands the gate down for the SAME caller: the survey answers.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_non_operator_survey_gets_404_and_zero_new_events_until_the_gate_stands_down(
+    pool: PgPool,
+) {
+    let app = common::setup_test_app(pool).await;
+    let (subject, _, _) = insert_profile(&app.pool).await;
+    let (token, non_admin) =
+        provision_non_operator(&app, "survey-nonadmin", "survey-nonadmin@example.com").await;
+
+    let events_before: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_events")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+
+    let resp = app
+        .client
+        .post(app.url("/api/admin/erasure/survey"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({ "subject": subject }))
+        .send()
+        .await
+        .expect("the survey door answers");
+    assert_eq!(
+        resp.status().as_u16(),
+        404,
+        "the door renders ABSENT to a caller the gate declined, got {}",
+        resp.text().await.unwrap_or_default()
+    );
+
+    let events_after: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_events")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        events_after, events_before,
+        "a refused survey records NOTHING — no principal_erasure_refused, no event at all"
+    );
+
+    // THE GATE-BEFORE-EXISTENCE ORDER, witnessed by the 404 BODY: a non-operator surveying a
+    // subject that does NOT exist still gets the gate's face — a body that says EXACTLY
+    // "not found", never "profile not found". This bites if anyone moves the existence check
+    // above the gate, which would leak that semantics to a caller the gate already declined.
+    let ghost = Uuid::now_v7();
+    let resp = app
+        .client
+        .post(app.url("/api/admin/erasure/survey"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({ "subject": ghost }))
+        .send()
+        .await
+        .expect("the survey door answers");
+    assert_eq!(
+        resp.status().as_u16(),
+        404,
+        "the gate renders ABSENT before existence is ever consulted"
+    );
+    let body: Value = resp.json().await.expect("the 404 body");
+    assert_eq!(
+        body["error"]["message"], "not found",
+        "the gate's silent face is EXACTLY \"not found\" — \"profile not found\" would \
+         betray an existence check running above the gate"
+    );
+
+    // THE BITE: the same caller, the gate granted, the same call — the survey answers.
+    temper_services::test_support::grant_governance(&app.pool, non_admin).await;
+    let resp = app
+        .client
+        .post(app.url("/api/admin/erasure/survey"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({ "subject": subject }))
+        .send()
+        .await
+        .expect("the survey door answers again");
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "with the gate stood down the same survey answers: {}",
+        resp.text().await.unwrap_or_default()
+    );
+}
+
+// ── WITNESS: survey-then-execute parity through the doors ────────────────────────────────────
+
+/// FAILS IF the survey's prediction can diverge from what the act then records: the recorded
+/// `principal_erased` payload's targets must EQUAL the survey's predicted targets — exact
+/// prose, exact order — and the redacted set with them.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_acts_recorded_targets_equal_the_survey_s_prediction(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (token, _) =
+        provision_and_make_operator(&app, "parity-operator", "parity-op@example.com").await;
+    let (subject, _, _) = insert_profile(&app.pool).await;
+
+    let surveyed = app
+        .client
+        .post(app.url("/api/admin/erasure/survey"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({ "subject": subject }))
+        .send()
+        .await
+        .expect("the survey door answers");
+    assert_eq!(surveyed.status().as_u16(), 200);
+    let prediction: Value = surveyed.json().await.expect("the prediction body");
+
+    let executed = app
+        .client
+        .post(app.url("/api/admin/erasure"))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({
+            "subject": subject,
+            "request_reference": Uuid::now_v7(),
+        }))
+        .send()
+        .await
+        .expect("the execute door answers");
+    assert_eq!(
+        executed.status().as_u16(),
+        200,
+        "the act completes: {}",
+        executed.text().await.unwrap_or_default()
+    );
+    let (payload, _) = the_completion(&app).await;
+
+    assert_eq!(
+        payload["targets"], prediction["targets"],
+        "the act's recorded targets must equal the survey's prediction, exactly"
+    );
+    assert_eq!(
+        payload["redacted_hashes"], prediction["redacted_hashes"],
+        "the redacted set must agree with the prediction"
+    );
 }
 
 // ── WITNESS: the audit read is the EXISTING admin ledger surface ─────────────────────────────

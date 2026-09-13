@@ -278,13 +278,17 @@ fn gated_routes() -> OpenApiRouter<AppState> {
         // `admin_ledger_service`, which gates per act family rather than with a prelude, and
         // denies with 404 so a refusal discloses nothing about the subject.
         .route("/api/admin/ledger", get(handlers::admin_ledger::list))
-        // The erasure act's execute door (task 01a0577c Beat 4). Same operator-only posture as
-        // `/api/admin/ledger`: plain `.route()`, out of the contract, allowlisted. The handler
-        // is deliberately GATE-FREE — authorization is `erasure_service::execute_erasure`'s
-        // `is_system_admin` gate (it records the `unauthorized` refusal before anything else
-        // happens), and the door's only job is the posture: map that refusal to a 404, never a
-        // 403, so the door's existence is not disclosed to a caller it has declined.
+        // The erasure act's doors (task 01a0577c Beat 4; the survey is task 01a09628 item 2).
+        // Same operator-only posture as `/api/admin/ledger`: plain `.route()`, out of the
+        // contract, allowlisted. The handlers are deliberately GATE-FREE — authorization is
+        // `erasure_service`'s `is_system_admin` gate (execute records the `unauthorized`
+        // refusal before anything else happens; the survey is silent — a survey attempt is
+        // not an erasure request, ruled 2026-09-12, so a non-operator's survey records
+        // NOTHING), and the doors' only job is the posture: map the gate's refusal to a 404,
+        // never a 403, so the doors' existence is not disclosed to a caller they have
+        // declined.
         .route("/api/admin/erasure", post(handlers::erasure::execute))
+        .route("/api/admin/erasure/survey", post(handlers::erasure::survey))
         // Machine-principal registration (G3 Phase A). Mounted with plain `.route()`, like
         // `/api/access/admin/*` above, so it stays OUT of the OpenAPI contract. Its paths are
         // allowlisted in `.github/scripts/check-openapi-routes.sh`.

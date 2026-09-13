@@ -9,9 +9,12 @@
 //! SQL commits, it does not decide legality (`principal_standing_apply`'s shape,
 //! migrations/20260720000030): the scope computation, the per-row governed-home strikes, the
 //! tombstone machinery and both events live in `principal_erasure_execute` /
-//! `principal_erasure_refuse` / `_erasure_apply_redaction` (migration 20260909000025). The
-//! admin surface's HTTP door (`handlers::erasure::execute`) calls straight into
-//! [`execute_erasure`] — this module stays the service layer and carries no HTTP types.
+//! `principal_erasure_refuse` / `_erasure_apply_redaction` (migration 20260909000025; the
+//! computation itself moved whole into `principal_erasure_survey_plan`, 20260913000010, which
+//! the act consumes and the survey door serves). The admin surface's HTTP doors
+//! (`handlers::erasure::execute`, `handlers::erasure::survey`) call straight into
+//! [`execute_erasure`] / [`survey_erasure`] — this module stays the service layer and carries
+//! no HTTP types.
 //!
 //! The request reference is an opaque UUID supplied by the caller: it rides
 //! `kb_events."references"` (rel `request`) and the act's correlation id — never the payload —
@@ -77,6 +80,41 @@ struct ExecuteOutcomeWire {
     redacted_hashes: Vec<String>,
     targets: Vec<ErasureTargetOutcome>,
     already_erased: bool,
+}
+
+/// One blob strike's PREDICTED verdict from the survey — the plan's `released_would_be`:
+/// the `blob_delete` refcount's own predicate, run at survey time. THE STRIKE-TIME VERDICT
+/// IS AUTHORITATIVE (the `strike_verdicts` honesty rule): this speaks for the moment the
+/// survey ran, and a commit or a sibling strike in between can flip the act's actual
+/// verdict; neither overrules the other.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct BlobStrikeVerdict {
+    pub blob_id: Uuid,
+    pub released: bool,
+}
+
+/// What the read-only survey predicts the act would do (task 01a09628 item 2): the full
+/// record the act would write — targets as prose, exactly, in the act's own order — the
+/// redacted set, the tombstone state it would report, and the typed strike predictions.
+/// Writes nothing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ErasureSurvey {
+    pub subject: ProfileId,
+    pub already_erased: bool,
+    /// The redacted set (D2) the act would admit: the governed-scope text hashes plus every
+    /// hash it would actually strike.
+    pub redacted_hashes: Vec<String>,
+    pub targets: Vec<ErasureTargetOutcome>,
+    pub blob_strikes: Vec<BlobStrikeVerdict>,
+}
+
+/// The jsonb `principal_erasure_survey` returns, before mapping onto the typed survey.
+#[derive(Debug, serde::Deserialize)]
+struct SurveyOutcomeWire {
+    redacted_hashes: Vec<String>,
+    targets: Vec<ErasureTargetOutcome>,
+    already_erased: bool,
+    blob_strikes: Vec<BlobStrikeVerdict>,
 }
 
 /// Execute the erasure act for `subject`.
@@ -164,11 +202,15 @@ pub async fn execute_erasure(
 }
 
 /// The per-row strike verdicts for a completion: every `blob_erased` event sharing the
-/// completion's correlation id, joined to the row it emptied. The wrapper decided the byte
-/// fate inside the act's transaction (live-rows-only refcount under the hash lock); this
-/// re-derives the verdict from the row state the act left behind. The fence derives its own
-/// pathname from the payload's per-target outcome prose — the STRUCK row's `blob_pathname` is
-/// always NULL (the strike emptied it), so it is not read here.
+/// completion's correlation id, joined to the row it emptied, each carrying the verdict the
+/// wrapper decided AT THAT STRIKE'S MOMENT. A later read sees only the end state, so the
+/// moment is reconstructed: live rows when the wrapper counted = live rows now + same-hash
+/// strikes LATER in the same act (each emptied one live row) + the struck row itself, which
+/// was still live under its own refcount — so released ⟺ live-now + later = 0. A subject's
+/// two same-hash homes therefore read false then true, the act's sequential refcount, not a
+/// flat end-state read. The fence derives its own pathname from the payload's per-target
+/// outcome prose — the STRUCK row's `blob_pathname` is always NULL (the strike emptied it),
+/// so it is not read here.
 async fn strike_verdicts(
     pool: &PgPool,
     completion_event: Uuid,
@@ -176,10 +218,18 @@ async fn strike_verdicts(
     let rows = sqlx::query!(
         r#"
         SELECT (e.payload->>'blob_id')::uuid       AS "blob_id: Uuid",
-               NOT EXISTS (
-                   SELECT 1 FROM kb_blobs live
-                    WHERE live.content_hash = b.content_hash
-                      AND live.content_type IS NOT NULL) AS "released: bool"
+               ((SELECT count(*) FROM kb_blobs live
+                  WHERE live.content_hash = b.content_hash
+                    AND live.content_type IS NOT NULL)
+                + (SELECT count(*) FROM kb_events f
+                    JOIN kb_event_types ft ON ft.id = f.event_type_id
+                          AND ft.name = 'blob_erased'
+                   WHERE f.correlation_id = e.correlation_id
+                     AND f.id <> e.id
+                     AND (f.occurred_at, f.id) > (e.occurred_at, e.id)
+                     AND (f.payload->>'blob_id')::uuid IN (
+                         SELECT s.id FROM kb_blobs s
+                          WHERE s.content_hash = b.content_hash))) = 0 AS "released: bool"
           FROM kb_events e
           JOIN kb_event_types t ON t.id = e.event_type_id AND t.name = 'blob_erased'
           JOIN kb_blobs b ON b.id = (e.payload->>'blob_id')::uuid
@@ -196,14 +246,71 @@ async fn strike_verdicts(
         .into_iter()
         .map(|r| BlobStrikeOutcome {
             blob_id: r.blob_id.expect("a blob_erased payload carries blob_id"),
-            // Released ⟺ no live row carries the hash — the refcount's verdict, exact AS OF
-            // THIS READ. The strike-time verdict is the payload's: a re-commit after the act
-            // (the fence's declared-open window) flips this read to `false` while the
-            // strike-time prose still says `released=true` — both are honest about the moment
-            // they speak for, and neither overrules the other.
+            // The wrapper's verdict at ITS moment — the struck row was live under its own
+            // refcount, so live-now + later same-hash strikes = 0 ⟺ it was the last live
+            // row. A re-commit after the act (the fence's declared-open window) drifts this
+            // read from the strike-time prose, and the payload's prose stays authoritative.
             released: r.released.unwrap_or(false),
         })
         .collect())
+}
+
+/// The read-only survey (task 01a09628 item 2): what [`execute_erasure`] WOULD record if it
+/// ran now. The prediction is the act's OWN computation — `principal_erasure_survey_plan`
+/// (migration 20260913000010), the exact body the act consumes — never a re-derivation, and
+/// its strike verdicts simulate the act's own sequential refcount (same-hash rows earlier
+/// in the strike set are already emptied when the act reaches this row). In the same state,
+/// the prediction matches the record; the strike-time verdict stays authoritative for a
+/// commit or sibling strike that lands after the survey (a preview that can disagree is
+/// worse than no preview).
+///
+/// THE GATE IS FIRST AND SILENT (ruled 2026-09-12 with Pete): a non-operator gets
+/// [`ApiError::NotFound`] and NOTHING ELSE — no emitter resolves, no
+/// `principal_erasure_refused` event is recorded, nothing mutates. A survey attempt is not
+/// an erasure request: the execute door's refusal is the recording of a REQUESTED erasure,
+/// and the survey requests nothing. There is deliberately no `Surface` parameter for the
+/// same reason — the survey appends nothing, so there is nothing to attribute.
+///
+/// Existence is disclosed only past the gate (the execute door's order, operator-only).
+pub async fn survey_erasure(
+    pool: &PgPool,
+    caller: ProfileId,
+    subject: ProfileId,
+) -> ApiResult<ErasureSurvey> {
+    let is_operator = access_service::is_system_admin(pool, caller).await?;
+
+    if !is_operator {
+        return Err(ApiError::NotFound("not found".to_string()));
+    }
+
+    // Gate passed — NOW existence may be disclosed (and as an error, not a ledger row).
+    let exists: Option<Uuid> = sqlx::query_scalar!(
+        r#"SELECT id FROM kb_profiles WHERE id = $1"#,
+        subject.uuid()
+    )
+    .fetch_optional(pool)
+    .await?;
+    if exists.is_none() {
+        return Err(ApiError::NotFound("profile not found".to_string()));
+    }
+
+    let raw = sqlx::query_scalar!(
+        r#"SELECT principal_erasure_survey($1) AS "survey: serde_json::Value""#,
+        subject.uuid(),
+    )
+    .fetch_one(pool)
+    .await?
+    .ok_or_else(|| ApiError::Internal("principal_erasure_survey returned no row".to_string()))?;
+    let wire: SurveyOutcomeWire = serde_json::from_value(raw)
+        .map_err(|e| ApiError::Internal(format!("erasure survey shape: {e}")))?;
+
+    Ok(ErasureSurvey {
+        subject,
+        already_erased: wire.already_erased,
+        redacted_hashes: wire.redacted_hashes,
+        targets: wire.targets,
+        blob_strikes: wire.blob_strikes,
+    })
 }
 
 /// Record a refusal (D6) — the negative face: ONE `principal_erasure_refused` event with the
