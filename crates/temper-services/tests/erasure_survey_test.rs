@@ -540,7 +540,9 @@ async fn the_survey_matches_the_subsequent_act_over_every_classification(pool: P
             .find(|t| t.target == "kb_blobs" && t.outcome.contains(tag))
             .unwrap_or_else(|| panic!("no strike prediction names the {tag} guest row"));
         assert!(
-            outcome.outcome.starts_with("erased; released=true; pathname="),
+            outcome
+                .outcome
+                .starts_with("erased; released=true; pathname="),
             "the {tag} guest row predicts a released strike, got {outcome:?}"
         );
         assert!(

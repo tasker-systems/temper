@@ -904,9 +904,7 @@ async fn world_shape(pool: &PgPool, chunk_hash: &str) -> (String, String) {
 /// strike releases: the guest's bytes die on someone else's erasure, the ruling's accepted
 /// cost, mitigated at commit-time disclosure (not in the act).
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn a_guest_committed_blob_in_a_governed_home_is_struck_with_the_estate(
-    pool: sqlx::PgPool,
-) {
+async fn a_guest_committed_blob_in_a_governed_home_is_struck_with_the_estate(pool: sqlx::PgPool) {
     let (subject, _) = insert_profile(&pool).await;
     let (operator, _) = insert_profile(&pool).await;
     temper_services::test_support::grant_governance(&pool, operator).await;
@@ -1019,14 +1017,13 @@ async fn a_guest_committed_blob_in_a_governed_home_is_struck_with_the_estate(
         (guest_unattached, &guest_unattached_hash, "unattached"),
         (guest_attached, &guest_attached_hash, "attached"),
     ] {
-        let (ctype, pathname, kept): (Option<String>, Option<String>, String) =
-            sqlx::query_as(
-                "SELECT content_type, blob_pathname, content_hash FROM kb_blobs WHERE id = $1",
-            )
-            .bind(id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let (ctype, pathname, kept): (Option<String>, Option<String>, String) = sqlx::query_as(
+            "SELECT content_type, blob_pathname, content_hash FROM kb_blobs WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(
             (ctype.as_deref(), pathname.as_deref()),
             (None, None),
@@ -1068,7 +1065,9 @@ async fn a_guest_committed_blob_in_a_governed_home_is_struck_with_the_estate(
             .find(|t| t.target == "kb_blobs" && t.outcome.contains(&blob_pathname(hash)))
             .unwrap_or_else(|| panic!("no strike outcome names {}", blob_pathname(hash)));
         assert!(
-            outcome.outcome.starts_with("erased; released=true; pathname="),
+            outcome
+                .outcome
+                .starts_with("erased; released=true; pathname="),
             "the guest row's outcome is the strike prose, got {outcome:?}"
         );
     }
@@ -1108,11 +1107,13 @@ async fn a_guest_committed_blob_in_a_governed_home_is_struck_with_the_estate(
 
     // The attached shape's provenance survives the strike as the substrate leaves it: the
     // strike folds no edges — the relation renders absent because the blob is gone.
-    let folded: bool =
-        sqlx::query_scalar("SELECT is_folded FROM kb_edges WHERE source_id = $1")
-            .bind(guest_attached)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert!(!folded, "the strike folds no edges (the substrate's ruled shape)");
+    let folded: bool = sqlx::query_scalar("SELECT is_folded FROM kb_edges WHERE source_id = $1")
+        .bind(guest_attached)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(
+        !folded,
+        "the strike folds no edges (the substrate's ruled shape)"
+    );
 }
