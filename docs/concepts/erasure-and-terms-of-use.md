@@ -57,8 +57,10 @@ determination. In one server-side transaction it:
   are never edited to hide them.
 - **Retires the subject's personal contexts** in the same transaction. This is what makes
   line 2 enforceable rather than promised: every share and grant that reached the estate
-  *through the context* dies with the retirement — nobody can read into or write into a
-  retired context afterward, guests included.
+  *through the context* dies with the retirement — nobody can read into a retired context
+  afterward, guests included. Writing is deliberately not blocked the same way: a fresh
+  commit into a retired home mints live, lawful content, and any later erasure of the same
+  estate strikes it again.
 - Leaves team-owned contexts untouched: the content stays, whoever authored it.
 
 One pre-existing door the retirement deliberately leaves open, stated because erasure

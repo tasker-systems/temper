@@ -20,8 +20,9 @@
 -- re-admit content into the wiped homes" is true only of CUSTODY. The context floor closes
 -- the read and author arms into the estate, but the estate's resource rows stay live (D3),
 -- kb_erased_content refuses no write anywhere (20260911000000), and a re-commit of
--- identical bytes into the retired home mints a fresh live row no act revisits (witnessed:
--- post_erasure_recommits_survive_replay). What guards the wiped estate is the tombstone on
+-- identical bytes into the retired home mints a fresh live row that replay reproduces
+-- surviving (witnessed: post_erasure_recommits_survive_replay) and that a later erasure
+-- of the same estate strikes again. What guards the wiped estate is the tombstone on
 -- the subject and the custody floor on everyone else's standing — a custody closure, never
 -- an admission impossibility.
 --
@@ -473,7 +474,7 @@ deliberately leaves standing. Custody, not admission (the corrected arm-13 postu
 20260913000020): retiring the governed contexts floors the read/author arms into the estate
 — but the estate''s resource rows stay live (D3), kb_erased_content refuses no write
 (20260911000000), and a re-commit of identical bytes into a retired home mints a fresh live
-row no act revisits; the estate is guarded by the tombstone and the custody floor, never by
+row that a later erasure of the same estate strikes again; the estate is guarded by the tombstone and the custody floor, never by
 an impossibility of re-admission. Does NOT decide legality (is_system_admin is the Rust
 caller''s gate, resolved before any mutation); the unauthorized refusal face is
 principal_erasure_refuse.';
@@ -481,5 +482,5 @@ principal_erasure_refuse.';
 SELECT declare_migration(
     20260913000020,
     'additive',
-    'The erasure act''s blob arm goes HOME-PURE (ruled 2026-09-12 with Pete): every live blob row homed in the erased governed context(s) is struck with the estate, whoever committed it. principal_erasure_survey_plan''s blob enumeration widens from the subject''s actor halves to home-pure-OR-actor, and 20260911000010''s guest-naming pass is retired — it named a guest-committed row in a governed home "retained with no release path" while the same act retired the row''s home context, an obligation no act could discharge. Every governed-home row now strikes through the same blob_delete wrapper, per-row, in plan order; guest hashes join the redacted set and kb_erased_content (only strikes enter the set), and the fence seeds their released bytes from the same payload prose. The strike vocabulary, outcome template and payload shape are byte-identical (the fence parses blob_strike_outcome_text by exact prefix; the guest prefix remains a known non-delete-target shape for records already in the ledger). The accepted cost — a guest''s bytes die on someone else''s erasure — is mitigated at commit-time disclosure (the terms-of-use line), not in the act. The migration also states the corrected arm-13 posture where 20260911000000 overclaims: the context floor closes CUSTODY into the wiped estate, never re-admission — resource rows stay live (D3) and a re-commit of identical bytes into a retired home mints a fresh live row no act revisits. The shared computation moves with the act by construction (the act consumes the plan, 20260913000010): one CREATE OR REPLACE, signatures unchanged, so survey and act cannot drift.'
+    'The erasure act''s blob arm goes HOME-PURE (ruled 2026-09-12 with Pete): every live blob row homed in the erased governed context(s) is struck with the estate, whoever committed it. principal_erasure_survey_plan''s blob enumeration widens from the subject''s actor halves to home-pure-OR-actor, and 20260911000010''s guest-naming pass is retired — it named a guest-committed row in a governed home "retained with no release path" while the same act retired the row''s home context, an obligation no act could discharge. Every governed-home row now strikes through the same blob_delete wrapper, per-row, in plan order; guest hashes join the redacted set and kb_erased_content (only strikes enter the set), and the fence seeds their released bytes from the same payload prose. The strike vocabulary, outcome template and payload shape are byte-identical (the fence parses blob_strike_outcome_text by exact prefix; the guest prefix remains a known non-delete-target shape for records already in the ledger). The accepted cost — a guest''s bytes die on someone else''s erasure — is mitigated at commit-time disclosure (the terms-of-use line), not in the act. The migration also states the corrected arm-13 posture where 20260911000000 overclaims: the context floor closes CUSTODY into the wiped estate, never re-admission — resource rows stay live (D3) and a re-commit of identical bytes into a retired home mints a fresh live row that a later erasure of the same estate strikes again. The shared computation moves with the act by construction (the act consumes the plan, 20260913000010): one CREATE OR REPLACE, signatures unchanged, so survey and act cannot drift.'
 );

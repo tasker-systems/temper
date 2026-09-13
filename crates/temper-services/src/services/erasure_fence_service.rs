@@ -1253,10 +1253,12 @@ mod tests {
     /// FAILS IF the strike-outcome template can drift from what the fence parses: the pin
     /// asserts the SQL literal composes to exactly the Rust constants — the released prefix
     /// the seed parses through, the held prefix it skips, and the non-strike shapes — in
-    /// BOTH the minting migration (20260909000025) and the LIVE carrier of the template and
-    /// the guest-naming outcomes (20260911000010): every `kb_blobs` outcome the act can
-    /// emit must start with a prefix this file pins. (Mirrors
-    /// `payload_schema::the_migration_literal_matches_the_committed_fixture`.)
+    /// the minting migration (20260909000025, retired), the retired guest-naming carrier
+    /// (20260911000010 — its outcome prefixes stay pinned for records already in the
+    /// ledger), and the LIVE carrier: `blob_strike_outcome_text` (20260913000010), which
+    /// the home-pure plan (20260913000020) calls rather than inlining the prose. Every
+    /// `kb_blobs` outcome the act can emit must start with a prefix this file pins.
+    /// (Mirrors `payload_schema::the_migration_literal_matches_the_committed_fixture`.)
     #[test]
     fn the_migration_strike_template_matches_the_pinned_constants() {
         let path = concat!(
@@ -1292,11 +1294,10 @@ mod tests {
             "the independent_obligation remainder shape is pinned"
         );
 
-        // The LIVE carrier (20260913000020 — the home-pure blob arm — replaced the plan body
-        // the act consumes; 20260911000010 minted the guest-naming outcomes, whose prefix
-        // stays pinned here for records already in the ledger). A future rewrite that
-        // moves the template or rewords the guest prefix away from a pinned shape fails
-        // HERE, not in a fence drain.
+        // The retired guest-naming carrier (20260911000010) minted the independent_obligation
+        // guest prefix; the ledger carries such records, so the prefix stays pinned HERE even
+        // though the body is retired. A future rewrite that rewords it away from a pinned
+        // shape fails HERE, not in a fence drain.
         let carrier_path = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../migrations/20260911000010_blob_arm_names_guest_rows.sql"
@@ -1305,8 +1306,8 @@ mod tests {
             std::fs::read_to_string(carrier_path).expect("the live carrier migration exists");
         assert!(
             carrier.contains(template),
-            "the strike-outcome template drifted in the live carrier — the fence parses by \
-             exact prefix, so the Rust constants and this literal MUST move together"
+            "the strike-outcome template drifted in the retired carrier — the fence parses \
+             by exact prefix, so the Rust constants and this literal MUST move together"
         );
         assert!(
             carrier.contains(&format!(
@@ -1314,6 +1315,20 @@ mod tests {
             )),
             "the guest-naming outcomes must carry the independent_obligation prefix the \
              fence classifies as a known non-delete-target"
+        );
+
+        // The LIVE carrier of the template: `blob_strike_outcome_text` (minted 20260913000010)
+        // — the home-pure plan (20260913000020) calls it rather than inlining the prose, so
+        // this body's spelling is what every fresh payload the fence parses arrives in.
+        let live = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../migrations/20260913000010_erasure_survey_door.sql"
+        ))
+        .expect("the survey-door migration exists");
+        assert!(
+            live.contains("'erased; released=' || p_released::text || '; pathname=' || p_pathname"),
+            "blob_strike_outcome_text's template drifted — the fence parses by exact prefix, \
+             so the Rust constants and this literal MUST move together"
         );
     }
 
