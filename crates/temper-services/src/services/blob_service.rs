@@ -112,6 +112,40 @@ pub struct BlobCommitOutcome {
     pub content_hash: String,
     pub content_type: String,
     pub deduped: bool,
+    /// The commit-time scope-of-engagement disclosure, set only when the home context is
+    /// governed by another profile — see the `estate_scope_disclosure` helper.
+    pub estate_scope_disclosure: Option<String>,
+}
+
+/// The commit-time scope-of-engagement disclosure (ruled 2026-09-12 with Pete — decision
+/// 01a097ff): when the home context is GOVERNED BY ANOTHER PROFILE, the committing guest
+/// is told, at the moment of writing, what that means — bytes committed into another's
+/// context live and die with that estate, and an erasure of its owner strikes them. A
+/// guest's prospective loss is disclosed at commit, never discovered at erasure (the
+/// mitigation sits here, deliberately NOT in the erasure act). `None` for the caller's
+/// own context: the owner owes themselves no disclosure. Team and map homes are outside
+/// this line — the team line is the terms' other half and needs no per-commit note.
+async fn estate_scope_disclosure(
+    pool: &PgPool,
+    caller: ProfileId,
+    home: &temper_substrate::payloads::AnchorRef,
+) -> ApiResult<Option<String>> {
+    let owner_id: Option<Uuid> = sqlx::query_scalar!(
+        r#"SELECT owner_id FROM kb_contexts
+            WHERE id = $1 AND owner_table = 'kb_profiles'"#,
+        home.id,
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ApiError::internal_scrubbed("blob commit disclosure read failed", e))?;
+    Ok(match owner_id {
+        Some(owner) if owner != caller.uuid() => Some(
+            "Committed into a context governed by another profile: these bytes live and \
+             die with that context — an erasure of its owner's profile erases them."
+                .to_string(),
+        ),
+        _ => None,
+    })
 }
 
 /// The wire's home anchor restricts to contexts — the blob-home exclusion (ruled
@@ -315,6 +349,10 @@ pub async fn commit_blob(
     }
     let home = parse_home(home_table, home_id)?;
     check_home_standing(pool, caller, &home).await?;
+    // The commit-time scope-of-engagement disclosure (decision 01a097ff) — read past the
+    // standing gate, before any byte moves: the guest hears the line at the moment of
+    // writing, and an inadmissible commit costs one indexed read at most.
+    let estate_scope_disclosure = estate_scope_disclosure(pool, caller, &home).await?;
 
     // The allowlist pre-check, before any byte can reach the provider. The wrapper is
     // still the authority (D9) — this restatement exists so its refusal is bytes-free: an
@@ -389,6 +427,7 @@ pub async fn commit_blob(
         content_hash,
         content_type: stored_type,
         deduped,
+        estate_scope_disclosure,
     })
 }
 
@@ -461,6 +500,9 @@ pub struct BlobUploadFinalizeOutcome {
     pub deduped: bool,
     pub content_type: String,
     pub content_bytes: i64,
+    /// The commit-time scope-of-engagement disclosure, set only when the home context is
+    /// governed by another profile — see the `estate_scope_disclosure` helper.
+    pub estate_scope_disclosure: Option<String>,
 }
 
 /// Begin a staged upload: standing two-step on the declared home (fail fast — no orphan
@@ -604,6 +646,9 @@ pub async fn finalize_upload(
     // Auth before writes, again: the begin-time standing was a fail-fast courtesy; this
     // is the gate the put answers to.
     check_home_standing(pool, caller, &session.home).await?;
+    // The commit-time scope-of-engagement disclosure (decision 01a097ff) — the segmented
+    // door speaks the same line as the single-request one, past the same standing gate.
+    let estate_scope_disclosure = estate_scope_disclosure(pool, caller, &session.home).await?;
 
     let landed = temper_substrate::uploads::landed_segments(pool, caller, upload_id)
         .await
@@ -733,6 +778,7 @@ pub async fn finalize_upload(
         deduped,
         content_type: stored_type,
         content_bytes: body.len() as i64,
+        estate_scope_disclosure,
     })
 }
 

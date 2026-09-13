@@ -210,9 +210,12 @@ pub async fn execute_erasure(
 /// strikes LATER in the same act (each emptied one live row) + the struck row itself, which
 /// was still live under its own refcount — so released ⟺ live-now + later = 0. A subject's
 /// two same-hash homes therefore read false then true, the act's sequential refcount, not a
-/// flat end-state read. The fence derives its own pathname from the payload's per-target
-/// outcome prose — the STRUCK row's `blob_pathname` is always NULL (the strike emptied it),
-/// so it is not read here.
+/// flat end-state read. THE ORDER IS THE ACT'S OWN: the strike loop consumes the plan's
+/// rows in `kb_blobs.id` order (the plan's declared, load-bearing order), so "later" is a
+/// key comparison on the struck row's id — exact regardless of event-timestamp or
+/// uuid-generation ordering, which tie at transaction-stable timestamps. The fence derives
+/// its own pathname from the payload's per-target outcome prose — the STRUCK row's
+/// `blob_pathname` is always NULL (the strike emptied it), so it is not read here.
 async fn strike_verdicts(
     pool: &PgPool,
     completion_event: Uuid,
@@ -228,16 +231,16 @@ async fn strike_verdicts(
                           AND ft.name = 'blob_erased'
                    WHERE f.correlation_id = e.correlation_id
                      AND f.id <> e.id
-                     AND (f.occurred_at, f.id) > (e.occurred_at, e.id)
                      AND (f.payload->>'blob_id')::uuid IN (
                          SELECT s.id FROM kb_blobs s
-                          WHERE s.content_hash = b.content_hash))) = 0 AS "released: bool"
+                          WHERE s.content_hash = b.content_hash
+                            AND s.id > b.id))) = 0 AS "released: bool"
           FROM kb_events e
           JOIN kb_event_types t ON t.id = e.event_type_id AND t.name = 'blob_erased'
           JOIN kb_blobs b ON b.id = (e.payload->>'blob_id')::uuid
          WHERE e.correlation_id = (SELECT correlation_id FROM kb_events WHERE id = $1)
            AND e.id <> $1
-         ORDER BY e.occurred_at, e.id
+         ORDER BY b.id
         "#,
         completion_event,
     )

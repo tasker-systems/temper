@@ -10816,6 +10816,13 @@
           },
           "deduped": {
             "type": "boolean"
+          },
+          "estate_scope_disclosure": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Present only when the blob homes in a context governed by another profile: the\ncommit-time disclosure that bytes committed into another's context live and die\nwith that estate — an erasure of its owner strikes them. `None` when the caller\ncommits into a context of their own, and for team-owned homes."
           }
         }
       },

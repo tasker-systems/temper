@@ -26,7 +26,14 @@ content_hash: string,
  * is the FIRST committer's type (what read-through serves), never the re-commit's
  * declaration (N2, 2026-09-03 review).
  */
-content_type: string, content_bytes: bigint, deduped: boolean, };
+content_type: string, content_bytes: bigint, deduped: boolean, 
+/**
+ * Present only when the blob homes in a context governed by another profile: the
+ * commit-time disclosure that bytes committed into another's context live and die
+ * with that estate — an erasure of its owner strikes them. `None` when the caller
+ * commits into a context of their own, and for team-owned homes.
+ */
+estate_scope_disclosure: string | null, };
 
 /**
  * The acknowledgement of `DELETE /api/blobs/{id}` — the strike's own verdict. `released`
