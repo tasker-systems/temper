@@ -377,7 +377,7 @@ status: signal-only
 pr: self
 classes: behavioral
 surfaces: http, mcp, cli-stdout
-status: open
+status: satisfied
 
 - **The defined dangling state — citation-audit gate: folded ≡ live → defined refusal**
   Auditing a citation whose block is folded is now refused (the gate's standing zero-rows→404
@@ -386,7 +386,7 @@ status: open
 pr: self
 classes: behavioral
 surfaces: http, mcp, cli-stdout
-status: open
+status: satisfied
 
 - **Citation 1 — PR #867 briefing: identical body + sources preserves block identity**
   A whole-body update whose sections and sources are byte-identical now keeps their block ids,
@@ -397,7 +397,7 @@ status: open
 pr: 867
 classes: behavioral
 surfaces: http, mcp, cli-stdout
-status: open
+status: satisfied
 
 - **Citation 2 — PR #867 briefing: content-gone citations stop reinforcing standing**
   A rewriting revise moves prior sources to history on the folded block; live citation
@@ -407,7 +407,7 @@ status: open
 pr: 867
 classes: behavioral
 surfaces: http, mcp, cli-stdout
-status: open
+status: satisfied
 
 - **Citation 3 — PR #867 briefing: redistributed carried rows become live citations**
   Absorbed and carried copies now count as uncorrected rows on live blocks; before this change
@@ -416,7 +416,7 @@ status: open
 pr: 867
 classes: behavioral
 surfaces: http, mcp, cli-stdout
-status: open
+status: satisfied
 
 - **Citation 4 — PR #867 briefing: one `resource_reblocked` per whole-body update**
   The ledger grain changes: one `resource_reblocked` computed against pre-update incumbents,
@@ -426,7 +426,7 @@ status: open
 pr: 867
 classes: behavioral
 surfaces: internal
-status: open
+status: satisfied
 
 - **Citation 5 — PR #867 briefing: chunker-skew 500 retires to async backfill**
   A CLI↔server chunker skew no longer fails the update with a 500 — unmatched caller chunks
@@ -435,7 +435,7 @@ status: open
 pr: 867
 classes: behavioral
 surfaces: http, mcp, cli-stdout
-status: open
+status: satisfied
 
 - **Citation 6 — PR #867 briefing: single-section identical rewrite is silent**
   A single-section identical rewrite with no sources emits no revision event, where it minted a
@@ -443,7 +443,7 @@ status: open
 pr: 867
 classes: behavioral
 surfaces: internal
-status: open
+status: satisfied
 
 - **Citation 7 — PR #867 briefing: region content clocks advance on whole-body replaces**
   Region content clocks advance on whole-body replaces (previously via `block_mutated`;
@@ -461,7 +461,7 @@ status: signal-only
 pr: 867
 classes: behavioral
 surfaces: http, mcp, cli-stdout
-status: open
+status: satisfied
 
 - **Citation 9 — PR #867 briefing: `is_carried` on the provenance read**
   The provenance read carries `is_carried`, letting callers distinguish carried copies from
