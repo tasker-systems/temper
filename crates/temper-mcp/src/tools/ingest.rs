@@ -264,6 +264,7 @@ pub async fn ingest_blocks(
 
 /// The segmented-ingest action to perform.
 #[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(inline)]
 #[serde(rename_all = "snake_case")]
 pub enum IngestAction {
     /// Begin a segmented ingest — land segment 0 and create the resource.

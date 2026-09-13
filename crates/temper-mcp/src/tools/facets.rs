@@ -253,6 +253,7 @@ pub async fn resource_facets(
 
 /// The facet target — a resource or a relationship (edge).
 #[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(inline)]
 #[serde(rename_all = "snake_case")]
 pub enum FacetTarget {
     /// Set a facet on a resource (node).
@@ -351,6 +352,7 @@ pub async fn facet_set_unified(
 
 /// The facet-read target — a resource or a relationship (edge).
 #[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(inline)]
 #[serde(rename_all = "snake_case")]
 pub enum FacetsReadTarget {
     /// Read facets of a resource (node).
@@ -405,6 +407,7 @@ pub async fn facets_read(
 
 /// The facet-retract target — a resource or a relationship (edge).
 #[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(inline)]
 #[serde(rename_all = "snake_case")]
 pub enum FacetRetractTarget {
     /// Retract a facet from a resource — not supported; refused with the reason.

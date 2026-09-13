@@ -83,6 +83,7 @@ pub async fn describe_open_meta(svc: &TemperMcpService) -> Result<CallToolResult
 
 /// The schema-describe view to perform.
 #[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(inline)]
 #[serde(rename_all = "snake_case")]
 pub enum DescribeSchemaView {
     /// List all available document types with schema summaries.
