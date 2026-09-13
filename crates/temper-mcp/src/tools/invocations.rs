@@ -194,6 +194,7 @@ pub async fn invocation_list(
 
 /// The invocation action to perform.
 #[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(inline)]
 #[serde(rename_all = "snake_case")]
 pub enum InvocationManageAction {
     /// Open an agent-invocation envelope.
@@ -279,6 +280,7 @@ pub async fn invocation_manage(
 
 /// The invocation-read view to perform.
 #[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(inline)]
 #[serde(rename_all = "snake_case")]
 pub enum InvocationReadView {
     /// Show one envelope plus its acts by UUID.

@@ -284,6 +284,7 @@ pub async fn rename_context(
 
 /// The context-read view to perform.
 #[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(inline)]
 #[serde(rename_all = "snake_case")]
 pub enum ContextReadView {
     /// List all contexts available to the caller.
@@ -370,6 +371,7 @@ pub async fn context_read(
 
 /// The context-manage action to perform.
 #[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(inline)]
 #[serde(rename_all = "snake_case")]
 pub enum ContextManageAction {
     /// Create a new context.

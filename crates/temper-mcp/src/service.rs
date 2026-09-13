@@ -1279,6 +1279,99 @@ mod tests {
         );
     }
 
+    /// **Every scalar enum in an advertised tool's input schema must be inlined, never `$ref`d.**
+    ///
+    /// rmcp generates input schemas with schemars' ref-based generator, so a scalar enum
+    /// field emits `{"$ref": "#/$defs/Foo"}` into `$defs`. The Anthropic tool-use layer
+    /// does not resolve `$ref`/`$defs`, so the model gets no type signal for that field
+    /// and sends explicit `null` → `-32602: invalid type: null, expected string`.
+    /// Objects tolerate an unresolved `$ref` (the model defaults to sending a map), so the
+    /// invariant is narrow: a `$ref` may never resolve to a scalar-enum schema among an
+    /// advertised input's top-level properties.
+    ///
+    /// A unit-only enum is scalar in either emitted shape: the flat
+    /// `{"type":"string","enum":[…]}` form, and the `oneOf`-of-string-consts form schemars
+    /// 1.2 emits (see the `tools::blobs` harness, which documents both admissible *inline*
+    /// shapes). This test accepts either shape inline and flags either shape behind `$ref`.
+    ///
+    /// Established 2026-05-29 on `EdgeKind`/`Polarity` and applied to each enum added
+    /// since — but never swept across the router: eleven older enums kept shipping `$ref`d.
+    /// This walks `tool_router().list_all()` — the object a connected client actually
+    /// receives — so a new tool cannot quietly regress it.
+    ///
+    /// **Declared remainder:** only top-level properties are walked. Every enum-typed
+    /// input field today is top-level and non-`Option` (verified by census when this test
+    /// landed); a nested object, or an `Option<Enum>` (which would arrive as `anyOf`),
+    /// would pass unwalked — this paragraph is where that gap is named rather than hidden.
+    #[test]
+    fn every_advertised_tool_input_inlines_scalar_enums() {
+        // A schema is a scalar enum when it enumerates string constants, in either
+        // emitted shape. Anything else — an object, a map, a free string — is fine
+        // behind `$ref`.
+        fn resolves_to_string_enum(resolved: &serde_json::Value) -> bool {
+            if resolved.get("type").and_then(|t| t.as_str()) == Some("string")
+                && resolved.get("enum").is_some()
+            {
+                return true;
+            }
+            resolved
+                .get("oneOf")
+                .and_then(|o| o.as_array())
+                .is_some_and(|branches| {
+                    !branches.is_empty()
+                        && branches.iter().all(|b| {
+                            b.get("const").is_some()
+                                && b.get("type").and_then(|t| t.as_str()) == Some("string")
+                        })
+                })
+        }
+
+        let advertised = TemperMcpService::tool_router().list_all();
+
+        let mut checked = 0usize;
+        let mut offenders: Vec<String> = Vec::new();
+        for tool in &advertised {
+            let schema =
+                serde_json::to_value(&*tool.input_schema).expect("input schema serializes");
+            let defs = schema.get("$defs");
+            let Some(props) = schema.get("properties").and_then(|p| p.as_object()) else {
+                continue;
+            };
+            for (name, prop) in props {
+                checked += 1;
+                let Some(target) = prop.get("$ref").and_then(|r| r.as_str()) else {
+                    continue;
+                };
+                let leaf = target.rsplit('/').next().unwrap_or_default();
+                let Some(resolved) = defs.and_then(|d| d.get(leaf)) else {
+                    continue;
+                };
+                if resolves_to_string_enum(resolved) {
+                    offenders.push(format!(
+                        "{}.{name} → {target} (a scalar enum behind `$ref` reaches \
+                         Anthropic tool-use as null)",
+                        tool.name
+                    ));
+                }
+            }
+        }
+
+        // A schema shape change that empties the walk must fail loudly, not pass vacuously.
+        assert!(
+            checked >= 30,
+            "walked only {checked} input properties across {} advertised tools — the \
+             properties walk has probably broken, leaving this test checking nothing",
+            advertised.len()
+        );
+        assert!(
+            offenders.is_empty(),
+            "{} advertised tool input(s) carry a scalar enum behind `$ref` — add \
+             `#[schemars(inline)]` to the enum:\n  {}",
+            offenders.len(),
+            offenders.join("\n  ")
+        );
+    }
+
     /// **Every `#[tool]` method must call `ensure_profile_from_parts` before dispatching.**
     ///
     /// The MCP surface authenticates per-request from the JWT claims injected into the HTTP
