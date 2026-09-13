@@ -14,6 +14,22 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.4.0 — unreleased
 
+- **The erasure record names the subject's team-context text**
+  The 2026-09-06 ruling's "the team remainder is named, never silent" now covers the text
+  arm: `principal_erasure_survey_plan` appends `independent_obligation`-shaped targets
+  naming count + hashes of the subject's own text in ungoverned homes — one per grain
+  (`kb_chunk_content.content`, `kb_block_content.content`), attributed by the same
+  `kb_resource_homes` owner/originator halves the blob arm's ungoverned remainder uses.
+  The hashes are never admitted to `redacted_hashes`/`kb_erased_content`, and the
+  redaction's reads stay governed-scoped — the team's copy keeps its lawful life under the
+  terms-of-use line. The act consumes the plan, so the execute door's response, the
+  recorded `principal_erased` targets, and the survey gain the naming together; existing
+  outcome shapes are unchanged. Found by the adversarial review of PR #877.
+  pr: self
+  classes: behavioral
+  surfaces: http
+  status: signal-only
+
 - **The erasure act's blob arm goes home-pure: every live governed-home blob row strikes with the estate**
   A guest-committed file homed in the erased principal's own context is now struck with the
   estate, whoever committed it — previously such rows were named in the record as retained
