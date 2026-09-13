@@ -79,6 +79,11 @@ static MEMORIES_CLI_MD: &str = include_str!("../../skill-content/memories-cli.md
 /// why this is a plain const rather than the other branch of a shared template.
 static MEMORIES_MCP_MD: &str = include_str!("../../skill-content/mcp/memories.md");
 static SUBAGENT_GUIDANCE_MD: &str = include_str!("../../skill-content/subagent-guidance.md");
+/// Review-gate discipline: when a change owes a code review and/or a security review
+/// before its PR, and what each pass must be. Names no command on either surface — the
+/// trigger rules are about the *change*, and the reviewer mechanics are client-side — so
+/// it ships to both surfaces verbatim, like the grounding pair.
+static REVIEW_GATES_MD: &str = include_str!("../../skill-content/review-gates.md");
 static PLAN_VERIFICATION_MD: &str = include_str!("../../skill-content/plan-verification.md");
 static SESSION_WRAP_MD: &str = include_str!("../../skill-content/session-wrap.md");
 static IMPLEMENTATION_GROUNDING_MD: &str =
@@ -886,6 +891,7 @@ pub fn generate_agent_skill_files() -> Result<HashMap<String, String>> {
         "implementation-grounding.md".to_string(),
         IMPLEMENTATION_GROUNDING_MD.to_string(),
     );
+    files.insert("review-gates.md".to_string(), REVIEW_GATES_MD.to_string());
     // Same rule: it names no command, because every command it would name lives in
     // `session-lifecycle.md`. That is a design choice rather than an accident — the wrap doc is
     // about what to WRITE, and giving the mechanics two homes is how they drift.
@@ -1125,6 +1131,7 @@ fn check_expected_files(skill_dir: &Path) {
         "subagent-guidance.md",
         "plan-verification.md",
         "implementation-grounding.md",
+        "review-gates.md",
         "outcome-registers.md",
         "data-artifacts.md",
         "session-lifecycle.md",
@@ -1262,6 +1269,9 @@ pub fn generate_skill_files_with_hash(
         "implementation-grounding.md".to_string(),
         IMPLEMENTATION_GROUNDING_MD.to_string(),
     );
+    // Review-gate discipline, same shipping rule as the grounding pair: it names no
+    // command on either surface, so both trees carry the same bytes.
+    files.insert("review-gates.md".to_string(), REVIEW_GATES_MD.to_string());
     // The outcome-register discipline. Root, not `guidance/`, for the same reason as the grounding
     // pair: `guidance/` is the project's namespace and this is universal, repo-agnostic discipline.
     files.insert(
@@ -1441,6 +1451,7 @@ mod tests {
         assert!(files.contains_key("subagent-guidance.md"));
         assert!(files.contains_key("plan-verification.md"));
         assert!(files.contains_key("implementation-grounding.md"));
+        assert!(files.contains_key("review-gates.md"));
         assert!(files.contains_key("outcome-registers.md"));
         assert!(files.contains_key("data-artifacts.md"));
         assert!(files.contains_key("session-lifecycle.md"));
@@ -1540,6 +1551,7 @@ mod tests {
                 "outcome-registers.md",
                 "plan-verification.md",
                 "references/frontmatter.md",
+                "review-gates.md",
                 "session-lifecycle.md",
                 "session-wrap.md",
                 "subagent-guidance.md",

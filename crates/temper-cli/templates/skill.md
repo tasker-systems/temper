@@ -27,6 +27,8 @@ principle, never the scope of it.
 - `plan-verification.md` — Verify a plan's claims against the code **before** dispatching from it
 - `implementation-grounding.md` — Writing a plan, or code from one — including you in the main
   loop. Inject verbatim into plan-writing/implementing subagents
+- `review-gates.md` — **Before opening a PR**: when the change owes a code review and/or a
+  security review pass, who counts as a reviewer, what a pass must return
 - `outcome-registers.md` — Stating an outcome so its rigor survives decomposition. For
   **authoring or amending a goal**, not to start a task
 - `working-a-goal.md` — The goal arc: uptake, resume, advance, record, decompose, close. For
@@ -158,6 +160,7 @@ session ritual performed before the purpose is known is effort spent on the wron
 | Authoring or amending a goal or sub-goal, or deciding whether a criterion belongs on one | Read `outcome-registers.md` |
 | Working a goal — taking one up, resuming under it, advancing, recording, decomposing, or closing it | Read `working-a-goal.md` |
 | `/temper init` — or setting a project's fundamentals up when they are missing | Read `project-setup.md` |
+| Finishing a body of work — deciding whether the change owes a code review and/or a security review pass before its PR | Read `review-gates.md` |
 | Storing structured data (JSON, YAML, measurements, query plans) a later session must retrieve whole | Read `data-artifacts.md` |
 | Anything touching a cognitive map (read/author a map, telos, nodes/edges, regions) | Read `cognitive-maps.md` |
 | Block-level / segmented / attributable writes (per-block provenance/sources, citation-grade docs, `annotate`, `segmented_ingest` lifecycle) | Read `reference.md` → *Block-Grain Ingest & Attribution* |
