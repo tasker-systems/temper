@@ -1,17 +1,16 @@
--- The erasure record names the subject's TEXT held under another governance's terms —
--- the 2026-09-06 ruling's "the team remainder is named, never silent", which the blob arm
--- has honored since 20260911000010 and the text arm has not: its scope computed only
--- governed-home hashes, so prose the subject authored into team homes was simply absent
--- from the record, unnamed (found by the adversarial review of PR #877). The plan gains
--- TWO independent_obligation-shaped targets — one per text grain, mirroring the
--- chunk-content and block-content redaction arms — naming count + hashes of
--- UNGOVERNED-home resources the subject owns or originates (kb_resource_homes'
--- owner/originator halves, the same attribution the blob arm's ungoverned remainder
--- names). The hashes are never admitted to v_hashes: the redaction's reads stay
--- governed-scoped, and the team's copy of the prose keeps its lawful life under the
--- terms-of-use line a contributor crosses by writing into another's personal context.
--- The act consumes the plan, so record and survey gain the naming together; a remainder
--- is a named outcome, never a mutation.
+-- The erasure record names the subject's ATTRIBUTED text in shared spaces — the
+-- attribution ruling (2026-09-13, with Pete, on the 2026-09-06 clause "the team remainder
+-- is named, never silent"): contributing into a shared space never carried a sole
+-- ownership or authorship claim; attribution is what the system provides and what
+-- survives. The record therefore names prose attributed to the subject by AUTHORSHIP —
+-- content blocks whose genesis event the subject's entity emitted, the blob arm's own
+-- emitted-half shape — wherever the block's resource homes OUTSIDE the governed estate
+-- (team and map homes alike). One target, block-grain: chunks carry no author attribution,
+-- and a block's chunk copies are the shared space's lawful duplicate of the same prose.
+-- The hashes are named for audit, never admitted to v_hashes — the redaction's reads stay
+-- governed-scoped and nothing in a shared home is the act's to strike. The act consumes
+-- the plan, so record and survey gain the naming together; a remainder is a named
+-- outcome, never a mutation.
 --
 -- Additive: CREATE OR REPLACE only, signatures unchanged (the 20260804000020 class).
 
@@ -319,46 +318,44 @@ BEGIN
                                 THEN 'erased' ELSE 'already-erased' END));
     END IF;
 
-    -- The text remainder (2026-09-06: the team remainder is named, never silent): the
-    -- subject's own text in UNGOVERNED homes, per grain, count + hashes (D2 vocabulary).
-    -- Named, never struck, never admitted to v_hashes — the redaction's reads stay
-    -- governed-scoped and the team's copy keeps its lawful life. Attribution is the same
-    -- owner/originator halves the blob arm's ungoverned remainder names; a resource with
-    -- ANY governed home is estate text and never a remainder.
+    -- The text remainder (the attribution ruling, 2026-09-13, on the 2026-09-06 clause):
+    -- prose ATTRIBUTED to the subject by authorship — content blocks whose genesis event
+    -- the subject's entity emitted — in homes outside the governed estate (team and map
+    -- alike). Named for audit with count + hashes (capped at 8, "and N more" beyond),
+    -- never struck, never admitted to v_hashes: nothing in a shared home is the act's to
+    -- strike, and the redaction's reads stay governed-scoped. Attribution is the emitting
+    -- entity, the blob arm's own emitted-half shape; direct authorship only — carried
+    -- attribution is provenance the pseudonym break already covers.
     v_text_rem := (
         SELECT 'independent_obligation: home governed by a team or map; '
-               || count(DISTINCT c.content_hash) || ' text hash(s) not struck: '
-               || array_to_string(array_agg(DISTINCT c.content_hash), ', ')
-          FROM kb_chunks c
-          JOIN kb_resource_homes h ON h.resource_id = c.resource_id
-         WHERE h.anchor_table = 'kb_contexts'
-           AND h.anchor_id NOT IN (SELECT unnest(v_governed))
-           AND NOT EXISTS (SELECT 1 FROM kb_resource_homes hg
-                            WHERE hg.resource_id = c.resource_id
-                              AND hg.anchor_table = 'kb_contexts'
-                              AND hg.anchor_id = ANY(v_governed))
-           AND (h.owner_profile_id = p_subject OR h.originator_profile_id = p_subject)
-        HAVING count(DISTINCT c.content_hash) > 0);
-    IF v_text_rem IS NOT NULL THEN
-        v_targets := v_targets || jsonb_build_array(jsonb_build_object(
-            'target',  'kb_chunk_content.content',
-            'outcome', v_text_rem));
-    END IF;
-    v_text_rem := (
-        SELECT 'independent_obligation: home governed by a team or map; '
-               || count(DISTINCT bc.content_hash) || ' text hash(s) not struck: '
-               || array_to_string(array_agg(DISTINCT bc.content_hash), ', ')
+               || count(DISTINCT bc.content_hash) || ' text hash(s) not struck'
+               || CASE WHEN count(DISTINCT bc.content_hash) <= 8
+                       THEN ': ' || array_to_string(array_agg(DISTINCT bc.content_hash), ', ')
+                       ELSE ': ' || array_to_string(ARRAY(
+                                   SELECT DISTINCT bc2.content_hash
+                                     FROM kb_block_content bc2
+                                     JOIN kb_block_revisions br2 ON br2.id = bc2.block_revision_id
+                                     JOIN kb_content_blocks b2 ON b2.id = br2.block_id
+                                     JOIN kb_events ge2 ON ge2.id = b2.genesis_event_id
+                                     JOIN kb_entities ge2_en ON ge2_en.id = ge2.emitter_entity_id
+                                    WHERE ge2_en.profile_id = p_subject
+                                      AND NOT EXISTS (SELECT 1 FROM kb_resource_homes hg2
+                                                       WHERE hg2.resource_id = b2.resource_id
+                                                         AND hg2.anchor_table = 'kb_contexts'
+                                                         AND hg2.anchor_id = ANY(v_governed))
+                                    ORDER BY 1 LIMIT 8), ', ')
+                            || '; and ' || (count(DISTINCT bc.content_hash) - 8) || ' more'
+                  END
           FROM kb_block_content bc
           JOIN kb_block_revisions br ON br.id = bc.block_revision_id
           JOIN kb_content_blocks b ON b.id = br.block_id
-          JOIN kb_resource_homes h ON h.resource_id = b.resource_id
-         WHERE h.anchor_table = 'kb_contexts'
-           AND h.anchor_id NOT IN (SELECT unnest(v_governed))
+          JOIN kb_events ge ON ge.id = b.genesis_event_id
+          JOIN kb_entities ge_en ON ge_en.id = ge.emitter_entity_id
+         WHERE ge_en.profile_id = p_subject
            AND NOT EXISTS (SELECT 1 FROM kb_resource_homes hg
                             WHERE hg.resource_id = b.resource_id
                               AND hg.anchor_table = 'kb_contexts'
                               AND hg.anchor_id = ANY(v_governed))
-           AND (h.owner_profile_id = p_subject OR h.originator_profile_id = p_subject)
         HAVING count(DISTINCT bc.content_hash) > 0);
     IF v_text_rem IS NOT NULL THEN
         v_targets := v_targets || jsonb_build_array(jsonb_build_object(
@@ -506,14 +503,16 @@ deliberately leaves standing. Custody, not admission (the corrected arm-13 postu
 — but the estate''s resource rows stay live (D3), kb_erased_content refuses no write
 (20260911000000), and a re-commit of identical bytes into a retired home mints a fresh live
 row that a later erasure of the same estate strikes again; the estate is guarded by the tombstone and the custody floor, never by
-an impossibility of re-admission. The record also names the subject''s ungoverned-home TEXT
-per grain (20260913000030, the 2026-09-06 team-remainder clause): named with count and
-hashes, never struck, never in the redacted set. Does NOT decide legality (is_system_admin is the Rust
+an impossibility of re-admission. The record also names the subject''s ATTRIBUTED text in
+shared spaces (20260913000030, the attribution ruling on the 2026-09-06 team-remainder
+clause): content blocks whose genesis event the subject''s entity emitted, in homes outside
+the governed estate — team and map alike — named with count and hashes for audit, never
+struck, never in the redacted set; attribution, never a deletion claim. Does NOT decide legality (is_system_admin is the Rust
 caller''s gate, resolved before any mutation); the unauthorized refusal face is
 principal_erasure_refuse.';
 
 SELECT declare_migration(
     20260913000030,
     'additive',
-    'The erasure record names the subject''s TEXT held under another governance''s terms — the 2026-09-06 ruling''s "the team remainder is named, never silent", which the blob arm honored since 20260911000010 and the text arm did not: its scope computed only governed-home hashes, so prose the subject authored into team homes was absent from the record, unnamed (found by the adversarial review of PR #877). principal_erasure_survey_plan gains two independent_obligation-shaped targets — one per text grain, mirroring the chunk-content and block-content redaction arms — naming count + hashes of ungoverned-home resources the subject owns or originates (kb_resource_homes owner/originator, the blob arm''s own ungoverned-remainder attribution). The hashes are never admitted to the redacted set: the redaction''s reads stay governed-scoped and the team''s copy keeps its lawful life under the terms-of-use line. The act consumes the plan, so record and survey gain the naming together; a remainder is a named outcome, never a mutation. Additive: CREATE OR REPLACE only, signatures unchanged (the 20260804000020 class).'
+    'The erasure record names the subject''s ATTRIBUTED text in shared spaces — the attribution ruling (2026-09-13, with Pete, on the 2026-09-06 clause "the team remainder is named, never silent"). Contributing into a shared space never carried a sole ownership or authorship claim; attribution is what the system provides and what survives (the pseudonym break), and erasure removes only what was truly private to the principal — the governed estate. principal_erasure_survey_plan gains one independent_obligation-shaped target naming the content-block hashes whose genesis event the subject''s entity emitted, wherever the block''s resource homes outside the governed estate (team and map homes alike) — authorship attribution, the blob arm''s own emitted-half shape, capped at 8 hashes with "and N more". The hashes are never admitted to the redacted set: the redaction''s reads stay governed-scoped and nothing in a shared home is the act''s to strike. The act consumes the plan, so record and survey gain the naming together. Additive: CREATE OR REPLACE only, signatures unchanged (the 20260804000020 class).'
 );

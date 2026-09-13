@@ -14,17 +14,19 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.4.0 — unreleased
 
-- **The erasure record names the subject's team-context text**
-  The 2026-09-06 ruling's "the team remainder is named, never silent" now covers the text
-  arm: `principal_erasure_survey_plan` appends `independent_obligation`-shaped targets
-  naming count + hashes of the subject's own text in ungoverned homes — one per grain
-  (`kb_chunk_content.content`, `kb_block_content.content`), attributed by the same
-  `kb_resource_homes` owner/originator halves the blob arm's ungoverned remainder uses.
-  The hashes are never admitted to `redacted_hashes`/`kb_erased_content`, and the
-  redaction's reads stay governed-scoped — the team's copy keeps its lawful life under the
-  terms-of-use line. The act consumes the plan, so the execute door's response, the
-  recorded `principal_erased` targets, and the survey gain the naming together; existing
-  outcome shapes are unchanged. Found by the adversarial review of PR #877.
+- **The erasure record names the subject's attributed text in shared spaces**
+  The attribution ruling (2026-09-13, with Pete, on the 2026-09-06 clause "the team
+  remainder is named, never silent"): contributing into a shared space never carried a sole
+  ownership or authorship claim — attribution is what the system provides and what
+  survives, and erasure removes only what was truly private to the principal.
+  `principal_erasure_survey_plan` appends one `independent_obligation`-shaped target naming
+  the content-block hashes whose genesis event the subject's entity emitted, wherever the
+  block's resource homes outside the governed estate (team and map homes alike) — capped at
+  8 hashes with "and N more". The hashes are never admitted to
+  `redacted_hashes`/`kb_erased_content`, and the redaction's reads stay governed-scoped —
+  nothing in a shared home is the act's to strike. The act consumes the plan, so the
+  execute door's response, the recorded `principal_erased` targets, and the survey gain the
+  naming together; existing outcome shapes are unchanged.
   pr: self
   classes: behavioral
   surfaces: http

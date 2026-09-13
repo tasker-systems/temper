@@ -78,6 +78,13 @@ cannot enforce, it names in its record — the erasure's response and the ledger
 per-target outcomes, so an operator reads the remainder at the door and the audit trail
 keeps it afterward:
 
+- **Prose the subject authored into shared homes is named, not struck.** Content blocks
+  whose genesis write the subject emitted — in team or map homes — are named in the record
+  with their content hashes: attribution for the audit trail, never a deletion claim.
+  Contributing into a shared space never carried a sole claim on the content; attribution
+  is what the system provides and what survives. The prose itself stays; only the
+  attribution breaks (the pseudonym break).
+
 - **Files the subject contributed to team or map homes are reported, not struck.** Each
   one is named in the record with its content hash as held by the team or map that homes
   it. The team keeps the bytes; the record is what proves the erasure was not silent about

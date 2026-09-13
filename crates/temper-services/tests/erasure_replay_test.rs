@@ -1119,9 +1119,13 @@ async fn a_guest_committed_blob_in_a_governed_home_is_struck_with_the_estate(poo
 }
 
 /// The text remainder is named, never silent (2026-09-06): the subject's own prose in a
-/// TEAM context survives the act under the terms-of-use line, and the record must NAME it
-/// — per grain, count + hashes — while never redacting it and never admitting its hashes
-/// to the redacted set. The survey predicts exactly what the act records: one computation.
+/// The text remainder is named, never silent (the attribution ruling, 2026-09-13, on the
+/// 2026-09-06 clause): prose ATTRIBUTED to the subject by authorship — content blocks whose
+/// genesis event the subject's entity emitted — in homes outside the governed estate is
+/// NAMED in the record (count + hashes, block-grain), never redacted, never admitted to the
+/// redacted set. Contributing into a shared space never carried a sole claim on the
+/// content; attribution is what the system provides and what survives. The survey predicts
+/// exactly what the act records: one computation.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn the_subjects_team_context_text_is_named_in_the_record(pool: sqlx::PgPool) {
     let (subject, handle) = insert_profile(&pool).await;
@@ -1160,7 +1164,7 @@ async fn the_subjects_team_context_text_is_named_in_the_record(pool: sqlx::PgPoo
         .await
         .expect("seed team context"),
     );
-    let (_, team_hash) = seed_resource(
+    let (team_resource, _) = seed_resource(
         &pool,
         subject,
         subject_emitter,
@@ -1169,6 +1173,18 @@ async fn the_subjects_team_context_text_is_named_in_the_record(pool: sqlx::PgPoo
         "prose living in a team context",
     )
     .await;
+    // The named hash is the BLOCK content hash — attribution lives at the block grain;
+    // the resource's chunk hash is the retrieval partition's own copy and is not named.
+    let team_block_hash: String = sqlx::query_scalar(
+        "SELECT DISTINCT bc.content_hash FROM kb_block_content bc \
+         JOIN kb_block_revisions br ON br.id = bc.block_revision_id \
+         JOIN kb_content_blocks b ON b.id = br.block_id \
+         WHERE b.resource_id = $1 AND bc.content <> ''",
+    )
+    .bind(team_resource)
+    .fetch_one(&pool)
+    .await
+    .expect("the team resource carries block content");
 
     // The survey predicts the remainder; the act records it — one computation, two doors.
     let survey = survey_erasure(&pool, ProfileId::from(operator), ProfileId::from(subject))
@@ -1185,8 +1201,8 @@ async fn the_subjects_team_context_text_is_named_in_the_record(pool: sqlx::PgPoo
     assert!(
         predicted
             .iter()
-            .any(|t| t.target == "kb_chunk_content.content" && t.outcome.contains(&team_hash)),
-        "the survey names the team-context prose's chunk hash; got {predicted:?}"
+            .any(|t| t.target == "kb_block_content.content" && t.outcome.contains(&team_block_hash)),
+        "the survey names the team-context prose's block hash; got {predicted:?}"
     );
 
     let outcome = execute_erasure(
@@ -1215,8 +1231,8 @@ async fn the_subjects_team_context_text_is_named_in_the_record(pool: sqlx::PgPoo
     assert!(
         named
             .iter()
-            .any(|t| t.target == "kb_chunk_content.content" && t.outcome.contains(&team_hash)),
-        "the record names the team-context prose's chunk hash; got {named:?}"
+            .any(|t| t.target == "kb_block_content.content" && t.outcome.contains(&team_block_hash)),
+        "the record names the team-context prose's block hash; got {named:?}"
     );
     assert_eq!(
         named.len(),
@@ -1231,14 +1247,16 @@ async fn the_subjects_team_context_text_is_named_in_the_record(pool: sqlx::PgPoo
         "the estate prose's hash is redacted"
     );
     assert!(
-        !completion.redacted_hashes.contains(&team_hash),
+        !completion.redacted_hashes.contains(&team_block_hash),
         "the team-context hash is named, never admitted to the redacted set"
     );
     let (team_prose,): (String,) = sqlx::query_as(
-        "SELECT cc.content FROM kb_chunk_content cc \
-         JOIN kb_chunks c ON c.id = cc.chunk_id WHERE c.content_hash = $1",
+        "SELECT bc.content FROM kb_block_content bc \
+         JOIN kb_block_revisions br ON br.id = bc.block_revision_id \
+         JOIN kb_content_blocks b ON b.id = br.block_id \
+         WHERE b.resource_id = $1 AND bc.content <> ''",
     )
-    .bind(&team_hash)
+    .bind(team_resource)
     .fetch_one(&pool)
     .await
     .unwrap();
