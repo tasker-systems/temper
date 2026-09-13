@@ -1273,7 +1273,7 @@ async fn the_subjects_team_context_text_is_named_in_the_record(pool: sqlx::PgPoo
     .await
     .unwrap();
     assert!(
-        estate_prose.as_deref().map_or(true, str::is_empty),
+        estate_prose.as_deref().is_none_or(str::is_empty),
         "the estate prose is emptied"
     );
 }
