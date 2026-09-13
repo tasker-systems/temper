@@ -20,7 +20,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use temper_core::types::ids::ProfileId;
-use temper_services::services::erasure_service::{execute_erasure, ErasureOutcome};
+use temper_services::services::erasure_service::{execute_erasure, survey_erasure, ErasureOutcome};
 use temper_substrate::blob_store::{blob_pathname, InMemoryBlobStore};
 use temper_substrate::content::{self, IncomingChunk};
 use temper_substrate::events::{fire, EventContext, SeedAction};
@@ -1115,5 +1115,165 @@ async fn a_guest_committed_blob_in_a_governed_home_is_struck_with_the_estate(poo
     assert!(
         !folded,
         "the strike folds no edges (the substrate's ruled shape)"
+    );
+}
+
+/// The text remainder is named, never silent (2026-09-06): the subject's own prose in a
+/// The text remainder is named, never silent (the attribution ruling, 2026-09-13, on the
+/// 2026-09-06 clause): prose ATTRIBUTED to the subject by authorship — content blocks whose
+/// genesis event the subject's entity emitted — in homes outside the governed estate is
+/// NAMED in the record (count + hashes, block-grain), never redacted, never admitted to the
+/// redacted set. Contributing into a shared space never carried a sole claim on the
+/// content; attribution is what the system provides and what survives. The survey predicts
+/// exactly what the act records: one computation.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_subjects_team_context_text_is_named_in_the_record(pool: sqlx::PgPool) {
+    let (subject, handle) = insert_profile(&pool).await;
+    let (operator, _) = insert_profile(&pool).await;
+    temper_services::test_support::grant_governance(&pool, operator).await;
+    let subject_emitter: Uuid = sqlx::query_scalar(
+        "SELECT id FROM kb_entities WHERE profile_id = $1 AND name LIKE '%@web'",
+    )
+    .bind(subject)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    // The governed estate: prose that strikes and redacts exactly as always.
+    let home = insert_personal_context(&pool, subject, "notes").await;
+    let (_, estate_hash) = seed_resource(
+        &pool,
+        subject,
+        subject_emitter,
+        home,
+        "estate prose",
+        "prose the estate empties",
+    )
+    .await;
+
+    // The novelty: the subject's own prose in a TEAM context — ungoverned, it survives the
+    // act under the terms-of-use line, and the record must name it rather than skip it.
+    let team_context: ContextId = ContextId::from(
+        sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
+                 SELECT 'kb_teams', t.id, 'shared', 'Shared' \
+                   FROM kb_teams t WHERE t.slug = 'personal-' || $1 RETURNING id",
+        )
+        .bind(&handle)
+        .fetch_one(&pool)
+        .await
+        .expect("seed team context"),
+    );
+    let (team_resource, _) = seed_resource(
+        &pool,
+        subject,
+        subject_emitter,
+        team_context,
+        "team prose",
+        "prose living in a team context",
+    )
+    .await;
+    // The named hash is the BLOCK content hash — attribution lives at the block grain;
+    // the resource's chunk hash is the retrieval partition's own copy and is not named.
+    let team_block_hash: String = sqlx::query_scalar(
+        "SELECT DISTINCT bc.content_hash FROM kb_block_content bc \
+         JOIN kb_block_revisions br ON br.id = bc.block_revision_id \
+         JOIN kb_content_blocks b ON b.id = br.block_id \
+         WHERE b.resource_id = $1 AND bc.content <> ''",
+    )
+    .bind(team_resource)
+    .fetch_one(&pool)
+    .await
+    .expect("the team resource carries block content");
+
+    // The survey predicts the remainder; the act records it — one computation, two doors.
+    let survey = survey_erasure(&pool, ProfileId::from(operator), ProfileId::from(subject))
+        .await
+        .expect("the operator's survey");
+    let predicted: Vec<_> = survey
+        .targets
+        .iter()
+        .filter(|t| {
+            t.outcome
+                .starts_with("independent_obligation: home governed by a team or map")
+        })
+        .collect();
+    assert!(
+        predicted
+            .iter()
+            .any(|t| t.target == "kb_block_content.content" && t.outcome.contains(&team_block_hash)),
+        "the survey names the team-context prose's block hash; got {predicted:?}"
+    );
+
+    let outcome = execute_erasure(
+        &pool,
+        ProfileId::from(operator),
+        ProfileId::from(subject),
+        Uuid::now_v7(),
+        Surface::ApiHttp,
+    )
+    .await
+    .expect("the operator's act completes");
+    let ErasureOutcome::Completed(completion) = outcome else {
+        panic!("must complete, got {outcome:?}");
+    };
+
+    // The named remainder: the team-context prose is reported with its hash, and the act
+    // names exactly what the survey named.
+    let named: Vec<_> = completion
+        .targets
+        .iter()
+        .filter(|t| {
+            t.outcome
+                .starts_with("independent_obligation: home governed by a team or map")
+        })
+        .collect();
+    assert!(
+        named
+            .iter()
+            .any(|t| t.target == "kb_block_content.content" && t.outcome.contains(&team_block_hash)),
+        "the record names the team-context prose's block hash; got {named:?}"
+    );
+    assert_eq!(
+        named.len(),
+        predicted.len(),
+        "the act names exactly what the survey named; got {named:?} vs {predicted:?}"
+    );
+
+    // Named, never redacted: the team hash stays out of the redacted set while the estate
+    // hash is in it, and the team's copy of the prose still reads.
+    assert!(
+        completion.redacted_hashes.contains(&estate_hash),
+        "the estate prose's hash is redacted"
+    );
+    assert!(
+        !completion.redacted_hashes.contains(&team_block_hash),
+        "the team-context hash is named, never admitted to the redacted set"
+    );
+    let (team_prose,): (String,) = sqlx::query_as(
+        "SELECT bc.content FROM kb_block_content bc \
+         JOIN kb_block_revisions br ON br.id = bc.block_revision_id \
+         JOIN kb_content_blocks b ON b.id = br.block_id \
+         WHERE b.resource_id = $1 AND bc.content <> ''",
+    )
+    .bind(team_resource)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        team_prose, "prose living in a team context",
+        "the team's copy of the prose keeps its lawful life"
+    );
+    let estate_prose: Option<String> = sqlx::query_scalar(
+        "SELECT cc.content FROM kb_chunk_content cc \
+         JOIN kb_chunks c ON c.id = cc.chunk_id WHERE c.content_hash = $1",
+    )
+    .bind(&estate_hash)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        estate_prose.as_deref().is_none_or(str::is_empty),
+        "the estate prose is emptied"
     );
 }
