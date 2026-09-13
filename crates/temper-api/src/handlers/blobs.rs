@@ -167,6 +167,7 @@ pub async fn commit(
         content_type: outcome.content_type,
         content_bytes,
         deduped: outcome.deduped,
+        estate_scope_disclosure: outcome.estate_scope_disclosure,
     }))
 }
 
@@ -458,6 +459,7 @@ pub async fn finalize_upload(
         content_type: outcome.content_type,
         content_bytes: outcome.content_bytes,
         deduped: outcome.deduped,
+        estate_scope_disclosure: outcome.estate_scope_disclosure,
     }))
 }
 

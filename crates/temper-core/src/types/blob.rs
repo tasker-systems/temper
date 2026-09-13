@@ -36,6 +36,11 @@ pub struct BlobCommitResponse {
     pub content_type: String,
     pub content_bytes: i64,
     pub deduped: bool,
+    /// Present only when the blob homes in a context governed by another profile: the
+    /// commit-time disclosure that bytes committed into another's context live and die
+    /// with that estate — an erasure of its owner strikes them. `None` when the caller
+    /// commits into a context of their own, and for team-owned homes.
+    pub estate_scope_disclosure: Option<String>,
 }
 
 /// Begin a segmented upload — `POST /api/blobs/uploads`. Declares the whole upload up

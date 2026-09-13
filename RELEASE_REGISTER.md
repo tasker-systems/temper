@@ -33,6 +33,19 @@ classes: behavioral
 surfaces: http
 status: signal-only
 
+- **The commit door discloses the estate line — `BlobCommitResponse.estate_scope_disclosure`**
+  When a blob commits into a context governed by another profile, every committing door
+  (`POST /api/blobs`, the segmented finalize, the MCP commit tool) carries a
+  scope-of-engagement note in its response: bytes committed into another's context live
+  and die with that estate — an erasure of its owner erases them. `None` for the caller's
+  own context and for team-owned homes (the team line is the terms' other half). Additive
+  field on one response class; the three generated client skins restale with the
+  contract.
+pr: self
+classes: additive
+surfaces: http, mcp, clients
+status: signal-only
+
 - **The erasure act gains a read-only survey door: `POST /api/admin/erasure/survey`**
   An operator can now ask what an erasure WOULD record before running it: the door serves
   the act's own computation (`principal_erasure_survey_plan`, which `principal_erasure_execute`
@@ -147,21 +160,6 @@ status: signal-only
 pr: self
 classes: additive
 surfaces: http, clients
-status: signal-only
-
-- **The erasure record names guest-committed blob rows homed in governed homes**
-  The blob arm's second pass enumerates the governed homes BY HOME: every live row whose
-  actor halves are not the subject's is named in the `principal_erased` targets and the
-  erasure door's response — blob id + content hash, independent_obligation-shaped, the same
-  reporting team-held rows get — where the actor-keyed sweep reported nothing for them. Both
-  outcomes name the retention with no release path (the act's own context retirement closes
-  the delete gate's read for every caller, guest included); the subject's own strike
-  outcomes and the strike template the fence parses are byte-unchanged; named hashes never
-  enter `kb_erased_content` (only strikes do). Ruled 2026-09-11: guest rows are accepted as
-  surviving, never silent.
-pr: self
-classes: behavioral
-surfaces: http
 status: signal-only
 
 - **`create --sources-as-edges` qualifies each asserted edge at attribution grain**
