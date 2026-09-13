@@ -117,6 +117,21 @@ script = '''
 # check` compiles but plain `cargo sqlx prepare` misses.
 cd crates/temper-services
 cargo sqlx prepare -- --all-targets --all-features
+# Dedup against the workspace root cache. prepare captures every query! macro that
+# re-expands during its run — on a cold target/sqlx-prepare-check that includes the
+# dependency crates' LIB queries — so without this the per-crate cache accumulates
+# content-identical copies of root entries, and how many a later run prunes depends
+# on build state. Entries are filename-hashed by query content: a hash that exists
+# in the root .sqlx is byte-identical to an entry the root cache provides to every
+# offline build, so removing the copy here cannot unresolve a query.
+removed=0
+for f in .sqlx/query-*.json; do
+  if [ -f "../../.sqlx/${f##*/}" ]; then
+    rm "$f"
+    removed=$((removed + 1))
+  fi
+done
+echo "prepare-services: deduped ${removed} root-duplicate entries; $(ls .sqlx | wc -l | tr -d ' ') per-crate-only entries remain"
 '''
 
 [tasks.prepare-e2e]
