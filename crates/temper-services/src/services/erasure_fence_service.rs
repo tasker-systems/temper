@@ -1253,12 +1253,11 @@ mod tests {
     /// FAILS IF the strike-outcome template can drift from what the fence parses: the pin
     /// asserts the SQL literal composes to exactly the Rust constants — the released prefix
     /// the seed parses through, the held prefix it skips, and the non-strike shapes — in
-    /// the minting migration (20260909000025), the template's ONE definition
-    /// (20260913000010's `blob_strike_outcome_text`), and the LIVE producer of every
-    /// `kb_blobs` outcome (20260913000020's home-pure plan): every `kb_blobs` outcome the
-    /// act can emit must start with a prefix this file pins. 20260911000010 is pinned as
-    /// HISTORY: its guest-naming outcomes are retired as live output, but the append-only
-    /// ledger holds events carrying that prose and the fence must keep classifying it.
+    /// the minting migration (20260909000025, retired), the retired guest-naming carrier
+    /// (20260911000010 — its outcome prefixes stay pinned for records already in the
+    /// ledger), and the LIVE carrier: `blob_strike_outcome_text` (20260913000010), which
+    /// the home-pure plan (20260913000020) calls rather than inlining the prose. Every
+    /// `kb_blobs` outcome the act can emit must start with a prefix this file pins.
     /// (Mirrors `payload_schema::the_migration_literal_matches_the_committed_fixture`.)
     #[test]
     fn the_migration_strike_template_matches_the_pinned_constants() {
@@ -1295,79 +1294,41 @@ mod tests {
             "the independent_obligation remainder shape is pinned"
         );
 
-        // The LIVE template definition (20260913000010 extracted it to the ONE
-        // blob_strike_outcome_text) — the survey and the act both render through it, so a
-        // rewording there drifts every NEWLY WRITTEN event away from these constants.
-        // The definition's parameters are p_released/p_pathname (the minting migration's
-        // inline spelling used v_rel/v_path); the LITERAL halves are what the fence parses.
-        let definition_path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../migrations/20260913000010_erasure_survey_door.sql"
-        );
-        let definition =
-            std::fs::read_to_string(definition_path).expect("the template definition exists");
-        let definition_template =
-            "'erased; released=' || p_released::text || '; pathname=' || p_pathname";
-        assert!(
-            definition.contains(definition_template),
-            "the strike-outcome template drifted in its ONE definition — the fence parses \
-             by exact prefix, so the Rust constants and this literal MUST move together"
-        );
-        assert!(
-            definition.contains("blob_strike_outcome_text("),
-            "the survey and the act render strikes through the ONE definition — a second \
-             inline template would drift outside this pin"
-        );
-
-        // The LIVE producer (20260913000020's home-pure plan): strikes flow out as
-        // STRUCTURED would-strike entries (rendered through the ONE definition by the
-        // consumers), and the outcome shapes it spells — already-erased and the team/map
-        // remainder — must stay prefix-pinned. The guest-naming class is RETIRED here; a
-        // rewrite that resurrects it fails this pin.
-        let producer_path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../migrations/20260913000020_blob_arm_home_pure.sql"
-        );
-        let producer =
-            std::fs::read_to_string(producer_path).expect("the live producer migration exists");
-        assert!(
-            producer.contains("'would_strike'"),
-            "the live plan emits strikes as structured entries rendered by the ONE template"
-        );
-        assert!(
-            producer.contains("'outcome', 'already-erased'"),
-            "the already-erased kb_blobs shape is pinned in the live producer"
-        );
-        assert!(
-            producer.contains(&format!("'outcome', '{OBLIGATION_OUTCOME_PREFIX}")),
-            "the independent_obligation remainder shape is pinned in the live producer"
-        );
-        assert!(
-            !producer.contains("committed by a guest of the erased principal"),
-            "the guest-naming outcomes are retired — the live producer must not mint them"
-        );
-
-        // HISTORY (20260911000010): its guest-named events are on the append-only ledger
-        // forever, and the fence's known non-delete-target classification must keep
-        // parsing them. This pin is about OLD events, not live output.
+        // The retired guest-naming carrier (20260911000010) minted the independent_obligation
+        // guest prefix; the ledger carries such records, so the prefix stays pinned HERE even
+        // though the body is retired. A future rewrite that rewords it away from a pinned
+        // shape fails HERE, not in a fence drain.
         let carrier_path = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../migrations/20260911000010_blob_arm_names_guest_rows.sql"
         );
         let carrier =
-            std::fs::read_to_string(carrier_path).expect("the historical carrier migration exists");
+            std::fs::read_to_string(carrier_path).expect("the live carrier migration exists");
         assert!(
             carrier.contains(template),
-            "the strike-outcome template drifted in the historical carrier — the fence \
-             parses by exact prefix, so the Rust constants and this literal MUST move together"
+            "the strike-outcome template drifted in the retired carrier — the fence parses \
+             by exact prefix, so the Rust constants and this literal MUST move together"
         );
         assert!(
             carrier.contains(&format!(
                 "'outcome', '{OBLIGATION_OUTCOME_PREFIX}committed by a guest of the erased principal"
             )),
-            "the LEDGER holds guest-named outcomes carrying the independent_obligation \
-             prefix the fence classifies as a known non-delete-target — historical events \
-             must keep parsing"
+            "the guest-naming outcomes must carry the independent_obligation prefix the \
+             fence classifies as a known non-delete-target"
+        );
+
+        // The LIVE carrier of the template: `blob_strike_outcome_text` (minted 20260913000010)
+        // — the home-pure plan (20260913000020) calls it rather than inlining the prose, so
+        // this body's spelling is what every fresh payload the fence parses arrives in.
+        let live = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../migrations/20260913000010_erasure_survey_door.sql"
+        ))
+        .expect("the survey-door migration exists");
+        assert!(
+            live.contains("'erased; released=' || p_released::text || '; pathname=' || p_pathname"),
+            "blob_strike_outcome_text's template drifted — the fence parses by exact prefix, \
+             so the Rust constants and this literal MUST move together"
         );
     }
 

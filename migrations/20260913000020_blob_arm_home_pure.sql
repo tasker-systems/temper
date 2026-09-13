@@ -1,41 +1,44 @@
--- The blob arm goes home-pure (task 01a09628 item 1, ruled 2026-09-12 with Pete — decision
--- 01a097ff-0aa1-7183-bd57-7044286123e8): every live blob row homed in a governed context of
--- the erased estate strikes with the estate, whoever committed it. The 2026-09-11 blob-arm
--- ruling (name-not-strike; 20260911000010's guest naming pass) is superseded by derivation
--- from the scope-of-engagement ruling: writing into someone's private context declares the
--- content's scope of engagement — it lives and dies with that estate. Resources have followed
--- that line since 20260911000000; blobs do now too. The actor arms' role as the
--- strike-deciding scope retires — they remain in the enumeration only as breadth for the
--- disposition-iii team remainder — and the record names no undischargeable obligation of the
--- estate, because none remains.
+-- The erasure act's blob arm goes HOME-PURE (ruled 2026-09-12 with Pete): every live blob
+-- row homed in the erased governed context(s) is STRUCK with the estate, whoever committed
+-- it. Replaces 20260911000010's guest-naming pass, which named a guest-committed row in a
+-- governed home "retained with no release path" while the same act retired the row's home
+-- context — the record named an obligation no act could ever discharge. The enumeration in
+-- principal_erasure_survey_plan widens from the subject's actor halves to HOME-PURE-OR-
+-- ACTOR: every governed-home row strikes through the SAME blob_delete('blob_erased', …)
+-- wrapper, per-row, in plan order; the subject's own ungoverned rows keep the named
+-- remainder (disposition iii — team and map homes keep custody, 20260911000010's team arm).
+-- Guest hashes become struck hashes: they join v_hashes, enter kb_erased_content (only
+-- strikes enter the set — D4), and the byte-delete fence seeds their released bytes from
+-- the same payload prose it already parses. The strike vocabulary, the outcome template,
+-- and the payload shape are byte-identical (the fence parses blob_strike_outcome_text by
+-- exact prefix, 20260913000010:28-39; the guest prefix stays a known non-delete-target
+-- shape there, for records already in the ledger). The accepted cost — a guest's bytes die
+-- on someone else's erasure — is mitigated at COMMIT-TIME DISCLOSURE (the terms-of-use line
+-- a contributor crosses by writing into another's personal context), never in the act.
 --
--- The accepted cost is stated, not discovered: a guest's bytes die on someone else's erasure.
--- The mitigation is deliberately NOT in the act — the commit door discloses the scope of
--- engagement at the moment of writing, and the terms-of-use documentation carries the line.
+-- THE CORRECTED CLAIM, where 20260911000000's arm 13 overclaims: "no live principal can
+-- re-admit content into the wiped homes" is true only of CUSTODY. The context floor closes
+-- the read and author arms into the estate, but the estate's resource rows stay live (D3),
+-- kb_erased_content refuses no write anywhere (20260911000000), and a re-commit of
+-- identical bytes into the retired home mints a fresh live row that replay reproduces
+-- surviving (witnessed: post_erasure_recommits_survive_replay) and that a later erasure
+-- of the same estate strikes again. What guards the wiped estate is the tombstone on
+-- the subject and the custody floor on everyone else's standing — a custody closure, never
+-- an admission impossibility.
 --
--- The strike machinery is UNCHANGED: guest rows join the same ordered strike set and leave
--- through the same blob_delete('blob_erased', …) wrapper — per-row events, the sequential
--- refcount under the hash lock deciding provider release, the strike prose the fence parses
--- by exact prefix. principal_erasure_execute and principal_erasure_survey consume the plan
--- by id and keep their bodies; the plan's and the act's COMMENTs are restated here (the
--- survey's rendering-only claims are unchanged and its COMMENT stands).
+-- THE SHARED COMPUTATION moves with the act, by construction: the plan IS the act's scope
+-- machinery (20260913000010 — the act consumes the plan once; nothing re-enumerates), so
+-- one CREATE OR REPLACE moves survey and act together and they cannot drift.
 --
--- Additive: CREATE OR REPLACE of one function + COMMENTs, signatures unchanged (the
--- 20260804000020 class).
+-- Additive: CREATE OR REPLACE only, signatures unchanged (the 20260804000020 class).
 
--- THE shared erasure computation — the act's own scope machinery, read-only (the body moved
--- whole from principal_erasure_execute in 20260913000010). The act consumes the plan
--- (computed ONCE per act; strikes consume its rows by id, in plan order; nothing
--- re-enumerates) and the survey door serves the same plan: same-state, the survey predicts
--- each strike's verdict under the act's own sequential refcount — same-hash rows earlier in
--- the strike set are already emptied when the act reaches this row — and the wrapper's
--- strike-time verdict stays authoritative for writers after the survey. LIVE governed-home
--- blob rows are the would-strike entries, whoever committed them (home-pure since
--- 20260913000020 — the scope-of-engagement ruling applied to the second content kind);
--- struck governed-home
--- rows report already-erased; the subject's own rows in ungoverned homes keep the named
--- team remainder (disposition iii). Every other target keeps the act's exact prose, in the
--- act's exact order.
+-- THE shared erasure computation (the act's own scope machinery, 20260913000010; the act
+-- consumes the plan computed ONCE per act and the survey door serves the same plan). The
+-- 2026-09-12 home-pure ruling widens the blob pass: every LIVE governed-home blob row is a
+-- structured would-strike entry (id, hash, pathname, released_would_be), whoever committed
+-- it; governed-home struck rows report already-erased; the subject's rows in ungoverned
+-- homes keep the act's named-remainder prose. Every other arm is unchanged from
+-- 20260913000010.
 CREATE OR REPLACE FUNCTION principal_erasure_survey_plan(p_subject uuid)
 RETURNS jsonb LANGUAGE plpgsql AS $$
 DECLARE
@@ -99,20 +102,17 @@ BEGIN
          WHERE b.resource_id = ANY(v_resources)
     ) s;
 
-    -- ── The blob pass: HOME-PURE (the blob-arm ruling, 2026-09-12 — decision 01a097ff;
-    -- supersedes 20260911000010's actor-first pass and its guest naming pass) ────────────
-    -- Every LIVE row homed in a governed context is a would-strike entry, whoever
-    -- committed it: a guest's bytes committed into another's estate are scoped to that
-    -- estate at commit, disclosed there (the commit door's scope-of-engagement note) —
-    -- the accepted cost, stated rather than discovered. Governed-home struck rows report
-    -- already-erased. The subject's own rows in ungoverned homes keep the named remainder
-    -- (disposition iii — team bytes survive for the team). A guest's row in an ungoverned
-    -- home is nobody's target and is not enumerated. released_would_be SIMULATES the
-    -- act's own sequential refcount: the ONE blob_delete live-row predicate (live rows
+    -- ── The blob pass: HOME-PURE (the 2026-09-12 ruling), WOULD-STRIKE structured ───────
+    -- Scope = every blob row homed in a governed context, WHOEVER committed it, plus the
+    -- subject's own rows (owner/originator/emitted) wherever they home — the subject's
+    -- team- and map-homed rows stay the named remainder (disposition iii). Governed-home
+    -- LIVE rows report would-strike entries; governed-home struck rows report
+    -- already-erased; EVERY other home is the named remainder. released_would_be SIMULATES
+    -- the act's own sequential refcount: the ONE blob_delete live-row predicate (live rows
     -- with the hash, this one included, <= 1) minus the same-hash rows EARLIER IN THE
-    -- PLAN'S OWN STRIKE SET — execute consumes the entries in order, so those siblings
-    -- are already emptied when the act reaches this row. Run at survey time WITHOUT the
-    -- hash's advisory lock: a PREDICTION, honest about the moment it ran; the wrapper's
+    -- PLAN'S OWN STRIKE SET — execute consumes the entries in order, so those siblings are
+    -- already emptied when the act reaches this row. Run at survey time WITHOUT the hash's
+    -- advisory lock: a PREDICTION, honest about the moment it ran; the wrapper's
     -- strike-time verdict is authoritative in the act. The enumeration is ORDERED BY id —
     -- the act strikes in plan order and the survey must walk the SAME sequence when it
     -- simulates it, so the order cannot be left to the scan.
@@ -127,16 +127,16 @@ BEGIN
                SELECT e.id FROM kb_events e
                  JOIN kb_entities en ON en.id = e.emitter_entity_id
                 WHERE en.profile_id = p_subject)
-         ORDER BY b.id
+          ORDER BY b.id
     LOOP
         IF v_row.governed_home AND v_row.content_type IS NOT NULL THEN
             -- The act's own SEQUENTIAL refcount, simulated: the strike loop consumes the
             -- plan's rows by id IN ORDER and each blob_delete counts live rows at ITS
             -- moment, so every same-hash row already in this plan's strike set is emptied
             -- when the act reaches this row — subtract it (accumulated below, in plan
-            -- order) from the ONE live-row predicate. Two same-hash rows in the strike
-            -- set therefore predict released=false then released=true, exactly as the
-            -- act strikes them.
+            -- order) from the ONE live-row predicate. Two same-hash rows in the estate
+            -- therefore predict released=false then released=true, exactly as the act
+            -- strikes them.
             v_rel := ((SELECT count(*) FROM kb_blobs live
                         WHERE live.content_hash = v_row.content_hash
                           AND live.content_type IS NOT NULL)
@@ -420,10 +420,10 @@ BEGIN
                                                SELECT h.resource_id FROM kb_resource_homes h
                                                 WHERE h.anchor_table = 'kb_contexts'
                                                   AND h.anchor_id = ANY(v_governed))))
-           -- The personal-context predicate again — the schema's own owner arm
-           -- (contexts_readable_by arm 1, 20260712000010:96-97); team-owned and team-shared
-           -- contexts (arms 2-3) are NOT governed — disposition iii.
-           OR (c.owner_table = 'kb_profiles' AND c.owner_id = p_subject) );
+          -- The personal-context predicate again — the schema's own owner arm
+          -- (contexts_readable_by arm 1, 20260712000010:96-97); team-owned and team-shared
+          -- contexts (arms 2-3) are NOT governed — disposition iii.
+          OR (c.owner_table = 'kb_profiles' AND c.owner_id = p_subject) );
     IF v_n > 0 THEN
         v_targets := v_targets || jsonb_build_array(
             jsonb_build_object('target','kb_contexts.shape_materialized_event_id',
@@ -439,45 +439,48 @@ END;
 $$;
 
 COMMENT ON FUNCTION principal_erasure_survey_plan(uuid) IS
-'THE shared erasure computation (task 01a09628; the act''s scope machinery moved whole out
-of principal_erasure_execute, 20260913000010): governed contexts, home-pure resources,
-text hashes, the blob pass as STRUCTURED would-strike entries (id, hash, pathname,
-released_would_be — the survey predicts each strike''s verdict under the act''s own
-sequential refcount: the blob_delete live-row predicate minus the same-hash rows earlier
-in the strike set, already emptied when the act reaches this row), and every per-target
-outcome arm reading PRE-redaction state, in the act''s exact order. The blob pass is
-HOME-PURE since 20260913000020 (ruled 2026-09-12 with Pete — decision 01a097ff, deriving
-from the 2026-09-11 scope-of-engagement ruling): every LIVE blob row homed in a governed
-context strikes with the estate, whoever committed it — the actor-first enumeration and
-its named guest class retire; a guest''s bytes are scoped to that estate at commit and
-disclosed there. Read-only: it appends no event, mutates no row.
-principal_erasure_execute consumes this plan (computed ONCE per act; strikes by id, in
-plan order; nothing re-enumerates) and the survey door serves the same plan — the
-would-strike verdicts speak for the moment the plan ran; the wrapper''s strike-time
-verdict is authoritative.';
+'THE shared erasure computation (the act''s scope machinery, moved whole out of
+principal_erasure_execute by 20260913000010): governed contexts, home-pure resources, text
+hashes, the blob pass, and every per-target outcome arm reading PRE-redaction state, in the
+act''s exact order. The blob pass is HOME-PURE (ruled 2026-09-12): every LIVE governed-home
+blob row is a structured would-strike entry (id, hash, pathname, released_would_be — the
+survey predicts each strike''s verdict under the act''s own sequential refcount: the
+blob_delete live-row predicate minus the same-hash rows earlier in the strike set, already
+emptied when the act reaches this row), whoever committed it; governed-home struck rows
+report already-erased; the subject''s rows in ungoverned homes keep the named remainder.
+Read-only: it appends no event, mutates no row. principal_erasure_execute consumes this
+plan (computed ONCE per act; strikes by id, in plan order; nothing re-enumerates) and the
+survey door serves the same plan — the would-strike verdicts speak for the moment the plan
+ran; the wrapper''s strike-time verdict is authoritative.';
 
+-- The act's COMMENT only — its body is UNCHANGED (it consumes the plan, 20260913000010;
+-- nothing re-enumerates): the home-pure ruling lands entirely in the plan above.
 COMMENT ON FUNCTION principal_erasure_execute(uuid, uuid, uuid, uuid) IS
-'the erasure act (spec 2026-08-31, "The act, end to end" §3; outcome reads
+'the erasure act (spec 2026-08-31, "The act, end to end" §3; Beat 2; outcome reads
 governed-scoped 20260911000000; home-pure scope per the 2026-09-11 scope-of-engagement
-ruling; SHARES THE COMPUTATION with principal_erasure_survey_plan since 20260913000010 —
-the plan is computed ONCE per act and the strike loop consumes its rows by id, so the act
-and the survey cannot drift): scope (every resource homed in a governed personal
-context), per-row governed-home blob strikes of every LIVE row homed in a governed
-context, whoever committed it — home-pure since 20260913000020 (ruled 2026-09-12 with
-Pete, decision 01a097ff; supersedes 20260911000010''s actor-first enumeration and its
-guest naming pass) — each through blob_delete(''blob_erased'', …), the wrapper''s verdict
-authoritative at strike time and provider release the existing refcount under the hash
-lock; the ONE NULL-anchored principal_erased event with the request reference on
-kb_events."references" + correlation, then _erasure_apply_redaction — all one
-transaction. The per-target outcome reads scope to governed homes with the redaction''s
-own predicate, so the record never reports "erased" for a row the act deliberately leaves
-standing. A struck row carries no marker of which act emptied it; the ledger events are
-the only distinction. Does NOT decide legality (is_system_admin is the Rust caller''s
-gate, resolved before any mutation); the unauthorized refusal face is
+ruling; the blob arm HOME-PURE since 20260913000020 — every live governed-home blob row is
+struck with the estate, whoever committed it, the 2026-09-12 ruling; SHARES THE COMPUTATION
+with principal_erasure_survey_plan since 20260913000010 — the plan is computed ONCE per act
+and the strike loop consumes its rows by id, so the act and the survey cannot drift): scope
+(every resource homed in a governed personal context), per-row governed-home blob strikes
+through blob_delete(''blob_erased'', …) — the wrapper''s verdict authoritative at strike
+time — the ONE NULL-anchored principal_erased event with the request reference on
+kb_events."references" + correlation, then _erasure_apply_redaction — all one transaction.
+The record names no retention the act does not make: every governed-home blob row is either
+struck or already-struck, and only the subject''s team/map-homed rows ride the named
+remainder (disposition iii). The per-target outcome reads scope to governed homes with the
+redaction''s own predicate, so the record never reports "erased" for a row the act
+deliberately leaves standing. Custody, not admission (the corrected arm-13 posture,
+20260913000020): retiring the governed contexts floors the read/author arms into the estate
+— but the estate''s resource rows stay live (D3), kb_erased_content refuses no write
+(20260911000000), and a re-commit of identical bytes into a retired home mints a fresh live
+row that a later erasure of the same estate strikes again; the estate is guarded by the tombstone and the custody floor, never by
+an impossibility of re-admission. Does NOT decide legality (is_system_admin is the Rust
+caller''s gate, resolved before any mutation); the unauthorized refusal face is
 principal_erasure_refuse.';
 
 SELECT declare_migration(
     20260913000020,
     'additive',
-    'The blob arm goes home-pure (task 01a09628 item 1, ruled 2026-09-12 with Pete — decision 01a097ff-0aa1-7183-bd57-7044286123e8): every live blob row homed in a governed context of the erased estate strikes with the estate, whoever committed it, superseding the 2026-09-11 blob-arm ruling''s name-not-strike disposition (20260911000010''s guest naming pass retires) by derivation from the scope-of-engagement ruling — content written into someone''s private context lives and dies with that estate, and resources have followed that line since 20260911000000. The strike machinery is unchanged: guest rows join the same ordered strike set and leave through the same blob_delete wrapper — per-row blob_erased events, the sequential refcount under the hash lock deciding provider release, the strike prose the fence parses by exact prefix. principal_erasure_execute and principal_erasure_survey keep their bodies (the strike loop consumes the plan by id); their COMMENTs are restated. The accepted cost — a guest''s bytes die on someone else''s erasure — is mitigated at the commit door''s scope-of-engagement disclosure, not in the act. Byte-identity caveat, stated: for a world with NO guest-committed governed-home rows the act''s observable record is unchanged (the replay witnesses'' worlds); where guest rows exist the record differs BY RULING — the named retention outcomes become strikes. Additive: CREATE OR REPLACE of one function + COMMENTs, signatures unchanged.'
+    'The erasure act''s blob arm goes HOME-PURE (ruled 2026-09-12 with Pete): every live blob row homed in the erased governed context(s) is struck with the estate, whoever committed it. principal_erasure_survey_plan''s blob enumeration widens from the subject''s actor halves to home-pure-OR-actor, and 20260911000010''s guest-naming pass is retired — it named a guest-committed row in a governed home "retained with no release path" while the same act retired the row''s home context, an obligation no act could discharge. Every governed-home row now strikes through the same blob_delete wrapper, per-row, in plan order; guest hashes join the redacted set and kb_erased_content (only strikes enter the set), and the fence seeds their released bytes from the same payload prose. The strike vocabulary, outcome template and payload shape are byte-identical (the fence parses blob_strike_outcome_text by exact prefix; the guest prefix remains a known non-delete-target shape for records already in the ledger). The accepted cost — a guest''s bytes die on someone else''s erasure — is mitigated at commit-time disclosure (the terms-of-use line), not in the act. The migration also states the corrected arm-13 posture where 20260911000000 overclaims: the context floor closes CUSTODY into the wiped estate, never re-admission — resource rows stay live (D3) and a re-commit of identical bytes into a retired home mints a fresh live row that a later erasure of the same estate strikes again. The shared computation moves with the act by construction (the act consumes the plan, 20260913000010): one CREATE OR REPLACE, signatures unchanged, so survey and act cannot drift.'
 );

@@ -61,9 +61,10 @@ erasure never strikes bytes a team context holds and never empties team-homed bl
 team contexts the erasure breaks *attribution* (the pseudonym break), not the bytes. The
 delete act above is the ordinary, custodian-driven counterpart: it operates wherever custody
 resolves, including team homes through the owner role. The bound has a mirror side: content
-homed in the subject's *own* personal contexts wipes with the erasure whoever authored or
-uploaded it — including file rows guests committed there under a grant, disclosed to them by
-the commit door at the time. Both lines, and the terms of use they carry, are in
+homed in the subject's *own* personal contexts wipes with the erasure whoever authored it —
+including file rows guests uploaded there under a grant; a struck row's bytes release only
+when no live record carries its hash.
+Both lines, and the terms of use they carry, are in
 [Erasure and the terms of use](./erasure-and-terms-of-use.md).
 
 ## The bytes

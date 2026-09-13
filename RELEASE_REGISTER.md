@@ -14,6 +14,25 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.4.0 — unreleased
 
+- **The erasure act's blob arm goes home-pure: every live governed-home blob row strikes with the estate**
+  A guest-committed file homed in the erased principal's own context is now struck with the
+  estate, whoever committed it — previously such rows were named in the record as retained
+  with no release path, an obligation no act could ever discharge (the retirement of the
+  row's home context had already closed every read into it). Who observes it: an operator
+  reading an erasure record now sees the strike template (`erased; released=…; pathname=…`)
+  for every governed-home row instead of an independent-obligation naming, the redacted set
+  and the erased-content ledger include guest-committed rows' hashes, and the byte-delete
+  fence releases their provider bytes when no live row holds the hash; a guest whose bytes
+  die on someone else's erasure is the ruling's accepted cost, mitigated at commit-time
+  disclosure (the terms-of-use line a contributor crosses) rather than in the act. No shape
+  changes: the route is out of the OpenAPI contract (no schema restale), the
+  `principal_erased` payload keys, the strike vocabulary and the D2 hash set are
+  byte-identical, and the survey door moves with the act because both consume the one plan.
+pr: self
+classes: behavioral
+surfaces: http
+status: signal-only
+
 - **The erasure act gains a read-only survey door: `POST /api/admin/erasure/survey`**
   An operator can now ask what an erasure WOULD record before running it: the door serves
   the act's own computation (`principal_erasure_survey_plan`, which `principal_erasure_execute`
@@ -128,25 +147,6 @@ status: signal-only
 pr: self
 classes: additive
 surfaces: http, clients
-status: signal-only
-
-- **The blob arm goes home-pure — guest-committed blob rows strike with the estate**
-  Every live blob row homed in a governed context of the erased estate strikes with the
-  estate, whoever committed it: the actor-first enumeration and its named guest class
-  retire — the `principal_erased` targets no longer carry `independent_obligation:
-  committed by a guest…` outcomes, and the struck rows land in the ordinary strike shape
-  (per-row `blob_erased` events, hashes admitted to `kb_erased_content`, provider release
-  under the existing refcount) where the actor-keyed sweep previously left them standing
-  and named. Guest rows join the same ordered strike set, so the survey's
-  sequential-refcount predictions cover them through the ONE computation both doors share.
-  Both erasure doors' wire contracts are unchanged — the strike prose template the fence
-  parses stays byte-identical. Ruled 2026-09-12 with Pete, deriving from the 2026-09-11
-  scope-of-engagement ruling; supersedes the unreleased name-not-strike disposition this
-  row's predecessor described (the accepted cost is mitigated by the commit-time
-  disclosure row below, not in the act).
-pr: self
-classes: behavioral
-surfaces: http
 status: signal-only
 
 - **The commit door discloses the estate line — `BlobCommitResponse.estate_scope_disclosure`**

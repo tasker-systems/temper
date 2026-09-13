@@ -29,10 +29,11 @@ afterwards is the team's act, not yours, and your erasure never performs it for 
 **2. Writing into someone else's personal context declares the content's lifetime.** When
 the owner of a personal context grants you authorship into it, everything you write there
 lives and dies with that context: if that profile is later erased, your content there is
-erased with it. You tied its lifetime to theirs by writing into their context — being its
-author does not hold it back. This holds for uploaded files exactly as it holds for prose:
-the commit door tells you so when you commit into a context governed by someone else, so
-the trade is stated at the moment of writing, never discovered at an erasure.
+erased with it — text, structured content, and binary files alike. You tied its lifetime
+to theirs by writing into their context — being its author does not hold it back, and
+nothing uploaded there is held back either. This line is the disclosure: by writing into
+someone else's personal context you accept that your files there die with their estate if
+it is ever erased, even though the erasure was never about you.
 
 **The local-copy remainder.** Neither line reaches a contributor's own machine. If you
 synced content to your laptop, that copy is yours and Temper has no enforcement over it —
@@ -46,17 +47,20 @@ executed by an instance administrator (system-admin standing) on the organizatio
 determination. In one server-side transaction it:
 
 - Empties the content of everything homed in the subject's **own personal contexts** —
-  text, structured content, embeddings and search data, and uploaded files — **whoever
+  text, structured content, embeddings, search data, and uploaded files — **whoever
   authored or uploaded it**. Content a guest wrote there under line 2 dies with the
-  context, files included.
+  context, files included; the bytes are released only when no live record carries the
+  same content hash.
 - Scrubs the subject's identity fields: handle, display name, email, linked provider
   identifiers. Attribution to them anywhere else breaks because their profile stops
   resolving to a person (the pseudonym break) — their past contributions to team contexts
   are never edited to hide them.
 - **Retires the subject's personal contexts** in the same transaction. This is what makes
   line 2 enforceable rather than promised: every share and grant that reached the estate
-  *through the context* dies with the retirement — nobody can read into or write into a
-  retired context afterward, guests included.
+  *through the context* dies with the retirement — nobody can read into a retired context
+  afterward, guests included. Writing is deliberately not blocked the same way: a fresh
+  commit into a retired home mints live, lawful content, and any later erasure of the same
+  estate strikes it again.
 - Leaves team-owned contexts untouched: the content stays, whoever authored it.
 
 One pre-existing door the retirement deliberately leaves open, stated because erasure
@@ -79,12 +83,14 @@ keeps it afterward:
   it. The team keeps the bytes; the record is what proves the erasure was not silent about
   them.
 - **Files a guest uploaded into the subject's contexts are struck with the estate.** The
-  act strikes every live file homed in the subject's own personal contexts, whoever
-  uploaded it — a file a guest committed there is scoped to that estate at commit, and the
-  commit door said so at the time (line 2). The strike itself is the ordinary one: media
-  type and pathname emptied, the hash retained, provider bytes released when no live row
-  holds them, one per-row event in the ledger. Structured-data artifacts a guest's kind
-  owns on those resources remain the one reported remainder.
+  sweep is computed from where content is homed, not who committed it: a file a guest
+  uploaded into the subject's context dies with the estate, whoever uploaded it. This is
+  the accepted cost of line 2, disclosed there rather than adjudicated here — the act
+  itself neither asks nor compensates; it strikes. The bytes release only when no live
+  record carries the same content hash, so a guest's bytes die outright only when they
+  were the last copy. Structured-data artifacts a guest's kind owns on those resources
+  are a different grain: their content is not the act's to strike, and it is named in
+  the record as an un-struck obligation.
 
 ## Where the act lives
 

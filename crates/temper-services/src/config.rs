@@ -508,7 +508,7 @@ fn parse_slack_link(lookup: impl Fn(&str) -> Option<String>) -> Option<SlackLink
 /// | Variable                    | Capability it confers                                          |
 /// | --------------------------- | -------------------------------------------------------------- |
 /// | `INTERNAL_RECONCILE_SECRET` | call `/internal/saml/reconcile`                                  |
-/// | `EMBED_DISPATCH_SECRET`     | call the embed drain crons                                       |
+/// | `EMBED_DISPATCH_SECRET`     | call the embed drain crons and the `/api/erasure/drain` byte-delete fence |
 /// | `SLACK_LINK_SECRET`         | ask `/internal/slack/link-state` *"is this principal linked?"*    |
 /// | `SLACK_MINT_SECRET`         | mint a token acting as **any linked human, with their full reach**|
 /// | `BLOB_READ_WRITE_TOKEN`     | write to the provider blob store                                  |
