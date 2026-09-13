@@ -62,8 +62,8 @@ team contexts the erasure breaks *attribution* (the pseudonym break), not the by
 delete act above is the ordinary, custodian-driven counterpart: it operates wherever custody
 resolves, including team homes through the owner role. The bound has a mirror side: content
 homed in the subject's *own* personal contexts wipes with the erasure whoever authored it —
-including content guests wrote there under a grant — with one named exception: file rows a
-guest *uploaded* there survive the sweep, named in the act's record rather than struck.
+including file rows guests uploaded there under a grant; a struck row's bytes release only
+when no live record carries its hash.
 Both lines, and the terms of use they carry, are in
 [Erasure and the terms of use](./erasure-and-terms-of-use.md).
 
