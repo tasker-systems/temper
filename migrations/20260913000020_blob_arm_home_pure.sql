@@ -4,9 +4,10 @@
 -- ruling (name-not-strike; 20260911000010's guest naming pass) is superseded by derivation
 -- from the scope-of-engagement ruling: writing into someone's private context declares the
 -- content's scope of engagement — it lives and dies with that estate. Resources have followed
--- that line since 20260911000000; blobs do now too. The actor-first enumeration and its
--- independent_obligation-named guest class retire, and the record names no undischargeable
--- obligation, because none remains.
+-- that line since 20260911000000; blobs do now too. The actor arms' role as the
+-- strike-deciding scope retires — they remain in the enumeration only as breadth for the
+-- disposition-iii team remainder — and the record names no undischargeable obligation of the
+-- estate, because none remains.
 --
 -- The accepted cost is stated, not discovered: a guest's bytes die on someone else's erasure.
 -- The mitigation is deliberately NOT in the act — the commit door discloses the scope of
@@ -16,7 +17,8 @@
 -- through the same blob_delete('blob_erased', …) wrapper — per-row events, the sequential
 -- refcount under the hash lock deciding provider release, the strike prose the fence parses
 -- by exact prefix. principal_erasure_execute and principal_erasure_survey consume the plan
--- by id and keep their bodies; their COMMENTs are restated here.
+-- by id and keep their bodies; the plan's and the act's COMMENTs are restated here (the
+-- survey's rendering-only claims are unchanged and its COMMENT stands).
 --
 -- Additive: CREATE OR REPLACE of one function + COMMENTs, signatures unchanged (the
 -- 20260804000020 class).

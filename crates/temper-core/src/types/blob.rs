@@ -37,10 +37,9 @@ pub struct BlobCommitResponse {
     pub content_bytes: i64,
     pub deduped: bool,
     /// Present only when the blob homes in a context governed by another profile: the
-    /// commit-time scope-of-engagement disclosure (ruled 2026-09-12 — decision
-    /// 01a097ff). Bytes committed into another's context live and die with that estate;
-    /// an erasure of its owner strikes them. `None` when the caller commits into a
-    /// context of their own.
+    /// commit-time disclosure that bytes committed into another's context live and die
+    /// with that estate — an erasure of its owner strikes them. `None` when the caller
+    /// commits into a context of their own, and for team-owned homes.
     pub estate_scope_disclosure: Option<String>,
 }
 

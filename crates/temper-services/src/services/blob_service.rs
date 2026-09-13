@@ -140,8 +140,8 @@ async fn estate_scope_disclosure(
     .map_err(|e| ApiError::internal_scrubbed("blob commit disclosure read failed", e))?;
     Ok(match owner_id {
         Some(owner) if owner != caller.uuid() => Some(
-            "Committed into a context governed by its owner: these bytes live and die \
-             with that context — an erasure of its owner's profile erases them."
+            "Committed into a context governed by another profile: these bytes live and \
+             die with that context — an erasure of its owner's profile erases them."
                 .to_string(),
         ),
         _ => None,

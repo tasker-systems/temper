@@ -29,7 +29,7 @@ module Temper::Generated
 
     attr_accessor :deduped
 
-    # Present only when the blob homes in a context governed by another profile: the commit-time scope-of-engagement disclosure (ruled 2026-09-12 — decision 01a097ff). Bytes committed into another's context live and die with that estate; an erasure of its owner strikes them. `None` when the caller commits into a context of their own.
+    # Present only when the blob homes in a context governed by another profile: the commit-time disclosure that bytes committed into another's context live and die with that estate — an erasure of its owner strikes them. `None` when the caller commits into a context of their own, and for team-owned homes.
     attr_accessor :estate_scope_disclosure
 
     # Attribute mapping from ruby-style variable name to JSON key.

@@ -211,4 +211,50 @@ async fn a_guest_commit_into_a_governed_context_discloses_the_estate_line(pool: 
         team_commit.estate_scope_disclosure, None,
         "the team-home commit is the team line, not the estate disclosure"
     );
+
+    // The SEGMENTED door speaks the same line: the guest's staged upload into the owner's
+    // governed context carries the disclosure at finalize, where the blob is born.
+    let upload_id = blob_service::begin_upload(
+        &pool,
+        &blob_cfg(),
+        ProfileId::from(guest),
+        temper_substrate::payloads::AnchorRef::context(temper_core::types::ids::ContextId::from(
+            home,
+        )),
+        "image/png".to_string(),
+    )
+    .await
+    .expect("the guest begins a staged upload");
+    blob_service::append_to_upload(
+        &pool,
+        &blob_cfg(),
+        ProfileId::from(guest),
+        upload_id,
+        0,
+        Bytes::from_static(b"estate-disclosure segmented bytes"),
+    )
+    .await
+    .expect("the segment lands");
+    let finalized = blob_service::finalize_upload(
+        &pool,
+        &store,
+        &blob_cfg(),
+        ProfileId::from(guest),
+        upload_id,
+        &temper_core::types::blob::BlobUploadFinalizeRequest {
+            expected_segments: 1,
+            expected_total_bytes: 33,
+            expected_content_hash: None,
+        },
+        Surface::Mcp,
+    )
+    .await
+    .expect("the staged upload finalizes");
+    let segment_line = finalized
+        .estate_scope_disclosure
+        .expect("the segmented door discloses at the moment of writing");
+    assert!(
+        segment_line.contains("live and die with that context"),
+        "the segmented door carries the same line: {segment_line}"
+    );
 }

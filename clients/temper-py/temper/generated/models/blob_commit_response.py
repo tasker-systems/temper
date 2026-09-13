@@ -33,7 +33,7 @@ class BlobCommitResponse(BaseModel):
     content_hash: StrictStr = Field(description="Bare sha256 hex — the dedup key, the erasure join key, and the proof the ledger keeps instead of bytes (`ledger-carries-hash-not-bytes`).")
     content_type: StrictStr = Field(description="The row's STORED media type — allowlist-checked at commit (D9). On a dedup hit this is the FIRST committer's type (what read-through serves), never the re-commit's declaration (N2, 2026-09-03 review).")
     deduped: StrictBool
-    estate_scope_disclosure: Optional[StrictStr] = Field(default=None, description="Present only when the blob homes in a context governed by another profile: the commit-time scope-of-engagement disclosure (ruled 2026-09-12 — decision 01a097ff). Bytes committed into another's context live and die with that estate; an erasure of its owner strikes them. `None` when the caller commits into a context of their own.")
+    estate_scope_disclosure: Optional[StrictStr] = Field(default=None, description="Present only when the blob homes in a context governed by another profile: the commit-time disclosure that bytes committed into another's context live and die with that estate — an erasure of its owner strikes them. `None` when the caller commits into a context of their own, and for team-owned homes.")
     __properties: ClassVar[List[str]] = ["blob_id", "content_bytes", "content_hash", "content_type", "deduped", "estate_scope_disclosure"]
 
     model_config = ConfigDict(
