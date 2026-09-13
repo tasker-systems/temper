@@ -17,7 +17,9 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 - **The erasure act gains a read-only survey door: `POST /api/admin/erasure/survey`**
   An operator can now ask what an erasure WOULD record before running it: the door serves
   the act's own computation (`principal_erasure_survey_plan`, which `principal_erasure_execute`
-  itself consumes — one computation, so the preview cannot disagree with the act), returning
+  itself consumes — one computation, whose would-strike verdicts simulate the act's own
+  sequential refcount, so in the same state the preview matches the act; the strike-time
+  verdict stays authoritative for writers after the survey), returning
   the predicted targets, redacted set and typed strike verdicts. Same operator-only posture
   as the execute door, mounted plain out of the OpenAPI contract (allowlisted, no schema
   restales); a non-operator gets the same silent 404 and — by ruling — NO recorded refusal:
