@@ -1292,8 +1292,9 @@ mod tests {
             "the independent_obligation remainder shape is pinned"
         );
 
-        // The LIVE carrier (20260911000000's home-pure rewrite moved the walk; 20260911000010
-        // carries it today and minted the guest-naming outcomes). A future rewrite that
+        // The LIVE carrier (20260913000020 — the home-pure blob arm — replaced the plan body
+        // the act consumes; 20260911000010 minted the guest-naming outcomes, whose prefix
+        // stays pinned here for records already in the ledger). A future rewrite that
         // moves the template or rewords the guest prefix away from a pinned shape fails
         // HERE, not in a fence drain.
         let carrier_path = concat!(
