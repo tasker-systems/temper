@@ -14,6 +14,17 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.4.0 — unreleased
 
+- **This release — the 0.5.0 fleet alignment: VERSION 0.4.0 → 0.5.0 across crates, packages, and clients**
+  The release train's own wire delta is none: openapi.json's `info.version` re-stales with
+  the bump (the D-S3 baseline — no shape movement, the jq-stripped base and head
+  identical), and the generated client cores (temper-rb, temper-py) and the ts schema
+  re-stale with it. The P floor is on the record through Citation 9 and the additive rows
+  above.
+pr: self
+classes: additive
+surfaces: http, clients
+status: signal-only
+
 - **The erasure record names the subject's attributed text in shared spaces**
   The attribution ruling (2026-09-13, with Pete, on the 2026-09-06 clause "the team
   remainder is named, never silent"): contributing into a shared space never carried a sole
