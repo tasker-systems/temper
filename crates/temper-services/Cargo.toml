@@ -1,6 +1,6 @@
 [package]
 name = "temper-services"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 description = "Shared business-logic + auth-infra layer for temper-api and temper-mcp"
 
