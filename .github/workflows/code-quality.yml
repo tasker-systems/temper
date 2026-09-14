@@ -588,7 +588,7 @@ jobs:
       # version-agreement guard and the pinned --key/--host that keeps a push
       # off rubygems.org.
       - name: Guard test — publish-ruby-github (push-refusal classifier)
-        run: bash .github/scripts/test-publish-ruby-github.sh
+        run: bash .github/scripts/test-publish-ruby.sh
 
       # The SHELL half of the containment-parity check. The Rust half rides the
       # `--workspace` selection in test-rust.yml's unit job

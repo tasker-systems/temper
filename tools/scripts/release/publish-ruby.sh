@@ -53,8 +53,11 @@ fi
 
 # Duplicate probe BEFORE the build: rubygems.org's versions API answers
 # unauthenticated, so a re-cut release skips loudly and skips cheaply. A 404
-# (gem or version absent) means not yet published.
-if curl -sf "$VERSIONS_API" | grep -q "\"number\":\"${VERSION}\""; then
+# (gem or version absent) means not yet published. No `grep -q`: the race
+# between grep's early exit and curl's last write reads as a failed probe
+# under pipefail, and a duplicate that slips past lands as a loud registry
+# refusal — annoying, not silent.
+if curl -sf "$VERSIONS_API" | grep "\"number\":\"${VERSION}\"" > /dev/null; then
     echo "==> ${GEM_NAME} ${VERSION} is already published — nothing to do."
     exit 0
 fi
