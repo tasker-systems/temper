@@ -21,6 +21,16 @@ concurrency:
   group: release
   cancel-in-progress: false
 
+# The ceiling this workflow needs whichever door it enters through (tag push,
+# workflow_dispatch, or the workflow_call from release-tag.yml): job-level
+# permissions narrow this, never widen it. When CALLED, the caller's own
+# declaration is the cap — release-tag.yml declares the same union.
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+  attestations: write
+
 jobs:
   determine-version:
     name: Determine Version
