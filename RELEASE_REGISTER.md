@@ -20,10 +20,10 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
   directories targeted GitHub Packages (and failed ENEEDAUTH against it) no matter
   where the operator logged in. Found by the first bootstrap publish, not by CI —
   no harness or gate reads the manifest's publish target.
-  pr: self
-  classes: additive
-  surfaces: clients
-  status: signal-only
+pr: self
+classes: additive
+surfaces: clients
+status: signal-only
 
 - **The client publish lanes move to the public registries**
   rubygems.org for the gem, registry.npmjs.org for the TS packages — token-free for

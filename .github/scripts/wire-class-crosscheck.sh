@@ -273,8 +273,13 @@ added_records() {
     awk '
         function trim(s) { sub(/^[[:space:]]+/, "", s); sub(/[[:space:]]+$/, "", s); return s }
         function flush() { if (pr != "") printf "%s\t%s\n", pr, (cls == "" ? "-" : cls) }
-        /^pr:/      { flush(); pr = trim(substr($0, 4)); cls = ""; next }
-        /^classes:/ { if (pr != "") { c = trim(substr($0, 9)); cls = (cls == "" ? c : cls ", " c) } next }
+        # Machine fields are matched after stripping leading whitespace: a row
+        # authored inside list context arrives indented, and an indented `pr:`
+        # must still name its PR (the #899 find — three consecutive PRs authored
+        # an indented row before this tolerated it).
+        { line = $0; sub(/^[[:space:]]+/, "", line) }
+        /^pr:/      { flush(); pr = trim(substr(line, 4)); cls = ""; next }
+        /^classes:/ { if (pr != "") { c = trim(substr(line, 10)); cls = (cls == "" ? c : cls ", " c) } next }
         { next }
         END { flush() }
     ' "$ADDED_LINES"
