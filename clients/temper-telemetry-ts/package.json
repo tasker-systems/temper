@@ -18,7 +18,7 @@
     "directory": "clients/temper-telemetry-ts"
   },
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com/tasker-systems"
+    "registry": "https://registry.npmjs.org"
   },
   "scripts": {
     "build": "tsc",
