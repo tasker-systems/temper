@@ -49,6 +49,13 @@ understanding. The conceptual walkthrough is at
   — when to store structured data as a data artifact instead of fenced JSON in a resource body,
   how to declare a shape, and what enforcement modes mean.
 
+## Uploading binary files
+
+- **[Blob uploads — surfaces, staged lifecycle, limits](../concepts/blob-uploads.md)** —
+  how files become blobs: the CLI/API/MCP doors, automatic segmentation above the
+  single-request threshold, size and media-type limits, and what happens to uploads that
+  never finish.
+
 ## Deleting binary blobs
 
 - **[Deleting a blob — custody, the ledger, and bytes](../concepts/blob-delete-and-erasure.md)**
