@@ -11,6 +11,17 @@ concurrency:
   group: release-tag
   cancel-in-progress: false
 
+# The ceiling for everything this workflow and its CALLED workflow may request: a nested
+# workflow's job permissions are capped by the caller's declaration here, never widened by
+# the callee's own blocks (the v0.5.0 tag run startup-failed because the publish jobs'
+# `packages: write` resolved against this file's absent declaration as `packages: none`).
+# Each job below and in release.yml narrows this to what it uses.
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+  attestations: write
+
 jobs:
   tag:
     name: Create release tag
