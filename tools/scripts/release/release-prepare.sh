@@ -269,6 +269,16 @@ fi
 rm -f "$REGISTER_TMP"
 
 # ---------------------------------------------------------------------------
+# Regenerate the version-restaled artifacts
+# ---------------------------------------------------------------------------
+# The bump changes openapi.json's info.version and stamps the generated client
+# cores — CI's drift gates red on the release PR unless the restale is
+# committed. Needs the Docker daemon (the py/rb generators); fails loudly
+# without it. The 0.5.0 and 0.5.1 cuts both forgot this step by hand.
+log_section "Regenerating version-restaled artifacts"
+cargo make openapi
+
+# ---------------------------------------------------------------------------
 # Sanity check on the bumped tree
 # ---------------------------------------------------------------------------
 log_section "Sanity check (cargo check)"
