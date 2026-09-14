@@ -14,6 +14,17 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 
 ## Since v0.5.0 — unreleased
 
+- **This release — the 0.5.1 fleet alignment: VERSION 0.5.0 → 0.5.1 across crates, packages, and clients**
+  The release train's own wire delta is none: version fields and the generated
+  cores re-stale with the bump (the D-S3 baseline — no shape movement); the
+  P floor rides the additive rows already in this window. The release exists to
+  restore the attestation chain (the v0.5.0 predicate names the tag-push door's
+  entry) and to carry the public-registry lanes' first publishes.
+pr: self
+classes: additive
+surfaces: http, clients
+status: signal-only
+
 - **The npm manifests' publishConfig points at the public registry**
   Completes the public-registry flip: `publishConfig.registry` still named
   `npm.pkg.github.com` in both TS manifests, so every `npm publish` inside those

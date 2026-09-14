@@ -233,6 +233,42 @@ log_section "Bumping versions"
 "${SCRIPT_DIR}/update-versions.sh" ${UPDATE_ARGS}
 
 # ---------------------------------------------------------------------------
+# The release's own declaration row
+# ---------------------------------------------------------------------------
+# A release PR touches every version site — wire-touched paths by the
+# crosscheck's definition — and the gate demands a row from every wire-touched
+# PR. The row is the release's: version-only restale, additive (the D-S3
+# baseline — no shape movement), pr: self (the number is unknowable until the
+# PR exists). Authored here so no release lands on the operator's memory of
+# the crosscheck's failure (the 0.5.0 and 0.5.1 cuts both needed a hand-added
+# row before this landed).
+REGISTER_TMP="$(mktemp)"
+cat > "$REGISTER_TMP" <<ROW
+- **This release — the ${NEXT_CORE_VERSION} fleet alignment: VERSION ${CURRENT_CORE_VERSION} → ${NEXT_CORE_VERSION} across crates, packages, and clients**
+  The release train's own wire delta is none: version fields and the generated
+  cores re-stale with the bump (the D-S3 baseline — no shape movement); the
+  P floor rides the additive rows already in this window.
+pr: self
+classes: additive
+surfaces: http, clients
+status: signal-only
+ROW
+if grep -q "This release — the ${NEXT_CORE_VERSION} fleet alignment" "$REGISTER_FILE"; then
+    log_info "Register already carries this release's row"
+else
+    WINDOW_LINE="$(grep -n "^## Since v${CURRENT_CORE_VERSION}" "$REGISTER_FILE" | head -1 | cut -d: -f1)"
+    if [ -n "$WINDOW_LINE" ]; then
+        awk -v n="$WINDOW_LINE" 'NR==n {print; while ((getline r < rowfile) > 0) print r; next} {print}' \
+            rowfile="$REGISTER_TMP" "$REGISTER_FILE" > "$REGISTER_FILE.tmp" \
+            && mv "$REGISTER_FILE.tmp" "$REGISTER_FILE"
+    else
+        { printf '\n## Since %s — unreleased\n\n' "$CURRENT_CORE_VERSION"; cat "$REGISTER_TMP"; } >> "$REGISTER_FILE"
+    fi
+    echo "==> Added the release's register row under the ${CURRENT_CORE_VERSION} window"
+fi
+rm -f "$REGISTER_TMP"
+
+# ---------------------------------------------------------------------------
 # Sanity check on the bumped tree
 # ---------------------------------------------------------------------------
 log_section "Sanity check (cargo check)"
