@@ -65,11 +65,11 @@ for d in "${BOTH_DIRS[@]}"; do
     pkg="@tasker-systems/$(basename "$d")"
     grep -q "npm view ${pkg}@9.9.9 version" "$CALLS_GOOD" \
         || fail "the duplicate probe never ran for ${pkg}: $(cat "$CALLS_GOOD")"
-    grep -q "npm publish --no-fund" "$CALLS_GOOD" \
+    grep -q "npm publish --access public" "$CALLS_GOOD" \
         || fail "${pkg} never reached publish: $(cat "$CALLS_GOOD")"
 done
 VIEW_LINE=$(grep -n "view @tasker-systems/temper-ts@" "$CALLS_GOOD" | head -1 | cut -d: -f1)
-PUBLISH_LINE=$(grep -n "publish --no-fund" "$CALLS_GOOD" | head -1 | cut -d: -f1)
+PUBLISH_LINE=$(grep -n "publish --access public" "$CALLS_GOOD" | head -1 | cut -d: -f1)
 [ "$VIEW_LINE" -lt "$PUBLISH_LINE" ] \
     || fail "publish ran before the duplicate probe — the probe is decorative: $(cat "$CALLS_GOOD")"
 
@@ -133,7 +133,7 @@ CALLS_DRY="$TMP/calls-dry"
     || fail "a dry-run failed: $(cat "$TMP/dry.log")"
 grep -q "npm publish --dry-run" "$CALLS_DRY" \
     || fail "the dry-run never packed: $(cat "$CALLS_DRY")"
-grep -q "npm publish --no-fund" "$CALLS_DRY" \
+grep -q "npm publish --access public" "$CALLS_DRY" \
     && fail "the dry-run performed a real publish: $(cat "$CALLS_DRY")"
 grep -q "would publish" "$TMP/dry.log" \
     || fail "the dry-run did not say what it would do: $(cat "$TMP/dry.log")"

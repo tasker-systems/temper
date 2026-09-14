@@ -61,6 +61,7 @@ source "${SCRIPT_DIR}/lib/common.sh"
 # Parse arguments
 # ---------------------------------------------------------------------------
 MINOR=false
+MAJOR=false
 OVERRIDE_BLOCKER=false
 REGISTER_FILE="${REPO_ROOT}/RELEASE_REGISTER.md"
 RB_RELEASE=false
@@ -74,6 +75,7 @@ DETECT_ARGS=()
 while [[ $# -gt 0 ]]; do
     case $1 in
         --minor)            MINOR=true; shift ;;
+        --major)            MAJOR=true; shift ;;
         --override-blocker) OVERRIDE_BLOCKER=true; shift ;;
         --register)         REGISTER_FILE="$2"; shift 2 ;;
         --register=*)       REGISTER_FILE="${1#*=}"; shift ;;
@@ -240,7 +242,9 @@ if [[ "$CORE_CHANGED" == "true" || "$WIRE_CHANGED" == "true" || "$CLIENTS_CHANGE
     FORCING=true
 fi
 
-if [[ "$MINOR" == "true" ]]; then
+if [[ "$MAJOR" == "true" ]]; then
+    NEXT_CORE_VERSION=$(bump_major "$CURRENT_CORE_VERSION")
+elif [[ "$MINOR" == "true" ]]; then
     NEXT_CORE_VERSION=$(bump_minor "$CURRENT_CORE_VERSION")
 elif [[ "$FORCING" == "true" ]]; then
     NEXT_CORE_VERSION=$(bump_patch "$CURRENT_CORE_VERSION")

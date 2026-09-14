@@ -41,6 +41,7 @@ while [[ $# -gt 0 ]]; do
         --dry-run)          DRY_RUN=true; shift ;;
         --yes|-y)           YES=true; shift ;;
         --minor)            CALC_ARGS+=(--minor); shift ;;
+        --major)            CALC_ARGS+=(--major); shift ;;
         --override-blocker) CALC_ARGS+=(--override-blocker); shift ;;
         --rb)               CALC_ARGS+=(--rb); shift ;;
         --py)               CALC_ARGS+=(--py); shift ;;

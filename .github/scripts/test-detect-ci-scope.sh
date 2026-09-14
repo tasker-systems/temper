@@ -954,8 +954,13 @@ assert_scoped_jobs_are_gated_and_validated() {
         output="run-${job}"
 
         # link 1: the detector emits the flag at all.
+        # No `grep -q` here: -q exits at the first match, the detector's
+        # remaining output lines hit the closed pipe, and under the harness's
+        # `set -o pipefail` the matched pipeline reads as a failure — a race
+        # that lands as an intermittent red on this exact assertion. Letting
+        # grep drain the output (no -q, matches discarded) is deterministic.
         if bash "$DETECT_SCRIPT" --stdin </dev/null 2>/dev/null \
-            | grep -q "^$(echo "$output" | tr 'a-z-' 'A-Z_')="; then
+            | grep "^$(echo "$output" | tr 'a-z-' 'A-Z_')=" > /dev/null; then
             echo "  PASS: detect-ci-scope emits ${output}"
             PASS=$((PASS + 1))
         else
