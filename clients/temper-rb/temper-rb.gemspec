@@ -24,7 +24,7 @@ Gem::Specification.new do |spec|
   # GitHub Packages RubyGems — the push host this gem may ever be pushed to
   # (tools/scripts/release/publish-ruby.sh). Publishing to rubygems.org is a
   # future decision this gemspec does not preclude, but does not point at.
-  spec.metadata['allowed_push_host']     = 'https://rubygems.pkg.github.com/tasker-systems'
+  spec.metadata['allowed_push_host']     = 'https://rubygems.org'
   spec.metadata['rubygems_mfa_required'] = 'true'
 
   spec.files = Dir['lib/**/*.rb', 'README.md', 'LICENSE'].select { |f| File.file?(f) }

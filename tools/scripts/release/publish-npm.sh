@@ -1,26 +1,32 @@
 #!/usr/bin/env bash
 # tools/scripts/release/publish-npm.sh
 #
-# Build and publish the scoped TS client packages to GitHub Packages npm.
+# Build and publish the scoped TS client packages to the public npm registry
+# (registry.npmjs.org).
 #
 # Usage:
 #   ./tools/scripts/release/publish-npm.sh VERSION [--dry-run] [--package DIR]...
 #
 # Default packages: clients/temper-ts and clients/temper-telemetry-ts.
 #
-# GitHub Packages' npm registry requires scoped names, so a package whose
-# manifest name is not @tasker-systems/* is refused — publishing an unscoped
-# name would target a different registry entirely.
+# The package names are scoped (@tasker-systems/*) and published with
+# --access public; a manifest name outside that scope would be a different
+# package entirely and is refused here.
 #
 # Duplicate handling is the house pattern (loud, idempotent skip — the same
-# behavior as publish-ruby.sh's "already published" and create-github-release.sh's
-# "already exists"): the `npm view` probe decides, and a re-run of a release for
-# an existing tag skips rather than failing the whole release. GitHub Packages'
-# own duplicate-push semantics are NOT relied on; the probe is load-bearing.
+# behavior as publish-ruby.sh's versions-API probe and
+# create-github-release.sh's "already exists"): the `npm view` probe decides,
+# and a re-run of a release for an existing tag skips rather than failing the
+# whole release. The probe is unauthenticated on the public registry.
 #
-# Auth: both `npm view` and `npm publish` against npm.pkg.github.com need a
-# token. CI supplies NODE_AUTH_TOKEN and an ~/.npmrc carrying
-# `//npm.pkg.github.com/:_authToken`; locally, dry-run skips the requirement.
+# Auth: npm trusted publishing. In CI, `npm publish --provenance` authenticates
+# via the job's OIDC identity token (id-token: write) — no NPM_TOKEN secret
+# exists or is wanted. The trusted publisher is registered on npmjs.com
+# against this repository and the CHAIN'S ENTRY workflow (release-tag.yml —
+# the claim names the entry, not the job's file). Locally, `npm login` plus a
+# plain `npm publish --access public` is the bootstrap path for claiming a new
+# package name before its trusted publisher is registered; this script's
+# provenance flag is CI-only.
 
 set -euo pipefail
 
@@ -45,8 +51,11 @@ fi
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 [[ ${#PACKAGES[@]} -gt 0 ]] || PACKAGES=("clients/temper-ts" "clients/temper-telemetry-ts")
 
-if [[ "$DRY_RUN" != "true" && -z "${GITHUB_ACTIONS:-}" ]]; then
-    : "${NODE_AUTH_TOKEN:?NODE_AUTH_TOKEN is required for GitHub Packages publishing}"
+# Provenance attests the publish via the job's OIDC identity — CI-only. A local
+# run (the name-claiming bootstrap) publishes under the operator's own login.
+PUBLISH_FLAGS=(--access public --no-fund --no-audit)
+if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+    PUBLISH_FLAGS+=(--provenance)
 fi
 
 FAILED=0
@@ -56,8 +65,8 @@ for DIR in "${PACKAGES[@]}"; do
 
     NAME=$(grep -m1 '"name"' "${PKG_DIR}/package.json" | sed -E 's/.*"name": "([^"]+)".*/\1/')
     if [[ "$NAME" != @tasker-systems/* ]]; then
-        echo "ERROR: ${DIR} manifest name is '${NAME}' — GitHub Packages npm requires an" >&2
-        echo "       @tasker-systems/* scope. Scope the package first." >&2
+        echo "ERROR: ${DIR} manifest name is '${NAME}' — these packages publish" >&2
+        echo "       under the @tasker-systems/* scope. Scope the package first." >&2
         exit 1
     fi
 
@@ -87,11 +96,11 @@ for DIR in "${PACKAGES[@]}"; do
 
     if [[ "$DRY_RUN" == "true" ]]; then
         echo "==> [dry-run] would publish ${NAME}@${VERSION}"
-        (cd "$PKG_DIR" && npm publish --dry-run --no-fund --no-audit) | head -20
+        (cd "$PKG_DIR" && npm publish --dry-run "${PUBLISH_FLAGS[@]}") | head -20
         continue
     fi
 
-    if (cd "$PKG_DIR" && npm publish --no-fund --no-audit); then
+    if (cd "$PKG_DIR" && npm publish "${PUBLISH_FLAGS[@]}"); then
         echo "==> Published ${NAME}@${VERSION}"
     else
         echo "ERROR: npm publish failed for ${NAME}@${VERSION}" >&2

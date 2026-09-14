@@ -25,40 +25,43 @@ deploying are decoupled by design (see
 
 ## Installing the clients
 
-Client packages live on **GitHub** only — GitHub Packages for npm and RubyGems,
-GitHub Release assets for Python. There is no pypi / rubygems.org / npm-registry /
-crates.io presence yet; nothing here precludes one later. Consumers authenticate to
-GitHub Packages with a fine-grained PAT (or `GITHUB_TOKEN`) carrying `read:packages`
-— Packages installs need a token **even though the repository is public**. The
-Python path needs no token at all.
+Client packages publish to the **public registries** — rubygems.org for the gem,
+registry.npmjs.org for the TypeScript packages, GitHub Release assets for Python.
+All three paths are token-free for consumers on a public repository; no
+`read:packages` PAT, no `.npmrc` stanza, no Bundler credentials.
 
-**temper-ts / temper-telemetry-ts (npm)** — `~/.npmrc`:
+**temper-ts / temper-telemetry-ts (npm)** — `npm install @tasker-systems/temper-ts`
+(telemetry-ts likewise), or pinned: `npm install @tasker-systems/temper-ts@0.5.1`.
 
-```
-@tasker-systems:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=<TOKEN>
-```
-
-then `npm install @tasker-systems/temper-ts@0.4.1` (telemetry-ts likewise).
-
-**temper-rb (RubyGems)** — a `Gemfile` with a scoped source and credentials:
+**temper-rb (RubyGems)** — `gem install temper-rb`, or a plain `Gemfile` line:
 
 ```
-source "https://rubygems.pkg.github.com/tasker-systems" do
-  gem "temper-rb", "0.4.1"
-end
+gem "temper-rb", "0.5.1"
 ```
-
-with `bundle config set --global https://rubygems.pkg.github.com <USERNAME>:<TOKEN>`.
 
 **temper-py (Python)** — a PEP 508 direct reference in `pyproject.toml`; the wheel
 is a Release asset, so no token and no index:
 
 ```
 dependencies = [
-  "temper-py @ https://github.com/tasker-systems/temper/releases/download/v0.4.1/temper_py-0.4.1-py3-none-any.whl",
+  "temper-py @ https://github.com/tasker-systems/temper/releases/download/v0.5.1/temper_py-0.5.1-py3-none-any.whl",
 ]
 ```
+
+(The npmjs/RubyGems examples above are token-free; the GitHub Packages copies
+published before the public flip remain on their hosts but are no longer the
+documented path — and no new versions land there.)
+
+**Publishing-side auth** (maintainers): both registry lanes authenticate via OIDC
+trusted publishing — RubyGems through `rubygems/configure-rubygems-credentials`
+and npm through `npm publish --provenance` — with the trusted publisher on each
+host registered against **`release-tag.yml`** (the chain's entry workflow; the
+identity claim names the entry, never the job's file). No registry API key
+exists as a repo secret. The first publish of a NEW package name on npm cannot
+be OIDC — npmjs.com only attaches trusted publishers to existing packages — so
+a new name is claimed once locally (`npm login`, then `npm publish --access
+public` in the package directory) and the trusted publisher is attached
+immediately after.
 
 ## Release checklist
 
