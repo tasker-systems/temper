@@ -1,6 +1,6 @@
 [package]
 name = "temper-api"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 description = "Axum HTTP server implementing the temper cloud API"
 # Cargo auto-detects build.rs in the package root, so this is not required — it is here
