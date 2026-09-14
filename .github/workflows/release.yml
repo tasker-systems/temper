@@ -179,8 +179,8 @@ jobs:
   # idempotent. Auth is RubyGems trusted publishing: the credentials action
   # mints short-lived credentials from the job's OIDC identity token
   # (id-token: write) — no API key secret exists. The trusted publisher on
-  # rubygems.org names the CHAIN'S ENTRY workflow (release-tag.yml), because
-  # the identity claim names the entry, not the job's file.
+  # rubygems.org names THIS workflow (release.yml — the identity claim names
+  # the job's own file, not the chain's entry).
   publish-ruby-client:
     name: Publish Ruby Client
     needs: determine-version
