@@ -18,7 +18,6 @@ concurrency:
 # Each job below and in release.yml narrows this to what it uses.
 permissions:
   contents: write
-  packages: write
   id-token: write
   attestations: write
 

@@ -12,6 +12,21 @@ user-visibility · release relevance. Beneath the citation line, machine fields,
 `schema`, `internal` · `status:` one of `open`, `signal-only`, `blocked:<release-class>`,
 `satisfied`.
 
+## Since v0.5.0 — unreleased
+
+- **The client publish lanes move to the public registries**
+  rubygems.org for the gem, registry.npmjs.org for the TS packages — token-free for
+  consumers (GitHub Packages gates reads even on a public repo, which walled every other
+  repository's CI off from the packages). Publish-side auth is OIDC trusted publishing on
+  both hosts, keyed to the chain's entry workflow; the GitHub Packages API-key machinery
+  and its refusal-text classifier are retired with the lanes they served. No client code
+  changes — distribution only. v0.5.0's GitHub Packages artifacts remain on their hosts,
+  frozen.
+pr: self
+classes: additive
+surfaces: clients
+status: signal-only
+
 ## Since v0.4.0 — unreleased
 
 - **This release — the 0.5.0 fleet alignment: VERSION 0.4.0 → 0.5.0 across crates, packages, and clients**

@@ -27,7 +27,6 @@ concurrency:
 # declaration is the cap — release-tag.yml declares the same union.
 permissions:
   contents: write
-  packages: write
   id-token: write
   attestations: write
 
@@ -146,10 +145,12 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-  # The TS clients publish to GitHub Packages npm (@tasker-systems/* scope).
-  # The script's duplicate probe decides BEFORE anything builds or publishes,
-  # so re-cutting an existing tag skips loudly rather than failing or
-  # overwriting (tools/scripts/release/publish-npm.sh header).
+  # The TS clients publish to the public npm registry (@tasker-systems/* scope,
+  # --access public). The script's duplicate probe decides BEFORE anything
+  # builds or publishes, so re-cutting an existing tag skips loudly rather
+  # than failing or overwriting (tools/scripts/release/publish-npm.sh header).
+  # Auth is npm trusted publishing: --provenance attests via the job's OIDC
+  # identity token (id-token: write) — no registry secret exists.
   publish-npm-clients:
     name: Publish npm Clients
     needs: determine-version
@@ -157,9 +158,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      packages: write
-    env:
-      NODE_AUTH_TOKEN: ${{ github.token }}
+      id-token: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -168,21 +167,20 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "24"
-
-      - name: Authenticate to GitHub Packages npm
-        run: |
-          auth_dir="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
-          printf '//npm.pkg.github.com/:_authToken=%s\n' "$NODE_AUTH_TOKEN" > "$auth_dir"
+          registry-url: "https://registry.npmjs.org"
 
       - name: Publish the TS clients
         env:
           VERSION: ${{ needs.determine-version.outputs.version }}
         run: bash tools/scripts/release/publish-npm.sh "$VERSION"
 
-  # The Ruby gem publishes to GitHub Packages RubyGems. There is no versions
-  # API on that host, so the publish script treats a duplicate-version push
-  # refusal as a loud idempotent skip (see its header) — re-cutting an
-  # existing tag stays safe here the same way it is for npm.
+  # The Ruby gem publishes to rubygems.org. The script probes the host's
+  # versions API before pushing, so a re-cut release skips loudly and stays
+  # idempotent. Auth is RubyGems trusted publishing: the credentials action
+  # mints short-lived credentials from the job's OIDC identity token
+  # (id-token: write) — no API key secret exists. The trusted publisher on
+  # rubygems.org names the CHAIN'S ENTRY workflow (release-tag.yml), because
+  # the identity claim names the entry, not the job's file.
   publish-ruby-client:
     name: Publish Ruby Client
     needs: determine-version
@@ -190,9 +188,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      packages: write
-    env:
-      GITHUB_TOKEN: ${{ github.token }}
+      id-token: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -202,6 +198,9 @@ jobs:
         with:
           # .ruby-version / mise.toml is 3.4.10.
           ruby-version: "3.4"
+
+      - name: Configure RubyGems credentials (trusted publishing)
+        uses: rubygems/configure-rubygems-credentials@v1.0.0
 
       - name: Publish the gem
         env:

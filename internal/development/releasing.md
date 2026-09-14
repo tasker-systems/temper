@@ -121,6 +121,21 @@ signature over the digest of the **exact object each one just compared** — the
 manifest's for `--verify --online`, the archive's for `temper update`. That is
 a real property, correctly enforced.
 
+> **v0.5.0 is the one release whose attestation the shipped verifier refuses —
+> by design.** The v0.5.0 tag was pushed directly onto `main` (immediately after
+> the publish-lanes permission fix, #897), so `release.yml`'s own tag-push
+> trigger was the chain's entry and the predicate names
+> `.github/workflows/release.yml` — which
+> `verify_predicate_workflow_path` refuses (`release-tag.yml` is the required
+> entry). Every `temper --verify --online` and `temper update` against a
+> v0.5.0 archive fails, loudly; the escape hatch (install.sh's hash
+> verification) works. **v0.5.1 and later release through the release-tag chain
+> and verify clean.** The door that produced this remains live and fail-closed:
+> pushing a `v*` tag fires `release.yml` directly whether or not the chain made
+> the tag, and such attestations always name `release.yml`. Treat the tag-push
+> and `workflow_dispatch` doors as recovery paths — the release flow is the
+> VERSION-push chain.
+
 > **Why `refs/heads/main`, not `refs/tags/{tag}`:** the release chain is
 > branch-triggered by construction. `release-tag.yml` fires on a `VERSION`-file
 > push to `main`, creates and pushes the tag with `GITHUB_TOKEN`, then calls
