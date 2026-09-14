@@ -55,8 +55,11 @@ documented path — and no new versions land there.)
 **Publishing-side auth** (maintainers): both registry lanes authenticate via OIDC
 trusted publishing — RubyGems through `rubygems/configure-rubygems-credentials`
 and npm through `npm publish --provenance` — with the trusted publisher on each
-host registered against **`release-tag.yml`** (the chain's entry workflow; the
-identity claim names the entry, never the job's file). No registry API key
+host registered against **`release.yml`** (the workflow whose job performs the
+push — the identity claim names the job's own workflow file, even when that
+workflow was called from the `release-tag.yml` chain; a publisher registered
+against the entry workflow is silently unauthorized at push: "You are not
+allowed to push this gem"). No registry API key
 exists as a repo secret. The first publish of a NEW package name on npm cannot
 be OIDC — npmjs.com only attaches trusted publishers to existing packages — so
 a new name is claimed once locally (`npm login`, then `npm publish --access
