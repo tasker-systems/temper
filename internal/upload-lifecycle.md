@@ -1,339 +1,65 @@
 # Upload Lifecycle
 
-> **Status (2026-09-03): historical.** The TypeScript blob upload/extract pipeline this
-> document describes has been removed from the codebase — its `kb_blob_files` table is
-> dropped by migration `20260903000020_kb_blobs.sql` (it had zero production readers).
-> The blob flow now lives in the `kb_blobs` substrate (`kb_blobs` + `kb_blob_homes`,
-> hash-unique, bytes external at the content-addressed pathname), surfaced through
-> `/api/blobs`, `temper blob …`, and the MCP `blob_read`/`blob_manage` tools — see
-> `specs/2026-09-01-binary-blobs-design.md` in temper-artifacts and the
-> `BLOB_*` vocabulary in `docs/playbooks/self-host-temper.md`. The Vercel project
-> topology below is still accurate; the `blob_files` schema, statuses, and TS endpoints
-> are not.
-
-The upload lifecycle describes how files flow from an authenticated client through the temper-cloud API into searchable, version-tracked knowledge base chunks with vector embeddings.
-
-## Architecture Overview
-
-temper-cloud runs two runtimes in a single Vercel project. That project is named
-**`temper-cloud`** (`prj_ra0MmQYksfePnXvHiTiOGoKigQvY`) and is **not** the project
-serving `temperkb.io` — that hostname belongs to the **`temper-ui`** project
-(`prj_UFUosi5qWyG7Vz830I0pOUkXyynK`), which reverse-proxies `/api`, `/mcp`, `/oauth`
-and `/.well-known` to `API_BASE_URL`. Note also that the Vercel *project* named
-`temper-cloud` is a different thing from the TypeScript *package* of the same name:
-
-- **Rust (axum)** handles the core API: resource CRUD, search, profiles, teams, events
-- **TypeScript (Node.js)** handles file upload and the async processing workflow
-
-Both runtimes share the same JWT authentication (EdDSA via Auth0 JWKS).[^auth] Vercel's file-based routing auto-detects the runtime from `api/axum.rs` (Rust) and `api/upload.ts` (TypeScript).
-
-[^auth]: Auth migrated from Neon Auth (early development) to Auth0 for the production CLI OAuth device flow.
-
-```
-                          temperkb.io
-                    ┌─────────────────────┐
-                    │    Vercel Router     │
-                    │  (file-based detect) │
-                    └────┬───────────┬─────┘
-                         │           │
-              ┌──────────▼──┐   ┌────▼──────────┐
-              │  Rust/axum  │   │  TypeScript    │
-              │             │   │  (Node.js)     │
-              │ /api/health │   │ /api/upload    │
-              │ /api/resources│ │                │
-              │ /api/search │   │ /api/workflows/│
-              │ /api/profile│   │  process-upload│
-              │ /api/events │   │                │
-              └──────┬──────┘   └───────┬────────┘
-                     │                  │
-                     └──────┬───────────┘
-                            │
-                     ┌──────▼──────┐
-                     │  Neon       │
-                     │  PostgreSQL │
-                     │  + pgvector │
-                     └─────────────┘
-```
-
-![Upload Sequence Diagram](../docs/diagrams/upload-sequence.svg)
-
-## The Resource-First Upload Flow
-
-Uploading a file is a two-step process. The resource record is created first (establishing context, document type, and ownership), then the file is uploaded referencing that resource.
-
-This separation means the resource exists as a first-class entity in the knowledge base before any file processing occurs. The client abstracts this into a single operation.
-
-### Step 1: Create Resource (Rust)
-
-```
-POST /api/resources
-Authorization: Bearer <jwt>
-Content-Type: application/json
-
-{
-  "kb_context_id": "...",
-  "kb_doc_type_id": "...",
-  "uri": "vault://notes/architecture.md",
-  "title": "Architecture Notes",
-  "mimetype": "text/markdown"
-}
-
-→ 201 { "id": "<resource_id>", ... }
-```
-
-The Rust handler:
-1. Verifies the JWT (EdDSA, Auth0 JWKS)
-2. Resolves the authenticated profile from `kb_profiles`
-3. Generates a UUIDv7 resource ID
-4. Inserts into `resources` with the profile as originator and owner
-5. Returns the full resource record
-
-### Step 2: Upload File (TypeScript)
-
-```
-POST /api/upload
-Authorization: Bearer <jwt>
-Content-Type: multipart/form-data
-
-file: <binary>
-resource_id: <uuid from step 1>
-
-→ 202 { "blob_file_id": "...", "status": "pending" }
-```
-
-The TypeScript handler:
-1. Verifies the same JWT (jose library, same JWKS endpoint)
-2. Resolves the profile via `auth_provider_sub`
-3. Checks resource visibility via `resources_visible_to()` SQL function
-4. Uploads the file to **Vercel Blob** at path `{profileId}/{resourceId}/{filename}`
-5. Inserts a `blob_files` record with status `pending`
-6. Triggers the processing workflow (durable, async)
-7. Returns 202 immediately — processing continues in the background
-
-### Step 3: Async Processing Workflow
-
-The workflow runs as a Vercel durable function with four steps. Each step is independently retriable via the `"use step"` directive.
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                   processUpload()                       │
-│                  "use workflow"                          │
-│                                                         │
-│  ┌──────────┐   ┌──────────┐   ┌─────────┐   ┌──────┐ │
-│  │ Extract  │──▶│  Chunk   │──▶│  Embed  │──▶│ Store│ │
-│  │          │   │          │   │         │   │      │ │
-│  │kreuzberg │   │ markdown │   │bge-base │   │  pg  │ │
-│  │ 91+ fmt  │   │  headers │   │ en v1.5 │   │vector│ │
-│  └──────────┘   └──────────┘   └─────────┘   └──────┘ │
-│                                                         │
-│  blob_files.status:                                     │
-│  pending → processing ─────────────────────→ processed  │
-│                    └─── on error ──────────→ failed     │
-└─────────────────────────────────────────────────────────┘
-```
-
-![Upload Data Flow](../docs/diagrams/upload-data-flow.svg)
-
-## Processing Pipeline Detail
-
-### Extract
-
-**Source:** `packages/temper-cloud/src/workflow/extract.ts`
-
-The extract step downloads the file from Vercel Blob and converts it to plain text using [kreuzberg-node](https://www.npmjs.com/package/@kreuzberg/node), a Rust-native document extraction library with Node.js bindings via napi-rs.
-
-Verified formats (via integration tests):
-
-| Format | Extension | Notes |
-|--------|-----------|-------|
-| Markdown | `.md` | Full text preserved |
-| Plain text | `.txt` | Passthrough |
-| PDF | `.pdf` | Text layer extraction |
-| Word | `.docx` | Headers and body text |
-| SVG | `.svg` | Embedded text elements |
-| Images | `.png`, `.jpg` | Requires Tesseract (optional) |
-
-kreuzberg claims 91+ format support. Images with text require Tesseract OCR as an optional system dependency — not available on Vercel serverless. Without Tesseract, image uploads receive `status: "failed"`.
-
-**Status transition:** `pending` → `processing`
-
-### Chunk
-
-**Source:** `packages/temper-cloud/src/workflow/chunk.ts`
-
-Text is split into chunks along Markdown header boundaries. The chunking algorithm:
-
-1. Scans line-by-line for Markdown headers (`# ` through `###### `)
-2. Maintains a header stack tracking nesting depth
-3. Flushes accumulated content when a new header is encountered
-4. Builds a `header_path` breadcrumb from the header stack (e.g., `"Getting Started > Installation"`)
-5. Computes a SHA-256 `content_hash` for each chunk (used for deduplication and change detection)
-
-Plain text without headers produces a single chunk with an empty `header_path`.
-
-Each chunk carries:
-```typescript
-{
-  chunk_index: number,     // sequential, 0-based
-  header_path: string,     // "Parent > Child > Grandchild"
-  content: string,         // text between headers
-  content_hash: string     // SHA-256 hex digest
-}
-```
-
-### Embed
-
-**Source:** `packages/temper-cloud/src/workflow/embed.ts`
-
-Chunks are embedded into 768-dimensional vectors using [BAAI/bge-base-en-v1.5](https://huggingface.co/BAAI/bge-base-en-v1.5), a sentence embedding model optimized for retrieval.
-
-| Property | Value |
-|----------|-------|
-| Model | BAAI/bge-base-en-v1.5 |
-| Dimensions | 768 |
-| Runtime | ONNX (onnxruntime-node, CPU) |
-| Tokenizer | HuggingFace AutoTokenizer |
-| Max tokens | 512 |
-| Normalization | L2 (unit vectors, cosine-ready) |
-| Cache | `/tmp/temper-models/bge-base-en-v1.5/` |
-
-The embedding pipeline:
-1. **Tokenize** all chunk texts as a batch (padding + truncation to 512 tokens)
-2. **Infer** via ONNX session → `last_hidden_state` tensor (batch x seq_len x 768)
-3. **Mean pool** across tokens, respecting the attention mask (real tokens only)
-4. **L2 normalize** each vector to unit length
-
-The model is downloaded from HuggingFace on first use and cached locally.
-
-### Store
-
-**Source:** `packages/temper-cloud/src/workflow/store.ts`
-
-The store step writes chunks and their embeddings to `kb_chunks` in PostgreSQL with version management.
-
-**Version lifecycle:**
-1. Query the current max version for this resource
-2. Compute `next_version = max(version) + 1`
-3. Mark all existing chunks as `is_current = false` where `version < next_version`
-4. Insert new chunks with `version = next_version` and `is_current = true`
-5. Upsert on `(resource_id, chunk_index, version)` composite unique constraint
-
-This means re-uploading the same resource creates a new version. Old chunks remain in the database (for history) but are excluded from search via the `is_current` flag.
-
-**Status transition:** → `processed`
-
-## Choosing an ingest surface: CLI vs MCP (bulk vs interactive)
-
-The two write surfaces split on **where embeddings are computed**, which determines how large content behaves:
-
-- **CLI (`temper resource create` / import → `/api/ingest`)** computes embeddings **client-side** and ships precomputed vectors (`chunks_packed`); the server only persists. Embedding cost runs on the client's (fast) CPU, so large content stays quick.
-- **MCP (`create_resource`) and raw HTTP ingest with `content` only** have no client-side model, so the server embeds. Today that embed runs **synchronously inside the serverless request** (issue [#299](https://github.com/tasker-systems/temper/issues/299)), so for large bodies it is slow and, on a large enough input, can brush the function timeout.
-
-**Interim operator guidance (permanent):** route **bulk / large imports through the CLI**, and use MCP for **interactive, incremental** writes where per-call embed cost is negligible. This holds regardless of the async work below and is good practice permanently — the CLI is the "bring your own vectors" fast path.
-
-The async-embedding work (issue #299, design spec `temper-artifacts:specs/2026-07-07-async-embedding-off-request-path-design.md`) moves the server-side embed **off the request path**: the create returns as soon as chunk text is persisted (immediately FTS-searchable), and the vector is backfilled by a queued job (vector-searchable shortly after). The create return contract stays uniform — no polling, no alternate return shape. Once that lands, large MCP/HTTP creates return promptly too; the CLI guidance above still stands as the lowest-latency path for bulk work.
-
-## Database Schema
-
-### blob_files
-
-Tracks uploaded files and their processing status.
-
-```sql
-CREATE TABLE blob_files (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    profile_id      UUID NOT NULL REFERENCES kb_profiles(id),
-    resource_id     UUID REFERENCES resources(id),
-    blob_url        TEXT NOT NULL,
-    pathname        TEXT NOT NULL,
-    content_type    TEXT,
-    file_size_bytes BIGINT,
-    status          TEXT NOT NULL DEFAULT 'pending'
-                    CHECK (status IN ('pending', 'processing', 'processed', 'failed')),
-    error_message   TEXT,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-```
-
-### kb_chunks
-
-Stores chunked content with vector embeddings, versioned per resource.
-
-```sql
-CREATE TABLE kb_chunks (
-    id              UUID PRIMARY KEY,
-    resource_id     UUID NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
-    chunk_index     INT NOT NULL,
-    version         INT NOT NULL DEFAULT 1,
-    header_path     TEXT NOT NULL DEFAULT '',
-    content         TEXT NOT NULL,
-    content_hash    VARCHAR(64) NOT NULL,
-    embedding       vector(768) NOT NULL,
-    is_current      BOOLEAN NOT NULL DEFAULT true,
-    created         TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE(resource_id, chunk_index, version)
-);
-```
-
-The HNSW index enables fast approximate nearest neighbor search over current chunks:
-
-```sql
-CREATE INDEX idx_chunks_current_embedding ON kb_chunks
-    USING hnsw(embedding vector_cosine_ops)
-    WITH (m = 16, ef_construction = 200)
-    WHERE is_current = true;
-```
-
-A convenience view filters to current chunks:
-
-```sql
-CREATE VIEW kb_current_chunks AS
-SELECT id, resource_id, chunk_index, version, header_path,
-       content, content_hash, embedding, created
-FROM kb_chunks
-WHERE is_current = true
-ORDER BY resource_id, chunk_index;
-```
-
-## Authentication
-
-Both endpoints verify the same JWT:
-
-| Property | Value |
-|----------|-------|
-| Algorithm | EdDSA (Ed25519) |
-| Key source | JWKS endpoint (Auth0) |
-| Required claims | `sub`, `email` |
-| Profile resolution | `kb_profiles.auth_provider_sub = claims.sub` |
-| Resource authorization | `resources_visible_to(profile_id)` SQL function |
-
-The `resources_visible_to()` function returns resources the profile owns directly or has access to via team membership, along with the access level (`owner`, `vault`, `mutable`, `immutable`).
-
-## Environment Variables
-
-| Variable | Used by | Purpose |
-|----------|---------|---------|
-| `DATABASE_URL` | TypeScript | Neon PostgreSQL connection (HTTP driver) |
-| `BLOB_READ_WRITE_TOKEN` | TypeScript | Vercel Blob read/write access |
-| `JWKS_URL` | TypeScript | Remote JWKS endpoint for token verification |
-| `AUTH_ISSUER` | TypeScript | Expected JWT issuer claim |
-
-The Rust runtime reads equivalent configuration from its own environment (see `crates/temper-api`).
-
-## Client Integration (I5)
-
-The temper-client crate will abstract the two-step flow into a single operation:
-
-```
-client.add_resource(context, doctype, metadata, file)
-  → POST /api/resources      (Rust, create resource)
-  → POST /api/upload          (TypeScript, upload file)
-  → optionally poll for status
-```
-
-The client needs:
-- Typed Rust API client (using temper-core types) for the Rust endpoints
-- Multipart upload client with its own response type (`{ blob_file_id, status }`) for the TypeScript endpoint
-- Shared JWT token for both endpoints
-- Error handling for processing failures (`blob_files.status = "failed"`)
+How binary files flow into Temper: from an authenticated client through the staged-upload
+doors to a committed, content-addressed blob — and how committed blobs leave (the delete
+act, and erasure). This is the internal companion to the public docs
+([Blob uploads](../../docs/concepts/blob-uploads.md),
+[Deleting a blob](../../docs/concepts/blob-delete-and-erasure.md)) and to the
+self-host configuration ([BLOB_* knobs](../../docs/playbooks/self-host-temper.md)). The
+design spec of record is `temper-artifacts:specs/2026-09-01-binary-blobs-design.md`.
+
+> The TypeScript upload/extract/embed pipeline this page once described (the `blob_files`
+> table, `/api/upload`, the Vercel durable workflow) was removed; migration
+> `20260903000020_kb_blobs.sql` dropped its table. Git history keeps that document.
+
+## The pipeline
+
+**Commit** — a file's bytes become a blob homed in a context (or a map) the caller can
+author. One multipart call at or under `BLOB_SINGLE_REQUEST_MAX_BYTES` (4 MB, deliberately
+under the platform's request cap); beyond it, the segmented upload: begin, append
+(each segment's identity is the server's own sha256 of the bytes it receives), finalize
+(the whole-file sha256 echoed by the caller is the integrity check). Every failure leaves
+the upload resumable. The same doors serve API, MCP (`blob_read`/`blob_manage`), and CLI
+(`temper blob put` segments automatically).
+
+**Storage** — bytes live external to the database at a content-addressed pathname
+(`blob_pathname`); the `kb_blobs` row carries the hash, media type, home, and lifecycle.
+Hashes are unique per home (owner-scoped uniqueness), so re-committing identical bytes into
+a home resolves to the same logical content, while a strike of one row never touches
+another principal's identical bytes (custody, never bytes).
+
+**Reaping** — an upload that stalls between begin and finalize is abandoned state, and
+abandonment is left to a TTL reaper, never silently cleaned: `blob_reap_service` sweeps
+staged uploads untouched past `BLOB_UPLOAD_STAGING_TTL_SECONDS` (default 24 hours) on its
+cron, and every reap is recorded. Finalize success retires the staged rows; every failure
+keeps them resumable.
+
+**Custody and deletion** — a committed blob is struck by `DELETE /api/blobs/{id}` under the
+two-arm custody gate (delete standing over every live relation's resource peer, else the
+home custodian); already-struck and unknown ids read the same 404. Released bytes delete
+post-commit and are watched by the erasure fence. See
+[Deleting a blob](../../docs/concepts/blob-delete-and-erasure.md).
+
+**Erasure** — the act's blob arm is home-pure: every live row homed in the erased governed
+contexts is struck with the estate, whoever committed it (disclosed at commit time — the
+commit response carries the estate-scope disclosure); rows in ungoverned homes survive,
+named in the record. Bytes release only when no live record carries the same hash.
+
+## Configuration
+
+| Knob | Default | Purpose |
+|---|---|---|
+| `BLOB_ENABLED` | unset (enabled) | `false` closes the blob doors deliberately — fails closed even with credentials present; the MCP tools are not advertised |
+| `BLOB_MAX_BYTES` | 100 MB | per-blob cap |
+| `BLOB_CONTENT_TYPE_ALLOWLIST` | png, jpeg, webp, svg, gif, pdf | media types the doors admit |
+| `BLOB_SINGLE_REQUEST_MAX_BYTES` | 4 MB | above this the CLI segments automatically |
+| `BLOB_UPLOAD_STAGING_TTL_SECONDS` | 24 hours | how long a stalled staged upload survives before the reaper sweeps it |
+
+## Named gaps
+
+Open work, stated so absence is never read as coverage:
+
+- **No per-owner aggregate bounds** — nothing caps open staged sessions or total staged
+  bytes per principal (task `01a0723e-cfe5-7080-9e0e-9b3323c25080` in the temper vault).
+- **Finalize assembles the whole body in memory** and clones it for the put — peak
+  resident is 2–3× the blob at the 100 MB cap.

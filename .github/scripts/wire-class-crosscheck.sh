@@ -351,7 +351,10 @@ derive_shape() {
     fi
     local tmp_base tmp_head
     tmp_base="$(mktemp)"; tmp_head="$(mktemp)"
-    trap 'rm -f "$CHANGED_FILE" "$WIRE_FILES" "$ADDED_LINES" "$tmp_base" "$tmp_head"' EXIT
+    # No EXIT trap here: every return path below rm's both temps, and re-registering the
+    # script's EXIT trap with these function-local names crashes the script at exit — the
+    # locals die at return, and the trap's expansion hits them unbound (the #896
+    # release-PR find; set -u turns it into `tmp_base: unbound variable`).
     git show "${BASE}:openapi.json" 2>/dev/null | jq -S 'del(.info.version)' > "$tmp_base" 2>/dev/null || { rm -f "$tmp_base" "$tmp_head"; echo "undeterminable"; return 0; }
     jq -S 'del(.info.version)' openapi.json > "$tmp_head" 2>/dev/null || { rm -f "$tmp_base" "$tmp_head"; echo "undeterminable"; return 0; }
     if [ ! -s "$tmp_base" ] || [ ! -s "$tmp_head" ]; then rm -f "$tmp_base" "$tmp_head"; echo "undeterminable"; return 0; fi
