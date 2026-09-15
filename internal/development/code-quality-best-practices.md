@@ -273,13 +273,19 @@ one is a blocking review finding regardless of correctness.
 
 ## 5. How reviews use this lens
 
-A review (human or `/code-review`) checks, in order:
+A **human review** checks, in order:
 
 1. **Correctness** — does it do the right thing? (the floor)
 2. **Structure** — §1: single responsibility, function length, keys-not-markers, types encode
    constraints, params structs, error/escalation discipline.
 3. **Invariants** — §2 and §3: any violation is blocking regardless of correctness.
 4. **Tests** — §4: right level, right gates, assertions intact.
+
+**The `/code-review` plugin does not carry this posture.** Its pass is CLAUDE.md compliance and
+shallow bugs, confidence-scored into a PR comment; it excludes general code-quality findings unless
+a CLAUDE.md it reads explicitly requires them, and this lens sits two hops below that file
+(repo `CLAUDE.md` → `internal/agents/code-quality.md` → here). The ordering above and the
+follow-up-filing rule below are the human pass's responsibility.
 
 When a review finds a §1 structural smell that is real but out of the PR's scope, **file a
 follow-up** rather than expanding the PR — and note it, so it isn't silently dropped. The
