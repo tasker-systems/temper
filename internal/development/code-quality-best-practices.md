@@ -123,6 +123,49 @@ makes call sites self-documenting (`field: value`) and resists positional-argume
   site, when the shape is known — but see §3 for the cases (SQL filters, wire types) where the
   cost of drift makes early extraction worth it.
 
+### 1.9 Fail loudly — no phantom data
+
+> A system that lies is worse than one that fails. *(borrowed from tasker-core's tenet #11)*
+
+"Phantom data" is a value that looks valid, passes type checks, and carries no information from
+the source — fabricated by defensive code trying to be helpful. A monitoring consumer receiving
+`0%` cannot distinguish "idle" from "data was missing"; both render as a green number.
+
+- **Required fields error on absence; optional fields stay `Option`.** The distinction is made
+  in the type at the boundary, never guessed at the read site (`ok_or_else(|| …invalid_response…)`
+  for required; plain `Option` for genuinely optional).
+- **Red flags in review** — a default fabricated for something the caller treats as a measurement:
+  - `unwrap_or_default()` on a **numeric** field (`0` is a valid reading, so absence hides);
+  - `unwrap_or_else(|| "unknown".into())` and friends (a fabricated status is indistinguishable
+    from a real one);
+  - `unwrap_or_else(default_struct)` for missing **nested** data (a whole section invented);
+  - a health/readiness check whose failure arm returns `Ok` (a check that cannot fail is worse
+    than none — it reads as coverage).
+- **Defaults are fine when the default is the domain's own "none"**: `Vec::default()` for "no
+  tags", a genuinely-optional config section left `None`, an absent value distinguishable from
+  every valid value. The test: *could a consumer make a wrong decision because the default
+  mimics a real value?* If yes, it is phantom data — error instead.
+- Tempered precedent: the `/api/health` witness that requires `"commit": null` **key present**
+  exists precisely because a skipped `None` reads as absence of the field, and absence must
+  stay distinguishable from "told it was null".
+
+### 1.10 Protections: layered by design, minimal by discipline
+
+Protections come in layers — database atomicity (constraints, CAS, row locks) → state-machine
+guards → transaction boundaries → application-level filtering — and each layer catches what the
+others miss. The discipline is the other half: **find the minimal set of protections that
+prevents corruption.** A redundant protection is not free — tasker-core removed processor-UUID
+ownership enforcement because it added zero safety (the CAS layer already rejected duplicates)
+while blocking crash recovery outright.
+
+When adding or reviewing a protection, name: which layer it belongs to; what specifically it
+protects against; which existing layer already covers it; what failure mode the protection
+itself introduces; and how the system recovers when the protection misfires. A protection whose
+answer to "what if this guard is wrong?" is "manual intervention" is a finding, not a feature.
+
+The review posture this encodes: a review verifies the implementation **matches intent** —
+not "would I have written it this way."
+
 ---
 
 ## 2. Repository invariants (non-negotiable)
@@ -155,6 +198,9 @@ one is a blocking review finding regardless of correctness.
   write time via `apply_doc_type_defaults` / `Frontmatter::set_managed_meta` — never rely on a
   downstream backfill. Inject canonical identity keys (`temper-title`, `temper-slug`) via
   `ensure_managed_identity_keys` on **both** sides of the wire (§1.2).
+- **Bounded channels.** `tokio::sync::mpsc::unbounded_channel()` is forbidden in production
+  code (zero exist today — keep it that way); a channel's capacity is configured, not a magic
+  number at the construction site. *(borrowed from tasker-core tenet #10)*
 
 ---
 
@@ -256,6 +302,9 @@ violation is "what it looks like in the wild" — the trigger an auditor greps/r
 | **CQ-12** | Auth before writes / profile scoping (§1.6, §2) | A data query not scoped through `resources_visible_to`/`can_modify_resource`; a mutation before its authorization check. |
 | **CQ-13** | SQL discipline (§3) | Runtime `query` where a macro works; multi-table JOINs copy-pasted across fns (→ view); filter predicates duplicated across queries (→ shared builder). |
 | **CQ-14** | Testing (§4) | A removed/weakened assertion; a missing `test-db`/`test-embed` gate on `#[sqlx::test]`/embed tests; a direct-call test where a production-caller e2e is needed; a non-descriptive test name. |
+| **CQ-15** | Fail loudly — no phantom data (§1.9) | `unwrap_or_default()` on a required numeric/status field; `unwrap_or_else(\|\| "unknown")`; a default struct fabricated for missing nested data; a health check whose failure arm returns `Ok`; a default that mimics a real value where the type could have said `Option`. |
+| **CQ-16** | Protection layering, minimal set (§1.10) | A new guard/protection whose layer is unnamed; a duplicate protection whose recovery-blocking cost went unexamined; a guard whose own failure requires manual intervention. |
+| **CQ-17** | Bounded channels (§2) | `unbounded_channel()` in production code; a hard-coded channel capacity where configuration exists. |
 
 This index is **rubric-shaped, not lens-specific**: a later security sweep gets its own `SEC-*`
 index in its own doc and runs the same audit harness against it.
@@ -264,7 +313,10 @@ index in its own doc and runs the same audit harness against it.
 
 ## References
 
-- tasker-core (sibling project) — `internal/development/best-practices-rust.md`
+- tasker-core (sibling project) — `docs/development/best-practices-rust.md`, and the
+  `docs/principles/` set (tenets, fail-loudly, defense-in-depth, cross-language-consistency,
+  twelve-factor-alignment, intentional-ai-partnership, composition-over-inheritance) — the
+  sources behind §1.9, §1.10, and the bounded-channels invariant
 - [Microsoft Pragmatic Rust Guidelines](https://microsoft.github.io/rust-guidelines/) — `M-*` rule IDs
 - [rust-skills](https://github.com/leonardomso/rust-skills)
 - [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/)

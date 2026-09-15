@@ -2,7 +2,7 @@
 
 > Shared agent guidance — the source of truth for `AGENTS.md` and `CLAUDE.md`.
 
-These rules apply to all code in this repository. Subagents and implementation plans must follow them. The canonical, fuller statement — the **explicit lens for code review** (opinionated best-practice, not just correctness) — lives in [internal/development/code-quality-best-practices.md](../development/code-quality-best-practices.md). The structural invariants below are the load-bearing summary; read the doc for the rationale, the worked examples, and the opinionated lens (single-responsibility/function-length, keys-not-loose-markers, parse-don't-validate, error-escalation, testing).
+These rules apply to all code in this repository. Subagents and implementation plans must follow them. The canonical, fuller statement — the **explicit lens for code review** (opinionated best-practice, not just correctness) — lives in [internal/development/code-quality-best-practices.md](../development/code-quality-best-practices.md). The structural invariants below are the load-bearing summary; read the doc for the rationale, the worked examples, and the opinionated lens (single-responsibility/function-length, keys-not-loose-markers, parse-don't-validate, error-escalation, fail-loudly/no-phantom-data, protection layering, testing).
 
 - **Typed structs over inline JSON** — Never use `serde_json::json!()` for data with a known structure. Define a struct. Compile-time type checking catches errors that runtime serialization silently passes.
 - **Shared types at boundaries** — When Rust calls TypeScript (or vice versa), the wire type lives in `temper-core` with `ts-rs` derives. Both sides share the generated type. Never define a zod schema that mirrors a Rust struct manually.
