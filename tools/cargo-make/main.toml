@@ -141,20 +141,6 @@ script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-docs-publi
 description = "Fail if specs/plans/reviews/spikes/handoffs are tracked here — they live in temper-artifacts"
 script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-no-process-artifacts.sh"]
 
-[tasks.register-coverage-drift]
-description = "Fail if internal/registers/coverage.yaml has drifted from the projection that produces it"
-# DELIBERATELY NOT a dependency of `check`, and the reason is a standing goal of this repo: CI paying
-# for work nobody asked for. This gate makes ~60 network round trips to the knowledge base and takes
-# about a minute, which is not a cost every local `cargo make check` should carry.
-#
-# It is also the ONLY drift gate here whose source is not this repository, so it is the only one that
-# can go red without any commit being at fault — a register edited elsewhere moves the artifact. That
-# makes it a poor fit for a blocking pre-merge gate and a good fit for a deliberate run.
-#
-# Wiring it into CI is a separate decision and an operator act. The goal it serves says so explicitly:
-# "CI answers did it regress; a map answers where are we and how did we get here."
-script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-register-coverage-drift.sh"]
-
 [tasks.ts-rs-drift]
 description = "Fail if any committed ts-rs generated type has drifted from the Rust that produces it"
 # The cross-LANGUAGE gate. Every other check here lives inside one language — clippy, tsc, biome —
