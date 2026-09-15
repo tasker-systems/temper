@@ -108,6 +108,13 @@ makes call sites self-documenting (`field: value`) and resists positional-argume
 - Override a lint with `#[expect(lint, reason = "…")]`, never bare `#[allow]` — `expect` rots
   loudly when the suppression is no longer needed (`M-LINT-OVERRIDE-EXPECT`). Every suppression
   carries a reason.
+  **The cfg-conditional exception, learned from the 2026-09 sweep:** for an item used only under
+  some `cfg` (a helper exercised by `cfg(test)`, a function called from a feature-gated site),
+  plain `#[expect]` misfires — the lint fires in the builds where the item is unused and does
+  not fire where it is used, so *some* build always warns. There the correct forms are
+  `#[allow]` **with the reason stated** in a comment or doc line, or
+  `#[cfg_attr(not(test), expect(lint, reason = "…"))]` when you want the rot-detection in
+  production builds specifically. `expect` is for lints that fire unconditionally.
 - All public types implement `Debug` (`M-PUBLIC-DEBUG`); error and string-wrapper types
   implement `Display` (`M-PUBLIC-DISPLAY`).
 - Hardcoded constants get a comment explaining the value, its rationale, and any external
@@ -294,7 +301,7 @@ violation is "what it looks like in the wild" — the trigger an auditor greps/r
 | **CQ-4** | Names carry responsibility (§1.4) | A *type* named `Manager`/`Helper`/`Service`/`Factory`/`Util`; a stringly-typed `match "literal"` over a bounded set the code owns. |
 | **CQ-5** | Params structs (§1.5) | >5 domain params on a fn; `#[expect(clippy::too_many_arguments)]`. |
 | **CQ-6** | Error handling & escalation (§1.6) | `.unwrap()`/`.expect()` on a fallible runtime value in a library path; write-then-check (auth after mutation); panic for a recoverable condition; a softened contract/assertion. |
-| **CQ-7** | Lint & suppression discipline (§1.7) | Bare `#[allow]` (vs `#[expect(reason=…)]`); a public type without `Debug`; a magic constant with no explaining comment. |
+| **CQ-7** | Lint & suppression discipline (§1.7) | A bare `#[allow]` on an unconditionally-firing lint (vs `#[expect(reason=…)]`); a suppression with no stated reason anywhere near it; a public type without `Debug`; a magic constant with no explaining comment. |
 | **CQ-8** | No "for now" / no premature compat/abstraction (§1.8) | Dead code kept "for compat"; a placeholder/"for now" workaround; a one-use abstraction. |
 | **CQ-9** | Typed structs over inline JSON (§2) | `serde_json::json!()` for data with a known shape. |
 | **CQ-10** | Shared types at boundaries (§2) | A zod schema (or other hand-mirror) duplicating a Rust struct instead of the `ts-rs`-generated type. |
