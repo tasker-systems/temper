@@ -109,6 +109,22 @@ describe("getTemperToken", () => {
     ).rejects.toMatchObject({ reason: "standing:deactivated", retryable: false });
   });
 
+  // FAILS IF: `refusalMessage` switches on `reason` without a default arm. A reason
+  // outside the known three then throws with `message: undefined` — eve's error surface
+  // and the repo's logs render nothing where a sentence naming the unrecognized reason
+  // should be. (`getTemperToken`'s status switch already has this backstop; this pins the
+  // refusal switch to the same standard.)
+  it("yields a message when the refusal reason is outside the known set", async () => {
+    requestMintedToken.mockResolvedValue({
+      status: "refused",
+      reason: "embargoed",
+    } as unknown as MintOutcome);
+
+    await expect(
+      getTemperToken({ principal: { type: "user", id: PRINCIPAL } }),
+    ).rejects.toThrow(/unrecognized refusal reason: embargoed/);
+  });
+
   // FAILS IF: `not_linked` is treated as retryable, or as an error rather than a refusal. It
   // is reachable here as a race — the link was removed between the pre-flight and this call.
   it("fails closed and terminally on not_linked", async () => {

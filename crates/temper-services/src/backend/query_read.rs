@@ -576,7 +576,9 @@ fn stage_result(
                 resource,
                 scoring: Scoring {
                     score_kind: decl.as_ref().and_then(|d| d.score_kind())?,
-                    score: h.quantity.unwrap_or_default() as f32,
+                    // Absent when the row carried no quantity — membership without an ordering
+                    // value. An unmeasured quantity never renders as a real zero.
+                    score: h.quantity.map(|q| q as f32),
                 },
                 // Declared as fillable only by the wide arm, and nothing fills it yet: the
                 // fragments collapse to a per-resource score and the argmin that would recover the
@@ -1944,9 +1946,60 @@ mod tests {
                     "and the surviving hit carries ITS OWN view, never a neighbour's"
                 );
                 assert_eq!(
-                    hits[0].scoring.score, 0.5,
+                    hits[0].scoring.score,
+                    Some(0.5),
                     "with its own score — pairing a view with another row's quantity would be \
                      a confidently wrong answer"
+                );
+            }
+            other => panic!("expected resources, got {other:?}"),
+        }
+    }
+
+    /// **A hit whose row carried no quantity omits its score rather than rendering a zero.**
+    ///
+    /// The row's quantity column is typed `Option` end to end, and a hit can reach the response
+    /// without one while still carrying its membership and its [`ScoreKind`]. Rendering that
+    /// absence as `0.0` would hand the hit a real position in every range comparison a client
+    /// runs — a zero would be a number nobody measured. Asserted on the SERIALIZED hit, because
+    /// the wire is where the fabrication would surface.
+    #[test]
+    fn a_hit_whose_row_carried_no_quantity_omits_its_score_rather_than_rendering_zero() {
+        let id = Uuid::now_v7();
+        let v = plan(
+            vec![act_node("hits", ActName::FindExact, None)],
+            vec!["hits"],
+        );
+        let rows = QueryRows {
+            hits: vec![HitRow {
+                quantity: None,
+                ..hit("hits", id, 0.0)
+            }],
+            tallies: vec![tally("hits", 1, 0)],
+            refusals: vec![],
+        };
+        let hydrated = Hydrated {
+            views: HashMap::from([(id, view(id))]),
+            open_meta: HashMap::new(),
+        };
+
+        let r = assemble(&v, &rows, &hydrated);
+        match &r.returned[&name("hits")].produced {
+            StageOutput::Resources { hits } => {
+                assert_eq!(hits.len(), 1, "the hit survives; only its score is absent");
+                assert_eq!(
+                    hits[0].scoring.score, None,
+                    "absence propagates as absence, not as a number"
+                );
+                let json = serde_json::to_value(&hits[0]).expect("the hit serializes");
+                assert!(
+                    json["scoring"].get("score").is_none(),
+                    "an absent quantity omits the score on the wire: {json}"
+                );
+                assert_eq!(
+                    hits[0].scoring.score_kind.as_str(),
+                    "fts_norm",
+                    "the kind still names what a quantity would be"
                 );
             }
             other => panic!("expected resources, got {other:?}"),

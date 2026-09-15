@@ -16,7 +16,7 @@ pub struct TaskInfo {
     #[serde(rename = "temper-context")]
     pub context: String,
     #[serde(rename = "temper-stage")]
-    pub stage: String,
+    pub stage: Option<String>,
     #[serde(rename = "temper-mode")]
     pub mode: Option<String>,
     #[serde(rename = "temper-effort")]
@@ -106,4 +106,40 @@ pub struct NormalizeSummary {
     pub slugs_fixed: u32,
     pub frontmatter_fixed: u32,
     pub tasks_without_effort: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn task_with(stage: Option<&str>) -> TaskInfo {
+        TaskInfo {
+            id: ResourceId::from(uuid::Uuid::nil()),
+            title: "a task".to_string(),
+            slug: "a-task".to_string(),
+            context: "@me/ctx".to_string(),
+            stage: stage.map(str::to_string),
+            mode: None,
+            effort: None,
+            seq: None,
+            branch: None,
+            pr: None,
+        }
+    }
+
+    /// A task with no stage must serialize the way its sibling Option fields do
+    /// — `null` for absent — never an empty string wearing a stage's name.
+    #[test]
+    fn a_stageless_task_serializes_stage_as_null_like_its_sibling_fields() {
+        let json = serde_json::to_string(&task_with(None)).unwrap();
+        assert!(json.contains(r#""temper-stage":null"#), "{json}");
+        assert!(json.contains(r#""temper-mode":null"#), "{json}");
+        assert!(!json.contains(r#""temper-stage":""#), "{json}");
+    }
+
+    #[test]
+    fn a_present_stage_serializes_under_its_canonical_name() {
+        let json = serde_json::to_string(&task_with(Some("in-progress"))).unwrap();
+        assert!(json.contains(r#""temper-stage":"in-progress""#), "{json}");
+    }
 }

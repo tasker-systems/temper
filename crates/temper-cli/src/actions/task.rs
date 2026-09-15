@@ -113,7 +113,7 @@ pub(crate) fn task_info_from_row(
         slug: sluggify(&row.title),
         title: row.title,
         context: context.to_string(),
-        stage: row.managed_meta.stage.unwrap_or_default(),
+        stage: row.managed_meta.stage,
         mode: row.managed_meta.mode,
         effort: row.managed_meta.effort,
         seq: row.managed_meta.seq.and_then(|s| u32::try_from(s).ok()),
