@@ -49,6 +49,21 @@ classes: additive
 surfaces: clients
 status: signal-only
 
+- **The Python client's distribution becomes temperkb-py, published to pypi.org**
+  Both natural names are taken on PyPI by unrelated projects (temper-py — a TEMPer
+  USB-device reader; temper — an HTML DSL), so the install line changes name; the
+  import package stays `temper` and no client code changes. The registry lane
+  replaces wheel+sdist Release assets (the npm/RubyGems pattern): consumers on the
+  0.5.1 direct-URL pin keep installing forever (the asset stays on the release),
+  and picking up new versions is a one-line dependency change to `temperkb-py`.
+  Publish-side auth is PyPI trusted publishing keyed to release.yml — the job's own
+  workflow file, per the #901 correction; pending-publisher registration claims the
+  name on first publish.
+pr: 902
+classes: additive
+surfaces: clients
+status: signal-only
+
 ## Since v0.4.0 — unreleased
 
 - **This release — the 0.5.0 fleet alignment: VERSION 0.4.0 → 0.5.0 across crates, packages, and clients**
