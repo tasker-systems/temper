@@ -292,6 +292,27 @@ describe("onDirectMessage — the gate that must exist", () => {
   });
 });
 
+describe("onAppMention — an unrecognized link state", () => {
+  // FAILS IF: the link-state fork narrows armlessly — `if (status === "unlinked")` with no
+  // arm for anything else — so a drifted status falls through to the mint pre-flight and is
+  // treated as `linked`: the one arm that dispatches a turn under a minted token. The
+  // `never` binding makes this a compile error too; this test covers the runtime case where
+  // a value reaches the fork with the types still passing, which types cannot catch.
+  it("does not treat a drifted link status as linked — drops with the generic retry ephemeral and never mints", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    requestLinkState.mockResolvedValue({ status: "quarantined" } as unknown as LinkState);
+    const { ctx, request } = fakeCtx();
+
+    const result = await mention(ctx);
+
+    expect(result).toBeNull();
+    expect(requestMintedToken).not.toHaveBeenCalled();
+    expect(ephemeralTexts(request)).toHaveLength(1);
+    expect(ephemeralTexts(request)[0]).toMatch(/try again/i);
+    expect(error).toHaveBeenCalled();
+  });
+});
+
 describe("onAppMention — an unrecognized mint status", () => {
   // FAILS IF: the `default:` arm is dropped from the switch. Without it the switch falls
   // through, `onAppMention` returns `undefined`, and the mention dies with NO ephemeral and

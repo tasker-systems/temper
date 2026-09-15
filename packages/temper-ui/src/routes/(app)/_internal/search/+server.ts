@@ -14,7 +14,15 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 			locals.accessToken!,
 		);
 		return json(result);
-	} catch {
-		return json({ rows: [], total: 0 }, { status: 503 });
+	} catch (err) {
+		console.error('search proxy failed', {
+			// Caller-chosen content at caller-chosen length — bounded before it reaches the log
+			// stream, same as the OIDC callback's query parameters.
+			q: q.slice(0, 128),
+			err,
+		});
+		// A failure must stay distinguishable from a successful empty answer: the body is not
+		// rows-shaped, so a client that checks the status never mistakes this for a result.
+		return json({ error: 'search unavailable' }, { status: 503 });
 	}
 };

@@ -46,6 +46,23 @@ export type LinkState =
  *
  * `principalId` is passed WHOLE. It has 2-4 segments and must never be split.
  */
+/**
+ * Runtime check that a parsed link-state body really is one of the two arms the Rust
+ * `SlackLinkStateResponse` can serialize (`#[serde(tag = "status", rename_all =
+ * "snake_case")]`, `crates/temper-api/src/handlers/slack_link.rs`). The TypeScript `LinkState`
+ * above is only as honest as the last regeneration: a server that ships a new arm before this
+ * agent redeploys arrives here with the types still passing, so the discriminant and each arm's
+ * one field are checked for real. Extra fields are tolerated, matching serde's own default —
+ * the union arms, not the full key set, are the contract.
+ */
+function isLinkState(value: unknown): value is LinkState {
+  if (typeof value !== "object" || value === null) return false;
+  const arm = value as { status?: unknown; handle?: unknown; authorize_url?: unknown };
+  if (arm.status === "linked") return typeof arm.handle === "string";
+  if (arm.status === "unlinked") return typeof arm.authorize_url === "string";
+  return false;
+}
+
 export async function requestLinkState(principalId: string): Promise<LinkState> {
   // Asserted on BOTH signed calls, not just the mint. link-state runs on every mention while the
   // mint runs only on the `linked` arm, so checking here is what makes a never-linked workspace's
@@ -73,7 +90,19 @@ export async function requestLinkState(principalId: string): Promise<LinkState> 
     throw new Error(`link-state failed: ${res.status}`);
   }
 
-  return (await res.json()) as LinkState;
+  const state: unknown = await res.json();
+  if (!isLinkState(state)) {
+    // The same failure class as the non-2xx throw above — the response is not an answer we
+    // can act on — so it propagates the same way: the channel's catch turns it into the
+    // generic retry ephemeral instead of a turn dispatched on an invented `linked`.
+    const status = (state as { status?: unknown } | null)?.status;
+    throw new Error(
+      `link-state returned an unrecognized response (status: ${
+        typeof status === "string" ? status : "none"
+      })`,
+    );
+  }
+  return state;
 }
 
 /**
