@@ -22,8 +22,10 @@
 # Auth: npm trusted publishing. In CI, `npm publish --provenance` authenticates
 # via the job's OIDC identity token (id-token: write) — no NPM_TOKEN secret
 # exists or is wanted. The trusted publisher is registered on npmjs.com
-# against this repository and the CHAIN'S ENTRY workflow (release-tag.yml —
-# the claim names the entry, not the job's file). Locally, `npm login` plus a
+# against this repository and the workflow whose job performs the push
+# (release.yml — the identity claim names the job's OWN workflow file, not the
+# chain's entry; a publisher registered against release-tag.yml is silently
+# unauthorized at push). Locally, `npm login` plus a
 # plain `npm publish --access public` is the bootstrap path for claiming a new
 # package name before its trusted publisher is registered; this script's
 # provenance flag is CI-only.

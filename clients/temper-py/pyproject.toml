@@ -1,9 +1,12 @@
 # Hand-written, and listed in .openapi-generator-ignore so it stays that way. The
 # generator emits a pyproject of its own (Poetry-flavoured, naming the package
-# `temper.generated`); ours describes the SDK, whose distribution is `temper-py`
-# and whose import package is `temper`.
+# `temper.generated`); ours describes the SDK, whose distribution is `temperkb-py`
+# and whose import package is `temper`. PyPI has no scopes, and both natural
+# distribution names were already taken by unrelated projects (temper-py — a TEMPer
+# USB-device reader; temper — an HTML DSL), so the distribution carries the kb.
+# Nothing under temper/ changes with the name: the wheel still installs `temper`.
 [project]
-name = "temper-py"
+name = "temperkb-py"
 dynamic = ["version"]
 description = "Python SDK for the Temper knowledge-base API"
 readme = "README.md"

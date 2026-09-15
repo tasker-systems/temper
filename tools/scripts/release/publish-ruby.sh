@@ -13,8 +13,10 @@
 # Auth: OIDC trusted publishing. In CI, rubygems/configure-rubygems-credentials
 # mints short-lived credentials from the job's identity token — no API key
 # secret exists or is wanted. The trusted publisher is registered on
-# rubygems.org against this repository and the CHAIN'S ENTRY workflow
-# (release-tag.yml — the workflow claim names the entry, not the job's file).
+# rubygems.org against this repository and the workflow whose job performs the
+# push (release.yml — the identity claim names the job's OWN workflow file, not
+# the chain's entry; a publisher registered against release-tag.yml is
+# silently unauthorized at push).
 # Locally, an existing ~/.gem/credentials from `gem login` works for a manual
 # push; this script is not the local path.
 #

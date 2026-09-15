@@ -12,12 +12,12 @@ reaches a running site is a separate, per-target concern — see
 A `v*` tag invokes [`.github/workflows/release.yml`](.github/workflows/release.yml):
 
 `determine-version` → `build-cli-binaries` (darwin-arm64 / linux-x64 / windows-x64)
-· `build-skill-bundle` · `build-py-client` (temper_py wheel + sdist) ·
-`publish-npm-clients` (@tasker-systems/temper-ts, @tasker-systems/temper-telemetry-ts
-→ GitHub Packages) · `publish-ruby-client` (temper-rb gem → GitHub Packages) →
-`release-summary` (publishes the GitHub Release with the CLI binaries, skill
-bundle, and Python distributions attached; the release is created only when every
-producer succeeded, and the summary table reports each lane).
+· `build-skill-bundle` · `publish-npm-clients` (@tasker-systems/temper-ts,
+@tasker-systems/temper-telemetry-ts → registry.npmjs.org) · `publish-ruby-client`
+(temper-rb → rubygems.org) · `publish-py-client` (temperkb-py → pypi.org) →
+`release-summary` (publishes the GitHub Release with the CLI binaries and skill
+bundle attached; the release is created only when every producer succeeded, and
+the summary table reports each lane).
 
 No Vercel deploy, no schema migration, no production side effects. Releasing and
 deploying are decoupled by design (see
@@ -26,9 +26,9 @@ deploying are decoupled by design (see
 ## Installing the clients
 
 Client packages publish to the **public registries** — rubygems.org for the gem,
-registry.npmjs.org for the TypeScript packages, GitHub Release assets for Python.
-All three paths are token-free for consumers on a public repository; no
-`read:packages` PAT, no `.npmrc` stanza, no Bundler credentials.
+registry.npmjs.org for the TypeScript packages, pypi.org for the Python client.
+All three paths are token-free for consumers; no `read:packages` PAT, no
+`.npmrc` stanza, no Bundler credentials, no direct URL.
 
 **temper-ts / temper-telemetry-ts (npm)** — `npm install @tasker-systems/temper-ts`
 (telemetry-ts likewise), or pinned: `npm install @tasker-systems/temper-ts@0.5.1`.
@@ -39,32 +39,32 @@ All three paths are token-free for consumers on a public repository; no
 gem "temper-rb", "0.5.1"
 ```
 
-**temper-py (Python)** — a PEP 508 direct reference in `pyproject.toml`; the wheel
-is a Release asset, so no token and no index:
-
-```
-dependencies = [
-  "temper-py @ https://github.com/tasker-systems/temper/releases/download/v0.5.1/temper_py-0.5.1-py3-none-any.whl",
-]
-```
+**temperkb-py (PyPI)** — `pip install temperkb-py`, or pinned:
+`pip install temperkb-py==0.5.1`. The distribution is `temperkb-py`; the import
+package stays `temper`. PyPI has no scopes, and both natural distribution names
+were taken by unrelated projects (a TEMPer USB-device reader under `temper-py`,
+an HTML DSL under `temper`), so the distribution carries the kb.
 
 (The npmjs/RubyGems examples above are token-free; the GitHub Packages copies
 published before the public flip remain on their hosts but are no longer the
 documented path — and no new versions land there.)
 
-**Publishing-side auth** (maintainers): both registry lanes authenticate via OIDC
-trusted publishing — RubyGems through `rubygems/configure-rubygems-credentials`
-and npm through `npm publish --provenance` — with the trusted publisher on each
-host registered against **`release.yml`** (the workflow whose job performs the
-push — the identity claim names the job's own workflow file, even when that
-workflow was called from the `release-tag.yml` chain; a publisher registered
-against the entry workflow is silently unauthorized at push: "You are not
-allowed to push this gem"). No registry API key
-exists as a repo secret. The first publish of a NEW package name on npm cannot
+**Publishing-side auth** (maintainers): every registry lane authenticates via
+OIDC trusted publishing — RubyGems through
+`rubygems/configure-rubygems-credentials`, npm through `npm publish
+--provenance`, and PyPI through `uv publish --trusted-publishing automatic` —
+with the trusted publisher on each host registered against **`release.yml`**
+(the workflow whose job performs the push — the identity claim names the job's
+own workflow file, even when that workflow was called from the `release-tag.yml`
+chain; a publisher registered against the entry workflow is silently
+unauthorized at push: "You are not allowed to push this gem"). No registry API
+key exists as a repo secret. The first publish of a NEW package name on npm cannot
 be OIDC — npmjs.com only attaches trusted publishers to existing packages — so
 a new name is claimed once locally (`npm login`, then `npm publish --access
 public` in the package directory) and the trusted publisher is attached
-immediately after.
+immediately after. PyPI has no such gap: a pending publisher can be attached to
+a not-yet-existing project, so a new name is pre-registered on pypi.org and the
+first release claims it — no local bootstrap upload.
 
 ## Release checklist
 
@@ -88,9 +88,9 @@ immediately after.
    `v<VERSION>` tag, which invokes `release.yml`.
 
 4. **Verify the GitHub Release.** The Actions run should be green and the
-   Release should list the three CLI binaries, the skill bundle, and the two
-   `temper_py-*` distributions; the npm and Ruby publish lanes report in the
-   run's summary table. That's the whole release.
+   Release should list the three CLI binaries and the skill bundle; the npm,
+   Ruby, and Python publish lanes report in the run's summary table. That's
+   the whole release.
 
 A release can also be (re-)run manually via **Actions → Release → Run workflow** with
 an explicit `tag` input — useful to re-cut binaries for an existing tag.
