@@ -64,6 +64,33 @@ classes: additive
 surfaces: clients
 status: signal-only
 
+- **Scoring.score becomes optional; TaskInfo.stage becomes nullable; silent CLI defaults become refusals**
+  The query scoring DTO drops `score` from the response contract's `required` set and widens
+  its type to nullable — a hit whose row carries no ordering quantity omits the field
+  instead of serializing `0.0` — and the rb/py/ts client models regenerate with it
+  (shape-breaking; consumers reading `score` as an always-present number must handle
+  absence). The CLI's task projection follows the same Option discipline (`temper-stage`
+  serializes `null` where it emitted `""`), and an existing-but-malformed global config or
+  an unreadable memory index now refuses with the reason instead of proceeding on defaults
+  (behavioral). The M-class obligations (version bump, changelog line, client-release plan)
+  are owed at the merge/release boundary per spec §4.
+pr: self
+classes: shape-breaking, behavioral
+surfaces: http, cli-stdout, clients
+status: signal-only
+
+- **temper-ui and temper-cloud stop presenting failure as success**
+  The command palette checks `resp.ok` and renders a distinct failure state where an API
+  error previously rendered "No results"; the internal search route logs its 5xx instead of
+  returning a body shaped like a valid empty result. temper-cloud's token verification
+  keeps an absent `email_verified` claim distinct from `false`, and validates the `/userinfo`
+  body at runtime instead of casting it (latent path — no live route today). No committed
+  contract shape moves.
+pr: self
+classes: behavioral
+surfaces: internal
+status: signal-only
+
 ## Since v0.4.0 — unreleased
 
 - **This release — the 0.5.0 fleet alignment: VERSION 0.4.0 → 0.5.0 across crates, packages, and clients**
