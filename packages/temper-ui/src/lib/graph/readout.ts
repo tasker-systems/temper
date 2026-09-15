@@ -1,5 +1,5 @@
 import type { CogmapRegionRow } from '$lib/types/generated/cognitive_maps';
-import type { QueryResponse, RegionDisclosure } from '$lib/types/generated/query';
+import type { QueryResponse } from '$lib/types/generated/query';
 
 /**
  * The *why-these* readout — machine reasoning about the answer, and never a thing in the graph.
@@ -120,11 +120,11 @@ const nameOf = (id: string, lookup: RegionLookup): GroupingName => {
  * without the trace a composition is a black box with an answer at the end.
  */
 export function buildReadout(response: QueryResponse, regions: RegionLookup = NO_REGIONS): Readout {
-	const stages = response.trace?.stages ?? [];
+	const stages = response.trace.stages;
 
 	return {
 		groupings: stages.flatMap((s) =>
-			((s.disclosed_regions ?? []) as RegionDisclosure[]).map((d) => ({
+			s.disclosed_regions.map((d) => ({
 				id: d.region_id,
 				name: nameOf(d.region_id, regions),
 			})),
@@ -132,8 +132,8 @@ export function buildReadout(response: QueryResponse, regions: RegionLookup = NO
 		stages: stages.map((s) => ({
 			stage: s.stage,
 			act: s.act,
-			handed: Number(s.input_ids ?? 0),
-			unusable: Number(s.input_unusable ?? 0),
+			handed: Number(s.input_ids),
+			unusable: Number(s.input_unusable),
 		})),
 	};
 }
@@ -141,8 +141,8 @@ export function buildReadout(response: QueryResponse, regions: RegionLookup = NO
 /** Every disclosed grouping id, for the route to resolve. Order-preserving, deduplicated. */
 export function disclosedRegionIds(response: QueryResponse): string[] {
 	const seen = new Set<string>();
-	for (const s of response.trace?.stages ?? []) {
-		for (const d of s.disclosed_regions ?? []) seen.add(d.region_id);
+	for (const s of response.trace.stages) {
+		for (const d of s.disclosed_regions) seen.add(d.region_id);
 	}
 	return [...seen];
 }

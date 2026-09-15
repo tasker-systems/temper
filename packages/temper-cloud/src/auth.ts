@@ -50,8 +50,25 @@ export async function verifyToken(
         );
 
   const sub = payload.sub;
-  let email = payload.email as string | undefined;
-  let emailVerified = payload.email_verified as boolean | undefined;
+  // jose verifies signature, issuer, audience, and expiry, but does not type-check claims. The
+  // email claims arrive from the IdP at runtime, so like the /userinfo body they are validated
+  // rather than asserted: present means conforming, absent means absent.
+  const rawEmail: unknown = payload.email;
+  const rawEmailVerified: unknown = payload.email_verified;
+  // `sub` arrives from the IdP at runtime like the email claims, so it is validated rather than
+  // asserted: a present-but-non-string sub is drift, and absence stays its own refusal.
+  if (sub !== undefined && typeof sub !== "string") {
+    throw new Error("JWT carried a non-string sub claim");
+  }
+  if (rawEmail !== undefined && typeof rawEmail !== "string") {
+    throw new Error("JWT carried a non-string email claim");
+  }
+  if (rawEmailVerified !== undefined && typeof rawEmailVerified !== "boolean") {
+    throw new Error("JWT carried a non-boolean email_verified claim");
+  }
+  let email: string | undefined = typeof rawEmail === "string" ? rawEmail : undefined;
+  let emailVerified: boolean | undefined =
+    typeof rawEmailVerified === "boolean" ? rawEmailVerified : undefined;
 
   if (!sub) {
     throw new Error("JWT missing sub claim");

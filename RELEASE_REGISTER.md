@@ -91,6 +91,22 @@ classes: behavioral
 surfaces: internal
 status: signal-only
 
+- **Query responses refuse rather than fabricate when a stage's tally row is missing; agent and UI boundaries validate temper-api responses instead of casting them**
+  Grounding ruled the tally absence a compile/execute contradiction — the planner emits one
+  tally arm per stage and each arm yields a row even over an empty CTE, so `tally() == None`
+  is compiler/executor disagreement, never "never ran" — and `0` is a real measured value
+  (a refused stage's CTE is `WHERE false`). Where the assembler previously rendered
+  `produced: 0` and derived `Extent::Complete` from it, it now fails the response; measured
+  zeros still render zeros. The steward/auditor dispatch consumers, the mention mint
+  outcome, and temper-cloud's JWT claims are runtime-checked at the boundary instead of
+  cast; temper-ui reads required wire fields as required and renders absence as absence. No
+  committed contract shape moves (behavioral only — the Option-shaped fix was ruled out by
+  the grounding).
+pr: self
+classes: behavioral
+surfaces: http, internal
+status: signal-only
+
 ## Since v0.4.0 — unreleased
 
 - **This release — the 0.5.0 fleet alignment: VERSION 0.4.0 → 0.5.0 across crates, packages, and clients**

@@ -33,7 +33,7 @@ use temper_core::types::query::{
 use temper_core::types::query::{BoundTerm, CompositionTrace, InputSource, StageInputTrace};
 use temper_core::types::resource_view::{ResourceSection, ResourceView};
 use temper_substrate::readback;
-use temper_substrate::readback::query_exec::{execute, QueryRows, StageIndex};
+use temper_substrate::readback::query_exec::{execute, QueryRows, StageIndex, TallyRow};
 use temper_substrate::readback::query_plan::compile;
 
 /// Run a validated composition and answer in the shape `POST /api/query` publishes.
@@ -73,7 +73,7 @@ pub async fn run_composition(
     })?;
     let rows = execute(pool, &compiled).await.map_err(opaque)?;
     let hydrated = hydrate(pool, principal, v, &rows).await?;
-    Ok(assemble(v, &rows, &hydrated))
+    assemble(v, &rows, &hydrated)
 }
 
 /// Log the real failure; hand the caller nothing but the fact of it.
@@ -90,6 +90,28 @@ fn opaque(e: anyhow::Error) -> ApiError {
     let detail = e.to_string();
     tracing::error!(error = %crate::error::bounded(&detail), "query read failed");
     ApiError::Internal("An internal error occurred".to_string())
+}
+
+/// The tally row every stage number below is derived from — and a missing one fails the response.
+///
+/// `compile` emits one tally arm per stage in the plan, and each tally arm is a `FROM`-less
+/// `SELECT` over a scalar `count(*)` that yields exactly one row even over an empty CTE — so
+/// through [`run_composition`] a tally row exists for every stage [`stage_numbers`] can ever be
+/// called with. Reaching this function without one means the compiler and the executor disagreed
+/// about the plan: the same class of contradiction `run_composition`'s compile arm renders as a
+/// 500, and for the same reason.
+///
+/// **The failure is the honest arm because `0` is a REAL tally value.** A refused stage's CTE is
+/// `WHERE false` and tallies `produced = 0, unusable = 0`; a stage that asked and matched nothing
+/// tallies the same. A defaulted zero for an absent row would be byte-identical on the wire to
+/// those measured zeros — indistinguishable from "asked, found nothing" — so absence is never
+/// substituted, it fails.
+fn required_tally<'a>(stage: &str, rows: &'a StageIndex<'_>) -> ApiResult<&'a TallyRow> {
+    rows.tally(stage).ok_or_else(|| {
+        opaque(anyhow::anyhow!(
+            "compiler/executor contradiction: no tally row for stage `{stage}`"
+        ))
+    })
 }
 
 /// Turn a caller's composition into one this server will run: shape-gate it, embed on its behalf,
@@ -345,7 +367,14 @@ struct Hydrated {
 
 /// Build the response from the plan, the rows and the hydrated views. **Pure** — every database
 /// question has already been asked, which is what makes the derivations below testable without one.
-fn assemble(v: &ValidatedComposition, rows: &QueryRows, hydrated: &Hydrated) -> QueryResponse {
+///
+/// A stage without a tally row is a compile/execute contradiction ([`required_tally`]) and fails
+/// the response rather than rendering invented numbers for it.
+fn assemble(
+    v: &ValidatedComposition,
+    rows: &QueryRows,
+    hydrated: &Hydrated,
+) -> ApiResult<QueryResponse> {
     let by_name: HashMap<&str, &StageNode> =
         v.ordered().iter().map(|n| (n.name().as_str(), n)).collect();
     // **Built once, here, for the whole response.** Everything below asks for a stage's tally by
@@ -359,20 +388,22 @@ fn assemble(v: &ValidatedComposition, rows: &QueryRows, hydrated: &Hydrated) -> 
         .iter()
         .filter_map(|spec| {
             let node = by_name.get(spec.stage.as_str())?;
-            Some((spec.stage.clone(), stage_result(node, spec, rows, hydrated)))
+            Some(stage_result(node, spec, rows, hydrated).map(|r| (spec.stage.clone(), r)))
         })
+        .collect::<ApiResult<Vec<_>>>()?
+        .into_iter()
         .collect();
 
     let stages = v
         .ordered()
         .iter()
-        .filter_map(|node| stage_trace(node, rows))
-        .collect();
+        .map(|node| stage_trace(node, rows))
+        .collect::<ApiResult<Vec<_>>>()?;
 
-    QueryResponse {
+    Ok(QueryResponse {
         returned,
         trace: CompositionTrace { stages },
-    }
+    })
 }
 
 /// What every stage discloses, whether or not its rows come back.
@@ -426,47 +457,51 @@ struct StageNumbers {
     extent: Extent,
 }
 
-fn stage_numbers(node: &StageNode, rows: &StageIndex<'_>) -> StageNumbers {
+fn stage_numbers(node: &StageNode, rows: &StageIndex<'_>) -> ApiResult<StageNumbers> {
     let name = node.name().as_str();
-    let tally = rows.tally(name);
-    let produced = tally.map(|t| t.produced).unwrap_or(0);
+    let tally = required_tally(name, rows)?;
+    let produced = tally.produced;
 
     let (inputs, input_ids): (Vec<StageInputTrace>, i64) = match node {
         StageNode::Act(inv) => {
             let traced: Vec<StageInputTrace> = inv
                 .inputs
                 .iter()
-                .map(|i| match i {
-                    StageInput::Caller { relation, ids } => StageInputTrace {
-                        relation: *relation,
-                        source: InputSource::Caller,
-                        ids: ids.ids.len() as i64,
-                    },
-                    StageInput::Upstream { relation, stage } => StageInputTrace {
-                        relation: *relation,
-                        source: InputSource::Upstream {
-                            stage: stage.clone(),
+                .map(|i| -> ApiResult<StageInputTrace> {
+                    Ok(match i {
+                        StageInput::Caller { relation, ids } => StageInputTrace {
+                            relation: *relation,
+                            source: InputSource::Caller,
+                            ids: ids.ids.len() as i64,
                         },
-                        // The upstream stage's OWN tally — the count of what it produced is
-                        // exactly the count of what this stage was handed. There is no second
-                        // question to ask.
-                        ids: rows.tally(stage.as_str()).map(|t| t.produced).unwrap_or(0),
-                    },
+                        StageInput::Upstream { relation, stage } => StageInputTrace {
+                            relation: *relation,
+                            source: InputSource::Upstream {
+                                stage: stage.clone(),
+                            },
+                            // The upstream stage's OWN tally — the count of what it produced is
+                            // exactly the count of what this stage was handed. There is no second
+                            // question to ask.
+                            ids: required_tally(stage.as_str(), rows)?.produced,
+                        },
+                    })
                 })
-                .collect();
+                .collect::<ApiResult<Vec<_>>>()?;
             let total = traced.iter().map(|t| t.ids).sum();
             (traced, total)
         }
         // A combinator's input is its own inputs' outputs; it declares no relation of its own — so
         // it contributes a total and no per-input entries, exactly as it carried no relation before.
-        StageNode::Combine(cn) => (
-            Vec::new(),
-            cn.inputs
+        // Every input's tally is required, as everywhere else: a dropped row would under-count the
+        // total silently, and absence is a contradiction, never a zero.
+        StageNode::Combine(cn) => {
+            let total = cn
+                .inputs
                 .iter()
-                .filter_map(|s| rows.tally(s.as_str()))
-                .map(|t| t.produced)
-                .sum(),
-        ),
+                .map(|s| required_tally(s.as_str(), rows).map(|t| t.produced))
+                .sum::<ApiResult<i64>>()?;
+            (Vec::new(), total)
+        }
     };
 
     // The ONE construction of the refusal both carriers share — built here so `StageResult.refusal`
@@ -497,9 +532,9 @@ fn stage_numbers(node: &StageNode, rows: &StageIndex<'_>) -> StageNumbers {
             .unwrap_or_default(),
         StageNode::Combine(_) => Default::default(),
     };
-    let extent = extent_of(node, rows, &terms_applied);
+    let extent = extent_of(node, rows, tally, &terms_applied);
 
-    StageNumbers {
+    Ok(StageNumbers {
         // **A refusal outranks the row count, and that ordering is the whole point.** A refused
         // stage's CTE is `WHERE false`, so its tally is `produced = 0` — byte-identical to an honest
         // empty. Reading the tally first would render `embedding_unavailable` as *"asked, nothing
@@ -513,14 +548,14 @@ fn stage_numbers(node: &StageNode, rows: &StageIndex<'_>) -> StageNumbers {
         },
         refusal,
         input_ids,
-        input_unusable: tally.map(|t| t.unusable).unwrap_or(0),
+        input_unusable: tally.unusable,
         // The same `produced` the disposition above was derived from, now also reaching the wire
         // rather than being spent on one boolean and dropped.
         produced_ids: produced,
         inputs,
         terms_applied,
         extent,
-    }
+    })
 }
 
 // `input_contributed` used to be derived here — the act-declaration gate, the anchor-input null,
@@ -533,13 +568,13 @@ fn stage_result(
     spec: &ReturnSpec,
     rows: &StageIndex<'_>,
     hydrated: &Hydrated,
-) -> StageResult {
+) -> ApiResult<StageResult> {
     let name = spec.stage.as_str();
     let wants_open_meta = spec.with.contains(&ResourceSection::OpenMeta);
     // `terms_applied` and `extent` are READ off this struct, never recomputed here — see its own
     // doc. Both are duplicated onto the trace under the pair rule, and a second `applied_terms` or
     // `extent_of` call site that agreed today is exactly the drift this file keeps removing.
-    let n = stage_numbers(node, rows);
+    let n = stage_numbers(node, rows)?;
     let act = act_of(node);
     let decl = declaration(&act);
 
@@ -602,7 +637,7 @@ fn stage_result(
         .collect();
 
     let produced = produced_for(&act, hits);
-    StageResult {
+    Ok(StageResult {
         act,
         disposition: n.disposition,
         refusal: n.refusal,
@@ -613,11 +648,11 @@ fn stage_result(
         // fragments return a page, not a count. Absent rather than guessed from the page size.
         total: None,
         terms_applied: n.terms_applied,
-        narrowed_by: narrowed_by(node, rows),
+        narrowed_by: narrowed_by(node, rows)?,
         input_ids: n.input_ids,
         input_unusable: n.input_unusable,
         disclosed_regions: disclosed_regions_for(node.name().as_str(), rows),
-    }
+    })
 }
 
 /// The output variant the act DECLARES, so the response cannot contradict `ValidationOutcome`'s
@@ -681,9 +716,9 @@ fn disclosed_regions_for(stage: &str, rows: &StageIndex<'_>) -> Vec<RegionDisclo
     out
 }
 
-fn stage_trace(node: &StageNode, rows: &StageIndex<'_>) -> Option<StageTrace> {
-    let n = stage_numbers(node, rows);
-    Some(StageTrace {
+fn stage_trace(node: &StageNode, rows: &StageIndex<'_>) -> ApiResult<StageTrace> {
+    let n = stage_numbers(node, rows)?;
+    Ok(StageTrace {
         stage: node.name().clone(),
         act: act_of(node),
         disposition: n.disposition,
@@ -697,7 +732,7 @@ fn stage_trace(node: &StageNode, rows: &StageIndex<'_>) -> Option<StageTrace> {
         // of the page it ran and of whether that page was full.
         extent: n.extent,
         terms_applied: n.terms_applied,
-        narrowed_by: narrowed_by(node, rows),
+        narrowed_by: narrowed_by(node, rows)?,
         disclosed_regions: disclosed_regions_for(node.name().as_str(), rows),
     })
 }
@@ -728,6 +763,7 @@ fn stage_trace(node: &StageNode, rows: &StageIndex<'_>) -> Option<StageTrace> {
 fn extent_of(
     node: &StageNode,
     rows: &StageIndex<'_>,
+    tally: &TallyRow,
     terms: &std::collections::BTreeMap<BoundTerm, i64>,
 ) -> Extent {
     // **A refused stage never consulted the corpus, so it cannot report completeness over it.**
@@ -777,10 +813,10 @@ fn extent_of(
                     .to_string(),
         };
     }
-    let produced = rows
-        .tally(node.name().as_str())
-        .map(|t| t.produced)
-        .unwrap_or(0);
+    // Read off the tally [`stage_numbers`] already required — one lookup serves the produced
+    // count, the unusable count and this extent, so there is no second place to default a missing
+    // row into a number.
+    let produced = tally.produced;
     match terms.get(&BoundTerm::Limit) {
         Some(limit) if produced >= *limit => Extent::Partial,
         _ => Extent::Complete,
@@ -824,24 +860,24 @@ fn extent_of(
 /// Returns nothing for a stage that refused: its tally is a `WHERE false` zero, byte-identical to
 /// an honest empty, so `excluded` would read as *"it removed all of them"* for a subtraction that
 /// never ran. The refusal is the disclosure in that case.
-fn subtraction_disclosure(cn: &CombineNode, rows: &StageIndex<'_>) -> Vec<NarrowedBy> {
+fn subtraction_disclosure(cn: &CombineNode, rows: &StageIndex<'_>) -> ApiResult<Vec<NarrowedBy>> {
     if !cn.op.is_ordered() || rows.refusal(cn.name.as_str()).is_some() {
-        return vec![];
+        return Ok(vec![]);
     }
-    let produced = |stage: &str| rows.tally(stage).map(|t| t.produced).unwrap_or(0);
     let (Some(minuend), Some(subtrahend)) = (cn.inputs.first(), cn.inputs.get(1)) else {
-        return vec![];
+        return Ok(vec![]);
     };
-    let survived = produced(cn.name.as_str());
-    vec![NarrowedBy {
+    let survived = required_tally(cn.name.as_str(), rows)?.produced;
+    let removed = required_tally(minuend.as_str(), rows)?.produced - survived;
+    Ok(vec![NarrowedBy {
         key: "subtracted".to_string(),
         value: subtrahend.as_str().to_string(),
         admitted: Some(survived),
-        excluded: Some(produced(minuend.as_str()) - survived),
-    }]
+        excluded: Some(removed),
+    }])
 }
 
-fn narrowed_by(node: &StageNode, rows: &StageIndex<'_>) -> Vec<NarrowedBy> {
+fn narrowed_by(node: &StageNode, rows: &StageIndex<'_>) -> ApiResult<Vec<NarrowedBy>> {
     let inv = match node {
         StageNode::Act(inv) => inv,
         // **A combinator discloses a narrowing only when it NARROWS, and only one of them does.**
@@ -919,7 +955,7 @@ fn narrowed_by(node: &StageNode, rows: &StageIndex<'_>) -> Vec<NarrowedBy> {
         .collect();
 
     let Some(f) = &inv.resource_filter else {
-        return out;
+        return Ok(out);
     };
 
     // One entry PER VALUE for the repeated fields, which is the shape the incumbent `doc_type` loop
@@ -965,7 +1001,7 @@ fn narrowed_by(node: &StageNode, rows: &StageIndex<'_>) -> Vec<NarrowedBy> {
             out.push(entry(key.to_string(), v.clone()));
         }
     }
-    out
+    Ok(out)
 }
 
 fn act_of(node: &StageNode) -> ActName {
@@ -1035,7 +1071,8 @@ mod tests {
             });
         }
 
-        let disclosed = narrowed_by(&node, &no_rows().index());
+        let disclosed = narrowed_by(&node, &no_rows().index())
+            .expect("an act stage's narrowing reads no tallies");
         let pairs: Vec<(&str, &str)> = disclosed
             .iter()
             .map(|n| (n.key.as_str(), n.value.as_str()))
@@ -1072,7 +1109,9 @@ mod tests {
     #[test]
     fn a_stage_that_narrowed_by_nothing_discloses_an_empty_list() {
         let node = act_node("hits", ActName::FindExact, None);
-        assert!(narrowed_by(&node, &no_rows().index()).is_empty());
+        assert!(narrowed_by(&node, &no_rows().index())
+            .expect("an act stage's narrowing reads no tallies")
+            .is_empty());
     }
 
     fn act_node(n: &str, act: ActName, input: Option<StageInput>) -> StageNode {
@@ -1308,7 +1347,8 @@ mod tests {
             refusals: vec![],
         };
 
-        let r = assemble(&v, &rows, &Hydrated::default());
+        let r = assemble(&v, &rows, &Hydrated::default())
+            .expect("every stage in the plan has a tally row");
         let applied = &r.returned[&name("hits")].terms_applied;
 
         assert_eq!(
@@ -1365,7 +1405,8 @@ mod tests {
             refusals: vec![],
         };
 
-        let r = assemble(&v, &rows, &Hydrated::default());
+        let r = assemble(&v, &rows, &Hydrated::default())
+            .expect("every stage in the plan has a tally row");
         assert!(
             !r.returned.contains_key(&name("near")),
             "the walk must be an intermediate, or this test cannot witness the defect"
@@ -1412,7 +1453,8 @@ mod tests {
             refusals: vec![],
         };
 
-        let r = assemble(&v, &rows, &Hydrated::default());
+        let r = assemble(&v, &rows, &Hydrated::default())
+            .expect("every stage in the plan has a tally row");
         let result = &r.returned[&name("hits")];
         let traced = r
             .trace
@@ -1465,7 +1507,8 @@ mod tests {
             refusals: vec![],
         };
 
-        let r = assemble(&v, &rows, &Hydrated::default());
+        let r = assemble(&v, &rows, &Hydrated::default())
+            .expect("every stage in the plan has a tally row");
 
         assert_eq!(r.returned.len(), 1, "exactly what `returns` asked for");
         assert!(r.returned.contains_key(&name("narrowed")));
@@ -1492,7 +1535,8 @@ mod tests {
             }],
         };
 
-        let r = assemble(&v, &rows, &Hydrated::default());
+        let r = assemble(&v, &rows, &Hydrated::default())
+            .expect("every stage in the plan has a tally row");
 
         assert_eq!(
             r.returned[&name("wide")].disposition,
@@ -1549,7 +1593,8 @@ mod tests {
             }],
         };
 
-        let r = assemble(&v, &rows, &Hydrated::default());
+        let r = assemble(&v, &rows, &Hydrated::default())
+            .expect("every stage in the plan has a tally row");
 
         assert_eq!(
             r.returned[&name("wide")].disposition,
@@ -1604,7 +1649,10 @@ mod tests {
             refusals: vec![],
         };
         assert_eq!(
-            assemble(&v, &full, &Hydrated::default()).returned[&name("hits")].extent,
+            assemble(&v, &full, &Hydrated::default())
+                .expect("every stage in the plan has a tally row")
+                .returned[&name("hits")]
+                .extent,
             Extent::Partial,
             "a page filled to its limit may have more behind it"
         );
@@ -1616,7 +1664,10 @@ mod tests {
             refusals: vec![],
         };
         assert_eq!(
-            assemble(&v, &short, &Hydrated::default()).returned[&name("hits")].extent,
+            assemble(&v, &short, &Hydrated::default())
+                .expect("every stage in the plan has a tally row")
+                .returned[&name("hits")]
+                .extent,
             Extent::Complete,
             "a page the limit did not fill has nothing behind it"
         );
@@ -1635,7 +1686,8 @@ mod tests {
             tallies: vec![tally("hits", 0, 0)],
             refusals: vec![],
         };
-        let r = assemble(&v, &rows, &Hydrated::default());
+        let r = assemble(&v, &rows, &Hydrated::default())
+            .expect("every stage in the plan has a tally row");
         assert_eq!(
             r.returned[&name("hits")].disposition,
             StageDisposition::Empty
@@ -1667,7 +1719,8 @@ mod tests {
             refusals: vec![],
         };
 
-        let r = assemble(&v, &rows, &Hydrated::default());
+        let r = assemble(&v, &rows, &Hydrated::default())
+            .expect("every stage in the plan has a tally row");
         assert_eq!(r.returned[&name("narrowed")].input_ids, 12);
         let traced = r
             .trace
@@ -1719,7 +1772,8 @@ mod tests {
             refusals: vec![],
         };
 
-        let r = assemble(&v, &rows, &Hydrated::default());
+        let r = assemble(&v, &rows, &Hydrated::default())
+            .expect("every stage in the plan has a tally row");
         let traced = r
             .trace
             .stages
@@ -1798,7 +1852,8 @@ mod tests {
             refusals: vec![],
         };
 
-        let r = assemble(&v, &rows, &Hydrated::default());
+        let r = assemble(&v, &rows, &Hydrated::default())
+            .expect("every stage in the plan has a tally row");
         let produced = |stage: &str| {
             r.trace
                 .stages
@@ -1860,7 +1915,8 @@ mod tests {
             tallies: vec![tally("a", 3, 0), tally("b", 4, 0), tally("merged", 6, 0)],
             refusals: vec![],
         };
-        let r = assemble(&v, &rows, &Hydrated::default());
+        let r = assemble(&v, &rows, &Hydrated::default())
+            .expect("every stage in the plan has a tally row");
         let traced = r
             .trace
             .stages
@@ -1936,7 +1992,7 @@ mod tests {
             open_meta: HashMap::new(),
         };
 
-        let r = assemble(&v, &rows, &hydrated);
+        let r = assemble(&v, &rows, &hydrated).expect("every stage in the plan has a tally row");
         match &r.returned[&name("hits")].produced {
             StageOutput::Resources { hits } => {
                 assert_eq!(hits.len(), 1, "the vanished row is dropped");
@@ -1983,7 +2039,7 @@ mod tests {
             open_meta: HashMap::new(),
         };
 
-        let r = assemble(&v, &rows, &hydrated);
+        let r = assemble(&v, &rows, &hydrated).expect("every stage in the plan has a tally row");
         match &r.returned[&name("hits")].produced {
             StageOutput::Resources { hits } => {
                 assert_eq!(hits.len(), 1, "the hit survives; only its score is absent");
@@ -2023,7 +2079,8 @@ mod tests {
                 detail: "no vector".to_string(),
             }],
         };
-        let r = assemble(&v, &rows, &Hydrated::default());
+        let r = assemble(&v, &rows, &Hydrated::default())
+            .expect("every stage in the plan has a tally row");
         assert!(
             matches!(
                 r.returned[&name("wide")].extent,
@@ -2058,7 +2115,8 @@ mod tests {
             tallies: vec![tally("shape", 0, 0)],
             refusals: vec![],
         };
-        let r = assemble(&v, &rows, &Hydrated::default());
+        let r = assemble(&v, &rows, &Hydrated::default())
+            .expect("every stage in the plan has a tally row");
         match &r.returned[&name("shape")].extent {
             temper_core::types::query::Extent::Indeterminate { reason } => {
                 assert!(
@@ -2087,11 +2145,178 @@ mod tests {
             tallies: vec![tally("hits", 0, 0)],
             refusals: vec![],
         };
-        let r = assemble(&v, &rows, &Hydrated::default());
+        let r = assemble(&v, &rows, &Hydrated::default())
+            .expect("every stage in the plan has a tally row");
         assert!(matches!(
             r.returned[&name("hits")].extent,
             temper_core::types::query::Extent::Complete
         ));
+    }
+
+    /// **A stage with no tally row is a compile/execute contradiction, and the response fails
+    /// rather than rendering numbers for it.**
+    ///
+    /// `compile` emits one tally arm per stage in the plan and each arm yields exactly one row, so
+    /// through `run_composition` this state is unreachable — reaching it means the compiler and the
+    /// executor disagreed about the plan. The honest failure is the one this file already uses for
+    /// contradictions: an opaque 500, detail in the logs. What it replaces rendered
+    /// `produced_ids: 0`, `input_unusable: 0` and `extent: complete` for a stage that never ran —
+    /// and because `0` is a REAL tally value (refused stages; asked-and-matched-nothing), a
+    /// fabricated zero is indistinguishable on the wire from a measured one. There is no serialized
+    /// boundary to assert here, and that is the point: the honest shape never produces one.
+    #[test]
+    fn a_stage_with_no_tally_row_fails_the_response_rather_than_rendering_zeros() {
+        let v = plan(
+            vec![act_node("hits", ActName::FindExact, None)],
+            vec!["hits"],
+        );
+        let rows = QueryRows {
+            hits: vec![],
+            tallies: vec![],
+            refusals: vec![],
+        };
+
+        let r = assemble(&v, &rows, &Hydrated::default());
+        assert!(
+            matches!(r, Err(ApiError::Internal(_))),
+            "a missing tally is a contradiction rendered as a 500, not a stage of zeros: {r:?}"
+        );
+    }
+
+    /// **An upstream hand-off with no upstream tally fails rather than counting zero ids.**
+    ///
+    /// `input_ids` for an upstream-fed stage is the upstream stage's own produced tally — derived,
+    /// not measured twice. Defaulting an absent tally to `0` would answer *"this stage was handed
+    /// nothing"*: a confident, wrong account of the pipe, where the truth is that the number does
+    /// not exist.
+    #[test]
+    fn an_upstream_hand_off_with_no_upstream_tally_fails_rather_than_counting_zero_ids() {
+        let v = plan(
+            vec![
+                act_node("hits", ActName::FindExact, None),
+                act_node(
+                    "narrowed",
+                    ActName::FindExact,
+                    Some(StageInput::Upstream {
+                        relation: StageRelation::Bound,
+                        stage: name("hits"),
+                    }),
+                ),
+            ],
+            vec!["narrowed"],
+        );
+        let rows = QueryRows {
+            hits: vec![],
+            tallies: vec![tally("narrowed", 4, 0)],
+            refusals: vec![],
+        };
+
+        let r = assemble(&v, &rows, &Hydrated::default());
+        assert!(
+            matches!(r, Err(ApiError::Internal(_))),
+            "the missing upstream tally is a contradiction, not an empty hand-off: {r:?}"
+        );
+    }
+
+    /// **A combinator input with no tally row fails the numbers rather than under-counting the total.**
+    ///
+    /// A combinator's `input_ids` is the sum of its inputs' produced tallies. An input whose tally
+    /// row is absent is the same compile/execute contradiction [`required_tally`] names for every
+    /// other number on this path; dropping the row from the sum would report a total that never
+    /// counts what the combinator was handed. Asserted directly on [`stage_numbers`], because
+    /// through `assemble` a plan's every stage is traced — the contradiction surfaces at whichever
+    /// site reaches the missing row first, and the sum's own silence must not be one of them.
+    #[test]
+    fn a_combine_input_with_no_tally_row_fails_rather_than_under_counting_the_total() {
+        let node = StageNode::Combine(CombineNode {
+            name: name("merged"),
+            op: CombineOp::Union,
+            inputs: vec![name("tasks"), name("declared")],
+        });
+        let rows = QueryRows {
+            hits: vec![],
+            tallies: vec![tally("tasks", 4, 0), tally("merged", 4, 0)],
+            refusals: vec![],
+        };
+
+        let r = stage_numbers(&node, &rows.index());
+        assert!(
+            matches!(&r, Err(ApiError::Internal(_))),
+            "the missing input tally is a contradiction, not an input the total absorbs: got {:?}",
+            r.map(|n| n.input_ids)
+        );
+    }
+
+    /// **A difference whose minuend has no tally fails rather than fabricating a removal count.**
+    ///
+    /// `excluded` is `|minuend| − |survived|`. Defaulting the minuend's absent tally to `0` makes
+    /// this fixture compute `0 − 25 = −25`: a subtraction that removed NEGATIVE resources, in the
+    /// disclosure `narrowed_by` exists to keep honest.
+    #[test]
+    fn a_difference_with_a_missing_minuend_tally_fails_rather_than_fabricating_a_removal_count() {
+        let v = plan(
+            vec![
+                act_node("tasks", ActName::FindExact, None),
+                act_node("declared", ActName::FindExact, None),
+                StageNode::Combine(CombineNode {
+                    name: name("gap"),
+                    op: CombineOp::Difference,
+                    inputs: vec![name("tasks"), name("declared")],
+                }),
+            ],
+            vec!["tasks"],
+        );
+        let rows = QueryRows {
+            hits: vec![],
+            tallies: vec![tally("declared", 6, 0), tally("gap", 25, 0)],
+            refusals: vec![],
+        };
+
+        let r = assemble(&v, &rows, &Hydrated::default());
+        assert!(
+            matches!(r, Err(ApiError::Internal(_))),
+            "the missing minuend tally is a contradiction, not a zero to subtract from: {r:?}"
+        );
+    }
+
+    /// **A tally row that really carries zeros still renders them as zeros.**
+    ///
+    /// The other half of the rule: failing loudly on an ABSENT tally must not make a PRESENT zero
+    /// disappear. A stage that ran and matched nothing — and a refused stage, whose `WHERE false`
+    /// CTE tallies the same — carries an honest `produced = 0`, and the wire must keep saying 0
+    /// rather than omitting the number. Asserted on the SERIALIZED trace, because the wire is where
+    /// a dropped zero and a real zero would come apart.
+    #[test]
+    fn a_stage_whose_tally_really_is_zero_still_renders_zeros_on_the_wire() {
+        let v = plan(
+            vec![act_node("hits", ActName::FindExact, None)],
+            vec!["hits"],
+        );
+        let rows = QueryRows {
+            hits: vec![],
+            tallies: vec![tally("hits", 0, 0)],
+            refusals: vec![],
+        };
+
+        let r = assemble(&v, &rows, &Hydrated::default())
+            .expect("a present tally renders, whatever it counts");
+        let traced = r
+            .trace
+            .stages
+            .iter()
+            .find(|s| s.stage == name("hits"))
+            .expect("every stage is traced");
+        let json = serde_json::to_value(traced).expect("the trace serializes");
+        assert_eq!(
+            json["produced_ids"],
+            serde_json::json!(0),
+            "a measured zero is a number, not an absence: {json}"
+        );
+        assert_eq!(
+            json["input_unusable"],
+            serde_json::json!(0),
+            "so is an unusable count of zero: {json}"
+        );
     }
 
     /// `[moved to the selection act — 2026-08-14]` This built the filter on a `find-exact` stage,
@@ -2146,7 +2371,8 @@ mod tests {
             tallies: vec![tally("sel", 0, 0), tally("hits", 0, 0)],
             refusals: vec![],
         };
-        let r = assemble(&v, &rows, &Hydrated::default());
+        let r = assemble(&v, &rows, &Hydrated::default())
+            .expect("every stage in the plan has a tally row");
         let n = &r
             .trace
             .stages
@@ -2351,7 +2577,7 @@ mod tests {
             views: HashMap::from([(id, view(id))]),
             open_meta: HashMap::new(),
         };
-        let r = assemble(&v, &rows, &hydrated);
+        let r = assemble(&v, &rows, &hydrated).expect("every stage in the plan has a tally row");
         let trace = r
             .trace
             .stages

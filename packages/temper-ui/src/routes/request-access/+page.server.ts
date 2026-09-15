@@ -31,18 +31,11 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	}
 
 	const [ownRequest, settings] = await Promise.all([
-		apiGet<JoinRequest | null>('/api/access/requests/me', locals.accessToken).catch(
-			(err: unknown) => {
-				if (err instanceof ApiError) return null;
-				throw err;
-			},
-		),
-		apiGet<PublicSystemSettings>('/api/access/settings', locals.accessToken).catch(
-			(err: unknown) => {
-				if (err instanceof ApiError) return null;
-				throw err;
-			},
-		),
+		// "No request on file" is a `null` the wire itself carries on a 200; a failed read must
+		// never arrive wearing that null. The settings endpoint declares 200 and 401 and no
+		// other answer, so any failure of either read is a failure of the load.
+		apiGet<JoinRequest | null>('/api/access/requests/me', locals.accessToken),
+		apiGet<PublicSystemSettings>('/api/access/settings', locals.accessToken),
 	]);
 
 	return {

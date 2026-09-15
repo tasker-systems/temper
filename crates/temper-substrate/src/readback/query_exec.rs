@@ -113,8 +113,11 @@ pub struct StageIndex<'a> {
 }
 
 impl<'a> StageIndex<'a> {
-    /// One stage's disclosure numbers. `None` means the stage produced no tally row at all, which
-    /// is how a stage that never ran is told apart from one that ran and matched nothing.
+    /// One stage's disclosure numbers. `None` means no tally row was found for the stage. The
+    /// planner emits one tally arm per planned stage and each arm yields a row even over an
+    /// empty CTE, so a producer-built index never carries `None` for a planned stage — the
+    /// assembler treats it as a compiler/executor contradiction and refuses, rather than
+    /// rendering fabricated zeros.
     pub fn tally(&self, stage: &str) -> Option<&'a TallyRow> {
         self.tallies.get(stage).copied()
     }

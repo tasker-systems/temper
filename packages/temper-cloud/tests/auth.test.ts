@@ -229,3 +229,58 @@ describe("verifyToken userinfo body validation", () => {
     );
   });
 });
+
+describe("verifyToken JWT claim validation", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("rejects a JWT whose email claim is not a string", async () => {
+    const token = await signTestJwt({
+      sub: "user-328",
+      email: 123,
+      email_verified: true,
+    });
+
+    await expect(verifyToken(token, publicKey, "test-issuer", TEST_AUDIENCE)).rejects.toThrow(
+      "non-string email claim",
+    );
+  });
+
+  it("rejects a JWT whose sub claim is not a string", async () => {
+    const token = await signTestJwt({
+      sub: 123,
+      email: "stringy@example.com",
+      email_verified: true,
+    });
+
+    await expect(verifyToken(token, publicKey, "test-issuer", TEST_AUDIENCE)).rejects.toThrow(
+      "non-string sub claim",
+    );
+  });
+
+  it("rejects a JWT whose email_verified claim is not a boolean", async () => {
+    const token = await signTestJwt({
+      sub: "user-329",
+      email: "stringy@example.com",
+      email_verified: "true",
+    });
+
+    await expect(verifyToken(token, publicKey, "test-issuer", TEST_AUDIENCE)).rejects.toThrow(
+      "non-boolean email_verified claim",
+    );
+  });
+
+  it("rejects a token carrying neither email claim when userinfo yields no email either", async () => {
+    const token = await signTestJwt({ sub: "user-330" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({}), { status: 200 })),
+    );
+
+    await expect(verifyToken(token, publicKey, "test-issuer", TEST_AUDIENCE)).rejects.toThrow(
+      "JWT missing email claim",
+    );
+  });
+});
