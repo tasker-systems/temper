@@ -75,6 +75,35 @@ export type MintOutcome =
   | ({ readonly status: "refused" } & LinkRefusal);
 
 /**
+ * Runtime check that a parsed mint body really is one of the two arms the Rust
+ * `SlackMintResponse` can serialize (`#[serde(tag = "status", rename_all = "snake_case")]`,
+ * `crates/temper-api/src/handlers/slack_mint.rs:33-47`): a `token` arm carrying the credential and
+ * its millisecond expiry, or a `refused` arm carrying one of the three `LinkRefusal` reasons. The
+ * same fetch-layer check `requestLinkState` applies to its response. Extra fields are tolerated,
+ * matching serde's own default — the union arms, not the full key set, are the contract. The
+ * `standing` payload is checked only for object-ness: `Refusal`'s kinds are the server's
+ * vocabulary to extend, and `unrecognized_standing` is itself a kind a newer server may send.
+ */
+function isMintOutcome(value: unknown): value is MintOutcome {
+  if (typeof value !== "object" || value === null) return false;
+  const arm = value as {
+    status?: unknown;
+    access_token?: unknown;
+    expires_at_ms?: unknown;
+    reason?: unknown;
+    refusal?: unknown;
+  };
+  if (arm.status === "token") {
+    return typeof arm.access_token === "string" && typeof arm.expires_at_ms === "number";
+  }
+  if (arm.status === "refused") {
+    if (arm.reason === "not_linked" || arm.reason === "not_vaulted") return true;
+    return arm.reason === "standing" && typeof arm.refusal === "object" && arm.refusal !== null;
+  }
+  return false;
+}
+
+/**
  * Ask temper for an access token to act as the human who mentioned us.
  *
  * `principalId` is passed WHOLE. It has 2-4 segments and must never be split.
@@ -105,5 +134,17 @@ export async function requestMintedToken(principalId: string): Promise<MintOutco
     throw new Error(`mint failed: ${res.status}`);
   }
 
-  return (await res.json()) as MintOutcome;
+  const outcome: unknown = await res.json();
+  if (!isMintOutcome(outcome)) {
+    // The same failure class as the non-2xx throw above — the response is not an answer this
+    // path can act on — so it propagates the same way: the channel's catch turns it into the
+    // generic retry ephemeral instead of a turn that mints or refuses on an invented shape.
+    const status = (outcome as { status?: unknown } | null)?.status;
+    throw new Error(
+      `mint returned an unrecognized response (status: ${
+        typeof status === "string" ? status : "none"
+      })`,
+    );
+  }
+  return outcome;
 }

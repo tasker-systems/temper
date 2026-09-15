@@ -16,7 +16,17 @@ import type { AnchorShape } from '$lib/types/generated/cognitive_maps';
 
 const apiGet = vi.fn();
 
+/** The shape `./api` throws on a non-ok answer — the identity the door's narrowing reads. */
+class ApiError extends Error {
+	status: number;
+	constructor(status: number, message: string) {
+		super(message);
+		this.status = status;
+	}
+}
+
 vi.mock('./api', () => ({
+	ApiError,
 	apiGet: (...a: unknown[]) => apiGet(...a),
 	apiPost: vi.fn(),
 }));
@@ -53,11 +63,14 @@ beforeEach(() => {
 });
 
 describe('the analysis door carries the cause off the wire', () => {
-	/** Everything except `shape` degrades or is skipped, so one mock per path keeps this honest. */
+	/**
+	 * Everything except `shape` degrades or is skipped, so one mock per path keeps this honest.
+	 * The rejections are 404 denies — the one status the analytics door degrades on.
+	 */
 	const routeReads = (shape: AnchorShape) => {
 		apiGet.mockImplementation((path: string) => {
 			if (path.endsWith('/shape')) return Promise.resolve(shape);
-			return Promise.reject(new Error('not under test'));
+			return Promise.reject(new ApiError(404, 'not under test'));
 		});
 	};
 
@@ -165,6 +178,22 @@ describe('the analysis door carries the cause off the wire', () => {
 		routeReads(emptyShape());
 
 		await expect(readAnchorAnalysis('tok', CONTEXT)).resolves.toMatchObject({ analytics: null });
+	});
+
+	/**
+	 * A failure is not a decline. Only the 404 deny degrades to `null`; anything else rejects,
+	 * because "not available" rendered on a read that never answered would be a claim about the
+	 * anchor made on no evidence.
+	 */
+	it('a failing anchor-level read rejects — it never reads as a decline', async () => {
+		for (const anchor of [CONTEXT, COGMAP]) {
+			apiGet.mockImplementation((path: string) => {
+				if (path.endsWith('/shape')) return Promise.resolve(emptyShape());
+				return Promise.reject(new ApiError(500, 'analytics door down'));
+			});
+
+			await expect(readAnchorAnalysis('tok', anchor)).rejects.toThrow('analytics door down');
+		}
 	});
 
 	/**

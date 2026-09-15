@@ -138,6 +138,27 @@ describe("requestMintedToken", () => {
     await expect(requestMintedToken(PRINCIPAL)).resolves.toEqual(body);
   });
 
+  // FAILS IF: the mint body stops being held to the `SlackMintResponse` arms at the boundary —
+  // an unrecognized `status` (a server arm this agent has never heard of) would be cast to
+  // MintOutcome and flow into the channel's `status` branching as if it were one of the two arms.
+  it("throws on a drifted status instead of returning it as a MintOutcome", async () => {
+    stubFetch(200, { status: "quarantined" });
+
+    await expect(requestMintedToken(PRINCIPAL)).rejects.toThrow(
+      "mint returned an unrecognized response (status: quarantined)",
+    );
+  });
+
+  // FAILS IF: the token arm is accepted with its credential or expiry missing — the cache would
+  // store a token-less outcome and a later call would present `undefined` as a bearer token.
+  it("throws when the token arm is missing its token or expiry", async () => {
+    stubFetch(200, { status: "token" });
+
+    await expect(requestMintedToken(PRINCIPAL)).rejects.toThrow(
+      "mint returned an unrecognized response (status: token)",
+    );
+  });
+
   // FAILS IF: the principal is split/reordered, the route path drifts from /internal/slack/mint
   // (e.g. copied as link-state), or the base URL's trailing slash is doubled up.
   it("posts the WHOLE principal to the mint route with no trailing-slash dupe", async () => {

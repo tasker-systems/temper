@@ -29,6 +29,11 @@
 
 	const status = $derived(data.ownRequest?.status ?? null);
 	const accountLabel = $derived(data.user?.email ?? data.user?.name ?? data.user?.sub ?? '');
+	// The instance name is shown only when a read carried it — absence renders as bare
+	// "invitation only", never as an invented domain.
+	const instanceMeta = $derived(
+		data.settings?.instance_name ? `${data.settings.instance_name} · invitation only` : 'invitation only',
+	);
 
 	function fullDate(iso: string): string {
 		return new Date(iso).toLocaleDateString('en-US', {
@@ -54,7 +59,7 @@
 		<span class="ed-strip-accent">{accountLabel}</span>
 		<span class="ed-strip-spacer"></span>
 		<span class="ed-strip-meta">
-			{data.settings?.instance_name ?? 'temperkb.io'} · invitation only
+			{instanceMeta}
 		</span>
 	</header>
 

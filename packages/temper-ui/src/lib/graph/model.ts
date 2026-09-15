@@ -519,9 +519,9 @@ export function buildGraph({ response, plan, seeds }: GraphInput): GraphModel {
 	const [SEED, SURVEY, WALK] = COMPOSITION_ARMS.map((a) => a.key);
 	for (const row of seeds) add(row, SEED);
 	for (const stage of plan.surveyStages) {
-		for (const hit of hitsOf(response.returned?.[stage])) add(hit.resource, SURVEY);
+		for (const hit of hitsOf(response.returned[stage])) add(hit.resource, SURVEY);
 	}
-	const walk = hitsOf(response.returned?.[plan.walkStage]);
+	const walk = hitsOf(response.returned[plan.walkStage]);
 	for (const hit of walk) add(hit.resource, WALK);
 
 	// The collapse. Keyed on the four fields the spec names; `polarity` rides along rather than
